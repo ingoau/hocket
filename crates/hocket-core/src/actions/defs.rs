@@ -197,6 +197,24 @@ fn play_later(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command>
     queue_commands(t, s, r, false)
 }
 
+fn one_track(t: &ActionTarget, _: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } => ids.len() == 1,
+        ActionTarget::QueueItems { keys } => keys.len() == 1,
+        _ => false,
+    }
+}
+
+fn preview_start(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let mut ids = super::track_ids_of(t, s, r);
+    if ids.len() != 1 {
+        return vec![];
+    }
+    vec![Command::PreviewStart {
+        track_id: ids.remove(0),
+    }]
+}
+
 fn stash(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
     let track_ids = track_ids_of(t, s, r);
     if track_ids.is_empty() {
@@ -207,6 +225,53 @@ fn stash(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
 
 fn clear_stash(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Command> {
     vec![Command::StashClear]
+}
+
+fn snoozed(id: &str, s: &StateView) -> bool {
+    s.snoozed_tracks.iter().any(|t| t == id)
+}
+
+/// Snooze is on when any selected song isn't snoozed. A queue row's track isn't known here, so the
+/// menu decides; the action stays available.
+fn snooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } if !ids.is_empty() => ids.iter().any(|id| !snoozed(id, s)),
+        ActionTarget::QueueItems { keys } if !keys.is_empty() => true,
+        ActionTarget::None => s
+            .current_track_id
+            .as_ref()
+            .is_some_and(|id| !snoozed(id, s)),
+        _ => false,
+    }
+}
+
+fn unsnooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } if !ids.is_empty() => ids.iter().any(|id| snoozed(id, s)),
+        ActionTarget::QueueItems { keys } if !keys.is_empty() => true,
+        ActionTarget::None => s.current_track_id.as_ref().is_some_and(|id| snoozed(id, s)),
+        _ => false,
+    }
+}
+
+fn snooze(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let track_ids = track_ids_of(t, s, r);
+    if track_ids.is_empty() {
+        return vec![];
+    }
+    // The song menu offers every duration itself. A swipe or the palette uses a week.
+    vec![Command::Snooze {
+        track_ids,
+        duration: crate::api::SnoozeFor::Week,
+    }]
+}
+
+fn unsnooze(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let track_ids = track_ids_of(t, s, r);
+    if track_ids.is_empty() {
+        return vec![];
+    }
+    vec![Command::Unsnooze { track_ids }]
 }
 
 macro_rules! rate_fn {
@@ -726,6 +791,15 @@ static ALL: &[ActionDef] = &[
         play_later,
         undoable = true
     ),
+    action!(
+        "preview",
+        "Preview",
+        "headphones",
+        Playback,
+        &[TargetKind::Tracks, TargetKind::QueueItems],
+        one_track,
+        preview_start
+    ),
     // -- stash --
     action!(
         "stash",
@@ -742,7 +816,8 @@ static ALL: &[ActionDef] = &[
         ],
         has_items,
         stash,
-        default_shortcut = Some("Mod+S")
+        default_shortcut = Some("Mod+S"),
+        media_session = Some(MediaSessionAction::Stash)
     ),
     action!(
         "openStash",
@@ -763,6 +838,34 @@ static ALL: &[ActionDef] = &[
         GLOBAL,
         always,
         clear_stash
+    ),
+    action!(
+        "snooze",
+        "Snooze",
+        "bedtime",
+        Queue,
+        &[
+            TargetKind::Tracks,
+            TargetKind::QueueItems,
+            TargetKind::Global
+        ],
+        snooze_enabled,
+        snooze,
+        undoable = true
+    ),
+    action!(
+        "unsnooze",
+        "Unsnooze",
+        "bedtime",
+        Queue,
+        &[
+            TargetKind::Tracks,
+            TargetKind::QueueItems,
+            TargetKind::Global
+        ],
+        unsnooze_enabled,
+        unsnooze,
+        undoable = true
     ),
     action!(
         "removeFromQueue",
@@ -1397,6 +1500,7 @@ const CONTEXT_MENU: &[&str] = &[
     "playShuffled",
     "playNext",
     "playLater",
+    "preview",
     "addToPlaylist",
     "stash",
     "love",
@@ -1411,6 +1515,8 @@ const CONTEXT_MENU: &[&str] = &[
     "unpin",
     "goToAlbum",
     "goToArtist",
+    "snooze",
+    "unsnooze",
     "pinToLibrary",
     "unpinFromLibrary",
     "removeFromQueue",
@@ -1462,6 +1568,12 @@ pub fn default_order(surface: Surface) -> Vec<&'static str> {
         Surface::Sidebar => SIDEBAR.to_vec(),
         Surface::MediaSession => MEDIA_SESSION.to_vec(),
         Surface::NowPlaying => NOW_PLAYING.to_vec(),
-        Surface::Palette => ALL.iter().map(|d| d.id).collect(),
+        // Preview only exists inside an open song menu. The palette lists
+        // every other action; offering it here would play with nothing to stop it.
+        Surface::Palette => ALL
+            .iter()
+            .map(|d| d.id)
+            .filter(|id| *id != "preview")
+            .collect(),
     }
 }

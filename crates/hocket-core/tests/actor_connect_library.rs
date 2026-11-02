@@ -77,6 +77,7 @@ async fn ratings_and_loves_reach_the_other_device_and_its_now_playing() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;

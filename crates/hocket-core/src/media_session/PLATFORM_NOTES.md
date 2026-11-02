@@ -117,8 +117,12 @@ maps to:
   `is_playing`, position from the stamp (`SimpleBasePlayer.PositionSupplier`
   extrapolating from `taken_at`/`rate`), shuffle/repeat from the fields.
 - `actions` → available `Player.Command`s plus custom `SessionCommand`s
-  (`love`, `rate`) exposed as `CommandButton`s in the notification, in the
-  given order.
+  (`love`, `rate`, `stash`) exposed as `CommandButton`s in the notification, in the
+  given order. `Stash` is not in the default button set. `metadata.stashed`
+  fills the icon once the playing track is in the stash; the command stays
+  `StashAdd` (a duplicate is a no-op, and the button does not unstash).
+- Desktop playwire (MPRIS, SMTC, Now Playing) has no custom-button slot, so
+  `Stash` is not published there even when the synced button order includes it.
 - `owns_transport == false` keeps the session and notification alive as a
   remote control. The session reports remote playback (Media3 `DeviceInfo`
   `PLAYBACK_TYPE_REMOTE` with a routing controller id) and a

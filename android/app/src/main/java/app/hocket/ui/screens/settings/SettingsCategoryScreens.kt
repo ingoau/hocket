@@ -211,6 +211,9 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
             modifier = Modifier.padding(horizontal = 16.dp).testTag("queue.savedCap.slider"),
         )
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")
+        val resumeAlbums = setting(SettingKeys.PLAYBACK_RESUME_ALBUMS)
+        SwitchRow(stringResource(R.string.settings_resume_albums), resumeAlbums.bool ?: true, { resumeAlbums.setBool(it) },
+            subtitle = stringResource(R.string.settings_resume_albums_body), scope = resumeAlbums.scope, tag = "playback.resumeAlbums")
         val minutes = sleepMinutes.int ?: 30
         SettingRow(stringResource(R.string.settings_sleep_default), stringResource(R.string.sleep_minutes, minutes), sleepMinutes.scope, tag = "sleep.defaultMinutes")
         val minuteResources = androidx.compose.ui.platform.LocalResources.current

@@ -188,6 +188,14 @@ pub(crate) struct Actor {
     pub last_saved_queues: Vec<SavedQueue>,
     /// The signed-in account's song stash, tombstones included (`crate::stash`).
     pub stash: Vec<crate::api::StashEntry>,
+    /// The signed-in account's snoozes, tombstones included (`crate::snooze`).
+    pub snoozes: Vec<crate::api::Snooze>,
+    /// Where albums were left off, tombstones included (`crate::album_resume`).
+    pub album_resumes: Vec<crate::api::AlbumResumeEntry>,
+    /// Track and position the next local load should land on (album resume).
+    pub pending_resume_at: Option<(TrackId, Ms)>,
+    /// When the oldest offered album resume point expires (re-announced from the tick).
+    pub album_resume_expires_at: Option<crate::api::EpochMs>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
     /// sent: one that would only repeat it is not sent (see
     /// [`Actor::emit_transport_state`]).
@@ -201,6 +209,9 @@ pub(crate) struct Actor {
     pub outbox_entries: HashMap<String, String>,
 
     pub playback: Playback,
+    /// Song preview, separate from the transport. `None` when nothing is
+    /// being previewed.
+    pub preview: Option<super::state::PreviewSession>,
     /// Track summaries already read from the mirror, for the queue view
     /// (rebuilt on every queue change): see [`Actor::summaries`].
     pub summary_cache: Mutex<super::state::SummaryCache>,
@@ -479,6 +490,10 @@ impl Actor {
             last_doc: None,
             last_saved_queues: vec![],
             stash: vec![],
+            snoozes: vec![],
+            album_resumes: vec![],
+            pending_resume_at: None,
+            album_resume_expires_at: None,
             emitted_transport: None,
             emitted_media_session: None,
             emitted_devices: None,
@@ -490,6 +505,7 @@ impl Actor {
                 muted,
                 ..Default::default()
             },
+            preview: None,
             summary_cache: Mutex::new(Default::default()),
             last_skip_at: None,
             skip_op: false,
@@ -864,6 +880,8 @@ impl Actor {
                 .unwrap_or_default(),
         });
         self.emit_stash();
+        self.emit_snoozes();
+        self.emit_album_resumes();
         self.emit(Event::UndoChanged {
             state: snapshot.undo.clone(),
         });
@@ -930,6 +948,7 @@ impl Actor {
         self.emit(Event::MediaSession {
             state: snapshot.media_session,
         });
+        self.emit_preview();
     }
 
     // -- tick -----------------------------------------------------------------
@@ -949,7 +968,10 @@ impl Actor {
             return;
         }
         self.hot.store(
-            self.playback.playing || self.playback.buffering || self.pending_load_timer.is_some(),
+            self.playback.playing
+                || self.playback.buffering
+                || self.pending_load_timer.is_some()
+                || self.preview.as_ref().is_some_and(|p| p.playing),
             Ordering::Relaxed,
         );
         if now - self.last_engine_tick >= ENGINE_TICK_MS - 1.0 {
@@ -971,12 +993,24 @@ impl Actor {
         if self.playback.playing && now - self.position_saved_at >= POSITION_HEARTBEAT_MS {
             self.save_position();
         }
+        if self.playback.playing {
+            self.capture_album_resume(false);
+        }
+        self.album_resume_tick(now);
         // Outbox retry.
         if now - self.last_outbox_retry >= OUTBOX_RETRY_MS {
             self.last_outbox_retry = now;
             if self.outbox.pending_count().unwrap_or(0) > 0 {
                 self.schedule_flush();
             }
+        }
+        // A snooze whose end has passed drops out of the lists as soon as the clock passes it.
+        if self
+            .snoozes
+            .iter()
+            .any(|e| !e.removed && e.until.is_some_and(|u| u <= now))
+        {
+            self.prune_snoozes();
         }
         // Library sync timer (checked once a minute).
         if now - self.last_sync_check >= 60_000.0 {
@@ -1009,6 +1043,7 @@ impl Actor {
             Err(e) => self.log("warn", format!("stream cache reconcile: {e}")),
         }
         self.downloads.save_traffic();
+        self.prune_snoozes();
     }
 
     // -- persistence ----------------------------------------------------------

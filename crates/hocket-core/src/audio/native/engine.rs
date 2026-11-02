@@ -1062,12 +1062,32 @@ fn url_extension(url: &str) -> Option<String> {
     Some(ext.to_ascii_lowercase())
 }
 
+/// What a second engine needs in order to play a preview on the same device.
+struct PreviewKit {
+    fetcher: Arc<dyn RangeFetcher>,
+    runtime: tokio::runtime::Handle,
+    output: OutputConfig,
+    audio: AudioSettings,
+}
+
 /// The native backend handle. See the module docs.
 pub struct NativeBackend {
     tx: Sender<Cmd>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
     devices: Arc<Mutex<Vec<OutputDevice>>>,
     watcher: Mutex<Option<DeviceWatcher>>,
+    reports: ReportSink,
+    /// Current output and DSP, so a preview opened later matches the main engine.
+    kit: Mutex<PreviewKit>,
+    /// Last gain sent to the engine, mirrored onto the preview player.
+    gain: Mutex<f64>,
+    /// A second engine for song previews. The main item stays loaded.
+    preview: Mutex<Option<Box<NativeBackend>>>,
+    /// Key of the preview currently loaded, so a late end from the previous
+    /// song is not taken as the end of this one.
+    preview_key: Arc<Mutex<String>>,
+    /// Whether the preview was last asked to play, for position reports.
+    preview_playing: Arc<AtomicBool>,
 }
 
 impl NativeBackend {
@@ -1093,16 +1113,22 @@ impl NativeBackend {
         } else {
             None
         };
-        let params = EngineParams {
-            rx,
-            tx: tx.clone(),
-            sink,
-            fetcher: config.fetcher,
-            runtime: config.runtime,
+        let kit = PreviewKit {
+            fetcher: config.fetcher.clone(),
+            runtime: config.runtime.clone(),
             output: OutputConfig {
                 device_id: config.audio.output_device.clone(),
                 ..config.output
             },
+            audio: config.audio.clone(),
+        };
+        let params = EngineParams {
+            rx,
+            tx: tx.clone(),
+            sink: sink.clone(),
+            fetcher: config.fetcher,
+            runtime: config.runtime,
+            output: kit.output.clone(),
             dsp: DspSettings::from(&config.audio),
             gapless: config.audio.gapless,
             exclusive: config.audio.exclusive,
@@ -1116,7 +1142,94 @@ impl NativeBackend {
             thread: Mutex::new(Some(thread)),
             devices,
             watcher: Mutex::new(watcher),
+            reports: sink,
+            kit: Mutex::new(kit),
+            gain: Mutex::new(1.0),
+            preview: Mutex::new(None),
+            preview_key: Arc::new(Mutex::new(String::new())),
+            preview_playing: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// The preview engine, opened on the same device the first time a
+    /// preview is asked for. Its reports are rewritten as preview reports
+    /// so the core never mistakes them for the main item.
+    fn ensure_preview(&self) -> Result<(), BackendError> {
+        if self.preview.lock().is_some() {
+            return Ok(());
+        }
+        let gain = *self.gain.lock();
+        let kit = {
+            let kit = self.kit.lock();
+            PreviewKit {
+                fetcher: kit.fetcher.clone(),
+                runtime: kit.runtime.clone(),
+                output: kit.output.clone(),
+                audio: kit.audio.clone(),
+            }
+        };
+        let parent = self.reports.clone();
+        let current_key = self.preview_key.clone();
+        let wanted = self.preview_playing.clone();
+        let sink: ReportSink = Arc::new(move |report| {
+            let key = match &report {
+                BackendReport::Ready { key, .. }
+                | BackendReport::Playing { key, .. }
+                | BackendReport::Paused { key, .. }
+                | BackendReport::Position { key, .. }
+                | BackendReport::Ended { key }
+                | BackendReport::Error { key, .. } => Some(key),
+                _ => None,
+            };
+            if key.is_some_and(|k| k != &*current_key.lock()) {
+                return;
+            }
+            let mapped = match report {
+                BackendReport::Ready { duration_ms, .. } => {
+                    Some(BackendReport::PreviewReady { duration_ms })
+                }
+                BackendReport::Playing { position_ms, .. } => {
+                    Some(BackendReport::PreviewProgress {
+                        position_ms,
+                        playing: true,
+                    })
+                }
+                BackendReport::Paused { position_ms, .. } => Some(BackendReport::PreviewProgress {
+                    position_ms,
+                    playing: false,
+                }),
+                // A position report says nothing about play/pause: it may
+                // have been queued before a pause, so it carries what was
+                // last asked of the preview, not "playing".
+                BackendReport::Position { position_ms, .. } => {
+                    Some(BackendReport::PreviewProgress {
+                        position_ms,
+                        playing: wanted.load(Ordering::Relaxed),
+                    })
+                }
+                BackendReport::Ended { .. } => Some(BackendReport::PreviewEnded),
+                BackendReport::Error { .. } => Some(BackendReport::PreviewFailed),
+                _ => None,
+            };
+            if let Some(mapped) = mapped {
+                parent(mapped);
+            }
+        });
+        let cfg = NativeConfig {
+            fetcher: kit.fetcher.clone(),
+            runtime: kit.runtime.clone(),
+            output: OutputConfig {
+                device_id: kit.output.device_id.clone(),
+                sample_rate: None,
+                null_sink: kit.output.null_sink,
+            },
+            audio: kit.audio.clone(),
+            watch_devices: false,
+        };
+        let child = NativeBackend::new(cfg, sink)?;
+        let _ = child.set_volume(gain);
+        *self.preview.lock() = Some(Box::new(child));
+        Ok(())
     }
 
     fn send(&self, cmd: Cmd) -> Result<(), BackendError> {
@@ -1125,9 +1238,14 @@ impl NativeBackend {
 
     /// Apply new DSP / gapless / exclusive settings.
     pub fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        self.kit.lock().audio = settings.clone();
         self.send(Cmd::SetDsp(DspSettings::from(settings)))?;
         self.send(Cmd::SetGapless(settings.gapless))?;
-        self.send(Cmd::SetExclusive(settings.exclusive))
+        self.send(Cmd::SetExclusive(settings.exclusive))?;
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_audio_settings(settings);
+        }
+        Ok(())
     }
 
     /// Re-enumerate devices now (`Command::RefreshOutputDevices`).
@@ -1182,7 +1300,12 @@ impl PlaybackBackend for NativeBackend {
         self.send(Cmd::Seek(position_ms))
     }
     fn set_volume(&self, volume: f64) -> Result<(), BackendError> {
-        self.send(Cmd::SetVolume(clamp_volume(volume)))
+        let volume = clamp_volume(volume);
+        *self.gain.lock() = volume;
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_volume(volume);
+        }
+        self.send(Cmd::SetVolume(volume))
     }
     fn pre_buffer(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
         self.send(Cmd::PreBuffer {
@@ -1194,6 +1317,10 @@ impl PlaybackBackend for NativeBackend {
         self.send(Cmd::DiscardPreBuffer)
     }
     fn set_gapless(&self, enabled: bool) -> Result<(), BackendError> {
+        self.kit.lock().audio.gapless = enabled;
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_gapless(enabled);
+        }
         self.send(Cmd::SetGapless(enabled))
     }
     fn set_output_device(&self, id: Option<String>) -> Result<(), BackendError> {
@@ -1204,16 +1331,77 @@ impl PlaybackBackend for NativeBackend {
                 return Err(BackendError::UnknownDevice(id.clone()));
             }
         }
+        self.kit.lock().output.device_id = id.clone();
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_output_device(id.clone());
+        }
         self.send(Cmd::SetOutputDevice(id))
     }
     fn output_devices(&self) -> Vec<OutputDevice> {
         self.devices.lock().clone()
     }
     fn set_exclusive(&self, exclusive: bool) -> Result<(), BackendError> {
+        self.kit.lock().audio.exclusive = exclusive;
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_exclusive(exclusive);
+        }
         self.send(Cmd::SetExclusive(exclusive))
     }
     fn name(&self) -> &'static str {
         "native"
+    }
+
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        self.ensure_preview()?;
+        *self.preview_key.lock() = source.key.clone();
+        self.preview_playing.store(true, Ordering::Relaxed);
+        let loaded = {
+            let slot = self.preview.lock();
+            match slot.as_ref() {
+                Some(preview) => preview.load(source, None, position_ms, true),
+                None => Err(BackendError::NotRunning),
+            }
+        };
+        if loaded.is_err() {
+            *self.preview_key.lock() = String::new();
+        }
+        loaded
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        self.preview_playing.store(true, Ordering::Relaxed);
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Ok(());
+        };
+        preview.play()
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        self.preview_playing.store(false, Ordering::Relaxed);
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Ok(());
+        };
+        preview.pause()
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Ok(());
+        };
+        preview.seek(position_ms)
+    }
+
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        self.preview_playing.store(false, Ordering::Relaxed);
+        *self.preview_key.lock() = String::new();
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Ok(());
+        };
+        preview.stop()
     }
 }
 

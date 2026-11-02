@@ -28,10 +28,10 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState, Ms,
-    PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey, QueueMode, RepeatMode,
-    SavedQueue, ServerId, SessionDocument, SessionId, Setting, StashEntry, TrackId, TransportLease,
-    UndoEntry,
+    AlbumResumeEntry, AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
+    LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey,
+    QueueMode, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, Snooze,
+    StashEntry, TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -213,6 +213,14 @@ pub struct ReplicaState {
     /// (`crate::stash`).
     #[serde(default)]
     pub stash: Vec<StashEntry>,
+    /// The account's snoozes: LWW set keyed on track id, tombstones included
+    /// (`crate::snooze`).
+    #[serde(default)]
+    pub snoozes: Vec<Snooze>,
+    /// Where albums were left off: LWW set keyed on album id, tombstones included
+    /// (`crate::album_resume`).
+    #[serde(default)]
+    pub album_resumes: Vec<AlbumResumeEntry>,
     /// Per-device last seen.
     #[serde(default)]
     pub devices: Vec<DeviceLease>,
@@ -345,6 +353,9 @@ pub enum SessionOp {
         label: String,
         shuffle: bool,
         save_outgoing: bool,
+        /// Where the chosen track starts. Absent on older peers, who start at 0.
+        #[serde(default)]
+        start_position_ms: Ms,
     },
     PlayNext {
         server_id: ServerId,
@@ -437,6 +448,7 @@ impl SessionOp {
                 start_index,
                 label,
                 shuffle,
+                start_position_ms,
             } => SessionOp::PlayTracks {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
@@ -444,6 +456,7 @@ impl SessionOp {
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
+                start_position_ms: *start_position_ms,
             },
             Command::PlayNext {
                 server_id,
@@ -523,6 +536,16 @@ impl SessionOp {
             self,
             SessionOp::MoveQueueItem { .. } | SessionOp::RemoveQueueItems { .. }
         )
+    }
+
+    /// Where a `PlayTracks` should start. Other ops start at the beginning.
+    pub fn start_position_ms(&self) -> Ms {
+        match self {
+            SessionOp::PlayTracks {
+                start_position_ms, ..
+            } => *start_position_ms,
+            _ => 0,
+        }
     }
 
     /// What the op is and the queue keys it names, for a log line (never the
@@ -857,6 +880,16 @@ pub enum Msg {
     StashSync {
         entries: Vec<StashEntry>,
     },
+    /// Either direction. Snoozes, merged LWW on `updatedAt` per track id
+    /// (`crate::snooze::merge`). Older builds drop it.
+    SnoozeSync {
+        entries: Vec<Snooze>,
+    },
+    /// Either direction. Album resume points, merged LWW per album id
+    /// (`crate::album_resume::merge`). Older builds drop it.
+    AlbumResumeSync {
+        entries: Vec<AlbumResumeEntry>,
+    },
 
     // -- undo -----------------------------------------------------------
     /// Either direction. A session-tier undo entry shared with the session,
@@ -971,6 +1004,8 @@ impl Msg {
         "savedQueuesSync",
         "settingsSync",
         "stashSync",
+        "snoozeSync",
+        "albumResumeSync",
         "undoEntryShared",
         "libraryEdited",
         "diagnosticsRequest",
@@ -1021,6 +1056,8 @@ impl Msg {
             Msg::SavedQueuesSync { .. } => "savedQueuesSync",
             Msg::SettingsSync { .. } => "settingsSync",
             Msg::StashSync { .. } => "stashSync",
+            Msg::SnoozeSync { .. } => "snoozeSync",
+            Msg::AlbumResumeSync { .. } => "albumResumeSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
@@ -1232,6 +1269,7 @@ mod tests {
             Msg::SavedQueuesSync { queues: vec![] },
             Msg::SettingsSync { settings: vec![] },
             Msg::StashSync { entries: vec![] },
+            Msg::AlbumResumeSync { entries: vec![] },
             Msg::LibraryEdited {
                 device_id: "a".into(),
                 items: vec![],
@@ -1296,6 +1334,8 @@ mod tests {
             saved_queues: vec![],
             settings: vec![],
             stash: vec![],
+            snoozes: vec![],
+            album_resumes: vec![],
             devices: vec![],
             transport_lease: TransportLease::default(),
             last_stamp: None,

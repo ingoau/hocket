@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -51,11 +52,18 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -287,14 +295,54 @@ internal fun HeroLine(text: String, modifier: Modifier = Modifier, style: TextSt
     Text(text, style = style, color = color, fontWeight = fontWeight, textAlign = TextAlign.Center, maxLines = maxLines, overflow = TextOverflow.Ellipsis, modifier = modifier)
 }
 
-/** The hero's Play: a medium filled button with its label, sharing the row with Shuffle. */
+/** The hero's Play: a medium filled button with its label, sharing the row with Shuffle.
+ *  With [resume], it is Resume (its own icon and label, the same width): a tap continues, a long press starts over. */
 @Composable
-internal fun RowScope.HeroPlayButton(onClick: () -> Unit, modifier: Modifier = Modifier, pos: GroupPos = GroupPos.Start) {
-    Button(onClick = onClick, shapes = groupButtonShapes(pos), modifier = modifier.weight(1f).heightIn(min = ButtonDefaults.MediumContainerHeight).testTag("detail.play"),
-        contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
-        Icon(HocketIcons.Filled.PlayArrow, null, Modifier.size(ButtonDefaults.MediumIconSize))
-        Spacer(Modifier.size(ButtonDefaults.MediumIconSpacing))
-        Text(stringResource(R.string.action_play), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight), maxLines = 1)
+internal fun RowScope.HeroPlayButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    pos: GroupPos = GroupPos.Start,
+    resume: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+) {
+    val label = stringResource(if (resume) R.string.action_resume else R.string.action_play)
+    val a11y = if (resume) stringResource(R.string.action_resume_long_press) else label
+    val icon = if (resume) HocketIcons.Filled.PlayCircle else HocketIcons.Filled.PlayArrow
+    val height = ButtonDefaults.MediumContainerHeight
+    val pad = ButtonDefaults.contentPaddingFor(height)
+    val base = modifier.weight(1f).heightIn(min = height).testTag("detail.play")
+    if (resume && onLongClick != null) {
+        val haptics = LocalHapticFeedback.current
+        val startOver = stringResource(R.string.action_start_over)
+        Surface(
+            shape = groupShape(pos),
+            color = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            modifier = base.combinedClickable(
+                onClick = onClick,
+                onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.SegmentTick); onLongClick() },
+                onLongClickLabel = startOver,
+            ).clearAndSetSemantics {
+                val press = onClick
+                val hold = onLongClick
+                role = Role.Button
+                contentDescription = a11y
+                this.onClick(label = a11y) { press(); true }
+                this.onLongClick(label = startOver) { haptics.performHapticFeedback(HapticFeedbackType.SegmentTick); hold(); true }
+            },
+        ) {
+            Row(Modifier.fillMaxWidth().heightIn(min = height).padding(pad), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, Modifier.size(ButtonDefaults.MediumIconSize))
+                Spacer(Modifier.size(ButtonDefaults.MediumIconSpacing))
+                Text(label, style = ButtonDefaults.textStyleFor(height), maxLines = 1)
+            }
+        }
+    } else {
+        Button(onClick = onClick, shapes = groupButtonShapes(pos), modifier = base, contentPadding = pad) {
+            Icon(icon, null, Modifier.size(ButtonDefaults.MediumIconSize))
+            Spacer(Modifier.size(ButtonDefaults.MediumIconSpacing))
+            Text(label, style = ButtonDefaults.textStyleFor(height), maxLines = 1)
+        }
     }
 }
 

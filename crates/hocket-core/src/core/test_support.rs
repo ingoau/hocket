@@ -599,6 +599,26 @@ impl PlaybackBackend for RecordingBackend {
     fn name(&self) -> &'static str {
         self.inner.name()
     }
+    fn preview_load(
+        &self,
+        source: MediaSource,
+        position_ms: u32,
+    ) -> Result<(), crate::audio::backend::BackendError> {
+        self.sources.lock().push(source.clone());
+        self.inner.preview_load(source, position_ms)
+    }
+    fn preview_play(&self) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.preview_play()
+    }
+    fn preview_pause(&self) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.preview_pause()
+    }
+    fn preview_seek(&self, position_ms: u32) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.preview_seek(position_ms)
+    }
+    fn preview_stop(&self) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.preview_stop()
+    }
 }
 
 /// How [`FakeUpstream`] answers `stream` for one track.

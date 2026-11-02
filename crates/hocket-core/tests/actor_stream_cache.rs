@@ -544,6 +544,7 @@ async fn clear_stream_cache_defers_files_in_use() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -591,6 +592,7 @@ async fn clear_stream_cache_defers_files_in_use() {
         start_index: 0,
         label: "Other".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -612,6 +614,7 @@ async fn backend_sources_carry_no_credentials_and_gapless_preload_reads_through_
         start_index: 0,
         label: "Three".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;

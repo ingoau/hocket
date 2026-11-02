@@ -486,6 +486,11 @@ impl Actor {
             self.prefetch_tick(self.now());
         }
         if owns {
+            // A preview started while someone else held the transport must
+            // not keep playing once this device takes it over.
+            if self.preview.as_ref().is_some_and(|p| p.hold.is_none()) {
+                self.stop_preview(false);
+            }
             self.playback.consecutive_skips = 0;
             // Taking over from a device that skipped tracks while offline:
             // here they may play.
@@ -638,6 +643,15 @@ impl Actor {
 
     /// Apply a transport command on this device (we own transport).
     pub(crate) fn apply_transport_command(&mut self, cmd: TransportCommand) {
+        // A Connect peer's command lands here without passing
+        // `handle_command`, so a preview has to give way here too. Play,
+        // stop and seek take the output back. A pause leaves the preview
+        // playing but drops the hold, so closing it does not undo the pause.
+        match cmd {
+            TransportCommand::Pause => self.drop_preview_hold(),
+            TransportCommand::SetVolume { .. } => {}
+            _ => self.stop_preview(false),
+        }
         match cmd {
             TransportCommand::Play => {
                 self.playback.want_playing = true;
@@ -659,8 +673,10 @@ impl Actor {
             TransportCommand::Stop => {
                 self.playback.want_playing = false;
                 if self.playback.loaded {
+                    // Pause first so the album resume point keeps this position. The rewind
+                    // below is only the transport; it is not where the album was left.
                     self.set_playing(false);
-                    self.seek_to(0);
+                    self.seek_to_inner(0, false);
                 }
                 self.engine_input(Input::ReleaseTransport);
             }
@@ -770,6 +786,12 @@ impl Actor {
     }
 
     pub(crate) fn set_playing(&mut self, playing: bool) {
+        self.set_playing_inner(playing, true);
+    }
+
+    /// `save_position` persists the resume point. A preview pause passes
+    /// false: the preview must not rewrite resume state.
+    pub(crate) fn set_playing_inner(&mut self, playing: bool, save_position: bool) {
         if !playing && self.playback.loaded && self.playback.focus_suspended {
             // Paused while focus is away: the backend must not resume later.
             self.playback.focus_suspended = false;
@@ -799,14 +821,20 @@ impl Actor {
         }
         let actions = self.scrobbler.set_playing(playing);
         self.apply_scrobble_actions(actions);
-        if !playing {
+        if !playing && save_position {
             self.save_position();
+            self.capture_album_resume(true);
         }
         self.stamp();
         self.emit_transport();
     }
 
     pub(crate) fn seek_to(&mut self, position_ms: Ms) {
+        self.seek_to_inner(position_ms, true);
+    }
+
+    /// `record` is false for the rewind Stop does after the resume point was saved.
+    fn seek_to_inner(&mut self, position_ms: Ms, record: bool) {
         let cap = self.playback.duration_ms();
         let position_ms = if cap > 0 {
             position_ms.min(cap)
@@ -815,6 +843,9 @@ impl Actor {
         };
         if !self.playback.loaded {
             self.playback.position_ms = position_ms;
+            if record {
+                self.capture_album_resume(true);
+            }
             return;
         }
         self.playback.position_ms = position_ms;
@@ -823,6 +854,9 @@ impl Actor {
         // silently); a backend still short of data reports buffering again.
         if self.playback.pending_load.is_some() {
             // The deferred load starts there.
+            if record {
+                self.capture_album_resume(true);
+            }
             self.stamp();
             self.emit_transport();
             return;
@@ -833,6 +867,9 @@ impl Actor {
         }
         if let Some(id) = self.playback.track_id().map(str::to_string) {
             self.scrobbler.seeked(&id, position_ms);
+        }
+        if record {
+            self.capture_album_resume(true);
         }
         self.stamp();
         self.emit_transport();
@@ -1021,6 +1058,47 @@ impl Actor {
     // -- backend reports -----------------------------------------------------------
 
     pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
+        if self.preview.is_some() {
+            match &report {
+                // The preview player taking the output is not another app,
+                // and a Playing report must not start the main item under it.
+                BackendReport::AudioFocusLost { .. } => return,
+                BackendReport::Playing { .. } => {
+                    let _ = self.backend.pause();
+                    return;
+                }
+                _ => {}
+            }
+        }
+        match &report {
+            BackendReport::PreviewReady { duration_ms } => {
+                self.on_preview_ready(*duration_ms);
+                return;
+            }
+            BackendReport::PreviewProgress {
+                position_ms,
+                playing,
+            } => {
+                self.on_preview_progress(*position_ms, *playing);
+                return;
+            }
+            BackendReport::PreviewEnded => {
+                self.stop_preview(true);
+                return;
+            }
+            BackendReport::PreviewInterrupted => {
+                self.stop_preview(false);
+                return;
+            }
+            BackendReport::PreviewFailed => {
+                if self.preview.is_some() {
+                    self.toast("Couldn't preview this song", None);
+                }
+                self.stop_preview(true);
+                return;
+            }
+            _ => {}
+        }
         if !matches!(
             report,
             BackendReport::Position { .. }
@@ -1338,6 +1416,11 @@ impl Actor {
                 self.stamp();
                 self.emit_transport();
             }
+            BackendReport::PreviewReady { .. }
+            | BackendReport::PreviewProgress { .. }
+            | BackendReport::PreviewEnded
+            | BackendReport::PreviewFailed
+            | BackendReport::PreviewInterrupted => {}
             BackendReport::OutputDevicesChanged { devices } => {
                 self.output_devices = devices.clone();
                 self.emit(Event::OutputDevicesChanged { devices });
@@ -1602,6 +1685,9 @@ impl Actor {
                 let _ = self.backend.set_volume(self.effective_volume());
             }
             SleepAction::Stop => {
+                // The timer stops all audio here, and closing a preview
+                // afterwards must not start the main player again.
+                self.stop_preview(false);
                 self.playback.want_playing = false;
                 self.set_playing(false);
                 self.playback.fade_gain = None;
@@ -1622,14 +1708,22 @@ impl Actor {
     ) -> MediaSessionState {
         let art = self.media_session_artwork(queue);
         let actions = self.registry.media_session_actions(&self.state_view());
-        derive_media_session_state(
+        let mut state = derive_media_session_state(
             queue,
             transport,
             self.session_now(),
             art,
             self.owns_transport(),
             Some(actions),
-        )
+        );
+        if let Some(meta) = state.metadata.as_mut() {
+            if let Some(id) = meta.track_id.as_deref() {
+                meta.stashed = crate::stash::live(&self.stash)
+                    .iter()
+                    .any(|entry| entry.track_id == id);
+            }
+        }
+        state
     }
 
     /// The OS media session's state, unless it would only repeat the last

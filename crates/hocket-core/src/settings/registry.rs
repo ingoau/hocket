@@ -52,6 +52,8 @@ pub mod keys {
     pub const QUEUE_MODE: &str = "queue.mode";
     pub const QUEUE_SAVED_CAP: &str = "queue.savedCap";
     pub const QUEUE_HISTORY_CAP: &str = "queue.historyCap";
+    /// Offer to continue an album that was started from the album and left unfinished.
+    pub const PLAYBACK_RESUME_ALBUMS: &str = "playback.resumeAlbums";
     pub const AUTOPLAY_SETTINGS: &str = "autoplay.settings";
     pub const AUTOPLAY_CONTEXT_OVERRIDES: &str = "autoplay.contextOverrides";
     pub const AUDIO_SETTINGS: &str = "audio.settings";
@@ -358,6 +360,9 @@ pub const SWIPE_QUEUE_ACTIONS: &[&str] = &[
     "love",
     "addToPlaylist",
     "download",
+    "snooze",
+    "unsnooze",
+    "preview",
 ];
 
 /// What a touch gesture on the Pebble's Now Playing opens.
@@ -381,11 +386,13 @@ pub const PEBBLE_MENU_ITEMS: &[&str] = &[
     "downloads",
     "search",
     "lyrics",
+    "stash",
 ];
 
-/// Rows of the Pebble's actions menu.
+/// Rows of the Pebble's actions menu. Stash is on by default (see the watch's
+/// `DEFAULT_ACTIONS`); lyrics stays off until chosen.
 pub const PEBBLE_ACTION_ITEMS: &[&str] = &[
-    "rating", "love", "shuffle", "repeat", "goAlbum", "goArtist", "playOn", "lyrics",
+    "rating", "love", "stash", "shuffle", "repeat", "goAlbum", "goArtist", "playOn", "lyrics",
 ];
 
 /// Sections of the Pebble's library browser.
@@ -434,6 +441,9 @@ pub const SWIPE_LIST_ACTIONS: &[&str] = &[
     "addToPlaylist",
     "download",
     "stash",
+    "snooze",
+    "unsnooze",
+    "preview",
 ];
 
 /// What swiping up on the phone's full player (on its artwork) opens: the
@@ -461,6 +471,9 @@ pub static REGISTRY: &[SettingDef] = &[
         SettingKind::Int { min: 10, max: 1000 },
         || json!(200),
     ),
+    def(PLAYBACK_RESUME_ALBUMS, Synced, SettingKind::Bool, || {
+        json!(true)
+    }),
     json_def(AUTOPLAY_SETTINGS, Synced, autoplay_default, autoplay_valid),
     json_def(
         AUTOPLAY_CONTEXT_OVERRIDES,

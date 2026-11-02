@@ -1,0 +1,531 @@
+//! Song preview: a second player that gives this device's playback back
+//! and leaves a Connect peer alone.
+
+#![cfg(feature = "sim")]
+
+use hocket_core::api::*;
+use hocket_core::audio::scripted::ScriptedCall;
+use hocket_core::core::test_support::{seeded_server, TestCore};
+use hocket_core::sim::SimTime;
+
+async fn synced_core(name: &str) -> TestCore {
+    let t = TestCore::start(name, seeded_server(8, 200.0)).await;
+    t.wait_until(30_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+    })
+    .await;
+    t
+}
+
+fn preview_of(events: &[Event]) -> Option<PreviewState> {
+    events.iter().rev().find_map(|e| match e {
+        Event::PreviewChanged { preview } => Some(preview.clone()),
+        _ => None,
+    })?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_pauses_here_and_resumes_at_the_same_position() {
+    let t = synced_core("preview").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(3_000.0).await;
+    let before = t.transport().await;
+    let position = before.position.position_ms;
+    assert!(before.position.is_playing);
+    assert!(position >= 2_000, "playback moved, at {position}");
+
+    t.events.clear();
+    t.run(Command::PreviewStart {
+        track_id: "t3".into(),
+    })
+    .await;
+    let transport = t.transport().await;
+    assert!(!transport.position.is_playing, "main playback pauses");
+    assert!(
+        transport.position.position_ms.abs_diff(position) < 500,
+        "position held: was {position}, now {}",
+        transport.position.position_ms
+    );
+    let preview = preview_of(&t.events.all()).expect("preview started");
+    assert_eq!(preview.track_id, "t3");
+    assert!(preview.playing);
+    // 200 s song, opened 30% in.
+    assert_eq!(preview.position_ms, 60_000);
+    assert!(!t.backend.is_playing(), "the main player is paused");
+    assert!(
+        t.backend.log().iter().any(|c| matches!(
+            c,
+            ScriptedCall::PreviewLoad {
+                position_ms: 60_000,
+                ..
+            }
+        )),
+        "preview loads at 30%"
+    );
+    // The main item is still the one that was playing, not the preview.
+    let (key, _) = t.backend.current().expect("main item stays loaded");
+    assert_ne!(key, "preview:t3");
+
+    let history: i64 = t
+        .open_db()
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM play_history WHERE track_id = 't3'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(history, 0, "a preview is not a play");
+
+    t.run(Command::PreviewToggle).await;
+    let paused = preview_of(&t.events.all()).expect("still previewing");
+    assert!(!paused.playing);
+
+    t.run(Command::PreviewSeek {
+        position_ms: 80_000,
+    })
+    .await;
+    let sought = preview_of(&t.events.all()).expect("seek");
+    assert_eq!(sought.position_ms, 80_000);
+
+    t.run(Command::PreviewStop).await;
+    assert!(preview_of(&t.events.all()).is_none(), "preview closed");
+    let after = t.transport().await;
+    assert!(after.position.is_playing, "main playback resumes");
+    assert!(
+        after.position.position_ms.abs_diff(position) < 800,
+        "resumed at {position}, got {}",
+        after.position.position_ms
+    );
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+    assert!(t.queue().await.history.is_empty(), "the queue did not move");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_on_a_peer_leaves_the_player_alone() {
+    let server = seeded_server(6, 200.0);
+    let net = hocket_core::core::io::memory::MemoryNet::new();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server, Some(net), 2, clock).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.backend.is_playing());
+    assert!(!b.backend.is_playing());
+    let owner = a.snapshot().await.transport.lease.owner.clone();
+    assert_eq!(owner.as_deref(), Some(a.device_id.as_str()));
+
+    b.events.clear();
+    b.run(Command::PreviewStart {
+        track_id: "t2".into(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+
+    assert!(a.backend.is_playing(), "the peer keeps playing");
+    assert_eq!(
+        a.snapshot().await.transport.lease.owner.as_deref(),
+        Some(a.device_id.as_str())
+    );
+    let preview = preview_of(&b.events.all()).expect("b previews locally");
+    assert_eq!(preview.track_id, "t2");
+    assert!(preview.playing);
+    assert!(
+        b.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::PreviewLoad { .. })),
+        "the preview is played on this device"
+    );
+    // Nothing was asked of the owner's player beyond what it was already doing.
+    assert!(
+        !a.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::Pause | ScriptedCall::Stop)),
+        "the peer was not paused"
+    );
+}
+
+/// The transport shows paused during a preview, so play (toggle) must start
+/// it, and pause must not play a moment of audio on the way to staying paused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transport_commands_during_a_preview_follow_what_the_user_hears() {
+    let t = synced_core("preview-transport").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid.clone(),
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    t.run(Command::PreviewStart {
+        track_id: "t3".into(),
+    })
+    .await;
+    assert!(!t.transport().await.position.is_playing);
+
+    t.backend.clear_log();
+    t.run(Command::Pause).await;
+    assert!(preview_of(&t.events.all()).is_none());
+    assert!(!t.transport().await.position.is_playing);
+    assert!(
+        !t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::Play)),
+        "pause must not restart the main player"
+    );
+
+    t.run(Command::Play).await;
+    t.run_for(500.0).await;
+    t.run(Command::PreviewStart {
+        track_id: "t4".into(),
+    })
+    .await;
+    t.run(Command::TogglePlay).await;
+    assert!(preview_of(&t.events.all()).is_none());
+    assert!(
+        t.transport().await.position.is_playing,
+        "play, while the preview had main looking paused, starts it"
+    );
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_end_resumes_and_an_interruption_does_not() {
+    let t = synced_core("preview-end").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    // 200 s song. Land just before the end and let the preview finish.
+    t.run(Command::PreviewSeek {
+        position_ms: 199_500,
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    assert!(
+        preview_of(&t.events.all()).is_none(),
+        "the song ending stops the preview"
+    );
+    assert!(
+        t.transport().await.position.is_playing,
+        "main playback resumes"
+    );
+
+    t.run(Command::PreviewStart {
+        track_id: "t2".into(),
+    })
+    .await;
+    t.backend.finish_preview(true);
+    t.core.settle().await;
+    assert!(preview_of(&t.events.all()).is_none());
+    assert!(
+        !t.transport().await.position.is_playing,
+        "another app taking the output does not resume main playback"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preview_that_cannot_load_gives_playback_back() {
+    let t = synced_core("preview-fail").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.backend.fail_key("preview:t5");
+    t.run(Command::PreviewStart {
+        track_id: "t5".into(),
+    })
+    .await;
+    assert!(preview_of(&t.events.all()).is_none());
+    assert!(t.transport().await.position.is_playing);
+    assert!(t.backend.is_playing());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
+    let t = synced_core("preview-hold").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    t.run(Command::PreviewStart {
+        track_id: "t2".into(),
+    })
+    .await;
+    let preview = preview_of(&t.events.all()).expect("switched preview");
+    assert_eq!(preview.track_id, "t2");
+    assert!(!t.transport().await.position.is_playing);
+    t.run(Command::PreviewStop).await;
+    assert!(
+        t.transport().await.position.is_playing,
+        "stopping the second preview still resumes the original track"
+    );
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+
+    t.run(Command::Pause).await;
+    assert!(!t.transport().await.position.is_playing);
+    t.run(Command::PreviewStart {
+        track_id: "t3".into(),
+    })
+    .await;
+    t.run(Command::PreviewStop).await;
+    assert!(
+        !t.transport().await.position.is_playing,
+        "a track that was paused stays paused"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_after_pausing_a_buffering_track_stays_paused() {
+    let t = synced_core("preview-paused-buffering").await;
+    let sid = t.server_id.clone();
+    // Ready has not arrived, so the track is still marked buffering after pause.
+    t.backend.set_load_latency_ms(5_000.0);
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run(Command::Pause).await;
+    let transport = t.transport().await;
+    assert!(!transport.position.is_playing);
+    assert!(
+        transport.buffering,
+        "the pause landed while the track was still buffering"
+    );
+    t.run(Command::PreviewStart {
+        track_id: "t2".into(),
+    })
+    .await;
+    assert!(preview_of(&t.events.all()).is_some());
+    t.run(Command::PreviewStop).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+    assert!(
+        !t.transport().await.position.is_playing,
+        "pausing while the track is still buffering stays paused after the preview"
+    );
+    t.backend.set_load_latency_ms(0.0);
+    t.run_for(1_000.0).await;
+    assert!(!t.transport().await.position.is_playing);
+    assert!(!t.backend.is_playing());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_while_the_track_is_still_loading_resumes_it() {
+    let t = synced_core("preview-loading").await;
+    let sid = t.server_id.clone();
+    t.backend.set_load_latency_ms(5_000.0);
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    assert!(preview_of(&t.events.all()).is_some());
+    assert!(
+        !t.backend.is_playing(),
+        "the loading track does not play over the preview"
+    );
+    t.run(Command::PreviewStop).await;
+    t.backend.set_load_latency_ms(0.0);
+    t.run_for(1_000.0).await;
+    assert!(
+        t.transport().await.position.is_playing,
+        "the track that was loading resumes after the preview"
+    );
+}
+
+/// A Connect peer's play or pause reaches this device without passing
+/// through its own command handler. Play takes the output back from the
+/// preview; pause is kept when the preview closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peers_transport_commands_during_a_preview_are_kept() {
+    let server = seeded_server(6, 200.0);
+    let net = hocket_core::core::io::memory::MemoryNet::new();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server, Some(net), 2, clock).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.backend.is_playing());
+
+    // Pause from the peer, then close the preview: main stays paused.
+    a.run(Command::PreviewStart {
+        track_id: "t2".into(),
+    })
+    .await;
+    assert!(!a.backend.is_playing());
+    b.run(Command::Pause).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert!(
+        preview_of(&a.events.all()).is_some(),
+        "a pause leaves the preview playing"
+    );
+    a.run(Command::PreviewStop).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert!(
+        !a.backend.is_playing(),
+        "closing the preview does not undo the peer's pause"
+    );
+    assert!(!a.transport().await.position.is_playing);
+
+    // Play from the peer stops the preview and plays main, without the
+    // preview pausing it again.
+    a.run(Command::PreviewStart {
+        track_id: "t3".into(),
+    })
+    .await;
+    a.events.clear();
+    b.run(Command::Play).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(preview_of(&a.events.all()).is_none(), "the preview closed");
+    assert!(a.backend.is_playing(), "main plays on the owner");
+    assert!(a.transport().await.position.is_playing);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_sleep_timer_stopping_during_a_preview_stays_stopped() {
+    let t = synced_core("preview-sleep").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::SetSleepTimer {
+        timer: Some(SleepTimer {
+            ends_at: Some(t.clock.now_ms() + 2_000.0),
+            stop_at_end_of_track: false,
+        }),
+    })
+    .await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    t.run_for(3_000.0).await;
+    assert!(
+        preview_of(&t.events.all()).is_none(),
+        "the timer stops the preview too"
+    );
+    t.run(Command::PreviewStop).await;
+    t.run_for(500.0).await;
+    assert!(!t.backend.is_playing(), "main playback stays stopped");
+    assert!(!t.transport().await.position.is_playing);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preview_that_fails_while_playing_says_so_and_gives_playback_back() {
+    let t = synced_core("preview-fail-late").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    t.events.clear();
+    t.backend.fail_preview();
+    t.core.settle().await;
+    assert!(preview_of(&t.events.all()).is_none());
+    assert!(
+        t.events.all().iter().any(|e| matches!(
+            e,
+            Event::Toast { toast } if toast.message == "Couldn't preview this song"
+        )),
+        "the failure is shown"
+    );
+    assert!(t.transport().await.position.is_playing);
+    assert!(t.backend.is_playing());
+}

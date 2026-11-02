@@ -22,7 +22,7 @@ export function Filters({ selected }: { selected?: string }) {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
   const play = (id: string) => {
     const f = filters.find((x) => x.id === id);
-    if (f) bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter: f } }, label: filterName(f), sort: f.sort, tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
+    if (f) bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter: f } }, label: filterName(f), sort: f.sort, tracks: [] }, shuffle: false, saveOutgoing: true } } });
   };
   const current = selected ?? filters[0]?.id;
   return (

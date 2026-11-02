@@ -18,6 +18,7 @@ object ActionLabels {
         ActionIds.PLAY_SHUFFLED -> R.string.action_label_play_shuffled
         ActionIds.PLAY_NEXT -> R.string.action_label_play_next
         ActionIds.PLAY_LATER -> R.string.action_label_play_later
+        ActionIds.PREVIEW -> R.string.action_label_preview
         ActionIds.ADD_TO_PLAYLIST -> R.string.action_label_add_to_playlist
         ActionIds.LOVE -> R.string.action_label_love
         ActionIds.UNLOVE -> R.string.action_label_unlove
@@ -30,6 +31,8 @@ object ActionLabels {
         ActionIds.DOWNLOAD -> R.string.action_label_download
         ActionIds.STASH -> R.string.action_label_stash
         ActionIds.CLEAR_STASH -> R.string.action_label_clear_stash
+        ActionIds.SNOOZE -> R.string.action_label_snooze
+        ActionIds.UNSNOOZE -> R.string.action_label_unsnooze
         ActionIds.UNPIN -> R.string.action_label_unpin
         ActionIds.GO_TO_ALBUM -> R.string.action_label_go_to_album
         ActionIds.GO_TO_ARTIST -> R.string.action_label_go_to_artist

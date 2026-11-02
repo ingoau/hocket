@@ -62,7 +62,7 @@ export function performPin(rp: ResolvedPin, tap: PinTap = pinTap(rp.pin)): void 
   const serverId = app.servers[0]?.id ?? "";
   const id = rp.pin.id;
   const play = (kind: "album" | "artist" | "playlist", shuffle: boolean) =>
-    bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: kind, data: { id } } as never, label: rp.title, sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
+    bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: kind, data: { id } } as never, label: rp.title, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
   switch (rp.kind) {
     case "track":
       bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: [id], start_index: 0, label: rp.title, shuffle: false } });

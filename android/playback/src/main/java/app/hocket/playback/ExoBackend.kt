@@ -26,6 +26,8 @@ import app.hocket.core.api.BackendReportPausedInner
 import app.hocket.core.api.BackendReportPlayingInner
 import app.hocket.core.api.BackendReportPositionInner
 import app.hocket.core.api.BackendReportPreBufferReadyInner
+import app.hocket.core.api.BackendReportPreviewProgressInner
+import app.hocket.core.api.BackendReportPreviewReadyInner
 import app.hocket.core.api.BackendReportReadyInner
 import app.hocket.core.api.BackendReportSystemVolumeInner
 import app.hocket.core.api.BackendReportTransitionedToNextInner
@@ -157,13 +159,23 @@ class ExoBackend(
         .setDeviceVolumeControlEnabled(true)
         .build()
 
+    /** The preview player. It asks for audio focus; the main player does not treat that as another app. */
+    private var previewPlayer: ExoPlayer? = null
+    private var preferredDevice: android.media.AudioDeviceInfo? = null
+
     init {
         // The output picked in the Connect sheet (speaker, earphones, ...) for this app's playback only.
         AudioOutputs.start(context)
-        AudioOutputs.attach { device -> player.setPreferredAudioDevice(device) }
+        AudioOutputs.attach { device ->
+            preferredDevice = device
+            player.setPreferredAudioDevice(device)
+            previewPlayer?.setPreferredAudioDevice(device)
+        }
     }
 
     private var preBufferPlayer: ExoPlayer? = null
+    private var previewJob: Job? = null
+    private var previewActive = false
     /** The main player's audio session as effect apps see it (the pre-buffer player stays silent). */
     private val effects = AudioEffectSession(context)
     private var preBufferKey: String? = null
@@ -234,7 +246,7 @@ class ExoBackend(
                     PlaybackLog.i("player ${if (playWhenReady) "playing" else "pausing"}: $why")
                 }
                 if (playWhenReady) return
-                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
+                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS && !previewActive) {
                     report(BackendReport.AudioFocusLost(BackendReportAudioFocusLostInner(transient = false)))
                 }
                 // The player stopped meaning to play, whoever asked (a pause while buffering never
@@ -246,7 +258,7 @@ class ExoBackend(
 
             override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
                 PlaybackLog.i("playback suppression: ${PlaybackLog.suppressionReason(playbackSuppressionReason)}")
-                if (playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS) {
+                if (playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS && !previewActive) {
                     report(BackendReport.AudioFocusLost(BackendReportAudioFocusLostInner(transient = true)))
                 }
             }
@@ -341,7 +353,8 @@ class ExoBackend(
      * the media session says about it.
      */
     fun isBusy(): Boolean =
-        recoveryJob?.isActive == true ||
+        previewActive ||
+            recoveryJob?.isActive == true ||
             (player.playWhenReady && (player.playbackState == Player.STATE_BUFFERING || player.playbackState == Player.STATE_READY))
 
     fun handle(command: BackendCommand) {
@@ -417,7 +430,91 @@ class ExoBackend(
                 // "off" is modelled by not preloading a follow-up (the core stops sending `next`).
                 if (!command.data.enabled) while (player.mediaItemCount > 1) player.removeMediaItem(player.mediaItemCount - 1)
             }
+            is BackendCommand.PreviewLoad -> {
+                // Set before the preview player takes focus, so the main player's focus loss is
+                // ours and is not reported as another app interrupting.
+                previewActive = true
+                val p = ensurePreviewPlayer()
+                val source = command.data.source
+                p.setMediaSource(mediaSource(source), command.data.position_ms.toLong())
+                val linear = 10.0.pow(source.gainDb / 20.0)
+                p.volume = (linear * masterVolume).coerceIn(0.0, 1.0).toFloat()
+                p.playWhenReady = true
+                p.prepare()
+            }
+            BackendCommand.PreviewPlay -> previewPlayer?.play()
+            BackendCommand.PreviewPause -> previewPlayer?.pause()
+            is BackendCommand.PreviewSeek -> previewPlayer?.seekTo(command.data.position_ms.toLong())
+            BackendCommand.PreviewStop -> stopPreviewPlayer()
         }
+    }
+
+    private fun ensurePreviewPlayer(): ExoPlayer = previewPlayer ?: ExoPlayer.Builder(context)
+        .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
+        .setHandleAudioBecomingNoisy(true)
+        .setMediaSourceFactory(mediaSourceFactory())
+        .build()
+        .also { p ->
+            p.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    when (playbackState) {
+                        Player.STATE_READY -> {
+                            val duration = p.duration.takeIf { it != C.TIME_UNSET }?.toUInt()
+                            report(BackendReport.PreviewReady(BackendReportPreviewReadyInner(duration)))
+                        }
+                        Player.STATE_ENDED -> {
+                            stopPreviewLoop()
+                            report(BackendReport.PreviewEnded)
+                        }
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    stopPreviewLoop()
+                    report(BackendReport.PreviewFailed)
+                }
+
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    // Another app taking focus, or headphones unplugged: the
+                    // core must not resume main playback into that.
+                    val interrupted = reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS ||
+                        reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY
+                    if (!playWhenReady && interrupted) {
+                        report(BackendReport.PreviewInterrupted)
+                    }
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) startPreviewLoop() else stopPreviewLoop()
+                    if (p.playbackState == Player.STATE_READY) {
+                        report(BackendReport.PreviewProgress(BackendReportPreviewProgressInner(p.currentPosition.coerceAtLeast(0).toUInt(), isPlaying)))
+                    }
+                }
+            })
+            p.setPreferredAudioDevice(preferredDevice)
+            previewPlayer = p
+        }
+
+    private fun stopPreviewPlayer() {
+        stopPreviewLoop()
+        previewPlayer?.let { it.stop(); it.clearMediaItems() }
+        previewActive = false
+    }
+
+    private fun startPreviewLoop() {
+        if (previewJob?.isActive == true) return
+        val p = previewPlayer ?: return
+        previewJob = scope.launch {
+            while (isActive && p.isPlaying) {
+                report(BackendReport.PreviewProgress(BackendReportPreviewProgressInner(p.currentPosition.coerceAtLeast(0).toUInt(), true)))
+                delay(500)
+            }
+        }
+    }
+
+    private fun stopPreviewLoop() {
+        previewJob?.cancel()
+        previewJob = null
     }
 
     /** Current position, or the pre-buffered one when the main player has nothing. */
@@ -448,6 +545,10 @@ class ExoBackend(
         cancelRecovery()
         preBufferPlayer?.release()
         preBufferPlayer = null
+        stopPreviewLoop()
+        previewPlayer?.release()
+        previewPlayer = null
+        previewActive = false
         effects.close()
         AudioOutputs.detach()
         player.release()

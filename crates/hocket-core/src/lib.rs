@@ -14,6 +14,7 @@ pub mod core;
 pub mod util;
 
 pub mod actions;
+pub mod album_resume;
 pub mod artwork;
 pub mod audio;
 pub mod autoplay;
@@ -30,6 +31,7 @@ pub mod outbox;
 pub mod reports;
 pub mod session;
 pub mod settings;
+pub mod snooze;
 pub mod stash;
 pub mod stats;
 pub mod subsonic;

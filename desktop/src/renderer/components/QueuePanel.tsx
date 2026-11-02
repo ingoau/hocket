@@ -308,10 +308,11 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
 
 const QueueRow = memo(function QueueRow({ id, entry, kind, large, selected, focused, sortable, carried, dropAt, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; kind: string; large: boolean; selected: boolean; focused: boolean; sortable: boolean; carried: boolean; dropAt?: "before" | "after"; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.item.key, disabled: !sortable });
+  const snoozed = useApp((s) => s.snoozes.some((x) => x.trackId === entry.track.id));
   const src = entry.item.source;
   const sub = src.type === "autoplay" ? t("queue.autoplayFrom", { reason: src.data.reason }) : entry.track.artist ?? "";
   return (
-    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`qrow ${kind} ${selected ? "selected" : ""} ${isDragging || carried ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
+    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`qrow ${kind} ${selected ? "selected" : ""} ${isDragging || carried ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""} ${snoozed ? "snoozed" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
       onClick={onClick} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} onDragOver={onLibraryOver} title={entry.item.unavailable ? t("queue.unavailable") : undefined}
       {...(sortable ? listeners : {})}
       {...(focused ? { "data-focused": true } : {})}>

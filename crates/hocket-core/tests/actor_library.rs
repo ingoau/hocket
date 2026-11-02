@@ -574,6 +574,7 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -612,6 +613,7 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -790,6 +792,7 @@ async fn pins_download_through_the_job_queue() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;

@@ -103,6 +103,8 @@ pub enum QueueOp {
         label: String,
         shuffle: bool,
         save_outgoing: bool,
+        /// Where the chosen track starts, in audio time.
+        start_position_ms: Ms,
     },
     PlayNext {
         server_id: ServerId,
@@ -210,6 +212,7 @@ impl QueueOp {
                 start_index,
                 label,
                 shuffle,
+                start_position_ms,
             } => QueueOp::PlayTracks {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
@@ -217,6 +220,7 @@ impl QueueOp {
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
+                start_position_ms: *start_position_ms,
             },
             Command::PlayNext {
                 server_id,
@@ -611,6 +615,7 @@ impl Reducer<'_, '_> {
                 args.start_index,
                 args.shuffle,
                 args.save_outgoing,
+                args.start_position_ms.unwrap_or(0),
             ),
             QueueOp::PlayTracks {
                 server_id,
@@ -619,6 +624,7 @@ impl Reducer<'_, '_> {
                 label,
                 shuffle,
                 save_outgoing,
+                start_position_ms,
             } => {
                 let context = QueueContext {
                     server_id,
@@ -629,7 +635,13 @@ impl Reducer<'_, '_> {
                     sort: SortOrder::Default,
                     tracks: track_ids,
                 };
-                self.play_context(context, Some(start_index), shuffle, save_outgoing)
+                self.play_context(
+                    context,
+                    Some(start_index),
+                    shuffle,
+                    save_outgoing,
+                    start_position_ms,
+                )
             }
             QueueOp::PlayNext {
                 server_id,
@@ -1111,6 +1123,7 @@ impl Reducer<'_, '_> {
         start_index: Option<u32>,
         shuffle: bool,
         save_outgoing: bool,
+        start_position_ms: Ms,
     ) -> Result<(), ReduceError> {
         if save_outgoing {
             self.snapshot_outgoing();
@@ -1142,6 +1155,7 @@ impl Reducer<'_, '_> {
             if let Some(index) = p.to_context(position) {
                 self.doc.current = self.fresh_context_item(index);
                 self.doc.cursor = position + 1;
+                *self.start_position = start_position_ms;
             }
         }
         self.effects.push(Effect::ContextReplaced);
@@ -1292,7 +1306,7 @@ impl Reducer<'_, '_> {
                 sort: SortOrder::Default,
                 tracks: track_ids,
             };
-            return self.play_context(context, Some(0), false, false);
+            return self.play_context(context, Some(0), false, false, 0);
         }
         // Context items Previous put back in Playing Next (see
         // `push_current_to_future`) play before the context resumes, so in
@@ -1938,6 +1952,7 @@ mod tests {
             start_index: start,
             shuffle,
             save_outgoing: true,
+            start_position_ms: None,
         };
         reduce(doc, QueueOp::PlayContext { args }, &ctx(e, 1.0, 0))
             .unwrap()
@@ -3152,6 +3167,7 @@ mod tests {
             start_index: Some(0),
             shuffle: false,
             save_outgoing: true,
+            start_position_ms: None,
         };
         let (d2, fx) = reduce(&d, QueueOp::PlayContext { args }, &ctx(&e, 50.0, 42_000)).unwrap();
         assert!(fx.contains(&Effect::SavedQueuesChanged));
@@ -3587,7 +3603,8 @@ mod tests {
                 context: album("a", 1),
                 start_index: None,
                 shuffle: false,
-                save_outgoing: true
+                save_outgoing: true,
+                start_position_ms: None,
             }
         }
         .replaces_context());

@@ -21,6 +21,7 @@ fn album_args(server_id: &str, album: &str) -> PlayContextArgs {
         start_index: Some(0),
         shuffle: false,
         save_outgoing: true,
+        start_position_ms: None,
     }
 }
 
@@ -234,6 +235,7 @@ async fn housekeeping_prunes_finished_outbox_entries_and_old_jobs() {
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     // Past the scrobble threshold: now-playing and submission are flushed

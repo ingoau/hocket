@@ -11,6 +11,8 @@ object Commands {
     fun seekBy(deltaMs: Int) = Command.SeekBy(CommandSeekByInner(deltaMs))
     fun setVolume(volume: Double) = Command.SetVolume(CommandSetVolumeInner(volume))
     fun setMuted(muted: Boolean) = Command.SetMuted(CommandSetMutedInner(muted))
+    fun previewStart(trackId: TrackId) = Command.PreviewStart(CommandPreviewStartInner(trackId))
+    fun previewSeek(positionMs: Long) = Command.PreviewSeek(CommandPreviewSeekInner(positionMs.coerceAtLeast(0).toUInt()))
     fun setNetworkState(state: NetworkState) = Command.SetNetworkState(CommandSetNetworkStateInner(state))
     fun setVisibility(visible: Boolean, focused: Boolean) = Command.SetVisibility(CommandSetVisibilityInner(visible, focused))
     fun setBatterySaver(enabled: Boolean) = Command.SetBatterySaver(CommandSetBatterySaverInner(enabled))
@@ -22,10 +24,17 @@ object Commands {
     fun setTranscodingProfile(networkId: String?, profile: TranscodingProfile) =
         Command.SetTranscodingProfile(CommandSetTranscodingProfileInner(networkId, profile))
 
+    fun snooze(trackIds: List<TrackId>, duration: app.hocket.core.api.SnoozeFor) =
+        Command.Snooze(CommandSnoozeInner(trackIds, duration))
+
+    fun unsnooze(trackIds: List<TrackId>) = Command.Unsnooze(CommandUnsnoozeInner(trackIds))
+
     fun playContext(context: QueueContext, startIndex: Int? = null, shuffle: Boolean = false, saveOutgoing: Boolean = true) =
         Command.PlayContext(CommandPlayContextInner(PlayContextArgs(context, startIndex?.toUInt(), shuffle, saveOutgoing)))
-    fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false) =
-        Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, startIndex.toUInt(), label, shuffle))
+    fun resumeAlbum(albumId: AlbumId) = Command.ResumeAlbum(CommandResumeAlbumInner(albumId))
+    fun clearAlbumResume(albumId: AlbumId) = Command.ClearAlbumResume(CommandClearAlbumResumeInner(albumId))
+    fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false, startPositionMs: Long = 0) =
+        Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, startIndex.toUInt(), label, shuffle, startPositionMs.coerceAtLeast(0).toUInt()))
     fun playNext(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayNext(CommandPlayNextInner(serverId, trackIds))
     fun playLater(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayLater(CommandPlayLaterInner(serverId, trackIds))
     fun jumpToQueueItem(key: QueueKey) = Command.JumpToQueueItem(CommandJumpToQueueItemInner(key))
@@ -156,6 +165,7 @@ object Queries {
     fun albumCount(serverId: ServerId, artistId: ArtistId? = null, genre: String? = null) =
         Query.AlbumCount(QueryAlbumCountInner(serverId, artistId, genre))
     fun album(id: AlbumId) = Query.Album(QueryAlbumInner(id))
+    fun albumResume(id: AlbumId) = Query.AlbumResume(QueryAlbumResumeInner(id))
     fun albumTracks(id: AlbumId) = Query.AlbumTracks(QueryAlbumTracksInner(id))
     /** Artists by name unless [sort] says album or song count, plays, date added or random. */
     fun artists(serverId: ServerId, page: Page, sort: SortOrder = SortOrder.Default, descending: Boolean = false) =

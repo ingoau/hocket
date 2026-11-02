@@ -178,6 +178,7 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
         start_index: 0,
         label: "Downloaded".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
