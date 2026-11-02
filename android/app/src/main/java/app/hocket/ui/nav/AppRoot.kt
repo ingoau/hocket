@@ -469,6 +469,12 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // corners over black, as a card pushed back under the sheet (read in the draw phase, so
             // dragging the sheet never recomposes the page).
             val recede = !LocalReducedMotion.current
+            // Coming out of the splash ([ShellEntrance]): the page rises and settles into place, the
+            // bar and the mini player slide up after it (with reduced motion, all of it just fades).
+            val entrance = rememberShellEntrance()
+            val entranceMoves = !LocalReducedMotion.current
+            val entranceRise = with(density) { 32.dp.toPx() }
+            val miniRise = with(density) { 96.dp.toPx() }
             // (The sheet's own scrim dims the page itself as it recedes.)
             if (recede) Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheet.progress.coerceIn(0f, 1f) }.background(Color.Black))
             Row(
@@ -476,13 +482,19 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     val p = sheet.progress.coerceIn(0f, 1f)
                     // Fully under the open player: not drawn at all (and left at its own size,
                     // so whatever reads its bounds meanwhile sees the page as laid out).
-                    alpha = if (p >= 1f) 0f else 1f
+                    val e = entrancePart(entrance(), ShellEntrance.CONTENT_START_MS, ShellEntrance.CONTENT_END_MS)
+                    alpha = if (p >= 1f) 0f else e
                     if (recede && p > 0f && p < 1f) {
                         val s = 1f - RecedeScale * p
                         scaleX = s
                         scaleY = s
                         shape = RoundedCornerShape(RecedeCorner * p)
                         clip = true
+                    } else if (entranceMoves && e < 1f) {
+                        val s = 0.94f + 0.06f * e
+                        scaleX = s
+                        scaleY = s
+                        translationY = (1f - e) * entranceRise
                     }
                 },
             ) {
@@ -539,12 +551,23 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = railStart).height(chromeHeight).then(if (covered) Modifier else Modifier.blockTouchesBehind()).testTag("bottomChromeBlocker"))
             }
             CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides navigator) {
+            // The mini player's part of the entrance: up from below the bar, last of all. (At the
+            // sheet's own zIndex, which only orders it among this Box's siblings from here: above
+            // the bottom scrim, below the bar.)
+            Box(Modifier.fillMaxSize().zIndex(10f).graphicsLayer {
+                val e = entrancePart(entrance(), ShellEntrance.MINI_START_MS, ShellEntrance.MINI_END_MS)
+                if (e < 1f) {
+                    alpha = e
+                    if (entranceMoves) translationY = (1f - e) * miniRise
+                }
+            }) {
             NowPlayingSheet(
                 state = sheet,
                 bottomInset = with(density) { bottomInsetPx.toDp() },
                 onOpenAlbum = navigator.openAlbum,
                 onOpenArtist = navigator.openArtist,
             )
+            }
             }
             app.hocket.ui.components.SongMenuHost(songMenu, navigator)
             // The scrim the bar and the mini player float on: the surface colour eased in from
@@ -564,7 +587,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.progress, SCRIM_FADE_END) }.background(scrim).testTag("bottomScrim"))
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.progress, SCRIM_FADE_END) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }.background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
@@ -576,9 +599,13 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     .align(Alignment.BottomCenter)
                     .zIndex(20f)
                     .onSizeChanged { navBarMeasuredPx = it.height }
-                    .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
+                    // Its part of the entrance: up from below the screen's edge, after the page.
+                    .offset {
+                        val e = entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS)
+                        IntOffset(0, ((sheet.progress + if (entranceMoves) 1f - e else 0f) * navBarHeightPx).roundToInt())
+                    }
                     // It fades out gently as the player grows over it.
-                    .graphicsLayer { alpha = barFade(sheet.progress) }
+                    .graphicsLayer { alpha = barFade(sheet.progress) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }
                     .testTag("navBar")
                     // The bar's whole strip (the pill, the margins around it and the system bar
                     // under it, all on the solid scrim) takes the touches its places leave, so
@@ -621,7 +648,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         .zIndex(20f)
                         .padding(end = app.hocket.ui.player.HeroGeometry.MINI_MARGIN, bottom = bottomInset + miniRoom + 8.dp)
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
-                        .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
+                        .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }
                         .then(hiddenWhenCovered),
                 ) {
                     app.hocket.ui.stash.StashChip(held[0], onClick = { stashOpen = true })
