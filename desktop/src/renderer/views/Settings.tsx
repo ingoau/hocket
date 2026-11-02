@@ -179,6 +179,7 @@ function General() {
         </Select>
       </Row>
       <QueueModeRow />
+      <Toggle anchor="resumeAlbums" settingKey={SK.resumeAlbums} title={t("settings.resumeAlbums")} desc={t("settings.resumeAlbumsDesc")} fallback />
     </>
   );
 }

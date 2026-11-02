@@ -546,6 +546,7 @@ impl SimDevice {
                 // What the actor does: merge into its own copy (an edit may have raced it).
                 self.stash = crate::stash::merge(&self.stash, &list).0;
             }
+            Output::AlbumResumeMerged(_) => {}
             Output::LibraryEditReceived {
                 from,
                 items,

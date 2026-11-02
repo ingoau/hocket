@@ -200,6 +200,7 @@ async fn media_session_stash_adds_the_playing_track_once() {
             start_index: Some(0),
             shuffle: false,
             save_outgoing: true,
+            start_position_ms: None,
         },
     })
     .await;

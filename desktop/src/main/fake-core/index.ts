@@ -137,6 +137,8 @@ export class FakeCore implements CoreHandle {
   private savedQueues: SavedQueue[] = [];
   /** The song stash, in order (no sync here: one fake device). */
   private stash: { entryId: string; trackId: string; addedAt: number; removed: boolean }[] = [];
+  /** Resume points the album page reads. Tests can replace this. */
+  albumResumes: { albumId: string; trackId: string; trackIndex: number; positionMs: number; durationMs: number; updatedAt: number }[] = [];
   private savedQueueCap = 10;
   private undoStack: UndoRecord[] = [];
   private redoStack: UndoRecord[] = [];
@@ -348,6 +350,21 @@ export class FakeCore implements CoreHandle {
         return;
       case "playContext":
         this.playContext(cmd.data.args.context, cmd.data.args.startIndex, cmd.data.args.shuffle, cmd.data.args.saveOutgoing);
+        return;
+      case "resumeAlbum": {
+        const p = this.albumResumes.find((x) => x.albumId === cmd.data.album_id);
+        const album = this.lib?.albums.find((x) => x.id === cmd.data.album_id);
+        const ctx = { serverId: this.servers[0]?.id ?? "", kind: { type: "album" as const, data: { id: cmd.data.album_id } }, label: album?.name ?? "", sort: "default" as const, tracks: [] as string[] };
+        if (!p) this.playContext(ctx, 0, false, true);
+        else {
+          this.playContext(ctx, p.trackIndex, false, true);
+          this.seek(p.positionMs);
+        }
+        return;
+      }
+      case "clearAlbumResume":
+        this.albumResumes = this.albumResumes.filter((x) => x.albumId !== cmd.data.album_id);
+        this.emitAlbumResumes();
         return;
       case "playTracks":
         this.playContext({ serverId: cmd.data.server_id, kind: { type: "adHoc", data: { label: cmd.data.label } }, label: cmd.data.label, sort: "default", tracks: cmd.data.track_ids }, cmd.data.start_index, cmd.data.shuffle, true);
@@ -1105,6 +1122,7 @@ export class FakeCore implements CoreHandle {
       revision: this.session.revision + 1,
     };
     this.loadCurrent(0, true);
+    this.noteAlbumResume();
     this.pushUndo(`Play ${ctx.label}`, () => {
       this.restoreSession(before);
       this.seek(outgoingPos);
@@ -1300,7 +1318,32 @@ export class FakeCore implements CoreHandle {
     s.revision += 1;
     this.loadCurrent(0, s.current !== undefined && this.transport.position.isPlaying);
     if (!s.current) this.stop();
+    this.noteAlbumResume(!s.current);
     this.emitAll();
+  }
+
+  /** The same rules as the core, so the album page can show Resume without a native addon. */
+  private noteAlbumResume(finished = false): void {
+    const ctx = this.session.context;
+    const albumId = ctx?.kind.type === "album" ? ctx.kind.data.id : undefined;
+    if (!albumId || this.session.shuffle) return;
+    const cur = this.session.current;
+    const index = cur?.source.type === "context" ? cur.source.data.index : undefined;
+    const drop = finished || index === undefined || index === 0 || cur?.source.type === "autoplay";
+    if (drop || !this.resumeAlbumsEnabled()) {
+      if (drop) this.albumResumes = this.albumResumes.filter((x) => x.albumId !== albumId);
+      this.emitAlbumResumes();
+      return;
+    }
+    const track = this.lib?.tracksById.get(cur!.trackId);
+    const point = { albumId, trackId: cur!.trackId, trackIndex: index, positionMs: Math.round(this.positionNow()), durationMs: track?.durationMs ?? 0, updatedAt: Date.now() };
+    this.albumResumes = [...this.albumResumes.filter((x) => x.albumId !== albumId), point];
+    this.emitAlbumResumes();
+  }
+
+  private resumeAlbumsEnabled(): boolean {
+    const raw = this.settings.get("playback.resumeAlbums")?.value;
+    return raw === undefined || raw === "true";
   }
 
   /** Previous; `restart` false is PreviousTrack, which never restarts a track it can go back from. */
@@ -1405,6 +1448,7 @@ export class FakeCore implements CoreHandle {
     const pos = this.positionNow();
     this.transport.position = { positionMs: pos, takenAt: Date.now(), rate: 1, isPlaying: playing };
     if (!this.transport.lease.owner) this.transport.lease = { owner: this.config.deviceId, epoch: this.transport.lease.epoch + 1, expiresAt: Date.now() + 20_000 };
+    if (!playing) this.noteAlbumResume();
     this.emitTransport();
   }
 
@@ -1419,6 +1463,7 @@ export class FakeCore implements CoreHandle {
     const max = cur?.durationMs ?? 0;
     const pos = Math.max(0, Math.min(max, Math.round(ms)));
     this.transport.position = { ...this.transport.position, positionMs: pos, takenAt: Date.now() };
+    this.noteAlbumResume();
     this.emitTransport();
   }
 
@@ -1681,6 +1726,10 @@ export class FakeCore implements CoreHandle {
 
   private emitStash(): void {
     this.emit({ type: "stashChanged", data: { items: this.stashItems() } });
+  }
+
+  private emitAlbumResumes(): void {
+    this.emit({ type: "albumResumesChanged", data: { points: this.albumResumes } });
   }
 
   private stashAdd(trackIds: string[]): void {
@@ -2068,6 +2117,7 @@ export class FakeCore implements CoreHandle {
       ["display.immersiveArtwork", "automatic", "deviceLocal"],
       ["display.playerRating", true, "accountSynced"],
       ["display.albumTrackArtists", false, "accountSynced"],
+      ["playback.resumeAlbums", true, "accountSynced"],
       ["actions.order.contextMenu", [], "accountSynced"],
       ["actions.order.sidebar", [], "accountSynced"],
       ["actions.order.mediaSession", [], "accountSynced"],
@@ -2716,6 +2766,8 @@ export class FakeCore implements CoreHandle {
         return { type: "reportUpload", data: this.reportUpload?.status };
       case "stash":
         return { type: "stashItems", data: this.stashItems() };
+      case "albumResume":
+        return { type: "albumResumeState", data: this.albumResumes.find((x) => x.albumId === q.data.id) };
       default: {
         const never: never = q;
         void never;

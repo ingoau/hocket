@@ -178,6 +178,7 @@ impl Actor {
                 self.media_art = None;
                 self.emit_media_session();
             }
+            keys::PLAYBACK_RESUME_ALBUMS => self.emit_album_resumes(),
             keys::LIBRARY_SYNC_INTERVAL_MINUTES | keys::LIBRARY_FULL_RECONCILE_DAYS => {
                 self.last_sync_check = 0.0;
             }

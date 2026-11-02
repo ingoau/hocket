@@ -28,10 +28,10 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState, Ms,
-    PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey, QueueMode, RepeatMode,
-    SavedQueue, ServerId, SessionDocument, SessionId, Setting, StashEntry, TrackId, TransportLease,
-    UndoEntry,
+    AlbumResumeEntry, AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
+    LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey,
+    QueueMode, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, StashEntry,
+    TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -213,6 +213,10 @@ pub struct ReplicaState {
     /// (`crate::stash`).
     #[serde(default)]
     pub stash: Vec<StashEntry>,
+    /// Where albums were left off: LWW set keyed on album id, tombstones included
+    /// (`crate::album_resume`).
+    #[serde(default)]
+    pub album_resumes: Vec<AlbumResumeEntry>,
     /// Per-device last seen.
     #[serde(default)]
     pub devices: Vec<DeviceLease>,
@@ -872,6 +876,11 @@ pub enum Msg {
     StashSync {
         entries: Vec<StashEntry>,
     },
+    /// Either direction. Album resume points, merged LWW per album id
+    /// (`crate::album_resume::merge`). Older builds drop it.
+    AlbumResumeSync {
+        entries: Vec<AlbumResumeEntry>,
+    },
 
     // -- undo -----------------------------------------------------------
     /// Either direction. A session-tier undo entry shared with the session,
@@ -986,6 +995,7 @@ impl Msg {
         "savedQueuesSync",
         "settingsSync",
         "stashSync",
+        "albumResumeSync",
         "undoEntryShared",
         "libraryEdited",
         "diagnosticsRequest",
@@ -1036,6 +1046,7 @@ impl Msg {
             Msg::SavedQueuesSync { .. } => "savedQueuesSync",
             Msg::SettingsSync { .. } => "settingsSync",
             Msg::StashSync { .. } => "stashSync",
+            Msg::AlbumResumeSync { .. } => "albumResumeSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
@@ -1247,6 +1258,7 @@ mod tests {
             Msg::SavedQueuesSync { queues: vec![] },
             Msg::SettingsSync { settings: vec![] },
             Msg::StashSync { entries: vec![] },
+            Msg::AlbumResumeSync { entries: vec![] },
             Msg::LibraryEdited {
                 device_id: "a".into(),
                 items: vec![],
@@ -1311,6 +1323,7 @@ mod tests {
             saved_queues: vec![],
             settings: vec![],
             stash: vec![],
+            album_resumes: vec![],
             devices: vec![],
             transport_lease: TransportLease::default(),
             last_stamp: None,

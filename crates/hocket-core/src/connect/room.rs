@@ -1522,6 +1522,16 @@ impl Room {
                     self.send(peer, Msg::StashSync { entries: merged });
                 }
             }
+            Msg::AlbumResumeSync { entries } => {
+                let changed = self.replica.merge_album_resumes(&entries, now);
+                let merged = self.replica.album_resumes.clone();
+                if changed {
+                    self.dirty = true;
+                    self.broadcast(Msg::AlbumResumeSync { entries: merged }, None);
+                } else if crate::album_resume::merge(&entries, &merged).1 {
+                    self.send(peer, Msg::AlbumResumeSync { entries: merged });
+                }
+            }
             Msg::UndoEntryShared {
                 entry,
                 before_revision,

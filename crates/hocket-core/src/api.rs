@@ -683,6 +683,41 @@ pub struct SavedQueue {
     pub cover_art: Option<String>,
 }
 
+/// Where an album was left off. One per album in the account's last-write-wins set
+/// (see `crate::album_resume`). A removal is a tombstone (`removed`) so finishing the album
+/// or starting over reaches every device.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumResumeEntry {
+    pub album_id: AlbumId,
+    pub track_id: TrackId,
+    /// Index into the album's track list when this was saved.
+    pub track_index: u32,
+    pub position_ms: Ms,
+    pub duration_ms: Ms,
+    /// LWW clock of the track and position.
+    pub updated_at: EpochMs,
+    #[serde(default)]
+    pub removed: bool,
+    /// LWW clock of `removed`, separate from `updatedAt`.
+    #[serde(default)]
+    pub removed_at: EpochMs,
+}
+
+/// An album's resume point, as the album page shows it. Absent once cleared or expired.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumResumePoint {
+    pub album_id: AlbumId,
+    pub track_id: TrackId,
+    pub track_index: u32,
+    pub position_ms: Ms,
+    pub duration_ms: Ms,
+    pub updated_at: EpochMs,
+}
+
 /// One stashed song: a record in the stash's last-write-wins set (see `crate::stash`). Removed
 /// entries stay as tombstones for a while so a removal reaches every device before the entry could
 /// come back from one that missed it.
@@ -1779,6 +1814,10 @@ pub struct PlayContextArgs {
     /// Keep the outgoing queue as a saved queue (default true).
     #[serde(default = "default_true")]
     pub save_outgoing: bool,
+    /// Where in the starting track to begin. Album resume sets it; absent means the start.
+    /// Older builds ignore it, so a coordinator from before this field drops it on the way through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_position_ms: Option<Ms>,
 }
 
 fn default_true() -> bool {
@@ -2031,6 +2070,15 @@ pub enum Command {
     },
     /// Empty the stash. Toasts with an Undo.
     StashClear,
+    /// Continue an album at its saved track and position. Falls back to the start when
+    /// there is nothing to resume (or the feature is off).
+    ResumeAlbum {
+        album_id: AlbumId,
+    },
+    /// Forget an album's resume point (Start over).
+    ClearAlbumResume {
+        album_id: AlbumId,
+    },
     /// Put removed entries back where they were (the Undo of remove and clear).
     StashRestore {
         entry_ids: Vec<String>,
@@ -2441,6 +2489,10 @@ pub enum Query {
     SavedQueues,
     /// The stash, in order.
     Stash,
+    /// Where this album would resume, if it has a point and the feature is on.
+    AlbumResume {
+        id: AlbumId,
+    },
     Lyrics {
         track_id: TrackId,
     },
@@ -2668,6 +2720,8 @@ pub enum QueryResult {
     Queue(QueueView),
     SavedQueues(Vec<SavedQueue>),
     StashItems(Vec<StashItem>),
+    /// `AlbumResumePoint`: the album's resume point, or none.
+    AlbumResumeState(Option<AlbumResumePoint>),
     LyricsResult(Option<Lyrics>),
     Related(Vec<RelatedTrack>),
     Stats(ListeningStats),
@@ -2984,6 +3038,10 @@ pub enum Event {
     /// The stash changed (here or on another device): the whole list, in order.
     StashChanged {
         items: Vec<StashItem>,
+    },
+    /// Albums that currently offer resume. Empty when the feature is off.
+    AlbumResumesChanged {
+        points: Vec<AlbumResumePoint>,
     },
     UndoChanged {
         state: UndoState,

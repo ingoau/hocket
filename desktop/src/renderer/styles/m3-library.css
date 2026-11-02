@@ -200,6 +200,9 @@
 /* The actions under the hero, on the page: Play, then round tonal icon buttons (square when on); the rating at the end. */
 .detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 20px var(--detail-pad) 0; }
 .detail-actions .btn.fab { height: 56px; padding: 0 24px 0 18px; gap: 8px; border-radius: var(--shape-full); font-size: 16px; font-weight: 600; box-shadow: var(--shadow-1); transition: border-radius var(--dur-spring) var(--spring-fast); }
+/* Play and Resume share a width, so the row doesn't shift when an album can be continued. */
+.detail-actions .btn.album-play { min-width: 148px; justify-content: center; }
+.track-resume-ring { width: 16px; height: 16px; display: block; }
 .detail-actions .btn.fab:active { border-radius: var(--shape-md); }
 .detail-actions .btn.icon { width: 56px; height: 56px; border-radius: var(--shape-full); background: var(--state-selected); color: var(--fg); transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized); }
 .detail-actions .btn.icon:hover { background: color-mix(in srgb, var(--fg) 8%, var(--state-selected)); }
