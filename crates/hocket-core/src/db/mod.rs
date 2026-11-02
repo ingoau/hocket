@@ -164,6 +164,20 @@ impl std::fmt::Debug for Db {
     }
 }
 
+/// Bring the lyric search index in line with the cache in one transaction. The
+/// index only serves search, so a failure is logged and the core still starts;
+/// the next open tries again.
+fn sync_lyrics_index_on_open(conn: &mut Connection) {
+    let result = conn.transaction().map_err(DbError::from).and_then(|tx| {
+        queries::sync_lyrics_index(&tx)?;
+        tx.commit()?;
+        Ok(())
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "could not update the lyrics search index");
+    }
+}
+
 impl Db {
     /// Open (creating if needed) the database at `path`, applying migrations.
     /// `backup_dir` receives a copy of the file before a migration when the
@@ -172,7 +186,7 @@ impl Db {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open_with_flags(
+        let mut conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
@@ -180,16 +194,16 @@ impl Db {
         )?;
         configure(&conn)?;
         let report = migrate(&conn, Some(path), Some(backup_dir))?;
-        queries::sync_lyrics_index(&conn)?;
+        sync_lyrics_index_on_open(&mut conn);
         Ok(Self::wrap(conn, Some(path.to_path_buf()), report))
     }
 
     /// An in-memory database (tests).
     pub fn open_in_memory() -> DbResult<Db> {
-        let conn = Connection::open_in_memory()?;
+        let mut conn = Connection::open_in_memory()?;
         configure(&conn)?;
         let report = migrate(&conn, None, None)?;
-        queries::sync_lyrics_index(&conn)?;
+        sync_lyrics_index_on_open(&mut conn);
         Ok(Self::wrap(conn, None, report))
     }
 

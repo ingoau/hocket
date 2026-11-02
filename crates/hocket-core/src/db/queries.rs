@@ -352,6 +352,21 @@ fn delete_lyrics_row(
 
 /// Drop index rows whose lyric was evicted, and index cached lyrics that have
 /// no row yet (an upgrade, or a write that landed before the index did).
+/// Index one cached document on `conn`, so a caller can do it in the same
+/// transaction as the `lyrics_cache` write.
+pub(crate) fn index_lyrics_in(
+    conn: &Connection,
+    server_id: &str,
+    track_id: &str,
+    source: &str,
+    lyrics: &api::Lyrics,
+) -> DbResult<()> {
+    match search::index_document(lyrics) {
+        Some(doc) => upsert_lyrics_row(conn, server_id, track_id, source, &doc),
+        None => delete_lyrics_row(conn, server_id, track_id, source),
+    }
+}
+
 pub fn sync_lyrics_index(conn: &Connection) -> DbResult<()> {
     conn.execute(
         "DELETE FROM lyrics_search WHERE NOT EXISTS (
@@ -1204,23 +1219,6 @@ impl Db {
             }
             Ok(hits.into_iter().map(|(hit, _)| hit).collect())
         })
-    }
-
-    /// Keep `lyrics_search` in step with one cached document. A lyric with no
-    /// words is stored with an empty body so it is not parsed again on open.
-    pub fn upsert_lyrics_index(
-        &self,
-        server_id: &str,
-        track_id: &str,
-        source: &str,
-        lyrics: &api::Lyrics,
-    ) -> DbResult<()> {
-        match search::index_document(lyrics) {
-            Some(doc) => {
-                self.with_conn(|c| upsert_lyrics_row(c, server_id, track_id, source, &doc))
-            }
-            None => self.with_conn(|c| delete_lyrics_row(c, server_id, track_id, source)),
-        }
     }
 
     // -- play history -------------------------------------------------------

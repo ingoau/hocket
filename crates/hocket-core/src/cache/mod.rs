@@ -106,6 +106,22 @@ fn source_name(s: LyricsSource) -> &'static str {
     }
 }
 
+fn store_lyrics_in(
+    conn: &rusqlite::Connection,
+    server_id: &str,
+    track_id: &str,
+    source: LyricsSource,
+    json: &str,
+    now: f64,
+) -> DbResult<()> {
+    conn.execute(
+        "INSERT INTO lyrics_cache(server_id, track_id, source, json, fetched_at, last_used_at, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+         ON CONFLICT(server_id, track_id, source) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at, last_used_at = excluded.last_used_at, bytes = excluded.bytes",
+        params![server_id, track_id, source_name(source), json, now, json.len() as i64],
+    )?;
+    Ok(())
+}
+
 struct Inner {
     db: Db,
     clock: Arc<dyn Clock>,
@@ -380,13 +396,19 @@ impl Caches {
         lyrics: &Lyrics,
     ) -> Result<(), CacheError> {
         let json = serde_json::to_string(lyrics)?;
-        self.lyrics_store(server_id, track_id, lyrics.source, &json)?;
-        self.inner.db.upsert_lyrics_index(
-            server_id,
-            track_id,
-            crate::lyrics::source_name(lyrics.source),
-            lyrics,
-        )?;
+        // One transaction, so a failed index write cannot leave the old text
+        // searchable next to the new copy.
+        let now = self.now();
+        self.inner.db.with_tx(|tx| {
+            store_lyrics_in(tx, server_id, track_id, lyrics.source, &json, now)?;
+            crate::db::queries::index_lyrics_in(
+                tx,
+                server_id,
+                track_id,
+                source_name(lyrics.source),
+                lyrics,
+            )
+        })?;
         self.inner.db.set_track_has_lyrics(track_id, true)?;
         self.enforce_lyrics_budget()?;
         Ok(())
@@ -410,14 +432,9 @@ impl Caches {
         json: &str,
     ) -> DbResult<()> {
         let now = self.now();
-        self.inner.db.with_conn(|c| {
-            c.execute(
-                "INSERT INTO lyrics_cache(server_id, track_id, source, json, fetched_at, last_used_at, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
-                 ON CONFLICT(server_id, track_id, source) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at, last_used_at = excluded.last_used_at, bytes = excluded.bytes",
-                params![server_id, track_id, source_name(source), json, now, json.len() as i64],
-            )?;
-            Ok(())
-        })
+        self.inner
+            .db
+            .with_conn(|c| store_lyrics_in(c, server_id, track_id, source, json, now))
     }
 
     pub fn lyrics_invalidate(&self, server_id: &str, track_id: &str) -> DbResult<usize> {
