@@ -8,6 +8,7 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { clearSearches, forgetSearch, recentSearches, rememberSearch } from "../lib/recent-searches";
 import { Artwork } from "./Artwork";
+import { LyricSnippet } from "./LyricSnippet";
 import { Icon } from "./Icon";
 import { StashChip } from "./Stash";
 import { fmtRelative } from "../lib/format";
@@ -104,12 +105,17 @@ function SearchBox() {
     return () => window.removeEventListener("mousedown", onDown);
   }, [open]);
 
-  type Row = { key: string; kind: string; label: string; sub?: string; cover?: string; go: () => void };
+  type Row = { key: string; kind: string; label: string; sub?: string; lyric?: { line: string; start: number; end: number }; cover?: string; go: () => void };
   const rows = (r: SearchResults | undefined): Row[] => {
     if (!r) return [];
     const sid = serverId ?? "";
+    const playLyric = (id: string, startMs: number | undefined) => {
+      bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [id], start_index: 0, label: r.query, shuffle: false } });
+      if (startMs != null) bridge().dispatch({ type: "seekTo", data: { position_ms: startMs } });
+    };
     return [
       ...r.tracks.map((x) => ({ key: `t${x.id}`, kind: t("search.tracks"), label: x.title, sub: x.artist, cover: x.coverArt, go: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [x.id], start_index: 0, label: x.title, shuffle: false } }) })),
+      ...(r.lyrics ?? []).map((x) => ({ key: `ly${x.track.id}`, kind: t("search.lyrics"), label: x.track.title, sub: x.track.artist, lyric: { line: x.line, start: x.matchStart, end: x.matchEnd }, cover: x.track.coverArt, go: () => playLyric(x.track.id, x.startMs) })),
       ...r.albums.map((x) => ({ key: `a${x.id}`, kind: t("search.albums"), label: x.name, sub: x.artist, cover: x.coverArt, go: () => navigate({ view: "album", id: x.id }) })),
       ...r.artists.map((x) => ({ key: `r${x.id}`, kind: t("search.artists"), label: x.name, cover: x.coverArt, go: () => navigate({ view: "artist", id: x.id }) })),
       ...r.playlists.map((x) => ({ key: `p${x.id}`, kind: t("search.playlists"), label: x.name, cover: x.coverArt, go: () => navigate({ view: "playlist", id: x.id }) })),
@@ -149,7 +155,7 @@ function SearchBox() {
   const renderRow = (r: Row, i: number) => (
     <div key={r.key} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onMouseDown={(e) => { e.preventDefault(); pick(r); }} data-testid="search-result">
       <Artwork id={r.cover} size={64} className="art" />
-      <div className="grow truncate">{r.label}{r.sub ? <span className="muted"> · {r.sub}</span> : null}</div>
+      <div className="grow truncate">{r.label}{r.sub ? <span className="muted"> · {r.sub}</span> : null}{r.lyric ? <div className="small"><LyricSnippet line={r.lyric.line} start={r.lyric.start} end={r.lyric.end} /></div> : null}</div>
       <span className="kind">{r.kind}</span>
     </div>
   );
@@ -190,6 +196,7 @@ function SearchBox() {
             </>
           ) : null}
           {!showRecent && local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
+          {!showRecent && localRows.some((r) => r.lyric) ? <div className="search-divider" role="presentation">{t("search.lyricsScope")}</div> : null}
           {!showRecent && localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
           {!showRecent && local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
           {!showRecent && serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}

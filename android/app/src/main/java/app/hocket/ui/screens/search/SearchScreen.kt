@@ -40,8 +40,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import app.hocket.ui.components.Segment
 import app.hocket.ui.components.segmentedListColors
 import androidx.compose.material3.Text
@@ -70,12 +73,16 @@ import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.QueryResult
+import app.hocket.core.api.LyricHit
 import app.hocket.core.api.SearchResults
+import app.hocket.core.ArtworkSizes
 import app.hocket.core.client.LibraryPatches
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.rememberCachedState
 import app.hocket.ui.screens.home.AlbumStrip
 import app.hocket.ui.components.ArtistRow
+import app.hocket.ui.components.Artwork
+import app.hocket.ui.components.ListArtCorner
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.PlaylistRow
 import app.hocket.ui.components.SectionHeader
@@ -183,8 +190,9 @@ fun SearchScreen(nav: NavHostController) {
         }
         val server = remote
         val counts = mapOf(
-            SearchKind.Songs to results.tracks.size, SearchKind.Albums to results.albums.size,
-            SearchKind.Artists to results.artists.size, SearchKind.Playlists to results.playlists.size,
+            SearchKind.Songs to results.tracks.size, SearchKind.Lyrics to (results.lyrics?.size ?: 0),
+            SearchKind.Albums to results.albums.size, SearchKind.Artists to results.artists.size,
+            SearchKind.Playlists to results.playlists.size,
         )
         val empty = counts.values.all { it == 0 }
         val show = { k: SearchKind -> (kind == SearchKind.All || kind == k) && (counts[k] ?: 0) > 0 }
@@ -193,13 +201,19 @@ fun SearchScreen(nav: NavHostController) {
             items(SearchKind.entries.toList(), key = { it.name }) { k ->
                 val n = counts[k]
                 FilterChip(
-                    selected = kind == k, onClick = { kind = k }, enabled = k == SearchKind.All || (n ?: 0) > 0,
+                    selected = kind == k, onClick = { kind = k }, enabled = k == SearchKind.All || k == SearchKind.Lyrics || (n ?: 0) > 0,
                     label = { Text(if (n == null) stringResource(k.label) else stringResource(R.string.search_kind_count, stringResource(k.label), n)) },
                     leadingIcon = if (kind == k) ({ Icon(HocketIcons.Filled.Check, null, Modifier.size(FilterChipDefaults.IconSize)) }) else null,
                     modifier = Modifier.testTag("search.kind.${k.name.lowercase()}"),
                 )
             }
         }
+        Text(
+            stringResource(R.string.search_lyrics_scope),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 6.dp).testTag("search.lyrics.scope"),
+        )
         val density = LocalDensity.current
         Box(Modifier.heightIn(min = with(density) { minHeightPx.toDp() }).onSizeChangedKeepMax { if (it > minHeightPx) minHeightPx = it }) {
             val listState = rememberLazyListState()
@@ -226,6 +240,32 @@ fun SearchScreen(nav: NavHostController) {
                         }
                     }
                 }
+                if (show(SearchKind.Lyrics)) {
+                    val hits = results.lyrics.orEmpty()
+                    val shown = if (kind == SearchKind.All) hits.take(SONG_PREVIEW) else hits
+                    val more = kind == SearchKind.All && hits.size > SONG_PREVIEW
+                    val n = shown.size + if (more) 1 else 0
+                    item(key = "h.lyrics") { SearchSectionLabel(stringResource(R.string.search_lyrics)) }
+                    itemsIndexed(shown, key = { _, h -> "ly" + h.track.id }) { i, h ->
+                        LyricHitRow(h, onClick = {
+                            rememberQuery()
+                            client.dispatch(Commands.playTracks(serverId, hits.map { it.track.id }, hits.indexOf(h), query))
+                            h.startMs?.let { client.dispatch(Commands.seekTo(it.toLong())) }
+                        }, nowPlaying = nowPlaying?.track?.id == h.track.id, segment = i to n, modifier = Modifier.segmentItem(i))
+                    }
+                    if (more) item(key = "lyrics.more") {
+                        Segment(n - 1, n, Modifier.segmentItem(1), onClick = { kind = SearchKind.Lyrics }) {
+                            Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 16.dp).testTag("search.lyrics.all"), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                Text(stringResource(R.string.search_see_all_lyrics), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                                Text(pluralStringResource(R.plurals.search_lyrics_count, hits.size, hits.size), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+                if (kind == SearchKind.Lyrics && results.lyrics.orEmpty().isEmpty()) item(key = "lyrics.empty") {
+                    EmptyState(stringResource(R.string.search_lyrics_none), stringResource(R.string.search_lyrics_scope))
+                }
                 if (show(SearchKind.Albums)) {
                     item(key = "h.albums") { SearchSectionLabel(stringResource(R.string.search_albums), top = 16.dp) }
                     item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) } }
@@ -238,7 +278,7 @@ fun SearchScreen(nav: NavHostController) {
                     item(key = "h.playlists") { SearchSectionLabel(stringResource(R.string.search_playlists), top = 16.dp) }
                     itemsIndexed(results.playlists, key = { _, p -> "p" + p.id }) { i, p -> PlaylistRow(p, onClick = { rememberQuery(); nav.navigate(Route.Playlist(p.id)) }, segment = i to results.playlists.size, modifier = Modifier.segmentItem(i)) }
                 }
-                item(key = "server") {
+                if (kind != SearchKind.Lyrics) item(key = "server") {
                     HorizontalDivider(Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
                     Row(Modifier.padding(horizontal = 16.dp).heightIn(min = 44.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Text(stringResource(R.string.search_from_server), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
@@ -247,7 +287,7 @@ fun SearchScreen(nav: NavHostController) {
                     if (pendingRemote) Text(stringResource(R.string.search_server_pending), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
                     else if (server != null && server.tracks.isEmpty() && server.albums.isEmpty() && server.artists.isEmpty()) Text(stringResource(R.string.search_server_none), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
                 }
-                server?.let { r ->
+                if (kind != SearchKind.Lyrics) server?.let { r ->
                     val tracks = if (kind == SearchKind.All || kind == SearchKind.Songs) r.tracks else emptyList()
                     val artists = if (kind == SearchKind.All || kind == SearchKind.Artists) r.artists else emptyList()
                     val n = tracks.size + artists.size
@@ -262,7 +302,35 @@ fun SearchScreen(nav: NavHostController) {
 
 /** What the results can narrow to. */
 private enum class SearchKind(val label: Int) {
-    All(R.string.search_kind_all), Songs(R.string.search_songs), Albums(R.string.search_albums), Artists(R.string.search_artists), Playlists(R.string.search_playlists)
+    All(R.string.search_kind_all), Songs(R.string.search_songs), Lyrics(R.string.search_lyrics), Albums(R.string.search_albums), Artists(R.string.search_artists), Playlists(R.string.search_playlists)
+}
+
+/** The matched phrase, in the lyric's own text. Offsets are character indexes from the core. */
+@Composable
+private fun LyricHitRow(hit: LyricHit, onClick: () -> Unit, nowPlaying: Boolean, segment: Pair<Int, Int>, modifier: Modifier = Modifier) {
+    val (i, n) = segment
+    val mark = SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+    val line = buildAnnotatedString {
+        val start = hit.matchStart.toInt().coerceIn(0, hit.line.length)
+        val end = hit.matchEnd.toInt().coerceIn(start, hit.line.length)
+        append(hit.line.substring(0, start))
+        pushStyle(mark)
+        append(hit.line.substring(start, end))
+        pop()
+        append(hit.line.substring(end))
+    }
+    val subtitle = listOfNotNull(hit.track.artist, hit.track.album).joinToString(stringResource(R.string.dot_separator))
+    Segment(i, n, modifier, onClick = onClick) {
+        Row(Modifier.heightIn(min = 72.dp).padding(horizontal = 8.dp, vertical = 8.dp).testTag("search.lyric"), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Artwork(hit.track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(hit.track.title, style = MaterialTheme.typography.bodyLarge, fontWeight = if (nowPlaying) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (subtitle.isNotEmpty()) Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(line, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
 }
 
 /** Songs shown under All before "See all songs". */

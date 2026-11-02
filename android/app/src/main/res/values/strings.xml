@@ -67,7 +67,7 @@
     <string name="empty_library_title">Library is syncing</string>
     <string name="empty_library_body">Albums appear as the sync completes. You can browse what is there already.</string>
     <string name="empty_search_title">Search your library</string>
-    <string name="empty_search_body">Songs, albums, artists and playlists, as you type.</string>
+    <string name="empty_search_body">Songs, albums, artists, playlists, and lyrics of songs you\'ve played.</string>
     <string name="empty_search_none">No results for “%1$s”</string>
     <string name="empty_playlists_title">No playlists yet</string>
     <string name="empty_playlists_body">Select songs and choose Add to playlist to create one.</string>
@@ -243,6 +243,9 @@
     <string name="search_albums">Albums</string>
     <string name="search_artists">Artists</string>
     <string name="search_playlists">Playlists</string>
+    <string name="search_lyrics">Lyrics</string>
+    <string name="search_lyrics_scope">Searching lyrics of songs you\'ve played</string>
+    <string name="search_lyrics_none">No lyric matches in songs you\'ve played</string>
     <string name="search_from_server">More from the server</string>
     <string name="search_server_pending">Asking the server…</string>
 
@@ -1222,9 +1225,14 @@
     <string name="search_kind_all">All</string>
     <string name="search_kind_count">%1$s %2$d</string>
     <string name="search_see_all_songs">See all songs</string>
+    <string name="search_see_all_lyrics">See all lyric matches</string>
     <plurals name="search_songs_count">
         <item quantity="one">%1$d song</item>
         <item quantity="other">%1$d songs</item>
+    </plurals>
+    <plurals name="search_lyrics_count">
+        <item quantity="one">%1$d match</item>
+        <item quantity="other">%1$d matches</item>
     </plurals>
     <string name="about_kbps">kbps</string>
     <string name="about_replaygain">ReplayGain</string>

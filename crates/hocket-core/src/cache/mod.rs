@@ -381,6 +381,12 @@ impl Caches {
     ) -> Result<(), CacheError> {
         let json = serde_json::to_string(lyrics)?;
         self.lyrics_store(server_id, track_id, lyrics.source, &json)?;
+        self.inner.db.upsert_lyrics_index(
+            server_id,
+            track_id,
+            crate::lyrics::source_name(lyrics.source),
+            lyrics,
+        )?;
         self.inner.db.set_track_has_lyrics(track_id, true)?;
         self.enforce_lyrics_budget()?;
         Ok(())

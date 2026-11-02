@@ -60,10 +60,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0007_album_release_types",
         include_str!("migrations/0007_album_release_types.sql"),
     ),
+    (
+        8,
+        "0008_lyrics_search",
+        include_str!("migrations/0008_lyrics_search.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -76,6 +81,7 @@ pub const MIRROR_TABLES: &[&str] = &[
     "capabilities",
     "image_cache",
     "lyrics_cache",
+    "lyrics_search",
     "metadata_cache",
     "cache_entries",
 ];
@@ -174,6 +180,7 @@ impl Db {
         )?;
         configure(&conn)?;
         let report = migrate(&conn, Some(path), Some(backup_dir))?;
+        queries::sync_lyrics_index(&conn)?;
         Ok(Self::wrap(conn, Some(path.to_path_buf()), report))
     }
 
@@ -182,6 +189,7 @@ impl Db {
         let conn = Connection::open_in_memory()?;
         configure(&conn)?;
         let report = migrate(&conn, None, None)?;
+        queries::sync_lyrics_index(&conn)?;
         Ok(Self::wrap(conn, None, report))
     }
 
@@ -491,6 +499,7 @@ mod tests {
             assert!(tables.contains(&t.to_string()), "missing {t}");
         }
         assert!(tables.contains(&"tracks_fts".to_string()));
+        assert!(tables.contains(&"lyrics_search_fts".to_string()));
     }
 
     #[test]

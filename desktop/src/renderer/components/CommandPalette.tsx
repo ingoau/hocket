@@ -8,6 +8,7 @@ import { rank, type Rankable } from "../store/palette-rank";
 import { executeAction } from "../store/actions";
 import { formatChord, parseChord } from "../store/shortcuts";
 import { Artwork } from "./Artwork";
+import { LyricSnippet } from "./LyricSnippet";
 import { Icon, hasIcon } from "./Icon";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
@@ -16,6 +17,7 @@ interface Item extends Rankable {
   icon?: string;
   coverArt?: string;
   shortcut?: string;
+  lyric?: { line: string; start: number; end: number };
   run: () => void;
 }
 
@@ -64,6 +66,18 @@ export function CommandPalette() {
     const out: Item[] = [];
     const sid = serverId ?? "";
     for (const tr of results?.tracks ?? []) out.push({ id: `t:${tr.id}`, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, run: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } }) });
+    for (const hit of results?.lyrics ?? []) out.push({
+      id: `ly:${hit.track.id}`,
+      label: hit.track.title,
+      sub: hit.line.split("\n").join(" "),
+      kind: "track",
+      coverArt: hit.track.coverArt,
+      lyric: { line: hit.line, start: hit.matchStart, end: hit.matchEnd },
+      run: () => {
+        bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [hit.track.id], start_index: 0, label: hit.track.title, shuffle: false } });
+        if (hit.startMs != null) bridge().dispatch({ type: "seekTo", data: { position_ms: hit.startMs } });
+      },
+    });
     for (const al of results?.albums ?? []) out.push({ id: `al:${al.id}`, label: al.name, sub: al.artist, kind: "album", coverArt: al.coverArt, run: () => navigate({ view: "album", id: al.id }) });
     for (const ar of results?.artists ?? []) out.push({ id: `ar:${ar.id}`, label: ar.name, kind: "artist", coverArt: ar.coverArt, run: () => navigate({ view: "artist", id: ar.id }) });
     for (const pl of results?.playlists ?? []) out.push({ id: `pl:${pl.id}`, label: pl.name, kind: "playlist", coverArt: pl.coverArt, run: () => navigate({ view: "playlist", id: pl.id }) });
@@ -75,7 +89,12 @@ export function CommandPalette() {
     return out;
   }, [results, actions, serverId, shortcuts, navigate]);
 
-  const ranked = useMemo(() => rank(query, items, 40), [query, items]);
+  // Lyric hits already matched in the core, which ignores case, punctuation and
+  // diacritics. The palette's own ranker would drop a line it cannot see.
+  const ranked = useMemo(() => {
+    const lyrics = items.filter((i) => i.lyric).map((item) => ({ item, score: 700, matches: [] as number[] }));
+    return [...lyrics, ...rank(query, items.filter((i) => !i.lyric), 40)].slice(0, 40);
+  }, [query, items]);
   useEffect(() => setActive(0), [ranked.length, query]);
   useEffect(() => {
     if (open) document.getElementById(`pal-opt-${active}`)?.scrollIntoView({ block: "nearest" });
@@ -112,7 +131,7 @@ export function CommandPalette() {
                   {it.kind === "action" ? (hasIcon(it.icon ?? "") ? <Icon name={it.icon as string} size={16} /> : <Icon name="command" size={16} />) : <Artwork id={it.coverArt} size={64} className="art" />}
                   <div className="grow truncate">
                     <Highlight text={it.label} matches={r.matches} />
-                    {it.sub ? <span className="sub"> · {it.sub}</span> : null}
+                    {it.lyric ? <span className="sub"> · <LyricSnippet line={it.lyric.line} start={it.lyric.start} end={it.lyric.end} /></span> : it.sub ? <span className="sub"> · {it.sub}</span> : null}
                   </div>
                   {chord ? <span className="kbd">{formatChord(chord, platform)}</span> : null}
                 </div>

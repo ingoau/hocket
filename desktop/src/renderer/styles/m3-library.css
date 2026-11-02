@@ -328,6 +328,7 @@
   .sort-row.on .sort-row-icon, .sort-row-check { forced-color-adjust: none; color: inherit; background: transparent; }
   .genre-tile::after, .section-icon, .empty-icon { forced-color-adjust: none; background: GrayText; color: Canvas; }
   .tr, .tile, .genre-tile, .tile .art { transition: none; }
+  .lyric-snippet mark { forced-color-adjust: none; background: Highlight; color: HighlightText; }
 }
 
 /* Search: the kind chips under the heading, and each section's head with its "See all". */
@@ -342,7 +343,16 @@
 .search-kind:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .search-kind-count { font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0.8; }
 .search-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.search-nothing, .search-asking { margin: 0; }
+.search-nothing, .search-asking, .search-lyrics-note { margin: 0; }
+.search-lyrics-note { padding: 0 var(--page-pad) 12px; }
+.lyric-hits { display: flex; flex-direction: column; gap: 2px; }
+.lyric-hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 12px; border: 0; border-radius: var(--shape-md); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.lyric-hit:hover { background: var(--bg-hover); }
+.lyric-hit:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.lyric-hit-title { font-weight: 600; }
+.lyric-hit-by { font-size: var(--fs-sm); }
+.lyric-snippet { white-space: pre-line; color: var(--fg-muted); }
+.lyric-snippet mark { background: transparent; color: var(--accent-text); font-weight: 700; }
 
 /* Artist discography: each shelf's head carries its "View more"; the grid view's head its back arrow and order. */
 .shelf-head { display: flex; align-items: center; gap: 10px; margin-top: 24px; }

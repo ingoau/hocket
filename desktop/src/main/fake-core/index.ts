@@ -2776,19 +2776,19 @@ export class FakeCore implements CoreHandle {
   private search(query: string, limit: number, requestId: string, includeServer: boolean): SearchResults {
     const q = query.trim().toLowerCase();
     const lib = this.lib;
-    const empty: SearchResults = { requestId, query, tracks: [], albums: [], artists: [], playlists: [], fromServer: false };
+    const empty: SearchResults = { requestId, query, tracks: [], albums: [], artists: [], playlists: [], fromServer: false, lyrics: [] };
     if (!q || !lib) return empty;
     const tracks = lib.tracks.filter((t) => t.title.toLowerCase().includes(q) || t.artist?.toLowerCase().includes(q) || t.album?.toLowerCase().includes(q));
     const albums = lib.albums.filter((a) => a.name.toLowerCase().includes(q) || a.artist?.toLowerCase().includes(q));
     const artists = lib.artists.filter((a) => a.name.toLowerCase().includes(q));
     const playlists = lib.playlists.filter((p) => p.playlist.name.toLowerCase().includes(q)).map((p) => p.playlist);
-    const local: SearchResults = { requestId, query, tracks: tracks.slice(0, limit).map(summary), albums: albums.slice(0, limit), artists: artists.slice(0, limit), playlists: playlists.slice(0, limit), fromServer: false };
+    const local: SearchResults = { requestId, query, tracks: tracks.slice(0, limit).map(summary), albums: albums.slice(0, limit), artists: artists.slice(0, limit), playlists: playlists.slice(0, limit), fromServer: false, lyrics: [] };
     if (includeServer) {
       // "search3 fires in parallel only when local results are thin": server batch after a delay.
       this.later(450, () => {
         const extraTracks = tracks.slice(limit, limit + Math.max(3, Math.floor(limit / 2)));
         const extraAlbums = albums.slice(limit, limit + 3);
-        this.emit({ type: "searchResults", data: { results: { requestId, query, tracks: extraTracks.map(summary), albums: extraAlbums, artists: artists.slice(limit, limit + 3), playlists: [], fromServer: true } } });
+        this.emit({ type: "searchResults", data: { results: { requestId, query, tracks: extraTracks.map(summary), albums: extraAlbums, artists: artists.slice(limit, limit + 3), playlists: [], fromServer: true, lyrics: [] } } });
       });
     }
     return local;

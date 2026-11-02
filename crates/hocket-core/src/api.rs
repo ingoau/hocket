@@ -2529,6 +2529,25 @@ pub struct ArtistPage {
     pub total: u32,
 }
 
+/// One cached-lyrics hit: the song, the line (or adjacent lines) that contain
+/// the phrase, and where in that text the phrase sits.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricHit {
+    pub track: TrackSummary,
+    /// Original lyric text. A phrase that crosses a line break is the lines
+    /// joined with a newline.
+    pub line: String,
+    /// Character offset of the phrase in [`Self::line`].
+    pub match_start: u32,
+    /// Character offset just past the phrase.
+    pub match_end: u32,
+    /// Audio position of the first matched line when those lyrics are synced,
+    /// already including the user's lyrics offset. Absent for an unsynced line.
+    pub start_ms: Option<Ms>,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -2541,6 +2560,9 @@ pub struct SearchResults {
     pub playlists: Vec<Playlist>,
     /// False for the local batch, true for the server batch appended below the divider.
     pub from_server: bool,
+    /// Phrases found in lyrics already cached on this device. Empty for a server batch.
+    #[serde(default)]
+    pub lyrics: Vec<LyricHit>,
 }
 
 #[typeshare]

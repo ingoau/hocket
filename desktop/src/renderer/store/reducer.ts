@@ -308,6 +308,10 @@ export function patchSearch(r: SearchResults, items: LibraryItemState[]): Search
       const s = findItem(items, "artist", a.id);
       return s ? { ...a, loved: s.loved } : a;
     }),
+    lyrics: (r.lyrics ?? []).map((h) => {
+      const track = patchTrack(h.track, items);
+      return track === h.track ? h : { ...h, track };
+    }),
   };
 }
 
