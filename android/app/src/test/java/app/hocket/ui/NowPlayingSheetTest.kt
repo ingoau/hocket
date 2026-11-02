@@ -473,7 +473,13 @@ class NowPlayingSheetTest {
         val shrinkFrom = app.hocket.ui.player.HeroGeometry.SHRINK_FROM
         assertEquals(0f, app.hocket.ui.player.HeroGeometry.continuationAlpha(shrinkFrom - 0.15f), 1e-4f)
         assertEquals(1f, app.hocket.ui.player.HeroGeometry.continuationAlpha(0.9f), 1e-4f)
-        assertEquals(1f, app.hocket.ui.player.HeroGeometry.seamFraction(0.45f), 1e-4f)
+        assertEquals(1f, app.hocket.ui.player.HeroGeometry.seamFraction(0.9f), 1e-4f)
+        // The continuation is wiped (opaque, never see-through) from fully open to where the
+        // artwork starts shrinking; once it has gone, the shrinking artwork has no faded edge.
+        assertEquals(1f, app.hocket.ui.player.HeroGeometry.continuationReveal(0.9f), 1e-4f)
+        assertEquals(0f, app.hocket.ui.player.HeroGeometry.continuationReveal(shrinkFrom), 1e-4f)
+        assertEquals(0f, app.hocket.ui.player.HeroGeometry.seamFraction(shrinkFrom), 1e-4f)
+        assertEquals(0f, app.hocket.ui.player.HeroGeometry.seamFraction(0.45f), 1e-4f)
         assertEquals(0f, app.hocket.ui.player.HeroGeometry.headerAlpha(0.85f), 1e-4f)
         assertEquals(1f, app.hocket.ui.player.HeroGeometry.headerAlpha(1f), 1e-4f)
         // A card is unchanged: it follows the progress from the start.

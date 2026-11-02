@@ -219,3 +219,4 @@ internal object FloatingNavBarDefaults {
     /** The bar's height above the system navigation bar: the pill and its bottom margin. */
     val Height: Dp = PillHeight + BottomMargin
 }
+
