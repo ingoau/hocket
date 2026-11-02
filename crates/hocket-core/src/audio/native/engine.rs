@@ -1077,7 +1077,8 @@ pub struct NativeBackend {
     devices: Arc<Mutex<Vec<OutputDevice>>>,
     watcher: Mutex<Option<DeviceWatcher>>,
     reports: ReportSink,
-    kit: PreviewKit,
+    /// Current output and DSP, so a preview opened later matches the main engine.
+    kit: Mutex<PreviewKit>,
     /// Last gain sent to the engine, mirrored onto the preview player.
     gain: Mutex<f64>,
     /// A second engine for song previews. The main item stays loaded.
@@ -1137,7 +1138,7 @@ impl NativeBackend {
             devices,
             watcher: Mutex::new(watcher),
             reports: sink,
-            kit,
+            kit: Mutex::new(kit),
             gain: Mutex::new(1.0),
             preview: Mutex::new(None),
         })
@@ -1151,6 +1152,15 @@ impl NativeBackend {
             return Ok(());
         }
         let gain = *self.gain.lock();
+        let kit = {
+            let kit = self.kit.lock();
+            PreviewKit {
+                fetcher: kit.fetcher.clone(),
+                runtime: kit.runtime.clone(),
+                output: kit.output.clone(),
+                audio: kit.audio.clone(),
+            }
+        };
         let parent = self.reports.clone();
         let sink: ReportSink = Arc::new(move |report| {
             let mapped = match report {
@@ -1185,14 +1195,14 @@ impl NativeBackend {
             }
         });
         let cfg = NativeConfig {
-            fetcher: self.kit.fetcher.clone(),
-            runtime: self.kit.runtime.clone(),
+            fetcher: kit.fetcher.clone(),
+            runtime: kit.runtime.clone(),
             output: OutputConfig {
-                device_id: self.kit.output.device_id.clone(),
+                device_id: kit.output.device_id.clone(),
                 sample_rate: None,
-                null_sink: self.kit.output.null_sink,
+                null_sink: kit.output.null_sink,
             },
-            audio: self.kit.audio.clone(),
+            audio: kit.audio.clone(),
             watch_devices: false,
         };
         let child = NativeBackend::new(cfg, sink)?;
@@ -1207,9 +1217,14 @@ impl NativeBackend {
 
     /// Apply new DSP / gapless / exclusive settings.
     pub fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        self.kit.lock().audio = settings.clone();
         self.send(Cmd::SetDsp(DspSettings::from(settings)))?;
         self.send(Cmd::SetGapless(settings.gapless))?;
-        self.send(Cmd::SetExclusive(settings.exclusive))
+        self.send(Cmd::SetExclusive(settings.exclusive))?;
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_audio_settings(settings);
+        }
+        Ok(())
     }
 
     /// Re-enumerate devices now (`Command::RefreshOutputDevices`).
@@ -1281,6 +1296,10 @@ impl PlaybackBackend for NativeBackend {
         self.send(Cmd::DiscardPreBuffer)
     }
     fn set_gapless(&self, enabled: bool) -> Result<(), BackendError> {
+        self.kit.lock().audio.gapless = enabled;
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_gapless(enabled);
+        }
         self.send(Cmd::SetGapless(enabled))
     }
     fn set_output_device(&self, id: Option<String>) -> Result<(), BackendError> {
@@ -1291,12 +1310,20 @@ impl PlaybackBackend for NativeBackend {
                 return Err(BackendError::UnknownDevice(id.clone()));
             }
         }
+        self.kit.lock().output.device_id = id.clone();
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_output_device(id.clone());
+        }
         self.send(Cmd::SetOutputDevice(id))
     }
     fn output_devices(&self) -> Vec<OutputDevice> {
         self.devices.lock().clone()
     }
     fn set_exclusive(&self, exclusive: bool) -> Result<(), BackendError> {
+        self.kit.lock().audio.exclusive = exclusive;
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_exclusive(exclusive);
+        }
         self.send(Cmd::SetExclusive(exclusive))
     }
     fn name(&self) -> &'static str {

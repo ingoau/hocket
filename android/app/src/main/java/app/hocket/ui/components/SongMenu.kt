@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -145,12 +146,14 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
         }
         // Keyed on the request: a new opening starts from a fresh sheet state, never a stale one.
         androidx.compose.runtime.key(request) {
+            // Every way the sheet goes away (dismiss, a pull that closes it,
+            // the host leaving composition) stops the preview.
+            DisposableEffect(request) {
+                onDispose { client.dispatch(Command.PreviewStop) }
+            }
             MenuSheet(
                 subject, request.target, actions,
-                onDismiss = {
-                    client.dispatch(Command.PreviewStop)
-                    controller.close()
-                },
+                onDismiss = { controller.close() },
                 onAddToPlaylist = { pickerFor = request.target },
                 extras = request.extras,
                 onGoToAlbum = track.albumId?.let { id -> navigator?.let { { it.openAlbum(id) } } },

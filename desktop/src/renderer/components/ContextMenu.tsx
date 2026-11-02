@@ -304,9 +304,13 @@ export function ContextMenu() {
       case "action":
         push({ label: r.label, enabled: r.action.enabled, run: () => (r.action.id === "preview" ? previewCommand() : perform(r.action.id)) });
         if (r.action.enabled) {
-          commands.set(r.action.id, () => perform(r.action.id));
+          // A chord for Preview must not close the menu first: the close
+          // stops the preview, and the start would then run with nothing
+          // left to stop it.
+          const run = r.action.id === "preview" ? previewCommand : () => perform(r.action.id);
+          commands.set(r.action.id, run);
           const alias = CHORD_OF[r.action.id];
-          if (alias) commands.set(alias, () => perform(r.action.id));
+          if (alias) commands.set(alias, run);
         }
         line++;
         break;

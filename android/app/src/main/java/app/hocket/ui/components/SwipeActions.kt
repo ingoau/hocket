@@ -119,8 +119,9 @@ fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAd
         ActionIds.PREVIEW -> {
             val menu = LocalSongMenu.current
             SwipeAction(id, actionLabel(id), HocketIcons.Filled.Headphones, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false) {
-                menu?.open(track, target)
-                client.dispatch(Commands.previewStart(track.id))
+                // The preview stops when that menu closes. Don't start one
+                // there is no menu to show it in.
+                if (menu?.open(track, target) == true) client.dispatch(Commands.previewStart(track.id))
             }
         }
         ActionIds.DOWNLOAD -> if (track.offline == OfflineState.Downloaded) null

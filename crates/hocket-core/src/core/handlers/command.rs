@@ -11,10 +11,12 @@ impl Actor {
         if tracing::enabled!(target: "hocket_core", tracing::Level::TRACE) {
             tracing::trace!(target: "hocket_core", kind = %cmd.kind(), "command");
         }
-        // A real transport command takes the output back. The preview is
-        // stopped before the command runs, so the two never sound together.
+        // A transport command takes the output back, but does not restart
+        // main playback first: the command itself is what the user asked
+        // for. Restoring and then toggling would pause a track the user
+        // had just heard as paused.
         if super::preview::command_ends_preview(&cmd) {
-            self.stop_preview(true);
+            self.stop_preview(false);
         }
         match cmd {
             // -- lifecycle --

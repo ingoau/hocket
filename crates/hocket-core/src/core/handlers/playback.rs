@@ -486,6 +486,11 @@ impl Actor {
             self.prefetch_tick(self.now());
         }
         if owns {
+            // A preview started while someone else held the transport must
+            // not keep playing once this device takes it over.
+            if self.preview.as_ref().is_some_and(|p| p.hold.is_none()) {
+                self.stop_preview(false);
+            }
             self.playback.consecutive_skips = 0;
             // Taking over from a device that skipped tracks while offline:
             // here they may play.
@@ -1029,16 +1034,14 @@ impl Actor {
     pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
         if self.preview.is_some() {
             match &report {
-                BackendReport::PreviewReady { .. }
-                | BackendReport::PreviewProgress { .. }
-                | BackendReport::PreviewEnded
-                | BackendReport::PreviewInterrupted
-                | BackendReport::SystemVolume { .. }
-                | BackendReport::OutputDevicesChanged { .. } => {}
-                // The main player, paused for the preview, must not be
-                // treated as interrupted by another app when the preview
-                // player takes the output. Its reports are dropped.
-                _ => return,
+                // The preview player taking the output is not another app,
+                // and a Playing report must not start the main item under it.
+                BackendReport::AudioFocusLost { .. } => return,
+                BackendReport::Playing { .. } => {
+                    let _ = self.backend.pause();
+                    return;
+                }
+                _ => {}
             }
         }
         match &report {

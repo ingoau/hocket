@@ -420,6 +420,16 @@ impl ScriptedBackend {
     fn emit(&self, report: BackendReport) {
         (self.sink)(report);
     }
+
+    /// End the preview the way a player does: naturally, or because another
+    /// app took the output (`interrupted` does not restore main playback).
+    pub fn finish_preview(&self, interrupted: bool) {
+        self.emit(if interrupted {
+            BackendReport::PreviewInterrupted
+        } else {
+            BackendReport::PreviewEnded
+        });
+    }
 }
 
 impl PlaybackBackend for ScriptedBackend {
@@ -638,6 +648,9 @@ impl PlaybackBackend for ScriptedBackend {
             key: source.key.clone(),
             position_ms,
         });
+        if st.failing.contains(&source.key) || st.failing_tracks.contains(&source.track.id) {
+            return Err(BackendError::Other("scripted failure".into()));
+        }
         let position = f64::from(position_ms).min(f64::from(source.track.duration_ms));
         let duration = source.track.duration_ms;
         st.preview = Some(Item {

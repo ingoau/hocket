@@ -199,10 +199,16 @@ impl Actor {
         if !self.owns_transport() {
             return None;
         }
-        let was_playing = self.playback.playing || self.playback.focus_suspended;
-        if was_playing {
+        // Buffering with intent to play counts: the sound has not started,
+        // but the user expects it back when the preview ends.
+        let was_playing = self.playback.playing
+            || self.playback.focus_suspended
+            || (self.playback.want_playing && self.playback.loaded);
+        if self.playback.playing || self.playback.focus_suspended {
             self.playback.want_playing = false;
             self.set_playing_inner(false, false);
+        } else if was_playing {
+            self.playback.want_playing = false;
         }
         Some(PreviewHold { was_playing })
     }

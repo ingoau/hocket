@@ -300,7 +300,12 @@ fn surfaces_filter_and_order() {
     assert!(menu.iter().all(|d| d.enabled
         || matches!(
             d.id.as_str(),
-            "removeFromPlaylist" | "goToAlbum" | "goToArtist" | "pinToLibrary" | "unpinFromLibrary"
+            "removeFromPlaylist"
+                | "goToAlbum"
+                | "goToArtist"
+                | "pinToLibrary"
+                | "unpinFromLibrary"
+                | "preview"
         )));
 
     let queue_menu = r.actions_for(

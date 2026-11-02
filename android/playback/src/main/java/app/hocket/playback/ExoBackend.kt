@@ -159,15 +159,21 @@ class ExoBackend(
         .setDeviceVolumeControlEnabled(true)
         .build()
 
+    /** The preview player. It asks for audio focus; the main player does not treat that as another app. */
+    private var previewPlayer: ExoPlayer? = null
+    private var preferredDevice: android.media.AudioDeviceInfo? = null
+
     init {
         // The output picked in the Connect sheet (speaker, earphones, ...) for this app's playback only.
         AudioOutputs.start(context)
-        AudioOutputs.attach { device -> player.setPreferredAudioDevice(device) }
+        AudioOutputs.attach { device ->
+            preferredDevice = device
+            player.setPreferredAudioDevice(device)
+            previewPlayer?.setPreferredAudioDevice(device)
+        }
     }
 
     private var preBufferPlayer: ExoPlayer? = null
-    /** The preview player. It asks for audio focus; the main player does not treat that as another app. */
-    private var previewPlayer: ExoPlayer? = null
     private var previewJob: Job? = null
     private var previewActive = false
     /** The main player's audio session as effect apps see it (the pre-buffer player stays silent). */
@@ -476,6 +482,7 @@ class ExoBackend(
                     }
                 }
             })
+            p.setPreferredAudioDevice(preferredDevice)
             previewPlayer = p
         }
 
