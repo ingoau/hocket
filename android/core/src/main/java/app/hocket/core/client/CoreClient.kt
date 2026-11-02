@@ -121,6 +121,9 @@ class CoreClient(
     private val _stash = MutableStateFlow<List<StashItem>>(emptyList())
     /** The song stash, in order (#150). */
     val stash: StateFlow<List<StashItem>> = _stash.asStateFlow()
+    private val _albumResumeRevision = MutableStateFlow(0)
+    /** Bumped when album resume points change, so an open album page refetches. */
+    val albumResumeRevision: StateFlow<Int> = _albumResumeRevision.asStateFlow()
     private val _pins = MutableStateFlow<List<Pin>>(emptyList())
     val pins: StateFlow<List<Pin>> = _pins.asStateFlow()
     private val _storage = MutableStateFlow(StorageSummary(0.0, 0.0, 0.0))
@@ -528,6 +531,7 @@ class CoreClient(
             is Event.NowPlayingChanged -> _nowPlaying.value = event.data.entry
             is Event.SavedQueuesChanged -> _savedQueues.value = event.data.queues
             is Event.StashChanged -> { stashEvents++; _stash.value = event.data.items }
+            is Event.AlbumResumesChanged -> _albumResumeRevision.value++
             is Event.UndoChanged -> _undo.value = event.data.state
             is Event.Toast -> _toasts.tryEmit(event.data.toast)
             is Event.PlayerNotice -> _playerNotice.value = event.data.takeIf { it.message != null || it.code != null }

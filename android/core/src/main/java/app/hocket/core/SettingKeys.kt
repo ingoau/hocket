@@ -9,6 +9,8 @@ object SettingKeys {
     const val QUEUE_MODE = "queue.mode"
     const val QUEUE_SAVED_CAP = "queue.savedCap"
     const val QUEUE_HISTORY_CAP = "queue.historyCap"
+    /** Offer to continue an album left unfinished. Off, Play always starts at the beginning. */
+    const val PLAYBACK_RESUME_ALBUMS = "playback.resumeAlbums"
     const val AUTOPLAY_SETTINGS = "autoplay.settings"
     const val AUDIO_SETTINGS = "audio.settings"
     const val TRANSCODING_PROFILES = "transcoding.profiles"

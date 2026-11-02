@@ -24,6 +24,8 @@ object Commands {
 
     fun playContext(context: QueueContext, startIndex: Int? = null, shuffle: Boolean = false, saveOutgoing: Boolean = true) =
         Command.PlayContext(CommandPlayContextInner(PlayContextArgs(context, startIndex?.toUInt(), shuffle, saveOutgoing)))
+    fun resumeAlbum(albumId: AlbumId) = Command.ResumeAlbum(CommandResumeAlbumInner(albumId))
+    fun clearAlbumResume(albumId: AlbumId) = Command.ClearAlbumResume(CommandClearAlbumResumeInner(albumId))
     fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false) =
         Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, startIndex.toUInt(), label, shuffle))
     fun playNext(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayNext(CommandPlayNextInner(serverId, trackIds))
@@ -156,6 +158,7 @@ object Queries {
     fun albumCount(serverId: ServerId, artistId: ArtistId? = null, genre: String? = null) =
         Query.AlbumCount(QueryAlbumCountInner(serverId, artistId, genre))
     fun album(id: AlbumId) = Query.Album(QueryAlbumInner(id))
+    fun albumResume(id: AlbumId) = Query.AlbumResume(QueryAlbumResumeInner(id))
     fun albumTracks(id: AlbumId) = Query.AlbumTracks(QueryAlbumTracksInner(id))
     /** Artists by name unless [sort] says album or song count, plays, date added or random. */
     fun artists(serverId: ServerId, page: Page, sort: SortOrder = SortOrder.Default, descending: Boolean = false) =

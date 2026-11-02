@@ -1,5 +1,6 @@
 package app.hocket.core.fake
 
+import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.ActionIds
@@ -118,6 +119,8 @@ class FakeCore(
     private var savedQueueCap = 10
     /** The song stash (#150): entry id → track id, in order; no sync on one fake device. */
     private val stash = mutableListOf<Pair<String, TrackId>>()
+    /** Album id to the resume point the album page queries. Tests seed this. */
+    val albumResumes = mutableMapOf<String, app.hocket.core.api.AlbumResumePoint>()
     private val stashRemoved = mutableMapOf<String, Pair<Int, TrackId>>()
     private var warnThreshold: Double? = 4.0 * 1024 * 1024 * 1024
     private val playHistory = ArrayList<PlayHistoryEntry>()
@@ -164,6 +167,7 @@ class FakeCore(
         def(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK, "\"automatic\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_PLAYER_RATING, "true", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS, "false", SettingScope.AccountSynced)
+        def(SettingKeys.PLAYBACK_RESUME_ALBUMS, "true", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_FLOATING_NAV_BAR, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_ACCENT, "null", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_DYNAMIC_COLOUR, "true", SettingScope.DeviceLocal)
@@ -763,6 +767,15 @@ class FakeCore(
             is Command.SetVolume -> { volumes[volumeTarget()] = c.data.volume.coerceIn(0.0, 1.0) to false; emitTransport() }
             is Command.SetMuted -> { volumes[volumeTarget()] = volumeOf(volumeTarget()).first to c.data.muted; emitTransport() }
 
+            is Command.ResumeAlbum -> {
+                val p = albumResumes[c.data.album_id]
+                if (p == null) handle(Commands.playContext(Commands.albumContext(serverId, c.data.album_id, library.album(c.data.album_id)?.name ?: "")))
+                else {
+                    handle(Commands.playContext(Commands.albumContext(serverId, c.data.album_id, library.album(c.data.album_id)?.name ?: ""), startIndex = p.trackIndex.toInt()))
+                    handle(Command.SeekTo(CommandSeekToInner(p.positionMs)))
+                }
+            }
+            is Command.ClearAlbumResume -> albumResumes.remove(c.data.album_id)
             is Command.PlayContext -> {
                 val a = c.data.args
                 val before = captureSession()
@@ -1540,6 +1553,7 @@ class FakeCore(
         Query.Queue -> QueryResult.Queue(queueView())
         Query.SavedQueues -> QueryResult.SavedQueues(savedQueues.toList())
         Query.Stash -> QueryResult.StashItems(stashItems())
+        is Query.AlbumResume -> QueryResult.AlbumResumeState(albumResumes[q.data.id])
         is Query.Lyrics -> QueryResult.LyricsResult(lyricsFor(q.data.track_id))
         is Query.Related -> {
             val seed = library.track(q.data.track_id)

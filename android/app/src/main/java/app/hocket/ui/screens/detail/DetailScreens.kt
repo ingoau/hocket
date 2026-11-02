@@ -61,6 +61,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -258,6 +259,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         return
     }
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
+    val transport by client.transport.collectAsStateWithLifecycle()
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val pins by client.pins.collectAsStateWithLifecycle()
@@ -269,7 +271,16 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     val downloaded = pins.any { it.target == Commands.albumPin(a.id) }
     val dot = stringResource(R.string.dot_separator)
     val settings by client.settings.collectAsStateWithLifecycle()
+    val resumeRev by client.albumResumeRevision.collectAsStateWithLifecycle()
+    var resume by remember(id) { mutableStateOf<app.hocket.core.api.AlbumResumePoint?>(null) }
+    LaunchedEffect(id, resumeRev) {
+        resume = (client.query(Queries.albumResume(id)) as? QueryResult.AlbumResumeState)?.data
+    }
     val allArtists = settings[SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS]?.value?.trim() == "true"
+    val startOver = {
+        client.dispatch(Commands.clearAlbumResume(a.id))
+        client.dispatch(Commands.playContext(context))
+    }
     DetailScaffold(nav, embedded, a.name, a.coverArt, shareKey = shareKey,
         barActions = {
             DetailLoveButton(a.loved, onToggle = { client.dispatch(Commands.loveAlbum(a.id, it)) })
@@ -283,7 +294,11 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
             listOfNotNull(a.genre?.takeIf { it.isNotBlank() }, a.year?.takeIf { it > 0u }?.toString()).takeIf { it.isNotEmpty() }?.let { HeroLine(it.joinToString(dot), style = MaterialTheme.typography.bodySmall) }
         },
         heroActions = {
-            HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
+            HeroPlayButton(
+                onClick = { if (resume != null) client.dispatch(Commands.resumeAlbum(a.id)) else client.dispatch(Commands.playContext(context)) },
+                resume = resume != null,
+                onLongClick = startOver,
+            )
             HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) }, pos = GroupPos.Middle)
             HeroMoreButton(onClick = { albumSheet = true })
         },
@@ -293,12 +308,15 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         item(key = "tracks.top") { Spacer(Modifier.height(16.dp)) }
         if (list == null) items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton(showArtwork = false) }
         else itemsIndexed(list, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { i, t ->
-            val playing = nowPlaying?.track?.id == t.id
+            val playing = transport.position.isPlaying && nowPlaying?.track?.id == t.id
+            val resumeHere = resume?.takeIf { it.trackId == t.id && !playing }
             TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { songMenu.open(t.toSummary()) }, showArtwork = false,
                 leading = {
                     Box(Modifier.width(40.dp), contentAlignment = Alignment.Center) {
+                        val number = (t.trackNumber?.toInt() ?: (i + 1)).toString()
                         if (playing) Icon(HocketIcons.Filled.GraphicEq, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                        else Text((t.trackNumber?.toInt() ?: (i + 1)).toString(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        else if (resumeHere != null) ResumeRing(resumeFraction(resumeHere.positionMs, t.durationMs.takeIf { it > 0u } ?: resumeHere.durationMs), number)
+                        else Text(number, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Spacer(Modifier.width(4.dp))
                 },
@@ -329,7 +347,32 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
             }
         }
     }
-    if (albumSheet) ActionSheet(target, a.name, a.artist, onDismiss = { albumSheet = false }, onGoToArtist = a.artistId?.let { aid -> { nav.navigate(Route.Artist(aid)) } })
+    if (albumSheet) ActionSheet(
+        target, a.name, a.artist, onDismiss = { albumSheet = false }, onGoToArtist = a.artistId?.let { aid -> { nav.navigate(Route.Artist(aid)) } },
+        extras = if (resume == null) emptyList() else listOf(app.hocket.ui.components.SongMenuExtra(
+            stringResource(R.string.action_start_over), HocketIcons.Filled.RestartAlt, onClick = { albumSheet = false; startOver() }, testTag = "album.startOver",
+        )),
+    )
+}
+
+/** How far through the resumed track the ring draws. */
+internal fun resumeFraction(positionMs: UInt, durationMs: UInt): Float {
+    val d = durationMs.toLong()
+    if (d <= 0L) return 0f
+    return (positionMs.toLong().toFloat() / d.toFloat()).coerceIn(0f, 1f)
+}
+
+/** A small ring in place of a track number, showing how far that track had played. */
+@Composable
+private fun ResumeRing(fraction: Float, number: String) {
+    val color = MaterialTheme.colorScheme.primary
+    val track = MaterialTheme.colorScheme.outlineVariant
+    androidx.compose.foundation.Canvas(Modifier.size(18.dp).semantics { contentDescription = number }) {
+        val stroke = 2.dp.toPx()
+        val inset = stroke / 2
+        drawArc(track, 0f, 360f, false, topLeft = androidx.compose.ui.geometry.Offset(inset, inset), size = androidx.compose.ui.geometry.Size(this.size.width - stroke, this.size.height - stroke), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+        drawArc(color, -90f, 360f * fraction, false, topLeft = androidx.compose.ui.geometry.Offset(inset, inset), size = androidx.compose.ui.geometry.Size(this.size.width - stroke, this.size.height - stroke), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+    }
 }
 
 /** Whether a track's artist is its album's: the same name, ignoring case and spacing (a track with none counts as the album's). */

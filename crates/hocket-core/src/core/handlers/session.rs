@@ -142,6 +142,7 @@ impl Actor {
             }
         }
         self.load_stash();
+        self.load_album_resumes();
         // Restore the resume point: the last known item and position, dormant
         // (never auto-resume on start).
         if let Ok(Some(pos)) = self
@@ -239,9 +240,18 @@ impl Actor {
             self.toast("That doesn't apply right now", None);
             return false;
         }
+        let album_ended = effects.as_ref().is_some_and(|fx| {
+            fx.iter()
+                .any(|e| matches!(e, Effect::Stopped | Effect::NeedsAutoplay))
+        });
         self.pending_effects = effects;
         self.engine_input(Input::LocalOp { op });
         self.pending_effects = None;
+        // Ending the queue often leaves the document where it was (the last track stays
+        // current), so there is no document-changed event to clear the resume point from.
+        if album_ended {
+            self.finish_album_resume();
+        }
         true
     }
 
@@ -494,6 +504,7 @@ impl Actor {
             }
             Output::SettingsMerged(list) => self.on_settings_merged(list),
             Output::StashMerged(list) => self.on_stash_merged(list),
+            Output::AlbumResumeMerged(list) => self.on_album_resume_merged(list),
             Output::UndoEntryReceived {
                 entry,
                 before_revision: _,
@@ -606,6 +617,22 @@ impl Actor {
             );
         }
 
+        let key_changed = new_key != old_key;
+        let resume_at = if key_changed {
+            self.take_pending_resume(document.current.as_ref().map(|c| c.track_id.as_str()))
+        } else {
+            None
+        };
+        if cause == DocChange::Local {
+            self.note_album_transition(
+                old.as_ref(),
+                &document,
+                key_changed,
+                stopped || needs_autoplay,
+                resume_at,
+            );
+        }
+
         if new_key != old_key {
             match document.current.clone() {
                 Some(item) => {
@@ -616,6 +643,7 @@ impl Actor {
                         .filter(|(k, _)| *k == item.key)
                         .map(|(_, p)| p)
                         .or(restore_position)
+                        .or(resume_at)
                         .unwrap_or(0);
                     if owns {
                         let keep_playing = match cause {
@@ -945,6 +973,7 @@ impl Actor {
             args.context.label = self.context_label(&args.context.server_id, &args.context.kind);
         }
         if args.context.tracks.is_empty() {
+            self.pending_resume_at = None;
             self.toast("Nothing to play", None);
             return;
         }

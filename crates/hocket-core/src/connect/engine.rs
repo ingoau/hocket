@@ -27,9 +27,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState,
-    Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, StashEntry, TrackId,
-    TransportLease, TransportState, UndoEntry,
+    AlbumResumeEntry, ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
+    LibraryItemState, Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting,
+    StashEntry, TrackId, TransportLease, TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
@@ -308,6 +308,8 @@ pub enum Input {
     SettingChanged(Setting),
     /// The local stash, whole (tombstones included).
     StashChanged(Vec<StashEntry>),
+    /// The local album-resume map, whole (tombstones included).
+    AlbumResumeChanged(Vec<AlbumResumeEntry>),
     UndoEntryCreated {
         entry: UndoEntry,
         before_revision: u32,
@@ -451,6 +453,8 @@ pub enum Output {
     SettingsMerged(Vec<Setting>),
     /// The stash after merging a remote copy (whole).
     StashMerged(Vec<StashEntry>),
+    /// Album resume points after merging a remote copy (whole).
+    AlbumResumeMerged(Vec<AlbumResumeEntry>),
     UndoEntryReceived {
         entry: UndoEntry,
         before_revision: u32,
@@ -698,6 +702,7 @@ pub struct Engine {
     saved_queues: Vec<SavedQueue>,
     settings: Vec<Setting>,
     stash: Vec<StashEntry>,
+    album_resumes: Vec<AlbumResumeEntry>,
 
     lan_peers: Vec<PeerAdvert>,
     /// LAN peers that failed the mutual proof (or refused us), with the
@@ -833,6 +838,7 @@ impl Engine {
             saved_queues: vec![],
             settings: vec![],
             stash: vec![],
+            album_resumes: vec![],
             lan_peers: vec![],
             lan_blocklist: BTreeMap::new(),
             lan_strikes: BTreeMap::new(),
@@ -1048,6 +1054,10 @@ impl Engine {
 
     pub fn stash(&self) -> &[StashEntry] {
         &self.stash
+    }
+
+    pub fn album_resumes(&self) -> &[AlbumResumeEntry] {
+        &self.album_resumes
     }
 
     pub fn now_local_ms(&self) -> EpochMs {
@@ -1370,6 +1380,13 @@ impl Engine {
                 self.stash = merged;
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
+            }
+            Input::AlbumResumeChanged(list) => {
+                let (mut merged, _) = crate::album_resume::merge(&list, &self.album_resumes);
+                crate::album_resume::prune(&mut merged, self.clock.now_ms());
+                self.album_resumes = merged;
+                let entries = self.album_resumes.clone();
+                self.upstream_send(Msg::AlbumResumeSync { entries });
             }
             Input::UndoEntryCreated {
                 entry,
@@ -2778,6 +2795,14 @@ impl Engine {
                     self.out.push(Output::StashMerged(merged));
                 }
             }
+            Msg::AlbumResumeSync { entries } => {
+                let (mut merged, _) = crate::album_resume::merge(&self.album_resumes, &entries);
+                crate::album_resume::prune(&mut merged, self.clock.now_ms());
+                if merged != self.album_resumes {
+                    self.album_resumes = merged.clone();
+                    self.out.push(Output::AlbumResumeMerged(merged));
+                }
+            }
             Msg::UndoEntryShared {
                 entry,
                 before_revision,
@@ -3112,6 +3137,13 @@ impl Engine {
                 self.stash = merged.clone();
                 self.out.push(Output::StashMerged(merged));
             }
+            let (mut merged, _) =
+                crate::album_resume::merge(&self.album_resumes, &rep.album_resumes);
+            crate::album_resume::prune(&mut merged, self.clock.now_ms());
+            if merged != self.album_resumes {
+                self.album_resumes = merged.clone();
+                self.out.push(Output::AlbumResumeMerged(merged));
+            }
             if remote {
                 let (theirs_plus_ours, ours_has_more) =
                     merge_saved_queues(&rep.saved_queues, &self.saved_queues);
@@ -3130,11 +3162,18 @@ impl Engine {
                     let entries = self.stash.clone();
                     self.upstream_send(Msg::StashSync { entries });
                 }
+                let (_, ours_has_more) =
+                    crate::album_resume::merge(&rep.album_resumes, &self.album_resumes);
+                if ours_has_more {
+                    let entries = self.album_resumes.clone();
+                    self.upstream_send(Msg::AlbumResumeSync { entries });
+                }
             }
         } else if remote
             && (!self.saved_queues.is_empty()
                 || !self.settings.is_empty()
-                || !self.stash.is_empty())
+                || !self.stash.is_empty()
+                || !self.album_resumes.is_empty())
         {
             let q = self.saved_queues.clone();
             self.upstream_send(Msg::SavedQueuesSync { queues: q });
@@ -3143,6 +3182,10 @@ impl Engine {
             if !self.stash.is_empty() {
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
+            }
+            if !self.album_resumes.is_empty() {
+                let entries = self.album_resumes.clone();
+                self.upstream_send(Msg::AlbumResumeSync { entries });
             }
         }
         if self.held.is_some() {

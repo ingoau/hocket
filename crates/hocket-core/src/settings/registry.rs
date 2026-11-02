@@ -52,6 +52,8 @@ pub mod keys {
     pub const QUEUE_MODE: &str = "queue.mode";
     pub const QUEUE_SAVED_CAP: &str = "queue.savedCap";
     pub const QUEUE_HISTORY_CAP: &str = "queue.historyCap";
+    /// Offer to continue an album that was started from the album and left unfinished.
+    pub const PLAYBACK_RESUME_ALBUMS: &str = "playback.resumeAlbums";
     pub const AUTOPLAY_SETTINGS: &str = "autoplay.settings";
     pub const AUTOPLAY_CONTEXT_OVERRIDES: &str = "autoplay.contextOverrides";
     pub const AUDIO_SETTINGS: &str = "audio.settings";
@@ -461,6 +463,9 @@ pub static REGISTRY: &[SettingDef] = &[
         SettingKind::Int { min: 10, max: 1000 },
         || json!(200),
     ),
+    def(PLAYBACK_RESUME_ALBUMS, Synced, SettingKind::Bool, || {
+        json!(true)
+    }),
     json_def(AUTOPLAY_SETTINGS, Synced, autoplay_default, autoplay_valid),
     json_def(
         AUTOPLAY_CONTEXT_OVERRIDES,

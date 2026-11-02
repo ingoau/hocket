@@ -79,7 +79,7 @@ class SettingsCategoriesTest {
     private val expected = mapOf(
         SettingsCategory.Account to setOf("sync.master", "server.info", "server.syncNow", "server.fullSync", "server.remove"),
         SettingsCategory.Appearance to setOf("display.theme", "display.accent", "display.artworkColour", "display.animatedBackground", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists"),
-        SettingsCategory.Playback to setOf("queue.mode", "queue.savedCap", "queue.autoplay", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "media.externalControl"),
+        SettingsCategory.Playback to setOf("queue.mode", "queue.savedCap", "queue.autoplay", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "media.externalControl"),
         SettingsCategory.Downloads to setOf("open.downloads", "downloads.wifiOnly", "storage.clearCache", "storage.warnThreshold", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved"),
         SettingsCategory.Lyrics to setOf("lyrics.external", "lyrics.defaultOffsetMs", "lyrics.showTranslations"),
         SettingsCategory.Library to setOf("ratings.loveThreshold", "open.filters", "open.stats"),

@@ -24,6 +24,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "savedQueueCap", section: "general", label: "settingsSearch.savedQueueCap", keywords: "settingsSearch.kw.savedQueueCap" },
   { id: "ratingBridge", section: "general", label: "settings.ratingBridge", keywords: "settingsSearch.kw.ratingBridge" },
   { id: "queueMode", section: "general", label: "settings.queueMode", keywords: "settingsSearch.kw.queueMode" },
+  { id: "resumeAlbums", section: "general", label: "settings.resumeAlbums", desc: "settings.resumeAlbumsDesc", keywords: "settingsSearch.kw.resumeAlbums" },
   { id: "replayGain", section: "audio", label: "settings.replayGain", keywords: "settingsSearch.kw.replayGain" },
   { id: "replayGainPreamp", section: "audio", label: "settingsSearch.replayGainPreamp", keywords: "settingsSearch.kw.replayGain" },
   { id: "normalisation", section: "audio", label: "settings.normalisation", keywords: "settingsSearch.kw.normalisation" },
