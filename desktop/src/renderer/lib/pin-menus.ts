@@ -18,11 +18,11 @@ export function savePins(pins: LibraryPin[]): void {
 }
 
 export function playFilter(serverId: string, f: Filter, shuffle = false): void {
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter: f } }, label: filterName(f), sort: f.sort, tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter: f } }, label: filterName(f), sort: f.sort, tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
 export function playGenre(serverId: string, name: string, shuffle = false): void {
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "genre", data: { name } }, label: name, sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "genre", data: { name } }, label: name, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
 /** Opens the Edit pins panel (from [pin]'s menu, focus going back to it after, or the sidebar's pins). */

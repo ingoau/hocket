@@ -673,8 +673,10 @@ impl Actor {
             TransportCommand::Stop => {
                 self.playback.want_playing = false;
                 if self.playback.loaded {
+                    // Pause first so the album resume point keeps this position. The rewind
+                    // below is only the transport; it is not where the album was left.
                     self.set_playing(false);
-                    self.seek_to(0);
+                    self.seek_to_inner(0, false);
                 }
                 self.engine_input(Input::ReleaseTransport);
             }
@@ -821,12 +823,18 @@ impl Actor {
         self.apply_scrobble_actions(actions);
         if !playing && save_position {
             self.save_position();
+            self.capture_album_resume(true);
         }
         self.stamp();
         self.emit_transport();
     }
 
     pub(crate) fn seek_to(&mut self, position_ms: Ms) {
+        self.seek_to_inner(position_ms, true);
+    }
+
+    /// `record` is false for the rewind Stop does after the resume point was saved.
+    fn seek_to_inner(&mut self, position_ms: Ms, record: bool) {
         let cap = self.playback.duration_ms();
         let position_ms = if cap > 0 {
             position_ms.min(cap)
@@ -835,6 +843,9 @@ impl Actor {
         };
         if !self.playback.loaded {
             self.playback.position_ms = position_ms;
+            if record {
+                self.capture_album_resume(true);
+            }
             return;
         }
         self.playback.position_ms = position_ms;
@@ -843,6 +854,9 @@ impl Actor {
         // silently); a backend still short of data reports buffering again.
         if self.playback.pending_load.is_some() {
             // The deferred load starts there.
+            if record {
+                self.capture_album_resume(true);
+            }
             self.stamp();
             self.emit_transport();
             return;
@@ -853,6 +867,9 @@ impl Actor {
         }
         if let Some(id) = self.playback.track_id().map(str::to_string) {
             self.scrobbler.seeked(&id, position_ms);
+        }
+        if record {
+            self.capture_album_resume(true);
         }
         self.stamp();
         self.emit_transport();
@@ -1691,14 +1708,22 @@ impl Actor {
     ) -> MediaSessionState {
         let art = self.media_session_artwork(queue);
         let actions = self.registry.media_session_actions(&self.state_view());
-        derive_media_session_state(
+        let mut state = derive_media_session_state(
             queue,
             transport,
             self.session_now(),
             art,
             self.owns_transport(),
             Some(actions),
-        )
+        );
+        if let Some(meta) = state.metadata.as_mut() {
+            if let Some(id) = meta.track_id.as_deref() {
+                meta.stashed = crate::stash::live(&self.stash)
+                    .iter()
+                    .any(|entry| entry.track_id == id);
+            }
+        }
+        state
     }
 
     /// The OS media session's state, unless it would only repeat the last

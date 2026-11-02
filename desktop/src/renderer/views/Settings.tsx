@@ -179,6 +179,7 @@ function General() {
         </Select>
       </Row>
       <QueueModeRow />
+      <Toggle anchor="resumeAlbums" settingKey={SK.resumeAlbums} title={t("settings.resumeAlbums")} desc={t("settings.resumeAlbumsDesc")} fallback />
     </>
   );
 }
@@ -636,6 +637,7 @@ function OrderList({ surface, anchor, title }: { surface: string; anchor: string
   return (
     <div style={{ marginBottom: 20 }} id={`setting-${anchor}`}>
       <h2 className="section-title" id={`order-${surface}-title`}>{title}</h2>
+      {surface === "mediaSession" ? <div className="muted small" style={{ marginBottom: 8 }}>{t("settings.mediaSessionButtonsNote")}</div> : null}
       <ul className="order-list plain-list" aria-labelledby={`order-${surface}-title`} data-testid={`order-${surface}`}>
         {items.map((it, i) => (
           <li key={it.a.id} className="order-item" draggable onDragStart={() => setDragIdx(i)} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragIdx !== undefined && dragIdx !== i) move(dragIdx, i); setDragIdx(undefined); }}>

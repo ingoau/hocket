@@ -22,6 +22,7 @@ import { executeAction, type ActionContext } from "../store/actions";
 import { Icon } from "./Icon";
 import { Artwork } from "./Artwork";
 import { PlaylistSubmenu } from "./PlaylistSubmenu";
+import { SnoozeSubmenu } from "./SnoozeSubmenu";
 import { ShareSubmenu } from "./ShareSubmenu";
 import { handOnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
@@ -552,6 +553,9 @@ export function ContextMenu() {
       </div>
       {sub?.id === "addToPlaylist" && facts?.trackIds?.length ? (
         <PlaylistSubmenu trackIds={facts.trackIds} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
+      ) : null}
+      {sub?.id === "snooze" && facts?.trackIds?.length ? (
+        <SnoozeSubmenu trackIds={facts.trackIds} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
       ) : null}
       {sub?.id === "share" && facts ? (
         <ShareSubmenu facts={facts} target={menu.target} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />

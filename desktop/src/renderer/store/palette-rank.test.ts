@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rank, scoreLabel, type Rankable } from "./palette-rank";
+import { rank, scoreLabel, withLyricHits, type Rankable } from "./palette-rank";
 
 const items: Rankable[] = [
   { id: "t1", label: "Silver Harbour", sub: "Marrow", kind: "track" },
@@ -36,5 +36,26 @@ describe("palette ranking", () => {
     const r = rank("", items);
     expect(r).toHaveLength(items.length);
     expect(r[r.length - 1]?.item.kind).toBe("action");
+  });
+
+  it("puts lyric hits after titles and actions and lists a song once", () => {
+    type Row = Rankable & { trackId?: string };
+    const rows: Row[] = [
+      { id: "t:s2", trackId: "s2", label: "Shuffle Song", kind: "track" },
+      { id: "act1", label: "Toggle shuffle", kind: "action" },
+    ];
+    const hits: Row[] = [
+      { id: "ly:s9", trackId: "s9", label: "Dance Floor", kind: "track" },
+      { id: "ly:s2", trackId: "s2", label: "Shuffle Song", kind: "track" },
+    ];
+    const r = withLyricHits(rank("shuffle", rows), hits, (i) => i.trackId);
+    expect(r.map((x) => x.item.id)).toEqual(["t:s2", "act1", "ly:s9"]);
+    expect(withLyricHits(rank("toggle shuffle", rows), hits, (i) => i.trackId)[0]?.item.id).toBe("act1");
+  });
+
+  it("keeps lyric hits when the list is full", () => {
+    const many: Rankable[] = Array.from({ length: 5 }, (_, i) => ({ id: `t${i}`, label: `Song ${i}`, kind: "track" }));
+    const r = withLyricHits(rank("song", many), [{ id: "ly:x", label: "Other", kind: "track" }], () => undefined, 3);
+    expect(r.map((x) => x.item.id)).toEqual(["t0", "t1", "ly:x"]);
   });
 });

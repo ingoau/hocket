@@ -15,7 +15,7 @@ import { BACKGROUND_FPS, perfForWindow } from "../lib/kawarp-budget";
 import { SK } from "@shared/settings-keys";
 import type { MenuFacts } from "../lib/menu-model";
 
-export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "developer" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
+export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "developer" | "album" | "artist" | "playlist" | "genre" | "filter" | "search" | "snoozed";
 
 export interface Route {
   view: ViewName;
@@ -412,6 +412,9 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
   if (kind === "main") {
     void b.query({ type: "stash" }).then((r) => {
       if (r.type === "stashItems") useApp.getState().applyEvent({ type: "stashChanged", data: { items: r.data } });
+    }).catch(() => undefined);
+    void b.query({ type: "snoozes" }).then((r) => {
+      if (r.type === "snoozeItems") useApp.getState().applyEvent({ type: "snoozesChanged", data: { items: r.data } });
     }).catch(() => undefined);
   }
   // A report upload already running (resumed as the core started) has sent its events by now: ask.

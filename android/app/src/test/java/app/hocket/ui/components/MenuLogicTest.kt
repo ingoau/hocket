@@ -3,6 +3,13 @@ package app.hocket.ui.components
 import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.api.ActionDescriptor
+import app.hocket.core.api.QueueEntry
+import app.hocket.core.api.QueueItem
+import app.hocket.core.api.QueueMode
+import app.hocket.core.api.QueueSource
+import app.hocket.core.api.QueueView
+import app.hocket.core.api.RepeatMode
+import app.hocket.core.api.TrackSummary
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.PlaylistEntryRef
@@ -27,6 +34,33 @@ class MenuLogicTest {
         ActionIds.ADD_TO_PLAYLIST, ActionIds.LOVE, ActionIds.UNLOVE, ActionIds.rate(5), ActionIds.rate(0), ActionIds.DOWNLOAD, ActionIds.UNPIN,
         ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST, ActionIds.REMOVE_FROM_PLAYLIST, ActionIds.SLEEP_TIMER, "somethingNew",
     ).map { d(it, enabled = it != ActionIds.UNPIN_FROM_LIBRARY) }
+
+    @Test
+    fun snoozeOnQueueRowsSnoozesTheirSongs() {
+        fun entry(key: String, track: String) = QueueEntry(
+            QueueItem(key, track, QueueSource.Inserted),
+            TrackSummary(id = track, serverId = "s", title = track, durationMs = 1u, rating = 0u, loved = false, offline = OfflineState.None),
+        )
+        val queue = QueueView(
+            history = listOf(entry("k0", "a")), current = entry("k1", "b"),
+            playingNext = listOf(entry("k2", "c")), upcoming = listOf(entry("k3", "d"), entry("k4", "c")),
+            shuffle = false, repeat = RepeatMode.Off, autoplay = false, mode = QueueMode.Apple, totalUpcoming = 2u,
+        )
+        assertEquals(listOf("d", "c", "a"), snoozeTrackIds(Commands.queueItems(listOf("k3", "k2", "k4", "k0")), null, queue))
+        assertEquals(listOf("x"), snoozeTrackIds(Commands.queueItems(listOf("gone")), "x", queue))
+        assertEquals(listOf("y"), snoozeTrackIds(Commands.tracks(listOf("y")), null, queue))
+    }
+
+    @Test
+    fun snoozeSitsUnderMoreAndASnoozedSongOffersUnsnooze() {
+        val withSnooze = songActions + d(ActionIds.SNOOZE) + d(ActionIds.UNSNOOZE)
+        val fresh = menuLayout(withSnooze, MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true, snoozed = false)
+        assertTrue(fresh.more.any { it.key == ActionIds.SNOOZE })
+        assertTrue(fresh.more.none { it.key == ActionIds.UNSNOOZE })
+        val snoozed = menuLayout(withSnooze, MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true, snoozed = true)
+        assertTrue(snoozed.more.any { it.key == ActionIds.UNSNOOZE })
+        assertTrue(snoozed.more.none { it.key == ActionIds.SNOOZE })
+    }
 
     @Test
     fun theSongMenuPlacesTheRegistryPerTheDesign() {

@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
+  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -34,6 +34,10 @@ export interface CoreState {
   savedQueues: SavedQueue[];
   /** The song stash, in order (core's `StashChanged`). */
   stash: StashItem[];
+  /** Songs snoozed right now (core's `SnoozesChanged`). */
+  snoozes: SnoozeItem[];
+  /** Albums that offer resume (core's `AlbumResumesChanged`). */
+  albumResumes: AlbumResumePoint[];
   pins: Pin[];
   storage: StorageSummary | undefined;
   filters: Filter[];
@@ -90,6 +94,8 @@ export const initialCoreState: CoreState = {
   syncProgress: undefined,
   savedQueues: [],
   stash: [],
+  snoozes: [],
+  albumResumes: [],
   pins: [],
   storage: undefined,
   filters: [],
@@ -182,6 +188,10 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, savedQueues: e.data.queues };
     case "stashChanged":
       return { ...state, stash: e.data.items };
+    case "snoozesChanged":
+      return { ...state, snoozes: e.data.items };
+    case "albumResumesChanged":
+      return { ...state, albumResumes: e.data.points };
     case "undoChanged": {
       // design.md "Global undo": a fresh mutation that throws the queue away gets
       // one toast with the single Undo action; everything else stays quiet (the
@@ -312,6 +322,10 @@ export function patchSearch(r: SearchResults, items: LibraryItemState[]): Search
     artists: r.artists.map((a) => {
       const s = findItem(items, "artist", a.id);
       return s ? { ...a, loved: s.loved } : a;
+    }),
+    lyrics: (r.lyrics ?? []).map((h) => {
+      const track = patchTrack(h.track, items);
+      return track === h.track ? h : { ...h, track };
     }),
   };
 }

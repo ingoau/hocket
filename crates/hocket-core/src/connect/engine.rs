@@ -27,9 +27,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState,
-    Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, StashEntry, TrackId,
-    TransportLease, TransportState, UndoEntry,
+    AlbumResumeEntry, ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
+    LibraryItemState, Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, Snooze,
+    StashEntry, TrackId, TransportLease, TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
@@ -308,6 +308,10 @@ pub enum Input {
     SettingChanged(Setting),
     /// The local stash, whole (tombstones included).
     StashChanged(Vec<StashEntry>),
+    /// The local snoozes, whole (tombstones included).
+    SnoozesChanged(Vec<Snooze>),
+    /// The local album-resume map, whole (tombstones included).
+    AlbumResumeChanged(Vec<AlbumResumeEntry>),
     UndoEntryCreated {
         entry: UndoEntry,
         before_revision: u32,
@@ -394,6 +398,10 @@ pub enum Output {
     DocumentChanged {
         document: SessionDocument,
         cause: DocChange,
+        /// Audio position for a `PlayTracks` that started this change. The
+        /// document does not store it, so a remote owner would otherwise load
+        /// at 0. Zero for every other change.
+        start_position_ms: Ms,
     },
     /// A remote stamp: extrapolate from it.
     TransportChanged {
@@ -451,6 +459,10 @@ pub enum Output {
     SettingsMerged(Vec<Setting>),
     /// The stash after merging a remote copy (whole).
     StashMerged(Vec<StashEntry>),
+    /// Snoozes after merging a remote copy (whole).
+    SnoozesMerged(Vec<Snooze>),
+    /// Album resume points after merging a remote copy (whole).
+    AlbumResumeMerged(Vec<AlbumResumeEntry>),
     UndoEntryReceived {
         entry: UndoEntry,
         before_revision: u32,
@@ -653,6 +665,9 @@ pub struct Engine {
     detached: bool,
     held_remote_epoch: Option<u32>,
     stamp: Option<CurrentStamp>,
+    /// Position a remote `PlayContext` asked to start at. The actor takes it
+    /// when that op's document lands; the document itself does not store it.
+    resume_load_ms: Option<Ms>,
     /// Switched rooms while playing here: the room only has whatever stamp
     /// it kept from before, so re-send ours once it grants the lease. Holds
     /// whether that grant comes from our own room (`true`) or a remote one.
@@ -698,6 +713,8 @@ pub struct Engine {
     saved_queues: Vec<SavedQueue>,
     settings: Vec<Setting>,
     stash: Vec<StashEntry>,
+    snoozes: Vec<Snooze>,
+    album_resumes: Vec<AlbumResumeEntry>,
 
     lan_peers: Vec<PeerAdvert>,
     /// LAN peers that failed the mutual proof (or refused us), with the
@@ -813,6 +830,7 @@ impl Engine {
             detached: false,
             held_remote_epoch: None,
             stamp: None,
+            resume_load_ms: None,
             restamp_on_grant: None,
             let_go_at: None,
             given_back: None,
@@ -833,6 +851,8 @@ impl Engine {
             saved_queues: vec![],
             settings: vec![],
             stash: vec![],
+            snoozes: vec![],
+            album_resumes: vec![],
             lan_peers: vec![],
             lan_blocklist: BTreeMap::new(),
             lan_strikes: BTreeMap::new(),
@@ -866,6 +886,11 @@ impl Engine {
     /// The live session document (with optimistic ops applied).
     pub fn document(&self) -> &SessionDocument {
         &self.doc
+    }
+
+    /// Position from the remote play op just applied, once.
+    pub fn take_resume_load_ms(&mut self) -> Option<Ms> {
+        self.resume_load_ms.take()
     }
 
     /// Persist this next to the document.
@@ -1048,6 +1073,14 @@ impl Engine {
 
     pub fn stash(&self) -> &[StashEntry] {
         &self.stash
+    }
+
+    pub fn snoozes(&self) -> &[Snooze] {
+        &self.snoozes
+    }
+
+    pub fn album_resumes(&self) -> &[AlbumResumeEntry] {
+        &self.album_resumes
     }
 
     pub fn now_local_ms(&self) -> EpochMs {
@@ -1370,6 +1403,20 @@ impl Engine {
                 self.stash = merged;
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
+            }
+            Input::SnoozesChanged(list) => {
+                let (mut merged, _) = crate::snooze::merge(&list, &self.snoozes);
+                crate::snooze::prune(&mut merged, self.clock.now_ms());
+                self.snoozes = merged;
+                let entries = self.snoozes.clone();
+                self.upstream_send(Msg::SnoozeSync { entries });
+            }
+            Input::AlbumResumeChanged(list) => {
+                let (mut merged, _) = crate::album_resume::merge(&list, &self.album_resumes);
+                crate::album_resume::prune(&mut merged, self.clock.now_ms());
+                self.album_resumes = merged;
+                let entries = self.album_resumes.clone();
+                self.upstream_send(Msg::AlbumResumeSync { entries });
             }
             Input::UndoEntryCreated {
                 entry,
@@ -2778,6 +2825,22 @@ impl Engine {
                     self.out.push(Output::StashMerged(merged));
                 }
             }
+            Msg::SnoozeSync { entries } => {
+                let (mut merged, _) = crate::snooze::merge(&self.snoozes, &entries);
+                crate::snooze::prune(&mut merged, self.clock.now_ms());
+                if merged != self.snoozes {
+                    self.snoozes = merged.clone();
+                    self.out.push(Output::SnoozesMerged(merged));
+                }
+            }
+            Msg::AlbumResumeSync { entries } => {
+                let (mut merged, _) = crate::album_resume::merge(&self.album_resumes, &entries);
+                crate::album_resume::prune(&mut merged, self.clock.now_ms());
+                if merged != self.album_resumes {
+                    self.album_resumes = merged.clone();
+                    self.out.push(Output::AlbumResumeMerged(merged));
+                }
+            }
             Msg::UndoEntryShared {
                 entry,
                 before_revision,
@@ -3050,6 +3113,7 @@ impl Engine {
                     self.out.push(Output::DocumentChanged {
                         document: d,
                         cause: DocChange::Sync,
+                        start_position_ms: 0,
                     });
                 }
             } else {
@@ -3112,6 +3176,19 @@ impl Engine {
                 self.stash = merged.clone();
                 self.out.push(Output::StashMerged(merged));
             }
+            let (mut merged, _) = crate::snooze::merge(&self.snoozes, &rep.snoozes);
+            crate::snooze::prune(&mut merged, self.clock.now_ms());
+            if merged != self.snoozes {
+                self.snoozes = merged.clone();
+                self.out.push(Output::SnoozesMerged(merged));
+            }
+            let (mut merged, _) =
+                crate::album_resume::merge(&self.album_resumes, &rep.album_resumes);
+            crate::album_resume::prune(&mut merged, self.clock.now_ms());
+            if merged != self.album_resumes {
+                self.album_resumes = merged.clone();
+                self.out.push(Output::AlbumResumeMerged(merged));
+            }
             if remote {
                 let (theirs_plus_ours, ours_has_more) =
                     merge_saved_queues(&rep.saved_queues, &self.saved_queues);
@@ -3130,11 +3207,24 @@ impl Engine {
                     let entries = self.stash.clone();
                     self.upstream_send(Msg::StashSync { entries });
                 }
+                let (_, ours_has_more) = crate::snooze::merge(&rep.snoozes, &self.snoozes);
+                if ours_has_more {
+                    let entries = self.snoozes.clone();
+                    self.upstream_send(Msg::SnoozeSync { entries });
+                }
+                let (_, ours_has_more) =
+                    crate::album_resume::merge(&rep.album_resumes, &self.album_resumes);
+                if ours_has_more {
+                    let entries = self.album_resumes.clone();
+                    self.upstream_send(Msg::AlbumResumeSync { entries });
+                }
             }
         } else if remote
             && (!self.saved_queues.is_empty()
                 || !self.settings.is_empty()
-                || !self.stash.is_empty())
+                || !self.stash.is_empty()
+                || !self.snoozes.is_empty()
+                || !self.album_resumes.is_empty())
         {
             let q = self.saved_queues.clone();
             self.upstream_send(Msg::SavedQueuesSync { queues: q });
@@ -3143,6 +3233,14 @@ impl Engine {
             if !self.stash.is_empty() {
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
+            }
+            if !self.snoozes.is_empty() {
+                let entries = self.snoozes.clone();
+                self.upstream_send(Msg::SnoozeSync { entries });
+            }
+            if !self.album_resumes.is_empty() {
+                let entries = self.album_resumes.clone();
+                self.upstream_send(Msg::AlbumResumeSync { entries });
             }
         }
         if self.held.is_some() {
@@ -3196,6 +3294,7 @@ impl Engine {
                 self.out.push(Output::DocumentChanged {
                     document: d,
                     cause: DocChange::Local,
+                    start_position_ms: op.start_position_ms(),
                 });
                 if let SessionOp::MoveQueueItem { key, .. } = &op {
                     if self.moved.len() >= 256 {
@@ -3382,6 +3481,7 @@ impl Engine {
         self.out.push(Output::DocumentChanged {
             document: d,
             cause: DocChange::Rollback,
+            start_position_ms: 0,
         });
         if self.records_sync_base() {
             self.sync_base = Some(SyncPoint {
@@ -3511,10 +3611,17 @@ impl Engine {
             Ok(next) => {
                 self.confirmed = next;
                 self.doc = self.confirmed.clone();
+                self.resume_load_ms = match &op {
+                    SessionOp::PlayContext { args } => {
+                        args.start_position_ms.filter(|position| *position > 0)
+                    }
+                    _ => None,
+                };
                 let d = self.doc.clone();
                 self.out.push(Output::DocumentChanged {
                     document: d,
                     cause: DocChange::Remote,
+                    start_position_ms: op.start_position_ms(),
                 });
                 if self.records_sync_base() {
                     self.sync_base = Some(SyncPoint {
@@ -3552,8 +3659,11 @@ impl Engine {
         self.confirmed = document.clone();
         self.doc = document;
         let d = self.doc.clone();
-        self.out
-            .push(Output::DocumentChanged { document: d, cause });
+        self.out.push(Output::DocumentChanged {
+            document: d,
+            cause,
+            start_position_ms: 0,
+        });
         if self.records_sync_base() {
             self.sync_base = Some(SyncPoint {
                 session_id: self.doc.session_id.clone(),
@@ -4621,6 +4731,7 @@ mod tests {
             label: "sel".into(),
             shuffle: false,
             save_outgoing: false,
+            start_position_ms: 0,
         }
     }
 
@@ -4655,6 +4766,60 @@ mod tests {
         });
         assert!(outs.iter().any(|o| matches!(o, Output::ReplicaChanged(_))));
         assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
+    }
+
+    #[test]
+    fn play_tracks_reports_its_start_position_locally_and_from_a_peer() {
+        let (mut e, _) = engine("a");
+        let mut op = play_op();
+        if let SessionOp::PlayTracks {
+            start_position_ms, ..
+        } = &mut op
+        {
+            *start_position_ms = 12_000;
+        }
+        let outs = e.handle(Input::LocalOp { op: op.clone() });
+        assert!(matches!(
+            outs[0],
+            Output::DocumentChanged {
+                cause: DocChange::Local,
+                start_position_ms: 12_000,
+                ..
+            }
+        ));
+
+        let (mut owner, _) = engine("owner");
+        attach(
+            &mut owner,
+            Some(replica_with(crate::session::new_document(
+                "scope",
+                "room".into(),
+                0.0,
+            ))),
+            vec![dev("phone")],
+        );
+        let outs = owner.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op,
+                revision: 1,
+                device_id: "phone".into(),
+                op_id: "phone-1".into(),
+                at: 1.0,
+                position_ms: 0,
+            }),
+        });
+        assert!(
+            outs.iter().any(|o| matches!(
+                o,
+                Output::DocumentChanged {
+                    cause: DocChange::Remote,
+                    start_position_ms: 12_000,
+                    ..
+                }
+            )),
+            "the device that owns playback hears where the lyric starts"
+        );
     }
 
     #[test]
@@ -4976,7 +5141,7 @@ mod tests {
         newer.revision = 5;
         newer.autoplay = true;
         let outs = attach(&mut e, Some(replica_with(newer)), vec![]);
-        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document } if document.revision == 5 && document.autoplay)));
+        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document, .. } if document.revision == 5 && document.autoplay)));
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
@@ -4992,7 +5157,7 @@ mod tests {
         room_doc.autoplay = true;
         let outs = attach(&mut e, Some(replica_with(room_doc)), vec![dev("b")]);
         assert!(outs.iter().any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { document, .. } if document.current.is_some())));
-        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document } if document.session_id == "other")));
+        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document, .. } if document.session_id == "other")));
         assert_eq!(e.document().session_id, "other");
         assert!(e.document().current.is_none());
     }
@@ -5216,6 +5381,7 @@ mod tests {
                     label: "sel".into(),
                     shuffle: false,
                     save_outgoing: false,
+                    start_position_ms: 0,
                 },
                 revision: 2,
                 device_id: "b".into(),

@@ -683,6 +683,41 @@ pub struct SavedQueue {
     pub cover_art: Option<String>,
 }
 
+/// Where an album was left off. One per album in the account's last-write-wins set
+/// (see `crate::album_resume`). A removal is a tombstone (`removed`) so finishing the album
+/// or starting over reaches every device.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumResumeEntry {
+    pub album_id: AlbumId,
+    pub track_id: TrackId,
+    /// Index into the album's track list when this was saved.
+    pub track_index: u32,
+    pub position_ms: Ms,
+    pub duration_ms: Ms,
+    /// LWW clock of the track and position.
+    pub updated_at: EpochMs,
+    #[serde(default)]
+    pub removed: bool,
+    /// LWW clock of `removed`, separate from `updatedAt`.
+    #[serde(default)]
+    pub removed_at: EpochMs,
+}
+
+/// An album's resume point, as the album page shows it. Absent once cleared or expired.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumResumePoint {
+    pub album_id: AlbumId,
+    pub track_id: TrackId,
+    pub track_index: u32,
+    pub position_ms: Ms,
+    pub duration_ms: Ms,
+    pub updated_at: EpochMs,
+}
+
 /// One stashed song: a record in the stash's last-write-wins set (see `crate::stash`). Removed
 /// entries stay as tombstones for a while so a removal reaches every device before the entry could
 /// come back from one that missed it.
@@ -729,6 +764,45 @@ pub struct StashEntry {
 pub struct StashItem {
     pub entry_id: String,
     pub added_at: EpochMs,
+    pub track: Track,
+}
+
+/// How long a snooze lasts, measured from when it is set.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SnoozeFor {
+    Day,
+    ThreeDays,
+    Week,
+    Month,
+    /// Until the listener unsnoozes it.
+    Indefinite,
+}
+
+/// One snoozed song in the account's last-write-wins set (see `crate::snooze`).
+/// `until` is when it ends; `None` means it doesn't. A removal is a tombstone.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Snooze {
+    pub track_id: TrackId,
+    /// When the snooze ends. Absent when it lasts until unsnoozed.
+    pub until: Option<EpochMs>,
+    /// LWW clock.
+    pub updated_at: EpochMs,
+    #[serde(default)]
+    pub removed: bool,
+}
+
+/// A snoozed song as the UI lists it, with the track it hides.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SnoozeItem {
+    pub track_id: TrackId,
+    /// When it ends. Absent when the snooze doesn't end.
+    pub until: Option<EpochMs>,
     pub track: Track,
 }
 
@@ -1563,6 +1637,8 @@ pub enum MediaSessionAction {
     Repeat,
     Love,
     Rate,
+    /// Add the playing track to the stash. Off by default; a second tap is a no-op.
+    Stash,
 }
 
 #[typeshare]
@@ -1578,6 +1654,10 @@ pub struct MediaSessionMetadata {
     pub track_id: Option<TrackId>,
     pub loved: bool,
     pub rating: u32,
+    /// The playing track is already in the stash. The notification shows a
+    /// filled icon; tapping again is a no-op (unstashing is not offered here).
+    #[serde(default)]
+    pub stashed: bool,
 }
 
 #[typeshare]
@@ -1812,12 +1892,18 @@ pub struct StorageSummary {
 #[serde(rename_all = "camelCase")]
 pub struct PlayContextArgs {
     pub context: QueueContext,
-    /// Index into the unshuffled track list to start from.
+    /// Index into the unshuffled track list to start from. Absent means the start of the list,
+    /// which is not a song the listener picked (a snoozed song there is left out).
+    #[serde(default)]
     pub start_index: Option<u32>,
     pub shuffle: bool,
     /// Keep the outgoing queue as a saved queue (default true).
     #[serde(default = "default_true")]
     pub save_outgoing: bool,
+    /// Where in the starting track to begin. Album resume sets it; absent means the start.
+    /// Older builds ignore it, so a coordinator from before this field drops it on the way through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_position_ms: Option<Ms>,
 }
 
 fn default_true() -> bool {
@@ -2001,6 +2087,10 @@ pub enum Command {
         start_index: u32,
         label: String,
         shuffle: bool,
+        /// Audio position to start the chosen track at. Part of the same
+        /// command so a following seek cannot land on the previous song.
+        #[serde(default)]
+        start_position_ms: Ms,
     },
     PlayNext {
         server_id: ServerId,
@@ -2083,9 +2173,30 @@ pub enum Command {
     },
     /// Empty the stash. Toasts with an Undo.
     StashClear,
+    /// Continue an album at its saved track and position. Falls back to the start when
+    /// there is nothing to resume (or the feature is off).
+    ResumeAlbum {
+        album_id: AlbumId,
+    },
+    /// Forget an album's resume point (Start over).
+    ClearAlbumResume {
+        album_id: AlbumId,
+    },
     /// Put removed entries back where they were (the Undo of remove and clear).
     StashRestore {
         entry_ids: Vec<String>,
+    },
+
+    // -- snooze -----------------------------------------------------------
+    /// Leave songs out of shuffle, playlists, artist play and autoplay for `duration`.
+    /// Goes through global undo.
+    Snooze {
+        track_ids: Vec<TrackId>,
+        duration: SnoozeFor,
+    },
+    /// Bring snoozed songs back. Goes through global undo.
+    Unsnooze {
+        track_ids: Vec<TrackId>,
     },
 
     // -- undo -------------------------------------------------------------
@@ -2493,6 +2604,12 @@ pub enum Query {
     SavedQueues,
     /// The stash, in order.
     Stash,
+    /// Songs snoozed right now, soonest ending first.
+    Snoozes,
+    /// Where this album would resume, if it has a point and the feature is on.
+    AlbumResume {
+        id: AlbumId,
+    },
     Lyrics {
         track_id: TrackId,
     },
@@ -2591,6 +2708,25 @@ pub struct ArtistPage {
     pub total: u32,
 }
 
+/// One cached-lyrics hit: the song, the line (or adjacent lines) that contain
+/// the phrase, and where in that text the phrase sits.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricHit {
+    pub track: TrackSummary,
+    /// Original lyric text. A phrase that crosses a line break is the lines
+    /// joined with a newline.
+    pub line: String,
+    /// Character offset of the phrase in [`Self::line`].
+    pub match_start: u32,
+    /// Character offset just past the phrase.
+    pub match_end: u32,
+    /// Audio position of the first matched line when those lyrics are synced,
+    /// already including the user's lyrics offset. Absent for an unsynced line.
+    pub start_ms: Option<Ms>,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -2603,6 +2739,9 @@ pub struct SearchResults {
     pub playlists: Vec<Playlist>,
     /// False for the local batch, true for the server batch appended below the divider.
     pub from_server: bool,
+    /// Phrases found in lyrics already cached on this device. Empty for a server batch.
+    #[serde(default)]
+    pub lyrics: Vec<LyricHit>,
 }
 
 #[typeshare]
@@ -2698,6 +2837,9 @@ pub enum QueryResult {
     Queue(QueueView),
     SavedQueues(Vec<SavedQueue>),
     StashItems(Vec<StashItem>),
+    SnoozeItems(Vec<SnoozeItem>),
+    /// `AlbumResumePoint`: the album's resume point, or none.
+    AlbumResumeState(Option<AlbumResumePoint>),
     LyricsResult(Option<Lyrics>),
     Related(Vec<RelatedTrack>),
     Stats(ListeningStats),
@@ -3018,6 +3160,14 @@ pub enum Event {
     /// The stash changed (here or on another device): the whole list, in order.
     StashChanged {
         items: Vec<StashItem>,
+    },
+    /// Snoozes changed (here or on another device): the songs still snoozed.
+    SnoozesChanged {
+        items: Vec<SnoozeItem>,
+    },
+    /// Albums that currently offer resume. Empty when the feature is off.
+    AlbumResumesChanged {
+        points: Vec<AlbumResumePoint>,
     },
     UndoChanged {
         state: UndoState,

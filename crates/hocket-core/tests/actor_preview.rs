@@ -37,6 +37,7 @@ async fn preview_pauses_here_and_resumes_at_the_same_position() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(3_000.0).await;
@@ -127,6 +128,7 @@ async fn preview_on_a_peer_leaves_the_player_alone() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -179,6 +181,7 @@ async fn transport_commands_during_a_preview_follow_what_the_user_hears() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_000.0).await;
@@ -225,6 +228,7 @@ async fn preview_end_resumes_and_an_interruption_does_not() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -270,6 +274,7 @@ async fn a_preview_that_cannot_load_gives_playback_back() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -293,6 +298,7 @@ async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -339,6 +345,7 @@ async fn preview_after_pausing_a_buffering_track_stays_paused() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::Pause).await;
@@ -376,6 +383,7 @@ async fn preview_while_the_track_is_still_loading_resumes_it() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::PreviewStart {
@@ -413,6 +421,7 @@ async fn a_peers_transport_commands_during_a_preview_are_kept() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -462,6 +471,7 @@ async fn the_sleep_timer_stopping_during_a_preview_stays_stopped() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -497,6 +507,7 @@ async fn a_preview_that_fails_while_playing_says_so_and_gives_playback_back() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;

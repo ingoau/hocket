@@ -51,6 +51,7 @@ async fn playing_core(name: &str, n: usize) -> TestCore {
         start_index: 0,
         label: "All".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1000.0).await;

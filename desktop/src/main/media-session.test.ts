@@ -5,7 +5,7 @@ vi.mock("electron", () => ({}));
 const { tickPosition } = await import("./media-session");
 
 const base: MediaSessionState = {
-  metadata: { title: "T", artist: undefined, album: undefined, durationMs: 10_000, artworkPath: undefined, trackId: "t", loved: false, rating: 0 },
+  metadata: { title: "T", artist: undefined, album: undefined, durationMs: 10_000, artworkPath: undefined, trackId: "t", loved: false, rating: 0, stashed: false },
   isPlaying: true,
   position: { positionMs: 1000, takenAt: 100_000, rate: 1, isPlaying: true },
   shuffle: false,

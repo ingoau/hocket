@@ -39,7 +39,7 @@ export function Sidebar() {
   const fallbackIcon: Record<string, string> = { navigateHome: "home", navigateLibrary: "library", navigateAlbums: "album", navigateArtists: "artist", navigatePlaylists: "playlist", navigateTracks: "song", navigateGenres: "genre", navigateDownloads: "download", navigateFilters: "filter", navigateStats: "stats", navigateRecent: "restore", navigateSettings: "settings" };
   const items = sidebarPlaces(navActions.length ? navActions.map((a) => ({ id: a.id, label: a.label, icon: a.icon })) : fallback.map((id) => ({ id, label: t(`nav.${NAV_VIEWS[id] ?? "home"}` as never), icon: fallbackIcon[id] ?? "music" })))
     .map((it) => ({ ...it, view: it.view as ViewName | undefined }));
-  const libraryViews: ViewName[] = ["library", "albums", "artists", "playlists", "songs", "genres", "filters", "downloads", "stats"];
+  const libraryViews: ViewName[] = ["library", "albums", "artists", "playlists", "songs", "genres", "filters", "downloads", "stats", "snoozed"];
   const pinnedOpen = (pins ?? []).some((rp) => isPinActive(rp));
   const isActive = (v: ViewName | undefined) => !!v && ((route.view === v && !(v === "downloads" && route.param === "offline")) || (v === "library" && !pinnedOpen && (libraryViews.includes(route.view) || ["album", "artist", "playlist", "genre", "filter"].includes(route.view)) && !items.some((it) => it.view === route.view)) || (v === "albums" && route.view === "album") || (v === "artists" && route.view === "artist") || (v === "playlists" && route.view === "playlist" && !route.param) || (v === "genres" && route.view === "genre") || (v === "filters" && route.view === "filter"));
   function isPinActive(rp: ResolvedPin): boolean {

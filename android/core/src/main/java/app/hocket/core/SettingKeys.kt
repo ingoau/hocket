@@ -9,6 +9,8 @@ object SettingKeys {
     const val QUEUE_MODE = "queue.mode"
     const val QUEUE_SAVED_CAP = "queue.savedCap"
     const val QUEUE_HISTORY_CAP = "queue.historyCap"
+    /** Offer to continue an album left unfinished. Off, Play always starts at the beginning. */
+    const val PLAYBACK_RESUME_ALBUMS = "playback.resumeAlbums"
     const val AUTOPLAY_SETTINGS = "autoplay.settings"
     const val AUDIO_SETTINGS = "audio.settings"
     const val TRANSCODING_PROFILES = "transcoding.profiles"
@@ -131,6 +133,8 @@ object ActionIds {
     const val STASH = "stash"
     const val OPEN_STASH = "openStash" // ui-handled
     const val CLEAR_STASH = "clearStash"
+    const val SNOOZE = "snooze"
+    const val UNSNOOZE = "unsnooze"
 
     fun rate(stars: Int) = "rate$stars"
 
@@ -141,9 +145,27 @@ object ActionIds {
 
     /** The registry's default context-menu order (surface `contextMenu`). */
     val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, PLAY_LATER, PREVIEW, ADD_TO_PLAYLIST, STASH, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
-        DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
+        DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, SNOOZE, UNSNOOZE, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
         SAVE_QUEUE_AS_PLAYLIST, DELETE_SAVED_QUEUE, DELETE_PLAYLIST)
+    /** Default media-session buttons. Stash is a choice, not part of this set. */
     val MEDIA_SESSION = listOf(PREVIOUS, TOGGLE_PLAY, NEXT, SHUFFLE, REPEAT, LOVE)
+
+    /** Everything the notification-button editor can turn on. Stash is last, and off until chosen. */
+    val MEDIA_SESSION_CHOICES = MEDIA_SESSION + STASH
+
+    private val MEDIA_SESSION_TRANSPORT = setOf(PREVIOUS, TOGGLE_PLAY, "play", "pause", NEXT)
+
+    /**
+     * A stash that was just turned on moves to sit after play and skip. Android shows about two
+     * extra buttons, and the editor otherwise leaves Stash after shuffle, repeat and love.
+     * A stash the user already had stays where they dragged it. Mirrors `show_new_stash` in the core.
+     */
+    fun withNewlyEnabledStash(previous: List<String>, ids: List<String>): List<String> {
+        if (STASH !in ids || STASH in previous) return ids
+        val rest = ids.filter { it != STASH }
+        val at = rest.indexOfLast { it in MEDIA_SESSION_TRANSPORT }.let { if (it < 0) 0 else it + 1 }
+        return rest.toMutableList().apply { add(at, STASH) }
+    }
 }
 
 /**
@@ -152,8 +174,8 @@ object ActionIds {
  */
 object SwipeOptions {
     const val NONE = "none"
-    val QUEUE = listOf(NONE, ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.PREVIEW)
-    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.STASH, ActionIds.PREVIEW)
+    val QUEUE = listOf(NONE, ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
+    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.STASH, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
     val DEFAULTS = mapOf(
         SettingKeys.SWIPE_QUEUE_START_TO_END to ActionIds.REMOVE_FROM_QUEUE,
         SettingKeys.SWIPE_QUEUE_END_TO_START to ActionIds.REMOVE_FROM_QUEUE,

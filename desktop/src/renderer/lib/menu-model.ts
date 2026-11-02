@@ -27,6 +27,10 @@ export interface MenuFacts {
   header?: MenuHeader;
   /** The songs the target stands for: what the add to playlist submenu adds. */
   trackIds?: string[];
+  /** How many of those songs are snoozed. */
+  snoozed?: number;
+  /** When the one song's snooze ends. Null means it doesn't; absent means it isn't snoozed. */
+  snoozeUntil?: number | null;
 }
 
 export interface MenuHeader {
@@ -159,6 +163,10 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
   check("pin", undefined, (on) => t(on === true ? "menu.pinned" : "menu.pin"));
 
   if (shareApplies(facts)) top.push({ kind: "submenu", id: "share", label: t("menu.share"), enabled: true });
+  const snooze = byId.get("snooze");
+  const unsnooze = byId.get("unsnooze");
+  if (snooze) used.add("snooze");
+  if (unsnooze) used.add("unsnooze");
   if (geniusApplies(facts)) top.push({ kind: "genius", label: t("menu.openGenius"), enabled: true });
 
   // Song info / Album info is the app's own (the core's registry has no details action): after the
@@ -178,6 +186,17 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
 
   if (top.length && rows.length) rows.push({ kind: "sep" });
   rows.push(...top);
+  // Snooze sits with the lower part of the menu (under More on the phone). A snoozed song offers
+  // Unsnooze, and when the snooze ends, instead of the duration submenu.
+  const snoozedN = facts?.snoozed ?? 0;
+  const songish = facts?.kind === "song";
+  const snoozeRows: MenuRow[] = [];
+  if (songish && unsnooze && snoozedN > 0) snoozeRows.push({ kind: "action", action: unsnooze, label: labelFor(unsnooze, facts), destructive: false });
+  if (songish && snooze && snoozedN < count) snoozeRows.push({ kind: "submenu", id: "snooze", label: t("action.snooze"), enabled: snooze.enabled });
+  if (snoozeRows.length) {
+    if (rows.length) rows.push({ kind: "sep" });
+    rows.push(...snoozeRows);
+  }
   let category: string | undefined = top.length ? "top" : rows.length ? "items" : undefined;
   for (const a of plain) {
     if (category !== undefined && category !== a.category) rows.push({ kind: "sep" });
@@ -204,6 +223,9 @@ export function geniusApplies(facts: MenuFacts | undefined): boolean {
 /** A row's words: the registry's, except where the menu design names it for its target. */
 export function labelFor(a: ActionDescriptor, facts: MenuFacts | undefined): string {
   const count = facts?.count ?? 1;
+  if (a.id === "unsnooze" && facts?.count === 1) {
+    return facts.snoozeUntil == null ? `${a.label} · ${t("snooze.untilNever")}` : `${a.label} · ${t("snooze.until", { when: new Date(facts.snoozeUntil).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) })}`;
+  }
   if (a.id === "ui.info" && facts?.kind === "song") return t("menu.songInfo");
   if (a.id === "ui.info" && facts?.kind === "album") return t("menu.albumInfo");
   if (a.id === "removeFromPlaylist" && facts?.playlistName) return count > 1 ? t("menu.removeSomeFrom", { n: count, playlist: facts.playlistName }) : t("menu.removeFrom", { playlist: facts.playlistName });
