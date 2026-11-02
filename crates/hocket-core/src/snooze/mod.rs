@@ -75,15 +75,27 @@ pub fn merge(ours: &[Snooze], theirs: &[Snooze]) -> (Vec<Snooze>, bool) {
 
 /// Forget snoozes that have ended, and tombstones older than [`TOMBSTONE_TTL_MS`].
 ///
-/// An ended snooze becomes a tombstone and keeps its clock. Deleting it would let an older copy
-/// from a device that was away merge back in and snooze the song again after it had come back.
+/// An ended snooze becomes a tombstone and keeps its clock, so an older copy from a device that
+/// was away cannot bring it back. The clock is not moved forward: a newer snooze from another
+/// device still wins. How long the tombstone is kept is measured from when the snooze stopped
+/// applying (its end, or the unsnooze), not from when it was set. A month is the same length as
+/// the tombstone window, so measuring from the set time would drop a month-long snooze in the
+/// same prune that ends it.
 pub fn prune(entries: &mut Vec<Snooze>, now: EpochMs) {
     for e in entries.iter_mut() {
         if !e.removed && e.until.is_some_and(|u| u <= now) {
             e.removed = true;
         }
     }
-    entries.retain(|e| !e.removed || now - e.updated_at < TOMBSTONE_TTL_MS);
+    entries.retain(|e| !e.removed || now - tombstone_from(e) < TOMBSTONE_TTL_MS);
+}
+
+/// When a removed entry stopped applying: the later of its end and its clock. An unsnooze has no
+/// end, so that is just the clock.
+fn tombstone_from(entry: &Snooze) -> EpochMs {
+    entry
+        .until
+        .map_or(entry.updated_at, |until| until.max(entry.updated_at))
 }
 
 /// Track ids snoozed at `now`, in a stable order.
@@ -303,6 +315,47 @@ mod tests {
         prune(&mut merged, 100.0);
         assert!(active_ids(&merged, 100.0).is_empty());
         assert!(merged.iter().any(|e| e.track_id == "t" && e.removed));
+    }
+
+    #[test]
+    fn a_month_long_snooze_still_blocks_an_older_copy_after_it_ends() {
+        let set_at = 0.0;
+        let until = set_at + 30.0 * DAY_MS;
+        let mut local = vec![Snooze {
+            track_id: "t".into(),
+            until: Some(until),
+            updated_at: set_at,
+            removed: false,
+        }];
+        // A day after it ended, and 31 days after it was set: past the tombstone window if that
+        // window were measured from the set time.
+        let prune_at = set_at + 31.0 * DAY_MS;
+        prune(&mut local, prune_at);
+        assert!(
+            local.iter().any(|e| e.track_id == "t" && e.removed),
+            "the ended month stays as a tombstone"
+        );
+        assert_eq!(
+            local[0].updated_at, set_at,
+            "the clock is not moved forward"
+        );
+        let stale = Snooze {
+            track_id: "t".into(),
+            until: None,
+            updated_at: set_at - 1.0,
+            removed: false,
+        };
+        let (merged, _) = merge(&local, &[stale]);
+        assert!(active_ids(&merged, prune_at).is_empty());
+        // A newer snooze from another device still wins.
+        let again = Snooze {
+            track_id: "t".into(),
+            until: None,
+            updated_at: prune_at,
+            removed: false,
+        };
+        let (merged, _) = merge(&local, &[again]);
+        assert_eq!(state_of(&merged, "t", prune_at), Some(None));
     }
 
     #[test]
