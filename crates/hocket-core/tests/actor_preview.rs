@@ -66,7 +66,10 @@ async fn preview_pauses_here_and_resumes_at_the_same_position() {
     assert!(
         t.backend.log().iter().any(|c| matches!(
             c,
-            ScriptedCall::PreviewLoad { position_ms: 60_000, .. }
+            ScriptedCall::PreviewLoad {
+                position_ms: 60_000,
+                ..
+            }
         )),
         "preview loads at 30%"
     );
@@ -90,8 +93,10 @@ async fn preview_pauses_here_and_resumes_at_the_same_position() {
     let paused = preview_of(&t.events.all()).expect("still previewing");
     assert!(!paused.playing);
 
-    t.run(Command::PreviewSeek { position_ms: 80_000 })
-        .await;
+    t.run(Command::PreviewSeek {
+        position_ms: 80_000,
+    })
+    .await;
     let sought = preview_of(&t.events.all()).expect("seek");
     assert_eq!(sought.position_ms, 80_000);
 
@@ -146,7 +151,10 @@ async fn preview_on_a_peer_leaves_the_player_alone() {
     assert_eq!(preview.track_id, "t2");
     assert!(preview.playing);
     assert!(
-        b.backend.log().iter().any(|c| matches!(c, ScriptedCall::PreviewLoad { .. })),
+        b.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::PreviewLoad { .. })),
         "the preview is played on this device"
     );
     // Nothing was asked of the owner's player beyond what it was already doing.
@@ -230,8 +238,14 @@ async fn preview_end_resumes_and_an_interruption_does_not() {
     })
     .await;
     t.run_for(1_000.0).await;
-    assert!(preview_of(&t.events.all()).is_none(), "the song ending stops the preview");
-    assert!(t.transport().await.position.is_playing, "main playback resumes");
+    assert!(
+        preview_of(&t.events.all()).is_none(),
+        "the song ending stops the preview"
+    );
+    assert!(
+        t.transport().await.position.is_playing,
+        "main playback resumes"
+    );
 
     t.run(Command::PreviewStart {
         track_id: "t2".into(),

@@ -184,10 +184,7 @@ impl PlaybackBackend for LoggedBackend {
     }
 
     fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
-        let what = format!(
-            "preview {} at {position_ms} ms",
-            describe_source(&source)
-        );
+        let what = format!("preview {} at {position_ms} ms", describe_source(&source));
         logged(|| what, self.inner.preview_load(source, position_ms))
     }
 

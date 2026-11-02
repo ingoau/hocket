@@ -1173,12 +1173,10 @@ impl NativeBackend {
                         playing: true,
                     })
                 }
-                BackendReport::Paused { position_ms, .. } => {
-                    Some(BackendReport::PreviewProgress {
-                        position_ms,
-                        playing: false,
-                    })
-                }
+                BackendReport::Paused { position_ms, .. } => Some(BackendReport::PreviewProgress {
+                    position_ms,
+                    playing: false,
+                }),
                 BackendReport::Position { position_ms, .. } => {
                     Some(BackendReport::PreviewProgress {
                         position_ms,

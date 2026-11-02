@@ -1492,6 +1492,10 @@ pub fn default_order(surface: Surface) -> Vec<&'static str> {
         Surface::NowPlaying => NOW_PLAYING.to_vec(),
         // Preview only exists inside an open song menu. The palette lists
         // every other action; offering it here would play with nothing to stop it.
-        Surface::Palette => ALL.iter().map(|d| d.id).filter(|id| *id != "preview").collect(),
+        Surface::Palette => ALL
+            .iter()
+            .map(|d| d.id)
+            .filter(|id| *id != "preview")
+            .collect(),
     }
 }
