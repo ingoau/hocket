@@ -869,10 +869,9 @@ fn media_session_buttons_follow_customisation() {
 fn stash_is_off_the_media_session_until_chosen() {
     let mut r = ActionRegistry::new(Platform::Android);
     let s = state();
-    assert!(
-        !r.media_session_actions(&s)
-            .contains(&MediaSessionAction::Stash)
-    );
+    assert!(!r
+        .media_session_actions(&s)
+        .contains(&MediaSessionAction::Stash));
     r.set_order(
         Surface::MediaSession,
         vec!["togglePlay".into(), "stash".into()],

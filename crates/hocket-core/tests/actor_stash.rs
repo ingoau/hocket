@@ -181,9 +181,10 @@ async fn two_devices_share_the_stash() {
 async fn media_session_stash_adds_the_playing_track_once() {
     let t = TestCore::start("a", seeded_server(6, 200.0)).await;
     t.wait_until(30_000.0, |core| {
-        core.events.all().iter().any(|e| {
-            matches!(e, Event::SyncProgress { progress } if progress.finished)
-        })
+        core.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
     })
     .await;
     let sid = t.server_id.clone();
