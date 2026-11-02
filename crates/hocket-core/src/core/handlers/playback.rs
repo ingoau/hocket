@@ -1386,7 +1386,7 @@ impl Actor {
             BackendReport::PreviewReady { .. }
             | BackendReport::PreviewProgress { .. }
             | BackendReport::PreviewEnded
-            | BackendReport::PreviewInterrupted => return,
+            | BackendReport::PreviewInterrupted => {}
             BackendReport::OutputDevicesChanged { devices } => {
                 self.output_devices = devices.clone();
                 self.emit(Event::OutputDevicesChanged { devices });
