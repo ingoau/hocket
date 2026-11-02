@@ -417,6 +417,7 @@ fn handlers_map_to_commands() {
             assert_eq!(args.context.kind, ContextKind::Album { id: "al".into() });
             assert_eq!(args.context.tracks, vec!["al-1", "al-2"]);
             assert!(args.shuffle);
+            assert_eq!(args.start_index, None);
         }
         other => panic!("{other:?}"),
     }
@@ -431,6 +432,28 @@ fn handlers_map_to_commands() {
         )
         .unwrap();
     assert!(matches!(&c[0], Command::PlayTracks { track_ids, .. } if track_ids.len() == 4));
+    for (action, shuffle) in [("play", false), ("playShuffled", true)] {
+        let c = r
+            .commands(
+                action,
+                &ActionTarget::Playlists {
+                    ids: vec!["late".into()],
+                },
+                &s,
+                &res,
+            )
+            .unwrap();
+        match &c[0] {
+            Command::PlayContext { args } => {
+                assert_eq!(args.shuffle, shuffle, "{action}");
+                assert_eq!(
+                    args.start_index, None,
+                    "{action} starts at the top, so a snoozed first song stays out"
+                );
+            }
+            other => panic!("{action}: {other:?}"),
+        }
+    }
     assert_eq!(
         r.commands(
             "play",

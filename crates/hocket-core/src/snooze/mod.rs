@@ -73,15 +73,17 @@ pub fn merge(ours: &[Snooze], theirs: &[Snooze]) -> (Vec<Snooze>, bool) {
     (merged, changed)
 }
 
-/// Drop expired snoozes and tombstones older than [`TOMBSTONE_TTL_MS`].
+/// Forget snoozes that have ended, and tombstones older than [`TOMBSTONE_TTL_MS`].
+///
+/// An ended snooze becomes a tombstone and keeps its clock. Deleting it would let an older copy
+/// from a device that was away merge back in and snooze the song again after it had come back.
 pub fn prune(entries: &mut Vec<Snooze>, now: EpochMs) {
-    entries.retain(|e| {
-        if e.removed {
-            now - e.updated_at < TOMBSTONE_TTL_MS
-        } else {
-            e.until.map(|u| u > now).unwrap_or(true)
+    for e in entries.iter_mut() {
+        if !e.removed && e.until.is_some_and(|u| u <= now) {
+            e.removed = true;
         }
-    });
+    }
+    entries.retain(|e| !e.removed || now - e.updated_at < TOMBSTONE_TTL_MS);
 }
 
 /// Track ids snoozed at `now`, in a stable order.
@@ -191,9 +193,13 @@ pub fn filter_context(
     if filtered.is_empty() {
         return (tracks.to_vec(), start);
     }
-    let start = keep_at.and_then(|i| {
-        let id = &tracks[i];
-        filtered.iter().position(|t| t == id).map(|n| n as u32)
+    // Count what stays ahead of the picked song. Searching by id would start on an earlier copy.
+    let start = keep_at.map(|i| {
+        tracks
+            .iter()
+            .take(i)
+            .filter(|id| !snoozed.contains(*id))
+            .count() as u32
     });
     (filtered, start)
 }
@@ -274,7 +280,37 @@ mod tests {
         assert!(active_ids(&entries, 49.0).contains(&"t".to_string()));
         assert!(active_ids(&entries, 50.0).is_empty());
         prune(&mut entries, 50.0);
-        assert!(entries.is_empty());
+        assert!(entries[0].removed, "ended snooze stays as a tombstone");
+        assert!(active_ids(&entries, 50.0).is_empty());
+    }
+
+    #[test]
+    fn an_ended_snooze_is_not_brought_back_by_an_older_copy() {
+        let mut local = vec![Snooze {
+            track_id: "t".into(),
+            until: Some(100.0),
+            updated_at: 20.0,
+            removed: false,
+        }];
+        prune(&mut local, 100.0);
+        let stale = Snooze {
+            track_id: "t".into(),
+            until: None,
+            updated_at: 10.0,
+            removed: false,
+        };
+        let (mut merged, _) = merge(&local, &[stale]);
+        prune(&mut merged, 100.0);
+        assert!(active_ids(&merged, 100.0).is_empty());
+        assert!(merged.iter().any(|e| e.track_id == "t" && e.removed));
+    }
+
+    #[test]
+    fn picking_a_later_copy_of_a_repeated_song_starts_on_that_copy() {
+        let tracks = ids(&["a", "b", "a"]);
+        let (out, start) = filter_context(&tracks, &kind_playlist(), Some(2), &set_of(&["b"]));
+        assert_eq!(out, ids(&["a", "a"]));
+        assert_eq!(start, Some(1));
     }
 
     #[test]

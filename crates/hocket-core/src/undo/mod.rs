@@ -341,6 +341,14 @@ impl UndoableCommand for SnoozeUndo {
         if n.kind != self.kind {
             return false;
         }
+        // A second song is its own undo. Only a repeat of the same tracks folds in.
+        let same_tracks = n.after.len() == self.after.len()
+            && n.after
+                .iter()
+                .all(|(id, _)| self.after.iter().any(|(existing, _)| existing == id));
+        if !same_tracks {
+            return false;
+        }
         for (id, after) in &n.after {
             let prior = n
                 .before

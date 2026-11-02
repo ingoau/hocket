@@ -211,6 +211,42 @@ async fn snooze_undo_and_each_queue() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shuffle_and_play_leave_out_a_snoozed_first_song() {
+    let t = TestCore::start("shuffle", seeded_server(4, 200.0)).await;
+    t.run(Command::Snooze {
+        track_ids: ids(&["a"]),
+        duration: SnoozeFor::Week,
+    })
+    .await;
+    play(
+        &t,
+        ContextKind::Playlist { id: "p".into() },
+        &["a", "b", "c"],
+        None,
+    )
+    .await;
+    assert_eq!(queue_ids(&t.queue().await), ids(&["b", "c"]));
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            context: context(
+                &t.server_id,
+                ContextKind::Playlist { id: "p".into() },
+                &["a", "b", "c"],
+            ),
+            start_index: None,
+            shuffle: true,
+            save_outgoing: false,
+        },
+    })
+    .await;
+    let q = t.queue().await;
+    assert!(q.shuffle);
+    let played = queue_ids(&q);
+    assert!(!played.contains(&"a".to_string()), "{played:?}");
+    assert_eq!(played.len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_snooze_expires_when_its_end_passes() {
     let t = TestCore::start("expire", seeded_server(4, 200.0)).await;
     t.run(Command::Snooze {

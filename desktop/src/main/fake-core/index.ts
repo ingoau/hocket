@@ -1731,7 +1731,8 @@ export class FakeCore implements CoreHandle {
     }
     if (!n) return;
     this.emitSnoozes();
-    this.toast(duration === "indefinite" ? (n === 1 ? "Snoozed indefinitely" : `Snoozed ${n} songs indefinitely`) : `Snoozed ${n === 1 ? "for" : `${n} songs for`} ${duration}`);
+    const length = duration === "day" ? "1 day" : duration === "threeDays" ? "3 days" : duration === "week" ? "1 week" : duration === "month" ? "1 month" : "indefinitely";
+    this.toast(duration === "indefinite" ? (n === 1 ? "Snoozed indefinitely" : `Snoozed ${n} songs indefinitely`) : (n === 1 ? `Snoozed for ${length}` : `Snoozed ${n} songs for ${length}`));
   }
 
   private clearSnooze(trackIds: string[]): void {

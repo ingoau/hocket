@@ -863,10 +863,12 @@ fn play_commands(
         ActionTarget::SavedQueue { id } => vec![Command::RestoreSavedQueue { id: id.clone() }],
         _ => {
             if let Some(context) = context_of(target, &server, resolver) {
+                // No start index: this is the whole context, not a song the listener picked.
+                // A snoozed first song stays out, including when shuffle would otherwise anchor it.
                 return vec![Command::PlayContext {
                     args: PlayContextArgs {
                         context,
-                        start_index: Some(0),
+                        start_index: None,
                         shuffle,
                         save_outgoing: true,
                     },
