@@ -51,7 +51,9 @@ export function StashChip() {
   }, [open]);
   if (!chip.value) return null;
   const shown = chip.value;
-  const [first, second] = shown;
+  // The two newest covers, the newest in front: each song stashed drops in as the front card.
+  const first = shown[shown.length - 1];
+  const second = shown[shown.length - 2];
   return (
     <div
       ref={ref}
