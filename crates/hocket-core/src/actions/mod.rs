@@ -859,6 +859,7 @@ fn play_commands(
                         start_index: Some(0),
                         shuffle,
                         save_outgoing: true,
+                        start_position_ms: None,
                     },
                 }];
             }

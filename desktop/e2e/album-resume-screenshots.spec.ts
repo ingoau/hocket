@@ -43,8 +43,11 @@ test("album resume", async () => {
     await page.getByTestId("artist-menu-album").click();
     await expect(page.getByTestId("view-album")).toBeVisible();
     await expect(page.getByTestId("album-play")).toContainText("Resume");
-    const title = await page.getByTestId("player-bar").locator(".title").innerText();
-    await page.getByTestId("track-row").filter({ hasText: title }).first().scrollIntoViewIfNeeded();
+    // Leave the album playing something else, so the page offers Resume and the ring
+    // (while this album is what is playing, the button stays Play).
+    await page.evaluate(({ serverId }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: "al-2" } }, label: "Other", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { serverId });
+    await expect(page.getByTestId("album-play")).toContainText("Resume");
+    await page.getByTestId("track-row").nth(1).scrollIntoViewIfNeeded();
     await settle(page);
     await page.screenshot({ path: join(out!, "desktop-album-resume.png") });
     await page.getByTestId("album-more").click();

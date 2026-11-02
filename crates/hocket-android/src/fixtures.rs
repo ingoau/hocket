@@ -95,6 +95,7 @@ mod tests {
                     start_index: Some(2),
                     shuffle: true,
                     save_outgoing: true,
+                    start_position_ms: None,
                 }
             }),
         );

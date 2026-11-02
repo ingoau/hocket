@@ -618,6 +618,13 @@ impl Actor {
         }
 
         let key_changed = new_key != old_key;
+        // A resume started on another device carries the position in the op. This device
+        // applies that op with no local effects, so the position is handed across here.
+        let remote_at = if cause == DocChange::Remote {
+            self.engine.as_mut().and_then(|e| e.take_resume_load_ms())
+        } else {
+            None
+        };
         let resume_at = if key_changed {
             self.take_pending_resume(document.current.as_ref().map(|c| c.track_id.as_str()))
         } else {
@@ -644,6 +651,7 @@ impl Actor {
                         .map(|(_, p)| p)
                         .or(restore_position)
                         .or(resume_at)
+                        .or(remote_at)
                         .unwrap_or(0);
                     if owns {
                         let keep_playing = match cause {
@@ -659,13 +667,14 @@ impl Actor {
                         self.playback.restore_position = Some((item.key.clone(), position));
                         self.queue_input(Input::ClaimTransport { takeover: false });
                     } else {
-                        // Another device plays; we only render. Whatever this
-                        // backend had loaded is stopped, and the old item's
-                        // position is not carried onto the new one.
+                        // Another device plays. Show the position this change asked for
+                        // (a resume). The device that holds playback loads it from the
+                        // same op, so a seek from here would land on whatever it still
+                        // had loaded.
                         self.render_only();
                         self.playback.doc_key = Some(item.key.clone());
                         self.playback.track = self.track_or_bare(&item.track_id);
-                        self.playback.position_ms = 0;
+                        self.playback.position_ms = position;
                         self.playback.position_at = self.now();
                     }
                 }

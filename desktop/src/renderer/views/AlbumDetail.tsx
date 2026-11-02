@@ -28,6 +28,10 @@ export function AlbumDetail({ id }: { id: string }) {
   const navigate = useApp((s) => s.navigate);
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const isPlaying = useApp((s) => s.transport.position.isPlaying);
+  const inThisAlbum = useApp((s) => {
+    const kind = s.session?.context?.kind;
+    return kind?.type === "album" && kind.data.id === id;
+  });
   const album = useQuery(() => ({ type: "album", data: { id } }), "albumDetail", [id]);
   const tracks = useQuery(() => ({ type: "albumTracks", data: { id } }), "trackList", [id]);
   const a = album.data;
@@ -46,7 +50,7 @@ export function AlbumDetail({ id }: { id: string }) {
   const allArtists = useSetting(SK.displayAlbumTrackArtists, false);
   const resumeOn = useSetting(SK.resumeAlbums, true);
   const resumes = useApp((s) => s.albumResumes);
-  const resume = resumeOn ? resumes.find((p) => p.albumId === id) : undefined;
+  const resume = resumeOn && !(inThisAlbum && isPlaying) ? resumes.find((p) => p.albumId === id) : undefined;
   const startOver = () => {
     bridge().dispatch({ type: "clearAlbumResume", data: { album_id: id } });
     play();
@@ -59,7 +63,7 @@ export function AlbumDetail({ id }: { id: string }) {
     <div className="view detail-page" data-testid="view-album">
       <DetailHead coverArt={a?.coverArt} icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="album-head" actions={
         <>
-          <button type="button" className="btn primary fab album-play" aria-label={resume ? t("album.resumeLongPress") : t("album.play")} onClick={() => (resume ? bridge().dispatch({ type: "resumeAlbum", data: { album_id: id } }) : play())} onContextMenu={resume ? (e) => { e.preventDefault(); e.stopPropagation(); openItemsMenu(e, [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }]); } : undefined} {...primer.bind(resume ? undefined : list[0]?.id)} data-testid="album-play"><Icon name={resume ? "resume" : "play"} size={24} filled /> {resume ? t("album.resume") : t("album.play")}</button>
+          <button type="button" className="btn primary fab album-play" aria-label={resume ? t("album.resumeMenu") : t("album.play")} onClick={() => (resume ? bridge().dispatch({ type: "resumeAlbum", data: { album_id: id } }) : play())} onContextMenu={resume ? (e) => { e.preventDefault(); e.stopPropagation(); openItemsMenu(e, [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }]); } : undefined} {...primer.bind(resume ? undefined : list[0]?.id)} data-testid="album-play"><Icon name={resume ? "resume" : "play"} size={24} filled /> {resume ? t("album.resume") : t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(0, true)} data-testid="album-shuffle"><Icon name="shuffle" size={24} /></button>
           {a ? <Heart size={24} on={a.loved} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "album", data: { id: a.id } }], loved: !a.loved } })} /> : null}
           {a ? <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(kept ? "unpin" : "download", { type: "albums", data: { ids: [a.id] } })} data-testid="album-download"><Icon name="download" size={24} filled={kept} /></button> : null}
@@ -87,7 +91,7 @@ export function AlbumDetail({ id }: { id: string }) {
             <span className="muted">{t("album.tracks", { count: list.length, duration: fmtTime(list.reduce((n, x) => n + (x.durationMs ?? 0), 0)) })}</span>
           </div>
           <div style={{ height: trackTableHeight(list.length), display: "flex", flexDirection: "column" }}>
-            <TrackTable tracks={list} total={list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={isPlaying ? playing : undefined} resumeTrackId={resume && !(isPlaying && playing === resume.trackId) ? resume.trackId : undefined} resumeFraction={resume ? resumeFraction(list, resume) : undefined} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
+            <TrackTable tracks={list} total={list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} resumeTrackId={resume && playing !== resume.trackId ? resume.trackId : undefined} resumeFraction={resume ? resumeFraction(list, resume) : undefined} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
           </div>
           {footnote ? <div className="detail-footnote">{footnote}</div> : null}
         </section>

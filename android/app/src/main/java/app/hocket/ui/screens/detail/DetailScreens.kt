@@ -260,6 +260,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     }
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val transport by client.transport.collectAsStateWithLifecycle()
+    val session by client.session.collectAsStateWithLifecycle()
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val pins by client.pins.collectAsStateWithLifecycle()
@@ -276,6 +277,9 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     LaunchedEffect(id, resumeRev) {
         resume = (client.query(Queries.albumResume(id)) as? QueryResult.AlbumResumeState)?.data
     }
+    // While this album is what is playing, Play stays Play. Paused, or after you leave, it is Resume.
+    val inThisAlbum = (session?.context?.kind as? app.hocket.core.api.ContextKind.Album)?.data?.id == a.id
+    val offer = resume?.takeIf { !(inThisAlbum && transport.position.isPlaying) }
     val allArtists = settings[SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS]?.value?.trim() == "true"
     val startOver = {
         client.dispatch(Commands.clearAlbumResume(a.id))
@@ -295,8 +299,8 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         },
         heroActions = {
             HeroPlayButton(
-                onClick = { if (resume != null) client.dispatch(Commands.resumeAlbum(a.id)) else client.dispatch(Commands.playContext(context)) },
-                resume = resume != null,
+                onClick = { if (offer != null) client.dispatch(Commands.resumeAlbum(a.id)) else client.dispatch(Commands.playContext(context)) },
+                resume = offer != null,
                 onLongClick = startOver,
             )
             HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) }, pos = GroupPos.Middle)
@@ -308,8 +312,8 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         item(key = "tracks.top") { Spacer(Modifier.height(16.dp)) }
         if (list == null) items(8, key = { "skeleton.row$it" }, contentType = { "skeletonRow" }) { TrackRowSkeleton(showArtwork = false) }
         else itemsIndexed(list, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { i, t ->
-            val playing = transport.position.isPlaying && nowPlaying?.track?.id == t.id
-            val resumeHere = resume?.takeIf { it.trackId == t.id && !playing }
+            val playing = nowPlaying?.track?.id == t.id
+            val resumeHere = offer?.takeIf { it.trackId == t.id && !playing }
             TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { songMenu.open(t.toSummary()) }, showArtwork = false,
                 leading = {
                     Box(Modifier.width(40.dp), contentAlignment = Alignment.Center) {
@@ -349,7 +353,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     }
     if (albumSheet) ActionSheet(
         target, a.name, a.artist, onDismiss = { albumSheet = false }, onGoToArtist = a.artistId?.let { aid -> { nav.navigate(Route.Artist(aid)) } },
-        extras = if (resume == null) emptyList() else listOf(app.hocket.ui.components.SongMenuExtra(
+        extras = if (offer == null) emptyList() else listOf(app.hocket.ui.components.SongMenuExtra(
             stringResource(R.string.action_start_over), HocketIcons.Filled.RestartAlt, onClick = { albumSheet = false; startOver() }, testTag = "album.startOver",
         )),
     )

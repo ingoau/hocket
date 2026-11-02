@@ -5,6 +5,7 @@
 use crate::album_resume::{self, Snapshot};
 use crate::api::*;
 use crate::connect::engine::Input;
+use crate::connect::wire::TransportCommand;
 use crate::core::actor::Actor;
 use crate::settings::keys;
 
@@ -76,10 +77,14 @@ impl Actor {
         album_resume::point(&self.album_resumes, album_id, self.now())
     }
 
-    fn album_resume_changed(&mut self) {
+    /// `sync` tells other devices. Position samples while an album plays stay on this
+    /// device; pause, a track change, stop and a clear are what travel.
+    fn album_resume_changed(&mut self, sync: bool) {
         self.save_album_resumes();
-        self.emit_album_resumes();
-        self.engine_input(Input::AlbumResumeChanged(self.album_resumes.clone()));
+        if sync {
+            self.emit_album_resumes();
+            self.engine_input(Input::AlbumResumeChanged(self.album_resumes.clone()));
+        }
     }
 
     pub(crate) fn on_album_resume_merged(&mut self, list: Vec<AlbumResumeEntry>) {
@@ -95,13 +100,24 @@ impl Actor {
     pub(crate) fn clear_album_resume(&mut self, album_id: &str) {
         let now = self.now();
         if album_resume::clear(&mut self.album_resumes, album_id, now) {
-            self.album_resume_changed();
+            self.album_resume_changed(true);
         }
     }
 
     /// Continue `album_id` at its saved track and position, or from the start when there is
-    /// nothing to resume.
+    /// nothing to resume. Already being in that album just continues: playback is already
+    /// at the live position, and rebuilding the queue would jump back to the last sample.
     pub(crate) fn resume_album(&mut self, album_id: AlbumId) {
+        if self.doc().is_some_and(|d| {
+            matches!(&d.context, Some(c) if matches!(&c.kind, ContextKind::Album { id } if id == &album_id))
+        }) {
+            if self.owns_transport() {
+                self.capture_album_resume(true);
+            }
+            self.playback.want_playing = true;
+            self.transport_command(TransportCommand::Play);
+            return;
+        }
         let point = self.album_resume_point(&album_id);
         let server_id = self
             .server
@@ -123,21 +139,27 @@ impl Actor {
             start_index: None,
             shuffle: false,
             save_outgoing: true,
+            start_position_ms: None,
         };
         if let Some(p) = point {
             if args.context.tracks.is_empty() {
                 args.context.tracks =
                     self.resolve_context_tracks(&args.context.server_id, &args.context.kind);
             }
+            let n = args.context.tracks.len() as u32;
             let index = args
                 .context
                 .tracks
                 .iter()
                 .position(|id| id == &p.track_id)
                 .map(|i| i as u32)
-                .unwrap_or(p.track_index);
-            args.start_index = Some(index);
-            self.pending_resume_at = Some((p.track_id, p.position_ms));
+                .filter(|i| *i < n)
+                .or((p.track_index < n).then_some(p.track_index));
+            if let Some(index) = index {
+                args.start_index = Some(index);
+                args.start_position_ms = Some(p.position_ms);
+                self.pending_resume_at = Some((p.track_id, p.position_ms));
+            }
         }
         self.play_context(args);
     }
@@ -263,7 +285,9 @@ impl Actor {
                     }
                 }
                 if album_resume::upsert(&mut self.album_resumes, entry) {
-                    self.album_resume_changed();
+                    // `precise` is a pause, seek, track change or stop: that is what other
+                    // devices need. A sample while the album plays stays on this device.
+                    self.album_resume_changed(precise);
                 }
             }
         }

@@ -13,7 +13,7 @@ pub const TEXTS: &[SettingText] = &[
     t("queue.mode", "Queue mode", "How Play Next behaves: a separate Playing Next list (Apple) or spliced into the context after the current track (YouTube)."),
     t("queue.savedCap", "Saved queues to keep", "How many unpinned recent queues are kept. Zero keeps only pinned queues."),
     t("queue.historyCap", "Playback history length", "How many played items stay reachable with Previous."),
-    t("playback.resumeAlbums", "Resume albums", "Offer to continue an album you started from the album and didn't finish, at the track and moment you left it. Off, Play always starts at the beginning."),
+    t("playback.resumeAlbums", "Resume albums", "Offer to continue an album you started from the album and didn't finish, at the track and moment you left it. Off, Play always starts at the beginning. Turning it back on brings back albums left in the last 30 days."),
     t("autoplay.settings", "Autoplay", "Provider order, seed window, sonic similarity threshold, exclusion window and optional saved filter."),
     t("autoplay.contextOverrides", "Autoplay per-context order", "Provider order overrides for album and artist contexts."),
     t("audio.settings", "Audio", "ReplayGain, equaliser, normalisation, gapless playback, output device and exclusive mode for this device."),

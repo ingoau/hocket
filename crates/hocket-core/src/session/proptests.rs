@@ -221,6 +221,7 @@ fn op() -> impl Strategy<Value = QueueOp> {
                     start_index,
                     shuffle,
                     save_outgoing: true,
+                    start_position_ms: None,
                 }
             }
         ),

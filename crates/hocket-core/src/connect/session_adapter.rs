@@ -265,6 +265,7 @@ mod tests {
                 start_index: Some(0),
                 shuffle: true,
                 save_outgoing: false,
+                start_position_ms: None,
             },
         }
     }

@@ -57,11 +57,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -323,6 +325,7 @@ internal fun RowScope.HeroPlayButton(
             ).clearAndSetSemantics {
                 val press = onClick
                 val hold = onLongClick
+                role = Role.Button
                 contentDescription = a11y
                 this.onClick(label = a11y) { press(); true }
                 this.onLongClick(label = startOver) { haptics.performHapticFeedback(HapticFeedbackType.SegmentTick); hold(); true }

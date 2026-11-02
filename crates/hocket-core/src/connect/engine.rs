@@ -657,6 +657,9 @@ pub struct Engine {
     detached: bool,
     held_remote_epoch: Option<u32>,
     stamp: Option<CurrentStamp>,
+    /// Position a remote `PlayContext` asked to start at. The actor takes it
+    /// when that op's document lands; the document itself does not store it.
+    resume_load_ms: Option<Ms>,
     /// Switched rooms while playing here: the room only has whatever stamp
     /// it kept from before, so re-send ours once it grants the lease. Holds
     /// whether that grant comes from our own room (`true`) or a remote one.
@@ -818,6 +821,7 @@ impl Engine {
             detached: false,
             held_remote_epoch: None,
             stamp: None,
+            resume_load_ms: None,
             restamp_on_grant: None,
             let_go_at: None,
             given_back: None,
@@ -872,6 +876,11 @@ impl Engine {
     /// The live session document (with optimistic ops applied).
     pub fn document(&self) -> &SessionDocument {
         &self.doc
+    }
+
+    /// Position from the remote play op just applied, once.
+    pub fn take_resume_load_ms(&mut self) -> Option<Ms> {
+        self.resume_load_ms.take()
     }
 
     /// Persist this next to the document.
@@ -3554,6 +3563,12 @@ impl Engine {
             Ok(next) => {
                 self.confirmed = next;
                 self.doc = self.confirmed.clone();
+                self.resume_load_ms = match &op {
+                    SessionOp::PlayContext { args } => {
+                        args.start_position_ms.filter(|position| *position > 0)
+                    }
+                    _ => None,
+                };
                 let d = self.doc.clone();
                 self.out.push(Output::DocumentChanged {
                     document: d,

@@ -20,6 +20,7 @@ fn album(server_id: &str, id: &str, shuffle: bool) -> PlayContextArgs {
         start_index: Some(0),
         shuffle,
         save_outgoing: false,
+        start_position_ms: None,
     }
 }
 
@@ -122,6 +123,7 @@ async fn shuffle_playlists_and_the_switch_do_not_offer_resume() {
             start_index: Some(1),
             shuffle: false,
             save_outgoing: false,
+            start_position_ms: None,
         },
     })
     .await;
@@ -173,6 +175,26 @@ async fn finishing_the_album_clears_the_point() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_keeps_the_position_it_paused_on() {
+    let t = synced("stop").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album(&sid, "al0", false),
+    })
+    .await;
+    t.run(Command::Next).await;
+    t.run(Command::SeekTo {
+        position_ms: 45_000,
+    })
+    .await;
+    t.run(Command::Stop).await;
+    let p = point(&t, "al0").await.expect("stop keeps the point");
+    assert_eq!(p.track_id, "t1");
+    assert_eq!(p.position_ms, 45_000);
+    assert_eq!(t.snapshot().await.transport.position.position_ms, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_point_saved_on_one_device_resumes_on_the_other() {
     let server = seeded_server(8, 180.0);
     let net = MemoryNet::new();
@@ -198,4 +220,35 @@ async fn a_point_saved_on_one_device_resumes_on_the_other() {
     let p = point(&b, "al0").await.expect("b learned the point");
     assert_eq!(p.track_id, "t1");
     assert_eq!(p.position_ms, 45_000);
+
+    // A still holds playback (paused). B resumes: A must not start the track over.
+    b.run(Command::ResumeAlbum {
+        album_id: "al0".into(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t1"));
+    let at = a.snapshot().await.transport.position.position_ms;
+    assert!(
+        (40_000..55_000).contains(&at),
+        "the device that holds playback resumes near 45s, got {at}"
+    );
+
+    // A has moved on, and still holds playback. B resumes the album A left.
+    a.run(Command::PlayContext {
+        args: album(&sid, "al1", false),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    b.run(Command::ResumeAlbum {
+        album_id: "al0".into(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t1"));
+    let at = a.snapshot().await.transport.position.position_ms;
+    assert!(
+        (40_000..55_000).contains(&at),
+        "resuming from the other device seeks the one that plays, got {at}"
+    );
 }

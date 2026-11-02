@@ -1808,6 +1808,10 @@ pub struct PlayContextArgs {
     /// Keep the outgoing queue as a saved queue (default true).
     #[serde(default = "default_true")]
     pub save_outgoing: bool,
+    /// Where in the starting track to begin. Album resume sets it; absent means the start.
+    /// Older builds ignore it, so a coordinator from before this field drops it on the way through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_position_ms: Option<Ms>,
 }
 
 fn default_true() -> bool {

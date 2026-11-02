@@ -113,7 +113,26 @@ fn merge_entry(m: &mut AlbumResumeEntry, t: &AlbumResumeEntry) -> bool {
         m.removed_at = t.removed_at;
         changed = true;
     }
+    // A position newer than the clear wins even when that save never saw the clear
+    // (its removed_at is still 0). A clear newer than the position stays cleared.
+    changed |= reconcile(m);
     changed
+}
+
+/// The position clock and the clear clock are independent. A strictly newer position
+/// revives the album; a strictly newer clear keeps it cleared. Equal clocks keep the
+/// flag the merge already chose (a tie stays cleared).
+fn reconcile(m: &mut AlbumResumeEntry) -> bool {
+    if m.updated_at > m.removed_at {
+        if m.removed {
+            m.removed = false;
+            return true;
+        }
+    } else if m.removed_at > m.updated_at && !m.removed {
+        m.removed = true;
+        return true;
+    }
+    false
 }
 
 /// Merge `theirs` into `ours`. Returns the merged set and whether it differs from `ours`.
@@ -162,18 +181,15 @@ pub fn prune(entries: &mut Vec<AlbumResumeEntry>, now: EpochMs) {
     sort(entries);
 }
 
-/// Write `entry` (a live position). A resurrection stamps `removed_at` so it beats an older clear.
+/// Write `entry` (a live position). `removed_at` matches `updated_at` so this save beats any
+/// older clear, including one this device has not seen yet.
 /// Returns whether the stored record changed.
 pub fn upsert(entries: &mut Vec<AlbumResumeEntry>, mut entry: AlbumResumeEntry) -> bool {
     entry.removed = false;
+    entry.removed_at = entry.updated_at;
     if let Some(prev) = entries.iter().find(|e| e.album_id == entry.album_id) {
         if entry.duration_ms == 0 && prev.track_id == entry.track_id && prev.duration_ms > 0 {
             entry.duration_ms = prev.duration_ms;
-        }
-        if prev.removed {
-            entry.removed_at = entry.updated_at;
-        } else {
-            entry.removed_at = prev.removed_at;
         }
     }
     let changed = match entries.iter_mut().find(|e| e.album_id == entry.album_id) {
@@ -362,12 +378,15 @@ mod tests {
         let tomb = vec_of_owned(cleared.clone(), now + 10.0);
         let (merged, _) = merge(&[fresh.clone()], &tomb);
         assert!(point(&merged, "a", now + 10.0).is_none());
+        // The later save never saw the clear: its removal clock is still 0.
         let mut later = entry("a", 4, now + 20.0);
-        later.removed_at = now + 20.0;
-        assert!(upsert(&mut merged.clone(), later.clone()));
+        later.removed_at = 0.0;
+        later.position_ms = 80_000;
         let (revived, changed) = merge(&merged, &[later]);
         assert!(changed);
-        assert_eq!(point(&revived, "a", now + 20.0).unwrap().track_index, 4);
+        let p = point(&revived, "a", now + 20.0).expect("a newer save beats the clear");
+        assert_eq!(p.track_index, 4);
+        assert_eq!(p.position_ms, 80_000);
     }
 
     fn entry(album: &str, index: u32, at: f64) -> AlbumResumeEntry {
