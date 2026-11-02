@@ -468,6 +468,7 @@ mod tests {
                         track_id: Some("t1".into()),
                         loved: false,
                         rating: 0,
+                        stashed: false,
                     }),
                     is_playing: true,
                     position: PositionStamp {

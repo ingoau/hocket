@@ -256,8 +256,9 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
         val menuIds = menuSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMenu
         ChooseAndOrder(allMenu, menuIds, minEnabled = 1, label = { actionLabel(it) }, tag = "customise.contextMenu") { ids -> client.dispatch(Commands.setActionOrder("contextMenu", ids)) }
         SettingsSection(stringResource(R.string.settings_media_buttons), tag = "customise.mediaSessionSection")
-        val allMedia = ActionIds.MEDIA_SESSION
-        val mediaIds = mediaSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMedia
+        Text(stringResource(R.string.settings_media_buttons_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        val allMedia = ActionIds.MEDIA_SESSION_CHOICES
+        val mediaIds = mediaSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: ActionIds.MEDIA_SESSION
         ChooseAndOrder(allMedia, mediaIds, minEnabled = 0, label = { actionLabel(it) }, tag = "customise.mediaSession") { ids -> client.dispatch(Commands.setActionOrder("mediaSession", ids)) }
         SettingsSection(stringResource(R.string.settings_swipe_actions), tag = "customise.swipe")
         Text(stringResource(R.string.settings_swipe_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))

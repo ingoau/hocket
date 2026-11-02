@@ -414,7 +414,7 @@ class FakeCore(
     private fun mediaSessionState(): MediaSessionState {
         val t = current?.let { library.track(it.trackId) }
         return MediaSessionState(
-            metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.loved, it.rating) },
+            metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.loved, it.rating, stash.any { s -> s.second == it.id }) },
             isPlaying = stamp.isPlaying, position = stamp, shuffle = shuffle != null, repeat = repeat, volume = volumeOf(volumeTarget()).first, muted = volumeOf(volumeTarget()).second,
             actions = orderedMediaActions(), ownsTransport = transportOwner == deviceId,
         )
@@ -423,7 +423,7 @@ class FakeCore(
     private fun orderedMediaActions(): List<MediaSessionAction> {
         val base = listOf(MediaSessionAction.Play, MediaSessionAction.Pause, MediaSessionAction.Next, MediaSessionAction.Previous, MediaSessionAction.Seek, MediaSessionAction.Stop)
         val custom = (actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION).mapNotNull {
-            when (it) { ActionIds.LOVE -> MediaSessionAction.Love; ActionIds.SHUFFLE -> MediaSessionAction.Shuffle; ActionIds.REPEAT -> MediaSessionAction.Repeat; ActionIds.RATE -> MediaSessionAction.Rate; else -> null }
+            when (it) { ActionIds.LOVE -> MediaSessionAction.Love; ActionIds.SHUFFLE -> MediaSessionAction.Shuffle; ActionIds.REPEAT -> MediaSessionAction.Repeat; ActionIds.RATE -> MediaSessionAction.Rate; ActionIds.STASH -> MediaSessionAction.Stash; else -> null }
         }
         return base + custom
     }
@@ -459,7 +459,10 @@ class FakeCore(
     private fun stashAdd(trackIds: List<TrackId>) {
         val fresh = trackIds.distinct().filter { t -> stash.none { it.second == t } && library.track(t) != null }
         fresh.forEach { stash.add(newId("stash") to it) }
-        if (fresh.isNotEmpty()) emitStash()
+        if (fresh.isNotEmpty()) {
+            emitStash()
+            emitMedia()
+        }
         toast(when (fresh.size) { 0 -> "Already in the stash"; 1 -> "Stashed 1 song"; else -> "Stashed ${fresh.size} songs" })
     }
 
@@ -1048,12 +1051,17 @@ class FakeCore(
                 MediaSessionAction.Repeat -> handle(Command.SetRepeat(CommandSetRepeatInner(when (repeat) { RepeatMode.Off -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off })))
                 MediaSessionAction.Love -> currentTrack()?.let { setLoved(listOf(RatingTarget.Track(RatingTargetTrackInner(it.id))), !it.loved) }
                 MediaSessionAction.Rate -> currentTrack()?.let { t -> setRating(listOf(RatingTarget.Track(RatingTargetTrackInner(t.id))), c.data.value?.toInt() ?: 0) }
+                MediaSessionAction.Stash -> currentTrack()?.let { stashAdd(listOf(it.id)) }
             }
             is Command.RunAction -> runAction(c.data.action_id, c.data.target)
             is Command.SetShortcut -> Unit
             is Command.SetActionOrder -> {
-                actionOrders[c.data.surface] = c.data.action_ids
-                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), c.data.action_ids))
+                val ids = if (c.data.surface == "mediaSession") {
+                    val previous = actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION
+                    ActionIds.withNewlyEnabledStash(previous, c.data.action_ids)
+                } else c.data.action_ids
+                actionOrders[c.data.surface] = ids
+                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), ids))
                 emit(Event.ActionsChanged(EventActionsChangedInner(c.data.surface))); emitMedia()
             }
             is Command.SetSelection -> { selection = c.data.target }

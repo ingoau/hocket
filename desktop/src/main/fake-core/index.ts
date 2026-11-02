@@ -710,11 +710,14 @@ export class FakeCore implements CoreHandle {
         this.shortcutOverrides.set(cmd.data.action_id, cmd.data.shortcut);
         this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });
         return;
-      case "setActionOrder":
-        this.actionOrders.set(cmd.data.surface, cmd.data.action_ids.map(canonicalActionId));
-        this.setSettingValue(`actions.order.${cmd.data.surface}`, JSON.stringify(cmd.data.action_ids.map(canonicalActionId)));
+      case "setActionOrder": {
+        let ids = cmd.data.action_ids.map(canonicalActionId);
+        if (cmd.data.surface === "mediaSession") ids = showNewStash(this.actionOrders.get("mediaSession") ?? DEFAULT_ORDERS.mediaSession ?? [], ids);
+        this.actionOrders.set(cmd.data.surface, ids);
+        this.setSettingValue(`actions.order.${cmd.data.surface}`, JSON.stringify(ids));
         this.emit({ type: "actionsChanged", data: { surface: cmd.data.surface } });
         return;
+      }
       case "setSelection":
         this.selection = cmd.data.target;
         return;
@@ -2248,6 +2251,11 @@ export class FakeCore implements CoreHandle {
         if (t && value !== undefined) this.setRating([{ type: "track", data: { id: t.id } }], Math.round(value));
         break;
       }
+      case "stash": {
+        const t = this.currentTrack();
+        if (t) this.stashAdd([t.id]);
+        break;
+      }
     }
     this.emitMediaSession();
   }
@@ -2255,11 +2263,11 @@ export class FakeCore implements CoreHandle {
   private mediaSessionState(): MediaSessionState {
     const t = this.currentTrack();
     const order = this.actionOrders.get("mediaSession") ?? DEFAULT_ORDERS.mediaSession ?? [];
-    const map: Record<string, MediaSessionAction[]> = { togglePlay: ["play", "pause"], pause: ["pause"], stop: ["stop"], next: ["next"], previous: ["previous"], shuffle: ["shuffle"], repeat: ["repeat"], love: ["love"], rate: ["rate"] };
+    const map: Record<string, MediaSessionAction[]> = { togglePlay: ["play", "pause"], pause: ["pause"], stop: ["stop"], next: ["next"], previous: ["previous"], shuffle: ["shuffle"], repeat: ["repeat"], love: ["love"], rate: ["rate"], stash: ["stash"] };
     const actions = [...new Set(order.flatMap((id) => map[canonicalActionId(id)] ?? []))];
     actions.push("seek");
     return {
-      metadata: t ? { title: t.title, artist: t.artist, album: t.album, durationMs: t.durationMs, artworkPath: t.coverArt ? this.artworkPath(t.coverArt, 300) : undefined, trackId: t.id, loved: t.loved, rating: t.rating } : undefined,
+      metadata: t ? { title: t.title, artist: t.artist, album: t.album, durationMs: t.durationMs, artworkPath: t.coverArt ? this.artworkPath(t.coverArt, 300) : undefined, trackId: t.id, loved: t.loved, rating: t.rating, stashed: this.stash.some((e) => !e.removed && e.trackId === t.id) } : undefined,
       isPlaying: this.transport.position.isPlaying,
       position: this.transport.position,
       shuffle: !!this.session.shuffle,
@@ -3144,4 +3152,19 @@ function noticeMessage(code: PlayerNoticeCode, detail = ""): string {
     case "couldNotPlayStopped": return `Couldn't play ${detail}; stopped after 3 unplayable tracks`;
     case "autoplayFoundNothing": return "Autoplay found nothing to add";
   }
+}
+
+/** The media-session transport rows; mirrors `MEDIA_SESSION_TRANSPORT` in the core. */
+const MEDIA_SESSION_TRANSPORT = new Set(["previous", "togglePlay", "play", "pause", "next"]);
+
+/** Mirrors the core's `show_new_stash`: a newly enabled Stash moves right after the transport rows. */
+function showNewStash(previous: readonly string[], ids: string[]): string[] {
+  if (!ids.includes("stash") || previous.includes("stash")) return ids;
+  const rest = ids.filter((id) => id !== "stash");
+  let at = 0;
+  rest.forEach((id, i) => {
+    if (MEDIA_SESSION_TRANSPORT.has(id)) at = i + 1;
+  });
+  rest.splice(at, 0, "stash");
+  return rest;
 }

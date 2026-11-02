@@ -863,6 +863,70 @@ fn media_session_buttons_follow_customisation() {
     assert_eq!(r.media_session_actions(&StateView::default()), vec![]);
 }
 
+/// Stash is a media-session button only after the user turns it on. It stays
+/// offered once the track is already stashed: the tap is a no-op, not an unstash.
+#[test]
+fn stash_is_off_the_media_session_until_chosen() {
+    let mut r = ActionRegistry::new(Platform::Android);
+    let s = state();
+    assert!(!r
+        .media_session_actions(&s)
+        .contains(&MediaSessionAction::Stash));
+    r.set_order(
+        Surface::MediaSession,
+        vec!["togglePlay".into(), "stash".into()],
+    );
+    let a = r.media_session_actions(&s);
+    assert!(a.contains(&MediaSessionAction::Stash));
+    assert_eq!(a[0], MediaSessionAction::Play);
+}
+
+/// Android shows about two custom buttons. Stash starts after shuffle, repeat
+/// and love, so the user-edit path moves it up. Saving that order and loading
+/// it again does not: a reload has no "previous" order and must not treat the
+/// saved place as a fresh opt-in.
+#[test]
+fn turning_stash_on_puts_it_among_the_buttons_android_shows() {
+    let media = [
+        "previous",
+        "togglePlay",
+        "next",
+        "shuffle",
+        "repeat",
+        "love",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    let with_stash_last = {
+        let mut ids = media.clone();
+        ids.push("stash".into());
+        ids
+    };
+    let shown = show_new_stash(&media, with_stash_last.clone());
+    assert_eq!(
+        shown,
+        [
+            "previous",
+            "togglePlay",
+            "next",
+            "stash",
+            "shuffle",
+            "repeat",
+            "love"
+        ]
+        .map(str::to_string)
+        .to_vec()
+    );
+
+    let mut r = ActionRegistry::new(Platform::Android);
+    r.set_order(Surface::MediaSession, with_stash_last.clone());
+    assert_eq!(r.order(Surface::MediaSession), with_stash_last);
+    let saved = r.to_json();
+    let mut loaded = ActionRegistry::new(Platform::Android);
+    loaded.from_json(&saved).unwrap();
+    assert_eq!(loaded.order(Surface::MediaSession), with_stash_last);
+}
+
 /// The Library place has its own action (it used to borrow `navigateAlbums`); the desktop's
 /// default sidebar is Home and the Library, with the pins under them.
 #[test]

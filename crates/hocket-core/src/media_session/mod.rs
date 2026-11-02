@@ -187,6 +187,7 @@ pub fn derive_media_session_state(
             track_id: Some(t.id.clone()),
             loved: t.loved,
             rating: t.rating.min(5),
+            stashed: false,
         }
     });
     let duration = metadata.as_ref().map(|m| m.duration_ms);
@@ -256,6 +257,8 @@ fn dedup_in_order(list: Vec<MediaSessionAction>) -> Vec<MediaSessionAction> {
 /// - `Repeat` with `value` `0`/`1`/`2` sets Off/All/One, without cycles
 ///   Off → All → One → Off.
 /// - `Love` toggles the current track's loved flag.
+/// - `Stash` adds the current track to the stash. A duplicate is a no-op
+///   (the stash skips songs already listed); this never removes one.
 /// - Returns `None` when the action needs a current track and there is
 ///   none, or `Seek`/`Rate` arrive without a value.
 pub fn command_for(
@@ -313,6 +316,12 @@ pub fn command_for(
             Some(Command::SetRating {
                 targets: vec![RatingTarget::Track { id }],
                 rating: v.round().clamp(0.0, 5.0) as u32,
+            })
+        }
+        MediaSessionAction::Stash => {
+            let id = track_id()?;
+            Some(Command::StashAdd {
+                track_ids: vec![id],
             })
         }
     }
@@ -557,7 +566,14 @@ mod tests {
             })
         );
         assert_eq!(command_for(MediaSessionAction::Rate, None, &st), None);
+        assert_eq!(
+            command_for(MediaSessionAction::Stash, None, &st),
+            Some(Command::StashAdd {
+                track_ids: vec!["t1".into()]
+            })
+        );
         let empty = MediaSessionState::default();
+        assert_eq!(command_for(MediaSessionAction::Stash, None, &empty), None);
         assert_eq!(command_for(MediaSessionAction::Love, None, &empty), None);
         assert_eq!(
             command_for(MediaSessionAction::Rate, Some(3.0), &empty),
