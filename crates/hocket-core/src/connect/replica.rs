@@ -142,9 +142,11 @@ impl ReplicaExt for ReplicaState {
     }
 
     fn merge_stash(&mut self, theirs: &[StashEntry], now: EpochMs) -> bool {
-        let (mut merged, changed) = crate::stash::merge(&self.stash, theirs);
+        let (mut merged, _) = crate::stash::merge(&self.stash, theirs);
+        crate::stash::prune(&mut merged, now);
+        // Only what survives the prune counts: a stale tombstone coming back is no change.
+        let changed = merged != self.stash;
         if changed {
-            crate::stash::prune(&mut merged, now);
             self.stash = merged;
             self.updated_at = now;
         }

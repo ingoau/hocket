@@ -1011,3 +1011,22 @@ fn version_two_orders_gain_the_stash() {
     again.from_json(&r.to_json()).unwrap();
     assert_eq!(again.order(Surface::ContextMenu), vec!["playNext"]);
 }
+
+/// A chord the user had bound before the stash took it by default stays theirs; the stash action
+/// starts unbound, and that sticks once saved.
+#[test]
+fn user_chords_win_over_the_stash_defaults() {
+    let mut r = ActionRegistry::new(Platform::Linux);
+    r.from_json(r#"{"version":2,"shortcuts":{"shuffle":"Mod+S"}}"#)
+        .unwrap();
+    assert_eq!(r.action_for_chord("Ctrl+S"), Some("shuffle"));
+    assert_eq!(r.shortcut_for("stash"), None);
+    assert_eq!(r.action_for_chord("Ctrl+Shift+S"), Some("openStash"));
+    let mut again = ActionRegistry::new(Platform::Linux);
+    again.from_json(&r.to_json()).unwrap();
+    assert_eq!(again.action_for_chord("Ctrl+S"), Some("shuffle"));
+    assert_eq!(again.shortcut_for("stash"), None);
+    // Without an older save, the defaults hold.
+    let fresh = ActionRegistry::new(Platform::Linux);
+    assert_eq!(fresh.action_for_chord("Ctrl+S"), Some("stash"));
+}

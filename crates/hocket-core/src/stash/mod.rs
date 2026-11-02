@@ -4,8 +4,11 @@
 //! The stash is a set of [`StashEntry`] records merged last-write-wins per `entryId`, the same way
 //! saved queues and synced settings are, so it rides Connect (`Msg::StashSync`) and the
 //! coordinator's replica. Order comes from each entry's `sortKey` (ties by `entryId`), so a move
-//! touches one record and concurrent adds on two devices both survive. A removal is a tombstone
-//! (`removed`), kept for [`TOMBSTONE_TTL_MS`] so it can't be undone by a device that missed it.
+//! touches one record and concurrent adds on two devices both survive. Position (`updatedAt`) and
+//! removal (`removedAt`) have clocks of their own and merge independently, so a move and a
+//! concurrent remove both stand. A removal is a tombstone (`removed`, its snapshot dropped), kept
+//! for [`TOMBSTONE_TTL_MS`] (at most [`MAX_TOMBSTONES`] of them) so a device that missed it can't
+//! bring the song back; one away for longer than that can.
 //!
 //! Everything here is pure: the actor owns the list, persists it and feeds it to the engine.
 
@@ -20,16 +23,37 @@ pub const MAX_ENTRIES: usize = 500;
 /// How long a removed entry is remembered: the coordinator's replica lives as long.
 pub const TOMBSTONE_TTL_MS: EpochMs = 30.0 * 24.0 * 3600.0 * 1000.0;
 
+/// How many removed entries are remembered at most (newest first), so clearing a full stash again
+/// and again can't grow the synced set (and the Connect frames carrying it) without bound.
+pub const MAX_TOMBSTONES: usize = 500;
+
 /// The saved-state key for one account's stash.
 pub fn state_key(scope: &str) -> String {
     format!("stash:{scope}")
 }
 
-/// Whether `a` beats `b` for the same entry. A total order, so every device picks the same winner
-/// whatever order the copies arrive in.
-fn newer(a: &StashEntry, b: &StashEntry) -> bool {
-    let rank = |e: &StashEntry| (e.updated_at, e.removed, e.sort_key);
-    matches!(rank(a).partial_cmp(&rank(b)), Some(Ordering::Greater))
+fn greater<T: PartialOrd>(a: T, b: T) -> bool {
+    matches!(a.partial_cmp(&b), Some(Ordering::Greater))
+}
+
+/// Merge one copy of an entry into ours, field group by field group: the position from the newer
+/// `updatedAt` (ties by key), the removal from the newer `removedAt` (ties: removed wins). Both are
+/// total orders, so every device ends up with the same entry whatever order copies arrive in.
+fn merge_entry(m: &mut StashEntry, t: &StashEntry) -> bool {
+    let mut changed = false;
+    if greater((t.updated_at, t.sort_key), (m.updated_at, m.sort_key)) {
+        let (removed, removed_at) = (m.removed, m.removed_at);
+        *m = t.clone();
+        m.removed = removed;
+        m.removed_at = removed_at;
+        changed = true;
+    }
+    if greater((t.removed_at, t.removed), (m.removed_at, m.removed)) {
+        m.removed = t.removed;
+        m.removed_at = t.removed_at;
+        changed = true;
+    }
+    changed
 }
 
 /// Merge `theirs` into `ours`. Returns the merged set and whether it differs from `ours`.
@@ -38,12 +62,7 @@ pub fn merge(ours: &[StashEntry], theirs: &[StashEntry]) -> (Vec<StashEntry>, bo
     let mut changed = false;
     for t in theirs {
         match merged.iter_mut().find(|m| m.entry_id == t.entry_id) {
-            Some(m) => {
-                if newer(t, m) {
-                    *m = t.clone();
-                    changed = true;
-                }
-            }
+            Some(m) => changed |= merge_entry(m, t),
             None => {
                 merged.push(t.clone());
                 changed = true;
@@ -111,6 +130,7 @@ pub fn add(
             added_at: now,
             updated_at: now,
             removed: false,
+            removed_at: now,
             origin_device: device.clone(),
             title: t.title.clone(),
             artist: t.artist.clone(),
@@ -122,18 +142,31 @@ pub fn add(
     (added, dropped)
 }
 
-/// Mark entries removed (or, with `removed: false`, restore them). Returns the ids that changed.
+/// Mark entries removed (or, with `removed: false`, restore them), along with any other live entry
+/// for the same song (a duplicate from another device that the list hides behind it). Returns the
+/// ids that changed.
 pub fn set_removed(
     entries: &mut [StashEntry],
     ids: &[String],
     removed: bool,
     now: EpochMs,
 ) -> Vec<String> {
+    let tracks: HashSet<String> = if removed {
+        entries
+            .iter()
+            .filter(|e| ids.contains(&e.entry_id))
+            .map(|e| e.track_id.clone())
+            .collect()
+    } else {
+        HashSet::new()
+    };
     let mut changed = vec![];
     for e in entries.iter_mut() {
-        if e.removed != removed && ids.contains(&e.entry_id) {
+        let hit =
+            ids.contains(&e.entry_id) || (removed && !e.removed && tracks.contains(&e.track_id));
+        if e.removed != removed && hit {
             e.removed = removed;
-            e.updated_at = bump(e.updated_at, now);
+            e.removed_at = bump(e.removed_at, now);
             changed.push(e.entry_id.clone());
         }
     }
@@ -162,6 +195,18 @@ pub fn move_to(entries: &mut [StashEntry], entry_id: &str, to: usize, now: Epoch
     let to = to.min(order.len() - 1);
     if from == to {
         return false;
+    }
+    // A duplicate of the song (stashed on another device too) hides behind the listed entry; moved
+    // past it, it would take its place. Drop it: the song stays once, where it was moved to.
+    let track = entries
+        .iter()
+        .find(|e| e.entry_id == entry_id)
+        .map(|e| e.track_id.clone());
+    for e in entries.iter_mut() {
+        if !e.removed && e.entry_id != entry_id && Some(&e.track_id) == track.as_ref() {
+            e.removed = true;
+            e.removed_at = bump(e.removed_at, now);
+        }
     }
     let others: Vec<f64> = order
         .iter()
@@ -192,16 +237,44 @@ pub fn move_to(entries: &mut [StashEntry], entry_id: &str, to: usize, now: Epoch
     ids.insert(to, moved);
     for (i, id) in ids.iter().enumerate() {
         if let Some(e) = entries.iter_mut().find(|e| &e.entry_id == id) {
-            e.sort_key = (i + 1) as f64;
-            e.updated_at = bump(e.updated_at, now);
+            let key = (i + 1) as f64;
+            if e.sort_key != key {
+                e.sort_key = key;
+                e.updated_at = bump(e.updated_at, now);
+            }
         }
     }
     true
 }
 
-/// Drop tombstones older than [`TOMBSTONE_TTL_MS`].
+/// Drop tombstones older than [`TOMBSTONE_TTL_MS`] and all but the newest [`MAX_TOMBSTONES`], and
+/// what tombstones don't need (the snapshot: a restored entry shows its track from the library).
 pub fn prune(entries: &mut Vec<StashEntry>, now: EpochMs) {
-    entries.retain(|e| !e.removed || now - e.updated_at < TOMBSTONE_TTL_MS);
+    entries.retain(|e| !e.removed || now - e.removed_at < TOMBSTONE_TTL_MS);
+    let mut stones: Vec<(EpochMs, String)> = entries
+        .iter()
+        .filter(|e| e.removed)
+        .map(|e| (e.removed_at, e.entry_id.clone()))
+        .collect();
+    if stones.len() > MAX_TOMBSTONES {
+        stones.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.1.cmp(&b.1))
+        });
+        let drop: HashSet<String> = stones
+            .split_off(MAX_TOMBSTONES)
+            .into_iter()
+            .map(|s| s.1)
+            .collect();
+        entries.retain(|e| !drop.contains(&e.entry_id));
+    }
+    for e in entries.iter_mut().filter(|e| e.removed) {
+        e.title.clear();
+        e.artist = None;
+        e.album = None;
+        e.cover_art = None;
+    }
 }
 
 /// An edit's clock: now, but always past the entry's last write, so it wins even when this

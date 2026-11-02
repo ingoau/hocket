@@ -1365,7 +1365,8 @@ impl Engine {
                 self.upstream_send(Msg::SettingsSync { settings });
             }
             Input::StashChanged(list) => {
-                let (merged, _) = crate::stash::merge(&list, &self.stash);
+                let (mut merged, _) = crate::stash::merge(&list, &self.stash);
+                crate::stash::prune(&mut merged, self.clock.now_ms());
                 self.stash = merged;
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
@@ -2770,8 +2771,9 @@ impl Engine {
                 }
             }
             Msg::StashSync { entries } => {
-                let (merged, changed) = crate::stash::merge(&self.stash, &entries);
-                if changed {
+                let (mut merged, _) = crate::stash::merge(&self.stash, &entries);
+                crate::stash::prune(&mut merged, self.clock.now_ms());
+                if merged != self.stash {
                     self.stash = merged.clone();
                     self.out.push(Output::StashMerged(merged));
                 }
@@ -3104,8 +3106,9 @@ impl Engine {
                 self.settings = merged.clone();
                 self.out.push(Output::SettingsMerged(merged));
             }
-            let (merged, changed) = crate::stash::merge(&self.stash, &rep.stash);
-            if changed {
+            let (mut merged, _) = crate::stash::merge(&self.stash, &rep.stash);
+            crate::stash::prune(&mut merged, self.clock.now_ms());
+            if merged != self.stash {
                 self.stash = merged.clone();
                 self.out.push(Output::StashMerged(merged));
             }

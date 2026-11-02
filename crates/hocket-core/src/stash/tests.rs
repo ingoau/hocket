@@ -109,11 +109,11 @@ fn the_same_song_stashed_twice_lists_once() {
     add(&mut two, &tracks(&["a"]), &"d2".into(), 1.0);
     let (m, _) = merge(&one, &two);
     assert_eq!(listed(&m), ["a"]);
-    // Removing the listed one shows the other copy; clearing removes both.
+    // Removing the listed one removes the other copy too, as does clearing.
     let first = live(&m)[0].entry_id.clone();
     let mut m2 = m.clone();
     set_removed(&mut m2, &[first], true, 2.0);
-    assert_eq!(listed(&m2), ["a"]);
+    assert!(listed(&m2).is_empty());
     let mut m3 = m.clone();
     clear(&mut m3, 2.0);
     assert!(listed(&m3).is_empty());
@@ -154,6 +154,73 @@ fn items_fall_back_to_the_snapshot() {
     });
     assert_eq!(items[0].track.title, "Song a");
     assert_eq!(items[1].track.title, "Fresh");
+}
+
+#[test]
+fn a_move_and_a_concurrent_remove_both_stand() {
+    let mut one = vec![];
+    add(&mut one, &tracks(&["a", "b", "c"]), &"d1".into(), 1.0);
+    let mut two = one.clone();
+    let c = live(&one)[2].entry_id.clone();
+    // Device one removes c; device two, later and unaware, moves c to the top.
+    set_removed(&mut one, std::slice::from_ref(&c), true, 10.0);
+    move_to(&mut two, &c, 0, 20.0);
+    let (m1, _) = merge(&one, &two);
+    let (m2, _) = merge(&two, &one);
+    assert_eq!(listed(&m1), ["a", "b"]);
+    assert_eq!(listed(&m1), listed(&m2));
+    // Restored, it comes back where it was moved to.
+    let mut m = m1;
+    set_removed(&mut m, &[c], false, 30.0);
+    assert_eq!(listed(&m), ["c", "a", "b"]);
+}
+
+#[test]
+fn removing_a_song_removes_its_hidden_duplicate_too() {
+    let mut one = vec![];
+    let mut two = vec![];
+    add(&mut one, &tracks(&["a", "b"]), &"d1".into(), 1.0);
+    add(&mut two, &tracks(&["a"]), &"d2".into(), 1.0);
+    let (mut m, _) = merge(&one, &two);
+    let shown = live(&m)[0].entry_id.clone();
+    let removed = set_removed(&mut m, &[shown], true, 2.0);
+    assert_eq!(removed.len(), 2);
+    assert_eq!(listed(&m), ["b"]);
+    set_removed(&mut m, &removed, false, 3.0);
+    assert_eq!(listed(&m), ["a", "b"]);
+}
+
+#[test]
+fn moving_a_song_drops_its_hidden_duplicate() {
+    let mut one = vec![];
+    let mut two = vec![];
+    add(&mut one, &tracks(&["a", "b", "c"]), &"d1".into(), 1.0);
+    add(&mut two, &tracks(&["a"]), &"d2".into(), 1.0);
+    let (mut m, _) = merge(&one, &two);
+    let a = live(&m)[0].entry_id.clone();
+    assert!(move_to(&mut m, &a, 2, 2.0));
+    assert_eq!(listed(&m), ["b", "c", "a"]);
+}
+
+#[test]
+fn tombstones_are_capped_and_slim() {
+    let mut s = vec![];
+    for round in 0..3 {
+        let ids: Vec<String> = (0..MAX_ENTRIES).map(|i| format!("{round}-{i}")).collect();
+        let refs: Vec<&str> = ids.iter().map(|x| x.as_str()).collect();
+        add(
+            &mut s,
+            &tracks(&refs),
+            &"d".into(),
+            round as f64 * 10.0 + 1.0,
+        );
+        clear(&mut s, round as f64 * 10.0 + 2.0);
+        prune(&mut s, round as f64 * 10.0 + 3.0);
+    }
+    assert_eq!(s.len(), MAX_TOMBSTONES);
+    assert!(s
+        .iter()
+        .all(|e| e.removed && e.title.is_empty() && e.track_id.starts_with('2')));
 }
 
 #[derive(Debug, Clone)]

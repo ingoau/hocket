@@ -239,6 +239,9 @@ fn customisation_version() -> u32 {
     1
 }
 
+/// Actions version 3 added with a default chord (the stash's).
+const NEW_DEFAULT_CHORDS_V3: &[&str] = &["stash", "openStash"];
+
 /// The customisation version this build writes. 2: the Library holds the places the sidebar used to
 /// list, and things can be pinned to it; 3: the stash (see [`migrate_order`]).
 const CUSTOMISATION_VERSION: u32 = 3;
@@ -606,8 +609,22 @@ impl ActionRegistry {
                 self.set_order(s, migrate_order(s, c.version, ids.clone()));
             }
         }
-        for (id, chord) in &c.shortcuts {
-            let _ = self.set_shortcut(id, chord.as_deref());
+        // Unbindings first, so a chord freed by one is there for the binding that takes it.
+        let (unbound, bound): (Vec<_>, Vec<_>) = c.shortcuts.iter().partition(|(_, c)| c.is_none());
+        for (id, chord) in unbound.into_iter().chain(bound) {
+            if let Err(ActionError::Conflict {
+                other_action_id, ..
+            }) = self.set_shortcut(id, chord.as_deref())
+            {
+                // A chord the user bound before a newer build gave it to a new action by default:
+                // the user's binding wins and the new action starts unbound (once; saved after).
+                if c.version < CUSTOMISATION_VERSION
+                    && NEW_DEFAULT_CHORDS_V3.contains(&other_action_id.as_str())
+                {
+                    self.overrides.insert(other_action_id, None);
+                    let _ = self.set_shortcut(id, chord.as_deref());
+                }
+            }
         }
     }
 

@@ -79,8 +79,9 @@ impl Actor {
     }
 
     pub(crate) fn on_stash_merged(&mut self, list: Vec<StashEntry>) {
-        let (merged, changed) = stash::merge(&self.stash, &list);
-        if changed {
+        let (mut merged, _) = stash::merge(&self.stash, &list);
+        stash::prune(&mut merged, self.now());
+        if merged != self.stash {
             self.stash = merged;
             self.save_stash();
             self.emit_stash();

@@ -699,10 +699,14 @@ pub struct StashEntry {
     /// new neighbours, so a move never rewrites the others.
     pub sort_key: f64,
     pub added_at: EpochMs,
-    /// LWW clock for sync.
+    /// LWW clock of the entry's position (and what was stashed).
     pub updated_at: EpochMs,
     #[serde(default)]
     pub removed: bool,
+    /// LWW clock of `removed`, separate from `updatedAt`, so a move made on one device never
+    /// undoes a removal made on another (and the other way round).
+    #[serde(default)]
+    pub removed_at: EpochMs,
     #[serde(default)]
     pub origin_device: DeviceId,
     /// What the song looked like when it was stashed, shown while the library mirror lacks it.
