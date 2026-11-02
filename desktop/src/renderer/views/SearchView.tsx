@@ -69,7 +69,7 @@ export function SearchView({ query }: { query: string }) {
           </section>
         ) : null}
         {show("lyrics") ? (
-          <section className="search-lyrics" aria-labelledby="search-lyrics" data-testid="search-lyrics">
+          <section className="search-lyrics" aria-label={t("search.lyricsScope")} data-testid="search-lyrics">
             <div className="search-section-head">
               <h2 className="section-heading" id="search-lyrics">{t("search.lyrics")}</h2>
               {kind === "all" && lyricHits.length > PREVIEW ? <button type="button" className="btn text sm" onClick={() => setKind("lyrics")} data-testid="search-see-all-lyrics">{t("search.seeAllLyrics", { count: lyricHits.length })}</button> : null}

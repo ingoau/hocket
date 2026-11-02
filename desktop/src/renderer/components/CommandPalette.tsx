@@ -65,8 +65,10 @@ export function CommandPalette() {
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
     const sid = serverId ?? "";
-    for (const tr of results?.tracks ?? []) out.push({ id: `t:${tr.id}`, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, run: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } }) });
-    for (const hit of results?.lyrics ?? []) out.push({
+    // A slower answer for the previous letters must not stay on top of Enter.
+    const found = results?.query.trim().toLowerCase() === query.trim().toLowerCase() ? results : undefined;
+    for (const tr of found?.tracks ?? []) out.push({ id: `t:${tr.id}`, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, run: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } }) });
+    for (const hit of found?.lyrics ?? []) out.push({
       id: `ly:${hit.track.id}`,
       label: hit.track.title,
       sub: hit.line.split("\n").join(" "),
@@ -77,16 +79,16 @@ export function CommandPalette() {
         bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [hit.track.id], start_index: 0, label: hit.track.title, shuffle: false, start_position_ms: hit.startMs ?? 0 } });
       },
     });
-    for (const al of results?.albums ?? []) out.push({ id: `al:${al.id}`, label: al.name, sub: al.artist, kind: "album", coverArt: al.coverArt, run: () => navigate({ view: "album", id: al.id }) });
-    for (const ar of results?.artists ?? []) out.push({ id: `ar:${ar.id}`, label: ar.name, kind: "artist", coverArt: ar.coverArt, run: () => navigate({ view: "artist", id: ar.id }) });
-    for (const pl of results?.playlists ?? []) out.push({ id: `pl:${pl.id}`, label: pl.name, kind: "playlist", coverArt: pl.coverArt, run: () => navigate({ view: "playlist", id: pl.id }) });
+    for (const al of found?.albums ?? []) out.push({ id: `al:${al.id}`, label: al.name, sub: al.artist, kind: "album", coverArt: al.coverArt, run: () => navigate({ view: "album", id: al.id }) });
+    for (const ar of found?.artists ?? []) out.push({ id: `ar:${ar.id}`, label: ar.name, kind: "artist", coverArt: ar.coverArt, run: () => navigate({ view: "artist", id: ar.id }) });
+    for (const pl of found?.playlists ?? []) out.push({ id: `pl:${pl.id}`, label: pl.name, kind: "playlist", coverArt: pl.coverArt, run: () => navigate({ view: "playlist", id: pl.id }) });
     for (const a of actions) {
       if (!a.enabled) continue;
       const sc = shortcuts.find((s) => s.actionId === a.id)?.shortcut ?? a.defaultShortcut;
       out.push({ id: `act:${a.id}`, label: a.label, sub: a.category, kind: "action", icon: a.icon, shortcut: sc, run: () => void executeAction(a.id) });
     }
     return out;
-  }, [results, actions, serverId, shortcuts, navigate]);
+  }, [results, query, actions, serverId, shortcuts, navigate]);
 
   // Lyric hits already matched in the core, which ignores case, punctuation and
   // diacritics. The palette's own ranker would drop a line it cannot see.
