@@ -67,7 +67,7 @@ class SettingsCategoriesTest {
     private val advancedRows = setOf("developer.mode", "developer.open")
 
     /** Registry settings the old page did not show, now in their category. */
-    private val added = setOf("queue.mode", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",
+    private val added = setOf("queue.mode", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",
         "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists") + pebbleRows + advancedRows
 
     /** Categories that open one of the older sub-screens: the old page's row for it. */
