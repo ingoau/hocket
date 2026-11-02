@@ -219,7 +219,7 @@ fun SearchScreen(nav: NavHostController) {
             val listState = rememberLazyListState()
             ScrollToTopOnReselect(listState)
             LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = BottomContentInset)) {
-                if (empty && server == null && !pendingRemote) item { EmptyState(stringResource(R.string.empty_search_none, query), stringResource(R.string.search_none_body)) }
+                if (kind != SearchKind.Lyrics && empty && server == null && !pendingRemote) item { EmptyState(stringResource(R.string.empty_search_none, query), stringResource(R.string.search_none_body)) }
                 if (show(SearchKind.Songs)) {
                     val shown = if (kind == SearchKind.All) results.tracks.take(SONG_PREVIEW) else results.tracks
                     val more = kind == SearchKind.All && results.tracks.size > SONG_PREVIEW

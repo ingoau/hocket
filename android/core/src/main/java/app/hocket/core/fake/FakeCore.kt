@@ -777,7 +777,7 @@ class FakeCore(
                 val before = captureSession()
                 saveOutgoingQueue()
                 setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.track_ids), c.data.track_ids, c.data.start_index.toInt(), c.data.shuffle)
-                startPlayback(0, true)
+                startPlayback(c.data.start_position_ms?.toLong() ?: 0, true)
                 pushUndo("Play ${c.data.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
             }
