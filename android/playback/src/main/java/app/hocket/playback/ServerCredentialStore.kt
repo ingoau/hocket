@@ -50,6 +50,9 @@ interface ServerCredentialStore {
 
     /** Keys whose login is stored but cannot be read right now (see [CredentialLookup.Unavailable]). */
     fun unavailable(): List<Pair<String, String>> = keys().filter { (url, user) -> lookup(url, user) is CredentialLookup.Unavailable }
+
+    /** Every stored key looked up once: what [all] and [unavailable] give, for one pass over the keystore. */
+    fun lookupAll(): Map<Pair<String, String>, CredentialLookup> = keys().associateWith { (url, user) -> lookup(url, user) }
     fun save(credential: ServerCredential)
     fun remove(url: String, username: String)
 
@@ -96,9 +99,19 @@ class AndroidKeystoreCrypto : CredentialCrypto {
         const val GCM_TAG_BITS = 128
     }
 
-    private fun keystore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    // The opened keystore and the key, kept between calls (each open and key fetch is a keystore2
+    // round trip, and a cold start decrypts every stored login). Dropped on any failure, so a key
+    // that went away is looked up afresh.
+    @Volatile private var store: KeyStore? = null
+    @Volatile private var cachedKey: SecretKey? = null
 
-    private fun key(): SecretKey {
+    private fun keystore(): KeyStore = store ?: KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.also { store = it }
+
+    private fun <T> keystoreCall(block: () -> T): T = try { block() } catch (e: Exception) { store = null; cachedKey = null; throw e }
+
+    private fun key(): SecretKey = cachedKey ?: freshKey().also { cachedKey = it }
+
+    private fun freshKey(): SecretKey {
         (keystore().getKey(ALIAS, null) as? SecretKey)?.let { return it }
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         gen.init(
@@ -113,18 +126,19 @@ class AndroidKeystoreCrypto : CredentialCrypto {
 
     // When the keystore itself cannot be opened nothing is known about the key: report it present so
     // the failure is treated as transient rather than as a reason to delete data.
-    override fun keyPresent(): Boolean = try { keystore().containsAlias(ALIAS) } catch (e: Exception) { true }
+    override fun keyPresent(): Boolean = try { keystoreCall { keystore().containsAlias(ALIAS) } } catch (e: Exception) { true }
 
-    override fun encrypt(plain: ByteArray): Pair<ByteArray, ByteArray> {
+    override fun encrypt(plain: ByteArray): Pair<ByteArray, ByteArray> = keystoreCall {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        return cipher.iv to cipher.doFinal(plain)
+        // A fresh key for saves (rare): one that went away since it was cached is regenerated here.
+        cipher.init(Cipher.ENCRYPT_MODE, freshKey().also { cachedKey = it })
+        cipher.iv to cipher.doFinal(plain)
     }
 
-    override fun decrypt(iv: ByteArray, data: ByteArray): ByteArray {
+    override fun decrypt(iv: ByteArray, data: ByteArray): ByteArray = keystoreCall {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(GCM_TAG_BITS, iv))
-        return cipher.doFinal(data)
+        cipher.doFinal(data)
     }
 }
 

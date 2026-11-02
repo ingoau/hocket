@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalWideNavigationRail
 import androidx.compose.material3.ShortNavigationBar
@@ -40,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,9 +56,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -149,9 +152,10 @@ fun AppRoot(
     logins: StateFlow<Set<String>> = CoreHost.logins,
     unreadableLogins: StateFlow<Set<String>> = CoreHost.unreadableLogins,
     fatalError: StateFlow<String?> = CoreHost.fatalError,
+    onFirstScreen: () -> Unit = {},
 ) {
     val fatal by fatalError.collectAsStateWithLifecycle()
-    fatal?.let { FatalErrorScreen(it); return }
+    fatal?.let { SideEffect(onFirstScreen); FatalErrorScreen(it); return }
     if (client == null) { LoadingScreen(); return }
     CompositionLocalProvider(LocalCoreClient provides client, LocalNavBarPrefs provides rememberShellNavBarPrefs(client), LocalPageChrome provides remember { PageChrome() }) {
         val started by client.started.collectAsStateWithLifecycle()
@@ -185,6 +189,7 @@ fun AppRoot(
                 if (fakeBanner) FakeCoreBanner()
                 app.hocket.ui.components.ReportUploadBarHost(client, insets = if (fakeBanner) null else BannerInsets)
                 Box(Modifier.weight(1f).fillMaxWidth().then(if (topBar) Modifier.consumeWindowInsets(BannerInsets) else Modifier)) {
+                    if (started && ready) SideEffect(onFirstScreen)
                     when {
                         !started || !ready -> LoadingScreen()
                         !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !server.capabilities.meetsFloor), needsRelogin = needsRelogin, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false })
@@ -235,15 +240,26 @@ fun FatalErrorScreen(detail: String, onReset: (android.content.Context) -> Unit 
     if (confirm) ConfirmDialog(stringResource(R.string.fatal_reset_confirm), stringResource(R.string.fatal_reset), onConfirm = { onReset(context) }, onDismiss = { confirm = false })
 }
 
+/**
+ * While the core starts: the splash screen's tile and mark, still (MainActivity keeps the system
+ * splash up over this, so it only shows if startup outlasts the splash or the core restarts). No
+ * spinner; a word appears only if it takes a while.
+ */
 @Composable
 fun LoadingScreen() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            LoadingIndicator()
-            Text(stringResource(R.string.connecting_to_core), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
+    var slow by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(LOADING_WORDS_AFTER_MS); slow = true }
+    Box(Modifier.fillMaxSize().background(colorResource(R.color.splash_background)).testTag("loading"), contentAlignment = Alignment.Center) {
+        // The foreground's 108-unit tile at the splash icon's size (its 72-unit mark in a 192 dp circle).
+        androidx.compose.foundation.Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null, modifier = Modifier.size(288.dp))
+        androidx.compose.animation.AnimatedVisibility(slow, enter = androidx.compose.animation.fadeIn(), modifier = Modifier.align(Alignment.Center).padding(top = 160.dp)) {
+            Text(stringResource(R.string.connecting_to_core), style = MaterialTheme.typography.bodyMedium, color = colorResource(R.color.shortcut_foreground))
         }
     }
 }
+
+/** How long the loading screen stays wordless. */
+private const val LOADING_WORDS_AFTER_MS = 3_000L
 
 /**
  * Event.Toast -> snackbar with its single action dispatching `action_command`; Event.Error ->

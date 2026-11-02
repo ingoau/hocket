@@ -32,9 +32,11 @@ object DevLog {
     val usesCore: Boolean get() = installed && NativeCore.isAvailable()
 
     /**
-     * Installs the core's capture (idempotent; [NativeCore.create] calls it too). Called early from
-     * `Application.onCreate`, so a crash before the core starts is still captured and kept on disk.
+     * Installs the core's capture (idempotent; [NativeCore.create] calls it too). Started early from
+     * `Application.onCreate` (on a thread of its own: it loads the library and reads back the
+     * previous log), so a crash before the core starts is still captured and kept on disk.
      */
+    @Synchronized
     fun install(dataDir: java.io.File, level: String = "info") {
         if (installed || !NativeCore.isAvailable()) return
         runCatching { app.hocket.core.ffi.initLogging(level, java.io.File(dataDir, "logs").absolutePath) }.onSuccess { installed = true }

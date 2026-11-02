@@ -57,7 +57,9 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         // Log capture from the start (the same dir CoreHost gives the core), and uncaught exceptions
         // go to it (and to disk) before the process dies.
-        app.hocket.core.DevLog.install(java.io.File(filesDir, "hocket"))
+        // Off the main thread: the first touch of the native library loads it, and the core's capture
+        // reads back the previous run's log. Whatever needs either waits for it, not the first frame.
+        Thread({ app.hocket.core.DevLog.install(java.io.File(filesDir, "hocket")) }, "hocket-devlog").start()
         app.hocket.core.DevLog.installCrashHandler()
         connection = PlaybackServiceConnection(this)
         scope.launch {
@@ -69,7 +71,7 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         // Bound only while UI is visible (never from here): an idle service can then stop, and the
         // process can go after the task is removed. Media3 keeps it alive while playing.
         ProcessLifecycleOwner.get().lifecycle.addObserver(ForegroundBinder(connection))
-        scope.launch { prefs.shortcuts.distinctUntilChanged().collect { AppShortcuts.publish(this@HocketApp, it) } }
+        scope.launch(Dispatchers.Default) { prefs.shortcuts.distinctUntilChanged().collect { AppShortcuts.publish(this@HocketApp, it) } }
         followReportUploads()
     }
 
@@ -114,6 +116,17 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
     companion object {
         /** How long a shortcut waits for the core to come up before it gives up. */
         const val SHORTCUT_WAIT_MS = 20_000L
+    }
+
+    /**
+     * Builds the core on a background thread ahead of the playback service, which the UI binds only
+     * once the activity is started: the library loads and the database opens while the activity and
+     * its first frame are being built, and the service's own [CoreHost.acquire] only has to start it
+     * ([CoreHost.prewarm]). Only when UI is coming (MainActivity), so the service is sure to follow.
+     */
+    fun prewarmCore() {
+        if (CoreHost.current != null) return
+        Thread({ runCatching { CoreHost.prewarm(this) }.onFailure { android.util.Log.w("HocketApp", "core prewarm failed", it) } }, "hocket-prewarm").start()
     }
 
     /** Swap in a different core (UI tests). */
