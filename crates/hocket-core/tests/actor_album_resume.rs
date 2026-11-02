@@ -269,3 +269,80 @@ async fn a_point_saved_on_one_device_resumes_on_the_other() {
         "resuming from the other device seeks the one that plays, got {at}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_album_from_the_other_device_saves_where_the_player_was() {
+    let server = seeded_server(8, 180.0);
+    let net = MemoryNet::new();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server, Some(net), 2, clock).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+
+    let sid = a.server_id.clone();
+    a.run(Command::PlayContext {
+        args: album(&sid, "al0", false),
+    })
+    .await;
+    a.run(Command::Next).await;
+    TestCore::run_all_for(&[&a, &b], 500.0).await;
+    a.run(Command::SeekTo {
+        position_ms: 45_000,
+    })
+    .await;
+    // A keeps playing: its samples past 45s stay on A.
+    TestCore::run_all_for(&[&a, &b], 20_000.0).await;
+    let p = point(&b, "al0").await.expect("b learned the seek");
+    assert!(
+        p.position_ms < 50_000,
+        "samples do not travel, got {}",
+        p.position_ms
+    );
+
+    // B starts another album while A plays. A records where al0 really was.
+    b.run(Command::PlayContext {
+        args: album(&sid, "al1", false),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_ne!(
+        a.current_track_id().await.as_deref(),
+        Some("t1"),
+        "a plays al1"
+    );
+    let p = point(&b, "al0").await.expect("al0 is still resumable");
+    assert_eq!(p.track_id, "t1");
+    assert!(
+        p.position_ms >= 60_000,
+        "the player's position travels, got {}",
+        p.position_ms
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expired_point_is_withdrawn_while_running() {
+    let t = synced("expire").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album(&sid, "al0", false),
+    })
+    .await;
+    t.run(Command::Next).await;
+    t.run(Command::Pause).await;
+    assert!(point(&t, "al0").await.is_some());
+
+    t.events.clear();
+    t.clock.advance(30.0 * 24.0 * 3600.0 * 1000.0);
+    t.run_for(500.0).await;
+    let last = t
+        .events
+        .all()
+        .into_iter()
+        .rev()
+        .find_map(|e| match e {
+            Event::AlbumResumesChanged { points } => Some(points),
+            _ => None,
+        })
+        .expect("expiry is announced");
+    assert!(last.is_empty(), "{last:?}");
+}

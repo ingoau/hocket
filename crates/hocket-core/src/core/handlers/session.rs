@@ -630,13 +630,16 @@ impl Actor {
         } else {
             None
         };
-        if cause == DocChange::Local {
+        // A change another device sent (Next, a tapped track, a new album) while this device
+        // plays is recorded here too: the outgoing track is still loaded, so its position is
+        // the real one. The device that sent it does not play and records nothing.
+        if cause == DocChange::Local || (cause == DocChange::Remote && owns) {
             self.note_album_transition(
                 old.as_ref(),
                 &document,
                 key_changed,
                 stopped || needs_autoplay,
-                resume_at,
+                resume_at.or(remote_at),
             );
         }
 

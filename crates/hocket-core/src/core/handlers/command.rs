@@ -66,7 +66,7 @@ impl Actor {
             | Command::StashClear
             | Command::StashRestore { .. }) => self.stash_command(c),
             Command::ResumeAlbum { album_id } => self.resume_album(album_id),
-            Command::ClearAlbumResume { album_id } => self.clear_album_resume(&album_id),
+            Command::ClearAlbumResume { album_id } => self.clear_album_resume(&album_id, true),
 
             // -- queue --
             Command::PlayContext { args } => self.play_context(args),

@@ -217,18 +217,43 @@ pub fn upsert(entries: &mut Vec<AlbumResumeEntry>, mut entry: AlbumResumeEntry) 
     changed
 }
 
-/// Mark the album cleared. Returns whether a live record was removed.
-pub fn clear(entries: &mut [AlbumResumeEntry], album_id: &str, now: EpochMs) -> bool {
-    let Some(e) = entries
-        .iter_mut()
-        .find(|e| e.album_id == album_id && !e.removed)
-    else {
-        return false;
-    };
-    e.removed = true;
-    e.removed_at = now;
-    e.updated_at = now;
-    true
+/// Mark the album cleared. Returns whether the stored set changed.
+///
+/// `tombstone` is for a deliberate clear (Start over, finishing the album, starting it from
+/// its first track): it writes a removal stamped `now` even when this device holds no live
+/// record, and restamps an older removal, so the clear beats an older save made on another
+/// device that this one has not seen yet. Without it only a live record is cleared, which is
+/// what a periodic sample wants (it must not rewrite the set on every tick).
+pub fn clear(
+    entries: &mut Vec<AlbumResumeEntry>,
+    album_id: &str,
+    now: EpochMs,
+    tombstone: bool,
+) -> bool {
+    match entries.iter_mut().find(|e| e.album_id == album_id) {
+        Some(e) if !e.removed || (tombstone && greater(now, e.removed_at)) => {
+            e.removed = true;
+            e.removed_at = now;
+            e.updated_at = e.updated_at.max(now);
+            true
+        }
+        Some(_) => false,
+        None if tombstone => {
+            entries.push(AlbumResumeEntry {
+                album_id: album_id.to_string(),
+                track_id: String::new(),
+                track_index: 0,
+                position_ms: 0,
+                duration_ms: 0,
+                updated_at: now,
+                removed: true,
+                removed_at: now,
+            });
+            sort(entries);
+            true
+        }
+        None => false,
+    }
 }
 
 fn live(e: &AlbumResumeEntry, now: EpochMs) -> bool {
@@ -374,7 +399,7 @@ mod tests {
 
         // A clear beats an older position, and a later position beats the clear.
         let mut cleared = fresh.clone();
-        assert!(clear(&mut vec_of(&mut cleared), "a", now + 10.0));
+        assert!(clear(&mut vec_of(&mut cleared), "a", now + 10.0, false));
         let tomb = vec_of_owned(cleared.clone(), now + 10.0);
         let (merged, _) = merge(&[fresh.clone()], &tomb);
         assert!(point(&merged, "a", now + 10.0).is_none());
@@ -387,6 +412,64 @@ mod tests {
         let p = point(&revived, "a", now + 20.0).expect("a newer save beats the clear");
         assert_eq!(p.track_index, 4);
         assert_eq!(p.position_ms, 80_000);
+    }
+
+    #[test]
+    fn a_clear_with_no_record_here_still_beats_an_older_save_elsewhere() {
+        // The phone saved X offline at 100. The desktop never saw it, played X from its
+        // first track and finished it at 200.
+        let phone = vec![entry("x", 3, 100.0)];
+        let mut desktop: Vec<AlbumResumeEntry> = vec![];
+        assert!(
+            !clear(&mut desktop, "x", 200.0, false),
+            "a sample leaves an empty set alone"
+        );
+        assert!(desktop.is_empty());
+        assert!(clear(&mut desktop, "x", 200.0, true));
+        assert_eq!(desktop.len(), 1);
+        assert!(desktop[0].removed);
+
+        // Both directions converge on cleared.
+        let (on_desktop, _) = merge(&desktop, &phone);
+        assert!(point(&on_desktop, "x", 300.0).is_none());
+        let (on_phone, changed) = merge(&phone, &desktop);
+        assert!(changed);
+        assert!(point(&on_phone, "x", 300.0).is_none());
+
+        // A save after the clear still wins.
+        let (later, _) = merge(&on_phone, &[entry("x", 5, 400.0)]);
+        assert_eq!(point(&later, "x", 400.0).unwrap().track_index, 5);
+    }
+
+    #[test]
+    fn clearing_again_restamps_an_older_tombstone() {
+        // X was cleared at 50 here; the phone saved it offline at 100; X is cleared again
+        // here at 200.
+        let mut desktop = vec![];
+        assert!(clear(&mut desktop, "x", 50.0, true));
+        let phone = vec![entry("x", 3, 100.0)];
+        assert!(
+            !clear(&mut desktop, "x", 200.0, false),
+            "a sample does not rewrite a tombstone"
+        );
+        assert_eq!(desktop[0].removed_at, 50.0);
+        assert!(clear(&mut desktop, "x", 200.0, true));
+        assert_eq!(desktop[0].removed_at, 200.0);
+        assert!(
+            !clear(&mut desktop, "x", 200.0, true),
+            "the same instant changes nothing"
+        );
+
+        let (on_phone, _) = merge(&phone, &desktop);
+        assert!(point(&on_phone, "x", 300.0).is_none());
+        let (on_desktop, _) = merge(&desktop, &phone);
+        assert!(point(&on_desktop, "x", 300.0).is_none());
+
+        // Without the restamp the older clear loses to the phone's save.
+        let mut stale = vec![];
+        clear(&mut stale, "x", 50.0, true);
+        let (lost, _) = merge(&stale, &phone);
+        assert!(point(&lost, "x", 300.0).is_some());
     }
 
     fn entry(album: &str, index: u32, at: f64) -> AlbumResumeEntry {

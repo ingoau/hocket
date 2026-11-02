@@ -58,9 +58,21 @@ impl Actor {
         }
     }
 
-    pub(crate) fn emit_album_resumes(&self) {
+    pub(crate) fn emit_album_resumes(&mut self) {
         let points = self.resume_points();
+        // When the oldest offered point runs out, the tick announces the shorter list.
+        self.album_resume_expires_at = points
+            .iter()
+            .map(|p| p.updated_at + album_resume::TTL_MS)
+            .min_by(|a, b| a.total_cmp(b));
         self.emit(Event::AlbumResumesChanged { points });
+    }
+
+    /// Called from the tick: re-announce once a point has passed its expiry.
+    pub(crate) fn album_resume_tick(&mut self, now: EpochMs) {
+        if self.album_resume_expires_at.is_some_and(|at| now >= at) {
+            self.emit_album_resumes();
+        }
     }
 
     pub(crate) fn resume_points(&self) -> Vec<AlbumResumePoint> {
@@ -97,9 +109,13 @@ impl Actor {
         }
     }
 
-    pub(crate) fn clear_album_resume(&mut self, album_id: &str) {
+    /// Clear the album's point and tell other devices. `tombstone` (Start over, an album
+    /// transition, finishing the album, a pause or seek on its first track) records the clear
+    /// even when this device has no live point, so it beats an older save another device made
+    /// offline. A periodic sample passes false so it does not rewrite the set every tick.
+    pub(crate) fn clear_album_resume(&mut self, album_id: &str, tombstone: bool) {
         let now = self.now();
-        if album_resume::clear(&mut self.album_resumes, album_id, now) {
+        if album_resume::clear(&mut self.album_resumes, album_id, now, tombstone) {
             self.album_resume_changed(true);
         }
     }
@@ -217,7 +233,8 @@ impl Actor {
         Some(snapshot_of(doc, position, duration, finished))
     }
 
-    /// A local queue change. The outgoing album is sampled at the position still loaded, and
+    /// A queue change on the device that plays (a local one, or a remote one while this
+    /// device holds the transport). The outgoing album is sampled at the position still loaded, and
     /// the album now playing at `resume_at` (a resume) or at the start of its track.
     pub(crate) fn note_album_transition(
         &mut self,
@@ -276,7 +293,9 @@ impl Actor {
         let enabled = self.settings.get_bool(keys::PLAYBACK_RESUME_ALBUMS);
         match album_resume::decide(&snap, self.now(), enabled) {
             album_resume::Decision::Ignore => {}
-            album_resume::Decision::Clear { album_id } => self.clear_album_resume(&album_id),
+            album_resume::Decision::Clear { album_id } => {
+                self.clear_album_resume(&album_id, precise)
+            }
             album_resume::Decision::Save(entry) => {
                 if !precise {
                     if let Some(cur) = self
