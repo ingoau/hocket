@@ -4,7 +4,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.KeyEvent
-import android.view.View
 import android.view.animation.PathInterpolator
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -119,8 +118,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Lets the mark finish drawing itself in (if the app was ready first), then lifts the splash
-     * away: the mark swells on and rises out as it fades, the tile dissolves a beat behind it, and
-     * the shell's entrance plays underneath ([ShellEntrance]).
+     * away, swelling as it fades, as the shell's entrance plays underneath ([ShellEntrance]).
      */
     private fun exitSplash(provider: SplashScreenViewProvider) {
         splashExiting = true
@@ -129,16 +127,30 @@ class MainActivity : ComponentActivity() {
         val remaining = if (provider.iconAnimationDurationMillis > 0) {
             (provider.iconAnimationStartMillis + provider.iconAnimationDurationMillis - System.currentTimeMillis()).coerceIn(0, SPLASH_MAX_WAIT_FOR_ICON_MS)
         } else 0L
-        val icon: View? = runCatching { provider.iconView }.getOrNull()
         // M3's emphasized accelerate: things leaving the screen.
         val leave = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
-        val rise = -24f * resources.displayMetrics.density
-        icon?.animate()?.scaleX(1.5f)?.scaleY(1.5f)?.translationY(rise)?.alpha(0f)
-            ?.setStartDelay(remaining)?.setDuration(SPLASH_ICON_EXIT_MS)?.setInterpolator(leave)?.start()
-        // The shell starts coming in with the mark's exit, under the still-opaque tile, so it is
-        // mostly there by the time the tile clears (never a moment with neither on screen).
+        // The shell starts coming in first, under the still-opaque splash, so it is mostly there by
+        // the time the splash clears (never a moment with neither on screen).
         view.postDelayed(ShellEntrance::reveal, remaining)
-        view.animate().alpha(0f).setStartDelay(remaining + SPLASH_TILE_DELAY_MS).setDuration(SPLASH_TILE_EXIT_MS).setInterpolator(leave)
+        // From API 31 the mark is a surface the system hands over, which can drop out on the way
+        // (and does not animate as a view). Once it has finished drawing in, a copy of the finished
+        // mark (ic_launcher_foreground at the splash icon's size and place) stands in for it.
+        val markSize = (SPLASH_MARK_DP * resources.displayMetrics.density).toInt()
+        val mark = android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.ic_launcher_foreground)
+            alpha = 0f
+        }
+        (view as? android.view.ViewGroup)?.addView(mark, android.widget.FrameLayout.LayoutParams(markSize, markSize, android.view.Gravity.CENTER))
+        view.postDelayed({
+            mark.alpha = 1f
+            runCatching { provider.iconView }.getOrNull()?.visibility = android.view.View.INVISIBLE
+        }, remaining)
+        // Then the splash lifts away: the mark swells on as the tile and it fade.
+        mark.animate().scaleX(SPLASH_MARK_EXIT_SCALE).scaleY(SPLASH_MARK_EXIT_SCALE)
+            .setStartDelay(remaining).setDuration(SPLASH_EXIT_DELAY_MS + SPLASH_EXIT_MS).setInterpolator(leave)
+            .start()
+        view.animate().alpha(0f)
+            .setStartDelay(remaining + SPLASH_EXIT_DELAY_MS).setDuration(SPLASH_EXIT_MS).setInterpolator(leave)
             .withEndAction { provider.remove() }
             .start()
     }
@@ -162,13 +174,15 @@ class MainActivity : ComponentActivity() {
         const val SPLASH_MAX_MS = 8_000L
         /** The longest the exit waits for the mark to finish drawing in. */
         const val SPLASH_MAX_WAIT_FOR_ICON_MS = 1_000L
-        const val SPLASH_ICON_EXIT_MS = 300L
         /** After the first frame, how long the shell waits for a splash exit to begin before coming in anyway. */
         const val NO_SPLASH_REVEAL_MS = 250L
         const val NO_SPLASH_REVEAL_FRAMES = 6
-        /** The tile goes a beat after the mark: the mark is seen to leave first, and the shell is mostly in. */
-        const val SPLASH_TILE_DELAY_MS = 160L
-        const val SPLASH_TILE_EXIT_MS = 300L
+        /** The shell's head start under the splash before it starts to go. */
+        const val SPLASH_EXIT_DELAY_MS = 160L
+        const val SPLASH_EXIT_MS = 320L
+        /** The splash icon's size without an icon background: the 108-unit tile the mark is drawn on. */
+        const val SPLASH_MARK_DP = 288
+        const val SPLASH_MARK_EXIT_SCALE = 1.4f
     }
 
     /**
