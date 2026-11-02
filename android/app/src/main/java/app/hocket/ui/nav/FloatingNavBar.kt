@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -175,4 +176,14 @@ internal object FloatingNavBarDefaults {
     val Elevation: Dp = 8.dp
     /** The bar's height above the system navigation bar: the pill and its bottom margin. */
     val Height: Dp = PillHeight + BottomMargin
+}
+
+/**
+ * Consumes every touch that reaches this element (after its children have had theirs), so a tap or
+ * scroll on it never reaches what is drawn behind it.
+ */
+internal fun Modifier.blockTouchesBehind(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) awaitPointerEvent().changes.forEach { it.consume() }
+    }
 }
