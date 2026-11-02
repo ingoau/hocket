@@ -370,8 +370,22 @@ internal class HeroGeometry {
         /** The immersive continuation while the sheet moves: gone before the artwork starts shrinking. */
         fun continuationAlpha(p: Float): Float = ((p - 0.45f) / 0.45f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
 
-        /** The immersive artwork's seam fade in flight: the landed one until the continuation has gone. */
-        fun seamFraction(p: Float): Float = ((p - 0.3f) / 0.15f).coerceIn(0f, 1f)
+        /**
+         * How much of the immersive continuation below the artwork shows while the sheet moves (1
+         * all of it, 0 none): it stays opaque and is wiped up from the bottom of the screen to the
+         * seam (from fully open to [SHRINK_FROM]), so it never turns see-through over the backdrop
+         * behind the title; and it has gone by the time the artwork starts shrinking.
+         */
+        fun continuationReveal(p: Float): Float = ((p - SHRINK_FROM) / (REVEAL_FULL - SHRINK_FROM)).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+        private const val REVEAL_FULL = 0.9f
+
+        /**
+         * The immersive artwork's seam fade in flight: the landed one while the continuation is
+         * under it, easing off as the wipe's last [SEAM_OFF] reaches the seam, so once it has gone
+         * the artwork shrinking into the thumbnail is a crisp card, not one with a faded bottom.
+         */
+        fun seamFraction(p: Float): Float = (continuationReveal(p) / SEAM_OFF).coerceIn(0f, 1f)
+        private const val SEAM_OFF = 0.15f
 
         /** The handle (and the immersive header scrim) fade out first, so nothing hangs over the art. */
         fun headerAlpha(p: Float): Float = ((p - 0.85f) / 0.1f).coerceIn(0f, 1f)
@@ -612,12 +626,24 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val sheetCorner = with(density) { SHEET_CORNER.toPx() }
         val cardElevation = with(density) { HeroGeometry.MINI_ELEVATION.toPx() }
         val appearShift = miniHeightPx + with(density) { HeroGeometry.MINI_GAP.toPx() }
+        val thumbFallback = fallbackThumb(density)
+        // Below the thumbnail in the mini player: the room the card keeps under the artwork in flight.
+        val thumbPad = (miniHeightPx - with(density) { HeroGeometry.THUMB_SIZE.toPx() }) / 2f
+        // The card's own fill, opaque throughout: the mini player's container under the full
+        // player's backdrop, so the card never shows the page through it while one fades into the other.
+        val cardFill = miniPlayerColours(coverArt).container
         val sheetOffset: () -> Float = { state.draggable.offset.takeIf { !it.isNaN() } ?: if (state.draggable.currentValue == SheetValue.Expanded) 0f else collapsedOffset }
+        // The sheet, and above it (outside its clip) the artwork in flight, so the artwork is
+        // whole while it grows out of the small card at the start of a swipe up.
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(with(density) { maxHeightPx.toDp() })
-                .offset { IntOffset(0, sheetOffset().roundToInt()) }
+                .offset { IntOffset(0, sheetOffset().roundToInt()) },
+        ) {
+        Box(
+            Modifier
+                .fillMaxSize()
                 // The floating card's margins, corners, height and shadow morph into the
                 // full-screen sheet; the whole sheet slides in/out with `appear`. One layer, no
                 // relayout.
@@ -631,7 +657,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                         inset = cardInset * (1f - (p / CARD_TO_SHEET).coerceIn(0f, 1f)),
                         topCorner = sheetTopCorner(p, corner, sheetCorner),
                         bottomCorner = corner * (1f - p),
-                        bottom = lerpF(miniHeightPx, screenBottom, (p / 0.5f).coerceIn(0f, 1f)),
+                        // Never short of the artwork in flight: the card grows around it from the
+                        // start, so the artwork never hangs out below a strip of a card.
+                        bottom = maxOf(lerpF(miniHeightPx, screenBottom, (p / 0.5f).coerceIn(0f, 1f)), if (flying) hero.flightRect(p, modeAnim.value, artScale.value, thumbFallback).bottom + thumbPad else 0f),
                     )
                     clip = true
                     shadowElevation = cardElevation * (1f - p * 3f).coerceIn(0f, 1f)
@@ -652,7 +680,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 }
                 .testTag("nowPlaying.sheet"),
         ) {
-            Box(Modifier.fillMaxSize().onPlaced { hero.root = it }) {
+            Box(Modifier.fillMaxSize().onPlaced { hero.root = it }.background(cardFill)) {
                 // The full player's backdrop: blurred artwork over the artwork's colour fading to
                 // near black, fading in as the sheet opens (Metrolist's curve: nothing for the first
                 // tenth, then quickly opaque).
@@ -689,7 +717,16 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                         Box(
                             Modifier
                                 .fillMaxSize()
-                                .graphicsLayer { alpha = ((state.progress - 0.15f) * 4f).coerceIn(0f, 1f) }
+                                .graphicsLayer {
+                                    alpha = ((state.progress - 0.15f) * 4f).coerceIn(0f, 1f)
+                                    // Over an immersive artwork in flight the controls are wiped with its
+                                    // continuation (below), so they never sit on the bare backdrop.
+                                    compositingStrategy = if (artworkLayout != null && flying) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+                                }
+                                .drawWithContent {
+                                    drawContent()
+                                    if (artworkLayout != null && flying) wipeBelow(hero.bigSlot().bottom, HeroGeometry.continuationReveal(state.progress))
+                                }
                                 .then(if (fullPlayerAccessible) Modifier else Modifier.clearAndSetSemantics { }),
                         ) {
                             FullPlayer(
@@ -724,11 +761,15 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                         MiniPlayerBar(onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, liveNeighbours = liveNeighbours)
                     }
                 }
-                // The one artwork that flies from the mini player's thumbnail to the full player's
-                // big artwork while the sheet moves in artwork mode (both of those hide meanwhile;
-                // see `flying`). Decorative.
-                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge, immersiveLayout = artworkLayout)
             }
+        }
+        // The one artwork that flies from the mini player's thumbnail to the full player's big
+        // artwork while the sheet moves in artwork mode (both of those hide meanwhile; see
+        // `flying`). Decorative. Laid out over the sheet's own box (where [HeroGeometry.root] is),
+        // so it lands in the same place, but not clipped by the card.
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = appear.value; translationY = (1f - appear.value) * appearShift }) {
+            FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge, immersiveLayout = artworkLayout)
+        }
         }
     }
 }
@@ -868,10 +909,13 @@ private fun Modifier.continuationLayer(
 ): Modifier = graphicsLayer {
     val p = state.progress
     val big = hero.bigSlot()
-    alpha = HeroGeometry.continuationAlpha(p) * (1f - modeFraction())
+    // In flight both the continuation below the artwork and the strip above it stay opaque and
+    // are wiped instead ([HeroGeometry.continuationReveal], below), so neither turns see-through.
+    val wiping = flying()
+    alpha = (if (wiping) (if (HeroGeometry.continuationReveal(p) > 0f) 1f else 0f) else HeroGeometry.continuationAlpha(p)) * (1f - modeFraction())
     transformOrigin = TransformOrigin(0f, 0f)
-    // Offscreen only while a seam is feathered (below).
-    compositingStrategy = if (feather && seamFeather(hero, offsetSpans, flying()) != 0f) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+    // Offscreen only while a seam is feathered or the wipe is masked (below).
+    compositingStrategy = if (wiping || (feather && seamFeather(hero, offsetSpans, flying()) != 0f)) CompositingStrategy.Offscreen else CompositingStrategy.Auto
     if (flying() && big.width > 0f) {
         val t = hero.flightTransform(p, modeFraction(), scale(), fallbackThumb(density))
         scaleX = t.scale
@@ -893,6 +937,24 @@ private fun Modifier.continuationLayer(
     }
 }.drawWithContent {
     drawContent()
+    // In flight, wiped softly (over [WIPE_FEATHER]) towards the artwork: the continuation from the
+    // bottom of the screen up to the seam (the artwork's bottom edge), the top strip from the top
+    // of the sheet down to the artwork's top edge.
+    if (flying()) {
+        val reveal = HeroGeometry.continuationReveal(state.progress)
+        val art = hero.bigSlot()
+        if (reveal < 1f && art.width > 0f) {
+            val soft = WIPE_FEATHER.toPx()
+            if (feather) {
+                wipeBelow(art.bottom, reveal)
+            } else {
+                val edge = lerpF(art.top, -soft, reveal)
+                drawRect(Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black, startY = edge, endY = edge + soft), topLeft = Offset(0f, edge), size = size.copy(height = soft), blendMode = BlendMode.DstIn)
+                if (edge > 0f) drawRect(Color.Transparent, topLeft = Offset.Zero, size = size.copy(height = edge), blendMode = BlendMode.Clear)
+            }
+        }
+        return@drawWithContent
+    }
     // While the artwork is swiped, the edge facing the other page fades out over [SEAM_FEATHER], so
     // the two pages' continuations and backdrops blend across the seam instead of meeting in a
     // hard line (the artwork above stays crisp). It eases in with the first [SEAM_FEATHER] of the
@@ -908,6 +970,22 @@ private fun Modifier.continuationLayer(
         drawRect(Brush.horizontalGradient(0f to Color.Black, 1f to faded, startX = size.width - w, endX = size.width), topLeft = Offset(size.width - w, 0f), size = size.copy(width = w), blendMode = BlendMode.DstIn)
     }
 }
+
+/**
+ * Masks what is drawn below the wipe's edge, which runs from [seamY] (at [reveal] 0) to past the
+ * bottom (at 1), softly over [WIPE_FEATHER]: the immersive continuation and the controls over it,
+ * wiped as one while the sheet moves. Needs an offscreen layer.
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.wipeBelow(seamY: Float, reveal: Float) {
+    if (reveal >= 1f || seamY <= 0f) return
+    val soft = WIPE_FEATHER.toPx()
+    val edge = lerpF(seamY, size.height + soft, reveal)
+    drawRect(Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent, startY = edge - soft, endY = edge), topLeft = Offset(0f, edge - soft), size = size.copy(height = soft), blendMode = BlendMode.DstIn)
+    if (edge < size.height) drawRect(Color.Transparent, topLeft = Offset(0f, edge), size = size.copy(height = size.height - edge), blendMode = BlendMode.Clear)
+}
+
+/** How soft the edge of the continuation's wipe is while the sheet moves. */
+private val WIPE_FEATHER = 96.dp
 
 /** How wide the soft edge between two swiped pages' continuations is. */
 private val SEAM_FEATHER = 56.dp
@@ -976,7 +1054,12 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
                 }
                 shape = RoundedCornerShape(visibleRadius / k.coerceAtLeast(0.01f))
                 clip = true
-                shadowElevation = if (landed) hero.elevationFor(f, this) * t else 0f
+                shadowElevation = when {
+                    !landed -> 0f
+                    // Off the edges an immersive artwork is a card in flight: a card's shadow.
+                    hero.immersive -> HeroGeometry.HERO_ELEVATION.toPx() * t * ((1f - t) / 0.15f).coerceIn(0f, 1f)
+                    else -> hero.elevationFor(f, this) * t
+                }
                 alpha = if (landed) 1f else (1f - p * 4f).coerceIn(0f, 1f)
             }
             .clearAndSetSemantics { },
@@ -991,8 +1074,10 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
             coverArt, ArtworkSizes.FULL, null,
             Modifier.fillMaxSize().immersiveFade(immersiveEdge, evenFlat = flat, fraction = {
                 val p = progress()
-                if (flat) (1f - HeroGeometry.continuationAlpha(p)) * HeroGeometry.seamFraction(p) else HeroGeometry.seamFraction(p)
-            }, top = immersiveLayout?.top, topFraction = { HeroGeometry.continuationAlpha(progress()) }, crispFraction = { HeroGeometry.seamFraction(progress()) }),
+                // A flat edge keeps the landed artwork's short crisp fade (below) over its opaque
+                // colour; any other, its landed seam, until the wipe reaches it.
+                if (flat) 0f else HeroGeometry.seamFraction(p)
+            }, top = immersiveLayout?.top, topFraction = { HeroGeometry.seamFraction(progress()) }, crispFraction = { HeroGeometry.seamFraction(progress()) }),
             RectangleShape,
         )
     }
