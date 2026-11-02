@@ -34,7 +34,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.WideNavigationRailItem
 import androidx.compose.material3.WideNavigationRailValue
 import androidx.compose.material3.rememberWideNavigationRailState
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,9 +70,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
-import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavController
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -611,6 +613,31 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         screen<Route.SettingsAdvanced>(transitions) { AdvancedSettingsScreen(nav) }
         screen<Route.DeveloperDiagnostics>(transitions) { DeveloperDiagnosticsScreen(nav) }
             }
+            // Composed after the NavHost so it registers later and outranks the NavHost's handler.
+            NavigationSettleBackGuard(nav, transitions)
         }
+    }
+}
+
+/**
+ * While a push/pop animation is still playing, back is a plain pop rather than a predictive gesture
+ * (see [ShellTransitionInfo.navigating]). Popping mid-push makes the NavHost reverse the push from
+ * where it is; popping mid-pop retargets it. At rest this is disabled and the NavHost gets the
+ * gesture as usual.
+ */
+@Composable
+private fun NavigationSettleBackGuard(nav: NavHostController, transitions: ShellTransitionInfo) {
+    DisposableEffect(nav) {
+        val listener = NavController.OnDestinationChangedListener { _, _, _ -> transitions.navigating = true }
+        nav.addOnDestinationChangedListener(listener)
+        onDispose { nav.removeOnDestinationChangedListener(listener) }
+    }
+    val visible by nav.visibleEntries.collectAsState()
+    LaunchedEffect(transitions.navigating, visible) {
+        // Read the flow's live value: the collected one can lag a navigate() by a frame.
+        if (transitions.navigating && nav.visibleEntries.value.size <= 1) transitions.navigating = false
+    }
+    BackHandler(enabled = transitions.navigating && nav.previousBackStackEntry != null) {
+        nav.popBackStack()
     }
 }

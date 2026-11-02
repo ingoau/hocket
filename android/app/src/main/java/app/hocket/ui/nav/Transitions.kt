@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
@@ -116,6 +118,16 @@ internal class ShellTransitionInfo {
      */
     var motion: PageMotion = PageMotion.Push
         private set
+
+    /**
+     * True from a destination change until the NavHost has settled on the new entry, i.e. while a
+     * push or pop animation (or the tail of a released back gesture) is still playing. A predictive
+     * back gesture must not start then: NavHost would seek its transition toward the previous entry
+     * while the interrupted animation keeps running underneath, leaving both pages blended under the
+     * scrim and not tracking the finger (report R-20261102-yyrs). Snapshot state, so the shell's
+     * back interceptor follows it.
+     */
+    var navigating: Boolean by mutableStateOf(false)
     var topEntryId: String? = null
         private set
     var coveredEntryId: String? = null
