@@ -173,6 +173,7 @@ impl Actor {
                     .map(|d| d.saved_queues.clone())
                     .unwrap_or_default(),
             ),
+            Query::Stash => QueryResult::StashItems(self.stash_items()),
             Query::Lyrics { track_id } => {
                 let cached = self.cached_lyrics(&track_id);
                 if cached.is_none() {

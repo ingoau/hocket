@@ -6,8 +6,8 @@
 use crate::api::{ActionTarget, Command, MediaSessionAction, RepeatMode, SleepTimer};
 
 use super::{
-    ids_of, pin_targets, play_commands, queue_commands, rating_targets, single_id, Resolver,
-    StateView, Surface, SEEK_STEP_MS,
+    ids_of, pin_targets, play_commands, queue_commands, rating_targets, single_id, track_ids_of,
+    Resolver, StateView, Surface, SEEK_STEP_MS,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +195,18 @@ fn play_next(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> 
 
 fn play_later(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
     queue_commands(t, s, r, false)
+}
+
+fn stash(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let track_ids = track_ids_of(t, s, r);
+    if track_ids.is_empty() {
+        return vec![];
+    }
+    vec![Command::StashAdd { track_ids }]
+}
+
+fn clear_stash(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    vec![Command::StashClear]
 }
 
 macro_rules! rate_fn {
@@ -713,6 +725,44 @@ static ALL: &[ActionDef] = &[
         has_selection,
         play_later,
         undoable = true
+    ),
+    // -- stash --
+    action!(
+        "stash",
+        "Stash",
+        "stash",
+        Queue,
+        &[
+            TargetKind::Global,
+            TargetKind::Tracks,
+            TargetKind::Albums,
+            TargetKind::Artists,
+            TargetKind::Playlists,
+            TargetKind::QueueItems
+        ],
+        has_items,
+        stash,
+        default_shortcut = Some("S")
+    ),
+    action!(
+        "openStash",
+        "Open stash",
+        "stash",
+        View,
+        GLOBAL,
+        not_in_text_field,
+        none,
+        default_shortcut = Some("Shift+S"),
+        ui_handled = true
+    ),
+    action!(
+        "clearStash",
+        "Clear stash",
+        "clear_all",
+        Queue,
+        GLOBAL,
+        always,
+        clear_stash
     ),
     action!(
         "removeFromQueue",
@@ -1348,6 +1398,7 @@ const CONTEXT_MENU: &[&str] = &[
     "playNext",
     "playLater",
     "addToPlaylist",
+    "stash",
     "love",
     "unlove",
     "rate5",
@@ -1391,6 +1442,7 @@ const NOW_PLAYING: &[&str] = &[
     "repeat",
     "autoplay",
     "addToPlaylist",
+    "stash",
     "goToAlbum",
     "goToArtist",
     "download",

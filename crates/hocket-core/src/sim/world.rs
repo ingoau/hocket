@@ -1165,6 +1165,16 @@ impl World {
                 }
             }
         }
+        // 5b. the stash: every awake device lists the same songs in the same order.
+        let stashes: BTreeSet<Vec<TrackId>> = self
+            .honest()
+            .filter(|&i| !self.devices[i].asleep)
+            .map(|i| self.devices[i].stash_tracks())
+            .collect();
+        if stashes.len() > 1 {
+            self.violations
+                .push(format!("[{now:.0}] stashes diverged: {stashes:?}"));
+        }
         // 3. scrobbles: every reached pair exactly once
         let mut reached: BTreeSet<(String, i64)> = BTreeSet::new();
         for i in self.honest() {

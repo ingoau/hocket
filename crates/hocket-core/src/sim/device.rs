@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::api::{
     DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms, Platform, PlaylistId, PositionStamp,
-    QueueKey, SavedQueue, TrackId,
+    QueueKey, SavedQueue, StashEntry, Track, TrackId,
 };
 use crate::connect::discovery::PeerAdvert;
 use crate::connect::engine::{Engine, EngineConfig, Input, Output, ResumeOfferDraft};
@@ -101,10 +101,20 @@ pub struct Persisted {
     pub document: crate::api::SessionDocument,
     pub sync_base: Option<SyncPoint>,
     pub saved_queues: Vec<SavedQueue>,
+    pub stash: Vec<StashEntry>,
     /// Scrobbles reached but without a verdict yet (the outbox).
     pub outbox: Vec<(TrackId, EpochMs)>,
     /// What the engine knows was scrobbled (persisted with the sync base).
     pub known_scrobbled: Vec<crate::connect::engine::KnownScrobble>,
+}
+
+/// A stash edit, by listed index.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StashEdit {
+    Add(Vec<TrackId>),
+    Remove(usize),
+    Move(usize, usize),
+    Clear,
 }
 
 pub struct SimDevice {
@@ -114,6 +124,8 @@ pub struct SimDevice {
     pub library: Arc<Library>,
     pub playback: Playback,
     pub saved_queues: Vec<SavedQueue>,
+    /// The account's stash as the actor holds it (tombstones included).
+    pub stash: Vec<StashEntry>,
     pub outbox: Vec<(TrackId, EpochMs)>,
     pub resume_offer: Option<ResumeOfferDraft>,
     pub picker_open: bool,
@@ -192,17 +204,19 @@ impl SimDevice {
             api_version: "1.16.1".into(),
         });
         let now = clock.now_ms();
-        let (doc, sync_base, saved, outbox, known) = match persisted {
+        let (doc, sync_base, saved, stash, outbox, known) = match persisted {
             Some(p) => (
                 p.document,
                 p.sync_base,
                 p.saved_queues,
+                p.stash,
                 p.outbox,
                 p.known_scrobbled,
             ),
             None => (
                 crate::session::new_document(scope, format!("session-{id}"), now),
                 None,
+                vec![],
                 vec![],
                 vec![],
                 vec![],
@@ -219,6 +233,7 @@ impl SimDevice {
             library,
             playback: Playback::default(),
             saved_queues: saved.clone(),
+            stash: stash.clone(),
             outbox: vec![],
             resume_offer: None,
             picker_open: false,
@@ -241,6 +256,9 @@ impl SimDevice {
         if !saved.is_empty() {
             d.handle(Input::SavedQueuesChanged(saved));
         }
+        if !stash.is_empty() {
+            d.handle(Input::StashChanged(stash));
+        }
         // The outbox retries: ask again for every scrobble without a verdict.
         for (t, s) in outbox {
             d.outbox.push((t.clone(), s));
@@ -259,6 +277,7 @@ impl SimDevice {
             document: self.engine.document().clone(),
             sync_base: self.engine.sync_base().cloned(),
             saved_queues: self.saved_queues.clone(),
+            stash: self.stash.clone(),
             outbox: self.outbox.clone(),
             known_scrobbled: self.engine.known_scrobbled(),
         }
@@ -294,6 +313,50 @@ impl SimDevice {
     pub fn edit_library(&mut self, items: Vec<LibraryItemState>, playlists: Vec<PlaylistEdit>) {
         self.apply_library(&items, &playlists);
         self.handle(Input::LibraryEdited { items, playlists });
+    }
+
+    /// The listed stash, as track ids in order.
+    pub fn stash_tracks(&self) -> Vec<TrackId> {
+        crate::stash::track_ids(&self.stash)
+    }
+
+    /// The entry id listed at `index`.
+    pub fn stash_entry(&self, index: usize) -> Option<String> {
+        crate::stash::live(&self.stash)
+            .get(index)
+            .map(|e| e.entry_id.clone())
+    }
+
+    /// What the actor does for a stash command: edit its copy, then hand the engine the whole set.
+    pub fn edit_stash(&mut self, edit: StashEdit) {
+        let now = self.now();
+        match edit {
+            StashEdit::Add(ids) => {
+                let tracks: Vec<Track> = ids
+                    .into_iter()
+                    .map(|id| Track {
+                        id,
+                        ..Track::default()
+                    })
+                    .collect();
+                let device = self.id.clone();
+                crate::stash::add(&mut self.stash, &tracks, &device, now);
+            }
+            StashEdit::Remove(index) => {
+                if let Some(id) = self.stash_entry(index) {
+                    crate::stash::set_removed(&mut self.stash, &[id], true, now);
+                }
+            }
+            StashEdit::Move(index, to) => {
+                if let Some(id) = self.stash_entry(index) {
+                    crate::stash::move_to(&mut self.stash, &id, to, now);
+                }
+            }
+            StashEdit::Clear => {
+                crate::stash::clear(&mut self.stash, now);
+            }
+        }
+        self.handle(Input::StashChanged(self.stash.clone()));
     }
 
     fn apply_library(&mut self, items: &[LibraryItemState], playlists: &[PlaylistEdit]) {
@@ -475,6 +538,10 @@ impl SimDevice {
                 }
             }
             Output::SavedQueuesMerged(list) => self.saved_queues = list,
+            Output::StashMerged(list) => {
+                // What the actor does: merge into its own copy (an edit may have raced it).
+                self.stash = crate::stash::merge(&self.stash, &list).0;
+            }
             Output::LibraryEditReceived {
                 from,
                 items,

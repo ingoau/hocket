@@ -141,6 +141,7 @@ impl Actor {
                 self.engine_input(Input::SettingChanged(s));
             }
         }
+        self.load_stash();
         // Restore the resume point: the last known item and position, dormant
         // (never auto-resume on start).
         if let Ok(Some(pos)) = self
@@ -492,6 +493,7 @@ impl Actor {
                 }
             }
             Output::SettingsMerged(list) => self.on_settings_merged(list),
+            Output::StashMerged(list) => self.on_stash_merged(list),
             Output::UndoEntryReceived {
                 entry,
                 before_revision: _,

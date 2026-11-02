@@ -260,10 +260,11 @@ fn version_one_orders_gain_the_library() {
             "goToArtist",
             "pinToLibrary",
             "unpinFromLibrary",
-            "addToPlaylist"
+            "addToPlaylist",
+            "stash"
         ]
     );
-    // Written back as version 2: removing the Library again sticks.
+    // Written back as the current version: removing the Library again sticks.
     r.set_order(
         Surface::Sidebar,
         vec!["navigateHome".into(), "navigateAlbums".into()],
@@ -990,4 +991,23 @@ fn library_pins_toggle_through_the_setting() {
         .actions_for(Surface::ContextMenu, &saved, &s)
         .iter()
         .any(|d| d.id == "pinToLibrary"));
+}
+
+/// A version-2 context menu gains Stash after Add to playlist (or at the end without one), once.
+#[test]
+fn version_two_orders_gain_the_stash() {
+    let mut r = ActionRegistry::new(Platform::Linux);
+    r.from_json(
+        r#"{"version":2,"orders":{"contextMenu":["playNext","addToPlaylist","love"],"nowPlaying":["love"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        r.order(Surface::ContextMenu),
+        vec!["playNext", "addToPlaylist", "stash", "love"]
+    );
+    assert_eq!(r.order(Surface::NowPlaying), vec!["love", "stash"]);
+    r.set_order(Surface::ContextMenu, vec!["playNext".into()]);
+    let mut again = ActionRegistry::new(Platform::Linux);
+    again.from_json(&r.to_json()).unwrap();
+    assert_eq!(again.order(Surface::ContextMenu), vec!["playNext"]);
 }

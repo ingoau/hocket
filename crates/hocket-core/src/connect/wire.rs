@@ -30,7 +30,8 @@ use typeshare::typeshare;
 use crate::api::{
     AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState, Ms,
     PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey, QueueMode, RepeatMode,
-    SavedQueue, ServerId, SessionDocument, SessionId, Setting, TrackId, TransportLease, UndoEntry,
+    SavedQueue, ServerId, SessionDocument, SessionId, Setting, StashEntry, TrackId, TransportLease,
+    UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -208,6 +209,10 @@ pub struct ReplicaState {
     /// LWW set keyed on setting key (account-synced keys only).
     #[serde(default)]
     pub settings: Vec<Setting>,
+    /// The account's song stash: LWW set keyed on entry id, tombstones included
+    /// (`crate::stash`).
+    #[serde(default)]
+    pub stash: Vec<StashEntry>,
     /// Per-device last seen.
     #[serde(default)]
     pub devices: Vec<DeviceLease>,
@@ -847,6 +852,11 @@ pub enum Msg {
     SettingsSync {
         settings: Vec<Setting>,
     },
+    /// Either direction. The song stash, merged LWW on `updatedAt` per entry id
+    /// (`crate::stash::merge`). Older builds drop it.
+    StashSync {
+        entries: Vec<StashEntry>,
+    },
 
     // -- undo -----------------------------------------------------------
     /// Either direction. A session-tier undo entry shared with the session,
@@ -960,6 +970,7 @@ impl Msg {
         "scrobbleDedupeAnswer",
         "savedQueuesSync",
         "settingsSync",
+        "stashSync",
         "undoEntryShared",
         "libraryEdited",
         "diagnosticsRequest",
@@ -1009,6 +1020,7 @@ impl Msg {
             Msg::ScrobbleDedupeAnswer { .. } => "scrobbleDedupeAnswer",
             Msg::SavedQueuesSync { .. } => "savedQueuesSync",
             Msg::SettingsSync { .. } => "settingsSync",
+            Msg::StashSync { .. } => "stashSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
@@ -1219,6 +1231,7 @@ mod tests {
             },
             Msg::SavedQueuesSync { queues: vec![] },
             Msg::SettingsSync { settings: vec![] },
+            Msg::StashSync { entries: vec![] },
             Msg::LibraryEdited {
                 device_id: "a".into(),
                 items: vec![],
@@ -1282,6 +1295,7 @@ mod tests {
             document: doc(),
             saved_queues: vec![],
             settings: vec![],
+            stash: vec![],
             devices: vec![],
             transport_lease: TransportLease::default(),
             last_stamp: None,
