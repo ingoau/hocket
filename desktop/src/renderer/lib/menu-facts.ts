@@ -43,11 +43,19 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
     case "queueItems": {
       const ids = await resolveTrackIds(target);
       if (!ids.length) return undefined;
-      if (ids.length > MAX_DETAIL) return { kind: "song", count: ids.length, trackIds: ids };
+      // Counted before the detail lookups, so a large or partly unresolved selection still gets
+      // Unsnooze rather than Snooze for songs already snoozed.
+      const snoozes = useApp.getState().snoozes;
+      const mine = ids.map((id) => snoozes.find((s) => s.trackId === id)).filter((s) => !!s);
+      const snoozeFacts = {
+        snoozed: mine.length,
+        snoozeUntil: ids.length === 1 ? (mine[0] ? (mine[0].until ?? null) : undefined) : undefined,
+      };
+      if (ids.length > MAX_DETAIL) return { kind: "song", count: ids.length, trackIds: ids, ...snoozeFacts };
       const found = expectResult(await b.query({ type: "tracksByIds", data: { ids } }), "trackList");
       const byId = new Map(found.map((x) => [x.id, x]));
       const tracks = ids.map((id) => byId.get(id)).filter((x): x is Track => !!x);
-      if (tracks.length !== ids.length) return { kind: "song", count: ids.length, trackIds: ids };
+      if (tracks.length !== ids.length) return { kind: "song", count: ids.length, trackIds: ids, ...snoozeFacts };
       const first = tracks[0] as Track;
       const header = tracks.length === 1
         ? { covers: [first.coverArt], title: first.title, subtitle: joined([first.artist, first.album]) }
@@ -56,8 +64,6 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
             title: t("menu.songsTime", { n: tracks.length, time: fmtDuration(tracks.reduce((s, x) => s + x.durationMs, 0)) }),
             subtitle: tracks.slice(0, 12).map((x) => x.title).join(", "),
           };
-      const snoozes = useApp.getState().snoozes;
-      const mine = ids.map((id) => snoozes.find((s) => s.trackId === id)).filter((s) => !!s);
       return {
         kind: "song",
         count: tracks.length,
@@ -66,8 +72,7 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
         ratings: tracks.map((x) => x.rating),
         header,
         trackIds: ids,
-        snoozed: mine.length,
-        snoozeUntil: ids.length === 1 ? (mine[0] ? (mine[0].until ?? null) : undefined) : undefined,
+        ...snoozeFacts,
       };
     }
     case "albums": {

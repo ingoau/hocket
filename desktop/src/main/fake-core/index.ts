@@ -1692,8 +1692,9 @@ export class FakeCore implements CoreHandle {
     const filtered = tracks.filter((id, i) => i === keep || !this.snoozes.has(id));
     if (!filtered.length) return { tracks, start };
     if (keep === undefined) return { tracks: filtered, start: undefined };
-    const at = filtered.indexOf(tracks[keep]!);
-    return { tracks: filtered, start: at < 0 ? undefined : at };
+    // Count what stays ahead of the picked song, as the core does: an earlier copy of it isn't it.
+    const at = tracks.slice(0, keep).filter((id) => !this.snoozes.has(id)).length;
+    return { tracks: filtered, start: at };
   }
 
   private snoozeItems(): import("@core/api").SnoozeItem[] {

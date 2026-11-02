@@ -529,8 +529,9 @@ class FakeCore(
         val keep = start?.takeIf { it in tracks.indices }
         val filtered = tracks.filterIndexed { i, id -> i == keep || id !in snoozes }
         if (filtered.isEmpty()) return tracks to start
-        val next = keep?.let { k -> filtered.indexOf(tracks[k]).takeIf { it >= 0 } }
-        return filtered to if (start == null) null else next
+        // Count what stays ahead of the picked song, as the core does: an earlier copy of it isn't it.
+        val next = keep?.let { k -> tracks.take(k).count { it !in snoozes } }
+        return filtered to next
     }
 
     private fun setContext(ctx: QueueContext, tracks: List<TrackId>, startIndex: Int, shuffled: Boolean, keepHistory: Boolean = false) {
