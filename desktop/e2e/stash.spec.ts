@@ -1,6 +1,7 @@
 // The song stash (#150): stash songs from the context menu and the keyboard, the chip that grows in
 // beside the search with their covers and count, the popover's actions (the stash stays after
 // queueing it), reordering by drag, removing with × (with Undo) and Clear (with Undo).
+import { expectNoViolations, setTheme } from "./a11y-helpers";
 import { completeSetup, expect, html5DragOver, html5DragStart, html5Drop, openPlace, showSideView, test } from "./fixtures";
 
 const onTitle = { x: 130, y: 12 };
@@ -97,6 +98,10 @@ test.describe("stash", () => {
     await page.keyboard.press("Control+Shift+S");
     await expect(page.getByTestId("stash-popover")).toBeVisible();
     await expect(page.getByTestId("stash-row").first()).toBeFocused();
+    for (const theme of ["light", "dark"] as const) {
+      await setTheme(page, theme);
+      await expectNoViolations(page, `${theme} stash popover`);
+    }
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("stash-popover")).toHaveCount(0);
     await expect(page.getByTestId("stash-chip")).toBeFocused();

@@ -162,7 +162,6 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
               className={`stash-row ${on ? "selected" : ""} ${drag?.from === i ? "dragging" : ""} ${before ? "drop-before" : ""} ${after ? "drop-after" : ""}`}
               tabIndex={0}
               draggable
-              aria-selected={on}
               data-testid="stash-row"
               onClick={() => toggle(item.entryId)}
               onDoubleClick={() => play(false, i, items.map((x) => x.track.id))}
@@ -194,7 +193,7 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
               <Icon name="grip" size={16} className="stash-grip" />
               <Artwork id={item.track.coverArt ?? undefined} size={ARTWORK_SIZES.thumb} className="art" />
               <span className="stash-text">
-                <span className="truncate">{item.track.title}</span>
+                <span className="truncate">{item.track.title}{on ? <span className="sr-only"> ({t("stash.picked")})</span> : null}</span>
                 <span className="small muted truncate">{item.track.artist ?? ""}</span>
               </span>
               <span className="small faint">{item.track.durationMs ? fmtTime(item.track.durationMs) : ""}</span>

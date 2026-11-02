@@ -206,6 +206,7 @@ const STRINGS = {
   "stash.remove": "Remove from stash",
   "stash.selectionHint": "Actions apply to the selection",
   "stash.clearSelection": "Deselect",
+  "stash.picked": "selected",
   "stash.added": "Added {count} songs to the queue",
   "stash.addedNext": "Playing {count} songs next",
   "stash.addedOne": "Added 1 song to the queue",
