@@ -152,7 +152,8 @@ fun StashChip(
 
 /**
  * The two newest covers fanned out, the newest in front tilted towards the count over the one
- * before it (mirrored right to left). Each song stashed drops in as the new front card.
+ * before it (mirrored right to left). Each song stashed drops in as the new front card, pushing
+ * the old front card back and the old back card out behind it.
  */
 @Composable
 private fun Fan(items: List<StashItem>, size: Dp, reduced: Boolean) {
@@ -162,32 +163,60 @@ private fun Fan(items: List<StashItem>, size: Dp, reduced: Boolean) {
     val spread by animateFloatAsState(if (two) 1f else 0f, spec, label = "stashFan")
     val width by animateDpAsState(if (two) size + 10.dp else size, if (reduced) spring(stiffness = Spring.StiffnessHigh) else spring(dampingRatio = 0.8f, stiffness = 500f), label = "stashFanWidth")
     Box(Modifier.width(width).height(size)) {
-        items.getOrNull(items.size - 2)?.let { back ->
-            key(back.entryId) {
-                Card(back, size, Modifier.graphicsLayer { rotationZ = -10f * spread * dir; alpha = spread.coerceIn(0f, 1f) })
-            }
-        }
-        items.lastOrNull()?.let { front ->
-            key(front.entryId) {
-                // A newly stashed front card drops in.
-                var shown by remember { mutableStateOf(reduced) }
-                LaunchedEffect(Unit) { shown = true }
-                val drop by animateFloatAsState(if (shown) 1f else 0f, spec, label = "stashCardDrop")
-                Card(
-                    front, size,
-                    Modifier.graphicsLayer {
-                        translationX = 10.dp.toPx() * spread * dir
-                        rotationZ = (8f * spread - 20f * (1f - drop)) * dir
-                        translationY = -size.toPx() * 0.4f * (1f - drop)
-                        scaleX = 0.6f + 0.4f * drop
-                        scaleY = 0.6f + 0.4f * drop
-                        alpha = drop
-                    },
-                )
+        // The newest three, oldest first so the front draws on top, all from one keyed loop: a card
+        // keeps its place in the composition (and its loaded art) as newer songs push it back, and
+        // moves from its old pose to its new one. The third only shows while it fades out behind.
+        val shown = items.takeLast(3)
+        shown.forEachIndexed { i, item ->
+            key(item.entryId) {
+                FanCard(item, size, depth = shown.size - 1 - i, spread = { spread }, dir, spec, reduced)
             }
         }
     }
 }
+
+/** One card of the [Fan] at [depth] (0 the front, 1 the back, 2 leaving behind it). */
+@Composable
+private fun FanCard(item: StashItem, size: Dp, depth: Int, spread: () -> Float, dir: Float, spec: androidx.compose.animation.core.AnimationSpec<Float>, reduced: Boolean) {
+    // Starts at its first depth, so a card arriving behind doesn't slide in from the front.
+    val d by animateFloatAsState(depth.toFloat(), if (reduced) spec else spring(dampingRatio = 0.75f, stiffness = 400f), label = "stashCardDepth")
+    // A card that arrives in front drops in.
+    var dropped by remember { mutableStateOf(reduced || depth != 0) }
+    LaunchedEffect(Unit) { dropped = true }
+    val drop by animateFloatAsState(if (dropped) 1f else 0f, spec, label = "stashCardDrop")
+    Card(
+        item, size,
+        Modifier.graphicsLayer {
+            val s = spread()
+            val tx: Float
+            val rot: Float
+            val scale: Float
+            val fade: Float
+            if (d <= 1f) {
+                // Front (nudged towards the count, tilted to it) to back (tilted away).
+                tx = lerp(10.dp.toPx() * s, 0f, d)
+                rot = lerp(8f * s, -10f * s, d)
+                scale = 1f
+                fade = 1f
+            } else {
+                // Back to gone: tipping further away as it shrinks and fades.
+                val t = d - 1f
+                tx = lerp(0f, -6.dp.toPx(), t)
+                rot = lerp(-10f * s, -18f, t)
+                scale = lerp(1f, 0.85f, t)
+                fade = (1f - t).coerceIn(0f, 1f)
+            }
+            translationX = tx * dir
+            rotationZ = (rot - 20f * (1f - drop)) * dir
+            translationY = -size.toPx() * 0.4f * (1f - drop)
+            scaleX = scale * (0.6f + 0.4f * drop)
+            scaleY = scale * (0.6f + 0.4f * drop)
+            alpha = fade * drop.coerceIn(0f, 1f)
+        },
+    )
+}
+
+private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 
 @Composable
 private fun Card(item: StashItem, size: Dp, modifier: Modifier) {
