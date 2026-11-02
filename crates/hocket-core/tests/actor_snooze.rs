@@ -302,3 +302,97 @@ async fn two_devices_share_snoozes() {
     assert_eq!(on_a, ids(&["t1"]));
     assert_eq!(snoozed(&b).await, ids(&["t1"]));
 }
+
+/// A saved queue keeps no track list for a playlist; restoring it re-resolves the playlist. The
+/// cursor, the shuffle order and each item's context index count positions in the queued list,
+/// which left the snoozed songs out, so the rebuilt list has to leave them out too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restored_playlist_queue_still_leaves_snoozed_songs_out() {
+    let server = seeded_server(10, 200.0);
+    let all = ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"];
+    server.add_playlist("pl", "Mine", "alice", &all, false);
+    let t = TestCore::start("snooze-restore", server).await;
+    t.wait_until(30_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+    })
+    .await;
+    let out = ids(&["t2", "t5", "t7"]);
+    t.run(Command::Snooze {
+        track_ids: out.clone(),
+        duration: SnoozeFor::Week,
+    })
+    .await;
+
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            context: context(&sid, ContextKind::Playlist { id: "pl".into() }, &[]),
+            start_index: None,
+            shuffle: true,
+            save_outgoing: false,
+        },
+    })
+    .await;
+    t.run(Command::Next).await;
+    t.run_for(500.0).await;
+    let before = queue_ids(&t.queue().await);
+    assert_eq!(before.len(), 6, "{before:?}");
+    assert!(before.iter().all(|id| !out.contains(id)), "{before:?}");
+
+    // Playing an album saves the shuffled playlist queue.
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            context: context(&sid, ContextKind::Album { id: "al0".into() }, &[]),
+            start_index: None,
+            shuffle: false,
+            save_outgoing: true,
+        },
+    })
+    .await;
+    t.run_for(500.0).await;
+    let saved = t.snapshot().await.session.unwrap().saved_queues;
+    let sq = saved
+        .iter()
+        .find(|q| matches!(&q.context.kind, ContextKind::Playlist { id } if id == "pl"))
+        .expect("the playlist queue was saved")
+        .clone();
+    assert!(
+        sq.context.tracks.is_empty(),
+        "snapshots omit the track list"
+    );
+
+    // Saving it as a playlist keeps the same songs, in the same order.
+    t.run(Command::SaveQueueAsPlaylist {
+        saved_queue_id: Some(sq.id.clone()),
+        name: "Again".into(),
+    })
+    .await;
+    t.run_for(500.0).await;
+    let made = (1..=100)
+        .map(|i| t.server.playlist_song_ids(&format!("pl-new-{i}")))
+        .find(|songs| !songs.is_empty())
+        .expect("a playlist was made");
+    let mut played = t
+        .snapshot()
+        .await
+        .session
+        .unwrap()
+        .saved_queues
+        .iter()
+        .find(|q| q.id == sq.id)
+        .unwrap()
+        .history
+        .iter()
+        .map(|i| i.track_id.clone())
+        .collect::<Vec<_>>();
+    played.extend(before.iter().cloned());
+    assert_eq!(made, played);
+
+    t.run(Command::RestoreSavedQueue { id: sq.id.clone() })
+        .await;
+    t.run_for(500.0).await;
+    assert_eq!(queue_ids(&t.queue().await), before);
+}

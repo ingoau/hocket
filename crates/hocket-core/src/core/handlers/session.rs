@@ -666,7 +666,7 @@ impl Actor {
         // document's bookkeeping is done (below), so it is persisted and
         // announced even when that op does not apply.
         let resolve_tracks = resolve
-            .map(|context| self.resolve_context_tracks(&context.server_id, &context.kind))
+            .map(|context| self.resolve_queued_context_tracks(&context.server_id, &context.kind))
             .filter(|tracks| !tracks.is_empty());
         if needs_autoplay && owns && resolve_tracks.is_none() {
             self.autoplay_advance = true;
@@ -971,7 +971,7 @@ impl Actor {
             return;
         };
         let tracks = if saved::needs_resolution(&sq) {
-            let t = self.resolve_context_tracks(&sq.context.server_id, &sq.context.kind);
+            let t = self.resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
             if t.is_empty() {
                 None
             } else {
@@ -1037,7 +1037,8 @@ impl Actor {
                 };
                 let mut tracks = sq.context.tracks.clone();
                 if tracks.is_empty() {
-                    tracks = self.resolve_context_tracks(&sq.context.server_id, &sq.context.kind);
+                    tracks =
+                        self.resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
                 }
                 let mut ids: Vec<TrackId> = sq.history.iter().map(|i| i.track_id.clone()).collect();
                 ids.extend(sq.current.iter().map(|i| i.track_id.clone()));

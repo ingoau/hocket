@@ -222,4 +222,16 @@ impl Actor {
         let snoozed: HashSet<TrackId> = self.snoozed_ids().into_iter().collect();
         snooze::filter_context(tracks, kind, start, &snoozed)
     }
+
+    /// Re-resolve an ID-referenced context the way it was first queued: snoozed songs left out.
+    /// A saved queue's cursor, shuffle order and context indices count positions in the list it
+    /// played, so a restore has to rebuild that same list rather than the full one.
+    pub(crate) fn resolve_queued_context_tracks(
+        &self,
+        server_id: &str,
+        kind: &crate::api::ContextKind,
+    ) -> Vec<TrackId> {
+        let tracks = self.resolve_context_tracks(server_id, kind);
+        self.filter_snoozed_context(&tracks, kind, None).0
+    }
 }
