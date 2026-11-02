@@ -101,7 +101,11 @@ impl ExternalBackend {
                 | BackendReport::Error { key, .. } => !st.retired.contains(key),
                 BackendReport::AudioFocusLost { .. }
                 | BackendReport::OutputDevicesChanged { .. }
-                | BackendReport::SystemVolume { .. } => true,
+                | BackendReport::SystemVolume { .. }
+                | BackendReport::PreviewReady { .. }
+                | BackendReport::PreviewProgress { .. }
+                | BackendReport::PreviewEnded
+                | BackendReport::PreviewInterrupted => true,
             }
         };
         if forward {
@@ -251,6 +255,29 @@ impl PlaybackBackend for ExternalBackend {
 
     fn name(&self) -> &'static str {
         "external"
+    }
+
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewLoad {
+            source,
+            position_ms,
+        })
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewPlay)
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewPause)
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewSeek { position_ms })
+    }
+
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewStop)
     }
 }
 

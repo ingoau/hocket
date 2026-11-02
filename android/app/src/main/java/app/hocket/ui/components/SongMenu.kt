@@ -22,6 +22,7 @@ import app.hocket.core.Commands
 import app.hocket.share.ShareRequest
 import app.hocket.share.ShareRequestEffect
 import app.hocket.core.api.ActionDescriptor
+import app.hocket.core.api.Command
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.TrackSummary
@@ -146,7 +147,10 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
         androidx.compose.runtime.key(request) {
             MenuSheet(
                 subject, request.target, actions,
-                onDismiss = { controller.close() },
+                onDismiss = {
+                    client.dispatch(Command.PreviewStop)
+                    controller.close()
+                },
                 onAddToPlaylist = { pickerFor = request.target },
                 extras = request.extras,
                 onGoToAlbum = track.albumId?.let { id -> navigator?.let { { it.openAlbum(id) } } },

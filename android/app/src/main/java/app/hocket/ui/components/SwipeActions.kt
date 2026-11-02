@@ -116,6 +116,13 @@ fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAd
         }
         ActionIds.ADD_TO_PLAYLIST -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.PlaylistAdd, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, onAddToPlaylist)
         ActionIds.STASH -> SwipeAction(id, actionLabel(id), HocketIcons.Filled.Inventory2, scheme.tertiaryContainer, scheme.onTertiaryContainer, dismisses = false, run(id))
+        ActionIds.PREVIEW -> {
+            val menu = LocalSongMenu.current
+            SwipeAction(id, actionLabel(id), HocketIcons.Filled.Headphones, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false) {
+                menu?.open(track, target)
+                client.dispatch(Commands.previewStart(track.id))
+            }
+        }
         ActionIds.DOWNLOAD -> if (track.offline == OfflineState.Downloaded) null
             else SwipeAction(id, actionLabel(id), HocketIcons.Filled.Download, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
         else -> null

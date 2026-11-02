@@ -26,6 +26,7 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "playShuffled", label: "Shuffle play", icon: "shuffle", category: "playback", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"] },
   { id: "playNext", label: "Play next", icon: "playNext", category: "queue", targets: ["tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu"], undoable: true },
   { id: "playLater", label: "Play later", icon: "playLater", category: "queue", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"], undoable: true },
+  { id: "preview", label: "Preview", icon: "headphones", category: "playback", targets: ["tracks", "queueItems"], surfaces: ["contextMenu"] },
   { id: "addToPlaylist", label: "Add to playlist…", icon: "playlistAdd", category: "library", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"], undoable: true },
   { id: "stash", label: "Stash", icon: "stash", category: "queue", targets: ["none", "tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu", "palette"], defaultShortcut: "Mod+S" },
   { id: "openStash", label: "Open stash", icon: "stash", category: "view", targets: ["none"], surfaces: ["palette"], defaultShortcut: "Mod+Shift+S" },
@@ -106,7 +107,7 @@ export const REGISTRY: RegistryEntry[] = [
 export const DEFAULT_ORDERS: Record<string, string[]> = {
   sidebar: ["navigateHome", "navigateLibrary"],
   mediaSession: ["previous", "togglePlay", "next", "shuffle", "repeat", "love"],
-  contextMenu: ["play", "playShuffled", "playNext", "playLater", "addToPlaylist", "stash", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "pinToLibrary", "unpinFromLibrary", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
+  contextMenu: ["play", "playShuffled", "playNext", "playLater", "preview", "addToPlaylist", "stash", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "pinToLibrary", "unpinFromLibrary", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
 };
 
 export interface ActionContext {
@@ -145,6 +146,10 @@ export function describeActions(surface: string, target: ActionTarget, order: st
   const filtered = sequence && (surface === "sidebar" || surface === "mediaSession") ? sorted.filter((e) => sequence.includes(e.id)) : sorted;
   return filtered
     .filter((e) => {
+      if (e.id === "preview") {
+        const n = target.type === "tracks" ? target.data.ids.length : target.type === "queueItems" ? target.data.keys.length : 0;
+        if (n !== 1) return false;
+      }
       if (e.id === "love" && (ctx.allLoved || (kind === "none" && ctx.currentLoved))) return false;
       if (e.id === "unlove" && (ctx.allLoved === false || (kind === "none" && ctx.currentLoved === false))) return false;
       if (e.id === "unpin" && !ctx.anyDownloaded) return false;

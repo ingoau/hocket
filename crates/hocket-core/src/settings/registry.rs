@@ -358,6 +358,7 @@ pub const SWIPE_QUEUE_ACTIONS: &[&str] = &[
     "love",
     "addToPlaylist",
     "download",
+    "preview",
 ];
 
 /// What a touch gesture on the Pebble's Now Playing opens.
@@ -434,6 +435,7 @@ pub const SWIPE_LIST_ACTIONS: &[&str] = &[
     "addToPlaylist",
     "download",
     "stash",
+    "preview",
 ];
 
 /// What swiping up on the phone's full player (on its artwork) opens: the

@@ -91,6 +91,12 @@ class MenuScreenshotTest {
         step {
             openSongMenu()
             shot(dir, "$prefix-01-song-menu")
+            compose.onNodeWithTag("songMenu.action.preview").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            shot(dir, "$prefix-01d-preview-playing")
+            compose.onNodeWithTag("songMenu.action.preview").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            shot(dir, "$prefix-01e-preview-paused")
             compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
             awaitTag("songMenu.share.navidrome")
             settle()

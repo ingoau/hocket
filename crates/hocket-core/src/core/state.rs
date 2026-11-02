@@ -140,6 +140,29 @@ impl Playback {
     }
 }
 
+/// This device's playback, remembered so a preview can give it back.
+#[derive(Debug, Clone)]
+pub(crate) struct PreviewHold {
+    pub was_playing: bool,
+}
+
+/// The preview session. Not the transport: it never enters the queue,
+/// play history, scrobbles or the saved resume position.
+#[derive(Debug, Clone)]
+pub(crate) struct PreviewSession {
+    pub track_id: TrackId,
+    pub title: String,
+    pub duration_ms: Ms,
+    pub position_ms: Ms,
+    pub playing: bool,
+    /// Set when this device's own playback was paused for the preview.
+    /// `None` when a Connect peer is playing: that peer is left alone.
+    pub hold: Option<PreviewHold>,
+    /// The start offset has been applied. A song whose duration arrives
+    /// only once the player opens is seeked to 30% then.
+    pub positioned: bool,
+}
+
 /// Persisted next to the session document.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]

@@ -182,6 +182,33 @@ impl PlaybackBackend for LoggedBackend {
     fn name(&self) -> &'static str {
         self.inner.name()
     }
+
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        let what = format!(
+            "preview {} at {position_ms} ms",
+            describe_source(&source)
+        );
+        logged(|| what, self.inner.preview_load(source, position_ms))
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        logged(|| "preview play".into(), self.inner.preview_play())
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        logged(|| "preview pause".into(), self.inner.preview_pause())
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        logged(
+            || format!("preview seek to {position_ms} ms"),
+            self.inner.preview_seek(position_ms),
+        )
+    }
+
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        logged(|| "preview stop".into(), self.inner.preview_stop())
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
+  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -13,6 +13,8 @@ export interface CoreState {
   session: SessionDocument | undefined;
   queue: QueueView;
   transport: TransportState;
+  /** A song preview playing beside the queue, or none. */
+  preview: PreviewState | undefined;
   nowPlaying: QueueEntry | undefined;
   connection: ConnectionState;
   devices: DeviceInfo[];
@@ -69,6 +71,7 @@ export const initialCoreState: CoreState = {
   session: undefined,
   queue: EMPTY_QUEUE,
   transport: EMPTY_TRANSPORT,
+  preview: undefined,
   nowPlaying: undefined,
   connection: { tier: "local", connected: false, coordinatorUrl: undefined, clockOffsetMs: 0, roundTripMs: undefined, peerCount: 0, error: undefined },
   devices: [],
@@ -171,6 +174,8 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, queue: e.data.queue, nowPlaying: e.data.queue.current ?? state.nowPlaying };
     case "transportChanged":
       return isPositionTick(state.transport, e.data.transport) ? state : { ...state, transport: e.data.transport };
+    case "previewChanged":
+      return { ...state, preview: e.data.preview };
     case "nowPlayingChanged":
       return { ...state, nowPlaying: e.data.entry };
     case "savedQueuesChanged":

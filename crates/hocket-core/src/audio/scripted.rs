@@ -61,6 +61,16 @@ pub enum ScriptedCall {
     SetOutputDevice {
         id: Option<String>,
     },
+    PreviewLoad {
+        key: QueueKey,
+        position_ms: u32,
+    },
+    PreviewPlay,
+    PreviewPause,
+    PreviewSeek {
+        position_ms: u32,
+    },
+    PreviewStop,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +124,10 @@ struct State {
     /// Report a gapless boundary the way Media3 does: `TransitionedToNext`
     /// alone, with no `Ended` for the item that finished.
     transition_only: bool,
+    /// The preview player: a second timeline that does not replace `current`.
+    preview: Option<Item>,
+    preview_playing: bool,
+    preview_last_report_ms: f64,
     /// Lose the preloaded follow-up at the boundary: `Ended` and nothing
     /// after it (a `SetNext` the player had not applied yet).
     drop_next: bool,
@@ -368,6 +382,34 @@ impl ScriptedBackend {
             }
         }
 
+        if st.preview_playing {
+            let ended = st.preview.as_ref().is_some_and(|prev| {
+                let end_at = prev.anchor_ms + (prev.duration() - prev.position_ms).max(0.0);
+                prev.duration() > 0.0 && now >= end_at
+            });
+            if ended {
+                st.preview = None;
+                st.preview_playing = false;
+                out.push(BackendReport::PreviewEnded);
+            } else if st.preview.is_some()
+                && now - st.preview_last_report_ms >= POSITION_INTERVAL_MS
+            {
+                let position_ms = st
+                    .preview
+                    .as_ref()
+                    .map(|prev| prev.position_at(now, true) as u32)
+                    .unwrap_or(0);
+                if let Some(p) = st.preview.as_mut() {
+                    p.rebase(now, true);
+                }
+                st.preview_last_report_ms = now;
+                out.push(BackendReport::PreviewProgress {
+                    position_ms,
+                    playing: true,
+                });
+            }
+        }
+
         drop(st);
         for r in &out {
             (self.sink)(r.clone());
@@ -587,6 +629,112 @@ impl PlaybackBackend for ScriptedBackend {
 
     fn name(&self) -> &'static str {
         "scripted"
+    }
+
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        let now = self.clock.now_ms();
+        let mut st = self.state.lock();
+        st.log.push(ScriptedCall::PreviewLoad {
+            key: source.key.clone(),
+            position_ms,
+        });
+        let position = f64::from(position_ms).min(f64::from(source.track.duration_ms));
+        let duration = source.track.duration_ms;
+        st.preview = Some(Item {
+            source,
+            position_ms: position,
+            anchor_ms: now,
+        });
+        st.preview_playing = true;
+        st.preview_last_report_ms = now;
+        drop(st);
+        self.emit(BackendReport::PreviewReady {
+            duration_ms: Some(duration),
+        });
+        self.emit(BackendReport::PreviewProgress {
+            position_ms,
+            playing: true,
+        });
+        Ok(())
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        let now = self.clock.now_ms();
+        let mut st = self.state.lock();
+        st.log.push(ScriptedCall::PreviewPlay);
+        if let Some(p) = st.preview.as_mut() {
+            p.rebase(now, false);
+        }
+        st.preview_playing = st.preview.is_some();
+        st.preview_last_report_ms = now;
+        let position_ms = st
+            .preview
+            .as_ref()
+            .map(|p| p.position_ms as u32)
+            .unwrap_or(0);
+        let playing = st.preview_playing;
+        drop(st);
+        if playing {
+            self.emit(BackendReport::PreviewProgress {
+                position_ms,
+                playing: true,
+            });
+        }
+        Ok(())
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        let now = self.clock.now_ms();
+        let mut st = self.state.lock();
+        st.log.push(ScriptedCall::PreviewPause);
+        let was_playing = st.preview_playing;
+        if let Some(p) = st.preview.as_mut() {
+            p.rebase(now, was_playing);
+        }
+        st.preview_playing = false;
+        let position_ms = st
+            .preview
+            .as_ref()
+            .map(|p| p.position_ms as u32)
+            .unwrap_or(0);
+        drop(st);
+        self.emit(BackendReport::PreviewProgress {
+            position_ms,
+            playing: false,
+        });
+        Ok(())
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        let now = self.clock.now_ms();
+        let mut st = self.state.lock();
+        st.log.push(ScriptedCall::PreviewSeek { position_ms });
+        let playing = st.preview_playing;
+        if let Some(p) = st.preview.as_mut() {
+            let cap = p.duration();
+            p.position_ms = f64::from(position_ms).min(if cap > 0.0 { cap } else { f64::MAX });
+            p.anchor_ms = now;
+        }
+        let position_ms = st
+            .preview
+            .as_ref()
+            .map(|p| p.position_ms as u32)
+            .unwrap_or(position_ms);
+        st.preview_last_report_ms = now;
+        drop(st);
+        self.emit(BackendReport::PreviewProgress {
+            position_ms,
+            playing,
+        });
+        Ok(())
+    }
+
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        let mut st = self.state.lock();
+        st.log.push(ScriptedCall::PreviewStop);
+        st.preview = None;
+        st.preview_playing = false;
+        Ok(())
     }
 }
 

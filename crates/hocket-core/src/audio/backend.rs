@@ -102,6 +102,32 @@ pub trait PlaybackBackend: Send + Sync {
 
     /// Human-readable backend name for diagnostics.
     fn name(&self) -> &'static str;
+
+    /// Load `source` into the preview player at `position_ms` and play it.
+    /// The main item stays loaded. Backends without a second output return
+    /// [`BackendError::Unsupported`].
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        let _ = (source, position_ms);
+        Err(BackendError::Unsupported("preview"))
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("preview"))
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("preview"))
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        let _ = position_ms;
+        Err(BackendError::Unsupported("preview"))
+    }
+
+    /// Unload the preview player. The main item is untouched.
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        Ok(())
+    }
 }
 
 impl fmt::Debug for dyn PlaybackBackend {

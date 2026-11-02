@@ -11,7 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, Album, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
+  ActionTarget, Album, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -345,6 +345,18 @@ export class FakeCore implements CoreHandle {
       case "setMuted":
         this.volumes.set(this.volumeTarget(), { ...this.volumeOf(this.volumeTarget()), muted: cmd.data.muted });
         this.emitTransport();
+        return;
+      case "previewStart":
+        this.previewStart(cmd.data.track_id);
+        return;
+      case "previewToggle":
+        this.previewToggle();
+        return;
+      case "previewSeek":
+        this.previewSeek(cmd.data.position_ms);
+        return;
+      case "previewStop":
+        this.previewStop(true);
         return;
       case "playContext":
         this.playContext(cmd.data.args.context, cmd.data.args.startIndex, cmd.data.args.shuffle, cmd.data.args.saveOutgoing);
@@ -2181,6 +2193,57 @@ export class FakeCore implements CoreHandle {
   }
 
   // ---- Connect ---------------------------------------------------------
+  private preview: PreviewState | undefined;
+  /** Set when this device's own playback was paused for the preview. */
+  private previewHold: { wasPlaying: boolean } | undefined;
+
+  private previewStart(trackId: string): void {
+    if (this.preview?.trackId === trackId) {
+      this.previewToggle();
+      return;
+    }
+    const t = this.lib?.tracksById.get(trackId);
+    const duration = t?.durationMs ?? 0;
+    const remote = !!this.transport.lease.owner && this.transport.lease.owner !== this.config.deviceId;
+    if (!this.preview) {
+      this.previewHold = remote ? undefined : { wasPlaying: this.transport.position.isPlaying };
+      if (!remote && this.transport.position.isPlaying) this.setPlaying(false);
+    }
+    this.preview = { trackId, title: t?.title ?? trackId, durationMs: duration, positionMs: Math.floor(duration * 0.3), playing: true, takenAt: Date.now() };
+    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+  }
+
+  private previewToggle(): void {
+    const current = this.preview;
+    if (!current) return;
+    const position = this.previewPosition(current);
+    this.preview = { ...current, playing: !current.playing, positionMs: position, takenAt: Date.now() };
+    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+  }
+
+  private previewSeek(positionMs: number): void {
+    const current = this.preview;
+    if (!current) return;
+    const cap = current.durationMs > 0 ? current.durationMs : positionMs;
+    this.preview = { ...current, positionMs: Math.max(0, Math.min(cap, positionMs)), takenAt: Date.now() };
+    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+  }
+
+  private previewStop(restore: boolean): void {
+    if (!this.preview) return;
+    const hold = this.previewHold;
+    this.preview = undefined;
+    this.previewHold = undefined;
+    this.emit({ type: "previewChanged", data: { preview: undefined } });
+    if (restore && hold?.wasPlaying && this.transport.lease.owner === this.config.deviceId) this.setPlaying(true);
+  }
+
+  private previewPosition(current: PreviewState): number {
+    const extra = current.playing ? Math.max(0, Date.now() - current.takenAt) : 0;
+    const at = current.positionMs + extra;
+    return current.durationMs > 0 ? Math.min(current.durationMs, at) : at;
+  }
+
   private handoffTo(deviceId: string): void {
     const target = this.devices.find((d) => d.id === deviceId);
     if (!target) return;
@@ -2307,6 +2370,9 @@ export class FakeCore implements CoreHandle {
         return;
       case "playLater":
         this.insert(trackIds, false);
+        return;
+      case "preview":
+        if (trackIds.length === 1) this.previewStart(trackIds[0]!);
         return;
       case "stash":
         this.stashAdd(trackIds);

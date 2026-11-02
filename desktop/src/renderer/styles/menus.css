@@ -6,6 +6,9 @@
    --state-selected, never a tint stacked on the tinted surface (see the menu notes in global.css). */
 .menu.cm { width: 256px; min-width: 0; max-width: calc(100vw - 8px); padding: 6px; border-radius: 16px; display: flex; flex-direction: column; gap: 1px; }
 .menu.cm .mi { flex: 0 0 auto; height: 28px; padding: 0 8px; gap: 8px; border-radius: 9px; }
+.menu.cm .mi.cm-preview { position: relative; overflow: hidden; }
+.menu.cm .cm-preview-bar { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 42%, transparent); pointer-events: none; z-index: 0; }
+.menu.cm .mi.cm-preview > :not(.cm-preview-bar) { position: relative; z-index: 1; }
 .menu.cm .mi:hover, .menu.cm .mi.active { border-radius: 9px; }
 .menu.cm .mi:active { border-radius: var(--shape-xs); }
 .menu.cm .sep { flex: 0 0 auto; margin: 4px 6px; }

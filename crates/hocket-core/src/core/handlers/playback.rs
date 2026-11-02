@@ -770,6 +770,12 @@ impl Actor {
     }
 
     pub(crate) fn set_playing(&mut self, playing: bool) {
+        self.set_playing_inner(playing, true);
+    }
+
+    /// `save_position` persists the resume point. A preview pause passes
+    /// false: the preview must not rewrite resume state.
+    pub(crate) fn set_playing_inner(&mut self, playing: bool, save_position: bool) {
         if !playing && self.playback.loaded && self.playback.focus_suspended {
             // Paused while focus is away: the backend must not resume later.
             self.playback.focus_suspended = false;
@@ -799,7 +805,7 @@ impl Actor {
         }
         let actions = self.scrobbler.set_playing(playing);
         self.apply_scrobble_actions(actions);
-        if !playing {
+        if !playing && save_position {
             self.save_position();
         }
         self.stamp();
@@ -1021,6 +1027,42 @@ impl Actor {
     // -- backend reports -----------------------------------------------------------
 
     pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
+        if self.preview.is_some() {
+            match &report {
+                BackendReport::PreviewReady { .. }
+                | BackendReport::PreviewProgress { .. }
+                | BackendReport::PreviewEnded
+                | BackendReport::PreviewInterrupted
+                | BackendReport::SystemVolume { .. }
+                | BackendReport::OutputDevicesChanged { .. } => {}
+                // The main player, paused for the preview, must not be
+                // treated as interrupted by another app when the preview
+                // player takes the output. Its reports are dropped.
+                _ => return,
+            }
+        }
+        match &report {
+            BackendReport::PreviewReady { duration_ms } => {
+                self.on_preview_ready(*duration_ms);
+                return;
+            }
+            BackendReport::PreviewProgress {
+                position_ms,
+                playing,
+            } => {
+                self.on_preview_progress(*position_ms, *playing);
+                return;
+            }
+            BackendReport::PreviewEnded => {
+                self.stop_preview(true);
+                return;
+            }
+            BackendReport::PreviewInterrupted => {
+                self.stop_preview(false);
+                return;
+            }
+            _ => {}
+        }
         if !matches!(
             report,
             BackendReport::Position { .. }
@@ -1338,6 +1380,10 @@ impl Actor {
                 self.stamp();
                 self.emit_transport();
             }
+            BackendReport::PreviewReady { .. }
+            | BackendReport::PreviewProgress { .. }
+            | BackendReport::PreviewEnded
+            | BackendReport::PreviewInterrupted => return,
             BackendReport::OutputDevicesChanged { devices } => {
                 self.output_devices = devices.clone();
                 self.emit(Event::OutputDevicesChanged { devices });

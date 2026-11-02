@@ -1062,12 +1062,26 @@ fn url_extension(url: &str) -> Option<String> {
     Some(ext.to_ascii_lowercase())
 }
 
+/// What a second engine needs in order to play a preview on the same device.
+struct PreviewKit {
+    fetcher: Arc<dyn RangeFetcher>,
+    runtime: tokio::runtime::Handle,
+    output: OutputConfig,
+    audio: AudioSettings,
+}
+
 /// The native backend handle. See the module docs.
 pub struct NativeBackend {
     tx: Sender<Cmd>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
     devices: Arc<Mutex<Vec<OutputDevice>>>,
     watcher: Mutex<Option<DeviceWatcher>>,
+    reports: ReportSink,
+    kit: PreviewKit,
+    /// Last gain sent to the engine, mirrored onto the preview player.
+    gain: Mutex<f64>,
+    /// A second engine for song previews. The main item stays loaded.
+    preview: Mutex<Option<Box<NativeBackend>>>,
 }
 
 impl NativeBackend {
@@ -1093,16 +1107,22 @@ impl NativeBackend {
         } else {
             None
         };
-        let params = EngineParams {
-            rx,
-            tx: tx.clone(),
-            sink,
-            fetcher: config.fetcher,
-            runtime: config.runtime,
+        let kit = PreviewKit {
+            fetcher: config.fetcher.clone(),
+            runtime: config.runtime.clone(),
             output: OutputConfig {
                 device_id: config.audio.output_device.clone(),
                 ..config.output
             },
+            audio: config.audio.clone(),
+        };
+        let params = EngineParams {
+            rx,
+            tx: tx.clone(),
+            sink: sink.clone(),
+            fetcher: config.fetcher,
+            runtime: config.runtime,
+            output: kit.output.clone(),
             dsp: DspSettings::from(&config.audio),
             gapless: config.audio.gapless,
             exclusive: config.audio.exclusive,
@@ -1116,7 +1136,69 @@ impl NativeBackend {
             thread: Mutex::new(Some(thread)),
             devices,
             watcher: Mutex::new(watcher),
+            reports: sink,
+            kit,
+            gain: Mutex::new(1.0),
+            preview: Mutex::new(None),
         })
+    }
+
+    /// The preview engine, opened on the same device the first time a
+    /// preview is asked for. Its reports are rewritten as preview reports
+    /// so the core never mistakes them for the main item.
+    fn ensure_preview(&self) -> Result<(), BackendError> {
+        if self.preview.lock().is_some() {
+            return Ok(());
+        }
+        let gain = *self.gain.lock();
+        let parent = self.reports.clone();
+        let sink: ReportSink = Arc::new(move |report| {
+            let mapped = match report {
+                BackendReport::Ready { duration_ms, .. } => {
+                    Some(BackendReport::PreviewReady { duration_ms })
+                }
+                BackendReport::Playing { position_ms, .. } => {
+                    Some(BackendReport::PreviewProgress {
+                        position_ms,
+                        playing: true,
+                    })
+                }
+                BackendReport::Paused { position_ms, .. } => {
+                    Some(BackendReport::PreviewProgress {
+                        position_ms,
+                        playing: false,
+                    })
+                }
+                BackendReport::Position { position_ms, .. } => {
+                    Some(BackendReport::PreviewProgress {
+                        position_ms,
+                        playing: true,
+                    })
+                }
+                BackendReport::Ended { .. } | BackendReport::Error { .. } => {
+                    Some(BackendReport::PreviewEnded)
+                }
+                _ => None,
+            };
+            if let Some(mapped) = mapped {
+                parent(mapped);
+            }
+        });
+        let cfg = NativeConfig {
+            fetcher: self.kit.fetcher.clone(),
+            runtime: self.kit.runtime.clone(),
+            output: OutputConfig {
+                device_id: self.kit.output.device_id.clone(),
+                sample_rate: None,
+                null_sink: self.kit.output.null_sink,
+            },
+            audio: self.kit.audio.clone(),
+            watch_devices: false,
+        };
+        let child = NativeBackend::new(cfg, sink)?;
+        let _ = child.set_volume(gain);
+        *self.preview.lock() = Some(Box::new(child));
+        Ok(())
     }
 
     fn send(&self, cmd: Cmd) -> Result<(), BackendError> {
@@ -1182,7 +1264,12 @@ impl PlaybackBackend for NativeBackend {
         self.send(Cmd::Seek(position_ms))
     }
     fn set_volume(&self, volume: f64) -> Result<(), BackendError> {
-        self.send(Cmd::SetVolume(clamp_volume(volume)))
+        let volume = clamp_volume(volume);
+        *self.gain.lock() = volume;
+        if let Some(preview) = self.preview.lock().as_ref() {
+            let _ = preview.set_volume(volume);
+        }
+        self.send(Cmd::SetVolume(volume))
     }
     fn pre_buffer(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
         self.send(Cmd::PreBuffer {
@@ -1214,6 +1301,47 @@ impl PlaybackBackend for NativeBackend {
     }
     fn name(&self) -> &'static str {
         "native"
+    }
+
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        self.ensure_preview()?;
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Err(BackendError::NotRunning);
+        };
+        preview.load(source, None, position_ms, true)
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Ok(());
+        };
+        preview.play()
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Ok(());
+        };
+        preview.pause()
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Ok(());
+        };
+        preview.seek(position_ms)
+    }
+
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        let slot = self.preview.lock();
+        let Some(preview) = slot.as_ref() else {
+            return Ok(());
+        };
+        preview.stop()
     }
 }
 

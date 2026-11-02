@@ -924,6 +924,7 @@
     <string name="action_label_play_shuffled">Shuffle play</string>
     <string name="action_label_play_next">Play next</string>
     <string name="action_label_play_later">Play later</string>
+    <string name="action_label_preview">Preview</string>
     <string name="action_label_add_to_playlist">Add to playlist</string>
     <string name="action_label_love">Love</string>
     <string name="action_label_unlove">Unlove</string>

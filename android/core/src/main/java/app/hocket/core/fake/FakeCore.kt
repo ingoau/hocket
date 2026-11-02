@@ -762,6 +762,10 @@ class FakeCore(
             is Command.SeekBy -> { startPlayback((positionNow() + c.data.delta_ms).coerceAtLeast(0), stamp.isPlaying); emitTransport() }
             is Command.SetVolume -> { volumes[volumeTarget()] = c.data.volume.coerceIn(0.0, 1.0) to false; emitTransport() }
             is Command.SetMuted -> { volumes[volumeTarget()] = volumeOf(volumeTarget()).first to c.data.muted; emitTransport() }
+            is Command.PreviewStart -> previewStart(c.data.track_id)
+            Command.PreviewToggle -> previewToggle()
+            is Command.PreviewSeek -> previewSeek(c.data.position_ms)
+            Command.PreviewStop -> previewStop(true)
 
             is Command.PlayContext -> {
                 val a = c.data.args
@@ -1356,6 +1360,59 @@ class FakeCore(
     private fun configDocument(secrets: Boolean) = HocketJson.json.encodeToString(ConfigDocument.serializer(), ConfigDocument(2u, now(), settings.values.toList(), filters.toList(), emptyList(), servers.toList(),
         if (secrets) hashMapOf("fake-server.password" to "••••") else null, audio, autoplaySettings, null))
 
+    private var preview: PreviewState? = null
+    private var previewHeld = false
+    private var previewWasPlaying = false
+
+    /** A local preview. Pausing here is skipped when another device owns playback. */
+    private fun previewStart(trackId: String) {
+        if (preview?.trackId == trackId) {
+            previewToggle()
+            return
+        }
+        val track = library.track(trackId)
+        val duration = track?.durationMs ?: 0u
+        val position = (duration.toDouble() * 0.3).toUInt()
+        val remote = transportOwner != null && transportOwner != deviceId
+        if (preview == null) {
+            previewHeld = !remote
+            previewWasPlaying = stamp.isPlaying
+            if (!remote && stamp.isPlaying) handle(Command.Pause)
+        }
+        preview = PreviewState(trackId, track?.title ?: trackId, duration, position, true, now())
+        emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+    }
+
+    private fun previewToggle() {
+        val current = preview ?: return
+        val position = previewPositionMs(current)
+        preview = current.copy(playing = !current.playing, positionMs = position, takenAt = now())
+        emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+    }
+
+    private fun previewSeek(position: UInt) {
+        val current = preview ?: return
+        val cap = current.durationMs
+        val at = if (cap > 0u) minOf(position, cap) else position
+        preview = current.copy(positionMs = at, takenAt = now())
+        emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+    }
+
+    private fun previewStop(restore: Boolean) {
+        if (preview == null) return
+        preview = null
+        emit(Event.PreviewChanged(EventPreviewChangedInner(null)))
+        if (restore && previewHeld && previewWasPlaying && transportOwner == deviceId) handle(Command.Play)
+        previewHeld = false
+        previewWasPlaying = false
+    }
+
+    private fun previewPositionMs(current: PreviewState): UInt {
+        val extra = if (current.playing) (now() - current.takenAt).coerceAtLeast(0.0) else 0.0
+        val at = current.positionMs.toLong() + extra.toLong()
+        return if (current.durationMs > 0u) minOf(at, current.durationMs.toLong()).toUInt() else at.coerceAtLeast(0).toUInt()
+    }
+
     private fun runAction(actionId: String, target: ActionTarget) {
         val id = canonical(actionId)
         if (id in ActionIds.UI_HANDLED) return // the platform performs these; the core yields no command
@@ -1376,6 +1433,7 @@ class FakeCore(
             id == ActionIds.PLAY_SHUFFLED -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, true)))
             id == ActionIds.PLAY_NEXT -> handle(Command.PlayNext(CommandPlayNextInner(serverId, trackIds)))
             id == ActionIds.PLAY_LATER -> handle(Command.PlayLater(CommandPlayLaterInner(serverId, trackIds)))
+            id == ActionIds.PREVIEW -> trackIds.firstOrNull()?.let { previewStart(it) }
             id == ActionIds.STASH -> stashAdd(trackIds)
             id == ActionIds.CLEAR_STASH -> handle(Command.StashClear)
             id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, true)
@@ -1457,6 +1515,7 @@ class FakeCore(
         val library = listOf(
             d(ActionIds.PLAY, "Play", "play_arrow", "playback"), d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"),
             d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
+            d(ActionIds.PREVIEW, "Preview", "headphones", "playback", undoable = false, enabled = (target is ActionTarget.Tracks && target.data.ids.size == 1) || (target is ActionTarget.QueueItems && target.data.keys.size == 1)),
             d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false),
             d(ActionIds.STASH, "Stash", "stash", "queue", undoable = false),
             d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.UNLOVE, "Unlove", "heart_minus", "library"),
@@ -1476,6 +1535,7 @@ class FakeCore(
             is ActionTarget.Artists -> library
             is ActionTarget.Playlists -> library + listOf(d(ActionIds.DELETE_PLAYLIST, "Delete playlist", "delete_forever", "library", undoable = false, destructive = true))
             is ActionTarget.QueueItems -> listOf(d(ActionIds.REMOVE_FROM_QUEUE, "Remove from queue", "remove_from_queue", "queue"), d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"),
+                d(ActionIds.PREVIEW, "Preview", "headphones", "playback", undoable = false, enabled = target.data.keys.size == 1),
                 d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false), d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.DOWNLOAD, "Download", "download", "offline", undoable = false),
                 d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
             is ActionTarget.SavedQueue -> listOf(d(ActionIds.RESTORE_SAVED_QUEUE, "Restore", "history", "queue"), d(ActionIds.PIN_SAVED_QUEUE, "Pin", "push_pin", "queue"), d(ActionIds.UNPIN_SAVED_QUEUE, "Unpin", "keep_off", "queue"),

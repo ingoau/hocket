@@ -10,8 +10,8 @@
 // close and focus returns to whatever opened it.
 // Pointer: like a native menu, the right button can be held, dragged onto an item and released to
 // run it; released where it was pressed, the menu stays open for a click.
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ActionTarget } from "@core/api";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
+import type { ActionTarget, PreviewState } from "@core/api";
 import { chordFromEvent, formatChord, parseChord } from "../store/shortcuts";
 import { useKeymap } from "../store/keyboard";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -30,6 +30,8 @@ import { toastUndoable } from "../lib/ui-toast";
 import { ratingText } from "../lib/a11y";
 import { buildMenu, loveToast, nextRating, rateToast, removeToast, starLabel, type MenuHeader, type MenuRow } from "../lib/menu-model";
 import { openGenius } from "../lib/share";
+import { bridge } from "../core/bridge";
+import { previewPosition, seekFraction } from "../lib/preview-seek";
 
 /** Where focus goes back to when the menu closes. */
 let returnFocus: HTMLElement | null = null;
@@ -117,6 +119,7 @@ interface Cell {
 
 export function ContextMenu() {
   const live = useApp((s) => s.contextMenu);
+  const preview = useApp((s) => s.preview);
   const close = useApp((s) => s.closeContextMenu);
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -147,6 +150,12 @@ export function ContextMenu() {
     // Keyboard-opened menus start on the first enabled item, like native menus.
     setActive(live.keyboard ? firstEnabled(ref.current) : -1);
     ref.current.focus();
+  }, [live]);
+
+  // Closing the menu (or opening a different one) ends the preview.
+  useEffect(() => {
+    if (!live) return;
+    return () => { bridge().dispatch({ type: "previewStop" }); };
   }, [live]);
 
   // Focus goes back to the trigger when the menu closes (unless an action moved it on purpose).
@@ -214,6 +223,15 @@ export function ContextMenu() {
 
   if (!menu) return null;
   const facts = menu.facts;
+  const trackId = menu.target.type === "tracks" && menu.target.data.ids.length === 1
+    ? menu.target.data.ids[0]
+    : facts?.trackIds?.length === 1 ? facts.trackIds[0] : undefined;
+  const mine = preview && trackId && preview.trackId === trackId ? preview : undefined;
+  const previewCommand = () => {
+    if (!trackId) return;
+    if (!mine) bridge().dispatch({ type: "previewStart", data: { track_id: trackId } });
+    else bridge().dispatch({ type: "previewToggle" });
+  };
 
   /** Close, then run: a dialog the run opens takes the trigger over for focus. */
   const finish = (then?: () => void) => {
@@ -284,7 +302,7 @@ export function ContextMenu() {
         line++;
         break;
       case "action":
-        push({ label: r.label, enabled: r.action.enabled, run: () => perform(r.action.id) });
+        push({ label: r.label, enabled: r.action.enabled, run: () => (r.action.id === "preview" ? previewCommand() : perform(r.action.id)) });
         if (r.action.enabled) {
           commands.set(r.action.id, () => perform(r.action.id));
           const alias = CHORD_OF[r.action.id];
@@ -475,6 +493,9 @@ export function ContextMenu() {
           </div>
         );
       case "action": {
+        if (r.action.id === "preview") {
+          return <PreviewRow key="preview" index={first} label={r.label} enabled={r.action.enabled} active={active === first} sample={mine} onStart={previewCommand} cellProps={cellProps(first)} />;
+        }
         const destructive = r.destructive;
         return (
           <div key={`a-${r.action.id}`} {...cellProps(first)} role="menuitem" className={`mi ${r.action.enabled ? "" : "disabled"} ${destructive ? "destructive" : ""} ${active === first ? "active" : ""}`} data-action={r.action.id}>
@@ -532,6 +553,81 @@ export function ContextMenu() {
         <ShareSubmenu facts={facts} target={menu.target} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
       ) : null}
     </Fragment>
+  );
+}
+
+/** Preview row: a progress bar behind the label, tap to pause, drag to seek. Does not close the menu. */
+function PreviewRow({ index, label, enabled, active, sample, onStart, cellProps }: {
+  index: number;
+  label: string;
+  enabled: boolean;
+  active: boolean;
+  sample: PreviewState | undefined;
+  onStart: () => void;
+  cellProps: HTMLAttributes<HTMLDivElement>;
+}) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!sample?.playing) return;
+    const id = window.setInterval(() => setTick((n) => n + 1), 80);
+    return () => window.clearInterval(id);
+  }, [sample?.playing, sample?.trackId, sample?.takenAt]);
+  const position = sample ? previewPosition(sample, Date.now()) : 0;
+  const fraction = sample && sample.durationMs > 0 ? Math.min(1, position / sample.durationMs) : 0;
+  const seek = (clientX: number, row: HTMLElement) => {
+    if (!sample || sample.durationMs <= 0) return;
+    const rect = row.getBoundingClientRect();
+    const at = Math.round(seekFraction(clientX - rect.left, rect.width, 12) * sample.durationMs);
+    bridge().dispatch({ type: "previewSeek", data: { position_ms: at } });
+  };
+  return (
+    <div
+      {...cellProps}
+      id={`cm-item-${index}`}
+      role="menuitem"
+      aria-label={sample ? (sample.playing ? `${label}, playing` : `${label}, paused`) : label}
+      className={`mi cm-preview ${enabled ? "" : "disabled"} ${active ? "active" : ""}`}
+      data-action="preview"
+      onClick={(e) => e.preventDefault()}
+      onPointerDown={(e) => {
+        if (e.button !== 0 || !enabled) return;
+        const row = e.currentTarget;
+        if (!sample) {
+          onStart();
+          return;
+        }
+        const startX = e.clientX;
+        const startY = e.clientY;
+        let dragged = false;
+        const move = (ev: PointerEvent) => {
+          const dx = ev.clientX - startX;
+          const dy = ev.clientY - startY;
+          if (!dragged) {
+            if (Math.hypot(dx, dy) < 5) return;
+            if (Math.abs(dy) > Math.abs(dx)) {
+              cleanup();
+              return;
+            }
+            dragged = true;
+          }
+          seek(ev.clientX, row);
+        };
+        const up = () => {
+          cleanup();
+          if (!dragged) bridge().dispatch({ type: "previewToggle" });
+        };
+        const cleanup = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      }}
+    >
+      {sample ? <span className="cm-preview-bar" style={{ width: `${fraction * 100}%` }} /> : null}
+      <span className="cm-lead cm-icon" aria-hidden="true"><Icon name={sample?.playing ? "pause" : "headphones"} size={15} /></span>
+      <span className="grow truncate">{label}</span>
+    </div>
   );
 }
 

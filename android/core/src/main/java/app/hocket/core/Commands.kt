@@ -11,6 +11,8 @@ object Commands {
     fun seekBy(deltaMs: Int) = Command.SeekBy(CommandSeekByInner(deltaMs))
     fun setVolume(volume: Double) = Command.SetVolume(CommandSetVolumeInner(volume))
     fun setMuted(muted: Boolean) = Command.SetMuted(CommandSetMutedInner(muted))
+    fun previewStart(trackId: TrackId) = Command.PreviewStart(CommandPreviewStartInner(trackId))
+    fun previewSeek(positionMs: Long) = Command.PreviewSeek(CommandPreviewSeekInner(positionMs.coerceAtLeast(0).toUInt()))
     fun setNetworkState(state: NetworkState) = Command.SetNetworkState(CommandSetNetworkStateInner(state))
     fun setVisibility(visible: Boolean, focused: Boolean) = Command.SetVisibility(CommandSetVisibilityInner(visible, focused))
     fun setBatterySaver(enabled: Boolean) = Command.SetBatterySaver(CommandSetBatterySaverInner(enabled))
