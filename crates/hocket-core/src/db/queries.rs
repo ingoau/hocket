@@ -2520,6 +2520,80 @@ mod tests {
     }
 
     #[test]
+    fn a_strong_embedded_match_outranks_a_weak_server_match() {
+        use std::sync::Arc;
+
+        use crate::api::{LyricLine, Lyrics, LyricsSource, LyricsTier};
+        use crate::cache::Caches;
+
+        let db = seeded();
+        let dir = tempfile::tempdir().unwrap();
+        let caches = Caches::new(db.clone(), Arc::new(WallClock), dir.path());
+        let lyric = |id: &str, text: &str, source: LyricsSource| Lyrics {
+            track_id: id.into(),
+            tier: LyricsTier::Line,
+            lang: None,
+            display_artist: None,
+            display_title: None,
+            agents: vec![],
+            lines: vec![LyricLine {
+                start_ms: Some(1_000),
+                end_ms: None,
+                text: text.into(),
+                syllables: vec![],
+                agent: None,
+                background: false,
+                translation: None,
+            }],
+            source,
+            offset_ms: 0,
+        };
+        let filler = "la ".repeat(40);
+        caches
+            .lyrics_put(
+                "s",
+                "1",
+                &lyric(
+                    "1",
+                    &format!("{filler}harbour lights {filler}"),
+                    LyricsSource::Server,
+                ),
+            )
+            .unwrap();
+        caches
+            .lyrics_put(
+                "s",
+                "2",
+                &lyric("2", "harbour lights", LyricsSource::Embedded),
+            )
+            .unwrap();
+        let hits = db.search("s", "harbour lights", 10).unwrap().lyrics;
+        assert_eq!(
+            hits.iter().map(|h| h.track.id.as_str()).collect::<Vec<_>>(),
+            vec!["2", "1"],
+            "the short embedded match ranks ahead of a long server match on another song"
+        );
+
+        caches
+            .lyrics_put(
+                "s",
+                "2",
+                &lyric(
+                    "2",
+                    &format!("harbour lights {filler}"),
+                    LyricsSource::Server,
+                ),
+            )
+            .unwrap();
+        let hits = db.search("s", "harbour lights", 10).unwrap().lyrics;
+        assert_eq!(hits[0].track.id, "2");
+        assert!(
+            hits[0].line.contains("la la"),
+            "the same song still shows its server copy"
+        );
+    }
+
+    #[test]
     fn lyrics_search_follows_the_cache() {
         use std::sync::Arc;
 
