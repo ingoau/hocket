@@ -492,10 +492,7 @@ fun MenuSheet(
                 SnoozePage(tag) { duration ->
                     if (duration == null) snoozePage = false
                     else hideThen {
-                        val ids = when (val t = target) {
-                            is app.hocket.core.api.ActionTarget.Tracks -> t.data.ids
-                            else -> listOfNotNull(subject.trackId)
-                        }
+                        val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
                         if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
                     }
                 }
@@ -700,6 +697,20 @@ private fun RatingRow(rating: Int?, onRate: (Int) -> Unit) {
         }
         RatingStars(rating ?: 0, onRate = onRate, starSize = 28.dp, spacing = 14.dp, stateOverride = if (rating == null) mixed else null)
     }
+}
+
+/**
+ * The songs Snooze's page snoozes: a selection's tracks, a queue selection's rows looked up in
+ * [queue] (the rows on screen are in it), else the one song the menu is for.
+ */
+internal fun snoozeTrackIds(target: app.hocket.core.api.ActionTarget, trackId: String?, queue: app.hocket.core.api.QueueView): List<String> = when (target) {
+    is app.hocket.core.api.ActionTarget.Tracks -> target.data.ids
+    is app.hocket.core.api.ActionTarget.QueueItems -> {
+        val entries = queue.history + listOfNotNull(queue.current) + queue.playingNext + queue.upcoming
+        val byKey = entries.associate { it.item.key to it.item.trackId }
+        target.data.keys.mapNotNull { byKey[it] }.distinct().ifEmpty { listOfNotNull(trackId) }
+    }
+    else -> listOfNotNull(trackId)
 }
 
 /** When a snooze ends, for the Unsnooze row. */
