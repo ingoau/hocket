@@ -66,7 +66,14 @@ import app.hocket.ui.a11y.LocalReducedMotion
  * Each item is a selectable tab whose accessible name is its label (shown or not).
  */
 @Composable
-internal fun FloatingNavBar(items: List<NavItem>, selected: NavItem?, onSelect: (NavItem) -> Unit, modifier: Modifier = Modifier) {
+internal fun FloatingNavBar(
+    items: List<NavItem>,
+    selected: NavItem?,
+    onSelect: (NavItem) -> Unit,
+    modifier: Modifier = Modifier,
+    stash: List<app.hocket.core.api.StashItem> = emptyList(),
+    onOpenStash: () -> Unit = {},
+) {
     val client = app.hocket.ui.LocalCoreClient.current
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val colours = navBarColours(nowPlayingScheme(nowPlaying?.track?.coverArt) ?: MaterialTheme.colorScheme)
@@ -80,7 +87,16 @@ internal fun FloatingNavBar(items: List<NavItem>, selected: NavItem?, onSelect: 
         // The selected label gets whatever the icon-only places leave (ellipsized past that), so
         // five places fit on a narrow phone at a large font size.
         val others = (items.size - 1).coerceAtLeast(0)
-        val labelMax = (maxWidth - FloatingNavBarDefaults.Padding * 2 - FloatingNavBarDefaults.ItemWidth * others - SelectedChrome).coerceIn(0.dp, 120.dp)
+        // The stash chip beside the pill (#150) takes its share first.
+        val hasStash = stash.isNotEmpty()
+        val chipRoom = if (hasStash) app.hocket.ui.stash.StashChipDefaults.BesideBarWidth + StashGap else 0.dp
+        val labelMax = (maxWidth - FloatingNavBarDefaults.Padding * 2 - FloatingNavBarDefaults.ItemWidth * others - SelectedChrome - chipRoom).coerceIn(0.dp, 120.dp)
+        val reduced = LocalReducedMotion.current
+        // The last non-empty stash, so the chip keeps its covers while it folds away.
+        val held = remember { arrayOf(stash) }
+        if (hasStash) held[0] = stash
+        val shownStash = held[0]
+        Row(verticalAlignment = Alignment.CenterVertically) {
         Row(
             Modifier
                 .height(FloatingNavBarDefaults.PillHeight)
@@ -94,8 +110,35 @@ internal fun FloatingNavBar(items: List<NavItem>, selected: NavItem?, onSelect: 
                 FloatingNavItem(item, item == selected, colours, labelMax, onClick = { onSelect(item) })
             }
         }
+        // The chip grows out of the pill's end: the pair re-centres as it widens, the chip
+        // scaling up from its start with a little overshoot.
+        AnimatedVisibility(
+            visible = hasStash,
+            enter = if (reduced) fadeIn() else expandHorizontally(spring(dampingRatio = 0.8f, stiffness = 380f), expandFrom = Alignment.Start) +
+                androidx.compose.animation.scaleIn(spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.4f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)) +
+                fadeIn(androidx.compose.animation.core.tween(120)),
+            exit = if (reduced) fadeOut() else fadeOut(androidx.compose.animation.core.tween(90)) +
+                androidx.compose.animation.scaleOut(spring(stiffness = 600f), targetScale = 0.4f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)) +
+                shrinkHorizontally(spring(dampingRatio = 1f, stiffness = 600f), shrinkTowards = Alignment.Start),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(StashGap))
+                app.hocket.ui.stash.StashChip(
+                    shownStash,
+                    onClick = onOpenStash,
+                    height = FloatingNavBarDefaults.PillHeight,
+                    container = colours.container,
+                    content = colours.selected,
+                    elevation = FloatingNavBarDefaults.Elevation,
+                )
+            }
+        }
+        }
     }
 }
+
+/** The gap between the pill and the stash chip. */
+private val StashGap = 8.dp
 
 /** The selected capsule's room besides its label: side padding, the icon and the gap. */
 private val SelectedChrome = 16.dp + 24.dp + 8.dp + 16.dp

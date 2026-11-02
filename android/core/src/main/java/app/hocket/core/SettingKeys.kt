@@ -127,16 +127,19 @@ object ActionIds {
     const val HANDOFF = "handoff"
     const val TOGGLE_LYRICS = "toggleLyrics" // ui-handled
     const val COPY_DIAGNOSTICS = "copyDiagnostics" // ui-handled
+    const val STASH = "stash"
+    const val OPEN_STASH = "openStash" // ui-handled
+    const val CLEAR_STASH = "clearStash"
 
     fun rate(stars: Int) = "rate$stars"
 
     /** Ids the platform performs itself (`ActionDef::ui_handled`). */
-    val UI_HANDLED = setOf(ADD_TO_PLAYLIST, RATE, GO_TO_ALBUM, GO_TO_ARTIST, SLEEP_TIMER, TOGGLE_LYRICS, COPY_DIAGNOSTICS,
+    val UI_HANDLED = setOf(ADD_TO_PLAYLIST, RATE, GO_TO_ALBUM, GO_TO_ARTIST, SLEEP_TIMER, TOGGLE_LYRICS, COPY_DIAGNOSTICS, OPEN_STASH,
         "navigateHome", "navigateLibrary", "navigateTracks", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateGenres",
         "navigateRecent", "navigateFilters", "navigateDownloads", "navigateStats", "navigateSettings")
 
     /** The registry's default context-menu order (surface `contextMenu`). */
-    val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, PLAY_LATER, ADD_TO_PLAYLIST, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
+    val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, PLAY_LATER, ADD_TO_PLAYLIST, STASH, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
         DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
         SAVE_QUEUE_AS_PLAYLIST, DELETE_SAVED_QUEUE, DELETE_PLAYLIST)
     val MEDIA_SESSION = listOf(PREVIOUS, TOGGLE_PLAY, NEXT, SHUFFLE, REPEAT, LOVE)
@@ -149,7 +152,7 @@ object ActionIds {
 object SwipeOptions {
     const val NONE = "none"
     val QUEUE = listOf(NONE, ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD)
-    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD)
+    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.STASH)
     val DEFAULTS = mapOf(
         SettingKeys.SWIPE_QUEUE_START_TO_END to ActionIds.REMOVE_FROM_QUEUE,
         SettingKeys.SWIPE_QUEUE_END_TO_START to ActionIds.REMOVE_FROM_QUEUE,

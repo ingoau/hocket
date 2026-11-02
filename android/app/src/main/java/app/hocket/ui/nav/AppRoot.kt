@@ -297,6 +297,13 @@ val LocalPlayerVisible = compositionLocalOf { false }
  */
 val LocalBottomBarInset = compositionLocalOf { 0.dp }
 
+/**
+ * The room the stash chip takes above the mini player when it floats on its own (the standard bar,
+ * or beside a rail; with the floating bar it sits beside the pill and takes none). Part of
+ * [BottomContentInset] and [BottomOverlayInset].
+ */
+val LocalStashRoom = compositionLocalOf { 0.dp }
+
 /** The gap the mini player keeps above the navigation bar. */
 private val MiniPlayerGap = app.hocket.ui.player.NowPlayingSheetState.MINI_GAP
 
@@ -306,11 +313,11 @@ private val MiniPlayerGap = app.hocket.ui.player.NowPlayingSheetState.MINI_GAP
  * both; otherwise only the bar and a small margin, so nothing leaves an empty band at the bottom.
  */
 val BottomContentInset: Dp
-    @Composable get() = LocalBottomBarInset.current + if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap + 24.dp else 24.dp
+    @Composable get() = LocalBottomBarInset.current + LocalStashRoom.current + if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap + 24.dp else 24.dp
 
 /** Where a screen's bottom overlay (a selection toolbar, a floating button) sits clear of the bar and the mini player. */
 val BottomOverlayInset: Dp
-    @Composable get() = LocalBottomBarInset.current + (if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
+    @Composable get() = LocalBottomBarInset.current + LocalStashRoom.current + (if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
 
 /**
  * The standard phone navigation bar's height before it has been measured (Material's short
@@ -367,7 +374,12 @@ private fun MainShell(snackbar: SnackbarHostState) {
         var queuesOpen by rememberSaveable { mutableStateOf(false) }
         val openQueues = remember { { queuesOpen = true } }
         if (queuesOpen) app.hocket.ui.player.QueuesSheet(onDismiss = { queuesOpen = false })
-        CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
+        // The song stash (#150): a chip beside the floating bar, or on its own above the mini player.
+        val stash by client.stash.collectAsStateWithLifecycle()
+        var stashOpen by rememberSaveable { mutableStateOf(false) }
+        val stashAlone = wide || !floatingBar
+        val stashRoom = if (stashAlone && stash.isNotEmpty()) app.hocket.ui.stash.StashChipDefaults.StandaloneRoom else 0.dp
+        CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, LocalStashRoom provides stashRoom, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -538,7 +550,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     .testTag("navBar")
                     .then(hiddenWhenCovered)
                 if (floatingBar) {
-                    FloatingNavBar(items = items, selected = selected, onSelect = go, modifier = barModifier)
+                    FloatingNavBar(items = items, selected = selected, onSelect = go, modifier = barModifier, stash = stash, onOpenStash = { stashOpen = true })
                 } else {
                     // Transparent over the scrim, along the bottom edge.
                     ShortNavigationBar(containerColor = Color.Transparent, modifier = barModifier) {
@@ -553,12 +565,36 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
                 }
             }
+            if (stashAlone) {
+                // Above the mini player (or the bar when nothing plays) at the end edge, leaving with
+                // the bar as the full player rises.
+                val miniRoom = if (playerVisible) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp
+                val held = remember { arrayOf(stash) }
+                if (stash.isNotEmpty()) held[0] = stash
+                val reducedMotion = LocalReducedMotion.current
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = stash.isNotEmpty(),
+                    enter = if (reducedMotion) androidx.compose.animation.fadeIn() else androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)) +
+                        androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 380f)) { it / 2 } + androidx.compose.animation.fadeIn(),
+                    exit = if (reducedMotion) androidx.compose.animation.fadeOut() else androidx.compose.animation.scaleOut(androidx.compose.animation.core.spring(stiffness = 600f), targetScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)) + androidx.compose.animation.fadeOut(),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .zIndex(20f)
+                        .padding(end = app.hocket.ui.player.HeroGeometry.MINI_MARGIN, bottom = bottomInset + miniRoom + 8.dp)
+                        .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
+                        .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
+                        .then(hiddenWhenCovered),
+                ) {
+                    app.hocket.ui.stash.StashChip(held[0], onClick = { stashOpen = true })
+                }
+            }
+            if (stashOpen) app.hocket.ui.stash.StashSheet(onDismiss = { stashOpen = false })
             // Snackbars sit just above the mini player (or the bar when nothing plays), centred on
             // the content beside the rail on wide layouts; as the full player opens they ease down
             // to the bottom of the screen instead of floating over its controls.
             val miniPx = if (playerVisible) with(density) { (app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap).roundToPx() } else 0
             val marginPx = with(density) { 8.dp.roundToPx() }
-            val collapsedBottomPx = bottomInsetPx + miniPx + marginPx
+            val collapsedBottomPx = bottomInsetPx + miniPx + marginPx + with(density) { stashRoom.roundToPx() }
             val expandedBottomPx = systemBottomPx + marginPx
             val railPx = if (wide) (if (railWidthPx >= 0) railWidthPx else with(density) { CollapsedRailWidth.roundToPx() }) else 0
             SnackbarHost(

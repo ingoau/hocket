@@ -227,6 +227,7 @@ fun menuLayout(
     // registry rates them (an album's page has no stars of its own).
     val stars = kind == MenuKind.Song || (rateable && (kind == MenuKind.Songs || kind == MenuKind.Album))
     val addTo = take(ActionIds.ADD_TO_PLAYLIST)?.let { MenuEntry.Action(it) }
+    val stash = take(ActionIds.STASH)?.let { MenuEntry.Action(it) }
     val download = MenuEntry.Download(take(ActionIds.DOWNLOAD), take(ActionIds.UNPIN)).takeIf { it.download != null || it.remove != null }
     val pin = MenuEntry.LibraryPin(take(ActionIds.PIN_TO_LIBRARY), take(ActionIds.UNPIN_FROM_LIBRARY)).takeIf { it.pin != null || it.unpin != null }
     val goAlbum = take(ActionIds.GO_TO_ALBUM)?.takeIf { canGoToAlbum }?.let { MenuEntry.GoTo(it) }
@@ -239,9 +240,9 @@ fun menuLayout(
     val rest = actions.filter { it.id !in used && it.id !in UNPERFORMABLE }
     val (restDestructive, restOther) = rest.partition { it.destructive }
     var primary = when (kind) {
-        MenuKind.Song -> listOfNotNull(addTo, download, share, genius, goAlbum)
-        MenuKind.Album -> listOfNotNull(addTo, download, share, goArtist)
-        else -> listOfNotNull(addTo, download, share)
+        MenuKind.Song -> listOfNotNull(addTo, stash, download, share, genius, goAlbum)
+        MenuKind.Album -> listOfNotNull(addTo, stash, download, share, goArtist)
+        else -> listOfNotNull(addTo, stash, download, share)
     } + otherExtras.map { MenuEntry.Extra(it) }
     var more = when (kind) {
         MenuKind.Song -> listOfNotNull(pin, goArtist, info)
@@ -391,6 +392,7 @@ fun MenuSheet(
                     ActionIds.REMOVE_FROM_PLAYLIST -> subject.context?.let { ctx -> if (subject.count > 1) stringResource(R.string.menu_remove_n_from, subject.count, ctx) else stringResource(R.string.menu_remove_from, ctx) } ?: a.label
                     ActionIds.REMOVE_FROM_QUEUE -> if (subject.count > 1) stringResource(R.string.menu_remove_n_from, subject.count, stringResource(R.string.menu_queue)) else stringResource(R.string.action_remove_from_queue)
                     ActionIds.ADD_TO_PLAYLIST -> stringResource(R.string.action_add_to_playlist)
+                    ActionIds.STASH -> stringResource(R.string.action_stash)
                     else -> a.label
                 }
                 val icon = if (a.id == ActionIds.ADD_TO_PLAYLIST) HocketIcons.AutoMirrored.Filled.PlaylistAdd else actionIcon(a.icon)
