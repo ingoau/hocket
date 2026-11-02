@@ -253,7 +253,11 @@ const MEDIA_SESSION_TRANSPORT: &[&str] = &["previous", "togglePlay", "play", "pa
 /// Put a newly enabled `stash` immediately after the transport rows, so it is
 /// one of the custom buttons the notification can show. A stash the user
 /// already had, including one they dragged down, stays where they put it.
-fn show_new_stash(previous: &[String], ids: Vec<String>) -> Vec<String> {
+///
+/// Only the user-edit path (`set_action_order`) calls this. Loading a saved
+/// order must not: a reload has no previous order, so it would look like
+/// Stash had just been turned on.
+pub(crate) fn show_new_stash(previous: &[String], ids: Vec<String>) -> Vec<String> {
     let turning_on = ids.iter().any(|id| id == "stash") && !previous.iter().any(|id| id == "stash");
     if !turning_on {
         return ids;
@@ -407,18 +411,11 @@ impl ActionRegistry {
     /// default order clears the customisation.
     pub fn set_order(&mut self, surface: Surface, ids: Vec<String>) {
         let mut seen = std::collections::HashSet::new();
-        let mut ids: Vec<String> = ids
+        let ids: Vec<String> = ids
             .into_iter()
             .map(|id| canonical_id(&id).to_string())
             .filter(|id| self.get(id).is_some() && seen.insert(id.clone()))
             .collect();
-        if surface == Surface::MediaSession {
-            // Read the previous order before replacing it. A stash that was
-            // just turned on would otherwise land after shuffle, repeat and
-            // love, past the two custom buttons Android actually shows.
-            let previous = self.order(surface);
-            ids = show_new_stash(&previous, ids);
-        }
         if ids == self.default_order(surface) {
             self.orders.remove(&surface);
         } else {
