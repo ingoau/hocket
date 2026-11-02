@@ -638,6 +638,7 @@ private fun NavigationSettleBackGuard(nav: NavHostController, transitions: Shell
         if (transitions.navigating && nav.visibleEntries.value.size <= 1) transitions.navigating = false
     }
     BackHandler(enabled = transitions.navigating && nav.previousBackStackEntry != null) {
-        nav.popBackStack()
+        // `enabled` lags a pop by a frame; never pop the start destination on a second quick back.
+        if (nav.previousBackStackEntry != null) nav.popBackStack()
     }
 }
