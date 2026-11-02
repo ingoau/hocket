@@ -180,7 +180,7 @@ export function FilterBuilder({ id, embedded = false }: { id: string; embedded?:
     bridge().dispatch({ type: "saveFilter", data: { filter: { ...filter, name: filter.name.trim() } } });
     if (!existing) setSaving(true);
   };
-  const play = () => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter } }, label: filter.name || t("filters.builder"), sort: filter.sort, tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
+  const play = () => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter } }, label: filter.name || t("filters.builder"), sort: filter.sort, tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const exportNsp = async () => {
     const path = await bridge().dialog.save({ title: t("dialog.exportNsp"), defaultPath: `${filter.name || "filter"}.nsp`, filters: [{ name: "Navidrome smart playlist", extensions: ["nsp"] }] });
     if (path) bridge().dispatch({ type: "exportNsp", data: { filter, path } });

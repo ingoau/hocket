@@ -1522,6 +1522,16 @@ impl Room {
                     self.send(peer, Msg::StashSync { entries: merged });
                 }
             }
+            Msg::SnoozeSync { entries } => {
+                let changed = self.replica.merge_snoozes(&entries, now);
+                let merged = self.replica.snoozes.clone();
+                if changed {
+                    self.dirty = true;
+                    self.broadcast(Msg::SnoozeSync { entries: merged }, None);
+                } else if crate::snooze::merge(&entries, &merged).1 {
+                    self.send(peer, Msg::SnoozeSync { entries: merged });
+                }
+            }
             Msg::UndoEntryShared {
                 entry,
                 before_revision,

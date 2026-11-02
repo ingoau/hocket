@@ -201,6 +201,7 @@ impl Actor {
             self.engine = None;
             self.scope = None;
             self.drop_stash();
+            self.drop_snoozes();
             self.last_doc = None;
         } else if rekeyed {
             self.flush_persistence(true);
@@ -208,6 +209,7 @@ impl Actor {
             self.engine = None;
             self.scope = None;
             self.drop_stash();
+            self.drop_snoozes();
             self.last_doc = None;
         }
         if let Err(e) = self.db.upsert_server(&info, self.now()) {
@@ -297,6 +299,7 @@ impl Actor {
         self.engine = None;
         self.scope = None;
         self.drop_stash();
+        self.drop_snoozes();
         self.last_doc = None;
         self.server = None;
         if let Some(p) = &self.stream_reader {

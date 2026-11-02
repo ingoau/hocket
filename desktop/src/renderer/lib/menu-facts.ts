@@ -6,6 +6,7 @@ import type { ActionTarget, Album, Artist, Playlist, Track } from "@core/api";
 import { expectResult } from "@shared/core-handle";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
+import { useApp } from "../store/app";
 import { resolveTrackIds, type ActionContext } from "../store/actions";
 import { fmtDuration } from "./format";
 import type { MenuFacts } from "./menu-model";
@@ -55,6 +56,8 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
             title: t("menu.songsTime", { n: tracks.length, time: fmtDuration(tracks.reduce((s, x) => s + x.durationMs, 0)) }),
             subtitle: tracks.slice(0, 12).map((x) => x.title).join(", "),
           };
+      const snoozes = useApp.getState().snoozes;
+      const mine = ids.map((id) => snoozes.find((s) => s.trackId === id)).filter((s) => !!s);
       return {
         kind: "song",
         count: tracks.length,
@@ -63,6 +66,8 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
         ratings: tracks.map((x) => x.rating),
         header,
         trackIds: ids,
+        snoozed: mine.length,
+        snoozeUntil: ids.length === 1 ? (mine[0] ? (mine[0].until ?? null) : undefined) : undefined,
       };
     }
     case "albums": {

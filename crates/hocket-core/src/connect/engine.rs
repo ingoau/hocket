@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::{
     ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState,
-    Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, StashEntry, TrackId,
+    Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, Snooze, StashEntry, TrackId,
     TransportLease, TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
@@ -308,6 +308,8 @@ pub enum Input {
     SettingChanged(Setting),
     /// The local stash, whole (tombstones included).
     StashChanged(Vec<StashEntry>),
+    /// The local snoozes, whole (tombstones included).
+    SnoozesChanged(Vec<Snooze>),
     UndoEntryCreated {
         entry: UndoEntry,
         before_revision: u32,
@@ -451,6 +453,8 @@ pub enum Output {
     SettingsMerged(Vec<Setting>),
     /// The stash after merging a remote copy (whole).
     StashMerged(Vec<StashEntry>),
+    /// Snoozes after merging a remote copy (whole).
+    SnoozesMerged(Vec<Snooze>),
     UndoEntryReceived {
         entry: UndoEntry,
         before_revision: u32,
@@ -698,6 +702,7 @@ pub struct Engine {
     saved_queues: Vec<SavedQueue>,
     settings: Vec<Setting>,
     stash: Vec<StashEntry>,
+    snoozes: Vec<Snooze>,
 
     lan_peers: Vec<PeerAdvert>,
     /// LAN peers that failed the mutual proof (or refused us), with the
@@ -833,6 +838,7 @@ impl Engine {
             saved_queues: vec![],
             settings: vec![],
             stash: vec![],
+            snoozes: vec![],
             lan_peers: vec![],
             lan_blocklist: BTreeMap::new(),
             lan_strikes: BTreeMap::new(),
@@ -1048,6 +1054,10 @@ impl Engine {
 
     pub fn stash(&self) -> &[StashEntry] {
         &self.stash
+    }
+
+    pub fn snoozes(&self) -> &[Snooze] {
+        &self.snoozes
     }
 
     pub fn now_local_ms(&self) -> EpochMs {
@@ -1370,6 +1380,13 @@ impl Engine {
                 self.stash = merged;
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
+            }
+            Input::SnoozesChanged(list) => {
+                let (mut merged, _) = crate::snooze::merge(&list, &self.snoozes);
+                crate::snooze::prune(&mut merged, self.clock.now_ms());
+                self.snoozes = merged;
+                let entries = self.snoozes.clone();
+                self.upstream_send(Msg::SnoozeSync { entries });
             }
             Input::UndoEntryCreated {
                 entry,
@@ -2778,6 +2795,14 @@ impl Engine {
                     self.out.push(Output::StashMerged(merged));
                 }
             }
+            Msg::SnoozeSync { entries } => {
+                let (mut merged, _) = crate::snooze::merge(&self.snoozes, &entries);
+                crate::snooze::prune(&mut merged, self.clock.now_ms());
+                if merged != self.snoozes {
+                    self.snoozes = merged.clone();
+                    self.out.push(Output::SnoozesMerged(merged));
+                }
+            }
             Msg::UndoEntryShared {
                 entry,
                 before_revision,
@@ -3112,6 +3137,12 @@ impl Engine {
                 self.stash = merged.clone();
                 self.out.push(Output::StashMerged(merged));
             }
+            let (mut merged, _) = crate::snooze::merge(&self.snoozes, &rep.snoozes);
+            crate::snooze::prune(&mut merged, self.clock.now_ms());
+            if merged != self.snoozes {
+                self.snoozes = merged.clone();
+                self.out.push(Output::SnoozesMerged(merged));
+            }
             if remote {
                 let (theirs_plus_ours, ours_has_more) =
                     merge_saved_queues(&rep.saved_queues, &self.saved_queues);
@@ -3130,11 +3161,17 @@ impl Engine {
                     let entries = self.stash.clone();
                     self.upstream_send(Msg::StashSync { entries });
                 }
+                let (_, ours_has_more) = crate::snooze::merge(&rep.snoozes, &self.snoozes);
+                if ours_has_more {
+                    let entries = self.snoozes.clone();
+                    self.upstream_send(Msg::SnoozeSync { entries });
+                }
             }
         } else if remote
             && (!self.saved_queues.is_empty()
                 || !self.settings.is_empty()
-                || !self.stash.is_empty())
+                || !self.stash.is_empty()
+                || !self.snoozes.is_empty())
         {
             let q = self.saved_queues.clone();
             self.upstream_send(Msg::SavedQueuesSync { queues: q });
@@ -3143,6 +3180,10 @@ impl Engine {
             if !self.stash.is_empty() {
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
+            }
+            if !self.snoozes.is_empty() {
+                let entries = self.snoozes.clone();
+                self.upstream_send(Msg::SnoozeSync { entries });
             }
         }
         if self.held.is_some() {

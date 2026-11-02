@@ -30,8 +30,8 @@ use typeshare::typeshare;
 use crate::api::{
     AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState, Ms,
     PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey, QueueMode, RepeatMode,
-    SavedQueue, ServerId, SessionDocument, SessionId, Setting, StashEntry, TrackId, TransportLease,
-    UndoEntry,
+    SavedQueue, ServerId, SessionDocument, SessionId, Setting, Snooze, StashEntry, TrackId,
+    TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -213,6 +213,10 @@ pub struct ReplicaState {
     /// (`crate::stash`).
     #[serde(default)]
     pub stash: Vec<StashEntry>,
+    /// The account's snoozes: LWW set keyed on track id, tombstones included
+    /// (`crate::snooze`).
+    #[serde(default)]
+    pub snoozes: Vec<Snooze>,
     /// Per-device last seen.
     #[serde(default)]
     pub devices: Vec<DeviceLease>,
@@ -857,6 +861,11 @@ pub enum Msg {
     StashSync {
         entries: Vec<StashEntry>,
     },
+    /// Either direction. Snoozes, merged LWW on `updatedAt` per track id
+    /// (`crate::snooze::merge`). Older builds drop it.
+    SnoozeSync {
+        entries: Vec<Snooze>,
+    },
 
     // -- undo -----------------------------------------------------------
     /// Either direction. A session-tier undo entry shared with the session,
@@ -971,6 +980,7 @@ impl Msg {
         "savedQueuesSync",
         "settingsSync",
         "stashSync",
+        "snoozeSync",
         "undoEntryShared",
         "libraryEdited",
         "diagnosticsRequest",
@@ -1021,6 +1031,7 @@ impl Msg {
             Msg::SavedQueuesSync { .. } => "savedQueuesSync",
             Msg::SettingsSync { .. } => "settingsSync",
             Msg::StashSync { .. } => "stashSync",
+            Msg::SnoozeSync { .. } => "snoozeSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
@@ -1296,6 +1307,7 @@ mod tests {
             saved_queues: vec![],
             settings: vec![],
             stash: vec![],
+            snoozes: vec![],
             devices: vec![],
             transport_lease: TransportLease::default(),
             last_stamp: None,

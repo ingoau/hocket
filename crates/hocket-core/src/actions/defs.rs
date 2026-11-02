@@ -209,6 +209,53 @@ fn clear_stash(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Command
     vec![Command::StashClear]
 }
 
+fn snoozed(id: &str, s: &StateView) -> bool {
+    s.snoozed_tracks.iter().any(|t| t == id)
+}
+
+/// Snooze is on when any selected song isn't snoozed. A queue row's track isn't known here, so the
+/// menu decides; the action stays available.
+fn snooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } if !ids.is_empty() => ids.iter().any(|id| !snoozed(id, s)),
+        ActionTarget::QueueItems { keys } if !keys.is_empty() => true,
+        ActionTarget::None => s
+            .current_track_id
+            .as_ref()
+            .is_some_and(|id| !snoozed(id, s)),
+        _ => false,
+    }
+}
+
+fn unsnooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } if !ids.is_empty() => ids.iter().any(|id| snoozed(id, s)),
+        ActionTarget::QueueItems { keys } if !keys.is_empty() => true,
+        ActionTarget::None => s.current_track_id.as_ref().is_some_and(|id| snoozed(id, s)),
+        _ => false,
+    }
+}
+
+fn snooze(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let track_ids = track_ids_of(t, s, r);
+    if track_ids.is_empty() {
+        return vec![];
+    }
+    // The song menu offers every duration itself. A swipe or the palette uses a week.
+    vec![Command::Snooze {
+        track_ids,
+        duration: crate::api::SnoozeFor::Week,
+    }]
+}
+
+fn unsnooze(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let track_ids = track_ids_of(t, s, r);
+    if track_ids.is_empty() {
+        return vec![];
+    }
+    vec![Command::Unsnooze { track_ids }]
+}
+
 macro_rules! rate_fn {
     ($name:ident, $n:literal) => {
         fn $name(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
@@ -763,6 +810,34 @@ static ALL: &[ActionDef] = &[
         GLOBAL,
         always,
         clear_stash
+    ),
+    action!(
+        "snooze",
+        "Snooze",
+        "bedtime",
+        Queue,
+        &[
+            TargetKind::Tracks,
+            TargetKind::QueueItems,
+            TargetKind::Global
+        ],
+        snooze_enabled,
+        snooze,
+        undoable = true
+    ),
+    action!(
+        "unsnooze",
+        "Unsnooze",
+        "bedtime",
+        Queue,
+        &[
+            TargetKind::Tracks,
+            TargetKind::QueueItems,
+            TargetKind::Global
+        ],
+        unsnooze_enabled,
+        unsnooze,
+        undoable = true
     ),
     action!(
         "removeFromQueue",
@@ -1411,6 +1486,8 @@ const CONTEXT_MENU: &[&str] = &[
     "unpin",
     "goToAlbum",
     "goToArtist",
+    "snooze",
+    "unsnooze",
     "pinToLibrary",
     "unpinFromLibrary",
     "removeFromQueue",

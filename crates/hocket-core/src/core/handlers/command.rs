@@ -66,6 +66,8 @@ impl Actor {
             | Command::StashClear
             | Command::StashRestore { .. }) => self.stash_command(c),
 
+            c @ (Command::Snooze { .. } | Command::Unsnooze { .. }) => self.snooze_command(c),
+
             // -- queue --
             Command::PlayContext { args } => self.play_context(args),
             c @ (Command::PlayTracks { .. }

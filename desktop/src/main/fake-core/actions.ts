@@ -30,6 +30,8 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "stash", label: "Stash", icon: "stash", category: "queue", targets: ["none", "tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu", "palette"], defaultShortcut: "Mod+S" },
   { id: "openStash", label: "Open stash", icon: "stash", category: "view", targets: ["none"], surfaces: ["palette"], defaultShortcut: "Mod+Shift+S" },
   { id: "clearStash", label: "Clear stash", icon: "clear_all", category: "queue", targets: ["none"], surfaces: ["palette"] },
+  { id: "snooze", label: "Snooze", icon: "bedtime", category: "queue", targets: ["tracks", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
+  { id: "unsnooze", label: "Unsnooze", icon: "bedtime", category: "queue", targets: ["tracks", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
   { id: "love", label: "Love", icon: "favorite", category: "library", targets: ["none", "tracks", "albums", "artists", "queueItems"], surfaces: ["contextMenu", "palette", "mediaSession"], undoable: true, defaultShortcut: "Mod+L" },
   { id: "unlove", label: "Unlove", icon: "heart_minus", category: "library", targets: ["none", "tracks", "albums", "artists", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
   { id: "rate5", label: "Rate 5 stars", icon: "star", category: "library", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"], undoable: true, defaultShortcut: "5" },
@@ -106,7 +108,7 @@ export const REGISTRY: RegistryEntry[] = [
 export const DEFAULT_ORDERS: Record<string, string[]> = {
   sidebar: ["navigateHome", "navigateLibrary"],
   mediaSession: ["previous", "togglePlay", "next", "shuffle", "repeat", "love"],
-  contextMenu: ["play", "playShuffled", "playNext", "playLater", "addToPlaylist", "stash", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "pinToLibrary", "unpinFromLibrary", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
+  contextMenu: ["play", "playShuffled", "playNext", "playLater", "addToPlaylist", "stash", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "snooze", "unsnooze", "pinToLibrary", "unpinFromLibrary", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
 };
 
 export interface ActionContext {

@@ -261,7 +261,9 @@ fn version_one_orders_gain_the_library() {
             "pinToLibrary",
             "unpinFromLibrary",
             "addToPlaylist",
-            "stash"
+            "stash",
+            "snooze",
+            "unsnooze"
         ]
     );
     // Written back as the current version: removing the Library again sticks.
@@ -1003,7 +1005,14 @@ fn version_two_orders_gain_the_stash() {
     .unwrap();
     assert_eq!(
         r.order(Surface::ContextMenu),
-        vec!["playNext", "addToPlaylist", "stash", "love"]
+        vec![
+            "playNext",
+            "addToPlaylist",
+            "stash",
+            "love",
+            "snooze",
+            "unsnooze"
+        ]
     );
     assert_eq!(r.order(Surface::NowPlaying), vec!["love", "stash"]);
     r.set_order(Surface::ContextMenu, vec!["playNext".into()]);

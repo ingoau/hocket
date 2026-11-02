@@ -39,6 +39,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.hocket.core.api.SnoozeFor
+import java.text.DateFormat
+import java.util.Date
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -214,6 +218,8 @@ fun menuLayout(
     canGoToArtist: Boolean = false,
     hasInfo: Boolean = false,
     count: Int = 1,
+    /** Whether this one song is snoozed. Null for a selection: the registry's enabled state decides. */
+    snoozed: Boolean? = null,
 ): MenuLayout {
     val byId = actions.associateBy { it.id }
     val replaced = extras.mapNotNull { it.replaces }.toSet()
@@ -232,6 +238,8 @@ fun menuLayout(
     val pin = MenuEntry.LibraryPin(take(ActionIds.PIN_TO_LIBRARY), take(ActionIds.UNPIN_FROM_LIBRARY)).takeIf { it.pin != null || it.unpin != null }
     val goAlbum = take(ActionIds.GO_TO_ALBUM)?.takeIf { canGoToAlbum }?.let { MenuEntry.GoTo(it) }
     val goArtist = take(ActionIds.GO_TO_ARTIST)?.takeIf { canGoToArtist }?.let { MenuEntry.GoTo(it) }
+    val snoozeAction = take(ActionIds.SNOOZE)
+    val unsnoozeAction = take(ActionIds.UNSNOOZE)
     val info = MenuEntry.Info.takeIf { hasInfo }
     val share = MenuEntry.Share.takeIf { shareChoices(kind, count).any }
     val genius = MenuEntry.Genius.takeIf { kind == MenuKind.Song && count <= 1 }
@@ -244,12 +252,17 @@ fun menuLayout(
         MenuKind.Album -> listOfNotNull(addTo, stash, download, share, goArtist)
         else -> listOfNotNull(addTo, stash, download, share)
     } + otherExtras.map { MenuEntry.Extra(it) }
+    val snoozeRows = when (snoozed) {
+        true -> listOfNotNull(unsnoozeAction)
+        false -> listOfNotNull(snoozeAction)
+        null -> listOfNotNull(unsnoozeAction, snoozeAction)
+    }.map { MenuEntry.Action(it) }
     var more = when (kind) {
         MenuKind.Song -> listOfNotNull(pin, goArtist, info)
         MenuKind.Album -> listOfNotNull(pin, info)
         MenuKind.Songs -> emptyList()
         else -> listOfNotNull(pin, goArtist, info)
-    } + listOfNotNull(MenuEntry.Rate.takeIf { rateable && !stars }) + restOther.map { MenuEntry.Action(it) }
+    } + snoozeRows + listOfNotNull(MenuEntry.Rate.takeIf { rateable && !stars }) + restOther.map { MenuEntry.Action(it) }
     if (primary.isEmpty()) { primary = more; more = emptyList() }
     val destructive = context.map { MenuEntry.Action(it) } + restDestructive.map { MenuEntry.Action(it) } + destructiveExtras.map { MenuEntry.Extra(it) }
     return MenuLayout(love, play, stars, primary, more, destructive)
@@ -294,17 +307,21 @@ fun MenuSheet(
     pull: SheetPull? = null,
 ) {
     val client = LocalCoreClient.current
+    val snoozeItems by client.snoozes.collectAsStateWithLifecycle()
+    val snoozed = subject.trackId?.let { id -> snoozeItems.any { it.trackId == id } }
+    val snoozeUntil = subject.trackId?.let { id -> snoozeItems.firstOrNull { it.trackId == id }?.until }
     val sheetState = rememberPulledSheetState(pull)
     val scope = rememberCoroutineScope()
     /** Hides the sheet, then runs [after] (which may open what follows) and reports it gone. */
     fun hideThen(after: () -> Unit = {}) {
         scope.launch { sheetState.hide() }.invokeOnCompletion { after(); onDismiss() }
     }
-    val layout = remember(actions, subject.kind, subject.count, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null) {
-        menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null, count = subject.count)
+    val layout = remember(actions, subject.kind, subject.count, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null, snoozed) {
+        menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null, count = subject.count, snoozed = snoozed)
     }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var sharePage by remember { mutableStateOf(false) }
+    var snoozePage by remember { mutableStateOf(false) }
     val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
     var loved by remember { mutableStateOf(subject.loved) }
     var rating by remember { mutableStateOf(subject.rating) }
@@ -393,13 +410,20 @@ fun MenuSheet(
                     ActionIds.REMOVE_FROM_QUEUE -> if (subject.count > 1) stringResource(R.string.menu_remove_n_from, subject.count, stringResource(R.string.menu_queue)) else stringResource(R.string.action_remove_from_queue)
                     ActionIds.ADD_TO_PLAYLIST -> stringResource(R.string.action_add_to_playlist)
                     ActionIds.STASH -> stringResource(R.string.action_stash)
+                    ActionIds.SNOOZE -> stringResource(R.string.action_snooze)
+                    ActionIds.UNSNOOZE -> stringResource(R.string.action_unsnooze)
                     else -> a.label
                 }
+                val untilText = if (a.id == ActionIds.UNSNOOZE && subject.count <= 1) snoozeEnds(snoozeUntil) else null
                 val icon = if (a.id == ActionIds.ADD_TO_PLAYLIST) HocketIcons.AutoMirrored.Filled.PlaylistAdd else actionIcon(a.icon)
-                MenuRow(AnnotatedString(label), icon, shape, enabled = a.enabled, destructive = a.destructive, tag = "$tag.action.${a.id}",
-                    trailing = if (a.id == ActionIds.ADD_TO_PLAYLIST) { { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) } } else null,
+                MenuRow(AnnotatedString(label), icon, shape, supporting = untilText, enabled = a.enabled, destructive = a.destructive, tag = "$tag.action.${a.id}",
+                    trailing = if (a.id == ActionIds.ADD_TO_PLAYLIST || a.id == ActionIds.SNOOZE) { { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) } } else null,
                 ) {
-                    if (a.id == ActionIds.ADD_TO_PLAYLIST) hideThen(onAddToPlaylist) else runAndClose(a)
+                    when (a.id) {
+                        ActionIds.ADD_TO_PLAYLIST -> hideThen(onAddToPlaylist)
+                        ActionIds.SNOOZE -> snoozePage = true
+                        else -> runAndClose(a)
+                    }
                 }
             }
             is MenuEntry.Download -> {
@@ -464,6 +488,17 @@ fun MenuSheet(
             }
             if (sharePage) {
                 SharePage(shareOptions, tag) { choice -> if (choice == null) sharePage = false else hideThen { onShare(choice) } }
+            } else if (snoozePage) {
+                SnoozePage(tag) { duration ->
+                    if (duration == null) snoozePage = false
+                    else hideThen {
+                        val ids = when (val t = target) {
+                            is app.hocket.core.api.ActionTarget.Tracks -> t.data.ids
+                            else -> listOfNotNull(subject.trackId)
+                        }
+                        if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
+                    }
+                }
             } else {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
             if (layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { runAndClose(it) }
@@ -664,6 +699,32 @@ private fun RatingRow(rating: Int?, onRate: (Int) -> Unit) {
             }
         }
         RatingStars(rating ?: 0, onRate = onRate, starSize = 28.dp, spacing = 14.dp, stateOverride = if (rating == null) mixed else null)
+    }
+}
+
+/** When a snooze ends, for the Unsnooze row. */
+@Composable
+private fun snoozeEnds(until: Double?): String = if (until == null) {
+    stringResource(R.string.snooze_until_never)
+} else {
+    stringResource(R.string.snooze_until, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(until.toLong())))
+}
+
+/** Snooze's page: back, then each duration. Null from [onChoose] is back. */
+@Composable
+private fun SnoozePage(tag: String, onChoose: (SnoozeFor?) -> Unit) {
+    val rows = listOf(
+        SnoozeFor.Day to R.string.snooze_day,
+        SnoozeFor.ThreeDays to R.string.snooze_three_days,
+        SnoozeFor.Week to R.string.snooze_week,
+        SnoozeFor.Month to R.string.snooze_month,
+        SnoozeFor.Indefinite to R.string.snooze_indefinite,
+    )
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        MenuRow(AnnotatedString(stringResource(R.string.action_back)), HocketIcons.AutoMirrored.Filled.ArrowBack, connectedShape(0, rows.size + 1), tag = "$tag.snooze.back") { onChoose(null) }
+        rows.forEachIndexed { i, (duration, label) ->
+            MenuRow(AnnotatedString(stringResource(label)), HocketIcons.Filled.Bedtime, connectedShape(i + 1, rows.size + 1), tag = "$tag.snooze.${duration.string}") { onChoose(duration) }
+        }
     }
 }
 

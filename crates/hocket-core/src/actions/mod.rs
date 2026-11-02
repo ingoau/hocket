@@ -135,6 +135,8 @@ pub struct StateView {
     pub volume_unknown: bool,
     /// What's pinned to the Library (`library.pins`), in order.
     pub library_pins: Vec<LibraryPin>,
+    /// Track ids snoozed right now.
+    pub snoozed_tracks: Vec<TrackId>,
 }
 
 /// One entry of `library.pins`.
@@ -243,8 +245,8 @@ fn customisation_version() -> u32 {
 const NEW_DEFAULT_CHORDS_V3: &[&str] = &["stash", "openStash"];
 
 /// The customisation version this build writes. 2: the Library holds the places the sidebar used to
-/// list, and things can be pinned to it; 3: the stash (see [`migrate_order`]).
-const CUSTOMISATION_VERSION: u32 = 3;
+/// list, and things can be pinned to it; 3: the stash; 4: snooze (see [`migrate_order`]).
+const CUSTOMISATION_VERSION: u32 = 4;
 
 /// Brings an order saved by an older build up to date: a version-1 sidebar gains the Library (after
 /// Home), whose page now holds the places it used to list, and a version-1 context menu gains Pin /
@@ -276,8 +278,16 @@ fn migrate_order(surface: Surface, version: u32, mut ids: Vec<String>) -> Vec<St
         }
     }
     // 3: Stash, after Add to playlist.
-    if matches!(surface, Surface::ContextMenu | Surface::NowPlaying) {
+    if version < 3 && matches!(surface, Surface::ContextMenu | Surface::NowPlaying) {
         insert_after("addToPlaylist", &["stash"]);
+    }
+    // 4: Snooze, on the song menu. Shown unless the listener takes it off.
+    if version < 4 && surface == Surface::ContextMenu {
+        for id in ["snooze", "unsnooze"] {
+            if !ids.iter().any(|existing| existing == id) {
+                ids.push(id.to_string());
+            }
+        }
     }
     ids
 }

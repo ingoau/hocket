@@ -142,6 +142,7 @@ impl Actor {
             }
         }
         self.load_stash();
+        self.load_snoozes();
         // Restore the resume point: the last known item and position, dormant
         // (never auto-resume on start).
         if let Ok(Some(pos)) = self
@@ -494,6 +495,7 @@ impl Actor {
             }
             Output::SettingsMerged(list) => self.on_settings_merged(list),
             Output::StashMerged(list) => self.on_stash_merged(list),
+            Output::SnoozesMerged(list) => self.on_snoozes_merged(list),
             Output::UndoEntryReceived {
                 entry,
                 before_revision: _,
@@ -801,6 +803,7 @@ impl Actor {
             .unwrap_or_default();
         exclude.extend(doc.insertions.iter().map(|i| i.track_id.clone()));
         exclude.extend(recent_ids);
+        exclude.extend(self.snoozed_ids());
         let seeds = crate::autoplay::SeedInput {
             recent,
             context: doc
@@ -888,6 +891,11 @@ impl Actor {
             }
             return;
         }
+        let snoozed = self.snoozed_ids();
+        let picks: Vec<_> = picks
+            .into_iter()
+            .filter(|p| !snoozed.iter().any(|id| id == &p.track.id))
+            .collect();
         if picks.is_empty() {
             if !advance {
                 // Fetched ahead: the end of the queue asks again, and says so.
@@ -941,6 +949,10 @@ impl Actor {
             args.context.tracks =
                 self.resolve_context_tracks(&args.context.server_id, &args.context.kind);
         }
+        let (tracks, start) =
+            self.filter_snoozed_context(&args.context.tracks, &args.context.kind, args.start_index);
+        args.context.tracks = tracks;
+        args.start_index = start;
         if args.context.label.is_empty() {
             args.context.label = self.context_label(&args.context.server_id, &args.context.kind);
         }
@@ -1102,6 +1114,7 @@ impl Actor {
                 self.clear_offline_skips();
             }
             UndoAction::Cas(mutations) => self.run_cas(&result.entry_id, &label, mutations, redo),
+            UndoAction::Snoozes(states) => self.apply_snooze_states(states),
             UndoAction::Nothing => {}
         }
         self.selection = result.target;
@@ -1383,6 +1396,7 @@ impl Actor {
                 }
             },
             volume_unknown: self.volume_control().0.is_none(),
+            snoozed_tracks: self.snoozed_ids(),
             library_pins: crate::actions::LibraryPin::list_from(
                 &self
                     .settings

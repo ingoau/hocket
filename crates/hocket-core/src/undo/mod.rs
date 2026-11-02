@@ -59,6 +59,9 @@ pub enum UndoAction {
     RestoreDocument(Box<SessionDocument>),
     /// Run these compare-and-swap mutations through the outbox.
     Cas(Vec<CasMutation>),
+    /// Put each track back to this snooze. `None` means not snoozed; `Some(until)` is snoozed
+    /// (`None` inside means it doesn't end).
+    Snoozes(Vec<(String, Option<Option<EpochMs>>)>),
     Nothing,
 }
 
@@ -284,6 +287,80 @@ pub trait UndoableCommand: Send + Sync {
     /// Absorb a rapid repeat. Returns false when the two cannot merge.
     fn coalesce(&mut self, next: &dyn UndoableCommand) -> bool;
     fn as_any(&self) -> &dyn Any;
+}
+
+/// A snooze or unsnooze: the tracks' snooze state before and after.
+/// `None` means not snoozed; `Some(until)` is snoozed (`None` inside means it doesn't end).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnoozeUndo {
+    pub kind: String,
+    pub label: String,
+    pub before: Vec<(String, Option<Option<EpochMs>>)>,
+    pub after: Vec<(String, Option<Option<EpochMs>>)>,
+}
+
+impl SnoozeUndo {
+    pub fn new(
+        kind: impl Into<String>,
+        label: impl Into<String>,
+        before: Vec<(String, Option<Option<EpochMs>>)>,
+        after: Vec<(String, Option<Option<EpochMs>>)>,
+    ) -> SnoozeUndo {
+        SnoozeUndo {
+            kind: kind.into(),
+            label: label.into(),
+            before,
+            after,
+        }
+    }
+}
+
+impl UndoableCommand for SnoozeUndo {
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+    fn tier(&self) -> UndoTier {
+        UndoTier::RemoteMutation
+    }
+    fn apply(&self) -> UndoAction {
+        UndoAction::Snoozes(self.after.clone())
+    }
+    fn inverse(&self) -> UndoAction {
+        UndoAction::Snoozes(self.before.clone())
+    }
+    fn size_bytes(&self) -> usize {
+        (self.before.len() + self.after.len()) * 48 + self.label.len()
+    }
+    fn coalesce(&mut self, next: &dyn UndoableCommand) -> bool {
+        let Some(n) = next.as_any().downcast_ref::<SnoozeUndo>() else {
+            return false;
+        };
+        if n.kind != self.kind {
+            return false;
+        }
+        for (id, after) in &n.after {
+            let prior = n
+                .before
+                .iter()
+                .find(|(i, _)| i == id)
+                .map(|(_, s)| s.clone());
+            match self.after.iter_mut().find(|(i, _)| i == id) {
+                Some(existing) => existing.1 = after.clone(),
+                None => {
+                    self.before.push((id.clone(), prior.unwrap_or(None)));
+                    self.after.push((id.clone(), after.clone()));
+                }
+            }
+        }
+        self.label = n.label.clone();
+        true
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Tier 1: a document snapshot before and after.

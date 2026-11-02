@@ -29,6 +29,17 @@ class MenuLogicTest {
     ).map { d(it, enabled = it != ActionIds.UNPIN_FROM_LIBRARY) }
 
     @Test
+    fun snoozeSitsUnderMoreAndASnoozedSongOffersUnsnooze() {
+        val withSnooze = songActions + d(ActionIds.SNOOZE) + d(ActionIds.UNSNOOZE)
+        val fresh = menuLayout(withSnooze, MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true, snoozed = false)
+        assertTrue(fresh.more.any { it.key == ActionIds.SNOOZE })
+        assertTrue(fresh.more.none { it.key == ActionIds.UNSNOOZE })
+        val snoozed = menuLayout(withSnooze, MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true, snoozed = true)
+        assertTrue(snoozed.more.any { it.key == ActionIds.UNSNOOZE })
+        assertTrue(snoozed.more.none { it.key == ActionIds.SNOOZE })
+    }
+
+    @Test
     fun theSongMenuPlacesTheRegistryPerTheDesign() {
         val l = menuLayout(songActions + d(ActionIds.REMOVE_FROM_QUEUE, enabled = false), MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true)
         assertEquals(listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER), l.play.map { it.id })

@@ -22,6 +22,11 @@ object Commands {
     fun setTranscodingProfile(networkId: String?, profile: TranscodingProfile) =
         Command.SetTranscodingProfile(CommandSetTranscodingProfileInner(networkId, profile))
 
+    fun snooze(trackIds: List<TrackId>, duration: app.hocket.core.api.SnoozeFor) =
+        Command.Snooze(CommandSnoozeInner(trackIds, duration))
+
+    fun unsnooze(trackIds: List<TrackId>) = Command.Unsnooze(CommandUnsnoozeInner(trackIds))
+
     fun playContext(context: QueueContext, startIndex: Int? = null, shuffle: Boolean = false, saveOutgoing: Boolean = true) =
         Command.PlayContext(CommandPlayContextInner(PlayContextArgs(context, startIndex?.toUInt(), shuffle, saveOutgoing)))
     fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false) =

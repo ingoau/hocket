@@ -121,6 +121,9 @@ class CoreClient(
     private val _stash = MutableStateFlow<List<StashItem>>(emptyList())
     /** The song stash, in order (#150). */
     val stash: StateFlow<List<StashItem>> = _stash.asStateFlow()
+    private val _snoozes = MutableStateFlow<List<SnoozeItem>>(emptyList())
+    /** Songs snoozed right now, soonest ending first (#157). */
+    val snoozes: StateFlow<List<SnoozeItem>> = _snoozes.asStateFlow()
     private val _pins = MutableStateFlow<List<Pin>>(emptyList())
     val pins: StateFlow<List<Pin>> = _pins.asStateFlow()
     private val _storage = MutableStateFlow(StorageSummary(0.0, 0.0, 0.0))
@@ -377,6 +380,7 @@ class CoreClient(
     fun dismissReportUpload() = dispatch(Command.DismissReportUpload)
 
     private var stashEvents = 0
+    private var snoozeEvents = 0
 
     /** The snapshot carries no stash: ask, unless an event answers first. */
     private fun refreshStash() {
@@ -384,6 +388,15 @@ class CoreClient(
         scope.launch {
             val result = query(Query.Stash) as? QueryResult.StashItems ?: return@launch
             if (stashEvents == seen) _stash.value = result.data
+        }
+    }
+
+    /** The snapshot carries no snoozes: ask, unless an event answers first. */
+    private fun refreshSnoozes() {
+        val seen = snoozeEvents
+        scope.launch {
+            val result = query(Query.Snoozes) as? QueryResult.SnoozeItems ?: return@launch
+            if (snoozeEvents == seen) _snoozes.value = result.data
         }
     }
 
@@ -479,8 +492,8 @@ class CoreClient(
     fun onEvent(event: Event) {
         when (event) {
             // `Started` once per core; `Snapshot` on every RequestSnapshot (UI attach, service reconnect).
-            is Event.Started -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash() }
-            is Event.Snapshot -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash() }
+            is Event.Started -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
+            is Event.Snapshot -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
             is Event.ServersChanged -> _servers.value = event.data.servers
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {
@@ -528,6 +541,7 @@ class CoreClient(
             is Event.NowPlayingChanged -> _nowPlaying.value = event.data.entry
             is Event.SavedQueuesChanged -> _savedQueues.value = event.data.queues
             is Event.StashChanged -> { stashEvents++; _stash.value = event.data.items }
+            is Event.SnoozesChanged -> { snoozeEvents++; _snoozes.value = event.data.items }
             is Event.UndoChanged -> _undo.value = event.data.state
             is Event.Toast -> _toasts.tryEmit(event.data.toast)
             is Event.PlayerNotice -> _playerNotice.value = event.data.takeIf { it.message != null || it.code != null }

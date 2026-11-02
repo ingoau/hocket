@@ -188,6 +188,8 @@ pub(crate) struct Actor {
     pub last_saved_queues: Vec<SavedQueue>,
     /// The signed-in account's song stash, tombstones included (`crate::stash`).
     pub stash: Vec<crate::api::StashEntry>,
+    /// The signed-in account's snoozes, tombstones included (`crate::snooze`).
+    pub snoozes: Vec<crate::api::Snooze>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
     /// sent: one that would only repeat it is not sent (see
     /// [`Actor::emit_transport_state`]).
@@ -479,6 +481,7 @@ impl Actor {
             last_doc: None,
             last_saved_queues: vec![],
             stash: vec![],
+            snoozes: vec![],
             emitted_transport: None,
             emitted_media_session: None,
             emitted_devices: None,
@@ -864,6 +867,7 @@ impl Actor {
                 .unwrap_or_default(),
         });
         self.emit_stash();
+        self.emit_snoozes();
         self.emit(Event::UndoChanged {
             state: snapshot.undo.clone(),
         });
@@ -978,6 +982,14 @@ impl Actor {
                 self.schedule_flush();
             }
         }
+        // A snooze whose end has passed drops out of the lists as soon as the clock passes it.
+        if self
+            .snoozes
+            .iter()
+            .any(|e| !e.removed && e.until.is_some_and(|u| u <= now))
+        {
+            self.prune_snoozes();
+        }
         // Library sync timer (checked once a minute).
         if now - self.last_sync_check >= 60_000.0 {
             self.last_sync_check = now;
@@ -1009,6 +1021,7 @@ impl Actor {
             Err(e) => self.log("warn", format!("stream cache reconcile: {e}")),
         }
         self.downloads.save_traffic();
+        self.prune_snoozes();
     }
 
     // -- persistence ----------------------------------------------------------

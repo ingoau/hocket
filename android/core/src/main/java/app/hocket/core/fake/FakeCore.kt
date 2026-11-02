@@ -456,6 +456,43 @@ class FakeCore(
     private fun emitLibrary(ids: List<String>, table: String = "tracks") = emit(Event.LibraryChanged(EventLibraryChangedInner(serverId, listOf(table), ids)))
     private fun stashItems(): List<StashItem> = stash.mapNotNull { (id, t) -> library.track(t)?.let { StashItem(id, 0.0, it) } }
     private fun emitStash() = emit(Event.StashChanged(EventStashChangedInner(stashItems())))
+    private val snoozes = linkedMapOf<String, Double?>()
+    private fun snoozeItems(): List<SnoozeItem> = snoozes.mapNotNull { (id, until) -> library.track(id)?.let { SnoozeItem(id, until, it) } }
+    private fun emitSnoozes() = emit(Event.SnoozesChanged(EventSnoozesChangedInner(snoozeItems())))
+    private fun untilFor(duration: SnoozeFor): Double? {
+        val day = 86_400_000.0
+        val now = now()
+        return when (duration) {
+            SnoozeFor.Day -> now + day
+            SnoozeFor.ThreeDays -> now + 3 * day
+            SnoozeFor.Week -> now + 7 * day
+            SnoozeFor.Month -> now + 30 * day
+            SnoozeFor.Indefinite -> null
+        }
+    }
+    private fun applySnooze(ids: List<String>, until: Double?, unsnooze: Boolean) {
+        val before = snoozes.toMap()
+        var changed = false
+        for (id in ids.distinct()) {
+            if (library.track(id) == null) continue
+            if (unsnooze) {
+                if (snoozes.remove(id) != null || id in before) changed = id in before
+            } else if (id !in snoozes || snoozes[id] != until) {
+                snoozes[id] = until
+                changed = true
+            }
+        }
+        if (!changed) return
+        emitSnoozes()
+        val message = if (unsnooze) "Unsnoozed" else if (until == null) "Snoozed indefinitely" else "Snoozed"
+        pushUndo(message) {
+            for (id in ids) {
+                if (id in before) snoozes[id] = before[id] else snoozes.remove(id)
+            }
+            emitSnoozes()
+        }
+        toast(message, "Undo", Command.Undo)
+    }
     private fun stashAdd(trackIds: List<TrackId>) {
         val fresh = trackIds.distinct().filter { t -> stash.none { it.second == t } && library.track(t) != null }
         fresh.forEach { stash.add(newId("stash") to it) }
@@ -484,6 +521,16 @@ class FakeCore(
         if (undoStack.size > 50) undoStack.removeAt(0)
         redoStack.clear()
         emitUndo()
+    }
+
+    private fun filterSnoozed(kind: ContextKind, tracks: List<TrackId>, start: Int?): Pair<List<TrackId>, Int?> {
+        val leaves = kind is ContextKind.Playlist || kind is ContextKind.Artist || kind is ContextKind.Genre || kind is ContextKind.Filter || kind is ContextKind.Autoplay
+        if (!leaves || tracks.isEmpty() || snoozes.isEmpty()) return tracks to start
+        val keep = start?.takeIf { it in tracks.indices }
+        val filtered = tracks.filterIndexed { i, id -> i == keep || id !in snoozes }
+        if (filtered.isEmpty()) return tracks to start
+        val next = keep?.let { k -> filtered.indexOf(tracks[k]).takeIf { it >= 0 } }
+        return filtered to if (start == null) null else next
     }
 
     private fun setContext(ctx: QueueContext, tracks: List<TrackId>, startIndex: Int, shuffled: Boolean, keepHistory: Boolean = false) {
@@ -767,8 +814,9 @@ class FakeCore(
                 val a = c.data.args
                 val before = captureSession()
                 if (a.saveOutgoing != false) saveOutgoingQueue()
-                val tracks = resolveContext(a.context)
-                setContext(a.context, tracks, a.startIndex?.toInt() ?: 0, a.shuffle)
+                val resolved = resolveContext(a.context)
+                val (tracks, start) = filterSnoozed(a.context.kind, resolved, a.startIndex?.toInt())
+                setContext(a.context, tracks, start ?: 0, a.shuffle)
                 startPlayback(0, true)
                 pushUndo("Play ${a.context.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
@@ -886,6 +934,8 @@ class FakeCore(
                 back.forEach { (id, at) -> if (stash.none { it.second == at.second }) stash.add(at.first.coerceIn(0, stash.size), id to at.second) }
                 if (back.isNotEmpty()) emitStash()
             }
+            is Command.Snooze -> applySnooze(c.data.track_ids, untilFor(c.data.duration), false)
+            is Command.Unsnooze -> applySnooze(c.data.track_ids, null, true)
 
             Command.Undo -> undo()
             Command.Redo -> redo()
@@ -1471,11 +1521,22 @@ class FakeCore(
             d(ActionIds.UNPIN_FROM_LIBRARY, "Unpin from Library", "keep_off", "library", undoable = false, enabled = pinned),
         ) else emptyList()
         val base: List<ActionDescriptor> = pins + when (target) {
-            is ActionTarget.Tracks -> library + listOf(d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
+            is ActionTarget.Tracks -> {
+                val ids = target.data.ids
+                val snoozed = ids.any { it in snoozes }
+                val fresh = ids.any { it !in snoozes }
+                library + listOf(
+                    d(ActionIds.SNOOZE, "Snooze", "bedtime", "queue", enabled = fresh),
+                    d(ActionIds.UNSNOOZE, "Unsnooze", "bedtime", "queue", enabled = snoozed),
+                    d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false),
+                    d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false),
+                )
+            }
             is ActionTarget.Albums -> library + listOf(d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
             is ActionTarget.Artists -> library
             is ActionTarget.Playlists -> library + listOf(d(ActionIds.DELETE_PLAYLIST, "Delete playlist", "delete_forever", "library", undoable = false, destructive = true))
             is ActionTarget.QueueItems -> listOf(d(ActionIds.REMOVE_FROM_QUEUE, "Remove from queue", "remove_from_queue", "queue"), d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"),
+                d(ActionIds.SNOOZE, "Snooze", "bedtime", "queue"), d(ActionIds.UNSNOOZE, "Unsnooze", "bedtime", "queue"),
                 d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false), d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.DOWNLOAD, "Download", "download", "offline", undoable = false),
                 d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
             is ActionTarget.SavedQueue -> listOf(d(ActionIds.RESTORE_SAVED_QUEUE, "Restore", "history", "queue"), d(ActionIds.PIN_SAVED_QUEUE, "Pin", "push_pin", "queue"), d(ActionIds.UNPIN_SAVED_QUEUE, "Unpin", "keep_off", "queue"),
@@ -1540,6 +1601,7 @@ class FakeCore(
         Query.Queue -> QueryResult.Queue(queueView())
         Query.SavedQueues -> QueryResult.SavedQueues(savedQueues.toList())
         Query.Stash -> QueryResult.StashItems(stashItems())
+        Query.Snoozes -> QueryResult.SnoozeItems(snoozeItems())
         is Query.Lyrics -> QueryResult.LyricsResult(lyricsFor(q.data.track_id))
         is Query.Related -> {
             val seed = library.track(q.data.track_id)

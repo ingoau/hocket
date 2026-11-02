@@ -732,6 +732,45 @@ pub struct StashItem {
     pub track: Track,
 }
 
+/// How long a snooze lasts, measured from when it is set.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SnoozeFor {
+    Day,
+    ThreeDays,
+    Week,
+    Month,
+    /// Until the listener unsnoozes it.
+    Indefinite,
+}
+
+/// One snoozed song in the account's last-write-wins set (see `crate::snooze`).
+/// `until` is when it ends; `None` means it doesn't. A removal is a tombstone.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Snooze {
+    pub track_id: TrackId,
+    /// When the snooze ends. Absent when it lasts until unsnoozed.
+    pub until: Option<EpochMs>,
+    /// LWW clock.
+    pub updated_at: EpochMs,
+    #[serde(default)]
+    pub removed: bool,
+}
+
+/// A snoozed song as the UI lists it, with the track it hides.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SnoozeItem {
+    pub track_id: TrackId,
+    /// When it ends. Absent when the snooze doesn't end.
+    pub until: Option<EpochMs>,
+    pub track: Track,
+}
+
 /// The unit of state. Small, serialisable, synced, snapshotted, undone.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1767,7 +1806,9 @@ pub struct StorageSummary {
 #[serde(rename_all = "camelCase")]
 pub struct PlayContextArgs {
     pub context: QueueContext,
-    /// Index into the unshuffled track list to start from.
+    /// Index into the unshuffled track list to start from. Absent means the start of the list,
+    /// which is not a song the listener picked (a snoozed song there is left out).
+    #[serde(default)]
     pub start_index: Option<u32>,
     pub shuffle: bool,
     /// Keep the outgoing queue as a saved queue (default true).
@@ -2024,6 +2065,18 @@ pub enum Command {
     /// Put removed entries back where they were (the Undo of remove and clear).
     StashRestore {
         entry_ids: Vec<String>,
+    },
+
+    // -- snooze -----------------------------------------------------------
+    /// Leave songs out of shuffle, playlists, artist play and autoplay for `duration`.
+    /// Goes through global undo.
+    Snooze {
+        track_ids: Vec<TrackId>,
+        duration: SnoozeFor,
+    },
+    /// Bring snoozed songs back. Goes through global undo.
+    Unsnooze {
+        track_ids: Vec<TrackId>,
     },
 
     // -- undo -------------------------------------------------------------
@@ -2431,6 +2484,8 @@ pub enum Query {
     SavedQueues,
     /// The stash, in order.
     Stash,
+    /// Songs snoozed right now, soonest ending first.
+    Snoozes,
     Lyrics {
         track_id: TrackId,
     },
@@ -2636,6 +2691,7 @@ pub enum QueryResult {
     Queue(QueueView),
     SavedQueues(Vec<SavedQueue>),
     StashItems(Vec<StashItem>),
+    SnoozeItems(Vec<SnoozeItem>),
     LyricsResult(Option<Lyrics>),
     Related(Vec<RelatedTrack>),
     Stats(ListeningStats),
@@ -2952,6 +3008,10 @@ pub enum Event {
     /// The stash changed (here or on another device): the whole list, in order.
     StashChanged {
         items: Vec<StashItem>,
+    },
+    /// Snoozes changed (here or on another device): the songs still snoozed.
+    SnoozesChanged {
+        items: Vec<SnoozeItem>,
     },
     UndoChanged {
         state: UndoState,

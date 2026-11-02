@@ -712,6 +712,7 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         screen<Route.Artists>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Artists) }
         screen<Route.Playlists>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Playlists) }
         screen<Route.Songs>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Songs) }
+        screen<Route.Snoozed>(transitions) { app.hocket.ui.screens.library.SnoozedScreen(nav) }
         screen<Route.Genres>(transitions) { app.hocket.ui.screens.library.LibraryListScreen(nav, app.hocket.ui.screens.library.LibraryList.Genres) }
         screen<Route.AvailableOffline>(transitions) { app.hocket.ui.screens.library.AvailableOfflineScreen(nav) }
         screen<Route.Filters>(transitions) { FiltersScreen(nav) }

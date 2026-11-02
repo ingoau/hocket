@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -56,6 +57,7 @@ import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.SwipeOptions
 import app.hocket.core.api.ActionTarget
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalDetailNavigator
 import app.hocket.ui.nav.ArtworkShare
@@ -223,6 +225,7 @@ fun TrackRow(
     var rating by remember { mutableStateOf(false) }
     var playlistPicker by remember { mutableStateOf(false) }
     val target = actionTarget ?: Commands.tracks(listOf(track.id))
+    val faded = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackId == track.id }
     // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
     val (startId, endId) = if (swipe != null) swipeActionIds(swipe) else SwipeOptions.NONE to SwipeOptions.NONE
@@ -252,7 +255,7 @@ fun TrackRow(
             swipeSurface = color,
             swipeShape = shape,
         ) {
-            Row(Modifier.heightIn(min = if (showSubtitle) 64.dp else 56.dp).padding(start = if (segment == null) 16.dp else 8.dp, end = if (segment == null) 16.dp else 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.alpha(if (faded) 0.45f else 1f).heightIn(min = if (showSubtitle) 64.dp else 56.dp).padding(start = if (segment == null) 16.dp else 8.dp, end = if (segment == null) 16.dp else 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke()
                 if (showArtwork) {
                     Box(Modifier.size(48.dp)) {

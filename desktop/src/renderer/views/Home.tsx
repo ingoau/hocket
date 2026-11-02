@@ -296,7 +296,7 @@ function toSummary(tr: { id: string; serverId: string; title: string; artist?: s
 }
 
 function playContext(serverId: string, kind: { type: "album" | "artist" | "playlist"; data: { id: string } }, label: string, shuffle = false): void {
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: kind as never, label, sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: kind as never, label, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
 /** The Customise Home panel: every section in order, a switch, drag (or the arrows) to move, how it's shown. */
