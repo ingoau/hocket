@@ -1308,6 +1308,7 @@
     <string name="stash_deselect">Deselect</string>
     <string name="stash_remove">Remove %1$s from the stash</string>
     <string name="stash_reorder">Drag to reorder %1$s</string>
+    <string name="stash_play_from">Play from %1$s</string>
     <string name="stash_move_up">Move up</string>
     <string name="stash_move_down">Move down</string>
     <plurals name="stash_queued">

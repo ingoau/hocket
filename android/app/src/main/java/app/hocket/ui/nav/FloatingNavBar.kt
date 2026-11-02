@@ -92,6 +92,8 @@ internal fun FloatingNavBar(
         val chipRoom = if (hasStash) app.hocket.ui.stash.StashChipDefaults.BesideBarWidth + StashGap else 0.dp
         val labelMax = (maxWidth - FloatingNavBarDefaults.Padding * 2 - FloatingNavBarDefaults.ItemWidth * others - SelectedChrome - chipRoom).coerceIn(0.dp, 120.dp)
         val reduced = LocalReducedMotion.current
+        // The chip scales from its side by the pill (the right one right to left).
+        val pillSideX = if (androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 1f else 0f
         // The last non-empty stash, so the chip keeps its covers while it folds away.
         val held = remember { arrayOf(stash) }
         if (hasStash) held[0] = stash
@@ -115,10 +117,10 @@ internal fun FloatingNavBar(
         AnimatedVisibility(
             visible = hasStash,
             enter = if (reduced) fadeIn() else expandHorizontally(spring(dampingRatio = 0.8f, stiffness = 380f), expandFrom = Alignment.Start) +
-                androidx.compose.animation.scaleIn(spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.4f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)) +
+                androidx.compose.animation.scaleIn(spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.4f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(pillSideX, 0.5f)) +
                 fadeIn(androidx.compose.animation.core.tween(120)),
             exit = if (reduced) fadeOut() else fadeOut(androidx.compose.animation.core.tween(90)) +
-                androidx.compose.animation.scaleOut(spring(stiffness = 600f), targetScale = 0.4f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)) +
+                androidx.compose.animation.scaleOut(spring(stiffness = 600f), targetScale = 0.4f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(pillSideX, 0.5f)) +
                 shrinkHorizontally(spring(dampingRatio = 1f, stiffness = 600f), shrinkTowards = Alignment.Start),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -139,6 +141,17 @@ internal fun FloatingNavBar(
 
 /** The gap between the pill and the stash chip. */
 private val StashGap = 8.dp
+
+/**
+ * Whether the stash chip fits beside a pill of [places] in [width] (the screen's) with room for a
+ * short label, at [fontScale] (its count and the label grow with it). When it doesn't, the shell
+ * floats the chip above the mini player instead.
+ */
+internal fun stashFitsBesideBar(width: Dp, places: Int, fontScale: Float): Boolean {
+    val pill = FloatingNavBarDefaults.Padding * 2 + FloatingNavBarDefaults.ItemWidth * (places - 1).coerceAtLeast(0) + SelectedChrome + 40.dp * fontScale
+    val chip = app.hocket.ui.stash.StashChipDefaults.BesideBarWidth + 14.dp * (fontScale - 1f).coerceAtLeast(0f) * 3f
+    return pill + StashGap + chip <= width - FloatingNavBarDefaults.SideMargin * 2
+}
 
 /** The selected capsule's room besides its label: side padding, the icon and the gap. */
 private val SelectedChrome = 16.dp + 24.dp + 8.dp + 16.dp

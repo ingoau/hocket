@@ -270,7 +270,8 @@ private fun ToastCollector(host: SnackbarHostState) {
         }
         launch {
             client.toasts.collect { toast ->
-                val result = host.showSnackbar(toast.message, actionLabel = toast.actionLabel, duration = if (toast.durationMs > 6000u) SnackbarDuration.Long else SnackbarDuration.Short)
+                val target = app.hocket.ui.components.SnackbarRedirect.host ?: host
+                val result = target.showSnackbar(toast.message, actionLabel = toast.actionLabel, duration = if (toast.durationMs > 6000u) SnackbarDuration.Long else SnackbarDuration.Short)
                 if (result == SnackbarResult.ActionPerformed) toast.actionCommand?.let { client.dispatch(HocketJson.decodeCommand(it)) }
             }
         }
@@ -377,8 +378,12 @@ private fun MainShell(snackbar: SnackbarHostState) {
         // The song stash (#150): a chip beside the floating bar, or on its own above the mini player.
         val stash by client.stash.collectAsStateWithLifecycle()
         var stashOpen by rememberSaveable { mutableStateOf(false) }
-        val stashAlone = wide || !floatingBar
-        val stashRoom = if (stashAlone && stash.isNotEmpty()) app.hocket.ui.stash.StashChipDefaults.StandaloneRoom else 0.dp
+        val fontScale = LocalDensity.current.fontScale
+        val stashAlone = wide || !floatingBar || !stashFitsBesideBar(maxWidth, navItems().size, fontScale)
+        // Eased, so the content's bottom padding follows the chip in rather than jumping.
+        val stashRoom by androidx.compose.animation.core.animateDpAsState(
+            if (stashAlone && stash.isNotEmpty()) app.hocket.ui.stash.StashChipDefaults.StandaloneRoom else 0.dp, label = "stashRoom",
+        )
         CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, LocalStashRoom provides stashRoom, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
@@ -563,7 +568,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     .blockTouchesBehind()
                     .then(hiddenWhenCovered)
                 if (floatingBar) {
-                    FloatingNavBar(items = items, selected = selected, onSelect = go, modifier = barModifier, stash = stash, onOpenStash = { stashOpen = true })
+                    FloatingNavBar(items = items, selected = selected, onSelect = go, modifier = barModifier, stash = if (stashAlone) emptyList() else stash, onOpenStash = { stashOpen = true })
                 } else {
                     // Transparent over the scrim, along the bottom edge.
                     ShortNavigationBar(containerColor = Color.Transparent, modifier = barModifier) {
@@ -585,11 +590,14 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 val held = remember { arrayOf(stash) }
                 if (stash.isNotEmpty()) held[0] = stash
                 val reducedMotion = LocalReducedMotion.current
+                // It grows from the corner by the screen edge (the left one right to left).
+                val edgeX = if (LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 0f else 1f
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = stash.isNotEmpty(),
-                    enter = if (reducedMotion) androidx.compose.animation.fadeIn() else androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)) +
+                    // Not under the full player either: faded out there, it would still take taps.
+                    visible = stash.isNotEmpty() && !covered,
+                    enter = if (reducedMotion) androidx.compose.animation.fadeIn() else androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(edgeX, 1f)) +
                         androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 380f)) { it / 2 } + androidx.compose.animation.fadeIn(),
-                    exit = if (reducedMotion) androidx.compose.animation.fadeOut() else androidx.compose.animation.scaleOut(androidx.compose.animation.core.spring(stiffness = 600f), targetScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)) + androidx.compose.animation.fadeOut(),
+                    exit = if (reducedMotion) androidx.compose.animation.fadeOut() else androidx.compose.animation.scaleOut(androidx.compose.animation.core.spring(stiffness = 600f), targetScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(edgeX, 1f)) + androidx.compose.animation.fadeOut(),
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .zIndex(20f)

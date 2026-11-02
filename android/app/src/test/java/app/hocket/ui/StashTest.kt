@@ -103,4 +103,15 @@ class StashTest {
         compose.waitForIdle()
         compose.onAllNodesWithTag("stash.chip").assertCountEquals(0)
     }
+
+    @Test
+    @Config(qualifiers = "w320dp-h700dp")
+    fun onANarrowPhoneTheChipFloatsAboveTheMiniPlayerInstead() {
+        val core = start()
+        stashSome(core, 12)
+        compose.onNodeWithTag("stash.chip").assertIsDisplayed()
+        val chip = compose.onNodeWithTag("stash.chip").getBoundsInRoot()
+        val mini = compose.onNodeWithTag("miniPlayer").getBoundsInRoot()
+        assertTrue("chip bottom ${chip.bottom} above mini top ${mini.top}", chip.bottom <= mini.top)
+    }
 }

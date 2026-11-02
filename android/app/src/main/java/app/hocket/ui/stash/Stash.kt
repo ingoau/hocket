@@ -27,7 +27,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.role
+import app.hocket.ui.components.AppSnackbar
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,7 +75,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -107,13 +116,7 @@ fun StashChip(
     elevation: Dp = 6.dp,
 ) {
     val reduced = LocalReducedMotion.current
-    val haptics = LocalHapticFeedback.current
     val count = items.size
-    var last by remember { mutableStateOf(count) }
-    LaunchedEffect(count) {
-        if (count > last && last > 0) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-        last = count
-    }
     val description = pluralStringResource(R.plurals.stash_chip_description, count, count)
     val art = (height - 16.dp).coerceAtMost(32.dp)
     Row(
@@ -122,9 +125,9 @@ fun StashChip(
             .shadow(elevation, CircleShape, ambientColor = Color.Black, spotColor = Color.Black)
             .clip(CircleShape)
             .background(container)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description }
             .testTag("stash.chip")
+            .clickable(role = Role.Button, onClick = onClick)
+            .clearAndSetSemantics { contentDescription = description; role = Role.Button }
             .padding(start = (height - art) / 2, end = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -142,25 +145,29 @@ fun StashChip(
             },
             label = "stashCount",
         ) { n ->
-            Text(n.toString(), color = content, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("stash.count"))
+            Text(n.toString(), color = content, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.testTag("stash.count"))
         }
     }
 }
 
-/** The first two covers fanned out, the front one tilted right over the back one tilted left. */
+/**
+ * The two newest covers fanned out, the newest in front tilted towards the count over the one
+ * before it (mirrored right to left). Each song stashed drops in as the new front card.
+ */
 @Composable
 private fun Fan(items: List<StashItem>, size: Dp, reduced: Boolean) {
     val two = items.size > 1
+    val dir = if (androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) -1f else 1f
     val spec = if (reduced) spring<Float>(stiffness = Spring.StiffnessHigh) else spring(dampingRatio = 0.55f, stiffness = 400f)
     val spread by animateFloatAsState(if (two) 1f else 0f, spec, label = "stashFan")
     val width by animateDpAsState(if (two) size + 10.dp else size, if (reduced) spring(stiffness = Spring.StiffnessHigh) else spring(dampingRatio = 0.8f, stiffness = 500f), label = "stashFanWidth")
     Box(Modifier.width(width).height(size)) {
-        items.getOrNull(1)?.let { back ->
+        items.getOrNull(items.size - 2)?.let { back ->
             key(back.entryId) {
-                Card(back, size, Modifier.graphicsLayer { rotationZ = -10f * spread; alpha = spread.coerceIn(0f, 1f) })
+                Card(back, size, Modifier.graphicsLayer { rotationZ = -10f * spread * dir; alpha = spread.coerceIn(0f, 1f) })
             }
         }
-        items.firstOrNull()?.let { front ->
+        items.lastOrNull()?.let { front ->
             key(front.entryId) {
                 // A newly stashed front card drops in.
                 var shown by remember { mutableStateOf(reduced) }
@@ -169,8 +176,8 @@ private fun Fan(items: List<StashItem>, size: Dp, reduced: Boolean) {
                 Card(
                     front, size,
                     Modifier.graphicsLayer {
-                        translationX = 10.dp.toPx() * spread
-                        rotationZ = 8f * spread - 20f * (1f - drop)
+                        translationX = 10.dp.toPx() * spread * dir
+                        rotationZ = (8f * spread - 20f * (1f - drop)) * dir
                         translationY = -size.toPx() * 0.4f * (1f - drop)
                         scaleX = 0.6f + 0.4f * drop
                         scaleY = 0.6f + 0.4f * drop
@@ -210,12 +217,25 @@ fun StashSheet(onDismiss: () -> Unit) {
     val items by client.stash.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
     val resources = LocalResources.current
-    val snackbar = LocalAppSnackbar.current
+    val scope = rememberCoroutineScope()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // The sheet is a window over the shell's snackbars: they (and their Undo) show in it instead.
+    val sheetSnackbars = remember { SnackbarHostState() }
+    val snackbar = remember(scope) { AppSnackbar(sheetSnackbars, scope) }
+    DisposableEffect(Unit) {
+        app.hocket.ui.components.SnackbarRedirect.host = sheetSnackbars
+        onDispose { if (app.hocket.ui.components.SnackbarRedirect.host === sheetSnackbars) app.hocket.ui.components.SnackbarRedirect.host = null }
+    }
     var picked by remember { mutableStateOf(setOf<String>()) }
     var playlistPicker by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf(false) }
-    // Emptied (here or on another device): nothing left to show.
-    LaunchedEffect(items.isEmpty()) { if (items.isEmpty()) onDismiss() }
+    // Emptied (here or on another device) after having songs: it slides away. (Restored before the
+    // stash has arrived, it waits for it rather than closing at once.)
+    var hadSongs by remember { mutableStateOf(false) }
+    LaunchedEffect(items.isEmpty()) {
+        if (items.isNotEmpty()) hadSongs = true
+        else if (hadSongs) { sheetState.hide(); onDismiss() }
+    }
     val live = items.map { it.entryId }.toSet()
     val selection = items.filter { it.entryId in picked && it.entryId in live }
     val acting = selection.ifEmpty { items }
@@ -226,9 +246,11 @@ fun StashSheet(onDismiss: () -> Unit) {
     fun queue(next: Boolean) {
         client.dispatch(Commands.runAction(if (next) ActionIds.PLAY_NEXT else ActionIds.PLAY_LATER, Commands.tracks(ids)))
         val text = resources.getQuantityString(if (next) R.plurals.stash_queued_next else R.plurals.stash_queued, ids.size, ids.size)
-        snackbar?.let { s -> s.launch { s.host.showSnackbar(text) } }
+        snackbar.launch { sheetSnackbars.showSnackbar(text) }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("stash.sheet")) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, modifier = Modifier.testTag("stash.sheet")) {
+        CompositionLocalProvider(LocalAppSnackbar provides snackbar) {
+        Box {
         Column(Modifier.navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -269,13 +291,16 @@ fun StashSheet(onDismiss: () -> Unit) {
                 items = items,
                 picked = picked,
                 onToggle = { id -> picked = if (id in picked) picked - id else picked + id; haptics.performHapticFeedback(HapticFeedbackType.SegmentTick) },
-                onPlayFrom = { i -> play(false, i, items.map { it.track.id }) },
+                onPlayFrom = { list, i -> play(false, i, list) },
                 onRemove = { id -> client.dispatch(Command.StashRemove(CommandStashRemoveInner(listOf(id)))) },
                 onMove = { id, to -> client.dispatch(Command.StashMove(CommandStashMoveInner(id, to.toUInt()))) },
             )
         }
+        SnackbarHost(sheetSnackbars, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(8.dp))
+        }
+        }
     }
-    if (playlistPicker) PlaylistPicker(Commands.tracks(ids), onDismiss = { playlistPicker = false })
+    if (playlistPicker) CompositionLocalProvider(LocalAppSnackbar provides snackbar) { PlaylistPicker(Commands.tracks(ids), onDismiss = { playlistPicker = false }) }
     if (naming) NewPlaylistDialog(onCreate = { name -> naming = false; client.dispatch(Commands.createPlaylist(serverId, name, ids)) }, onDismiss = { naming = false })
 }
 
@@ -292,7 +317,7 @@ private fun StashList(
     items: List<StashItem>,
     picked: Set<String>,
     onToggle: (String) -> Unit,
-    onPlayFrom: (Int) -> Unit,
+    onPlayFrom: (List<String>, Int) -> Unit,
     onRemove: (String) -> Unit,
     onMove: (String, Int) -> Unit,
 ) {
@@ -300,7 +325,8 @@ private fun StashList(
     // The list as shown: moves land here at once and reach the core when the drag ends.
     var shown by remember { mutableStateOf(items) }
     var dragging by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(items) { if (dragging == null) shown = items }
+    LaunchedEffect(items, dragging) { if (dragging == null) shown = items }
+    val current by rememberUpdatedState(items)
     val listState = rememberLazyListState()
     val reorder = rememberReorderableLazyListState(listState) { from, to ->
         shown = shown.toMutableList().apply { add(to.index, removeAt(from.index)) }
@@ -313,10 +339,10 @@ private fun StashList(
         modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).testTag("stash.list"),
         contentPadding = PaddingValues(start = 12.dp, end = 4.dp, bottom = 16.dp),
     ) {
-        items(shown, key = { it.entryId }) { item ->
-            val index = shown.indexOf(item)
+        itemsIndexed(shown, key = { _, it -> it.entryId }) { index, item ->
             ReorderableItem(reorder, key = item.entryId) { isDragging ->
                 val on = item.entryId in picked
+                val reorderLabel = stringResource(R.string.stash_reorder, item.track.title)
                 val lift by animateDpAsState(if (isDragging) 8.dp else 0.dp, label = "stashRowLift")
                 Surface(
                     shadowElevation = lift,
@@ -326,9 +352,8 @@ private fun StashList(
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clickable { onToggle(item.entryId) }
+                            .toggleable(value = on, role = Role.Checkbox) { onToggle(item.entryId) }
                             .semantics(mergeDescendants = true) {
-                                selected = on
                                 customActions = buildList {
                                     if (index > 0) add(CustomAccessibilityAction(moveUp) { onMove(item.entryId, index - 1); true })
                                     if (index < shown.lastIndex) add(CustomAccessibilityAction(moveDown) { onMove(item.entryId, index + 1); true })
@@ -338,7 +363,11 @@ private fun StashList(
                             .padding(start = 8.dp, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Artwork(item.track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp).clickable { onPlayFrom(index) }, RoundedCornerShape(10.dp))
+                        Artwork(
+                            item.track.coverArt, ArtworkSizes.THUMB, stringResource(R.string.stash_play_from, item.track.title),
+                            Modifier.size(48.dp).clickable(onClickLabel = stringResource(R.string.stash_play_from, item.track.title), role = Role.Button) { onPlayFrom(shown.map { it.track.id }, index) },
+                            RoundedCornerShape(10.dp),
+                        )
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
                             Text(item.track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -355,11 +384,20 @@ private fun StashList(
                                     onDragStopped = {
                                         val id = dragging
                                         dragging = null
-                                        val to = shown.indexOfFirst { it.entryId == id }
-                                        if (id != null && to >= 0 && items.indexOfFirst { it.entryId == id } != to) onMove(id, to)
+                                        // Where it landed, as an index among the others in the stash as it is now
+                                        // (another device may have changed it meanwhile): after the row it was
+                                        // dropped under.
+                                        val at = shown.indexOfFirst { it.entryId == id }
+                                        if (id != null && at >= 0) {
+                                            val others = current.filter { it.entryId != id }
+                                            val prev = shown.getOrNull(at - 1)?.entryId
+                                            val to = if (prev == null) 0 else others.indexOfFirst { it.entryId == prev } + 1
+                                            if (to >= 0 && current.indexOfFirst { it.entryId == id } != to) onMove(id, to)
+                                        }
                                         haptics.performHapticFeedback(HapticFeedbackType.GestureEnd)
                                     },
-                                ),
+                                )
+                                .semantics { contentDescription = reorderLabel },
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(HocketIcons.Filled.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
