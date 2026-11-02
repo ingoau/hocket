@@ -775,7 +775,10 @@ class FakeCore(
                     handle(Command.SeekTo(CommandSeekToInner(p.positionMs)))
                 }
             }
-            is Command.ClearAlbumResume -> albumResumes.remove(c.data.album_id)
+            is Command.ClearAlbumResume -> {
+                albumResumes.remove(c.data.album_id)
+                emit(Event.AlbumResumesChanged(EventAlbumResumesChangedInner(albumResumes.values.sortedBy { it.albumId })))
+            }
             is Command.PlayContext -> {
                 val a = c.data.args
                 val before = captureSession()
