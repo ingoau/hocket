@@ -38,6 +38,7 @@ object LibraryPatches {
         tracks = r.tracks.map { track(it, items) },
         albums = r.albums.map { album(it, items) },
         artists = r.artists.map { artist(it, items) },
+        lyrics = r.lyrics?.map { h -> track(h.track, items).let { if (it === h.track) h else h.copy(track = it) } },
     )
 
     fun queue(q: QueueView, items: List<LibraryItemState>): QueueView {

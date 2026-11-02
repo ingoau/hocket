@@ -143,6 +143,7 @@ impl Actor {
         }
         self.load_stash();
         self.load_snoozes();
+        self.load_album_resumes();
         // Restore the resume point: the last known item and position, dormant
         // (never auto-resume on start).
         if let Ok(Some(pos)) = self
@@ -240,9 +241,18 @@ impl Actor {
             self.toast("That doesn't apply right now", None);
             return false;
         }
+        let album_ended = effects.as_ref().is_some_and(|fx| {
+            fx.iter()
+                .any(|e| matches!(e, Effect::Stopped | Effect::NeedsAutoplay))
+        });
         self.pending_effects = effects;
         self.engine_input(Input::LocalOp { op });
         self.pending_effects = None;
+        // Ending the queue often leaves the document where it was (the last track stays
+        // current), so there is no document-changed event to clear the resume point from.
+        if album_ended {
+            self.finish_album_resume();
+        }
         true
     }
 
@@ -406,9 +416,11 @@ impl Actor {
             Output::StopListener => self.io_stop_listener(),
             Output::Advertise(a) => self.io_advertise(a),
             Output::VerifyCredential { peer, credential } => self.io_verify(peer, credential),
-            Output::DocumentChanged { document, cause } => {
-                self.on_document_changed(document, cause)
-            }
+            Output::DocumentChanged {
+                document,
+                cause,
+                start_position_ms,
+            } => self.on_document_changed(document, cause, start_position_ms),
             Output::TransportChanged { .. } => self.emit_transport(),
             Output::LeaseChanged {
                 owns,
@@ -496,6 +508,7 @@ impl Actor {
             Output::SettingsMerged(list) => self.on_settings_merged(list),
             Output::StashMerged(list) => self.on_stash_merged(list),
             Output::SnoozesMerged(list) => self.on_snoozes_merged(list),
+            Output::AlbumResumeMerged(list) => self.on_album_resume_merged(list),
             Output::UndoEntryReceived {
                 entry,
                 before_revision: _,
@@ -531,7 +544,12 @@ impl Actor {
 
     // -- document changes -------------------------------------------------------
 
-    fn on_document_changed(&mut self, document: SessionDocument, cause: DocChange) {
+    fn on_document_changed(
+        &mut self,
+        document: SessionDocument,
+        cause: DocChange,
+        start_position_ms: Ms,
+    ) {
         if cause != DocChange::Local {
             self.on_offline_clear_refused(&document);
         }
@@ -599,12 +617,44 @@ impl Actor {
                 _ => {}
             }
         }
+        // A remote `PlayTracks` carries its start time on the op. The document
+        // does not, and a remote change has no reducer effects, so without
+        // this the device that owns playback would load at the beginning.
+        if restore_position.is_none() && start_position_ms > 0 {
+            restore_position = Some(start_position_ms);
+        }
         for key in skipped {
             let name = self.track_title_for_key(&document, &key);
             self.player_notice(
                 PlayerNoticeCode::CouldNotPlaySkipped,
                 format!("Couldn't play {name}, skipped"),
                 Some(name),
+            );
+        }
+
+        let key_changed = new_key != old_key;
+        // A resume started on another device carries the position in the op. This device
+        // applies that op with no local effects, so the position is handed across here.
+        let remote_at = if cause == DocChange::Remote {
+            self.engine.as_mut().and_then(|e| e.take_resume_load_ms())
+        } else {
+            None
+        };
+        let resume_at = if key_changed {
+            self.take_pending_resume(document.current.as_ref().map(|c| c.track_id.as_str()))
+        } else {
+            None
+        };
+        // A change another device sent (Next, a tapped track, a new album) while this device
+        // plays is recorded here too: the outgoing track is still loaded, so its position is
+        // the real one. The device that sent it does not play and records nothing.
+        if cause == DocChange::Local || (cause == DocChange::Remote && owns) {
+            self.note_album_transition(
+                old.as_ref(),
+                &document,
+                key_changed,
+                stopped || needs_autoplay,
+                resume_at.or(remote_at),
             );
         }
 
@@ -618,6 +668,8 @@ impl Actor {
                         .filter(|(k, _)| *k == item.key)
                         .map(|(_, p)| p)
                         .or(restore_position)
+                        .or(resume_at)
+                        .or(remote_at)
                         .unwrap_or(0);
                     if owns {
                         let keep_playing = match cause {
@@ -633,13 +685,14 @@ impl Actor {
                         self.playback.restore_position = Some((item.key.clone(), position));
                         self.queue_input(Input::ClaimTransport { takeover: false });
                     } else {
-                        // Another device plays; we only render. Whatever this
-                        // backend had loaded is stopped, and the old item's
-                        // position is not carried onto the new one.
+                        // Another device plays. Show the position this change asked for
+                        // (a resume). The device that holds playback loads it from the
+                        // same op, so a seek from here would land on whatever it still
+                        // had loaded.
                         self.render_only();
                         self.playback.doc_key = Some(item.key.clone());
                         self.playback.track = self.track_or_bare(&item.track_id);
-                        self.playback.position_ms = 0;
+                        self.playback.position_ms = position;
                         self.playback.position_at = self.now();
                     }
                 }
@@ -957,6 +1010,7 @@ impl Actor {
             args.context.label = self.context_label(&args.context.server_id, &args.context.kind);
         }
         if args.context.tracks.is_empty() {
+            self.pending_resume_at = None;
             self.toast("Nothing to play", None);
             return;
         }

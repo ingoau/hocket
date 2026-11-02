@@ -1,5 +1,6 @@
 package app.hocket.core.fake
 
+import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.ActionIds
@@ -118,6 +119,8 @@ class FakeCore(
     private var savedQueueCap = 10
     /** The song stash (#150): entry id → track id, in order; no sync on one fake device. */
     private val stash = mutableListOf<Pair<String, TrackId>>()
+    /** Album id to the resume point the album page queries. Tests seed this. */
+    val albumResumes = mutableMapOf<String, app.hocket.core.api.AlbumResumePoint>()
     private val stashRemoved = mutableMapOf<String, Pair<Int, TrackId>>()
     private var warnThreshold: Double? = 4.0 * 1024 * 1024 * 1024
     private val playHistory = ArrayList<PlayHistoryEntry>()
@@ -164,6 +167,7 @@ class FakeCore(
         def(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK, "\"automatic\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_PLAYER_RATING, "true", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS, "false", SettingScope.AccountSynced)
+        def(SettingKeys.PLAYBACK_RESUME_ALBUMS, "true", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_FLOATING_NAV_BAR, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_ACCENT, "null", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_DYNAMIC_COLOUR, "true", SettingScope.DeviceLocal)
@@ -414,7 +418,7 @@ class FakeCore(
     private fun mediaSessionState(): MediaSessionState {
         val t = current?.let { library.track(it.trackId) }
         return MediaSessionState(
-            metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.loved, it.rating) },
+            metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.loved, it.rating, stash.any { s -> s.second == it.id }) },
             isPlaying = stamp.isPlaying, position = stamp, shuffle = shuffle != null, repeat = repeat, volume = volumeOf(volumeTarget()).first, muted = volumeOf(volumeTarget()).second,
             actions = orderedMediaActions(), ownsTransport = transportOwner == deviceId,
         )
@@ -423,7 +427,7 @@ class FakeCore(
     private fun orderedMediaActions(): List<MediaSessionAction> {
         val base = listOf(MediaSessionAction.Play, MediaSessionAction.Pause, MediaSessionAction.Next, MediaSessionAction.Previous, MediaSessionAction.Seek, MediaSessionAction.Stop)
         val custom = (actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION).mapNotNull {
-            when (it) { ActionIds.LOVE -> MediaSessionAction.Love; ActionIds.SHUFFLE -> MediaSessionAction.Shuffle; ActionIds.REPEAT -> MediaSessionAction.Repeat; ActionIds.RATE -> MediaSessionAction.Rate; else -> null }
+            when (it) { ActionIds.LOVE -> MediaSessionAction.Love; ActionIds.SHUFFLE -> MediaSessionAction.Shuffle; ActionIds.REPEAT -> MediaSessionAction.Repeat; ActionIds.RATE -> MediaSessionAction.Rate; ActionIds.STASH -> MediaSessionAction.Stash; else -> null }
         }
         return base + custom
     }
@@ -496,7 +500,10 @@ class FakeCore(
     private fun stashAdd(trackIds: List<TrackId>) {
         val fresh = trackIds.distinct().filter { t -> stash.none { it.second == t } && library.track(t) != null }
         fresh.forEach { stash.add(newId("stash") to it) }
-        if (fresh.isNotEmpty()) emitStash()
+        if (fresh.isNotEmpty()) {
+            emitStash()
+            emitMedia()
+        }
         toast(when (fresh.size) { 0 -> "Already in the stash"; 1 -> "Stashed 1 song"; else -> "Stashed ${fresh.size} songs" })
     }
 
@@ -811,6 +818,18 @@ class FakeCore(
             is Command.SetVolume -> { volumes[volumeTarget()] = c.data.volume.coerceIn(0.0, 1.0) to false; emitTransport() }
             is Command.SetMuted -> { volumes[volumeTarget()] = volumeOf(volumeTarget()).first to c.data.muted; emitTransport() }
 
+            is Command.ResumeAlbum -> {
+                val p = albumResumes[c.data.album_id]
+                if (p == null) handle(Commands.playContext(Commands.albumContext(serverId, c.data.album_id, library.album(c.data.album_id)?.name ?: "")))
+                else {
+                    handle(Commands.playContext(Commands.albumContext(serverId, c.data.album_id, library.album(c.data.album_id)?.name ?: ""), startIndex = p.trackIndex.toInt()))
+                    handle(Command.SeekTo(CommandSeekToInner(p.positionMs)))
+                }
+            }
+            is Command.ClearAlbumResume -> {
+                albumResumes.remove(c.data.album_id)
+                emit(Event.AlbumResumesChanged(EventAlbumResumesChangedInner(albumResumes.values.sortedBy { it.albumId })))
+            }
             is Command.PlayContext -> {
                 val a = c.data.args
                 val before = captureSession()
@@ -826,7 +845,7 @@ class FakeCore(
                 val before = captureSession()
                 saveOutgoingQueue()
                 setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.track_ids), c.data.track_ids, c.data.start_index.toInt(), c.data.shuffle)
-                startPlayback(0, true)
+                startPlayback(c.data.start_position_ms?.toLong() ?: 0, true)
                 pushUndo("Play ${c.data.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
             }
@@ -1099,12 +1118,17 @@ class FakeCore(
                 MediaSessionAction.Repeat -> handle(Command.SetRepeat(CommandSetRepeatInner(when (repeat) { RepeatMode.Off -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off })))
                 MediaSessionAction.Love -> currentTrack()?.let { setLoved(listOf(RatingTarget.Track(RatingTargetTrackInner(it.id))), !it.loved) }
                 MediaSessionAction.Rate -> currentTrack()?.let { t -> setRating(listOf(RatingTarget.Track(RatingTargetTrackInner(t.id))), c.data.value?.toInt() ?: 0) }
+                MediaSessionAction.Stash -> currentTrack()?.let { stashAdd(listOf(it.id)) }
             }
             is Command.RunAction -> runAction(c.data.action_id, c.data.target)
             is Command.SetShortcut -> Unit
             is Command.SetActionOrder -> {
-                actionOrders[c.data.surface] = c.data.action_ids
-                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), c.data.action_ids))
+                val ids = if (c.data.surface == "mediaSession") {
+                    val previous = actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION
+                    ActionIds.withNewlyEnabledStash(previous, c.data.action_ids)
+                } else c.data.action_ids
+                actionOrders[c.data.surface] = ids
+                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), ids))
                 emit(Event.ActionsChanged(EventActionsChangedInner(c.data.surface))); emitMedia()
             }
             is Command.SetSelection -> { selection = c.data.target }
@@ -1603,6 +1627,7 @@ class FakeCore(
         Query.SavedQueues -> QueryResult.SavedQueues(savedQueues.toList())
         Query.Stash -> QueryResult.StashItems(stashItems())
         Query.Snoozes -> QueryResult.SnoozeItems(snoozeItems())
+        is Query.AlbumResume -> QueryResult.AlbumResumeState(albumResumes[q.data.id])
         is Query.Lyrics -> QueryResult.LyricsResult(lyricsFor(q.data.track_id))
         is Query.Related -> {
             val seed = library.track(q.data.track_id)
@@ -1658,7 +1683,7 @@ class FakeCore(
         val albums = if (needle.isEmpty()) emptyList() else library.albums.filter { it.name.lowercase().contains(needle) || it.artist?.lowercase()?.contains(needle) == true }.take(limit)
         val artists = if (needle.isEmpty()) emptyList() else library.artists.filter { it.name.lowercase().contains(needle) }.take(limit)
         val playlists = if (needle.isEmpty()) emptyList() else library.playlists.filter { it.name.lowercase().contains(needle) }.take(limit)
-        val local = SearchResults(q.request_id, q.query, tracks.map { it.toSummary() }, albums, artists, playlists, false)
+        val local = SearchResults(q.request_id, q.query, tracks.map { it.toSummary() }, albums, artists, playlists, false, lyricHits(needle, limit))
         if (q.include_server && needle.isNotEmpty() && timers) scope.launch {
             delay(700)
             // "Server" results: a handful of extra matches the mirror wouldn't have yet.
@@ -1666,6 +1691,34 @@ class FakeCore(
             emit(Event.SearchResults(EventSearchResultsInner(SearchResults(q.request_id, q.query, extra.map { it.toSummary() }, emptyList(), emptyList(), emptyList(), true))))
         }
         return QueryResult.Search(local)
+    }
+
+    /** Phrases from lyrics this fake has cached (songs it pretends were played). */
+    private fun lyricHits(needle: String, limit: Int): List<LyricHit> {
+        if (needle.isEmpty()) return emptyList()
+        val out = ArrayList<LyricHit>()
+        for (t in library.tracks) {
+            val lyrics = library.lyricsByTrack[t.id] ?: continue
+            val lines = lyrics.lines
+            for (i in lines.indices) {
+                val text = lines[i].text
+                val here = text.lowercase().indexOf(needle)
+                if (here >= 0) {
+                    out += LyricHit(t.toSummary(), text, here.toUInt(), (here + needle.length).toUInt(), lines[i].startMs)
+                    break
+                }
+                if (i + 1 < lines.size) {
+                    val joined = text + "\n" + lines[i + 1].text
+                    val at = joined.lowercase().indexOf(needle)
+                    if (at >= 0) {
+                        out += LyricHit(t.toSummary(), joined, at.toUInt(), (at + needle.length).toUInt(), lines[i].startMs)
+                        break
+                    }
+                }
+            }
+            if (out.size >= limit) break
+        }
+        return out
     }
 
     private fun stats(days: Int): QueryResult {

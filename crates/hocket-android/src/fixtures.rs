@@ -78,7 +78,8 @@ mod tests {
                 track_ids: vec!["a".into()],
                 start_index: 0,
                 label: "Search: hello".into(),
-                shuffle: false
+                shuffle: false,
+                start_position_ms: 0,
             }),
         );
         push(
@@ -95,6 +96,7 @@ mod tests {
                     start_index: Some(2),
                     shuffle: true,
                     save_outgoing: true,
+                    start_position_ms: None,
                 }
             }),
         );
@@ -468,6 +470,7 @@ mod tests {
                         track_id: Some("t1".into()),
                         loved: false,
                         rating: 0,
+                        stashed: false,
                     }),
                     is_playing: true,
                     position: PositionStamp {

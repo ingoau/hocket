@@ -140,6 +140,7 @@ async fn random_scenario(seed: u64, steps: usize) {
                 start_index: 0,
                 label: "Sel".into(),
                 shuffle: rng.random_bool(0.3),
+                start_position_ms: 0,
             },
             1 => Command::Next,
             2 => Command::Previous,

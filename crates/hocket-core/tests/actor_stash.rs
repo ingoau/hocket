@@ -174,3 +174,85 @@ async fn two_devices_share_the_stash() {
     assert_eq!(stashed(&a).await, ids(&["t1", "t3"]));
     assert_eq!(stashed(&b).await, ids(&["t1", "t3"]));
 }
+
+/// The notification's Stash button is off until chosen, then adds the playing
+/// track once. A second tap does not remove it or emit another stash change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn media_session_stash_adds_the_playing_track_once() {
+    let t = TestCore::start("a", seeded_server(6, 200.0)).await;
+    t.wait_until(30_000.0, |core| {
+        core.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+    })
+    .await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            context: QueueContext {
+                server_id: sid,
+                kind: ContextKind::Album { id: "al0".into() },
+                label: String::new(),
+                sort: SortOrder::Default,
+                tracks: vec![],
+            },
+            start_index: Some(0),
+            shuffle: false,
+            save_outgoing: true,
+            start_position_ms: None,
+        },
+    })
+    .await;
+    t.run_for(500.0).await;
+
+    let before = t.snapshot().await.media_session;
+    assert!(
+        !before.actions.contains(&MediaSessionAction::Stash),
+        "stash is off the notification until the user turns it on"
+    );
+    assert!(!before.metadata.as_ref().unwrap().stashed);
+
+    t.run(Command::SetActionOrder {
+        surface: "mediaSession".into(),
+        action_ids: vec!["togglePlay".into(), "stash".into()],
+    })
+    .await;
+    assert!(t
+        .snapshot()
+        .await
+        .media_session
+        .actions
+        .contains(&MediaSessionAction::Stash));
+
+    t.events.clear();
+    t.run(Command::MediaSessionCommand {
+        action: MediaSessionAction::Stash,
+        value: None,
+    })
+    .await;
+    assert_eq!(stashed(&t).await, ids(&["t0"]));
+    let published = t.events.all().into_iter().rev().find_map(|e| match e {
+        Event::MediaSession { state } => Some(state),
+        _ => None,
+    });
+    assert_eq!(
+        published.and_then(|s| s.metadata).map(|m| m.stashed),
+        Some(true)
+    );
+
+    t.events.clear();
+    t.run(Command::MediaSessionCommand {
+        action: MediaSessionAction::Stash,
+        value: None,
+    })
+    .await;
+    assert_eq!(stashed(&t).await, ids(&["t0"]));
+    assert!(
+        t.events
+            .all()
+            .iter()
+            .all(|e| !matches!(e, Event::StashChanged { .. })),
+        "a second tap does not change the stash"
+    );
+}

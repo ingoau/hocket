@@ -789,7 +789,8 @@ static ALL: &[ActionDef] = &[
         ],
         has_items,
         stash,
-        default_shortcut = Some("Mod+S")
+        default_shortcut = Some("Mod+S"),
+        media_session = Some(MediaSessionAction::Stash)
     ),
     action!(
         "openStash",

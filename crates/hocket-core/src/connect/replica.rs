@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::api::{
-    DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, Snooze, StashEntry,
-    TrackId, TransportLease,
+    AlbumResumeEntry, DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, Snooze,
+    StashEntry, TrackId, TransportLease,
 };
 use crate::connect::wire::{
     merge_saved_queues, merge_settings, DeviceLease, LastStamp, ReplicaState, ScrobbleRecord,
@@ -66,6 +66,7 @@ pub fn new_replica(document: SessionDocument, now: EpochMs) -> ReplicaState {
         settings: vec![],
         stash: vec![],
         snoozes: vec![],
+        album_resumes: vec![],
         devices: vec![],
         transport_lease: TransportLease::default(),
         last_stamp: None,
@@ -83,6 +84,7 @@ pub trait ReplicaExt {
     fn merge_settings(&mut self, theirs: &[Setting], now: EpochMs) -> bool;
     fn merge_stash(&mut self, theirs: &[StashEntry], now: EpochMs) -> bool;
     fn merge_snoozes(&mut self, theirs: &[Snooze], now: EpochMs) -> bool;
+    fn merge_album_resumes(&mut self, theirs: &[AlbumResumeEntry], now: EpochMs) -> bool;
     fn claim_scrobble(
         &mut self,
         track_id: &str,
@@ -161,6 +163,17 @@ impl ReplicaExt for ReplicaState {
         let changed = merged != self.snoozes;
         if changed {
             self.snoozes = merged;
+            self.updated_at = now;
+        }
+        changed
+    }
+
+    fn merge_album_resumes(&mut self, theirs: &[AlbumResumeEntry], now: EpochMs) -> bool {
+        let (mut merged, _) = crate::album_resume::merge(&self.album_resumes, theirs);
+        crate::album_resume::prune(&mut merged, now);
+        let changed = merged != self.album_resumes;
+        if changed {
+            self.album_resumes = merged;
             self.updated_at = now;
         }
         changed

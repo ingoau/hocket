@@ -51,6 +51,7 @@ internal object PebbleLog {
         PebbleProtocol.Cmd.PLAY_NEXT -> "play-next"
         PebbleProtocol.Cmd.PLAY_LATER -> "play-later"
         PebbleProtocol.Cmd.SEEK -> "seek"
+        PebbleProtocol.Cmd.STASH -> "stash"
         else -> "cmd $cmd"
     }
 }

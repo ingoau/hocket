@@ -90,6 +90,7 @@ Queue
 Library
 ───────────
 ♥ Love
+Stash
 Rating ★★★☆☆
 Shuffle: Off
 Repeat: All
@@ -109,7 +110,7 @@ Play on…
 
 Press and hold on Now Playing (touch mode), or the lower half of the menu (buttons-only):
 
-- Rate (1–5 stars) and Love
+- Rate (1–5 stars), Love and Stash (stashes the playing track, then back to Now Playing with a short "Stashed")
 - Shuffle, Repeat (off / all / one)
 - Go to album, Go to artist
 - Play on… (Connect handoff)
@@ -153,7 +154,7 @@ A Pebble page in the Android app's Settings. Keys are `pebble.*` in the core set
 - Touch navigation: On / Off (default Off)
 - Buttons-only mode (Time 2)
 - Gestures: swipe up / down / left / right and press-and-hold, each one of Queue, Library, Actions, Back, Lyrics, Nothing. Defaults as in Now Playing. The back button always goes back, so no assignment can trap you.
-- Buttons-only menu: items and order. Items can be screens (Now Playing, Queue, Library, Lyrics), actions (Love, Rating, Shuffle, Repeat, Go to album / artist, Play on…), or shortcuts (Playlists, Albums, Artists, Downloads, Search).
+- Buttons-only menu: items and order. Items can be screens (Now Playing, Queue, Library, Lyrics), actions (Love, Stash, Rating, Shuffle, Repeat, Go to album / artist, Play on…), or shortcuts (Playlists, Albums, Artists, Downloads, Search).
 - Actions menu: items and order
 - Library sections: items and order
 - Menu timeout: Off / 3 / 5 / 10 s (default 5)

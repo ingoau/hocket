@@ -1,6 +1,7 @@
 //! Command handling, split by concern. Every `impl Actor` block here is part
 //! of the one actor; the split is only for readability.
 
+pub(crate) mod album_resume;
 pub(crate) mod cache;
 pub(crate) mod command;
 pub(crate) mod connect;

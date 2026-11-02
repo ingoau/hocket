@@ -20,6 +20,7 @@ fn album_args(server_id: &str, album: &str) -> PlayContextArgs {
         start_index: Some(0),
         shuffle: false,
         save_outgoing: true,
+        start_position_ms: None,
     }
 }
 

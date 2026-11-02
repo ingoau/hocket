@@ -36,7 +36,8 @@
       ],
       "start_index": 0,
       "label": "Search: hello",
-      "shuffle": false
+      "shuffle": false,
+      "start_position_ms": 0
     }
   },
   "command.playContext": {
@@ -761,7 +762,8 @@
           "artworkPath": "/cache/al1-640.jpg",
           "trackId": "t1",
           "loved": false,
-          "rating": 0
+          "rating": 0,
+          "stashed": false
         },
         "isPlaying": true,
         "position": {

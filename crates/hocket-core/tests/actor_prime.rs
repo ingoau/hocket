@@ -134,6 +134,7 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     assert_eq!(primed(&t, "t0"), 0);
@@ -266,6 +267,7 @@ async fn the_device_that_owns_playback_primes_with_its_own_state() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;

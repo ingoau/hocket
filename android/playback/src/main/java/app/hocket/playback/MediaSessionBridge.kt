@@ -40,7 +40,7 @@ import kotlin.math.roundToInt
 /**
  * Builds the Media3 [MediaLibrarySession] over a [CoreSessionPlayer] and keeps its custom button
  * layout in step with the core's customised action list (`MediaSessionState.actions`): love,
- * shuffle, repeat and rate as media button preferences, so they appear on the notification and on
+ * shuffle, repeat, rate and stash as media button preferences, so they appear on the notification and on
  * Wear/Auto surfaces that honour them. Transport buttons come from the player's available commands.
  *
  * The library side ([browser]) answers other apps' browsing and search (Android Auto, Wear,
@@ -78,6 +78,7 @@ class MediaSessionBridge(
         const val CMD_SHUFFLE = "app.hocket.SHUFFLE"
         const val CMD_REPEAT = "app.hocket.REPEAT"
         const val CMD_RATE = "app.hocket.RATE"
+        const val CMD_STASH = "app.hocket.STASH"
         const val EXTRA_RATING = "rating"
 
         /**
@@ -94,7 +95,7 @@ class MediaSessionBridge(
         }
     }
 
-    private val customCommands = listOf(CMD_LOVE, CMD_SHUFFLE, CMD_REPEAT, CMD_RATE).map { SessionCommand(it, Bundle.EMPTY) }
+    private val customCommands = listOf(CMD_LOVE, CMD_SHUFFLE, CMD_REPEAT, CMD_RATE, CMD_STASH).map { SessionCommand(it, Bundle.EMPTY) }
     /** Library commands too: without them a browser's root and children requests are refused. */
     private val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon().apply { customCommands.forEach { add(it) } }.build()
 
@@ -169,6 +170,7 @@ class MediaSessionBridge(
                     CMD_SHUFFLE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Shuffle))
                     CMD_REPEAT -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Repeat))
                     CMD_RATE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Rate, args.getInt(EXTRA_RATING, 0).toDouble()))
+                    CMD_STASH -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Stash))
                     else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
                 }
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -353,6 +355,11 @@ class MediaSessionBridge(
                     .setDisplayName("Repeat").setSessionCommand(SessionCommand(CMD_REPEAT, Bundle.EMPTY)).build()
                 MediaSessionAction.Rate -> CommandButton.Builder(if ((meta?.rating ?: 0u) > 0u) CommandButton.ICON_STAR_FILLED else CommandButton.ICON_STAR_UNFILLED)
                     .setDisplayName("Rate").setSessionCommand(SessionCommand(CMD_RATE, Bundle().apply { putInt(EXTRA_RATING, if ((meta?.rating ?: 0u) >= 5u) 0 else 5) })).setEnabled(meta != null).build()
+                // Filled once this track is in the stash. A second tap still sends Stash; the core
+                // skips a song that's already there, and this button never unstashes.
+                MediaSessionAction.Stash -> CommandButton.Builder(if (meta?.stashed == true) CommandButton.ICON_BOOKMARK_FILLED else CommandButton.ICON_BOOKMARK_UNFILLED)
+                    .setDisplayName(if (meta?.stashed == true) "Stashed" else "Stash")
+                    .setSessionCommand(SessionCommand(CMD_STASH, Bundle.EMPTY)).setEnabled(meta != null).build()
                 else -> null // transport actions are player commands
             }
         }

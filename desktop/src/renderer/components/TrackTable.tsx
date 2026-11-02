@@ -102,6 +102,9 @@ export interface TrackTableProps {
   onDelete?: (indices: number[], ids: string[]) => void;
   emptyMessage?: string;
   playingTrackId?: string;
+  /** The track a resume ring replaces the number of, and how far through it playback got. */
+  resumeTrackId?: string;
+  resumeFraction?: number;
   testId?: string;
   /** Accessible name of the grid (defaults to "Tracks"). */
   label?: string;
@@ -343,7 +346,7 @@ export function TrackTable(props: TrackTableProps) {
                 data-track-id={tr?.id}
               >
                 {columns.map((c) => (
-                  <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} onPlay={onPlay} primer={primer} omitArtist={props.omitArtist} />
+                  <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} onPlay={onPlay} primer={primer} omitArtist={props.omitArtist} resume={props.resumeTrackId && tr?.id === props.resumeTrackId ? (props.resumeFraction ?? 0) : undefined} />
                 ))}
               </div>
             );
@@ -354,7 +357,19 @@ export function TrackTable(props: TrackTableProps) {
   );
 }
 
-function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string; onPlay: (index: number, track: Track) => void; primer?: Primer; omitArtist?: string }) {
+function ResumeRing({ fraction }: { fraction: number }) {
+  const r = 6;
+  const c = 2 * Math.PI * r;
+  const dash = Math.max(0, Math.min(1, fraction)) * c;
+  return (
+    <svg className="track-resume-ring" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r={r} fill="none" stroke="var(--border)" strokeWidth="2" />
+      <circle cx="8" cy="8" r={r} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeDasharray={`${dash} ${c}`} transform="rotate(-90 8 8)" />
+    </svg>
+  );
+}
+
+function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist, resume }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string; onPlay: (index: number, track: Track) => void; primer?: Primer; omitArtist?: string; resume?: number }) {
   const navigate = useApp((s) => s.navigate);
   const cls = COLUMNS[col].num ? "td num" : "td";
   // Controls inside rows are not Tab stops: the row is (roving), and its
@@ -365,7 +380,7 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist
     case "position":
       return (
         <div className={`${cls} index`} role="gridcell">
-          {playing ? <><Icon name="play" size={12} filled style={{ color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : <span className="n">{col === "position" ? index + 1 : (track.trackNumber ?? index + 1)}</span>}
+          {playing ? <><Icon name="play" size={12} filled style={{ color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : resume !== undefined ? <><ResumeRing fraction={resume} /><span className="sr-only">{col === "position" ? index + 1 : (track.trackNumber ?? index + 1)}</span></> : <span className="n">{col === "position" ? index + 1 : (track.trackNumber ?? index + 1)}</span>}
           {/* Pointer shortcut (Enter plays the focused row); resting on it primes the track. */}
           {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(track.id)} data-testid="row-play"><Icon name="play" size={11} filled /></button> : null}
         </div>

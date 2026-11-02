@@ -148,6 +148,7 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             label,
             shuffle,
             save_outgoing,
+            start_position_ms,
         } => QueueOp::PlayTracks {
             server_id: server_id.clone(),
             track_ids: track_ids.clone(),
@@ -155,6 +156,7 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             label: label.clone(),
             shuffle: *shuffle,
             save_outgoing: *save_outgoing,
+            start_position_ms: *start_position_ms,
         },
         SessionOp::PlayNext {
             server_id,
@@ -265,6 +267,7 @@ mod tests {
                 start_index: Some(0),
                 shuffle: true,
                 save_outgoing: false,
+                start_position_ms: None,
             },
         }
     }

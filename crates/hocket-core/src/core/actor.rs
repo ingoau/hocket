@@ -190,6 +190,12 @@ pub(crate) struct Actor {
     pub stash: Vec<crate::api::StashEntry>,
     /// The signed-in account's snoozes, tombstones included (`crate::snooze`).
     pub snoozes: Vec<crate::api::Snooze>,
+    /// Where albums were left off, tombstones included (`crate::album_resume`).
+    pub album_resumes: Vec<crate::api::AlbumResumeEntry>,
+    /// Track and position the next local load should land on (album resume).
+    pub pending_resume_at: Option<(TrackId, Ms)>,
+    /// When the oldest offered album resume point expires (re-announced from the tick).
+    pub album_resume_expires_at: Option<crate::api::EpochMs>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
     /// sent: one that would only repeat it is not sent (see
     /// [`Actor::emit_transport_state`]).
@@ -482,6 +488,9 @@ impl Actor {
             last_saved_queues: vec![],
             stash: vec![],
             snoozes: vec![],
+            album_resumes: vec![],
+            pending_resume_at: None,
+            album_resume_expires_at: None,
             emitted_transport: None,
             emitted_media_session: None,
             emitted_devices: None,
@@ -868,6 +877,7 @@ impl Actor {
         });
         self.emit_stash();
         self.emit_snoozes();
+        self.emit_album_resumes();
         self.emit(Event::UndoChanged {
             state: snapshot.undo.clone(),
         });
@@ -975,6 +985,10 @@ impl Actor {
         if self.playback.playing && now - self.position_saved_at >= POSITION_HEARTBEAT_MS {
             self.save_position();
         }
+        if self.playback.playing {
+            self.capture_album_resume(false);
+        }
+        self.album_resume_tick(now);
         // Outbox retry.
         if now - self.last_outbox_retry >= OUTBOX_RETRY_MS {
             self.last_outbox_retry = now;

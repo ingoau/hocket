@@ -8,6 +8,8 @@ export const SK = {
   libraryPins: "library.pins",
   queueMode: "queue.mode",
   queueSavedCap: "queue.savedCap",
+  /** Continue an album left unfinished. Synced. Off, Play always starts at the beginning. */
+  resumeAlbums: "playback.resumeAlbums",
   lyricsExternalEnabled: "lyrics.external.enabled",
   ratingsLoveBridgeEnabled: "ratings.loveBridge.enabled",
   ratingsLoveBridgeThreshold: "ratings.loveBridge.threshold",

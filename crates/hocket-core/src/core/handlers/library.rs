@@ -1561,6 +1561,16 @@ impl Actor {
             });
         local.request_id = request_id.clone();
         local.from_server = false;
+        // The index stores each line's own timestamp. A positive offset shows
+        // lyrics later, so the audio position of that line is later by the same amount.
+        for hit in &mut local.lyrics {
+            if let Some(ms) = hit.start_ms {
+                hit.start_ms = Some(crate::lyrics::search::seek_position(
+                    ms,
+                    self.lyrics_offset(&hit.track.id),
+                ));
+            }
+        }
         self.emit(Event::SearchResults {
             results: local.clone(),
         });
@@ -1597,6 +1607,7 @@ impl Actor {
                         artists: r.artist.iter().map(|a| artist_from_id3(&sid, a)).collect(),
                         playlists: vec![],
                         from_server: true,
+                        lyrics: vec![],
                     };
                     let _ = username;
                     let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { results }));

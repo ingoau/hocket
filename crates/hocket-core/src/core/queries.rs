@@ -175,6 +175,9 @@ impl Actor {
             ),
             Query::Stash => QueryResult::StashItems(self.stash_items()),
             Query::Snoozes => QueryResult::SnoozeItems(self.snooze_items()),
+            Query::AlbumResume { id } => {
+                QueryResult::AlbumResumeState(self.album_resume_point(&id))
+            }
             Query::Lyrics { track_id } => {
                 let cached = self.cached_lyrics(&track_id);
                 if cached.is_none() {

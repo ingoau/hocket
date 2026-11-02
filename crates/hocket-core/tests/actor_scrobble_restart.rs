@@ -78,6 +78,7 @@ async fn deferred_on_b() -> Deferred {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 30_000.0).await;
@@ -218,6 +219,7 @@ async fn a_single_device_play_is_submitted_at_its_threshold_and_leaves_nothing_p
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(99_000.0).await;

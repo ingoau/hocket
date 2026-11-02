@@ -45,6 +45,7 @@ async fn play(t: &TestCore, kind: ContextKind, tracks: &[&str], start: Option<u3
             start_index: start,
             shuffle: false,
             save_outgoing: false,
+            start_position_ms: None,
         },
     })
     .await;
@@ -236,6 +237,7 @@ async fn shuffle_and_play_leave_out_a_snoozed_first_song() {
             start_index: None,
             shuffle: true,
             save_outgoing: false,
+            start_position_ms: None,
         },
     })
     .await;
@@ -333,6 +335,7 @@ async fn a_restored_playlist_queue_still_leaves_snoozed_songs_out() {
             start_index: None,
             shuffle: true,
             save_outgoing: false,
+            start_position_ms: None,
         },
     })
     .await;
@@ -349,6 +352,7 @@ async fn a_restored_playlist_queue_still_leaves_snoozed_songs_out() {
             start_index: None,
             shuffle: false,
             save_outgoing: true,
+            start_position_ms: None,
         },
     })
     .await;
