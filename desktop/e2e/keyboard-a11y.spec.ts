@@ -187,9 +187,11 @@ test.describe("keyboard only", () => {
     await expect(menu).toBeFocused();
     await expect(menu).toHaveAttribute("aria-activedescendant", "cm-item-0");
     expect(await (await activeCell()).getAttribute("aria-label")).toBe("Play");
-    // → moves along the strip; ↓ goes to the next line, the rating, landing on its current star.
+    // → moves along the strip; ↓ goes to Preview, then to the rating, landing on its current star.
     await page.keyboard.press("ArrowRight");
     expect(await (await activeCell()).getAttribute("aria-label")).toBe("Shuffle");
+    await page.keyboard.press("ArrowDown");
+    expect(await (await activeCell()).getAttribute("data-action")).toBe("preview");
     await page.keyboard.press("ArrowDown");
     await expect(await activeCell()).toHaveAttribute("data-star", "4");
     await expect(await activeCell()).toHaveAttribute("aria-checked", "true");
