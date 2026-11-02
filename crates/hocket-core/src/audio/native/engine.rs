@@ -1083,6 +1083,9 @@ pub struct NativeBackend {
     gain: Mutex<f64>,
     /// A second engine for song previews. The main item stays loaded.
     preview: Mutex<Option<Box<NativeBackend>>>,
+    /// Key of the preview currently loaded, so a late end from the previous
+    /// song is not taken as the end of this one.
+    preview_key: Arc<Mutex<String>>,
 }
 
 impl NativeBackend {
@@ -1141,6 +1144,7 @@ impl NativeBackend {
             kit: Mutex::new(kit),
             gain: Mutex::new(1.0),
             preview: Mutex::new(None),
+            preview_key: Arc::new(Mutex::new(String::new())),
         })
     }
 
@@ -1162,7 +1166,17 @@ impl NativeBackend {
             }
         };
         let parent = self.reports.clone();
+        let current_key = self.preview_key.clone();
         let sink: ReportSink = Arc::new(move |report| {
+            let stale_end = match &report {
+                BackendReport::Ended { key } | BackendReport::Error { key, .. } => {
+                    key != &*current_key.lock()
+                }
+                _ => false,
+            };
+            if stale_end {
+                return;
+            }
             let mapped = match report {
                 BackendReport::Ready { duration_ms, .. } => {
                     Some(BackendReport::PreviewReady { duration_ms })
@@ -1330,11 +1344,18 @@ impl PlaybackBackend for NativeBackend {
 
     fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
         self.ensure_preview()?;
-        let slot = self.preview.lock();
-        let Some(preview) = slot.as_ref() else {
-            return Err(BackendError::NotRunning);
+        *self.preview_key.lock() = source.key.clone();
+        let loaded = {
+            let slot = self.preview.lock();
+            match slot.as_ref() {
+                Some(preview) => preview.load(source, None, position_ms, true),
+                None => Err(BackendError::NotRunning),
+            }
         };
-        preview.load(source, None, position_ms, true)
+        if loaded.is_err() {
+            *self.preview_key.lock() = String::new();
+        }
+        loaded
     }
 
     fn preview_play(&self) -> Result<(), BackendError> {
@@ -1362,6 +1383,7 @@ impl PlaybackBackend for NativeBackend {
     }
 
     fn preview_stop(&self) -> Result<(), BackendError> {
+        *self.preview_key.lock() = String::new();
         let slot = self.preview.lock();
         let Some(preview) = slot.as_ref() else {
             return Ok(());

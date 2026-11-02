@@ -282,3 +282,78 @@ async fn a_preview_that_cannot_load_gives_playback_back() {
     assert!(t.transport().await.position.is_playing);
     assert!(t.backend.is_playing());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
+    let t = synced_core("preview-hold").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    t.run(Command::PreviewStart {
+        track_id: "t2".into(),
+    })
+    .await;
+    let preview = preview_of(&t.events.all()).expect("switched preview");
+    assert_eq!(preview.track_id, "t2");
+    assert!(!t.transport().await.position.is_playing);
+    t.run(Command::PreviewStop).await;
+    assert!(
+        t.transport().await.position.is_playing,
+        "stopping the second preview still resumes the original track"
+    );
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+
+    t.run(Command::Pause).await;
+    assert!(!t.transport().await.position.is_playing);
+    t.run(Command::PreviewStart {
+        track_id: "t3".into(),
+    })
+    .await;
+    t.run(Command::PreviewStop).await;
+    assert!(
+        !t.transport().await.position.is_playing,
+        "a track that was paused stays paused"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_while_the_track_is_still_loading_resumes_it() {
+    let t = synced_core("preview-loading").await;
+    let sid = t.server_id.clone();
+    t.backend.set_load_latency_ms(5_000.0);
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    assert!(preview_of(&t.events.all()).is_some());
+    assert!(
+        !t.backend.is_playing(),
+        "the loading track does not play over the preview"
+    );
+    t.run(Command::PreviewStop).await;
+    t.backend.set_load_latency_ms(0.0);
+    t.run_for(1_000.0).await;
+    assert!(
+        t.transport().await.position.is_playing,
+        "the track that was loading resumes after the preview"
+    );
+}

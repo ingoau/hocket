@@ -571,6 +571,7 @@ function PreviewRow({ index, label, enabled, active, sample, onStart, cellProps 
   cellProps: HTMLAttributes<HTMLDivElement>;
 }) {
   const [, setTick] = useState(0);
+  const leftGesture = useRef(false);
   useEffect(() => {
     if (!sample?.playing) return;
     const id = window.setInterval(() => setTick((n) => n + 1), 80);
@@ -592,9 +593,21 @@ function PreviewRow({ index, label, enabled, active, sample, onStart, cellProps 
       aria-label={sample ? (sample.playing ? `${label}, playing` : `${label}, paused`) : label}
       className={`mi cm-preview ${enabled ? "" : "disabled"} ${active ? "active" : ""}`}
       data-action="preview"
-      onClick={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.preventDefault();
+        // A left click is handled on pointerup. A right-button drag releases
+        // with a click, the same gesture every other row runs.
+        if (leftGesture.current) {
+          leftGesture.current = false;
+          return;
+        }
+        if (!enabled) return;
+        if (sample) bridge().dispatch({ type: "previewToggle" });
+        else onStart();
+      }}
       onPointerDown={(e) => {
         if (e.button !== 0 || !enabled) return;
+        leftGesture.current = true;
         const row = e.currentTarget;
         if (!sample) {
           onStart();

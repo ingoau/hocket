@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -91,6 +92,7 @@ import app.hocket.R
 import app.hocket.core.ActionIds
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
+import app.hocket.core.api.Command
 import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
@@ -298,6 +300,11 @@ fun MenuSheet(
     pull: SheetPull? = null,
 ) {
     val client = LocalCoreClient.current
+    // Every menu that hosts this sheet (the song menu, a one-song selection, an item menu)
+    // stops the preview when the sheet leaves, however it was closed.
+    DisposableEffect(Unit) {
+        onDispose { client.dispatch(Command.PreviewStop) }
+    }
     val sheetState = rememberPulledSheetState(pull)
     val scope = rememberCoroutineScope()
     /** Hides the sheet, then runs [after] (which may open what follows) and reports it gone. */

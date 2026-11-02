@@ -39,6 +39,8 @@ pub(crate) fn command_ends_preview(cmd: &Command) -> bool {
             | Command::PlayContext { .. }
             | Command::PlayTracks { .. }
             | Command::JumpToQueueItem { .. }
+            | Command::RestoreSavedQueue { .. }
+            | Command::ResumeHere
     )
 }
 
@@ -82,6 +84,7 @@ impl Actor {
         });
         if let Err(e) = self.backend.preview_load(source, position_ms) {
             self.log("debug", format!("preview load: {e}"));
+            self.toast("Couldn't preview this song", None);
             let hold = self.preview.take().and_then(|p| p.hold);
             self.emit_preview();
             self.restore_hold(hold);
@@ -203,12 +206,18 @@ impl Actor {
         // but the user expects it back when the preview ends.
         let was_playing = self.playback.playing
             || self.playback.focus_suspended
-            || (self.playback.want_playing && self.playback.loaded);
-        if self.playback.playing || self.playback.focus_suspended {
+            || self.playback.buffering
+            || self.playback.want_playing
+            || self.playback.pending_load.is_some();
+        if was_playing {
             self.playback.want_playing = false;
-            self.set_playing_inner(false, false);
-        } else if was_playing {
-            self.playback.want_playing = false;
+            if self.playback.playing || self.playback.focus_suspended {
+                self.set_playing_inner(false, false);
+            } else if let Err(e) = self.backend.pause() {
+                // Not audible yet (still loading). Pause the backend so it
+                // does not start under the preview.
+                self.log("debug", format!("preview pause: {e}"));
+            }
         }
         Some(PreviewHold { was_playing })
     }
@@ -219,7 +228,11 @@ impl Actor {
         };
         if hold.was_playing && self.owns_transport() {
             self.playback.want_playing = true;
-            self.set_playing(true);
+            if self.playback.loaded {
+                self.set_playing(true);
+            } else if let Err(e) = self.backend.play() {
+                self.log("debug", format!("preview resume: {e}"));
+            }
         }
     }
 }
