@@ -63,7 +63,7 @@
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|smallestScreenSize"
             android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.Hocket">
+            android:theme="@style/Theme.Hocket.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

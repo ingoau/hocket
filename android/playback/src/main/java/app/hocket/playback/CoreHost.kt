@@ -105,6 +105,24 @@ object CoreHost {
     val current: CoreHandle? get() = _handle.value
     val kind: CoreKind? get() = _handle.value?.kind
 
+    /** A core [prewarm] built (not started) for the next [acquire]. */
+    private var prewarmed: CoreHandle? = null
+
+    /**
+     * Builds the core ahead of [acquire] (the native library, the database, settings) and opens the
+     * credential store, without starting it: the service starts it, once it is listening for the
+     * core's events (a started core tells the backend its volume and audio settings at once).
+     * Called on a background thread while the UI is still being created. Safe to call from any thread.
+     */
+    @Synchronized
+    fun prewarm(context: Context) {
+        if (_handle.value != null || prewarmed != null) return
+        val app = context.applicationContext
+        pendingShutdown?.let { job -> runBlocking { job.join() }; pendingShutdown = null }
+        prewarmed = createCore(app)
+        if (credentials == null) credentials = KeystoreCredentialStore(app)
+    }
+
     /** Returns the running core, creating and starting it if needed. Safe to call from any thread. */
     @Synchronized
     fun acquire(context: Context): CoreHandle {
@@ -113,7 +131,7 @@ object CoreHost {
         // One core per data dir: a previous instance may still be flushing when the service is
         // re-created quickly after being destroyed.
         pendingShutdown?.let { job -> runBlocking { job.join() }; pendingShutdown = null }
-        val core = createCore(app)
+        val core = prewarmed?.also { prewarmed = null } ?: createCore(app)
         val store = credentials ?: KeystoreCredentialStore(app).also { credentials = it }
         _credentialsReplayed.value = false
         replayJob?.cancel()
@@ -179,13 +197,15 @@ object CoreHost {
                     lastServers = known
                     if (!replayed) {
                         replayed = true
-                        val stored = store.all()
+                        // One keystore pass serves the replay and the login flows.
+                        val lookups = store.lookupAll()
+                        val stored = lookups.values.mapNotNull { (it as? CredentialLookup.Found)?.credential }
                         val toReplay = if (known.isEmpty()) stored else stored.filter { c -> known.any { matches(it, c) } }
                         toReplay.forEach { c ->
                             Log.i(TAG, "replaying credentials for ${c.username}@${c.url}")
                             core.dispatch(Commands.addServer(c.url, c.username, c.password, c.name))
                         }
-                        refreshLogins(store)
+                        refreshLogins(lookups)
                         _credentialsReplayed.value = true
                     }
                 }
@@ -225,9 +245,11 @@ object CoreHost {
     private fun matches(server: ServerInfo, c: ServerCredential) =
         server.url.trimEnd('/') == c.url.trimEnd('/') && server.username == c.username
 
-    private fun refreshLogins(store: ServerCredentialStore) {
-        _logins.value = store.all().map { ServerCredentialStore.key(it.url, it.username) }.toSet()
-        _unreadableLogins.value = store.unavailable().map { (url, user) -> ServerCredentialStore.key(url, user) }.toSet()
+    private fun refreshLogins(store: ServerCredentialStore) = refreshLogins(store.lookupAll())
+
+    private fun refreshLogins(lookups: Map<Pair<String, String>, CredentialLookup>) {
+        _logins.value = lookups.filterValues { it is CredentialLookup.Found }.keys.map { (url, user) -> ServerCredentialStore.key(url, user) }.toSet()
+        _unreadableLogins.value = lookups.filterValues { it is CredentialLookup.Unavailable }.keys.map { (url, user) -> ServerCredentialStore.key(url, user) }.toSet()
     }
 
     /** True when [logins] (a collected value) holds a login for [server]. */
@@ -276,20 +298,25 @@ object CoreHost {
     /**
      * Detaches the running core and flushes it on a worker thread: [NativeCore.close] blocks until
      * the actor has written the session document, position and settings (bounded by its timeout),
-     * which must not happen on the main thread in `Service.onDestroy`.
+     * which must not happen on the main thread in `Service.onDestroy`. A [prewarm]ed core that was
+     * never started goes with it.
      */
     @Synchronized
     fun shutdown() {
         replayJob?.cancel()
         replayJob = null
         pendingLogin = null
-        val core = _handle.value ?: return
+        val cores = listOfNotNull(_handle.value, prewarmed)
         _handle.value = null
+        prewarmed = null
+        if (cores.isEmpty()) return
         pendingShutdown = scope.launch(Dispatchers.IO) {
-            try {
-                core.close()
-            } catch (t: Throwable) {
-                Log.e(TAG, "core shutdown failed", t)
+            cores.forEach { core ->
+                try {
+                    core.close()
+                } catch (t: Throwable) {
+                    Log.e(TAG, "core shutdown failed", t)
+                }
             }
         }
     }

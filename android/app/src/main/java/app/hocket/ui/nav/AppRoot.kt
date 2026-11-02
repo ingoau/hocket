@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalWideNavigationRail
 import androidx.compose.material3.ShortNavigationBar
@@ -40,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,9 +56,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -149,9 +152,10 @@ fun AppRoot(
     logins: StateFlow<Set<String>> = CoreHost.logins,
     unreadableLogins: StateFlow<Set<String>> = CoreHost.unreadableLogins,
     fatalError: StateFlow<String?> = CoreHost.fatalError,
+    onFirstScreen: () -> Unit = {},
 ) {
     val fatal by fatalError.collectAsStateWithLifecycle()
-    fatal?.let { FatalErrorScreen(it); return }
+    fatal?.let { SideEffect(onFirstScreen); FatalErrorScreen(it); return }
     if (client == null) { LoadingScreen(); return }
     CompositionLocalProvider(LocalCoreClient provides client, LocalNavBarPrefs provides rememberShellNavBarPrefs(client), LocalPageChrome provides remember { PageChrome() }) {
         val started by client.started.collectAsStateWithLifecycle()
@@ -185,6 +189,7 @@ fun AppRoot(
                 if (fakeBanner) FakeCoreBanner()
                 app.hocket.ui.components.ReportUploadBarHost(client, insets = if (fakeBanner) null else BannerInsets)
                 Box(Modifier.weight(1f).fillMaxWidth().then(if (topBar) Modifier.consumeWindowInsets(BannerInsets) else Modifier)) {
+                    if (started && ready) SideEffect(onFirstScreen)
                     when {
                         !started || !ready -> LoadingScreen()
                         !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !server.capabilities.meetsFloor), needsRelogin = needsRelogin, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false })
@@ -235,15 +240,26 @@ fun FatalErrorScreen(detail: String, onReset: (android.content.Context) -> Unit 
     if (confirm) ConfirmDialog(stringResource(R.string.fatal_reset_confirm), stringResource(R.string.fatal_reset), onConfirm = { onReset(context) }, onDismiss = { confirm = false })
 }
 
+/**
+ * While the core starts: the splash screen's tile and mark, still (MainActivity keeps the system
+ * splash up over this, so it only shows if startup outlasts the splash or the core restarts). No
+ * spinner; a word appears only if it takes a while.
+ */
 @Composable
 fun LoadingScreen() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            LoadingIndicator()
-            Text(stringResource(R.string.connecting_to_core), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
+    var slow by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(LOADING_WORDS_AFTER_MS); slow = true }
+    Box(Modifier.fillMaxSize().background(colorResource(R.color.splash_background)).testTag("loading"), contentAlignment = Alignment.Center) {
+        // The foreground's 108-unit tile at the splash icon's size (its 72-unit mark in a 192 dp circle).
+        androidx.compose.foundation.Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null, modifier = Modifier.size(288.dp))
+        androidx.compose.animation.AnimatedVisibility(slow, enter = androidx.compose.animation.fadeIn(), modifier = Modifier.align(Alignment.Center).padding(top = 160.dp)) {
+            Text(stringResource(R.string.connecting_to_core), style = MaterialTheme.typography.bodyMedium, color = colorResource(R.color.shortcut_foreground))
         }
     }
 }
+
+/** How long the loading screen stays wordless. */
+private const val LOADING_WORDS_AFTER_MS = 3_000L
 
 /**
  * Event.Toast -> snackbar with its single action dispatching `action_command`; Event.Error ->
@@ -453,6 +469,12 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // corners over black, as a card pushed back under the sheet (read in the draw phase, so
             // dragging the sheet never recomposes the page).
             val recede = !LocalReducedMotion.current
+            // Coming out of the splash ([ShellEntrance]): the page rises and settles into place, the
+            // bar and the mini player slide up after it (with reduced motion, all of it just fades).
+            val entrance = rememberShellEntrance()
+            val entranceMoves = !LocalReducedMotion.current
+            val entranceRise = with(density) { 32.dp.toPx() }
+            val miniRise = with(density) { 64.dp.toPx() }
             // (The sheet's own scrim dims the page itself as it recedes.)
             if (recede) Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheet.progress.coerceIn(0f, 1f) }.background(Color.Black))
             Row(
@@ -460,13 +482,19 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     val p = sheet.progress.coerceIn(0f, 1f)
                     // Fully under the open player: not drawn at all (and left at its own size,
                     // so whatever reads its bounds meanwhile sees the page as laid out).
-                    alpha = if (p >= 1f) 0f else 1f
+                    val e = entrancePart(entrance(), ShellEntrance.CONTENT_START_MS, ShellEntrance.CONTENT_END_MS)
+                    alpha = if (p >= 1f) 0f else e
                     if (recede && p > 0f && p < 1f) {
                         val s = 1f - RecedeScale * p
                         scaleX = s
                         scaleY = s
                         shape = RoundedCornerShape(RecedeCorner * p)
                         clip = true
+                    } else if (entranceMoves && e < 1f) {
+                        val s = 0.94f + 0.06f * e
+                        scaleX = s
+                        scaleY = s
+                        translationY = (1f - e) * entranceRise
                     }
                 },
             ) {
@@ -523,12 +551,23 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = railStart).height(chromeHeight).then(if (covered) Modifier else Modifier.blockTouchesBehind()).testTag("bottomChromeBlocker"))
             }
             CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides navigator) {
+            // The mini player's part of the entrance: up from below the bar, last of all. (At the
+            // sheet's own zIndex, which only orders it among this Box's siblings from here: above
+            // the bottom scrim, below the bar.)
+            Box(Modifier.fillMaxSize().zIndex(10f).graphicsLayer {
+                val e = entrancePart(entrance(), ShellEntrance.MINI_START_MS, ShellEntrance.MINI_END_MS)
+                if (e < 1f) {
+                    alpha = e
+                    if (entranceMoves) translationY = (1f - e) * miniRise
+                }
+            }) {
             NowPlayingSheet(
                 state = sheet,
                 bottomInset = with(density) { bottomInsetPx.toDp() },
                 onOpenAlbum = navigator.openAlbum,
                 onOpenArtist = navigator.openArtist,
             )
+            }
             }
             app.hocket.ui.components.SongMenuHost(songMenu, navigator)
             // The scrim the bar and the mini player float on: the surface colour eased in from
@@ -548,7 +587,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.progress, SCRIM_FADE_END) }.background(scrim).testTag("bottomScrim"))
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.progress, SCRIM_FADE_END) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }.background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
@@ -560,9 +599,13 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     .align(Alignment.BottomCenter)
                     .zIndex(20f)
                     .onSizeChanged { navBarMeasuredPx = it.height }
-                    .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
+                    // Its part of the entrance: up from below the screen's edge, after the page.
+                    .offset {
+                        val e = entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS)
+                        IntOffset(0, ((sheet.progress + if (entranceMoves) 1f - e else 0f) * navBarHeightPx).roundToInt())
+                    }
                     // It fades out gently as the player grows over it.
-                    .graphicsLayer { alpha = barFade(sheet.progress) }
+                    .graphicsLayer { alpha = barFade(sheet.progress) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }
                     .testTag("navBar")
                     // The bar's whole strip (the pill, the margins around it and the system bar
                     // under it, all on the solid scrim) takes the touches its places leave, so
@@ -605,7 +648,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         .zIndex(20f)
                         .padding(end = app.hocket.ui.player.HeroGeometry.MINI_MARGIN, bottom = bottomInset + miniRoom + 8.dp)
                         .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
-                        .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) }
+                        .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }
                         .then(hiddenWhenCovered),
                 ) {
                     app.hocket.ui.stash.StashChip(held[0], onClick = { stashOpen = true })

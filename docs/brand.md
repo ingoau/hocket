@@ -27,6 +27,7 @@ Where it lives (the geometry is the same in each, and changes go to all of them)
 - `desktop/scripts/gen-app-icons.mjs` — renders `icon.icon`'s note layers, the Windows `.ico` and the Linux PNGs; the output is committed.
 - `desktop/src/main/brand.ts` — rasterised at runtime for the tray and the dev-build dock icon.
 - `android/app/src/main/res/drawable/ic_launcher_foreground.xml` — the adaptive icon's foreground and monochrome layer.
+- `android/app/src/main/res/drawable/splash_icon_animated.xml` — the Android splash screen (API 31+): the same mark drawn in note by note as it swells to size. It copies the foreground's geometry.
 - `desktop/src/renderer/components/BrandMark.tsx` and `android/app/src/main/java/app/hocket/ui/brand/Wordmark.kt` — the bare wave, cropped to x 10–90, y 28.4–71.6, for the lockups.
 
 
