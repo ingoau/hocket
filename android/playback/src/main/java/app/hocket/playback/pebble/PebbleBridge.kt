@@ -359,6 +359,7 @@ class PebbleBridge(
             Cmd.CYCLE_REPEAT -> dispatch(Commands.setRepeat(when (s?.repeat) { RepeatMode.Off, null -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off }))
             Cmd.RESUME -> dispatch(if (resumeOffer != null) Command.ResumeHere else Commands.mediaSessionCommand(MediaSessionAction.Play))
             Cmd.SEEK -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Seek, arg.coerceAtLeast(0).toDouble()))
+            Cmd.STASH -> trackId?.let { dispatch(Commands.mediaSessionCommand(MediaSessionAction.Stash)) }
             Cmd.ACTIVATE -> activate(path, item)
             Cmd.PLAY_NEXT, Cmd.PLAY_LATER -> {
                 val server = serverId() ?: return

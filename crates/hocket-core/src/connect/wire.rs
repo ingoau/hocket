@@ -349,6 +349,9 @@ pub enum SessionOp {
         label: String,
         shuffle: bool,
         save_outgoing: bool,
+        /// Where the chosen track starts. Absent on older peers, who start at 0.
+        #[serde(default)]
+        start_position_ms: Ms,
     },
     PlayNext {
         server_id: ServerId,
@@ -441,6 +444,7 @@ impl SessionOp {
                 start_index,
                 label,
                 shuffle,
+                start_position_ms,
             } => SessionOp::PlayTracks {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
@@ -448,6 +452,7 @@ impl SessionOp {
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
+                start_position_ms: *start_position_ms,
             },
             Command::PlayNext {
                 server_id,
@@ -527,6 +532,16 @@ impl SessionOp {
             self,
             SessionOp::MoveQueueItem { .. } | SessionOp::RemoveQueueItems { .. }
         )
+    }
+
+    /// Where a `PlayTracks` should start. Other ops start at the beginning.
+    pub fn start_position_ms(&self) -> Ms {
+        match self {
+            SessionOp::PlayTracks {
+                start_position_ms, ..
+            } => *start_position_ms,
+            _ => 0,
+        }
     }
 
     /// What the op is and the queue keys it names, for a log line (never the

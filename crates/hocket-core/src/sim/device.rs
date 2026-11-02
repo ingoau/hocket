@@ -414,7 +414,11 @@ impl SimDevice {
             Output::VerifyCredential { peer, credential } => {
                 self.effects.push(DeviceEffect::Verify { peer, credential })
             }
-            Output::DocumentChanged { document, cause } => {
+            Output::DocumentChanged {
+                document,
+                cause,
+                start_position_ms,
+            } => {
                 self.note(format!(
                     "doc rev {} ({cause:?}) current={:?}",
                     document.revision,
@@ -428,7 +432,7 @@ impl SimDevice {
                             Some(item) => self.load(
                                 item.key,
                                 item.track_id,
-                                0,
+                                start_position_ms,
                                 0,
                                 self.engine.now_session_ms(),
                                 false,

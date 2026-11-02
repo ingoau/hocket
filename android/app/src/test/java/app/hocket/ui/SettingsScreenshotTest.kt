@@ -45,7 +45,11 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.hocket.core.ActionIds
+import app.hocket.core.Commands
+import app.hocket.core.SettingKeys
 import app.hocket.ui.nav.AppRoot
+import app.hocket.ui.nav.LocalFakeCoreBanner
 import app.hocket.ui.screens.settings.SettingsCategory
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -85,6 +89,11 @@ class SettingsScreenshotTest {
     @Test
     @Config(qualifiers = "+night")
     fun dark() = captureAll("dark")
+
+    /** The notification-button editor: Stash off, then on and moved ahead of the other extra buttons. */
+    @Test
+    @Config(qualifiers = "+night")
+    fun mediaButtonsDark() = captureMediaButtons("dark")
 
     @Test
     @Config(qualifiers = "+notnight")
@@ -150,6 +159,29 @@ class SettingsScreenshotTest {
                 }
             }
         }
+    }
+
+    private fun captureMediaButtons(theme: String) {
+        val dir = outDir
+        assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write settings screenshots", dir != null)
+        dir!!.mkdirs()
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
+        core.start()
+        compose.openSettingsFromAccount()
+        compose.onNodeWithTag("settings.category.customise").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        awaitTag("customise.mediaSession")
+        compose.onNodeWithTag("customise.mediaSession.stash").performScrollTo()
+        compose.waitForIdle()
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "android-settings-$theme-media-buttons-stash-off.png"))
+        // The same command the row sends. The core then moves Stash up so the notification can show it.
+        core.client.dispatch(Commands.setActionOrder("mediaSession", ActionIds.withNewlyEnabledStash(ActionIds.MEDIA_SESSION, ActionIds.MEDIA_SESSION + ActionIds.STASH)))
+        compose.waitUntil(5_000) {
+            core.client.settings.value[SettingKeys.ACTIONS_ORDER_MEDIA_SESSION]?.value?.contains("\"stash\"") == true
+        }
+        compose.onNodeWithTag("customise.mediaSession.next").performScrollTo()
+        compose.waitForIdle()
+        save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "android-settings-$theme-media-buttons-stash-on.png"))
     }
 
     private fun captureAll(theme: String) {

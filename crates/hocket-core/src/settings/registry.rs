@@ -383,11 +383,13 @@ pub const PEBBLE_MENU_ITEMS: &[&str] = &[
     "downloads",
     "search",
     "lyrics",
+    "stash",
 ];
 
-/// Rows of the Pebble's actions menu.
+/// Rows of the Pebble's actions menu. Stash is on by default (see the watch's
+/// `DEFAULT_ACTIONS`); lyrics stays off until chosen.
 pub const PEBBLE_ACTION_ITEMS: &[&str] = &[
-    "rating", "love", "shuffle", "repeat", "goAlbum", "goArtist", "playOn", "lyrics",
+    "rating", "love", "stash", "shuffle", "repeat", "goAlbum", "goArtist", "playOn", "lyrics",
 ];
 
 /// Sections of the Pebble's library browser.

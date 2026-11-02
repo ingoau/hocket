@@ -5,12 +5,15 @@
 //! [`SortOrder`], and a page. Search is FTS5 with prefix matching so it is
 //! instant as you type.
 
+use std::collections::HashMap;
+
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, ToSql};
 
 use crate::api::{
     self, Album, Artist, Genre, OfflineState, Page, Playlist, SortOrder, Track, TrackSummary,
 };
+use crate::lyrics::search::{self, IndexedLyrics};
 
 use super::{Db, DbResult};
 
@@ -308,6 +311,101 @@ fn page_sql(page: &Option<Page>) -> String {
         Some(p) => format!(" LIMIT {} OFFSET {}", p.limit, p.offset),
         None => String::new(),
     }
+}
+
+/// Lower is the copy the player shows: server, then embedded, then external.
+fn lyric_source_rank(source: &str) -> u8 {
+    match source {
+        "server" => 0,
+        "embedded" => 1,
+        _ => 2,
+    }
+}
+
+fn upsert_lyrics_row(
+    conn: &Connection,
+    server_id: &str,
+    track_id: &str,
+    source: &str,
+    doc: &IndexedLyrics,
+) -> DbResult<()> {
+    conn.execute(
+        "INSERT INTO lyrics_search(server_id, track_id, source, body, lines) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(server_id, track_id, source) DO UPDATE SET body = excluded.body, lines = excluded.lines",
+        params![server_id, track_id, source, doc.body, doc.lines_json],
+    )?;
+    Ok(())
+}
+
+fn delete_lyrics_row(
+    conn: &Connection,
+    server_id: &str,
+    track_id: &str,
+    source: &str,
+) -> DbResult<()> {
+    conn.execute(
+        "DELETE FROM lyrics_search WHERE server_id = ?1 AND track_id = ?2 AND source = ?3",
+        params![server_id, track_id, source],
+    )?;
+    Ok(())
+}
+
+/// Drop index rows whose lyric was evicted, and index cached lyrics that have
+/// no row yet (an upgrade, or a write that landed before the index did).
+/// Index one cached document on `conn`, so a caller can do it in the same
+/// transaction as the `lyrics_cache` write.
+pub(crate) fn index_lyrics_in(
+    conn: &Connection,
+    server_id: &str,
+    track_id: &str,
+    source: &str,
+    lyrics: &api::Lyrics,
+) -> DbResult<()> {
+    match search::index_document(lyrics) {
+        Some(doc) => upsert_lyrics_row(conn, server_id, track_id, source, &doc),
+        None => delete_lyrics_row(conn, server_id, track_id, source),
+    }
+}
+
+pub fn sync_lyrics_index(conn: &Connection) -> DbResult<()> {
+    conn.execute(
+        "DELETE FROM lyrics_search WHERE NOT EXISTS (
+            SELECT 1 FROM lyrics_cache c
+            WHERE c.server_id = lyrics_search.server_id
+              AND c.track_id = lyrics_search.track_id
+              AND c.source = lyrics_search.source
+              AND c.json != ''
+         )",
+        [],
+    )?;
+    let pending: Vec<(String, String, String, String)> = {
+        let mut st = conn.prepare(
+            "SELECT c.server_id, c.track_id, c.source, c.json
+             FROM lyrics_cache c
+             WHERE c.json != '' AND NOT EXISTS (
+                SELECT 1 FROM lyrics_search s
+                WHERE s.server_id = c.server_id AND s.track_id = c.track_id AND s.source = c.source
+             )",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for (server_id, track_id, source, json) in pending {
+        let Some(lyrics) = crate::lyrics::from_cache_json(&json).ok().flatten() else {
+            continue;
+        };
+        if let Some(doc) = search::index_document(&lyrics) {
+            upsert_lyrics_row(conn, &server_id, &track_id, &source, &doc)?;
+        }
+    }
+    Ok(())
 }
 
 /// Build an FTS5 MATCH expression with prefix matching on every term.
@@ -1009,14 +1107,15 @@ impl Db {
     // -- search -------------------------------------------------------------
 
     /// Local-first instant search: FTS5 prefix match over tracks (title,
-    /// album, artist), albums (name, artist), artists (name), plus playlists
-    /// by name. Ranked by FTS `bm25`.
+    /// album, artist), albums (name, artist), artists (name), playlists by
+    /// name, and lyrics already cached on this device. Ranked by FTS `bm25`.
     pub fn search(&self, server_id: &str, query: &str, limit: u32) -> DbResult<api::SearchResults> {
         let mut results = api::SearchResults {
             query: query.to_string(),
             ..Default::default()
         };
         let Some(match_expr) = fts_query(query) else {
+            results.lyrics = self.lyrics_hits(server_id, query, limit)?;
             return Ok(results);
         };
         let lim = limit.max(1) as i64;
@@ -1050,7 +1149,76 @@ impl Db {
             results.playlists = rows.collect::<Result<Vec<_>, _>>()?;
             Ok(())
         })?;
+        results.lyrics = self.lyrics_hits(server_id, query, limit)?;
         Ok(results)
+    }
+
+    /// Phrase matches in lyrics cached for this server. One hit per track.
+    fn lyrics_hits(
+        &self,
+        server_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> DbResult<Vec<api::LyricHit>> {
+        let Some(match_expr) = search::lyrics_match_expr(query) else {
+            return Ok(vec![]);
+        };
+        let lim = (limit.max(1) as i64).saturating_mul(3);
+        let track_cols = TRACK_COLUMNS
+            .split(", ")
+            .map(|col| format!("t.{col}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let n_cols = TRACK_COLUMNS.split(", ").count();
+        self.with_conn(|c| {
+            let mut st = c.prepare_cached(&format!(
+                "SELECT {track_cols}, s.lines, s.source
+                 FROM lyrics_search_fts f
+                 JOIN lyrics_search s ON s.rowid = f.rowid
+                 JOIN tracks t ON t.server_id = s.server_id AND t.id = s.track_id
+                 WHERE lyrics_search_fts MATCH ?1 AND s.server_id = ?2
+                 ORDER BY bm25(lyrics_search_fts)
+                 LIMIT ?3"
+            ))?;
+            let rows = st.query_map(params![match_expr, server_id, lim], |row| {
+                let track = track_from_row(row)?;
+                let lines: String = row.get(n_cols)?;
+                let source: String = row.get(n_cols + 1)?;
+                Ok((track, lines, source))
+            })?;
+            // Rows arrive best-match first. A later row for the same song
+            // replaces the hit only when it is the copy the player shows
+            // (server, then embedded). Relevance stays the first row's.
+            let mut hits: Vec<(api::LyricHit, u8)> = Vec::new();
+            let mut index_of: HashMap<String, usize> = HashMap::new();
+            let cap = limit.max(1) as usize;
+            for row in rows {
+                let (track, lines, source) = row?;
+                let Some(span) = search::find_in_stored(&lines, query) else {
+                    continue;
+                };
+                let rank = lyric_source_rank(&source);
+                let hit = api::LyricHit {
+                    track: crate::subsonic::convert::summary_of(&track),
+                    line: span.line,
+                    match_start: span.match_start,
+                    match_end: span.match_end,
+                    start_ms: span.start_ms,
+                };
+                if let Some(&at) = index_of.get(&hit.track.id) {
+                    if rank < hits[at].1 {
+                        hits[at] = (hit, rank);
+                    }
+                    continue;
+                }
+                if hits.len() >= cap {
+                    continue;
+                }
+                index_of.insert(hit.track.id.clone(), hits.len());
+                hits.push((hit, rank));
+            }
+            Ok(hits.into_iter().map(|(hit, _)| hit).collect())
+        })
     }
 
     // -- play history -------------------------------------------------------
@@ -2347,6 +2515,300 @@ mod tests {
         for q in ["\"", "a:b", "(", "^x", "*", "foo OR bar", "NEAR(a b)"] {
             db.search("s", q, 5).unwrap();
         }
+    }
+
+    #[test]
+    fn a_strong_embedded_match_outranks_a_weak_server_match() {
+        use std::sync::Arc;
+
+        use crate::api::{LyricLine, Lyrics, LyricsSource, LyricsTier};
+        use crate::cache::Caches;
+
+        let db = seeded();
+        let dir = tempfile::tempdir().unwrap();
+        let caches = Caches::new(db.clone(), Arc::new(WallClock), dir.path());
+        let lyric = |id: &str, text: &str, source: LyricsSource| Lyrics {
+            track_id: id.into(),
+            tier: LyricsTier::Line,
+            lang: None,
+            display_artist: None,
+            display_title: None,
+            agents: vec![],
+            lines: vec![LyricLine {
+                start_ms: Some(1_000),
+                end_ms: None,
+                text: text.into(),
+                syllables: vec![],
+                agent: None,
+                background: false,
+                translation: None,
+            }],
+            source,
+            offset_ms: 0,
+        };
+        let filler = "la ".repeat(40);
+        caches
+            .lyrics_put(
+                "s",
+                "1",
+                &lyric(
+                    "1",
+                    &format!("{filler}harbour lights {filler}"),
+                    LyricsSource::Server,
+                ),
+            )
+            .unwrap();
+        caches
+            .lyrics_put(
+                "s",
+                "2",
+                &lyric("2", "harbour lights", LyricsSource::Embedded),
+            )
+            .unwrap();
+        let hits = db.search("s", "harbour lights", 10).unwrap().lyrics;
+        assert_eq!(
+            hits.iter().map(|h| h.track.id.as_str()).collect::<Vec<_>>(),
+            vec!["2", "1"],
+            "the short embedded match ranks ahead of a long server match on another song"
+        );
+
+        caches
+            .lyrics_put(
+                "s",
+                "2",
+                &lyric(
+                    "2",
+                    &format!("harbour lights {filler}"),
+                    LyricsSource::Server,
+                ),
+            )
+            .unwrap();
+        let hits = db.search("s", "harbour lights", 10).unwrap().lyrics;
+        assert_eq!(hits[0].track.id, "2");
+        assert!(
+            hits[0].line.contains("la la"),
+            "the same song still shows its server copy"
+        );
+    }
+
+    #[test]
+    fn lyrics_search_follows_the_cache() {
+        use std::sync::Arc;
+
+        use crate::api::{LyricLine, Lyrics, LyricsSource, LyricsTier};
+        use crate::cache::Caches;
+
+        struct Tick(std::sync::Mutex<f64>);
+        impl crate::util::Clock for Tick {
+            fn now_ms(&self) -> f64 {
+                *self.0.lock().unwrap()
+            }
+        }
+        let db = seeded();
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Tick(std::sync::Mutex::new(1_000.0)));
+        let caches = Caches::new(db.clone(), clock.clone(), dir.path());
+        let bump = || {
+            *clock.0.lock().unwrap() += 10.0;
+        };
+        let doc = |id: &str, lines: Vec<LyricLine>, source: LyricsSource| Lyrics {
+            track_id: id.into(),
+            tier: LyricsTier::Line,
+            lang: None,
+            display_artist: None,
+            display_title: None,
+            agents: vec![],
+            lines,
+            source,
+            offset_ms: 0,
+        };
+        let line = |text: &str, start: Option<u32>| LyricLine {
+            start_ms: start,
+            end_ms: None,
+            text: text.into(),
+            syllables: vec![],
+            agent: None,
+            background: false,
+            translation: None,
+        };
+
+        caches
+            .lyrics_put(
+                "s",
+                "1",
+                &doc(
+                    "1",
+                    vec![
+                        line("And the night,", Some(12_000)),
+                        line("was young.", Some(15_000)),
+                    ],
+                    LyricsSource::Server,
+                ),
+            )
+            .unwrap();
+        bump();
+        caches
+            .lyrics_put(
+                "s",
+                "3",
+                &doc(
+                    "3",
+                    vec![line("Don't you café, tonight?", Some(4_000))],
+                    LyricsSource::External,
+                ),
+            )
+            .unwrap();
+        // Cached lyrics for a track the mirror does not have are not offered.
+        bump();
+        caches
+            .lyrics_put(
+                "s",
+                "missing",
+                &doc(
+                    "missing",
+                    vec![line("And the night was", Some(1))],
+                    LyricsSource::Server,
+                ),
+            )
+            .unwrap();
+
+        let night = db.search("s", "night was", 10).unwrap();
+        assert_eq!(night.lyrics.len(), 1, "one hit per track");
+        assert_eq!(night.lyrics[0].track.id, "1");
+        assert_eq!(night.lyrics[0].track.title, "Roygbiv");
+        assert!(night.lyrics[0].line.contains('\n'));
+        assert_eq!(night.lyrics[0].start_ms, Some(12_000));
+        let marked: String = night.lyrics[0]
+            .line
+            .chars()
+            .skip(night.lyrics[0].match_start as usize)
+            .take((night.lyrics[0].match_end - night.lyrics[0].match_start) as usize)
+            .collect();
+        assert_eq!(marked, "night,\nwas");
+        assert!(db
+            .search("other", "night was", 10)
+            .unwrap()
+            .lyrics
+            .is_empty());
+
+        let cafe = db.search("s", "dont you cafe", 10).unwrap();
+        assert_eq!(cafe.lyrics.len(), 1);
+        assert_eq!(cafe.lyrics[0].track.id, "3");
+        assert_eq!(cafe.lyrics[0].start_ms, Some(4_000));
+
+        // A second source for the same song does not produce a second hit.
+        bump();
+        caches
+            .lyrics_put(
+                "s",
+                "1",
+                &doc(
+                    "1",
+                    vec![line("And the night, was young.", Some(12_000))],
+                    LyricsSource::External,
+                ),
+            )
+            .unwrap();
+        let night = db.search("s", "night was", 10).unwrap();
+        assert_eq!(night.lyrics.len(), 1);
+        assert!(
+            night.lyrics[0].line.contains('\n'),
+            "the server copy is the one the player shows"
+        );
+
+        // Replacing the lyric drops the old phrase. The server copy still matches.
+        bump();
+        caches
+            .lyrics_put(
+                "s",
+                "3",
+                &doc(
+                    "3",
+                    vec![line("entirely different words", None)],
+                    LyricsSource::External,
+                ),
+            )
+            .unwrap();
+        assert!(db
+            .search("s", "dont you cafe", 10)
+            .unwrap()
+            .lyrics
+            .is_empty());
+        assert_eq!(
+            db.search("s", "different words", 10).unwrap().lyrics[0].start_ms,
+            None,
+            "unsynced lines do not seek"
+        );
+
+        caches
+            .lyrics_put_none("s", "3", LyricsSource::External)
+            .unwrap();
+        assert!(db
+            .search("s", "different words", 10)
+            .unwrap()
+            .lyrics
+            .is_empty());
+
+        // Eviction and an explicit invalidate take the phrase out of the index.
+        caches.set_lyrics_max_entries(1);
+        bump();
+        caches
+            .lyrics_put(
+                "s",
+                "2",
+                &doc(
+                    "2",
+                    vec![line("brand new chorus line", Some(9))],
+                    LyricsSource::Server,
+                ),
+            )
+            .unwrap();
+        assert!(
+            db.search("s", "night was", 10).unwrap().lyrics.is_empty(),
+            "the older lyric was evicted"
+        );
+        assert_eq!(
+            db.search("s", "brand new", 10).unwrap().lyrics[0].track.id,
+            "2"
+        );
+        assert_eq!(caches.lyrics_invalidate("s", "2").unwrap(), 1);
+        assert!(db.search("s", "brand new", 10).unwrap().lyrics.is_empty());
+
+        // A cache row written without the index (an upgrade) is picked up on sync.
+        caches.set_lyrics_max_entries(10);
+        bump();
+        caches
+            .lyrics_put(
+                "s",
+                "1",
+                &doc(
+                    "1",
+                    vec![line("remember this chorus", Some(3))],
+                    LyricsSource::Server,
+                ),
+            )
+            .unwrap();
+        db.with_conn(|c| {
+            c.execute("DELETE FROM lyrics_search", [])?;
+            assert!(db_search_empty(c));
+            sync_lyrics_index(c)?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            db.search("s", "remember this", 10).unwrap().lyrics[0]
+                .track
+                .id,
+            "1"
+        );
+    }
+
+    fn db_search_empty(c: &Connection) -> bool {
+        c.query_row("SELECT count(*) FROM lyrics_search", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap()
+            == 0
     }
 
     #[test]

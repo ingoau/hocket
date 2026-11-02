@@ -75,6 +75,11 @@ const STRINGS = {
   "search.kind.albums": "Albums",
   "search.kind.artists": "Artists",
   "search.kind.playlists": "Playlists",
+  "search.kind.lyrics": "Lyrics",
+  "search.lyrics": "Lyrics",
+  "search.lyricsScope": "Searching lyrics of songs you've played",
+  "search.lyricsNone": "No lyric matches in songs you've played",
+  "search.seeAllLyrics": "See all {count} lyric matches",
   "search.seeAllSongs": "See all {count} songs",
   "search.albumCount": "{count} albums",
   "search.songCount": "{count} songs",
@@ -804,6 +809,7 @@ const STRINGS = {
   "settings.sidebarItems": "Sidebar items",
   "settings.contextMenuItems": "Context menu items",
   "settings.mediaSessionButtons": "Media session buttons",
+  "settings.mediaSessionButtonsNote": "Stash is shared with your phone's notification. This computer's media controls don't show it.",
   "settings.customiseHint": "Drag to reorder. Unchecked items are hidden.",
   "settings.shortcutsHint": "Click a shortcut and press the new keys. Escape cancels, Backspace clears.",
   "settings.shortcutConflict": "Also bound to {action}",
@@ -1074,6 +1080,7 @@ const STRINGS = {
   "palette.placeholder": "Search songs, albums, artists, playlists, actions…",
   "palette.results": "Results",
   "palette.actions": "Actions",
+  "palette.lyrics": "Lyrics",
   "palette.empty": "Nothing matches",
 
   // Selection

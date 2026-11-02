@@ -103,6 +103,8 @@ pub enum QueueOp {
         label: String,
         shuffle: bool,
         save_outgoing: bool,
+        /// Where the chosen track starts, in audio time.
+        start_position_ms: Ms,
     },
     PlayNext {
         server_id: ServerId,
@@ -210,6 +212,7 @@ impl QueueOp {
                 start_index,
                 label,
                 shuffle,
+                start_position_ms,
             } => QueueOp::PlayTracks {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
@@ -217,6 +220,7 @@ impl QueueOp {
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
+                start_position_ms: *start_position_ms,
             },
             Command::PlayNext {
                 server_id,
@@ -620,6 +624,7 @@ impl Reducer<'_, '_> {
                 label,
                 shuffle,
                 save_outgoing,
+                start_position_ms,
             } => {
                 let context = QueueContext {
                     server_id,
@@ -630,7 +635,13 @@ impl Reducer<'_, '_> {
                     sort: SortOrder::Default,
                     tracks: track_ids,
                 };
-                self.play_context(context, Some(start_index), shuffle, save_outgoing, 0)
+                self.play_context(
+                    context,
+                    Some(start_index),
+                    shuffle,
+                    save_outgoing,
+                    start_position_ms,
+                )
             }
             QueueOp::PlayNext {
                 server_id,

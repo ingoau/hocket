@@ -49,6 +49,7 @@ async fn queue_is_shared_and_handoff_moves_transport_with_position() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -154,6 +155,7 @@ async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 10_000.0).await;
@@ -251,6 +253,7 @@ async fn an_output_latency_correction_reaches_the_room() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 10_000.0).await;
@@ -283,6 +286,7 @@ async fn a_handed_off_play_is_scrobbled_with_its_original_start_time() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -396,6 +400,7 @@ async fn session_undo_is_shared_but_only_the_author_can_undo() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -414,6 +419,7 @@ async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -546,6 +552,7 @@ async fn play_on(owner: &TestCore, other: &TestCore) {
             start_index: 0,
             label: "Sel".into(),
             shuffle: false,
+            start_position_ms: 0,
         })
         .await;
     TestCore::run_all_for(&[owner, other], 2_000.0).await;
@@ -745,6 +752,7 @@ async fn restarted_while_the_room_still_names_it(start_index: u32) -> (TestCore,
         start_index,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -786,6 +794,7 @@ async fn new_music_after_a_restart_the_room_outlived_plays_here() {
         start_index: 0,
         label: "New".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
@@ -828,6 +837,7 @@ async fn a_track_changed_elsewhere_during_a_call_stays_quiet() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -859,6 +869,7 @@ async fn play_after_handing_off_during_a_call_starts_at_once() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -940,6 +951,7 @@ async fn a_room_rekeying_the_current_item_does_not_restart_it() {
         start_index: 1,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 30_000.0).await;
@@ -1004,6 +1016,7 @@ async fn skips_made_before_rejoining_after_a_restart_are_kept() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;

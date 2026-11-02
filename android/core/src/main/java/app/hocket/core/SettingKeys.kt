@@ -144,7 +144,25 @@ object ActionIds {
     val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, PLAY_LATER, ADD_TO_PLAYLIST, STASH, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
         DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
         SAVE_QUEUE_AS_PLAYLIST, DELETE_SAVED_QUEUE, DELETE_PLAYLIST)
+    /** Default media-session buttons. Stash is a choice, not part of this set. */
     val MEDIA_SESSION = listOf(PREVIOUS, TOGGLE_PLAY, NEXT, SHUFFLE, REPEAT, LOVE)
+
+    /** Everything the notification-button editor can turn on. Stash is last, and off until chosen. */
+    val MEDIA_SESSION_CHOICES = MEDIA_SESSION + STASH
+
+    private val MEDIA_SESSION_TRANSPORT = setOf(PREVIOUS, TOGGLE_PLAY, "play", "pause", NEXT)
+
+    /**
+     * A stash that was just turned on moves to sit after play and skip. Android shows about two
+     * extra buttons, and the editor otherwise leaves Stash after shuffle, repeat and love.
+     * A stash the user already had stays where they dragged it. Mirrors `show_new_stash` in the core.
+     */
+    fun withNewlyEnabledStash(previous: List<String>, ids: List<String>): List<String> {
+        if (STASH !in ids || STASH in previous) return ids
+        val rest = ids.filter { it != STASH }
+        val at = rest.indexOfLast { it in MEDIA_SESSION_TRANSPORT }.let { if (it < 0) 0 else it + 1 }
+        return rest.toMutableList().apply { add(at, STASH) }
+    }
 }
 
 /**

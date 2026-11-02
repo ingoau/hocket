@@ -246,6 +246,32 @@ const NEW_DEFAULT_CHORDS_V3: &[&str] = &["stash", "openStash"];
 /// list, and things can be pinned to it; 3: the stash (see [`migrate_order`]).
 const CUSTOMISATION_VERSION: u32 = 3;
 
+/// Transport rows of the media-session editor. Custom buttons (shuffle, repeat,
+/// love, stash) come after these; Android shows about two of the custom ones.
+const MEDIA_SESSION_TRANSPORT: &[&str] = &["previous", "togglePlay", "play", "pause", "next"];
+
+/// Put a newly enabled `stash` immediately after the transport rows, so it is
+/// one of the custom buttons the notification can show. A stash the user
+/// already had, including one they dragged down, stays where they put it.
+///
+/// Only the user-edit path (`set_action_order`) calls this. Loading a saved
+/// order must not: a reload has no previous order, so it would look like
+/// Stash had just been turned on.
+pub(crate) fn show_new_stash(previous: &[String], ids: Vec<String>) -> Vec<String> {
+    let turning_on = ids.iter().any(|id| id == "stash") && !previous.iter().any(|id| id == "stash");
+    if !turning_on {
+        return ids;
+    }
+    let rest: Vec<String> = ids.into_iter().filter(|id| id != "stash").collect();
+    let at = rest
+        .iter()
+        .rposition(|id| MEDIA_SESSION_TRANSPORT.contains(&id.as_str()))
+        .map_or(0, |i| i + 1);
+    let mut out = rest;
+    out.insert(at, "stash".to_string());
+    out
+}
+
 /// Brings an order saved by an older build up to date: a version-1 sidebar gains the Library (after
 /// Home), whose page now holds the places it used to list, and a version-1 context menu gains Pin /
 /// Unpin to Library (after Go to artist); before version 3, the context menu and the now-playing
@@ -873,6 +899,7 @@ fn play_commands(
                 start_index: 0,
                 label: "Selection".into(),
                 shuffle,
+                start_position_ms: 0,
             }]
         }
     }

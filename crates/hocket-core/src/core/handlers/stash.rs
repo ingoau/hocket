@@ -71,11 +71,13 @@ impl Actor {
         }
     }
 
-    /// After a local edit: persist, tell the UI, sync.
+    /// After a local edit: persist, tell the UI, sync, and refresh the media
+    /// session so a notification's stash icon follows the playing track.
     fn stash_edited(&mut self) {
         self.save_stash();
         self.emit_stash();
         self.engine_input(Input::StashChanged(self.stash.clone()));
+        self.emit_media_session();
     }
 
     pub(crate) fn on_stash_merged(&mut self, list: Vec<StashEntry>) {
@@ -85,6 +87,7 @@ impl Actor {
             self.stash = merged;
             self.save_stash();
             self.emit_stash();
+            self.emit_media_session();
         }
     }
 

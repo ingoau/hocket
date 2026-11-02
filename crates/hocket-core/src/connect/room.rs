@@ -1945,6 +1945,7 @@ mod tests {
             label: "sel".into(),
             shuffle: false,
             save_outgoing: false,
+            start_position_ms: 0,
         }
     }
 

@@ -228,6 +228,7 @@ async fn a_play_scrobbles_exactly_once_and_lands_in_history() {
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     // 200 s track: threshold is 100 s. Now playing goes out at start.
@@ -288,6 +289,7 @@ async fn seeking_does_not_count_as_listening() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(10_000.0).await;
@@ -314,6 +316,7 @@ async fn unplayable_items_are_skipped_with_a_notice() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -366,6 +369,7 @@ async fn sleep_timer_stops_at_end_of_track() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::SetSleepTimer {
@@ -396,6 +400,7 @@ async fn a_play_with_scrobbling_off_is_recorded_but_not_marked_scrobbled() {
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(110_000.0).await;
@@ -436,6 +441,7 @@ async fn auto_advance_follows_the_backend(name: &str, transition_only: bool) {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -494,6 +500,40 @@ async fn gapless_auto_advance_without_ended_moves_the_session() {
     auto_advance_follows_the_backend("h", true).await;
 }
 
+/// A lyric hit starts the song at the matched line in the same command, so the
+/// load is already there and nothing seeks the track that was playing before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn play_tracks_loads_at_the_given_position() {
+    let t = synced_core("pos").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Lyric".into(),
+        shuffle: false,
+        start_position_ms: 12_000,
+    })
+    .await;
+    assert!(
+        t.backend.log().iter().any(|c| matches!(
+            c,
+            ScriptedCall::Load {
+                position_ms: 12_000,
+                ..
+            }
+        )),
+        "the new song loads at the lyric"
+    );
+    assert!(
+        !t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::Seek { .. })),
+        "no separate seek that could land on the previous song"
+    );
+}
+
 /// A transient focus loss (a call, a navigation prompt) must not pause the
 /// platform player: it resumes by itself when focus returns and reports
 /// `Playing`. A pause the user asks for meanwhile does reach it.
@@ -507,6 +547,7 @@ async fn transient_focus_loss_resumes_when_focus_returns() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -556,6 +597,7 @@ async fn lease_renewals_during_a_call_do_not_resume_playback() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -598,6 +640,7 @@ async fn a_stream_error_during_a_call_retries_quietly() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -645,6 +688,7 @@ async fn a_permanent_focus_loss_during_a_call_pauses_for_good() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -684,6 +728,7 @@ async fn an_adopted_item_the_backend_never_starts_is_loaded_explicitly() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -1062,6 +1107,7 @@ async fn autoplay_at_the_end_does_not_skip_a_song_started_meanwhile() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     });
     t.run_for(2000.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t5"));

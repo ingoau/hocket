@@ -54,6 +54,20 @@ class PebbleProtocolTest {
     }
 
     @Test
+    fun stashIsInTheDefaultMenusAtTheWatchsId() {
+        assertEquals(true, PebbleProtocol.DEFAULT_ACTIONS.contains("stash"))
+        assertEquals(true, PebbleProtocol.DEFAULT_MENU.contains("stash"))
+        assertEquals(16, PebbleProtocol.MENU_ITEMS.indexOf("stash"))
+        val blob = PebbleProtocol.encodeSettings(PebbleProtocol.WatchSettings())
+        // [version][flags][5 gestures][timeout][n menu][menu…][n actions][actions…]
+        val menuCount = blob[8].toInt()
+        val actionsAt = 9 + menuCount
+        val actionCount = blob[actionsAt].toInt()
+        val actions = blob.copyOfRange(actionsAt + 1, actionsAt + 1 + actionCount).map { it.toInt() }
+        assertEquals(true, actions.contains(16))
+    }
+
+    @Test
     fun volumeArgIsAStepCountWithZeroMeaningOne() {
         assertEquals(1, PebbleProtocol.volumeSteps(0))
         assertEquals(1, PebbleProtocol.volumeSteps(1))

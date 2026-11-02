@@ -119,6 +119,7 @@ async fn offline_plays_downloads_and_complete_cache_entries_and_skips_the_rest()
         start_index: 0,
         label: "Mixed".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1000.0).await;
@@ -183,6 +184,7 @@ async fn offline_autoplay_picks_what_plays_offline() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::SetAutoplay { enabled: true }).await;
@@ -219,6 +221,7 @@ async fn playback_records_skips_and_autoplay_picks_for_eviction() {
         start_index: 0,
         label: "Three".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(5_000.0).await;
@@ -245,6 +248,7 @@ async fn a_track_left_by_a_skip_burst_counts_as_skipped() {
         start_index: 0,
         label: "Four".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(5_000.0).await;

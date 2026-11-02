@@ -26,8 +26,8 @@ object Commands {
         Command.PlayContext(CommandPlayContextInner(PlayContextArgs(context, startIndex?.toUInt(), shuffle, saveOutgoing)))
     fun resumeAlbum(albumId: AlbumId) = Command.ResumeAlbum(CommandResumeAlbumInner(albumId))
     fun clearAlbumResume(albumId: AlbumId) = Command.ClearAlbumResume(CommandClearAlbumResumeInner(albumId))
-    fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false) =
-        Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, startIndex.toUInt(), label, shuffle))
+    fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false, startPositionMs: Long = 0) =
+        Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, startIndex.toUInt(), label, shuffle, startPositionMs.coerceAtLeast(0).toUInt()))
     fun playNext(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayNext(CommandPlayNextInner(serverId, trackIds))
     fun playLater(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayLater(CommandPlayLaterInner(serverId, trackIds))
     fun jumpToQueueItem(key: QueueKey) = Command.JumpToQueueItem(CommandJumpToQueueItemInner(key))

@@ -240,6 +240,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             label: "Selection".into(),
             shuffle: false,
             save_outgoing: false,
+            start_position_ms: 0,
         },
     })
     .await;

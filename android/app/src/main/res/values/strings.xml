@@ -70,7 +70,7 @@
     <string name="empty_library_title">Library is syncing</string>
     <string name="empty_library_body">Albums appear as the sync completes. You can browse what is there already.</string>
     <string name="empty_search_title">Search your library</string>
-    <string name="empty_search_body">Songs, albums, artists and playlists, as you type.</string>
+    <string name="empty_search_body">Songs, albums, artists, playlists, and lyrics of songs you\'ve played.</string>
     <string name="empty_search_none">No results for “%1$s”</string>
     <string name="empty_playlists_title">No playlists yet</string>
     <string name="empty_playlists_body">Select songs and choose Add to playlist to create one.</string>
@@ -246,6 +246,9 @@
     <string name="search_albums">Albums</string>
     <string name="search_artists">Artists</string>
     <string name="search_playlists">Playlists</string>
+    <string name="search_lyrics">Lyrics</string>
+    <string name="search_lyrics_scope">Searching lyrics of songs you\'ve played</string>
+    <string name="search_lyrics_none">No lyric matches in songs you\'ve played</string>
     <string name="search_from_server">More from the server</string>
     <string name="search_server_pending">Asking the server…</string>
 
@@ -714,6 +717,7 @@
     <string name="settings_section_customise">Customise</string>
     <string name="settings_context_menu">Context menu actions</string>
     <string name="settings_media_buttons">Media notification buttons</string>
+    <string name="settings_media_buttons_hint">Android shows about two extra buttons besides play and skip. Stash stays off until you turn it on, and then it moves ahead of shuffle, repeat and love, so one of those drops off the notification. Drag to choose which stay.</string>
     <string name="settings_reorder_hint">Drag to reorder, toggle to show or hide.</string>
     <string name="settings_swipe_actions">Swipe actions</string>
     <string name="settings_swipe_hint">What swiping a song sideways does. Every action is also in the song\'s menu.</string>
@@ -1027,6 +1031,7 @@
     <string name="pebble_item_queue">Queue</string>
     <string name="pebble_item_library">Library</string>
     <string name="pebble_item_love">Love</string>
+    <string name="pebble_item_stash">Stash</string>
     <string name="pebble_item_rating">Rating</string>
     <string name="pebble_item_shuffle">Shuffle</string>
     <string name="pebble_item_repeat">Repeat</string>
@@ -1228,9 +1233,14 @@
     <string name="search_kind_all">All</string>
     <string name="search_kind_count">%1$s %2$d</string>
     <string name="search_see_all_songs">See all songs</string>
+    <string name="search_see_all_lyrics">See all lyric matches</string>
     <plurals name="search_songs_count">
         <item quantity="one">%1$d song</item>
         <item quantity="other">%1$d songs</item>
+    </plurals>
+    <plurals name="search_lyrics_count">
+        <item quantity="one">%1$d match</item>
+        <item quantity="other">%1$d matches</item>
     </plurals>
     <string name="about_kbps">kbps</string>
     <string name="about_replaygain">ReplayGain</string>

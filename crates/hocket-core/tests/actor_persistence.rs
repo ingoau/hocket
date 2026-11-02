@@ -235,6 +235,7 @@ async fn housekeeping_prunes_finished_outbox_entries_and_old_jobs() {
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     // Past the scrobble threshold: now-playing and submission are flushed

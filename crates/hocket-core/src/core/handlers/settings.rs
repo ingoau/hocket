@@ -430,6 +430,15 @@ impl Actor {
     }
 
     pub(crate) fn set_action_order(&mut self, surface: &str, action_ids: Vec<String>) {
+        // Stash starts after shuffle, repeat and love, past the two custom
+        // buttons Android shows. Move it up only for this edit. A reload or a
+        // synced copy must keep a drag the user already made.
+        let action_ids = if surface == "mediaSession" {
+            let previous = self.registry.order(crate::actions::Surface::MediaSession);
+            crate::actions::show_new_stash(&previous, action_ids)
+        } else {
+            action_ids
+        };
         match self.registry.set_order_str(surface, action_ids) {
             Ok(()) => {
                 self.persist_registry();

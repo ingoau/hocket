@@ -200,9 +200,9 @@ static void prv_send_hello(void) {
 
 // -- Settings --------------------------------------------------------------------------------------
 
-static const uint8_t DEFAULT_MENU[] = {ItemNowPlaying, ItemQueue, ItemLibrary, ItemLove, ItemRating,
+static const uint8_t DEFAULT_MENU[] = {ItemNowPlaying, ItemQueue, ItemLibrary, ItemLove, ItemStash, ItemRating,
                                        ItemShuffle, ItemRepeat, ItemGoAlbum, ItemGoArtist, ItemPlayOn};
-static const uint8_t DEFAULT_ACTIONS[] = {ItemRating, ItemLove, ItemShuffle, ItemRepeat,
+static const uint8_t DEFAULT_ACTIONS[] = {ItemRating, ItemLove, ItemStash, ItemShuffle, ItemRepeat,
                                           ItemGoAlbum, ItemGoArtist, ItemPlayOn};
 
 static void prv_default_settings(Settings *s) {
@@ -607,6 +607,15 @@ void open_menu_item(MenuItemId id, bool from_menu) {
       g_now.flags ^= NowLoved;  // optimistic; the phone's next state confirms
       pop_to_now_playing();
       break;
+    case ItemStash:
+      pop_to_now_playing();
+      if (g_now.flags & NowHasTrack) {
+        send_cmd(CmdStash, 0, NULL, NULL);
+        show_notice("Stashed");
+      } else {
+        show_notice("Nothing playing");
+      }
+      break;
     case ItemShuffle:
       send_cmd(CmdToggleShuffle, 0, NULL, NULL);
       g_now.flags ^= NowShuffle;
@@ -628,6 +637,7 @@ const char *menu_item_label(MenuItemId id, char *buf, size_t n) {
     case ItemQueue: return "Queue";
     case ItemLibrary: return "Library";
     case ItemLove: return (g_now.flags & NowLoved) ? "Loved" : "Love";
+    case ItemStash: return "Stash";
     case ItemRating:
       if (g_now.rating) {
         snprintf(buf, n, "Rating: %d of 5", g_now.rating);

@@ -92,6 +92,26 @@ class RedesignScreenshotTest {
         }) { SearchScreen(rememberNavController()) }
     }
 
+    @Test @Config(qualifiers = "+notnight")
+    fun searchLyrics() {
+        RecentSearchPrefs(compose.activity).clear()
+        capture("light-search-lyrics", after = {
+            compose.onNodeWithTag("search.input").performTextInput("harbour lights")
+            repeat(4) { compose.mainClock.advanceTimeBy(1_000); compose.waitForIdle() }
+        }) { SearchScreen(rememberNavController()) }
+    }
+
+    @Test @Config(qualifiers = "+notnight")
+    fun searchLyricsFilter() {
+        RecentSearchPrefs(compose.activity).clear()
+        capture("light-search-lyrics-filter", after = {
+            compose.onNodeWithTag("search.input").performTextInput("harbour lights")
+            repeat(4) { compose.mainClock.advanceTimeBy(1_000); compose.waitForIdle() }
+            compose.onNodeWithTag("search.kind.lyrics").performClick()
+            compose.waitForIdle()
+        }) { SearchScreen(rememberNavController()) }
+    }
+
     /** An artist with every kind of release, so each shelf shows. */
     private fun richArtist(core: TestCore): app.hocket.core.api.Artist {
         val lib = core.fake.library
