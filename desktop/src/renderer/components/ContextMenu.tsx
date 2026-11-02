@@ -594,9 +594,10 @@ function PreviewRow({ index, label, enabled, active, sample, onStart, cellProps 
       data-action="preview"
       onClick={(e) => {
         e.preventDefault();
-        // A real click is handled on pointerup. The right-button drag release
-        // sends a synthetic click, the same gesture every other row runs.
-        if (e.nativeEvent.isTrusted || !enabled) return;
+        // A real mouse click (detail >= 1) is handled on pointerup. A
+        // right-drag release, a screen reader, and the keyboard send a click
+        // with detail 0, the same gesture every other row runs.
+        if (e.detail > 0 || !enabled) return;
         if (sample) bridge().dispatch({ type: "previewToggle" });
         else onStart();
       }}
