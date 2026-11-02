@@ -239,15 +239,19 @@ fn customisation_version() -> u32 {
     1
 }
 
+/// Actions version 3 added with a default chord (the stash's).
+const NEW_DEFAULT_CHORDS_V3: &[&str] = &["stash", "openStash"];
+
 /// The customisation version this build writes. 2: the Library holds the places the sidebar used to
-/// list, and things can be pinned to it (see [`migrate_order`]).
-const CUSTOMISATION_VERSION: u32 = 2;
+/// list, and things can be pinned to it; 3: the stash (see [`migrate_order`]).
+const CUSTOMISATION_VERSION: u32 = 3;
 
 /// Brings an order saved by an older build up to date: a version-1 sidebar gains the Library (after
 /// Home), whose page now holds the places it used to list, and a version-1 context menu gains Pin /
-/// Unpin to Library (after Go to artist). Done once; the user can remove them again.
+/// Unpin to Library (after Go to artist); before version 3, the context menu and the now-playing
+/// menu gain Stash (after Add to playlist). Done once; the user can remove them again.
 fn migrate_order(surface: Surface, version: u32, mut ids: Vec<String>) -> Vec<String> {
-    if version >= 2 {
+    if version >= CUSTOMISATION_VERSION {
         return ids;
     }
     let mut insert_after = |anchor: &str, new: &[&str]| {
@@ -262,10 +266,18 @@ fn migrate_order(surface: Surface, version: u32, mut ids: Vec<String>) -> Vec<St
             .map_or(ids.len(), |i| i + 1);
         ids.splice(at..at, missing);
     };
-    match surface {
-        Surface::Sidebar => insert_after("navigateHome", &["navigateLibrary"]),
-        Surface::ContextMenu => insert_after("goToArtist", &["pinToLibrary", "unpinFromLibrary"]),
-        _ => {}
+    if version < 2 {
+        match surface {
+            Surface::Sidebar => insert_after("navigateHome", &["navigateLibrary"]),
+            Surface::ContextMenu => {
+                insert_after("goToArtist", &["pinToLibrary", "unpinFromLibrary"])
+            }
+            _ => {}
+        }
+    }
+    // 3: Stash, after Add to playlist.
+    if matches!(surface, Surface::ContextMenu | Surface::NowPlaying) {
+        insert_after("addToPlaylist", &["stash"]);
     }
     ids
 }
@@ -597,8 +609,22 @@ impl ActionRegistry {
                 self.set_order(s, migrate_order(s, c.version, ids.clone()));
             }
         }
-        for (id, chord) in &c.shortcuts {
-            let _ = self.set_shortcut(id, chord.as_deref());
+        // Unbindings first, so a chord freed by one is there for the binding that takes it.
+        let (unbound, bound): (Vec<_>, Vec<_>) = c.shortcuts.iter().partition(|(_, c)| c.is_none());
+        for (id, chord) in unbound.into_iter().chain(bound) {
+            if let Err(ActionError::Conflict {
+                other_action_id, ..
+            }) = self.set_shortcut(id, chord.as_deref())
+            {
+                // A chord the user bound before a newer build gave it to a new action by default:
+                // the user's binding wins and the new action starts unbound (once; saved after).
+                if c.version < CUSTOMISATION_VERSION
+                    && NEW_DEFAULT_CHORDS_V3.contains(&other_action_id.as_str())
+                {
+                    self.overrides.insert(other_action_id, None);
+                    let _ = self.set_shortcut(id, chord.as_deref());
+                }
+            }
         }
     }
 

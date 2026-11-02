@@ -186,6 +186,8 @@ pub(crate) struct Actor {
     pub pending_effects: Option<Vec<crate::session::Effect>>,
     pub last_doc: Option<SessionDocument>,
     pub last_saved_queues: Vec<SavedQueue>,
+    /// The signed-in account's song stash, tombstones included (`crate::stash`).
+    pub stash: Vec<crate::api::StashEntry>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
     /// sent: one that would only repeat it is not sent (see
     /// [`Actor::emit_transport_state`]).
@@ -476,6 +478,7 @@ impl Actor {
             pending_effects: None,
             last_doc: None,
             last_saved_queues: vec![],
+            stash: vec![],
             emitted_transport: None,
             emitted_media_session: None,
             emitted_devices: None,
@@ -860,6 +863,7 @@ impl Actor {
                 .map(|d| d.saved_queues.clone())
                 .unwrap_or_default(),
         });
+        self.emit_stash();
         self.emit(Event::UndoChanged {
             state: snapshot.undo.clone(),
         });

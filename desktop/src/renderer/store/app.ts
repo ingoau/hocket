@@ -25,6 +25,7 @@ export interface Route {
 }
 
 /** What the fullscreen player's stage shows: the big artwork, or one of its panes (the artwork shrinks next to the title). */
+export type SelectionKind = "tracks" | "albums" | "artists" | "playlists" | "queueItems";
 export type NowPlayingMode = "art" | "lyrics" | "queue" | "about";
 const NOW_PLAYING_MODES: readonly NowPlayingMode[] = ["art", "lyrics", "queue", "about"];
 
@@ -94,12 +95,16 @@ export interface UiState {
   panels: PanelState;
   fullscreen: boolean;
   paletteOpen: boolean;
+  /** The stash popover in the top bar. */
+  stashOpen: boolean;
   contextMenu: ContextMenuState | undefined;
   playlistPicker: PlaylistPickerState | undefined;
   dialog: DialogState | undefined;
   selection: Selection;
   /** View id the selection belongs to; a route change clears it. */
   selectionScope: string;
+  /** What the selected ids are (track ids, album ids, queue keys…), for shortcuts that act on it. */
+  selectionKind: SelectionKind | undefined;
   searchQuery: string;
   searchFocusNonce: number;
   accent: string | undefined;
@@ -134,13 +139,14 @@ export interface AppStore extends CoreState, UiState {
   setPanels(patch: Partial<PanelState>): void;
   setFullscreen(on: boolean): void;
   setPaletteOpen(open: boolean): void;
+  setStashOpen(open: boolean): void;
   openContextMenu(menu: ContextMenuState): void;
   closeContextMenu(): void;
   openPlaylistPicker(picker: PlaylistPickerState): void;
   closePlaylistPicker(): void;
   openDialog(dialog: DialogState): void;
   closeDialog(): void;
-  setSelection(selection: Selection, scope: string): void;
+  setSelection(selection: Selection, scope: string, kind?: SelectionKind): void;
   clearSelection(): void;
   setSearchQuery(q: string): void;
   focusSearch(): void;
@@ -182,11 +188,13 @@ export const useApp = create<AppStore>((set, get) => ({
   panels: loadPanels(),
   fullscreen: false,
   paletteOpen: false,
+  stashOpen: false,
   contextMenu: undefined,
   playlistPicker: undefined,
   dialog: undefined,
   selection: EMPTY_SELECTION,
   selectionScope: "",
+  selectionKind: undefined,
   searchQuery: "",
   searchFocusNonce: 0,
   accent: undefined,
@@ -213,7 +221,7 @@ export const useApp = create<AppStore>((set, get) => ({
   navigate(route, replace = false) {
     const cur = get().route;
     if (cur.view === route.view && cur.id === route.id && cur.param === route.param) return;
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", contextMenu: undefined, playlistPicker: undefined }));
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, contextMenu: undefined, playlistPicker: undefined }));
   },
   back() {
     const { history, route } = get();
@@ -238,6 +246,9 @@ export const useApp = create<AppStore>((set, get) => ({
   setPaletteOpen(open) {
     set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined });
   },
+  setStashOpen(open) {
+    set({ stashOpen: open });
+  },
   openContextMenu(menu) {
     set({ contextMenu: menu, playlistPicker: undefined });
   },
@@ -256,8 +267,8 @@ export const useApp = create<AppStore>((set, get) => ({
   closeDialog() {
     set({ dialog: undefined });
   },
-  setSelection(selection, scope) {
-    set({ selection, selectionScope: scope });
+  setSelection(selection, scope, kind) {
+    set({ selection, selectionScope: scope, selectionKind: kind });
   },
   clearSelection() {
     set({ selection: EMPTY_SELECTION });
@@ -397,6 +408,12 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
       if (r.type === "lyricsResult" && r.data) useApp.getState().applyEvent({ type: "lyricsChanged", data: { track_id: trackId, lyrics: r.data } });
     }).catch(() => undefined);
   };
+  // Stash events sent before this window subscribed are gone: ask once.
+  if (kind === "main") {
+    void b.query({ type: "stash" }).then((r) => {
+      if (r.type === "stashItems") useApp.getState().applyEvent({ type: "stashChanged", data: { items: r.data } });
+    }).catch(() => undefined);
+  }
   // A report upload already running (resumed as the core started) has sent its events by now: ask.
   let reportEventSeen = false;
   const offEvent = b.onEvent((e) => {

@@ -11,7 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, Album, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
+  ActionTarget, Album, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -135,6 +135,8 @@ export class FakeCore implements CoreHandle {
   /** Each device's own volume (Connect: the control drives the device playing). */
   private volumes = new Map<string, { volume: number; muted: boolean }>();
   private savedQueues: SavedQueue[] = [];
+  /** The song stash, in order (no sync here: one fake device). */
+  private stash: { entryId: string; trackId: string; addedAt: number; removed: boolean }[] = [];
   private savedQueueCap = 10;
   private undoStack: UndoRecord[] = [];
   private redoStack: UndoRecord[] = [];
@@ -721,6 +723,45 @@ export class FakeCore implements CoreHandle {
       case "setBackendCapabilities":
         // The fake core serves plain URLs; it has no core stream reader to switch to.
         return;
+      case "stashAdd":
+        this.stashAdd(cmd.data.track_ids);
+        return;
+      case "stashRemove": {
+        const ids = new Set(cmd.data.entry_ids);
+        const removed = this.stash.filter((e) => !e.removed && ids.has(e.entryId));
+        if (!removed.length) return;
+        removed.forEach((e) => (e.removed = true));
+        this.emitStash();
+        this.stashToast(`Removed ${removed.length === 1 ? "1 song" : `${removed.length} songs`} from the stash`, removed.map((e) => e.entryId));
+        return;
+      }
+      case "stashMove": {
+        // Indices are into the list as shown (one entry per track, resolved), like the real core's.
+        const shown = new Set(this.stashItems().map((x) => x.entryId));
+        const live = this.stash.filter((e) => shown.has(e.entryId));
+        const from = live.findIndex((e) => e.entryId === cmd.data.entry_id);
+        if (from < 0) return;
+        const [entry] = live.splice(from, 1);
+        if (entry) live.splice(Math.min(cmd.data.to_index, live.length), 0, entry);
+        this.stash = [...live, ...this.stash.filter((e) => !shown.has(e.entryId))];
+        this.emitStash();
+        return;
+      }
+      case "stashClear": {
+        const removed = this.stash.filter((e) => !e.removed);
+        if (!removed.length) return;
+        removed.forEach((e) => (e.removed = true));
+        this.emitStash();
+        this.stashToast("Stash cleared", removed.map((e) => e.entryId));
+        return;
+      }
+      case "stashRestore": {
+        const ids = new Set(cmd.data.entry_ids);
+        let changed = false;
+        for (const e of this.stash) if (e.removed && ids.has(e.entryId)) { e.removed = false; changed = true; }
+        if (changed) this.emitStash();
+        return;
+      }
       default: {
         const never: never = cmd;
         void never;
@@ -1622,6 +1663,40 @@ export class FakeCore implements CoreHandle {
     return { canUndo: !!top, undoLabel: top?.label, canRedo: !!rtop, redoLabel: rtop?.label, history };
   }
 
+  private stashItems(): StashItem[] {
+    const seen = new Set<string>();
+    const out: StashItem[] = [];
+    for (const e of this.stash) {
+      if (e.removed || seen.has(e.trackId)) continue;
+      seen.add(e.trackId);
+      const track = this.lib?.tracksById.get(e.trackId);
+      if (track) out.push({ entryId: e.entryId, addedAt: e.addedAt, track });
+    }
+    return out;
+  }
+
+  private emitStash(): void {
+    this.emit({ type: "stashChanged", data: { items: this.stashItems() } });
+  }
+
+  private stashAdd(trackIds: string[]): void {
+    const listed = new Set(this.stash.filter((e) => !e.removed).map((e) => e.trackId));
+    let added = 0;
+    for (const id of trackIds) {
+      if (listed.has(id) || !this.lib?.tracksById.has(id)) continue;
+      listed.add(id);
+      this.stash.push({ entryId: newId("stash"), trackId: id, addedAt: Date.now(), removed: false });
+      added++;
+    }
+    if (added) this.emitStash();
+    this.toast(added ? `Stashed ${added === 1 ? "1 song" : `${added} songs`}` : "Already in the stash");
+  }
+
+  private stashToast(message: string, entryIds: string[]): void {
+    const toast: Toast = { id: newId("toast"), message, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "stashRestore", data: { entry_ids: entryIds } } satisfies Command), durationMs: 5000 };
+    this.emit({ type: "toast", data: { toast } });
+  }
+
   private toast(message: string): void {
     const toast: Toast = { id: newId("toast"), message, actionLabel: undefined, actionCommand: undefined, durationMs: 4000 };
     this.emit({ type: "toast", data: { toast } });
@@ -2233,6 +2308,12 @@ export class FakeCore implements CoreHandle {
       case "playLater":
         this.insert(trackIds, false);
         return;
+      case "stash":
+        this.stashAdd(trackIds);
+        return;
+      case "clearStash":
+        this.handle({ type: "stashClear" });
+        return;
       case "love":
       case "unlove": {
         const loved = actionId === "love";
@@ -2624,6 +2705,8 @@ export class FakeCore implements CoreHandle {
         return { type: "audioFile", data: undefined };
       case "reportUpload":
         return { type: "reportUpload", data: this.reportUpload?.status };
+      case "stash":
+        return { type: "stashItems", data: this.stashItems() };
       default: {
         const never: never = q;
         void never;

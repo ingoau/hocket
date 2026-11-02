@@ -31,6 +31,8 @@ const MAP = {
   selectAll: "select_all", grip: "drag_indicator", dragHandle: "drag_handle", more: "more_horiz", moreVert: "more_vert", minimize: "minimize", maximize: "crop_square", restoreWin: "filter_none",
   spinner: "progress_activity", offline: "wifi_off", warn: "warning", battery: "battery_saver", external: "open_in_new", folder: "folder",
   copy: "content_copy", resume: "play_circle", music: "music_note", cloud: "cloud", sync: "sync", lan: "lan", plus: "add",
+  // The song stash (#150).
+  stash: "inventory_2",
   // Now playing (#47): device kinds, the side panel toggle, the connect dropdown and the fullscreen glyphs.
   phone: "phone_android", laptop: "laptop_windows", sidePanel: "view_sidebar", dropDown: "arrow_drop_down", openInFull: "open_in_full", closeFullscreen: "close_fullscreen",
   // Edit pins: a chip that says a pin opens when clicked.

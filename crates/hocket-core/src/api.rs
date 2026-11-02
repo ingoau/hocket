@@ -683,6 +683,55 @@ pub struct SavedQueue {
     pub cover_art: Option<String>,
 }
 
+/// One stashed song: a record in the stash's last-write-wins set (see `crate::stash`). Removed
+/// entries stay as tombstones for a while so a removal reaches every device before the entry could
+/// come back from one that missed it.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    /// Unique per stash action (device + time + track), not per track: two devices stashing the
+    /// same song at once both keep their entry, and the list shows the first.
+    pub entry_id: String,
+    pub track_id: TrackId,
+    pub server_id: ServerId,
+    /// Position: entries sort by this, then by `entryId`. Moving one gives it a key between its
+    /// new neighbours, so a move never rewrites the others.
+    pub sort_key: f64,
+    pub added_at: EpochMs,
+    /// LWW clock of the entry's position (and what was stashed).
+    pub updated_at: EpochMs,
+    #[serde(default)]
+    pub removed: bool,
+    /// LWW clock of `removed`, separate from `updatedAt`, so a move made on one device never
+    /// undoes a removal made on another (and the other way round).
+    #[serde(default)]
+    pub removed_at: EpochMs,
+    #[serde(default)]
+    pub origin_device: DeviceId,
+    /// What the song looked like when it was stashed, shown while the library mirror lacks it.
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub album: Option<String>,
+    #[serde(default)]
+    pub cover_art: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Ms,
+}
+
+/// A song in the stash, in order, with its resolved track.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StashItem {
+    pub entry_id: String,
+    pub added_at: EpochMs,
+    pub track: Track,
+}
+
 /// The unit of state. Small, serialisable, synced, snapshotted, undone.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1956,6 +2005,27 @@ pub enum Command {
         cap: u32,
     },
 
+    // -- stash ------------------------------------------------------------
+    /// Stash songs (added at the end). Songs already in the stash are skipped.
+    StashAdd {
+        track_ids: Vec<TrackId>,
+    },
+    /// Take entries out of the stash. Toasts with an Undo.
+    StashRemove {
+        entry_ids: Vec<String>,
+    },
+    /// Move an entry to `toIndex` in the stash as listed.
+    StashMove {
+        entry_id: String,
+        to_index: u32,
+    },
+    /// Empty the stash. Toasts with an Undo.
+    StashClear,
+    /// Put removed entries back where they were (the Undo of remove and clear).
+    StashRestore {
+        entry_ids: Vec<String>,
+    },
+
     // -- undo -------------------------------------------------------------
     Undo,
     Redo,
@@ -2359,6 +2429,8 @@ pub enum Query {
     },
     Queue,
     SavedQueues,
+    /// The stash, in order.
+    Stash,
     Lyrics {
         track_id: TrackId,
     },
@@ -2563,6 +2635,7 @@ pub enum QueryResult {
     Search(SearchResults),
     Queue(QueueView),
     SavedQueues(Vec<SavedQueue>),
+    StashItems(Vec<StashItem>),
     LyricsResult(Option<Lyrics>),
     Related(Vec<RelatedTrack>),
     Stats(ListeningStats),
@@ -2875,6 +2948,10 @@ pub enum Event {
     },
     SavedQueuesChanged {
         queues: Vec<SavedQueue>,
+    },
+    /// The stash changed (here or on another device): the whole list, in order.
+    StashChanged {
+        items: Vec<StashItem>,
     },
     UndoChanged {
         state: UndoState,

@@ -165,11 +165,11 @@ fn shortcut_rebinding_and_conflicts() {
             other_action_id: "openCommandPalette".into()
         })
     );
-    r.set_shortcut("shuffle", Some("ctrl+shift+s")).unwrap();
-    assert_eq!(r.shortcut_for("shuffle").as_deref(), Some("Ctrl+Shift+S"));
-    assert_eq!(r.action_for_chord("Ctrl+Shift+S"), Some("shuffle"));
+    r.set_shortcut("shuffle", Some("ctrl+shift+u")).unwrap();
+    assert_eq!(r.shortcut_for("shuffle").as_deref(), Some("Ctrl+Shift+U"));
+    assert_eq!(r.action_for_chord("Ctrl+Shift+U"), Some("shuffle"));
     // Rebinding an action to its own chord is fine; unbinding frees the chord.
-    r.set_shortcut("shuffle", Some("Ctrl+Shift+S")).unwrap();
+    r.set_shortcut("shuffle", Some("Ctrl+Shift+U")).unwrap();
     r.set_shortcut("openCommandPalette", None).unwrap();
     assert_eq!(r.action_for_chord("Ctrl+K"), None);
     r.set_shortcut("shuffle", Some("Ctrl+K")).unwrap();
@@ -198,7 +198,7 @@ fn shortcut_rebinding_and_conflicts() {
 #[test]
 fn customisation_round_trips_across_platforms() {
     let mut linux = ActionRegistry::new(Platform::Linux);
-    linux.set_shortcut("shuffle", Some("Mod+S")).unwrap();
+    linux.set_shortcut("shuffle", Some("Mod+U")).unwrap();
     linux.set_shortcut("undo", None).unwrap();
     linux.set_order(
         Surface::MediaSession,
@@ -212,7 +212,7 @@ fn customisation_round_trips_across_platforms() {
     linux.set_order(Surface::Sidebar, linux.default_order(Surface::Sidebar));
     let json = linux.to_json();
     let c: ActionCustomisation = serde_json::from_str(&json).unwrap();
-    assert_eq!(c.shortcuts["shuffle"].as_deref(), Some("Mod+S"));
+    assert_eq!(c.shortcuts["shuffle"].as_deref(), Some("Mod+U"));
     assert_eq!(c.shortcuts["undo"], None);
     assert_eq!(c.orders["mediaSession"], vec!["togglePlay", "next"]);
     assert!(
@@ -222,7 +222,7 @@ fn customisation_round_trips_across_platforms() {
 
     let mut mac = ActionRegistry::new(Platform::MacOs);
     mac.from_json(&json).unwrap();
-    assert_eq!(mac.shortcut_for("shuffle").as_deref(), Some("Cmd+S"));
+    assert_eq!(mac.shortcut_for("shuffle").as_deref(), Some("Cmd+U"));
     assert_eq!(mac.shortcut_for("undo"), None);
     assert_eq!(mac.order(Surface::MediaSession), vec!["togglePlay", "next"]);
     assert_eq!(mac.to_json(), json);
@@ -260,10 +260,11 @@ fn version_one_orders_gain_the_library() {
             "goToArtist",
             "pinToLibrary",
             "unpinFromLibrary",
-            "addToPlaylist"
+            "addToPlaylist",
+            "stash"
         ]
     );
-    // Written back as version 2: removing the Library again sticks.
+    // Written back as the current version: removing the Library again sticks.
     r.set_order(
         Surface::Sidebar,
         vec!["navigateHome".into(), "navigateAlbums".into()],
@@ -990,4 +991,42 @@ fn library_pins_toggle_through_the_setting() {
         .actions_for(Surface::ContextMenu, &saved, &s)
         .iter()
         .any(|d| d.id == "pinToLibrary"));
+}
+
+/// A version-2 context menu gains Stash after Add to playlist (or at the end without one), once.
+#[test]
+fn version_two_orders_gain_the_stash() {
+    let mut r = ActionRegistry::new(Platform::Linux);
+    r.from_json(
+        r#"{"version":2,"orders":{"contextMenu":["playNext","addToPlaylist","love"],"nowPlaying":["love"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        r.order(Surface::ContextMenu),
+        vec!["playNext", "addToPlaylist", "stash", "love"]
+    );
+    assert_eq!(r.order(Surface::NowPlaying), vec!["love", "stash"]);
+    r.set_order(Surface::ContextMenu, vec!["playNext".into()]);
+    let mut again = ActionRegistry::new(Platform::Linux);
+    again.from_json(&r.to_json()).unwrap();
+    assert_eq!(again.order(Surface::ContextMenu), vec!["playNext"]);
+}
+
+/// A chord the user had bound before the stash took it by default stays theirs; the stash action
+/// starts unbound, and that sticks once saved.
+#[test]
+fn user_chords_win_over_the_stash_defaults() {
+    let mut r = ActionRegistry::new(Platform::Linux);
+    r.from_json(r#"{"version":2,"shortcuts":{"shuffle":"Mod+S"}}"#)
+        .unwrap();
+    assert_eq!(r.action_for_chord("Ctrl+S"), Some("shuffle"));
+    assert_eq!(r.shortcut_for("stash"), None);
+    assert_eq!(r.action_for_chord("Ctrl+Shift+S"), Some("openStash"));
+    let mut again = ActionRegistry::new(Platform::Linux);
+    again.from_json(&r.to_json()).unwrap();
+    assert_eq!(again.action_for_chord("Ctrl+S"), Some("shuffle"));
+    assert_eq!(again.shortcut_for("stash"), None);
+    // Without an older save, the defaults hold.
+    let fresh = ActionRegistry::new(Platform::Linux);
+    assert_eq!(fresh.action_for_chord("Ctrl+S"), Some("stash"));
 }

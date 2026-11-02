@@ -444,7 +444,7 @@ private fun RemoveCopiesDialog(name: String, copies: Int, onRemoveAll: () -> Uni
 
 /** "New playlist" with nothing typed in the search: ask for its name. */
 @Composable
-private fun NewPlaylistDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun NewPlaylistDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,

@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::{
     ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState,
-    Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
-    TransportState, UndoEntry,
+    Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, StashEntry, TrackId,
+    TransportLease, TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
@@ -306,6 +306,8 @@ pub enum Input {
     },
     SavedQueuesChanged(Vec<SavedQueue>),
     SettingChanged(Setting),
+    /// The local stash, whole (tombstones included).
+    StashChanged(Vec<StashEntry>),
     UndoEntryCreated {
         entry: UndoEntry,
         before_revision: u32,
@@ -447,6 +449,8 @@ pub enum Output {
     },
     SavedQueuesMerged(Vec<SavedQueue>),
     SettingsMerged(Vec<Setting>),
+    /// The stash after merging a remote copy (whole).
+    StashMerged(Vec<StashEntry>),
     UndoEntryReceived {
         entry: UndoEntry,
         before_revision: u32,
@@ -693,6 +697,7 @@ pub struct Engine {
     restored_waits: Vec<(TrackId, EpochMs, EpochMs)>,
     saved_queues: Vec<SavedQueue>,
     settings: Vec<Setting>,
+    stash: Vec<StashEntry>,
 
     lan_peers: Vec<PeerAdvert>,
     /// LAN peers that failed the mutual proof (or refused us), with the
@@ -827,6 +832,7 @@ impl Engine {
             restored_waits: vec![],
             saved_queues: vec![],
             settings: vec![],
+            stash: vec![],
             lan_peers: vec![],
             lan_blocklist: BTreeMap::new(),
             lan_strikes: BTreeMap::new(),
@@ -1038,6 +1044,10 @@ impl Engine {
 
     pub fn settings(&self) -> &[Setting] {
         &self.settings
+    }
+
+    pub fn stash(&self) -> &[StashEntry] {
+        &self.stash
     }
 
     pub fn now_local_ms(&self) -> EpochMs {
@@ -1353,6 +1363,13 @@ impl Engine {
                 self.settings = merged;
                 let settings = self.settings.clone();
                 self.upstream_send(Msg::SettingsSync { settings });
+            }
+            Input::StashChanged(list) => {
+                let (mut merged, _) = crate::stash::merge(&list, &self.stash);
+                crate::stash::prune(&mut merged, self.clock.now_ms());
+                self.stash = merged;
+                let entries = self.stash.clone();
+                self.upstream_send(Msg::StashSync { entries });
             }
             Input::UndoEntryCreated {
                 entry,
@@ -2753,6 +2770,14 @@ impl Engine {
                     self.out.push(Output::SettingsMerged(merged));
                 }
             }
+            Msg::StashSync { entries } => {
+                let (mut merged, _) = crate::stash::merge(&self.stash, &entries);
+                crate::stash::prune(&mut merged, self.clock.now_ms());
+                if merged != self.stash {
+                    self.stash = merged.clone();
+                    self.out.push(Output::StashMerged(merged));
+                }
+            }
             Msg::UndoEntryShared {
                 entry,
                 before_revision,
@@ -3081,6 +3106,12 @@ impl Engine {
                 self.settings = merged.clone();
                 self.out.push(Output::SettingsMerged(merged));
             }
+            let (mut merged, _) = crate::stash::merge(&self.stash, &rep.stash);
+            crate::stash::prune(&mut merged, self.clock.now_ms());
+            if merged != self.stash {
+                self.stash = merged.clone();
+                self.out.push(Output::StashMerged(merged));
+            }
             if remote {
                 let (theirs_plus_ours, ours_has_more) =
                     merge_saved_queues(&rep.saved_queues, &self.saved_queues);
@@ -3094,12 +3125,25 @@ impl Engine {
                     let s = self.settings.clone();
                     self.upstream_send(Msg::SettingsSync { settings: s });
                 }
+                let (_, ours_has_more) = crate::stash::merge(&rep.stash, &self.stash);
+                if ours_has_more {
+                    let entries = self.stash.clone();
+                    self.upstream_send(Msg::StashSync { entries });
+                }
             }
-        } else if remote && (!self.saved_queues.is_empty() || !self.settings.is_empty()) {
+        } else if remote
+            && (!self.saved_queues.is_empty()
+                || !self.settings.is_empty()
+                || !self.stash.is_empty())
+        {
             let q = self.saved_queues.clone();
             self.upstream_send(Msg::SavedQueuesSync { queues: q });
             let s = self.settings.clone();
             self.upstream_send(Msg::SettingsSync { settings: s });
+            if !self.stash.is_empty() {
+                let entries = self.stash.clone();
+                self.upstream_send(Msg::StashSync { entries });
+            }
         }
         if self.held.is_some() {
             let expected = if remote { self.held_remote_epoch } else { None };

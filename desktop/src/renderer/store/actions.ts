@@ -25,7 +25,7 @@ const RENDERER_HANDLED = new Set([
   "openCommandPalette", "findInList", "toggleQueuePanel", "toggleLyrics", "toggleFullscreen", "toggleMiniPlayer",
   "navigateRecent", "ui.back", "ui.forward", "ui.escape", "selectAll", "remove", "handoff", "sleepTimer", "copyDiagnostics",
   "goToAlbum", "goToArtist", "ui.info", "addToPlaylist", "ui.newPlaylist", "removeFromPlaylist", "ui.renamePlaylist",
-  "deletePlaylist", "unpin", "saveQueueAsPlaylist", "ui.developerDiagnostics",
+  "deletePlaylist", "unpin", "saveQueueAsPlaylist", "ui.developerDiagnostics", "openStash",
 ]);
 
 export async function executeAction(rawId: string, target: ActionTarget = { type: "none" }, ctx: ActionContext = {}): Promise<void> {
@@ -44,6 +44,9 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
   switch (actionId) {
     case "openCommandPalette":
       app.setPaletteOpen(!app.paletteOpen);
+      return;
+    case "openStash":
+      app.setStashOpen(!app.stashOpen);
       return;
     case "findInList": {
       // On Settings, Find searches the settings; everywhere else, the library.
@@ -86,6 +89,7 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       if (app.contextMenu) app.closeContextMenu();
       else if (app.dialog) app.closeDialog();
       else if (app.paletteOpen) app.setPaletteOpen(false);
+      else if (app.stashOpen) app.setStashOpen(false);
       else if (app.fullscreen) app.setFullscreen(false);
       else if (app.drawerOpen && isNarrow()) app.setDrawerOpen(false);
       else app.clearSelection();

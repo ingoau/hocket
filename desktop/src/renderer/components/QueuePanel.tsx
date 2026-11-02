@@ -79,7 +79,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   }, [reorderable]);
 
   const publish = useCallback((sel: typeof selection) => {
-    setSelection(sel, SCOPE);
+    setSelection(sel, SCOPE, "queueItems");
     d({ type: "setSelection", data: { target: { type: "queueItems", data: { keys: [...sel.ids] } } } });
   }, [setSelection, d]);
 

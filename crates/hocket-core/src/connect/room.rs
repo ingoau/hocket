@@ -546,9 +546,10 @@ impl Room {
             None => out.push_str("last stamp: none\n"),
         }
         out.push_str(&format!(
-            "replica: {} saved queues, {} settings, {} scrobbles in the dedupe log, {} known devices\n",
+            "replica: {} saved queues, {} settings, {} stash entries, {} scrobbles in the dedupe log, {} known devices\n",
             r.saved_queues.len(),
             r.settings.len(),
+            r.stash.len(),
             r.scrobbles.len(),
             r.devices.len()
         ));
@@ -1508,6 +1509,17 @@ impl Room {
                     self.broadcast(Msg::SettingsSync { settings: merged }, None);
                 } else if merged.len() != settings.len() {
                     self.send(peer, Msg::SettingsSync { settings: merged });
+                }
+            }
+            Msg::StashSync { entries } => {
+                let changed = self.replica.merge_stash(&entries, now);
+                let merged = self.replica.stash.clone();
+                if changed {
+                    self.dirty = true;
+                    self.broadcast(Msg::StashSync { entries: merged }, None);
+                } else if crate::stash::merge(&entries, &merged).1 {
+                    // The sender is behind: catch it up.
+                    self.send(peer, Msg::StashSync { entries: merged });
                 }
             }
             Msg::UndoEntryShared {

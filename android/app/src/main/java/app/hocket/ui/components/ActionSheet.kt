@@ -56,6 +56,7 @@ fun actionIcon(name: String): ImageVector = when (name) {
     "delete", "delete_forever" -> HocketIcons.Filled.Delete
     "remove" -> HocketIcons.Filled.Remove
     "clear_all" -> HocketIcons.Filled.ClearAll
+    "stash", "inventory_2" -> HocketIcons.Filled.Inventory2
     "album" -> HocketIcons.Filled.Album
     "artist", "person" -> HocketIcons.Filled.Person
     "history" -> HocketIcons.Filled.History

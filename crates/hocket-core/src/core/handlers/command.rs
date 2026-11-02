@@ -59,6 +59,13 @@ impl Actor {
             Command::SetVolume { volume } => self.volume_command(Some(volume), false),
             Command::SetMuted { muted } => self.volume_command(None, muted),
 
+            // -- stash --
+            c @ (Command::StashAdd { .. }
+            | Command::StashRemove { .. }
+            | Command::StashMove { .. }
+            | Command::StashClear
+            | Command::StashRestore { .. }) => self.stash_command(c),
+
             // -- queue --
             Command::PlayContext { args } => self.play_context(args),
             c @ (Command::PlayTracks { .. }

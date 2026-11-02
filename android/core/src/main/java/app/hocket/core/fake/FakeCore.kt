@@ -116,6 +116,9 @@ class FakeCore(
     private var externalLyrics = false
     private var autoplaySettings = AutoplaySettings(listOf(AutoplayProvider.SonicSimilarity, AutoplayProvider.SimilarSongs, AutoplayProvider.TopSongs, AutoplayProvider.Random), 5u, 0.6, 50u, null)
     private var savedQueueCap = 10
+    /** The song stash (#150): entry id → track id, in order; no sync on one fake device. */
+    private val stash = mutableListOf<Pair<String, TrackId>>()
+    private val stashRemoved = mutableMapOf<String, Pair<Int, TrackId>>()
     private var warnThreshold: Double? = 4.0 * 1024 * 1024 * 1024
     private val playHistory = ArrayList<PlayHistoryEntry>()
     private var keyCounter = 0
@@ -451,6 +454,15 @@ class FakeCore(
     }
     private fun emitDevices() = emit(Event.DevicesChanged(EventDevicesChangedInner(devices.toList())))
     private fun emitLibrary(ids: List<String>, table: String = "tracks") = emit(Event.LibraryChanged(EventLibraryChangedInner(serverId, listOf(table), ids)))
+    private fun stashItems(): List<StashItem> = stash.mapNotNull { (id, t) -> library.track(t)?.let { StashItem(id, 0.0, it) } }
+    private fun emitStash() = emit(Event.StashChanged(EventStashChangedInner(stashItems())))
+    private fun stashAdd(trackIds: List<TrackId>) {
+        val fresh = trackIds.distinct().filter { t -> stash.none { it.second == t } && library.track(t) != null }
+        fresh.forEach { stash.add(newId("stash") to it) }
+        if (fresh.isNotEmpty()) emitStash()
+        toast(when (fresh.size) { 0 -> "Already in the stash"; 1 -> "Stashed 1 song"; else -> "Stashed ${fresh.size} songs" })
+    }
+
     private fun toast(message: String, actionLabel: String? = null, action: Command? = null, duration: Int = 5000) =
         emit(Event.Toast(EventToastInner(Toast(newId("toast"), message, actionLabel, action?.let { HocketJson.encodeCommand(it) }, duration.toUInt()))))
 
@@ -846,6 +858,34 @@ class FakeCore(
                 toast("Saved as playlist “${c.data.name}”")
             }
             is Command.SetSavedQueueCap -> { savedQueueCap = c.data.cap.toInt(); setSetting(SettingKeys.QUEUE_SAVED_CAP, savedQueueCap.toString()) }
+
+            is Command.StashAdd -> stashAdd(c.data.track_ids)
+            is Command.StashRemove -> {
+                val ids = c.data.entry_ids.toSet()
+                val gone = stash.withIndex().filter { it.value.first in ids }
+                if (gone.isNotEmpty()) {
+                    gone.forEach { stashRemoved[it.value.first] = it.index to it.value.second }
+                    stash.removeAll { it.first in ids }
+                    emitStash()
+                    toast(if (gone.size == 1) "Removed 1 song from the stash" else "Removed ${gone.size} songs from the stash", "Undo", Command.StashRestore(CommandStashRestoreInner(gone.map { it.value.first })))
+                }
+            }
+            is Command.StashMove -> {
+                val from = stash.indexOfFirst { it.first == c.data.entry_id }
+                if (from >= 0) { val e = stash.removeAt(from); stash.add(c.data.to_index.toInt().coerceIn(0, stash.size), e); emitStash() }
+            }
+            Command.StashClear -> if (stash.isNotEmpty()) {
+                val ids = stash.map { it.first }
+                stash.forEachIndexed { i, e -> stashRemoved[e.first] = i to e.second }
+                stash.clear()
+                emitStash()
+                toast("Stash cleared", "Undo", Command.StashRestore(CommandStashRestoreInner(ids)))
+            }
+            is Command.StashRestore -> {
+                val back = c.data.entry_ids.mapNotNull { id -> stashRemoved.remove(id)?.let { id to it } }.sortedBy { it.second.first }
+                back.forEach { (id, at) -> if (stash.none { it.second == at.second }) stash.add(at.first.coerceIn(0, stash.size), id to at.second) }
+                if (back.isNotEmpty()) emitStash()
+            }
 
             Command.Undo -> undo()
             Command.Redo -> redo()
@@ -1336,6 +1376,8 @@ class FakeCore(
             id == ActionIds.PLAY_SHUFFLED -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, true)))
             id == ActionIds.PLAY_NEXT -> handle(Command.PlayNext(CommandPlayNextInner(serverId, trackIds)))
             id == ActionIds.PLAY_LATER -> handle(Command.PlayLater(CommandPlayLaterInner(serverId, trackIds)))
+            id == ActionIds.STASH -> stashAdd(trackIds)
+            id == ActionIds.CLEAR_STASH -> handle(Command.StashClear)
             id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, true)
             id == ActionIds.UNLOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, false)
             id == ActionIds.DOWNLOAD -> when (target) {
@@ -1416,6 +1458,7 @@ class FakeCore(
             d(ActionIds.PLAY, "Play", "play_arrow", "playback"), d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"),
             d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
             d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false),
+            d(ActionIds.STASH, "Stash", "stash", "queue", undoable = false),
             d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.UNLOVE, "Unlove", "heart_minus", "library"),
             d(ActionIds.rate(5), "Rate 5", "star", "library"), d(ActionIds.rate(4), "Rate 4", "star", "library"), d(ActionIds.rate(3), "Rate 3", "star", "library"),
             d(ActionIds.rate(2), "Rate 2", "star", "library"), d(ActionIds.rate(1), "Rate 1", "star", "library"), d(ActionIds.rate(0), "Clear rating", "star_outline", "library"),
@@ -1496,6 +1539,7 @@ class FakeCore(
         is Query.Search -> search(q.data)
         Query.Queue -> QueryResult.Queue(queueView())
         Query.SavedQueues -> QueryResult.SavedQueues(savedQueues.toList())
+        Query.Stash -> QueryResult.StashItems(stashItems())
         is Query.Lyrics -> QueryResult.LyricsResult(lyricsFor(q.data.track_id))
         is Query.Related -> {
             val seed = library.track(q.data.track_id)

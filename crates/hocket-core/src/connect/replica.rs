@@ -20,7 +20,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::api::{
-    DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
+    DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, StashEntry, TrackId,
+    TransportLease,
 };
 use crate::connect::wire::{
     merge_saved_queues, merge_settings, DeviceLease, LastStamp, ReplicaState, ScrobbleRecord,
@@ -63,6 +64,7 @@ pub fn new_replica(document: SessionDocument, now: EpochMs) -> ReplicaState {
         document,
         saved_queues: vec![],
         settings: vec![],
+        stash: vec![],
         devices: vec![],
         transport_lease: TransportLease::default(),
         last_stamp: None,
@@ -78,6 +80,7 @@ pub trait ReplicaExt {
     fn forget_device(&mut self, device_id: &str);
     fn merge_saved_queues(&mut self, theirs: &[SavedQueue], now: EpochMs) -> bool;
     fn merge_settings(&mut self, theirs: &[Setting], now: EpochMs) -> bool;
+    fn merge_stash(&mut self, theirs: &[StashEntry], now: EpochMs) -> bool;
     fn claim_scrobble(
         &mut self,
         track_id: &str,
@@ -133,6 +136,18 @@ impl ReplicaExt for ReplicaState {
         let (merged, changed) = merge_settings(&self.settings, theirs);
         if changed {
             self.settings = merged;
+            self.updated_at = now;
+        }
+        changed
+    }
+
+    fn merge_stash(&mut self, theirs: &[StashEntry], now: EpochMs) -> bool {
+        let (mut merged, _) = crate::stash::merge(&self.stash, theirs);
+        crate::stash::prune(&mut merged, now);
+        // Only what survives the prune counts: a stale tombstone coming back is no change.
+        let changed = merged != self.stash;
+        if changed {
+            self.stash = merged;
             self.updated_at = now;
         }
         changed
