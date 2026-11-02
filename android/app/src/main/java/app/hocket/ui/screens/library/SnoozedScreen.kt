@@ -13,6 +13,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
@@ -40,7 +41,7 @@ import java.util.Date
 @Composable
 fun SnoozedScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
-    val items by client.snoozes.collectAsStateWithLifecycle()
+    val snoozes by client.snoozes.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val songMenu = rememberSongMenu()
@@ -56,14 +57,14 @@ fun SnoozedScreen(nav: NavHostController) {
             )
         },
     ) { padding ->
-        if (items.isEmpty()) {
+        if (snoozes.isEmpty()) {
             EmptyState(stringResource(R.string.snooze_title), stringResource(R.string.snooze_empty), Modifier.padding(top = padding.calculateTopPadding()).fillMaxSize())
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                items(items, key = { it.trackId }) { item ->
+                items(snoozes, key = { it.trackId }) { item ->
                     val until = item.until?.let { whenFormat.format(Date(it.toLong())) }
                     val subtitle = if (until == null) stringResource(R.string.snooze_until_never) else stringResource(R.string.snooze_until, until)
                     TrackRow(
