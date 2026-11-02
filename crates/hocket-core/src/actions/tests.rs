@@ -881,6 +881,60 @@ fn stash_is_off_the_media_session_until_chosen() {
     assert_eq!(a[0], MediaSessionAction::Play);
 }
 
+/// Android shows about two custom buttons. Stash starts after shuffle, repeat
+/// and love, so turning it on has to move it up or the notification never
+/// shows it. Dragging it back down afterwards sticks.
+#[test]
+fn turning_stash_on_puts_it_among_the_buttons_android_shows() {
+    let mut r = ActionRegistry::new(Platform::Android);
+    r.set_order(
+        Surface::MediaSession,
+        [
+            "previous",
+            "togglePlay",
+            "next",
+            "shuffle",
+            "repeat",
+            "love",
+            "stash",
+        ]
+        .map(str::to_string)
+        .to_vec(),
+    );
+    assert_eq!(
+        r.order(Surface::MediaSession),
+        [
+            "previous",
+            "togglePlay",
+            "next",
+            "stash",
+            "shuffle",
+            "repeat",
+            "love"
+        ]
+        .map(str::to_string)
+        .to_vec()
+    );
+    r.set_order(
+        Surface::MediaSession,
+        [
+            "previous",
+            "togglePlay",
+            "next",
+            "shuffle",
+            "repeat",
+            "love",
+            "stash",
+        ]
+        .map(str::to_string)
+        .to_vec(),
+    );
+    assert_eq!(
+        r.order(Surface::MediaSession).last().map(String::as_str),
+        Some("stash")
+    );
+}
+
 /// The Library place has its own action (it used to borrow `navigateAlbums`); the desktop's
 /// default sidebar is Home and the Library, with the pins under them.
 #[test]

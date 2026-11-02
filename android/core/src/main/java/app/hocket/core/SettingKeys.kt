@@ -147,6 +147,20 @@ object ActionIds {
 
     /** Everything the notification-button editor can turn on. Stash is last, and off until chosen. */
     val MEDIA_SESSION_CHOICES = MEDIA_SESSION + STASH
+
+    private val MEDIA_SESSION_TRANSPORT = setOf(PREVIOUS, TOGGLE_PLAY, "play", "pause", NEXT)
+
+    /**
+     * A stash that was just turned on moves to sit after play and skip. Android shows about two
+     * extra buttons, and the editor otherwise leaves Stash after shuffle, repeat and love.
+     * A stash the user already had stays where they dragged it. Mirrors `show_new_stash` in the core.
+     */
+    fun withNewlyEnabledStash(previous: List<String>, ids: List<String>): List<String> {
+        if (STASH !in ids || STASH in previous) return ids
+        val rest = ids.filter { it != STASH }
+        val at = rest.indexOfLast { it in MEDIA_SESSION_TRANSPORT }.let { if (it < 0) 0 else it + 1 }
+        return rest.toMutableList().apply { add(at, STASH) }
+    }
 }
 
 /**

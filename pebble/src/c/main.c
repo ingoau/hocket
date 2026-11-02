@@ -608,10 +608,12 @@ void open_menu_item(MenuItemId id, bool from_menu) {
       pop_to_now_playing();
       break;
     case ItemStash:
+      pop_to_now_playing();
       if (g_now.flags & NowHasTrack) {
         send_cmd(CmdStash, 0, NULL, NULL);
-        pop_to_now_playing();
         show_notice("Stashed");
+      } else {
+        show_notice("Nothing playing");
       }
       break;
     case ItemShuffle:

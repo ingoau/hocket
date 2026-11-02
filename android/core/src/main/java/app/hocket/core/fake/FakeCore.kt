@@ -1056,8 +1056,12 @@ class FakeCore(
             is Command.RunAction -> runAction(c.data.action_id, c.data.target)
             is Command.SetShortcut -> Unit
             is Command.SetActionOrder -> {
-                actionOrders[c.data.surface] = c.data.action_ids
-                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), c.data.action_ids))
+                val ids = if (c.data.surface == "mediaSession") {
+                    val previous = actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION
+                    ActionIds.withNewlyEnabledStash(previous, c.data.action_ids)
+                } else c.data.action_ids
+                actionOrders[c.data.surface] = ids
+                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), ids))
                 emit(Event.ActionsChanged(EventActionsChangedInner(c.data.surface))); emitMedia()
             }
             is Command.SetSelection -> { selection = c.data.target }

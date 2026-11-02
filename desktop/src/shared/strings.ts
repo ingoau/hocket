@@ -800,6 +800,7 @@ const STRINGS = {
   "settings.sidebarItems": "Sidebar items",
   "settings.contextMenuItems": "Context menu items",
   "settings.mediaSessionButtons": "Media session buttons",
+  "settings.mediaSessionButtonsNote": "Stash is shared with your phone's notification. This computer's media controls have no extra buttons, so it does not appear here.",
   "settings.customiseHint": "Drag to reorder. Unchecked items are hidden.",
   "settings.shortcutsHint": "Click a shortcut and press the new keys. Escape cancels, Backspace clears.",
   "settings.shortcutConflict": "Also bound to {action}",

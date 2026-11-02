@@ -708,7 +708,7 @@
     <string name="settings_section_customise">Customise</string>
     <string name="settings_context_menu">Context menu actions</string>
     <string name="settings_media_buttons">Media notification buttons</string>
-    <string name="settings_media_buttons_hint">Android shows about two extra buttons, so turning Stash on takes the place of another (love, shuffle, repeat or rating). Stash stays off until you turn it on.</string>
+    <string name="settings_media_buttons_hint">Android shows about two extra buttons besides play and skip. Stash stays off until you turn it on, and then it moves ahead of shuffle, repeat and love, so one of those drops off the notification. Drag to choose which stay.</string>
     <string name="settings_reorder_hint">Drag to reorder, toggle to show or hide.</string>
     <string name="settings_swipe_actions">Swipe actions</string>
     <string name="settings_swipe_hint">What swiping a song sideways does. Every action is also in the song\'s menu.</string>
