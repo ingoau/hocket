@@ -474,7 +474,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val entrance = rememberShellEntrance()
             val entranceMoves = !LocalReducedMotion.current
             val entranceRise = with(density) { 32.dp.toPx() }
-            val miniRise = with(density) { 96.dp.toPx() }
+            val miniRise = with(density) { 64.dp.toPx() }
             // (The sheet's own scrim dims the page itself as it recedes.)
             if (recede) Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheet.progress.coerceIn(0f, 1f) }.background(Color.Black))
             Row(

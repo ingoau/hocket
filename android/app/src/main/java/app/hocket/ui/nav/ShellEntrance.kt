@@ -42,13 +42,13 @@ object ShellEntrance {
     }
 
     /** The whole entrance; each part takes its own stretch of it ([entrancePart]). */
-    internal const val DURATION_MS = 720
+    internal const val DURATION_MS = 520
     internal const val CONTENT_START_MS = 0
     internal const val CONTENT_END_MS = 520
-    internal const val BAR_START_MS = 120
-    internal const val BAR_END_MS = 640
-    internal const val MINI_START_MS = 200
-    internal const val MINI_END_MS = 720
+    internal const val BAR_START_MS = 80
+    internal const val BAR_END_MS = 380
+    internal const val MINI_START_MS = 140
+    internal const val MINI_END_MS = 440
 }
 
 /** M3's emphasized decelerate: things arriving on screen. */
