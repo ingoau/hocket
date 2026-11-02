@@ -470,6 +470,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // over the screen behind it, so instead it stays on the page (sliding and fading with it)
         // while the mini player's own thumbnail fades in with the bar.
         val flying by remember(state) { derivedStateOf { state.mode == PlayerMode.Artwork && state.progress.let { it > FLY_EPSILON && it < 1f - FLY_EPSILON } } }
+        // Whether the full player's backdrop shows at all ([backgroundAlpha] is 0 up to 0.1).
+        val backdropShown by remember(state) { derivedStateOf { backgroundAlpha(state.progress) > 0f } }
 
         // Scrim behind the sheet (a pointer affordance only: the collapse button and the sheet's
         // collapse/dismiss actions are the accessible way out).
@@ -685,8 +687,13 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             Box(Modifier.fillMaxSize().onPlaced { hero.root = it }.drawBehind { if (backgroundAlpha(state.progress) < 1f) drawRect(cardFill) }) {
                 // The full player's backdrop: blurred artwork over the artwork's colour fading to
                 // near black, fading in as the sheet opens (Metrolist's curve: nothing for the first
-                // tenth, then quickly opaque).
-                PlayerBackground(coverArt, seed, moving = settledOpen, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) })
+                // tenth, then quickly opaque). Before Android 13 it is a full-screen RenderEffect
+                // blur, rendered offscreen every frame even at alpha 0, so it is only composed once
+                // it can show: under the collapsed card it cost a full-screen blur per frame, and on
+                // a Galaxy S10 (Android 12) the card's own content stopped drawing.
+                if (Build.VERSION.SDK_INT >= 33 || backdropShown) {
+                    PlayerBackground(coverArt, seed, moving = settledOpen, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) })
+                }
                 // While the artwork is swiped, the neighbour's backdrop fades in with the swipe.
                 if (swiping && neighbourShown != null) {
                     val sign = if (towards > 0f) 1f else -1f
