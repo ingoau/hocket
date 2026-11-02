@@ -99,27 +99,105 @@ const first = (...names) => {
   return undefined;
 };
 
-/**
- * Re-spells minified SVG path data with explicit separators ("M4 19v-9q0-.475.213-.9"
- * → "M 4 19 v -9 q 0 -0.475 0.213 -0.9"), so Compose's parser never has to split
- * run-together numbers. Arc flags are single digits that may run into the next number.
- */
-function normalize(d) {
-  const out = [];
+/** Splits minified SVG path data into [command, args] segments, one per command instance. */
+function tokenize(d) {
+  const ARITY = { m: 2, l: 2, h: 1, v: 1, c: 6, s: 4, q: 4, t: 2, a: 7, z: 0 };
+  const segs = [];
   let cmd = "";
-  let arg = 0;
+  let args = [];
   let i = 0;
   const num = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/;
+  const flush = () => {
+    const n = ARITY[cmd.toLowerCase()];
+    if (n === 0) { segs.push([cmd, []]); return; }
+    if (!args.length || args.length % n) throw new Error(`bad argument count for ${cmd} in ${d}`);
+    for (let k = 0; k < args.length; k += n) {
+      // Extra pairs after a moveto are implicit linetos.
+      const c = k > 0 && /[Mm]/.test(cmd) ? (cmd === "M" ? "L" : "l") : cmd;
+      segs.push([c, args.slice(k, k + n)]);
+    }
+  };
   while (i < d.length) {
     const c = d[i];
     if (/[\s,]/.test(c)) { i++; continue; }
-    if (/[MmLlHhVvCcSsQqTtAaZz]/.test(c)) { out.push(c); cmd = c; arg = 0; i++; continue; }
-    const flag = /[Aa]/.test(cmd) && (arg % 7 === 3 || arg % 7 === 4);
+    if (/[MmLlHhVvCcSsQqTtAaZz]/.test(c)) {
+      if (cmd) flush();
+      cmd = c; args = []; i++;
+      continue;
+    }
+    // Arc flags are single digits that may run into the next number.
+    const flag = /[Aa]/.test(cmd) && (args.length % 7 === 3 || args.length % 7 === 4);
     const m = flag ? d.slice(i).match(/^[01]/) : d.slice(i).match(num);
     if (!m) throw new Error(`unparseable path data at ${i}: ${d.slice(i, i + 20)}`);
-    out.push(flag ? m[0] : String(Number(m[0])));
-    arg++;
+    args.push(Number(m[0]));
     i += m[0].length;
+  }
+  if (cmd) flush();
+  return segs;
+}
+
+/**
+ * Re-spells SVG path data with absolute commands only (M L C Q A Z; H/V become L,
+ * S/T become C/Q with their reflected control points), separated by spaces.
+ *
+ * Compose hands relative commands straight to android.graphics.Path's rMoveTo,
+ * rLineTo… and those resolve against Skia's last point. After a close, older
+ * Android (seen on a Galaxy S10 with Android 12) takes that as the contour's last
+ * drawn point, not its start, so every "z m…" subpath lands offset: holes go
+ * missing and second halves of glyphs fall off the 24dp canvas. Absolute
+ * coordinates don't depend on that, so icons draw the same on every version.
+ */
+function normalize(d) {
+  const out = [];
+  const r = (n) => String(Math.round(n * 1000) / 1000 + 0); // + 0 turns -0 into 0
+  let x = 0, y = 0, sx = 0, sy = 0;
+  let prev = ""; // previous command, upper-cased
+  let cx = 0, cy = 0; // its last control point, for S/T reflection
+  for (const [cmd, a] of tokenize(d)) {
+    const rel = cmd === cmd.toLowerCase();
+    const ox = rel ? x : 0, oy = rel ? y : 0;
+    switch (cmd.toUpperCase()) {
+      case "M":
+        x = a[0] + ox; y = a[1] + oy; sx = x; sy = y;
+        out.push("M", r(x), r(y)); prev = "M"; break;
+      case "L":
+        x = a[0] + ox; y = a[1] + oy;
+        out.push("L", r(x), r(y)); prev = "L"; break;
+      case "H":
+        x = a[0] + ox;
+        out.push("L", r(x), r(y)); prev = "L"; break;
+      case "V":
+        y = a[0] + oy;
+        out.push("L", r(x), r(y)); prev = "L"; break;
+      case "C": {
+        const p = [a[0] + ox, a[1] + oy, a[2] + ox, a[3] + oy, a[4] + ox, a[5] + oy];
+        out.push("C", ...p.map(r));
+        [cx, cy, x, y] = [p[2], p[3], p[4], p[5]]; prev = "C"; break;
+      }
+      case "S": {
+        const [x1, y1] = prev === "C" ? [2 * x - cx, 2 * y - cy] : [x, y];
+        const p = [a[0] + ox, a[1] + oy, a[2] + ox, a[3] + oy];
+        out.push("C", r(x1), r(y1), ...p.map(r));
+        [cx, cy, x, y] = p; prev = "C"; break;
+      }
+      case "Q": {
+        const p = [a[0] + ox, a[1] + oy, a[2] + ox, a[3] + oy];
+        out.push("Q", ...p.map(r));
+        [cx, cy, x, y] = p; prev = "Q"; break;
+      }
+      case "T": {
+        const [x1, y1] = prev === "Q" ? [2 * x - cx, 2 * y - cy] : [x, y];
+        const nx = a[0] + ox, ny = a[1] + oy;
+        out.push("Q", r(x1), r(y1), r(nx), r(ny));
+        [cx, cy, x, y] = [x1, y1, nx, ny]; prev = "Q"; break;
+      }
+      case "A":
+        x = a[5] + ox; y = a[6] + oy;
+        out.push("A", r(a[0]), r(a[1]), r(a[2]), String(a[3]), String(a[4]), r(x), r(y)); prev = "A"; break;
+      case "Z":
+        x = sx; y = sy;
+        out.push("Z"); prev = "Z"; break;
+    }
   }
   return out.join(" ");
 }
