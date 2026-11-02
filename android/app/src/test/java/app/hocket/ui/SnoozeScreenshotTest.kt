@@ -3,6 +3,7 @@ package app.hocket.ui
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.captureToImage
@@ -53,9 +54,15 @@ class SnoozeScreenshotTest {
         compose.waitUntil(5_000) { core.client.started.value }
         val trackId = lib.playlistTracks.getValue("pl0").first()
         val title = lib.track(trackId)!!.title
+        // One setContent per test: the Snoozed list replaces the playlist when [snoozedList] flips.
+        val snoozedList = mutableStateOf(false)
         compose.setThemedContent(core) {
-            CompositionLocalProvider(LocalDetailNavigator provides DetailNavigator({}, {}, {})) {
-                app.hocket.ui.screens.detail.PlaylistDetailScreen(rememberNavController(), "pl0")
+            if (snoozedList.value) {
+                SnoozedScreen(rememberNavController())
+            } else {
+                CompositionLocalProvider(LocalDetailNavigator provides DetailNavigator({}, {}, {})) {
+                    app.hocket.ui.screens.detail.PlaylistDetailScreen(rememberNavController(), "pl0")
+                }
             }
         }
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("More options for $title").fetchSemanticsNodes().isNotEmpty() }
@@ -81,9 +88,7 @@ class SnoozeScreenshotTest {
         settle()
         shot(dir, "android-unsnooze")
 
-        compose.setThemedContent(core) {
-            SnoozedScreen(rememberNavController())
-        }
+        compose.runOnIdle { snoozedList.value = true }
         awaitTag("library.snoozed")
         settle()
         shot(dir, "android-snoozed-list")
@@ -99,8 +104,26 @@ class SnoozeScreenshotTest {
         compose.waitForIdle()
     }
 
+    @Suppress("UNCHECKED_CAST")
+    private fun rootViews(): List<android.view.View> {
+        val global = Class.forName("android.view.WindowManagerGlobal").getMethod("getInstance").invoke(null)
+        val field = global.javaClass.getDeclaredField("mViews").apply { isAccessible = true }
+        return (field.get(global) as List<android.view.View>).toList()
+    }
+
+    /** The activity's window with every other window (the menu sheet) drawn over it. */
     private fun shot(dir: File, name: String) {
         val bitmap = compose.onAllNodes(isRoot())[0].captureToImage().asAndroidBitmap().copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = android.graphics.Canvas(bitmap)
+        val activityDecor = compose.activity.window.decorView
+        for (view in rootViews()) {
+            if (view === activityDecor || view.width == 0) continue
+            val at = IntArray(2).also { view.getLocationOnScreen(it) }
+            canvas.save()
+            canvas.translate(at[0].toFloat(), at[1].toFloat())
+            view.draw(canvas)
+            canvas.restore()
+        }
         val file = File(dir, "$name.png")
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("screenshot: ${file.absolutePath}")
