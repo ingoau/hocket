@@ -249,8 +249,7 @@ fun SearchScreen(nav: NavHostController) {
                     itemsIndexed(shown, key = { _, h -> "ly" + h.track.id }) { i, h ->
                         LyricHitRow(h, onClick = {
                             rememberQuery()
-                            client.dispatch(Commands.playTracks(serverId, hits.map { it.track.id }, hits.indexOf(h), query))
-                            h.startMs?.let { client.dispatch(Commands.seekTo(it.toLong())) }
+                            client.dispatch(Commands.playTracks(serverId, hits.map { it.track.id }, hits.indexOf(h), query, startPositionMs = h.startMs?.toLong() ?: 0))
                         }, nowPlaying = nowPlaying?.track?.id == h.track.id, segment = i to n, modifier = Modifier.segmentItem(i))
                     }
                     if (more) item(key = "lyrics.more") {
@@ -305,14 +304,24 @@ private enum class SearchKind(val label: Int) {
     All(R.string.search_kind_all), Songs(R.string.search_songs), Lyrics(R.string.search_lyrics), Albums(R.string.search_albums), Artists(R.string.search_artists), Playlists(R.string.search_playlists)
 }
 
+/**
+ * Core offsets count Unicode scalar values. Kotlin indexes UTF-16 units, so an
+ * emoji before the match is two units and would otherwise shift the highlight.
+ */
+internal fun lyricUtf16Range(line: String, matchStart: Int, matchEnd: Int): Pair<Int, Int> {
+    val points = line.codePointCount(0, line.length)
+    val start = line.offsetByCodePoints(0, matchStart.coerceIn(0, points))
+    val end = line.offsetByCodePoints(0, matchEnd.coerceIn(matchStart.coerceAtLeast(0), points))
+    return start to end.coerceAtLeast(start)
+}
+
 /** The matched phrase, in the lyric's own text. Offsets are character indexes from the core. */
 @Composable
 private fun LyricHitRow(hit: LyricHit, onClick: () -> Unit, nowPlaying: Boolean, segment: Pair<Int, Int>, modifier: Modifier = Modifier) {
     val (i, n) = segment
     val mark = SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
     val line = buildAnnotatedString {
-        val start = hit.matchStart.toInt().coerceIn(0, hit.line.length)
-        val end = hit.matchEnd.toInt().coerceIn(start, hit.line.length)
+        val (start, end) = lyricUtf16Range(hit.line, hit.matchStart.toInt(), hit.matchEnd.toInt())
         append(hit.line.substring(0, start))
         pushStyle(mark)
         append(hit.line.substring(start, end))

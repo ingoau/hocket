@@ -1153,8 +1153,8 @@ impl Db {
                  JOIN lyrics_search s ON s.rowid = f.rowid
                  JOIN tracks t ON t.server_id = s.server_id AND t.id = s.track_id
                  WHERE lyrics_search_fts MATCH ?1 AND s.server_id = ?2
-                 ORDER BY bm25(lyrics_search_fts),
-                          CASE s.source WHEN 'server' THEN 0 WHEN 'embedded' THEN 1 ELSE 2 END
+                 ORDER BY CASE s.source WHEN 'server' THEN 0 WHEN 'embedded' THEN 1 ELSE 2 END,
+                          bm25(lyrics_search_fts)
                  LIMIT ?3"
             ))?;
             let rows = st.query_map(params![match_expr, server_id, lim], |row| {
@@ -1188,8 +1188,8 @@ impl Db {
         })
     }
 
-    /// Keep `lyrics_search` in step with one cached document. An empty lyric
-    /// (no words) drops the row.
+    /// Keep `lyrics_search` in step with one cached document. A lyric with no
+    /// words is stored with an empty body so it is not parsed again on open.
     pub fn upsert_lyrics_index(
         &self,
         server_id: &str,
@@ -2619,7 +2619,12 @@ mod tests {
                 ),
             )
             .unwrap();
-        assert_eq!(db.search("s", "night was", 10).unwrap().lyrics.len(), 1);
+        let night = db.search("s", "night was", 10).unwrap();
+        assert_eq!(night.lyrics.len(), 1);
+        assert!(
+            night.lyrics[0].line.contains('\n'),
+            "the server copy is the one the player shows"
+        );
 
         // Replacing the lyric drops the old phrase. The server copy still matches.
         bump();

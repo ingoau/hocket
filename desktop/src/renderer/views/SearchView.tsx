@@ -42,8 +42,7 @@ export function SearchView({ query }: { query: string }) {
   const play = (i: number) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: songs.map((x) => x.id), start_index: i, label: query, shuffle: false } });
   const playLyric = (hit: LyricHit) => {
     const i = Math.max(0, lyricHits.findIndex((h) => h.track.id === hit.track.id));
-    bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: lyricHits.map((h) => h.track.id), start_index: i, label: query, shuffle: false } });
-    if (hit.startMs != null) bridge().dispatch({ type: "seekTo", data: { position_ms: hit.startMs } });
+    bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: lyricHits.map((h) => h.track.id), start_index: i, label: query, shuffle: false, start_position_ms: hit.startMs ?? 0 } });
   };
   const nothing = !!found && counts.all === 0 && !!server;
   return (

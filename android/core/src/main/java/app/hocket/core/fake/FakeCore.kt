@@ -1595,7 +1595,7 @@ class FakeCore(
         val albums = if (needle.isEmpty()) emptyList() else library.albums.filter { it.name.lowercase().contains(needle) || it.artist?.lowercase()?.contains(needle) == true }.take(limit)
         val artists = if (needle.isEmpty()) emptyList() else library.artists.filter { it.name.lowercase().contains(needle) }.take(limit)
         val playlists = if (needle.isEmpty()) emptyList() else library.playlists.filter { it.name.lowercase().contains(needle) }.take(limit)
-        val local = SearchResults(q.request_id, q.query, tracks.map { it.toSummary() }, albums, artists, playlists, false)
+        val local = SearchResults(q.request_id, q.query, tracks.map { it.toSummary() }, albums, artists, playlists, false, lyricHits(needle, limit))
         if (q.include_server && needle.isNotEmpty() && timers) scope.launch {
             delay(700)
             // "Server" results: a handful of extra matches the mirror wouldn't have yet.
@@ -1603,6 +1603,34 @@ class FakeCore(
             emit(Event.SearchResults(EventSearchResultsInner(SearchResults(q.request_id, q.query, extra.map { it.toSummary() }, emptyList(), emptyList(), emptyList(), true))))
         }
         return QueryResult.Search(local)
+    }
+
+    /** Phrases from lyrics this fake has cached (songs it pretends were played). */
+    private fun lyricHits(needle: String, limit: Int): List<LyricHit> {
+        if (needle.isEmpty()) return emptyList()
+        val out = ArrayList<LyricHit>()
+        for (t in library.tracks) {
+            val lyrics = library.lyricsByTrack[t.id] ?: continue
+            val lines = lyrics.lines
+            for (i in lines.indices) {
+                val text = lines[i].text
+                val here = text.lowercase().indexOf(needle)
+                if (here >= 0) {
+                    out += LyricHit(t.toSummary(), text, here.toUInt(), (here + needle.length).toUInt(), lines[i].startMs)
+                    break
+                }
+                if (i + 1 < lines.size) {
+                    val joined = text + "\n" + lines[i + 1].text
+                    val at = joined.lowercase().indexOf(needle)
+                    if (at >= 0) {
+                        out += LyricHit(t.toSummary(), joined, at.toUInt(), (at + needle.length).toUInt(), lines[i].startMs)
+                        break
+                    }
+                }
+            }
+            if (out.size >= limit) break
+        }
+        return out
     }
 
     private fun stats(days: Int): QueryResult {

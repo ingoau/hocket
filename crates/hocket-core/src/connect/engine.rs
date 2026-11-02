@@ -4621,6 +4621,7 @@ mod tests {
             label: "sel".into(),
             shuffle: false,
             save_outgoing: false,
+            start_position_ms: 0,
         }
     }
 
@@ -5216,6 +5217,7 @@ mod tests {
                     label: "sel".into(),
                     shuffle: false,
                     save_outgoing: false,
+                    start_position_ms: 0,
                 },
                 revision: 2,
                 device_id: "b".into(),

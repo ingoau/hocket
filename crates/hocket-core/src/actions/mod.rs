@@ -872,6 +872,7 @@ fn play_commands(
                 start_index: 0,
                 label: "Selection".into(),
                 shuffle,
+                start_position_ms: 0,
             }]
         }
     }

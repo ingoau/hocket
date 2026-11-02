@@ -110,8 +110,7 @@ function SearchBox() {
     if (!r) return [];
     const sid = serverId ?? "";
     const playLyric = (id: string, startMs: number | undefined) => {
-      bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [id], start_index: 0, label: r.query, shuffle: false } });
-      if (startMs != null) bridge().dispatch({ type: "seekTo", data: { position_ms: startMs } });
+      bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [id], start_index: 0, label: r.query, shuffle: false, start_position_ms: startMs ?? 0 } });
     };
     return [
       ...r.tracks.map((x) => ({ key: `t${x.id}`, kind: t("search.tracks"), label: x.title, sub: x.artist, cover: x.coverArt, go: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [x.id], start_index: 0, label: x.title, shuffle: false } }) })),

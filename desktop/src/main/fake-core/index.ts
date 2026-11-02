@@ -11,7 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, Album, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
+  ActionTarget, Album, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, LyricHit, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -351,6 +351,7 @@ export class FakeCore implements CoreHandle {
         return;
       case "playTracks":
         this.playContext({ serverId: cmd.data.server_id, kind: { type: "adHoc", data: { label: cmd.data.label } }, label: cmd.data.label, sort: "default", tracks: cmd.data.track_ids }, cmd.data.start_index, cmd.data.shuffle, true);
+        if (cmd.data.start_position_ms) this.seek(cmd.data.start_position_ms);
         return;
       case "playNext":
         this.insert(cmd.data.track_ids, true);
@@ -2782,7 +2783,8 @@ export class FakeCore implements CoreHandle {
     const albums = lib.albums.filter((a) => a.name.toLowerCase().includes(q) || a.artist?.toLowerCase().includes(q));
     const artists = lib.artists.filter((a) => a.name.toLowerCase().includes(q));
     const playlists = lib.playlists.filter((p) => p.playlist.name.toLowerCase().includes(q)).map((p) => p.playlist);
-    const local: SearchResults = { requestId, query, tracks: tracks.slice(0, limit).map(summary), albums: albums.slice(0, limit), artists: artists.slice(0, limit), playlists: playlists.slice(0, limit), fromServer: false, lyrics: [] };
+    const lyrics = this.lyricHits(q, limit);
+    const local: SearchResults = { requestId, query, tracks: tracks.slice(0, limit).map(summary), albums: albums.slice(0, limit), artists: artists.slice(0, limit), playlists: playlists.slice(0, limit), fromServer: false, lyrics };
     if (includeServer) {
       // "search3 fires in parallel only when local results are thin": server batch after a delay.
       this.later(450, () => {
@@ -2792,6 +2794,34 @@ export class FakeCore implements CoreHandle {
       });
     }
     return local;
+  }
+
+  /** Lyrics the fake has "cached" because those songs were played. */
+  private lyricHits(q: string, limit: number): LyricHit[] {
+    const lib = this.lib;
+    if (!lib || !q) return [];
+    const verses = [
+      "We drove out past the harbour lights",
+      "And the radio was only static",
+      "You said the city never sleeps",
+      "But tonight it's holding its breath",
+    ];
+    const out: LyricHit[] = [];
+    for (let i = 0; i < lib.tracks.length && out.length < limit; i++) {
+      if (i % 4 === 3) continue;
+      const track = summary(lib.tracks[i]!);
+      const lines = verses.map((text, n) => ({ text, startMs: i % 4 === 2 ? undefined : 8_000 + n * 6_000 }));
+      for (let n = 0; n < lines.length; n++) {
+        const here = lines[n]!;
+        const next = lines[n + 1];
+        const joined = next ? `${here.text}\n${next.text}` : here.text;
+        const at = joined.toLowerCase().indexOf(q);
+        if (at < 0) continue;
+        out.push({ track, line: at + q.length <= here.text.length ? here.text : joined, matchStart: at, matchEnd: at + q.length, startMs: here.startMs });
+        break;
+      }
+    }
+    return out;
   }
 
   private related(trackId: string, count: number): RelatedTrack[] {

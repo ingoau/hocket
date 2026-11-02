@@ -1939,6 +1939,10 @@ pub enum Command {
         start_index: u32,
         label: String,
         shuffle: bool,
+        /// Audio position to start the chosen track at. Part of the same
+        /// command so a following seek cannot land on the previous song.
+        #[serde(default)]
+        start_position_ms: Ms,
     },
     PlayNext {
         server_id: ServerId,

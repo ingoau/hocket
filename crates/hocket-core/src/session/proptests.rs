@@ -206,6 +206,7 @@ fn op() -> impl Strategy<Value = QueueOp> {
                 label: "sel".into(),
                 shuffle,
                 save_outgoing: true,
+                start_position_ms: 0,
             }
         }),
         (track_ids(), prop::option::of(0u32..4), prop::bool::ANY).prop_map(

@@ -50,13 +50,11 @@ pub fn seek_position(start_ms: Ms, offset_ms: i32) -> Ms {
     (i64::from(start_ms) + i64::from(offset_ms)).clamp(0, i64::from(u32::MAX)) as Ms
 }
 
-/// `None` when the lyrics have no words worth indexing.
+/// `None` only when the line list cannot be stored. A lyric with no words
+/// still gets a row (`body` empty) so opening the database does not parse it again.
 pub fn index_document(lyrics: &Lyrics) -> Option<IndexedLyrics> {
     let lines = stored_lines(lyrics);
     let words = words_of(&lines);
-    if words.is_empty() {
-        return None;
-    }
     let body = words
         .iter()
         .map(|w| w.folded.as_str())
@@ -172,13 +170,20 @@ fn words_of(lines: &[StoredLine]) -> Vec<Word> {
         let chars: Vec<char> = line.text.chars().collect();
         let mut i = 0;
         while i < chars.len() {
-            if is_apostrophe(chars[i]) || !chars[i].is_alphanumeric() {
+            // A combining mark is part of the letter it follows, including when
+            // the lyric was stored decomposed (NFD), as macOS tags often are.
+            if is_apostrophe(chars[i]) || is_combining_mark(chars[i]) || !chars[i].is_alphanumeric()
+            {
                 i += 1;
                 continue;
             }
             let start = i;
             let mut raw = String::new();
-            while i < chars.len() && (chars[i].is_alphanumeric() || is_apostrophe(chars[i])) {
+            while i < chars.len()
+                && (chars[i].is_alphanumeric()
+                    || is_apostrophe(chars[i])
+                    || is_combining_mark(chars[i]))
+            {
                 if !is_apostrophe(chars[i]) {
                     raw.push(chars[i]);
                 }
@@ -199,10 +204,10 @@ fn words_of(lines: &[StoredLine]) -> Vec<Word> {
 }
 
 fn fold(s: &str) -> String {
-    s.nfd()
-        .filter(|c| !is_combining_mark(*c))
-        .flat_map(|c| c.to_lowercase())
-        .collect()
+    // Lowercase first: İ lowercases to i plus a combining dot, which the
+    // following strip then removes. Stripping first would leave that dot.
+    let lower: String = s.chars().flat_map(|c| c.to_lowercase()).collect();
+    lower.nfd().filter(|c| !is_combining_mark(*c)).collect()
 }
 
 fn is_apostrophe(c: char) -> bool {
@@ -308,8 +313,27 @@ mod tests {
         let synced = lyrics(vec![line("hello there", None)]);
         assert_eq!(hit(&synced, "hello").start_ms, None);
         let empty = lyrics(vec![line("...", None), line("   ", None)]);
-        assert!(index_document(&empty).is_none());
+        assert!(index_document(&empty).unwrap().body.is_empty());
         assert!(lyrics_match_expr("...").is_none());
+    }
+
+    #[test]
+    fn decomposed_lyrics_match_a_composed_query() {
+        let stored = lyrics(vec![line(
+            "the re\u{0301}sume\u{0301} is here",
+            Some(2_000),
+        )]);
+        let span = hit(&stored, "résumé");
+        let marked: String = span
+            .line
+            .chars()
+            .skip(span.match_start as usize)
+            .take((span.match_end - span.match_start) as usize)
+            .collect();
+        assert_eq!(marked, "re\u{0301}sume\u{0301}");
+        assert_eq!(span.start_ms, Some(2_000));
+        let city = lyrics(vec![line("from İstanbul tonight", None)]);
+        assert!(find_in_stored(&index_document(&city).unwrap().lines_json, "istanbul").is_some());
     }
 
     #[test]

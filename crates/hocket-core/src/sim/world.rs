@@ -779,6 +779,7 @@ impl World {
                     label: "selection".into(),
                     shuffle: false,
                     save_outgoing: true,
+                    start_position_ms: 0,
                 };
                 self.devices[i].handle(Input::LocalOp { op });
             }

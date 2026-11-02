@@ -74,8 +74,7 @@ export function CommandPalette() {
       coverArt: hit.track.coverArt,
       lyric: { line: hit.line, start: hit.matchStart, end: hit.matchEnd },
       run: () => {
-        bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [hit.track.id], start_index: 0, label: hit.track.title, shuffle: false } });
-        if (hit.startMs != null) bridge().dispatch({ type: "seekTo", data: { position_ms: hit.startMs } });
+        bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [hit.track.id], start_index: 0, label: hit.track.title, shuffle: false, start_position_ms: hit.startMs ?? 0 } });
       },
     });
     for (const al of results?.albums ?? []) out.push({ id: `al:${al.id}`, label: al.name, sub: al.artist, kind: "album", coverArt: al.coverArt, run: () => navigate({ view: "album", id: al.id }) });
