@@ -121,6 +121,12 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
     return [{ id, label: t(s.label), icon: s.icon, enabled: a.enabled }];
   });
   if (cells.length) top.push({ kind: "strip", cells });
+  const preview = byId.get("preview");
+  if (preview) {
+    used.add("preview");
+    const oneSong = (facts?.count ?? 1) <= 1 && facts?.kind !== "album" && facts?.kind !== "artist" && facts?.kind !== "playlist";
+    if (oneSong) top.push({ kind: "action", action: preview, label: labelFor(preview, facts), destructive: false });
+  }
 
   const rates = RATE_IDS.filter((id) => byId.has(id));
   if (rates.length) {

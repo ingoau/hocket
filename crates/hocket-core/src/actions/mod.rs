@@ -471,6 +471,7 @@ impl ActionRegistry {
     pub fn all_for(&self, target: &ActionTarget, state: &StateView) -> Vec<ActionDescriptor> {
         defs::all()
             .iter()
+            .filter(|d| d.id != "preview")
             .filter(|d| Self::applies(d, target, Some(Surface::Palette)))
             .map(|d| self.describe(d, target, state))
             .collect()
@@ -571,6 +572,10 @@ impl ActionRegistry {
         let id = canonical_id(id);
         if self.get(id).is_none() {
             return Err(ActionError::UnknownAction(id.into()));
+        }
+        // A preview has no menu to close it. It is not a bindable shortcut.
+        if id == "preview" {
+            return Err(ActionError::NotApplicable(id.into()));
         }
         let chord = match chord {
             Some(c) => Some(normalise(c, self.platform)?),

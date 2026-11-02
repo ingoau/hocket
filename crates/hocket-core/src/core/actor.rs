@@ -209,6 +209,9 @@ pub(crate) struct Actor {
     pub outbox_entries: HashMap<String, String>,
 
     pub playback: Playback,
+    /// Song preview, separate from the transport. `None` when nothing is
+    /// being previewed.
+    pub preview: Option<super::state::PreviewSession>,
     /// Track summaries already read from the mirror, for the queue view
     /// (rebuilt on every queue change): see [`Actor::summaries`].
     pub summary_cache: Mutex<super::state::SummaryCache>,
@@ -502,6 +505,7 @@ impl Actor {
                 muted,
                 ..Default::default()
             },
+            preview: None,
             summary_cache: Mutex::new(Default::default()),
             last_skip_at: None,
             skip_op: false,
@@ -944,6 +948,7 @@ impl Actor {
         self.emit(Event::MediaSession {
             state: snapshot.media_session,
         });
+        self.emit_preview();
     }
 
     // -- tick -----------------------------------------------------------------
@@ -963,7 +968,10 @@ impl Actor {
             return;
         }
         self.hot.store(
-            self.playback.playing || self.playback.buffering || self.pending_load_timer.is_some(),
+            self.playback.playing
+                || self.playback.buffering
+                || self.pending_load_timer.is_some()
+                || self.preview.as_ref().is_some_and(|p| p.playing),
             Ordering::Relaxed,
         );
         if now - self.last_engine_tick >= ENGINE_TICK_MS - 1.0 {

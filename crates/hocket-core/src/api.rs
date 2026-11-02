@@ -1513,6 +1513,19 @@ pub enum BackendCommand {
     SetGapless {
         enabled: bool,
     },
+    /// Load a song into the preview player (a second output). The main item
+    /// stays loaded. `position_ms` is where the preview starts.
+    PreviewLoad {
+        source: MediaSource,
+        position_ms: Ms,
+    },
+    PreviewPlay,
+    PreviewPause,
+    PreviewSeek {
+        position_ms: Ms,
+    },
+    /// Unload the preview player. The main item is untouched.
+    PreviewStop,
 }
 
 /// What an external backend reports back.
@@ -1572,6 +1585,38 @@ pub enum BackendReport {
         volume: f64,
         muted: bool,
     },
+    /// The preview player knows the song's duration.
+    PreviewReady {
+        duration_ms: Option<Ms>,
+    },
+    /// Where the preview is. `playing` is false while it is paused.
+    PreviewProgress {
+        position_ms: Ms,
+        playing: bool,
+    },
+    /// The preview played to the end.
+    PreviewEnded,
+    /// The preview player could not load or play the song.
+    PreviewFailed,
+    /// The preview player lost the output (another app took audio focus).
+    /// The main session must not be resumed into that.
+    PreviewInterrupted,
+}
+
+/// A song preview playing beside the queue. Positions are samples: a UI
+/// extrapolates from [`taken_at`] while [`playing`] is set. Nothing here is
+/// the transport, the queue or a scrobble.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewState {
+    pub track_id: TrackId,
+    pub title: String,
+    pub duration_ms: Ms,
+    pub position_ms: Ms,
+    pub playing: bool,
+    /// Wall-clock milliseconds when `position_ms` was sampled.
+    pub taken_at: EpochMs,
 }
 
 // ---------------------------------------------------------------------------
@@ -2013,6 +2058,23 @@ pub enum Command {
     SetMuted {
         muted: bool,
     },
+
+    // -- preview ----------------------------------------------------------
+    /// Play a song beside the queue, starting about 30% in. Pauses playback
+    /// on this device and restores it afterwards; a Connect peer is left
+    /// playing. Never written to the queue, play history, scrobbles or the
+    /// resume position.
+    PreviewStart {
+        track_id: TrackId,
+    },
+    /// Pause or resume the preview that is already open.
+    PreviewToggle,
+    /// Seek the preview. The position is clamped to the song.
+    PreviewSeek {
+        position_ms: Ms,
+    },
+    /// Stop the preview and, on this device, resume what was playing.
+    PreviewStop,
 
     // -- queue ------------------------------------------------------------
     PlayContext {
@@ -3083,6 +3145,10 @@ pub enum Event {
     /// renewal or `played_ms` alone (those ride along with the next one).
     TransportChanged {
         transport: TransportState,
+    },
+    /// The song preview opened, moved, paused or closed (`None`).
+    PreviewChanged {
+        preview: Option<PreviewState>,
     },
     /// The item now playing (or `None` when stopped), with a resolved track.
     NowPlayingChanged {

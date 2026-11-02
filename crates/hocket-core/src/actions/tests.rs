@@ -307,6 +307,7 @@ fn surfaces_filter_and_order() {
                 | "goToArtist"
                 | "pinToLibrary"
                 | "unpinFromLibrary"
+                | "preview"
                 | "unsnooze"
         )));
 

@@ -9,6 +9,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod library;
 pub(crate) mod playback;
 pub(crate) mod prefetch;
+pub(crate) mod preview;
 pub(crate) mod prime;
 pub(crate) mod reports;
 pub(crate) mod servers;

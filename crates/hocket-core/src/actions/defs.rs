@@ -197,6 +197,24 @@ fn play_later(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command>
     queue_commands(t, s, r, false)
 }
 
+fn one_track(t: &ActionTarget, _: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } => ids.len() == 1,
+        ActionTarget::QueueItems { keys } => keys.len() == 1,
+        _ => false,
+    }
+}
+
+fn preview_start(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let mut ids = super::track_ids_of(t, s, r);
+    if ids.len() != 1 {
+        return vec![];
+    }
+    vec![Command::PreviewStart {
+        track_id: ids.remove(0),
+    }]
+}
+
 fn stash(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
     let track_ids = track_ids_of(t, s, r);
     if track_ids.is_empty() {
@@ -772,6 +790,15 @@ static ALL: &[ActionDef] = &[
         has_selection,
         play_later,
         undoable = true
+    ),
+    action!(
+        "preview",
+        "Preview",
+        "headphones",
+        Playback,
+        &[TargetKind::Tracks, TargetKind::QueueItems],
+        one_track,
+        preview_start
     ),
     // -- stash --
     action!(
@@ -1473,6 +1500,7 @@ const CONTEXT_MENU: &[&str] = &[
     "playShuffled",
     "playNext",
     "playLater",
+    "preview",
     "addToPlaylist",
     "stash",
     "love",
@@ -1540,6 +1568,12 @@ pub fn default_order(surface: Surface) -> Vec<&'static str> {
         Surface::Sidebar => SIDEBAR.to_vec(),
         Surface::MediaSession => MEDIA_SESSION.to_vec(),
         Surface::NowPlaying => NOW_PLAYING.to_vec(),
-        Surface::Palette => ALL.iter().map(|d| d.id).collect(),
+        // Preview only exists inside an open song menu. The palette lists
+        // every other action; offering it here would play with nothing to stop it.
+        Surface::Palette => ALL
+            .iter()
+            .map(|d| d.id)
+            .filter(|id| *id != "preview")
+            .collect(),
     }
 }

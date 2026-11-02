@@ -78,6 +78,9 @@ class CoreClient(
     val queue: StateFlow<QueueView> = _queue.asStateFlow()
     private val _transport = MutableStateFlow(emptyTransport())
     val transport: StateFlow<TransportState> = _transport.asStateFlow()
+    private val _preview = MutableStateFlow<PreviewState?>(null)
+    /** The song preview, or null when nothing is being previewed. */
+    val preview: StateFlow<PreviewState?> = _preview.asStateFlow()
     /**
      * Latest stamp, including ~1 Hz ticks that do not republish [transport]. Written off the main
      * thread for those ticks (see [collector]); a flow so a paused [position] can wait on it.
@@ -541,6 +544,7 @@ class CoreClient(
                 clockTransport = next
                 if (!prev.isPositionTick(next)) _transport.value = next
             }
+            is Event.PreviewChanged -> _preview.value = event.data.preview
             is Event.NowPlayingChanged -> _nowPlaying.value = event.data.entry
             is Event.SavedQueuesChanged -> _savedQueues.value = event.data.queues
             is Event.StashChanged -> { stashEvents++; _stash.value = event.data.items }

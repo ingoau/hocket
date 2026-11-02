@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -95,6 +96,7 @@ import app.hocket.R
 import app.hocket.core.ActionIds
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
+import app.hocket.core.api.Command
 import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
@@ -143,6 +145,9 @@ sealed interface MenuEntry {
 
     /** A registry action shown as itself (its label, or the context's "Remove from Late night"). */
     data class Action(val action: ActionDescriptor) : MenuEntry { override val key get() = action.id }
+
+    /** Preview: stays open and becomes a small player while the song plays. */
+    data class Preview(val action: ActionDescriptor) : MenuEntry { override val key get() = action.id }
 
     /** Download / Downloaded: runs `download`, or `unpin` once downloaded. */
     data class Download(val download: ActionDescriptor?, val remove: ActionDescriptor?) : MenuEntry { override val key get() = "download" }
@@ -226,6 +231,7 @@ fun menuLayout(
     val used = mutableSetOf<String>()
     fun take(id: String): ActionDescriptor? { used += id; return byId[id] }
     val play = PLAY_IDS.mapNotNull(::take)
+    val preview = take(ActionIds.PREVIEW)?.takeIf { it.enabled && count <= 1 && (kind == MenuKind.Song || kind == MenuKind.Songs) }?.let { MenuEntry.Preview(it) }
     val love = LoveToggle(take(ActionIds.LOVE), take(ActionIds.UNLOVE)).takeIf { it.love != null || it.unlove != null }
     val rateable = actions.any { it.id in RATE_IDS }
     used += RATE_IDS
@@ -248,9 +254,9 @@ fun menuLayout(
     val rest = actions.filter { it.id !in used && it.id !in UNPERFORMABLE }
     val (restDestructive, restOther) = rest.partition { it.destructive }
     var primary = when (kind) {
-        MenuKind.Song -> listOfNotNull(addTo, stash, download, share, genius, goAlbum)
+        MenuKind.Song -> listOfNotNull(preview, addTo, stash, download, share, genius, goAlbum)
         MenuKind.Album -> listOfNotNull(addTo, stash, download, share, goArtist)
-        else -> listOfNotNull(addTo, stash, download, share)
+        else -> listOfNotNull(preview, addTo, stash, download, share)
     } + otherExtras.map { MenuEntry.Extra(it) }
     val snoozeRows = when (snoozed) {
         true -> listOfNotNull(unsnoozeAction)
@@ -307,6 +313,11 @@ fun MenuSheet(
     pull: SheetPull? = null,
 ) {
     val client = LocalCoreClient.current
+    // Every menu that hosts this sheet (the song menu, a one-song selection, an item menu)
+    // stops the preview when the sheet leaves, however it was closed.
+    DisposableEffect(Unit) {
+        onDispose { client.dispatch(Command.PreviewStop) }
+    }
     val snoozeItems by client.snoozes.collectAsStateWithLifecycle()
     val snoozed = subject.trackId?.let { id -> snoozeItems.any { it.trackId == id } }
     val snoozeUntil = subject.trackId?.let { id -> snoozeItems.firstOrNull { it.trackId == id }?.until }
@@ -403,6 +414,7 @@ fun MenuSheet(
     @Composable
     fun EntryRow(entry: MenuEntry, shape: Shape) {
         when (entry) {
+            is MenuEntry.Preview -> PreviewMenuRow(entry.action, subject.trackId, target, shape, "$tag.action.${entry.action.id}")
             is MenuEntry.Action -> {
                 val a = entry.action
                 val label = when (a.id) {

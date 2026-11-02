@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -131,7 +132,10 @@ class SongMenuTest {
         swipeMenu(-900f, 600)
         compose.waitUntil(5_000) { !present("songMenu.more") }
         assertTrue(present("songMenu.showLess"))
-        // A short flick down closes the rest, and the menu stays.
+        // A short flick down (the list at its top) closes the rest, and the menu stays. The open menu
+        // can be taller than the screen, so bring the list back to its top first.
+        compose.onNodeWithTag("songMenu.header").performScrollTo()
+        compose.waitForIdle()
         swipeMenu(300f, 100)
         compose.waitForIdle()
         assertTrue(present("songMenu.header"))

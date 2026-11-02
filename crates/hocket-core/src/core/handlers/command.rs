@@ -11,6 +11,13 @@ impl Actor {
         if tracing::enabled!(target: "hocket_core", tracing::Level::TRACE) {
             tracing::trace!(target: "hocket_core", kind = %cmd.kind(), "command");
         }
+        // A transport command takes the output back, but does not restart
+        // main playback first: the command itself is what the user asked
+        // for. Restoring and then toggling would pause a track the user
+        // had just heard as paused.
+        if super::preview::command_ends_preview(&cmd) {
+            self.stop_preview(false);
+        }
         match cmd {
             // -- lifecycle --
             Command::Start => self.start(),
@@ -58,6 +65,12 @@ impl Actor {
             }
             Command::SetVolume { volume } => self.volume_command(Some(volume), false),
             Command::SetMuted { muted } => self.volume_command(None, muted),
+
+            // -- preview --
+            Command::PreviewStart { track_id } => self.preview_start(track_id),
+            Command::PreviewToggle => self.preview_toggle(),
+            Command::PreviewSeek { position_ms } => self.preview_seek(position_ms),
+            Command::PreviewStop => self.stop_preview(true),
 
             // -- stash --
             c @ (Command::StashAdd { .. }
