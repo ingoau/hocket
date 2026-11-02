@@ -4,10 +4,14 @@ import android.os.SystemClock
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
+import app.hocket.core.CoreKind
 import app.hocket.core.DevLog
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
+import app.hocket.core.api.Query
+import app.hocket.core.api.QueryResult
 import app.hocket.core.api.EventMediaSessionInner
 import app.hocket.core.api.EventSettingChangedInner
 import app.hocket.core.api.EventStartedInner
@@ -30,6 +34,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -214,5 +219,32 @@ class PebbleBridgeTest {
         println("Now messages in 10 min of playback: ${count(Type.NOW)} (elapsed ${SystemClock.elapsedRealtime()})")
         assertEquals(PebbleBridge.NOW_RESYNC_MS, 60_000L)
         assertEquals(10, count(Type.NOW))
+    }
+
+    @Test
+    fun stashSendsTheMediaSessionActionForThePlayingTrack() = runTest {
+        val dispatched = mutableListOf<Command>()
+        val b = PebbleBridge(
+            ApplicationProvider.getApplicationContext(),
+            core = {
+                object : CoreHandle {
+                    override val kind = CoreKind.Fake
+                    override fun dispatch(command: Command) { dispatched += command }
+                    override suspend fun query(query: Query): QueryResult = error("unused")
+                    override val events = MutableSharedFlow<Event>()
+                    override fun close() = Unit
+                }
+            },
+            serverId = { null },
+            scope = backgroundScope,
+            transmit = { sent += it; Delivery.Sent },
+        )
+        b.onEvent(session(state(0)))
+        b.onMessage(mapOf(
+            Key.TYPE to PebbleDictionaryItem.UInt8(Type.CMD.toUByte()),
+            Key.CMD to PebbleDictionaryItem.UInt8(PebbleProtocol.Cmd.STASH.toUByte()),
+        ))
+        runCurrent()
+        assertEquals(listOf(Commands.mediaSessionCommand(MediaSessionAction.Stash)), dispatched)
     }
 }

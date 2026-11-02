@@ -863,6 +863,25 @@ fn media_session_buttons_follow_customisation() {
     assert_eq!(r.media_session_actions(&StateView::default()), vec![]);
 }
 
+/// Stash is a media-session button only after the user turns it on. It stays
+/// offered once the track is already stashed: the tap is a no-op, not an unstash.
+#[test]
+fn stash_is_off_the_media_session_until_chosen() {
+    let mut r = ActionRegistry::new(Platform::Android);
+    let s = state();
+    assert!(
+        !r.media_session_actions(&s)
+            .contains(&MediaSessionAction::Stash)
+    );
+    r.set_order(
+        Surface::MediaSession,
+        vec!["togglePlay".into(), "stash".into()],
+    );
+    let a = r.media_session_actions(&s);
+    assert!(a.contains(&MediaSessionAction::Stash));
+    assert_eq!(a[0], MediaSessionAction::Play);
+}
+
 /// The Library place has its own action (it used to borrow `navigateAlbums`); the desktop's
 /// default sidebar is Home and the Library, with the pins under them.
 #[test]

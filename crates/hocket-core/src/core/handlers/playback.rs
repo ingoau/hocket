@@ -1622,14 +1622,22 @@ impl Actor {
     ) -> MediaSessionState {
         let art = self.media_session_artwork(queue);
         let actions = self.registry.media_session_actions(&self.state_view());
-        derive_media_session_state(
+        let mut state = derive_media_session_state(
             queue,
             transport,
             self.session_now(),
             art,
             self.owns_transport(),
             Some(actions),
-        )
+        );
+        if let Some(meta) = state.metadata.as_mut() {
+            if let Some(id) = meta.track_id.as_deref() {
+                meta.stashed = crate::stash::live(&self.stash)
+                    .iter()
+                    .any(|entry| entry.track_id == id);
+            }
+        }
+        state
     }
 
     /// The OS media session's state, unless it would only repeat the last

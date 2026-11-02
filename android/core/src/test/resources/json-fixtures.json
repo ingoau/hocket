@@ -761,7 +761,8 @@
           "artworkPath": "/cache/al1-640.jpg",
           "trackId": "t1",
           "loved": false,
-          "rating": 0
+          "rating": 0,
+          "stashed": false
         },
         "isPlaying": true,
         "position": {
