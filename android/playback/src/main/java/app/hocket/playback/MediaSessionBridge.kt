@@ -355,10 +355,9 @@ class MediaSessionBridge(
                     .setDisplayName("Repeat").setSessionCommand(SessionCommand(CMD_REPEAT, Bundle.EMPTY)).build()
                 MediaSessionAction.Rate -> CommandButton.Builder(if ((meta?.rating ?: 0u) > 0u) CommandButton.ICON_STAR_FILLED else CommandButton.ICON_STAR_UNFILLED)
                     .setDisplayName("Rate").setSessionCommand(SessionCommand(CMD_RATE, Bundle().apply { putInt(EXTRA_RATING, if ((meta?.rating ?: 0u) >= 5u) 0 else 5) })).setEnabled(meta != null).build()
-                // Filled once this track is in the stash. A second tap still sends Stash; the core
-                // skips a song that's already there, and this button never unstashes.
+                // Filled once this track is in the stash; tapping again takes it out (the core toggles).
                 MediaSessionAction.Stash -> CommandButton.Builder(if (meta?.stashed == true) CommandButton.ICON_BOOKMARK_FILLED else CommandButton.ICON_BOOKMARK_UNFILLED)
-                    .setDisplayName(if (meta?.stashed == true) "Stashed" else "Stash")
+                    .setDisplayName(if (meta?.stashed == true) "Remove from stash" else "Stash")
                     .setSessionCommand(SessionCommand(CMD_STASH, Bundle.EMPTY)).setEnabled(meta != null).build()
                 else -> null // transport actions are player commands
             }

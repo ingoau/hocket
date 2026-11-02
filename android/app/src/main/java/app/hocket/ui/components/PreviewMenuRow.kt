@@ -15,6 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +42,7 @@ import app.hocket.core.Commands
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.Command
+import app.hocket.core.api.PreviewState
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.delay
@@ -50,7 +52,8 @@ private val EDGE = 24.dp
 
 /**
  * The Preview row. Tapping it does not close the menu: while the preview plays the row is a small
- * player, the progress drawn behind the label. Tap pauses or resumes; a horizontal drag seeks,
+ * player, the progress drawn behind the label. Tap pauses or resumes; a horizontal drag moves the
+ * progress by as far as the finger travels (like an iOS slider, it doesn't jump to the finger),
  * staying clear of the screen edges so the back gesture still owns them. A vertical drag is left
  * to the menu's scroll.
  */
@@ -78,16 +81,34 @@ fun PreviewMenuRow(action: ActionDescriptor, trackId: String?, target: ActionTar
     var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var dragFraction by remember { mutableFloatStateOf(Float.NaN) }
     var ignoreDrag by remember { mutableStateOf(false) }
-    var finger by remember { mutableFloatStateOf(0f) }
-    val shown = if (dragFraction.isNaN()) fraction else dragFraction
+    // Where the drag began and how far the finger has gone: the bar moves by the drag, not to the finger.
+    var dragAnchor by remember { mutableFloatStateOf(0f) }
+    var dragDistance by remember { mutableFloatStateOf(0f) }
+    // A released seek, shown until the core's preview catches up so the bar doesn't snap back.
+    var pending by remember { mutableFloatStateOf(Float.NaN) }
+    var pendingFrom by remember { mutableStateOf<PreviewState?>(null) }
+    LaunchedEffect(sample, pending) {
+        if (pending.isNaN()) return@LaunchedEffect
+        if (sample == null || (sample !== pendingFrom && previewSeekLanded(fraction, pending, duration))) {
+            pending = Float.NaN
+            return@LaunchedEffect
+        }
+        delay(2_000)
+        pending = Float.NaN
+    }
+    val shown = when {
+        !dragFraction.isNaN() -> dragFraction
+        !pending.isNaN() -> pending
+        else -> fraction
+    }
     val density = LocalDensity.current
     val view = LocalView.current
     val edgePx = with(density) { EDGE.toPx() }
     val scheme = MaterialTheme.colorScheme
     val drag = rememberDraggableState { delta ->
         if (ignoreDrag || duration <= 0) return@rememberDraggableState
-        finger = (finger + delta).coerceIn(edgePx, (width - edgePx).coerceAtLeast(edgePx))
-        dragFraction = previewSeekFraction(finger, width, edgePx)
+        dragDistance += delta
+        dragFraction = previewDragFraction(dragAnchor, dragDistance, width)
     }
 
     Box(
@@ -115,12 +136,15 @@ fun PreviewMenuRow(action: ActionDescriptor, trackId: String?, target: ActionTar
                 onDragStarted = { start ->
                     val windowX = coords?.localToRoot(start)?.x ?: start.x
                     ignoreDrag = windowX < edgePx || windowX > view.width - edgePx
-                    finger = start.x
-                    if (!ignoreDrag && duration > 0) dragFraction = previewSeekFraction(start.x, width, edgePx)
+                    dragAnchor = shown
+                    dragDistance = 0f
+                    if (!ignoreDrag && duration > 0) dragFraction = dragAnchor
                 },
                 onDragStopped = {
                     if (!ignoreDrag && !dragFraction.isNaN() && duration > 0) {
                         client.dispatch(Commands.previewSeek((dragFraction * duration).toLong()))
+                        pending = dragFraction
+                        pendingFrom = sample
                     }
                     dragFraction = Float.NaN
                     ignoreDrag = false
@@ -145,7 +169,7 @@ fun PreviewMenuRow(action: ActionDescriptor, trackId: String?, target: ActionTar
             Icon(
                 if (sample?.playing == true) HocketIcons.Filled.Pause else HocketIcons.Filled.Headphones,
                 null,
-                tint = scheme.primary,
+                tint = scheme.onSurfaceVariant,
             )
             Text(
                 action.label,

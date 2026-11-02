@@ -1845,6 +1845,25 @@ impl Actor {
         let queue = self.queue_head_view();
         let transport = self.transport_state();
         let state = self.media_session_state(&queue, &transport);
+        // Stash toggles: a song already in the stash comes out. `command_for`
+        // only knows the track, not the entries listing it, so this lives here.
+        if action == MediaSessionAction::Stash {
+            if let Some(meta) = state.metadata.as_ref().filter(|m| m.stashed) {
+                let Some(id) = meta.track_id.as_deref() else {
+                    return;
+                };
+                let entry_ids: Vec<String> = self
+                    .stash
+                    .iter()
+                    .filter(|e| !e.removed && e.track_id == id)
+                    .map(|e| e.entry_id.clone())
+                    .collect();
+                if !entry_ids.is_empty() {
+                    self.handle_command(Command::StashRemove { entry_ids });
+                }
+                return;
+            }
+        }
         if let Some(cmd) = command_for(action, value, &state) {
             self.handle_command(cmd);
         }

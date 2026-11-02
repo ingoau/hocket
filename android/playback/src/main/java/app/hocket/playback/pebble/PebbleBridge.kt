@@ -8,6 +8,7 @@ import app.hocket.core.HocketJson
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
+import app.hocket.core.api.CommandStashAddInner
 import app.hocket.core.api.DeviceInfo
 import app.hocket.core.api.Event
 import app.hocket.core.api.LyricsTier
@@ -359,7 +360,8 @@ class PebbleBridge(
             Cmd.CYCLE_REPEAT -> dispatch(Commands.setRepeat(when (s?.repeat) { RepeatMode.Off, null -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off }))
             Cmd.RESUME -> dispatch(if (resumeOffer != null) Command.ResumeHere else Commands.mediaSessionCommand(MediaSessionAction.Play))
             Cmd.SEEK -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Seek, arg.coerceAtLeast(0).toDouble()))
-            Cmd.STASH -> trackId?.let { dispatch(Commands.mediaSessionCommand(MediaSessionAction.Stash)) }
+            // Add only: the watch says "Stashed", so it never takes a song out (the notification toggles).
+            Cmd.STASH -> trackId?.let { dispatch(Command.StashAdd(CommandStashAddInner(listOf(it)))) }
             Cmd.ACTIVATE -> activate(path, item)
             Cmd.PLAY_NEXT, Cmd.PLAY_LATER -> {
                 val server = serverId() ?: return

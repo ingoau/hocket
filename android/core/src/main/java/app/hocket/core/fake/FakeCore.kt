@@ -939,6 +939,7 @@ class FakeCore(
                     gone.forEach { stashRemoved[it.value.first] = it.index to it.value.second }
                     stash.removeAll { it.first in ids }
                     emitStash()
+                    emitMedia()
                     toast(if (gone.size == 1) "Removed 1 song from the stash" else "Removed ${gone.size} songs from the stash", "Undo", Command.StashRestore(CommandStashRestoreInner(gone.map { it.value.first })))
                 }
             }
@@ -1122,7 +1123,10 @@ class FakeCore(
                 MediaSessionAction.Repeat -> handle(Command.SetRepeat(CommandSetRepeatInner(when (repeat) { RepeatMode.Off -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off })))
                 MediaSessionAction.Love -> currentTrack()?.let { setLoved(listOf(RatingTarget.Track(RatingTargetTrackInner(it.id))), !it.loved) }
                 MediaSessionAction.Rate -> currentTrack()?.let { t -> setRating(listOf(RatingTarget.Track(RatingTargetTrackInner(t.id))), c.data.value?.toInt() ?: 0) }
-                MediaSessionAction.Stash -> currentTrack()?.let { stashAdd(listOf(it.id)) }
+                MediaSessionAction.Stash -> currentTrack()?.let { t ->
+                    val listed = stash.filter { it.second == t.id }.map { it.first }
+                    if (listed.isEmpty()) stashAdd(listOf(t.id)) else handle(Command.StashRemove(CommandStashRemoveInner(listed)))
+                }
             }
             is Command.RunAction -> runAction(c.data.action_id, c.data.target)
             is Command.SetShortcut -> Unit

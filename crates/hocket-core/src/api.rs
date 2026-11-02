@@ -1637,7 +1637,7 @@ pub enum MediaSessionAction {
     Repeat,
     Love,
     Rate,
-    /// Add the playing track to the stash. Off by default; a second tap is a no-op.
+    /// Toggle the playing track in the stash: add it, or take it out if it's there. Off by default.
     Stash,
 }
 
@@ -1655,7 +1655,7 @@ pub struct MediaSessionMetadata {
     pub loved: bool,
     pub rating: u32,
     /// The playing track is already in the stash. The notification shows a
-    /// filled icon; tapping again is a no-op (unstashing is not offered here).
+    /// filled icon, and tapping it again takes the song out.
     #[serde(default)]
     pub stashed: bool,
 }
