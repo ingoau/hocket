@@ -4,7 +4,7 @@ import type { ActionDescriptor, SearchResults } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
-import { rank, type Rankable } from "../store/palette-rank";
+import { rank, withLyricHits, type Rankable } from "../store/palette-rank";
 import { executeAction } from "../store/actions";
 import { formatChord, parseChord } from "../store/shortcuts";
 import { Artwork } from "./Artwork";
@@ -18,6 +18,8 @@ interface Item extends Rankable {
   coverArt?: string;
   shortcut?: string;
   lyric?: { line: string; start: number; end: number };
+  /** The song a track or lyric row plays, so one song is not listed twice. */
+  trackId?: string;
   run: () => void;
 }
 
@@ -67,9 +69,10 @@ export function CommandPalette() {
     const sid = serverId ?? "";
     // A slower answer for the previous letters must not stay on top of Enter.
     const found = results?.query.trim().toLowerCase() === query.trim().toLowerCase() ? results : undefined;
-    for (const tr of found?.tracks ?? []) out.push({ id: `t:${tr.id}`, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, run: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } }) });
+    for (const tr of found?.tracks ?? []) out.push({ id: `t:${tr.id}`, trackId: tr.id, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, run: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } }) });
     for (const hit of found?.lyrics ?? []) out.push({
       id: `ly:${hit.track.id}`,
+      trackId: hit.track.id,
       label: hit.track.title,
       sub: hit.line.split("\n").join(" "),
       kind: "track",
@@ -91,11 +94,12 @@ export function CommandPalette() {
   }, [results, query, actions, serverId, shortcuts, navigate]);
 
   // Lyric hits already matched in the core, which ignores case, punctuation and
-  // diacritics. The palette's own ranker would drop a line it cannot see.
-  const ranked = useMemo(() => {
-    const lyrics = items.filter((i) => i.lyric).map((item) => ({ item, score: 700, matches: [] as number[] }));
-    return [...lyrics, ...rank(query, items.filter((i) => !i.lyric), 40)].slice(0, 40);
-  }, [query, items]);
+  // diacritics. The palette's own ranker would drop a line it cannot see, so they
+  // are added after titles and actions rather than ranked.
+  const ranked = useMemo(
+    () => withLyricHits(rank(query, items.filter((i) => !i.lyric), 40), items.filter((i) => i.lyric), (i) => i.trackId, 40),
+    [query, items],
+  );
   useEffect(() => setActive(0), [ranked.length, query]);
   useEffect(() => {
     if (open) document.getElementById(`pal-opt-${active}`)?.scrollIntoView({ block: "nearest" });
@@ -115,6 +119,7 @@ export function CommandPalette() {
     else trapTab(e);
   };
   const firstAction = ranked.findIndex((r) => r.item.kind === "action");
+  const firstLyric = ranked.findIndex((r) => r.item.lyric);
   return (
     <div className={`overlay ${closing ? "closing" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
       <div {...exitProps} className={`palette ${motion}`} role="dialog" aria-modal="true" aria-label={t("action.palette")} onKeyDown={onKey} data-testid="palette">
@@ -126,8 +131,9 @@ export function CommandPalette() {
             const chord = it.shortcut ? parseChord(it.shortcut) : undefined;
             return (
               <Fragment key={it.id}>
-                {i === 0 && it.kind !== "action" ? <div className="group" role="presentation">{t("palette.results")}</div> : null}
+                {i === 0 && it.kind !== "action" && !it.lyric ? <div className="group" role="presentation">{t("palette.results")}</div> : null}
                 {i === firstAction ? <div className="group" role="presentation">{t("palette.actions")}</div> : null}
+                {i === firstLyric ? <div className="group" role="presentation">{t("palette.lyrics")}</div> : null}
                 <div id={`pal-opt-${i}`} className={`pi ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onClick={() => run(it)} data-testid="palette-item">
                   {it.kind === "action" ? (hasIcon(it.icon ?? "") ? <Icon name={it.icon as string} size={16} /> : <Icon name="command" size={16} />) : <Artwork id={it.coverArt} size={64} className="art" />}
                   <div className="grow truncate">

@@ -83,3 +83,28 @@ export function rank<T extends Rankable>(query: string, items: T[], limit = 50):
   });
   return out.slice(0, limit);
 }
+
+/**
+ * Adds lyric hits below everything the palette ranked itself. The core already
+ * matched them (ignoring case, punctuation and diacritics), so they skip the
+ * label scorer, but they go last: typing an action or a song title and pressing
+ * Enter must not play a song only because its lyrics mention the word. A song
+ * already listed by title is not repeated. Lyric hits keep their place when the
+ * list is full.
+ */
+export function withLyricHits<T extends Rankable>(ranked: Ranked<T>[], hits: T[], trackOf: (item: T) => string | undefined, limit = 50): Ranked<T>[] {
+  const listed = new Set<string>();
+  for (const r of ranked) {
+    const id = trackOf(r.item);
+    if (id !== undefined) listed.add(id);
+  }
+  const extra: Ranked<T>[] = [];
+  for (const item of hits) {
+    const id = trackOf(item);
+    if (id !== undefined && listed.has(id)) continue;
+    if (id !== undefined) listed.add(id);
+    extra.push({ item, score: 0, matches: [] });
+  }
+  const kept = extra.slice(0, limit);
+  return [...ranked.slice(0, limit - kept.length), ...kept];
+}

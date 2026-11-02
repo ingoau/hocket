@@ -1073,6 +1073,7 @@ const STRINGS = {
   "palette.placeholder": "Search songs, albums, artists, playlists, actions…",
   "palette.results": "Results",
   "palette.actions": "Actions",
+  "palette.lyrics": "Lyrics",
   "palette.empty": "Nothing matches",
 
   // Selection
