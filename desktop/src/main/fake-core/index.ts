@@ -2436,7 +2436,10 @@ export class FakeCore implements CoreHandle {
       }
       case "stash": {
         const t = this.currentTrack();
-        if (t) this.stashAdd([t.id]);
+        if (!t) break;
+        const listed = this.stash.filter((e) => !e.removed && e.trackId === t.id).map((e) => e.entryId);
+        if (listed.length) this.handle({ type: "stashRemove", data: { entry_ids: listed } });
+        else this.stashAdd([t.id]);
         break;
       }
     }

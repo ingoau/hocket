@@ -1,12 +1,18 @@
 package app.hocket.ui.components
 
 /**
- * Where a horizontal drag on a preview row seeks, as a fraction of the song.
- * [edge] is kept clear at both ends (the Android back gesture owns the screen edge).
+ * Where a horizontal drag on a preview row seeks, as a fraction of the song: the progress the drag
+ * started from, moved by the distance dragged (the row's width is the whole song). The finger's
+ * position doesn't matter, only how far it went, as on an iOS slider.
  */
-fun previewSeekFraction(x: Float, width: Float, edge: Float): Float {
-    val span = (width - edge * 2f).coerceAtLeast(1f)
-    return ((x - edge) / span).coerceIn(0f, 1f)
+fun previewDragFraction(anchor: Float, distance: Float, width: Float): Float =
+    (anchor + distance / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
+
+/** Whether the core's progress has caught up with a released seek (within a second, or 2% of a short song). */
+fun previewSeekLanded(fraction: Float, target: Float, durationMs: Long): Boolean {
+    if (durationMs <= 0) return true
+    val tolerance = maxOf(1_000f / durationMs, 0.02f)
+    return kotlin.math.abs(fraction - target) <= tolerance
 }
 
 /** Position extrapolated from the core's sample, capped at the song. */

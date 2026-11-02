@@ -175,10 +175,10 @@ async fn two_devices_share_the_stash() {
     assert_eq!(stashed(&b).await, ids(&["t1", "t3"]));
 }
 
-/// The notification's Stash button is off until chosen, then adds the playing
-/// track once. A second tap does not remove it or emit another stash change.
+/// The notification's Stash button is off until chosen, then toggles the
+/// playing track: one tap stashes it, the next takes it out again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn media_session_stash_adds_the_playing_track_once() {
+async fn media_session_stash_toggles_the_playing_track() {
     let t = TestCore::start("a", seeded_server(6, 200.0)).await;
     t.wait_until(30_000.0, |core| {
         core.events
@@ -247,12 +247,21 @@ async fn media_session_stash_adds_the_playing_track_once() {
         value: None,
     })
     .await;
-    assert_eq!(stashed(&t).await, ids(&["t0"]));
-    assert!(
-        t.events
-            .all()
-            .iter()
-            .all(|e| !matches!(e, Event::StashChanged { .. })),
-        "a second tap does not change the stash"
+    assert_eq!(stashed(&t).await, Vec::<String>::new());
+    let published = t.events.all().into_iter().rev().find_map(|e| match e {
+        Event::MediaSession { state } => Some(state),
+        _ => None,
+    });
+    assert_eq!(
+        published.and_then(|s| s.metadata).map(|m| m.stashed),
+        Some(false),
+        "a second tap takes the song out of the stash"
     );
+
+    t.run(Command::MediaSessionCommand {
+        action: MediaSessionAction::Stash,
+        value: None,
+    })
+    .await;
+    assert_eq!(stashed(&t).await, ids(&["t0"]));
 }

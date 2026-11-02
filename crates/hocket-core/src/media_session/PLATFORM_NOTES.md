@@ -120,7 +120,7 @@ maps to:
   (`love`, `rate`, `stash`) exposed as `CommandButton`s in the notification, in the
   given order. `Stash` is not in the default button set. `metadata.stashed`
   fills the icon once the playing track is in the stash; the command stays
-  `StashAdd` (a duplicate is a no-op, and the button does not unstash).
+  `StashAdd`, or `StashRemove` when the playing track is already stashed (the button toggles).
 - Desktop playwire (MPRIS, SMTC, Now Playing) has no custom-button slot, so
   `Stash` is not published there even when the synced button order includes it.
 - `owns_transport == false` keeps the session and notification alive as a

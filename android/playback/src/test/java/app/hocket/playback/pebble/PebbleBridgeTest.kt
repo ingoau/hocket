@@ -9,6 +9,7 @@ import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.DevLog
 import app.hocket.core.api.Command
+import app.hocket.core.api.CommandStashAddInner
 import app.hocket.core.api.Event
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
@@ -222,7 +223,7 @@ class PebbleBridgeTest {
     }
 
     @Test
-    fun stashSendsTheMediaSessionActionForThePlayingTrack() = runTest {
+    fun stashAddsThePlayingTrackWithoutToggling() = runTest {
         val dispatched = mutableListOf<Command>()
         val b = PebbleBridge(
             ApplicationProvider.getApplicationContext(),
@@ -245,6 +246,6 @@ class PebbleBridgeTest {
             Key.CMD to PebbleDictionaryItem.UInt8(PebbleProtocol.Cmd.STASH.toUByte()),
         ))
         runCurrent()
-        assertEquals(listOf(Commands.mediaSessionCommand(MediaSessionAction.Stash)), dispatched)
+        assertEquals(listOf<Command>(Command.StashAdd(CommandStashAddInner(listOf("t1")))), dispatched)
     }
 }

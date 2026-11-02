@@ -257,8 +257,8 @@ fn dedup_in_order(list: Vec<MediaSessionAction>) -> Vec<MediaSessionAction> {
 /// - `Repeat` with `value` `0`/`1`/`2` sets Off/All/One, without cycles
 ///   Off → All → One → Off.
 /// - `Love` toggles the current track's loved flag.
-/// - `Stash` adds the current track to the stash. A duplicate is a no-op
-///   (the stash skips songs already listed); this never removes one.
+/// - `Stash` adds the current track to the stash. The actor turns it into a
+///   removal when the track is already stashed (it knows the entry ids).
 /// - Returns `None` when the action needs a current track and there is
 ///   none, or `Seek`/`Rate` arrive without a value.
 pub fn command_for(
