@@ -394,6 +394,10 @@ pub enum Output {
     DocumentChanged {
         document: SessionDocument,
         cause: DocChange,
+        /// Audio position for a `PlayTracks` that started this change. The
+        /// document does not store it, so a remote owner would otherwise load
+        /// at 0. Zero for every other change.
+        start_position_ms: Ms,
     },
     /// A remote stamp: extrapolate from it.
     TransportChanged {
@@ -3050,6 +3054,7 @@ impl Engine {
                     self.out.push(Output::DocumentChanged {
                         document: d,
                         cause: DocChange::Sync,
+                        start_position_ms: 0,
                     });
                 }
             } else {
@@ -3196,6 +3201,7 @@ impl Engine {
                 self.out.push(Output::DocumentChanged {
                     document: d,
                     cause: DocChange::Local,
+                    start_position_ms: op.start_position_ms(),
                 });
                 if let SessionOp::MoveQueueItem { key, .. } = &op {
                     if self.moved.len() >= 256 {
@@ -3382,6 +3388,7 @@ impl Engine {
         self.out.push(Output::DocumentChanged {
             document: d,
             cause: DocChange::Rollback,
+            start_position_ms: 0,
         });
         if self.records_sync_base() {
             self.sync_base = Some(SyncPoint {
@@ -3515,6 +3522,7 @@ impl Engine {
                 self.out.push(Output::DocumentChanged {
                     document: d,
                     cause: DocChange::Remote,
+                    start_position_ms: op.start_position_ms(),
                 });
                 if self.records_sync_base() {
                     self.sync_base = Some(SyncPoint {
@@ -3552,8 +3560,11 @@ impl Engine {
         self.confirmed = document.clone();
         self.doc = document;
         let d = self.doc.clone();
-        self.out
-            .push(Output::DocumentChanged { document: d, cause });
+        self.out.push(Output::DocumentChanged {
+            document: d,
+            cause,
+            start_position_ms: 0,
+        });
         if self.records_sync_base() {
             self.sync_base = Some(SyncPoint {
                 session_id: self.doc.session_id.clone(),
@@ -4659,6 +4670,60 @@ mod tests {
     }
 
     #[test]
+    fn play_tracks_reports_its_start_position_locally_and_from_a_peer() {
+        let (mut e, _) = engine("a");
+        let mut op = play_op();
+        if let SessionOp::PlayTracks {
+            start_position_ms, ..
+        } = &mut op
+        {
+            *start_position_ms = 12_000;
+        }
+        let outs = e.handle(Input::LocalOp { op: op.clone() });
+        assert!(matches!(
+            outs[0],
+            Output::DocumentChanged {
+                cause: DocChange::Local,
+                start_position_ms: 12_000,
+                ..
+            }
+        ));
+
+        let (mut owner, _) = engine("owner");
+        attach(
+            &mut owner,
+            Some(replica_with(crate::session::new_document(
+                "scope",
+                "room".into(),
+                0.0,
+            ))),
+            vec![dev("phone")],
+        );
+        let outs = owner.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::OpCommitted {
+                op,
+                revision: 1,
+                device_id: "phone".into(),
+                op_id: "phone-1".into(),
+                at: 1.0,
+                position_ms: 0,
+            }),
+        });
+        assert!(
+            outs.iter().any(|o| matches!(
+                o,
+                Output::DocumentChanged {
+                    cause: DocChange::Remote,
+                    start_position_ms: 12_000,
+                    ..
+                }
+            )),
+            "the device that owns playback hears where the lyric starts"
+        );
+    }
+
+    #[test]
     fn claim_and_release_transport_alone() {
         let (mut e, _) = engine("a");
         e.handle(Input::LocalOp { op: play_op() });
@@ -4977,7 +5042,7 @@ mod tests {
         newer.revision = 5;
         newer.autoplay = true;
         let outs = attach(&mut e, Some(replica_with(newer)), vec![]);
-        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document } if document.revision == 5 && document.autoplay)));
+        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document, .. } if document.revision == 5 && document.autoplay)));
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
@@ -4993,7 +5058,7 @@ mod tests {
         room_doc.autoplay = true;
         let outs = attach(&mut e, Some(replica_with(room_doc)), vec![dev("b")]);
         assert!(outs.iter().any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { document, .. } if document.current.is_some())));
-        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document } if document.session_id == "other")));
+        assert!(outs.iter().any(|o| matches!(o, Output::DocumentChanged { cause: DocChange::Sync, document, .. } if document.session_id == "other")));
         assert_eq!(e.document().session_id, "other");
         assert!(e.document().current.is_none());
     }

@@ -11,4 +11,11 @@ class LyricHighlightTest {
         val (start, end) = lyricUtf16Range(line, 2, 7)
         assertEquals("night", line.substring(start, end))
     }
+
+    @Test
+    fun anOffsetPastTheEndClampsInsteadOfThrowing() {
+        val (start, end) = lyricUtf16Range("night", 40, 2)
+        assertEquals(5, start)
+        assertEquals(5, end)
+    }
 }

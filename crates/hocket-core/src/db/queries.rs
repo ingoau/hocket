@@ -5,7 +5,7 @@
 //! [`SortOrder`], and a page. Search is FTS5 with prefix matching so it is
 //! instant as you type.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, ToSql};
@@ -310,6 +310,15 @@ fn page_sql(page: &Option<Page>) -> String {
     match page {
         Some(p) => format!(" LIMIT {} OFFSET {}", p.limit, p.offset),
         None => String::new(),
+    }
+}
+
+/// Lower is the copy the player shows: server, then embedded, then external.
+fn lyric_source_rank(source: &str) -> u8 {
+    match source {
+        "server" => 0,
+        "embedded" => 1,
+        _ => 2,
     }
 }
 
@@ -1148,43 +1157,52 @@ impl Db {
         let n_cols = TRACK_COLUMNS.split(", ").count();
         self.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
-                "SELECT {track_cols}, s.lines
+                "SELECT {track_cols}, s.lines, s.source
                  FROM lyrics_search_fts f
                  JOIN lyrics_search s ON s.rowid = f.rowid
                  JOIN tracks t ON t.server_id = s.server_id AND t.id = s.track_id
                  WHERE lyrics_search_fts MATCH ?1 AND s.server_id = ?2
-                 ORDER BY CASE s.source WHEN 'server' THEN 0 WHEN 'embedded' THEN 1 ELSE 2 END,
-                          bm25(lyrics_search_fts)
+                 ORDER BY bm25(lyrics_search_fts)
                  LIMIT ?3"
             ))?;
             let rows = st.query_map(params![match_expr, server_id, lim], |row| {
                 let track = track_from_row(row)?;
                 let lines: String = row.get(n_cols)?;
-                Ok((track, lines))
+                let source: String = row.get(n_cols + 1)?;
+                Ok((track, lines, source))
             })?;
-            let mut hits = Vec::new();
-            let mut seen = HashSet::new();
+            // Rows arrive best-match first. A later row for the same song
+            // replaces the hit only when it is the copy the player shows
+            // (server, then embedded). Relevance stays the first row's.
+            let mut hits: Vec<(api::LyricHit, u8)> = Vec::new();
+            let mut index_of: HashMap<String, usize> = HashMap::new();
+            let cap = limit.max(1) as usize;
             for row in rows {
-                let (track, lines) = row?;
-                if !seen.insert(track.id.clone()) {
-                    continue;
-                }
+                let (track, lines, source) = row?;
                 let Some(span) = search::find_in_stored(&lines, query) else {
-                    seen.remove(&track.id);
                     continue;
                 };
-                hits.push(api::LyricHit {
+                let rank = lyric_source_rank(&source);
+                let hit = api::LyricHit {
                     track: crate::subsonic::convert::summary_of(&track),
                     line: span.line,
                     match_start: span.match_start,
                     match_end: span.match_end,
                     start_ms: span.start_ms,
-                });
-                if hits.len() as u32 >= limit.max(1) {
-                    break;
+                };
+                if let Some(&at) = index_of.get(&hit.track.id) {
+                    if rank < hits[at].1 {
+                        hits[at] = (hit, rank);
+                    }
+                    continue;
                 }
+                if hits.len() >= cap {
+                    continue;
+                }
+                index_of.insert(hit.track.id.clone(), hits.len());
+                hits.push((hit, rank));
             }
-            Ok(hits)
+            Ok(hits.into_iter().map(|(hit, _)| hit).collect())
         })
     }
 

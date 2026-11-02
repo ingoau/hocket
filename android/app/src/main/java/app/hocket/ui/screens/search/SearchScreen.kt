@@ -310,9 +310,9 @@ private enum class SearchKind(val label: Int) {
  */
 internal fun lyricUtf16Range(line: String, matchStart: Int, matchEnd: Int): Pair<Int, Int> {
     val points = line.codePointCount(0, line.length)
-    val start = line.offsetByCodePoints(0, matchStart.coerceIn(0, points))
-    val end = line.offsetByCodePoints(0, matchEnd.coerceIn(matchStart.coerceAtLeast(0), points))
-    return start to end.coerceAtLeast(start)
+    val startPoints = matchStart.coerceIn(0, points)
+    val endPoints = matchEnd.coerceIn(startPoints, points)
+    return line.offsetByCodePoints(0, startPoints) to line.offsetByCodePoints(0, endPoints)
 }
 
 /** The matched phrase, in the lyric's own text. Offsets are character indexes from the core. */

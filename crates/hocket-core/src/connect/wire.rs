@@ -532,6 +532,16 @@ impl SessionOp {
 
     /// What the op is and the queue keys it names, for a log line (never the
     /// track lists a queue replacement carries).
+    /// Where a `PlayTracks` should start. Other ops start at the beginning.
+    pub fn start_position_ms(&self) -> Ms {
+        match self {
+            SessionOp::PlayTracks {
+                start_position_ms, ..
+            } => *start_position_ms,
+            _ => 0,
+        }
+    }
+
     pub fn summary(&self) -> String {
         match self {
             SessionOp::MoveQueueItem { key, to_index } => {
