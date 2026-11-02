@@ -430,6 +430,12 @@ impl ScriptedBackend {
             BackendReport::PreviewEnded
         });
     }
+
+    /// The preview player failing after the load was accepted (a bad
+    /// stream, a network error mid-song).
+    pub fn fail_preview(&self) {
+        self.emit(BackendReport::PreviewFailed);
+    }
 }
 
 impl PlaybackBackend for ScriptedBackend {

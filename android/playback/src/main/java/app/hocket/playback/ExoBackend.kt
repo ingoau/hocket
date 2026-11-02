@@ -471,11 +471,15 @@ class ExoBackend(
 
                 override fun onPlayerError(error: PlaybackException) {
                     stopPreviewLoop()
-                    report(BackendReport.PreviewEnded)
+                    report(BackendReport.PreviewFailed)
                 }
 
                 override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                    if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
+                    // Another app taking focus, or headphones unplugged: the
+                    // core must not resume main playback into that.
+                    val interrupted = reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS ||
+                        reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY
+                    if (!playWhenReady && interrupted) {
                         report(BackendReport.PreviewInterrupted)
                     }
                 }

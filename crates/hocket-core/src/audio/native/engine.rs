@@ -1086,6 +1086,8 @@ pub struct NativeBackend {
     /// Key of the preview currently loaded, so a late end from the previous
     /// song is not taken as the end of this one.
     preview_key: Arc<Mutex<String>>,
+    /// Whether the preview was last asked to play, for position reports.
+    preview_playing: Arc<AtomicBool>,
 }
 
 impl NativeBackend {
@@ -1145,6 +1147,7 @@ impl NativeBackend {
             gain: Mutex::new(1.0),
             preview: Mutex::new(None),
             preview_key: Arc::new(Mutex::new(String::new())),
+            preview_playing: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -1167,6 +1170,7 @@ impl NativeBackend {
         };
         let parent = self.reports.clone();
         let current_key = self.preview_key.clone();
+        let wanted = self.preview_playing.clone();
         let sink: ReportSink = Arc::new(move |report| {
             let key = match &report {
                 BackendReport::Ready { key, .. }
@@ -1194,15 +1198,17 @@ impl NativeBackend {
                     position_ms,
                     playing: false,
                 }),
+                // A position report says nothing about play/pause: it may
+                // have been queued before a pause, so it carries what was
+                // last asked of the preview, not "playing".
                 BackendReport::Position { position_ms, .. } => {
                     Some(BackendReport::PreviewProgress {
                         position_ms,
-                        playing: true,
+                        playing: wanted.load(Ordering::Relaxed),
                     })
                 }
-                BackendReport::Ended { .. } | BackendReport::Error { .. } => {
-                    Some(BackendReport::PreviewEnded)
-                }
+                BackendReport::Ended { .. } => Some(BackendReport::PreviewEnded),
+                BackendReport::Error { .. } => Some(BackendReport::PreviewFailed),
                 _ => None,
             };
             if let Some(mapped) = mapped {
@@ -1348,6 +1354,7 @@ impl PlaybackBackend for NativeBackend {
     fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
         self.ensure_preview()?;
         *self.preview_key.lock() = source.key.clone();
+        self.preview_playing.store(true, Ordering::Relaxed);
         let loaded = {
             let slot = self.preview.lock();
             match slot.as_ref() {
@@ -1362,6 +1369,7 @@ impl PlaybackBackend for NativeBackend {
     }
 
     fn preview_play(&self) -> Result<(), BackendError> {
+        self.preview_playing.store(true, Ordering::Relaxed);
         let slot = self.preview.lock();
         let Some(preview) = slot.as_ref() else {
             return Ok(());
@@ -1370,6 +1378,7 @@ impl PlaybackBackend for NativeBackend {
     }
 
     fn preview_pause(&self) -> Result<(), BackendError> {
+        self.preview_playing.store(false, Ordering::Relaxed);
         let slot = self.preview.lock();
         let Some(preview) = slot.as_ref() else {
             return Ok(());
@@ -1386,6 +1395,7 @@ impl PlaybackBackend for NativeBackend {
     }
 
     fn preview_stop(&self) -> Result<(), BackendError> {
+        self.preview_playing.store(false, Ordering::Relaxed);
         *self.preview_key.lock() = String::new();
         let slot = self.preview.lock();
         let Some(preview) = slot.as_ref() else {

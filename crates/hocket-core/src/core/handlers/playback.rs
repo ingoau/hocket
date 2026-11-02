@@ -643,6 +643,15 @@ impl Actor {
 
     /// Apply a transport command on this device (we own transport).
     pub(crate) fn apply_transport_command(&mut self, cmd: TransportCommand) {
+        // A Connect peer's command lands here without passing
+        // `handle_command`, so a preview has to give way here too. Play,
+        // stop and seek take the output back. A pause leaves the preview
+        // playing but drops the hold, so closing it does not undo the pause.
+        match cmd {
+            TransportCommand::Pause => self.drop_preview_hold(),
+            TransportCommand::SetVolume { .. } => {}
+            _ => self.stop_preview(false),
+        }
         match cmd {
             TransportCommand::Play => {
                 self.playback.want_playing = true;
@@ -1064,6 +1073,13 @@ impl Actor {
                 self.stop_preview(false);
                 return;
             }
+            BackendReport::PreviewFailed => {
+                if self.preview.is_some() {
+                    self.toast("Couldn't preview this song", None);
+                }
+                self.stop_preview(true);
+                return;
+            }
             _ => {}
         }
         if !matches!(
@@ -1386,6 +1402,7 @@ impl Actor {
             BackendReport::PreviewReady { .. }
             | BackendReport::PreviewProgress { .. }
             | BackendReport::PreviewEnded
+            | BackendReport::PreviewFailed
             | BackendReport::PreviewInterrupted => {}
             BackendReport::OutputDevicesChanged { devices } => {
                 self.output_devices = devices.clone();
@@ -1651,6 +1668,9 @@ impl Actor {
                 let _ = self.backend.set_volume(self.effective_volume());
             }
             SleepAction::Stop => {
+                // The timer stops all audio here, and closing a preview
+                // afterwards must not start the main player again.
+                self.stop_preview(false);
                 self.playback.want_playing = false;
                 self.set_playing(false);
                 self.playback.fade_gain = None;

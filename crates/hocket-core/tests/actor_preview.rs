@@ -395,3 +395,126 @@ async fn preview_while_the_track_is_still_loading_resumes_it() {
         "the track that was loading resumes after the preview"
     );
 }
+
+/// A Connect peer's play or pause reaches this device without passing
+/// through its own command handler. Play takes the output back from the
+/// preview; pause is kept when the preview closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peers_transport_commands_during_a_preview_are_kept() {
+    let server = seeded_server(6, 200.0);
+    let net = hocket_core::core::io::memory::MemoryNet::new();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server, Some(net), 2, clock).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.backend.is_playing());
+
+    // Pause from the peer, then close the preview: main stays paused.
+    a.run(Command::PreviewStart {
+        track_id: "t2".into(),
+    })
+    .await;
+    assert!(!a.backend.is_playing());
+    b.run(Command::Pause).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert!(
+        preview_of(&a.events.all()).is_some(),
+        "a pause leaves the preview playing"
+    );
+    a.run(Command::PreviewStop).await;
+    TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    assert!(
+        !a.backend.is_playing(),
+        "closing the preview does not undo the peer's pause"
+    );
+    assert!(!a.transport().await.position.is_playing);
+
+    // Play from the peer stops the preview and plays main, without the
+    // preview pausing it again.
+    a.run(Command::PreviewStart {
+        track_id: "t3".into(),
+    })
+    .await;
+    a.events.clear();
+    b.run(Command::Play).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(preview_of(&a.events.all()).is_none(), "the preview closed");
+    assert!(a.backend.is_playing(), "main plays on the owner");
+    assert!(a.transport().await.position.is_playing);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_sleep_timer_stopping_during_a_preview_stays_stopped() {
+    let t = synced_core("preview-sleep").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::SetSleepTimer {
+        timer: Some(SleepTimer {
+            ends_at: Some(t.clock.now_ms() + 2_000.0),
+            stop_at_end_of_track: false,
+        }),
+    })
+    .await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    t.run_for(3_000.0).await;
+    assert!(
+        preview_of(&t.events.all()).is_none(),
+        "the timer stops the preview too"
+    );
+    t.run(Command::PreviewStop).await;
+    t.run_for(500.0).await;
+    assert!(!t.backend.is_playing(), "main playback stays stopped");
+    assert!(!t.transport().await.position.is_playing);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preview_that_fails_while_playing_says_so_and_gives_playback_back() {
+    let t = synced_core("preview-fail-late").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::PreviewStart {
+        track_id: "t1".into(),
+    })
+    .await;
+    t.events.clear();
+    t.backend.fail_preview();
+    t.core.settle().await;
+    assert!(preview_of(&t.events.all()).is_none());
+    assert!(
+        t.events.all().iter().any(|e| matches!(
+            e,
+            Event::Toast { toast } if toast.message == "Couldn't preview this song"
+        )),
+        "the failure is shown"
+    );
+    assert!(t.transport().await.position.is_playing);
+    assert!(t.backend.is_playing());
+}

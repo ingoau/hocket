@@ -105,6 +105,7 @@ impl ExternalBackend {
                 | BackendReport::PreviewReady { .. }
                 | BackendReport::PreviewProgress { .. }
                 | BackendReport::PreviewEnded
+                | BackendReport::PreviewFailed
                 | BackendReport::PreviewInterrupted => true,
             }
         };

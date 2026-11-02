@@ -143,6 +143,14 @@ impl Actor {
         }
     }
 
+    /// Main playback was stopped on purpose during the preview: closing the
+    /// preview must leave it stopped.
+    pub(crate) fn drop_preview_hold(&mut self) {
+        if let Some(hold) = self.preview.as_mut().and_then(|p| p.hold.as_mut()) {
+            hold.was_playing = false;
+        }
+    }
+
     pub(crate) fn on_preview_ready(&mut self, duration_ms: Option<Ms>) {
         let Some(duration_ms) = duration_ms.filter(|d| *d > 0) else {
             return;

@@ -1522,6 +1522,8 @@ pub enum BackendReport {
     },
     /// The preview played to the end.
     PreviewEnded,
+    /// The preview player could not load or play the song.
+    PreviewFailed,
     /// The preview player lost the output (another app took audio focus).
     /// The main session must not be resumed into that.
     PreviewInterrupted,
