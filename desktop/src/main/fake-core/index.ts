@@ -710,11 +710,14 @@ export class FakeCore implements CoreHandle {
         this.shortcutOverrides.set(cmd.data.action_id, cmd.data.shortcut);
         this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });
         return;
-      case "setActionOrder":
-        this.actionOrders.set(cmd.data.surface, cmd.data.action_ids.map(canonicalActionId));
-        this.setSettingValue(`actions.order.${cmd.data.surface}`, JSON.stringify(cmd.data.action_ids.map(canonicalActionId)));
+      case "setActionOrder": {
+        let ids = cmd.data.action_ids.map(canonicalActionId);
+        if (cmd.data.surface === "mediaSession") ids = showNewStash(this.actionOrders.get("mediaSession") ?? DEFAULT_ORDERS.mediaSession ?? [], ids);
+        this.actionOrders.set(cmd.data.surface, ids);
+        this.setSettingValue(`actions.order.${cmd.data.surface}`, JSON.stringify(ids));
         this.emit({ type: "actionsChanged", data: { surface: cmd.data.surface } });
         return;
+      }
       case "setSelection":
         this.selection = cmd.data.target;
         return;
@@ -3149,4 +3152,19 @@ function noticeMessage(code: PlayerNoticeCode, detail = ""): string {
     case "couldNotPlayStopped": return `Couldn't play ${detail}; stopped after 3 unplayable tracks`;
     case "autoplayFoundNothing": return "Autoplay found nothing to add";
   }
+}
+
+/** The media-session transport rows; mirrors `MEDIA_SESSION_TRANSPORT` in the core. */
+const MEDIA_SESSION_TRANSPORT = new Set(["previous", "togglePlay", "play", "pause", "next"]);
+
+/** Mirrors the core's `show_new_stash`: a newly enabled Stash moves right after the transport rows. */
+function showNewStash(previous: readonly string[], ids: string[]): string[] {
+  if (!ids.includes("stash") || previous.includes("stash")) return ids;
+  const rest = ids.filter((id) => id !== "stash");
+  let at = 0;
+  rest.forEach((id, i) => {
+    if (MEDIA_SESSION_TRANSPORT.has(id)) at = i + 1;
+  });
+  rest.splice(at, 0, "stash");
+  return rest;
 }
