@@ -114,10 +114,10 @@ internal fun FloatingNavBar(
         }
         // The chip grows out of the pill's end: the pair re-centres as it widens, the chip
         // scaling up from its start with a little overshoot. Unclipped, so its shadow shows
-        // throughout (the scale keeps it within the room the expansion makes).
+        // throughout; the room opens from the chip's starting scale, so it never overhangs much.
         AnimatedVisibility(
             visible = hasStash,
-            enter = if (reduced) fadeIn() else expandHorizontally(spring(dampingRatio = 0.8f, stiffness = 380f), expandFrom = Alignment.Start, clip = false) +
+            enter = if (reduced) fadeIn() else expandHorizontally(spring(dampingRatio = 0.8f, stiffness = 380f), expandFrom = Alignment.Start, clip = false) { (it * 0.4f).toInt() } +
                 androidx.compose.animation.scaleIn(spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.4f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(pillSideX, 0.5f)) +
                 fadeIn(androidx.compose.animation.core.tween(120)),
             exit = if (reduced) fadeOut() else fadeOut(androidx.compose.animation.core.tween(90)) +
