@@ -58,6 +58,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
@@ -367,7 +368,7 @@ internal class HeroGeometry {
         /** Sheet progress above which an immersive artwork in flight keeps its full size ([flightRect]). */
         const val SHRINK_FROM = 0.6f
 
-        /** The immersive continuation while the sheet moves: gone before the artwork starts shrinking. */
+        /** The immersive continuation's and top strip's opacity when not in flight (in flight they are wiped: [continuationReveal]). */
         fun continuationAlpha(p: Float): Float = ((p - 0.45f) / 0.45f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
 
         /**
@@ -680,7 +681,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 }
                 .testTag("nowPlaying.sheet"),
         ) {
-            Box(Modifier.fillMaxSize().onPlaced { hero.root = it }.background(cardFill)) {
+            // (The fill only while the backdrop over it is not yet opaque.)
+            Box(Modifier.fillMaxSize().onPlaced { hero.root = it }.drawBehind { if (backgroundAlpha(state.progress) < 1f) drawRect(cardFill) }) {
                 // The full player's backdrop: blurred artwork over the artwork's colour fading to
                 // near black, fading in as the sheet opens (Metrolist's curve: nothing for the first
                 // tenth, then quickly opaque).
@@ -893,8 +895,8 @@ private fun fallbackThumb(density: Density): Rect = with(density) {
  * [HeroGeometry.immersiveSlot]): at rest it follows the full player's skip swipe, [offsetSpans]
  * pages ([span]) along (a neighbour's continuation: -1 the previous, 1 the next); while the sheet moves it takes
  * the artwork in flight's transform ([HeroGeometry.flightRect]), so the two stay one unit, and
- * fades out ([HeroGeometry.continuationAlpha]) before the artwork shrinks. It fades with the mode
- * too (lyrics / queue).
+ * is wiped towards the artwork ([HeroGeometry.continuationReveal]) before the artwork shrinks. It
+ * fades with the mode too (lyrics / queue).
  */
 private fun Modifier.continuationLayer(
     hero: HeroGeometry,

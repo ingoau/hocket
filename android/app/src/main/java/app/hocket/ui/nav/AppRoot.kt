@@ -499,7 +499,9 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // those still get theirs, but over the page, so a row hidden behind them is never tapped.
             if (!wide || playerVisible) {
                 val chromeHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() else 0.dp)
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(chromeHeight).then(if (covered) Modifier else Modifier.blockTouchesBehind()).testTag("bottomChromeBlocker"))
+                // Beside the rail on wide layouts (its lowest places stay tappable).
+                val railStart = if (wide) with(density) { (if (railWidthPx >= 0) railWidthPx else CollapsedRailWidth.roundToPx()).toDp() } else 0.dp
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = railStart).height(chromeHeight).then(if (covered) Modifier else Modifier.blockTouchesBehind()).testTag("bottomChromeBlocker"))
             }
             CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides navigator) {
             NowPlayingSheet(
@@ -527,7 +529,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.progress) }.background(scrim).testTag("bottomScrim"))
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.progress, SCRIM_FADE_END) }.background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
@@ -598,15 +600,19 @@ private fun MainShell(snackbar: SnackbarHostState) {
     }
 }
 
-/** How far up the sheet the bar (and the scrim under it) has faded out completely. */
+/** How far up the sheet the bar has faded out completely. */
 private const val BAR_FADE_END = 0.6f
 
+/** How far up the sheet the scrim under the bar has faded out: sooner, so it never washes over the rising player. */
+private const val SCRIM_FADE_END = 0.35f
+
 /**
- * The bar's and its scrim's opacity at sheet progress [p]: a smoothstep from opaque at rest to
- * gone at [BAR_FADE_END], so it eases away with the player instead of snapping out at the start.
+ * The bar's (or, with [end] = [SCRIM_FADE_END], its scrim's) opacity at sheet progress [p]: a
+ * smoothstep from opaque at rest to gone at [end], so it eases away with the player instead of
+ * snapping out at the start.
  */
-internal fun barFade(p: Float): Float {
-    val t = (p / BAR_FADE_END).coerceIn(0f, 1f)
+internal fun barFade(p: Float, end: Float = BAR_FADE_END): Float {
+    val t = (p / end).coerceIn(0f, 1f)
     return 1f - t * t * (3f - 2f * t)
 }
 

@@ -49,5 +49,10 @@ class BlockTouchesBehindTest {
         compose.waitForIdle()
         assertEquals(1, place)
         assertEquals(0, behind)
+        // A real tap wobbles a little between down and up: the place still takes it.
+        compose.onNodeWithTag("place").performTouchInput { down(center); moveBy(androidx.compose.ui.geometry.Offset(1f, 1f)); up() }
+        compose.waitForIdle()
+        assertEquals(2, place)
+        assertEquals(0, behind)
     }
 }
