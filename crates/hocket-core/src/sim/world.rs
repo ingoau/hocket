@@ -1176,6 +1176,15 @@ impl World {
             self.violations
                 .push(format!("[{now:.0}] stashes diverged: {stashes:?}"));
         }
+        let snoozes: BTreeSet<Vec<TrackId>> = self
+            .honest()
+            .filter(|&i| !self.devices[i].asleep)
+            .map(|i| self.devices[i].snoozed_tracks())
+            .collect();
+        if snoozes.len() > 1 {
+            self.violations
+                .push(format!("[{now:.0}] snoozes diverged: {snoozes:?}"));
+        }
         // 3. scrobbles: every reached pair exactly once
         let mut reached: BTreeSet<(String, i64)> = BTreeSet::new();
         for i in self.honest() {

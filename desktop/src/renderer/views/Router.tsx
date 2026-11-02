@@ -6,6 +6,7 @@ import { Albums } from "./Albums";
 import { Artists } from "./Artists";
 import { Playlists } from "./Playlists";
 import { Songs } from "./Songs";
+import { Snoozed } from "./Snoozed";
 import { Genres } from "./Genres";
 import { AlbumDetail } from "./AlbumDetail";
 import { ArtistDetail } from "./ArtistDetail";
@@ -47,6 +48,8 @@ function RouteView({ route }: { route: Route }) {
       return <Playlists />;
     case "songs":
       return <Songs />;
+    case "snoozed":
+      return <Snoozed />;
     case "genres":
       return <Genres />;
     case "album":

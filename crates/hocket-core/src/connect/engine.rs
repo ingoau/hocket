@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::{
     AlbumResumeEntry, ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
-    LibraryItemState, Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting,
+    LibraryItemState, Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, Snooze,
     StashEntry, TrackId, TransportLease, TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
@@ -308,6 +308,8 @@ pub enum Input {
     SettingChanged(Setting),
     /// The local stash, whole (tombstones included).
     StashChanged(Vec<StashEntry>),
+    /// The local snoozes, whole (tombstones included).
+    SnoozesChanged(Vec<Snooze>),
     /// The local album-resume map, whole (tombstones included).
     AlbumResumeChanged(Vec<AlbumResumeEntry>),
     UndoEntryCreated {
@@ -457,6 +459,8 @@ pub enum Output {
     SettingsMerged(Vec<Setting>),
     /// The stash after merging a remote copy (whole).
     StashMerged(Vec<StashEntry>),
+    /// Snoozes after merging a remote copy (whole).
+    SnoozesMerged(Vec<Snooze>),
     /// Album resume points after merging a remote copy (whole).
     AlbumResumeMerged(Vec<AlbumResumeEntry>),
     UndoEntryReceived {
@@ -709,6 +713,7 @@ pub struct Engine {
     saved_queues: Vec<SavedQueue>,
     settings: Vec<Setting>,
     stash: Vec<StashEntry>,
+    snoozes: Vec<Snooze>,
     album_resumes: Vec<AlbumResumeEntry>,
 
     lan_peers: Vec<PeerAdvert>,
@@ -846,6 +851,7 @@ impl Engine {
             saved_queues: vec![],
             settings: vec![],
             stash: vec![],
+            snoozes: vec![],
             album_resumes: vec![],
             lan_peers: vec![],
             lan_blocklist: BTreeMap::new(),
@@ -1067,6 +1073,10 @@ impl Engine {
 
     pub fn stash(&self) -> &[StashEntry] {
         &self.stash
+    }
+
+    pub fn snoozes(&self) -> &[Snooze] {
+        &self.snoozes
     }
 
     pub fn album_resumes(&self) -> &[AlbumResumeEntry] {
@@ -1393,6 +1403,13 @@ impl Engine {
                 self.stash = merged;
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
+            }
+            Input::SnoozesChanged(list) => {
+                let (mut merged, _) = crate::snooze::merge(&list, &self.snoozes);
+                crate::snooze::prune(&mut merged, self.clock.now_ms());
+                self.snoozes = merged;
+                let entries = self.snoozes.clone();
+                self.upstream_send(Msg::SnoozeSync { entries });
             }
             Input::AlbumResumeChanged(list) => {
                 let (mut merged, _) = crate::album_resume::merge(&list, &self.album_resumes);
@@ -2808,6 +2825,14 @@ impl Engine {
                     self.out.push(Output::StashMerged(merged));
                 }
             }
+            Msg::SnoozeSync { entries } => {
+                let (mut merged, _) = crate::snooze::merge(&self.snoozes, &entries);
+                crate::snooze::prune(&mut merged, self.clock.now_ms());
+                if merged != self.snoozes {
+                    self.snoozes = merged.clone();
+                    self.out.push(Output::SnoozesMerged(merged));
+                }
+            }
             Msg::AlbumResumeSync { entries } => {
                 let (mut merged, _) = crate::album_resume::merge(&self.album_resumes, &entries);
                 crate::album_resume::prune(&mut merged, self.clock.now_ms());
@@ -3151,6 +3176,12 @@ impl Engine {
                 self.stash = merged.clone();
                 self.out.push(Output::StashMerged(merged));
             }
+            let (mut merged, _) = crate::snooze::merge(&self.snoozes, &rep.snoozes);
+            crate::snooze::prune(&mut merged, self.clock.now_ms());
+            if merged != self.snoozes {
+                self.snoozes = merged.clone();
+                self.out.push(Output::SnoozesMerged(merged));
+            }
             let (mut merged, _) =
                 crate::album_resume::merge(&self.album_resumes, &rep.album_resumes);
             crate::album_resume::prune(&mut merged, self.clock.now_ms());
@@ -3176,6 +3207,11 @@ impl Engine {
                     let entries = self.stash.clone();
                     self.upstream_send(Msg::StashSync { entries });
                 }
+                let (_, ours_has_more) = crate::snooze::merge(&rep.snoozes, &self.snoozes);
+                if ours_has_more {
+                    let entries = self.snoozes.clone();
+                    self.upstream_send(Msg::SnoozeSync { entries });
+                }
                 let (_, ours_has_more) =
                     crate::album_resume::merge(&rep.album_resumes, &self.album_resumes);
                 if ours_has_more {
@@ -3187,6 +3223,7 @@ impl Engine {
             && (!self.saved_queues.is_empty()
                 || !self.settings.is_empty()
                 || !self.stash.is_empty()
+                || !self.snoozes.is_empty()
                 || !self.album_resumes.is_empty())
         {
             let q = self.saved_queues.clone();
@@ -3196,6 +3233,10 @@ impl Engine {
             if !self.stash.is_empty() {
                 let entries = self.stash.clone();
                 self.upstream_send(Msg::StashSync { entries });
+            }
+            if !self.snoozes.is_empty() {
+                let entries = self.snoozes.clone();
+                self.upstream_send(Msg::SnoozeSync { entries });
             }
             if !self.album_resumes.is_empty() {
                 let entries = self.album_resumes.clone();

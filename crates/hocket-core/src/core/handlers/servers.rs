@@ -201,6 +201,7 @@ impl Actor {
             self.engine = None;
             self.scope = None;
             self.drop_stash();
+            self.drop_snoozes();
             self.drop_album_resumes();
             self.last_doc = None;
         } else if rekeyed {
@@ -209,6 +210,7 @@ impl Actor {
             self.engine = None;
             self.scope = None;
             self.drop_stash();
+            self.drop_snoozes();
             self.drop_album_resumes();
             self.last_doc = None;
         }
@@ -299,6 +301,7 @@ impl Actor {
         self.engine = None;
         self.scope = None;
         self.drop_stash();
+        self.drop_snoozes();
         self.drop_album_resumes();
         self.last_doc = None;
         self.server = None;

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::api::{
     DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms, Platform, PlaylistId, PositionStamp,
-    QueueKey, SavedQueue, StashEntry, Track, TrackId,
+    QueueKey, SavedQueue, Snooze, StashEntry, Track, TrackId,
 };
 use crate::connect::discovery::PeerAdvert;
 use crate::connect::engine::{Engine, EngineConfig, Input, Output, ResumeOfferDraft};
@@ -102,6 +102,7 @@ pub struct Persisted {
     pub sync_base: Option<SyncPoint>,
     pub saved_queues: Vec<SavedQueue>,
     pub stash: Vec<StashEntry>,
+    pub snoozes: Vec<Snooze>,
     /// Scrobbles reached but without a verdict yet (the outbox).
     pub outbox: Vec<(TrackId, EpochMs)>,
     /// What the engine knows was scrobbled (persisted with the sync base).
@@ -126,6 +127,8 @@ pub struct SimDevice {
     pub saved_queues: Vec<SavedQueue>,
     /// The account's stash as the actor holds it (tombstones included).
     pub stash: Vec<StashEntry>,
+    /// The account's snoozes as the actor holds them (tombstones included).
+    pub snoozes: Vec<Snooze>,
     pub outbox: Vec<(TrackId, EpochMs)>,
     pub resume_offer: Option<ResumeOfferDraft>,
     pub picker_open: bool,
@@ -204,18 +207,20 @@ impl SimDevice {
             api_version: "1.16.1".into(),
         });
         let now = clock.now_ms();
-        let (doc, sync_base, saved, stash, outbox, known) = match persisted {
+        let (doc, sync_base, saved, stash, snoozes, outbox, known) = match persisted {
             Some(p) => (
                 p.document,
                 p.sync_base,
                 p.saved_queues,
                 p.stash,
+                p.snoozes,
                 p.outbox,
                 p.known_scrobbled,
             ),
             None => (
                 crate::session::new_document(scope, format!("session-{id}"), now),
                 None,
+                vec![],
                 vec![],
                 vec![],
                 vec![],
@@ -234,6 +239,7 @@ impl SimDevice {
             playback: Playback::default(),
             saved_queues: saved.clone(),
             stash: stash.clone(),
+            snoozes: snoozes.clone(),
             outbox: vec![],
             resume_offer: None,
             picker_open: false,
@@ -259,6 +265,9 @@ impl SimDevice {
         if !stash.is_empty() {
             d.handle(Input::StashChanged(stash));
         }
+        if !snoozes.is_empty() {
+            d.handle(Input::SnoozesChanged(snoozes));
+        }
         // The outbox retries: ask again for every scrobble without a verdict.
         for (t, s) in outbox {
             d.outbox.push((t.clone(), s));
@@ -278,6 +287,7 @@ impl SimDevice {
             sync_base: self.engine.sync_base().cloned(),
             saved_queues: self.saved_queues.clone(),
             stash: self.stash.clone(),
+            snoozes: self.snoozes.clone(),
             outbox: self.outbox.clone(),
             known_scrobbled: self.engine.known_scrobbled(),
         }
@@ -357,6 +367,22 @@ impl SimDevice {
             }
         }
         self.handle(Input::StashChanged(self.stash.clone()));
+    }
+
+    /// Track ids snoozed right now.
+    pub fn snoozed_tracks(&self) -> Vec<TrackId> {
+        crate::snooze::active_ids(&self.snoozes, self.now())
+    }
+
+    /// What the actor does for a snooze: edit its copy, then hand the engine the whole set.
+    pub fn edit_snooze(&mut self, track: &str, until: Option<EpochMs>, removed: bool) {
+        let now = self.now();
+        if removed {
+            crate::snooze::clear(&mut self.snoozes, track, now);
+        } else {
+            crate::snooze::set(&mut self.snoozes, track, until, now);
+        }
+        self.handle(Input::SnoozesChanged(self.snoozes.clone()));
     }
 
     fn apply_library(&mut self, items: &[LibraryItemState], playlists: &[PlaylistEdit]) {
@@ -545,6 +571,9 @@ impl SimDevice {
             Output::StashMerged(list) => {
                 // What the actor does: merge into its own copy (an edit may have raced it).
                 self.stash = crate::stash::merge(&self.stash, &list).0;
+            }
+            Output::SnoozesMerged(list) => {
+                self.snoozes = crate::snooze::merge(&self.snoozes, &list).0;
             }
             Output::AlbumResumeMerged(_) => {}
             Output::LibraryEditReceived {

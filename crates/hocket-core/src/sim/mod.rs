@@ -27,6 +27,8 @@ pub use world::{Action, Topology, World, WorldConfig};
 #[cfg(test)]
 mod library_tests;
 #[cfg(test)]
+mod snooze_tests;
+#[cfg(test)]
 mod stash_tests;
 #[cfg(test)]
 mod tests;

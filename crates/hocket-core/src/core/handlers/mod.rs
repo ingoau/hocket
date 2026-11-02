@@ -14,4 +14,5 @@ pub(crate) mod reports;
 pub(crate) mod servers;
 pub(crate) mod session;
 pub(crate) mod settings;
+pub(crate) mod snooze;
 pub(crate) mod stash;

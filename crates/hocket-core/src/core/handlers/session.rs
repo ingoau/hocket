@@ -142,6 +142,7 @@ impl Actor {
             }
         }
         self.load_stash();
+        self.load_snoozes();
         self.load_album_resumes();
         // Restore the resume point: the last known item and position, dormant
         // (never auto-resume on start).
@@ -506,6 +507,7 @@ impl Actor {
             }
             Output::SettingsMerged(list) => self.on_settings_merged(list),
             Output::StashMerged(list) => self.on_stash_merged(list),
+            Output::SnoozesMerged(list) => self.on_snoozes_merged(list),
             Output::AlbumResumeMerged(list) => self.on_album_resume_merged(list),
             Output::UndoEntryReceived {
                 entry,
@@ -717,7 +719,7 @@ impl Actor {
         // document's bookkeeping is done (below), so it is persisted and
         // announced even when that op does not apply.
         let resolve_tracks = resolve
-            .map(|context| self.resolve_context_tracks(&context.server_id, &context.kind))
+            .map(|context| self.resolve_queued_context_tracks(&context.server_id, &context.kind))
             .filter(|tracks| !tracks.is_empty());
         if needs_autoplay && owns && resolve_tracks.is_none() {
             self.autoplay_advance = true;
@@ -854,6 +856,7 @@ impl Actor {
             .unwrap_or_default();
         exclude.extend(doc.insertions.iter().map(|i| i.track_id.clone()));
         exclude.extend(recent_ids);
+        exclude.extend(self.snoozed_ids());
         let seeds = crate::autoplay::SeedInput {
             recent,
             context: doc
@@ -941,6 +944,11 @@ impl Actor {
             }
             return;
         }
+        let snoozed = self.snoozed_ids();
+        let picks: Vec<_> = picks
+            .into_iter()
+            .filter(|p| !snoozed.iter().any(|id| id == &p.track.id))
+            .collect();
         if picks.is_empty() {
             if !advance {
                 // Fetched ahead: the end of the queue asks again, and says so.
@@ -994,6 +1002,10 @@ impl Actor {
             args.context.tracks =
                 self.resolve_context_tracks(&args.context.server_id, &args.context.kind);
         }
+        let (tracks, start) =
+            self.filter_snoozed_context(&args.context.tracks, &args.context.kind, args.start_index);
+        args.context.tracks = tracks;
+        args.start_index = start;
         if args.context.label.is_empty() {
             args.context.label = self.context_label(&args.context.server_id, &args.context.kind);
         }
@@ -1013,7 +1025,7 @@ impl Actor {
             return;
         };
         let tracks = if saved::needs_resolution(&sq) {
-            let t = self.resolve_context_tracks(&sq.context.server_id, &sq.context.kind);
+            let t = self.resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
             if t.is_empty() {
                 None
             } else {
@@ -1079,7 +1091,8 @@ impl Actor {
                 };
                 let mut tracks = sq.context.tracks.clone();
                 if tracks.is_empty() {
-                    tracks = self.resolve_context_tracks(&sq.context.server_id, &sq.context.kind);
+                    tracks =
+                        self.resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
                 }
                 let mut ids: Vec<TrackId> = sq.history.iter().map(|i| i.track_id.clone()).collect();
                 ids.extend(sq.current.iter().map(|i| i.track_id.clone()));
@@ -1156,6 +1169,7 @@ impl Actor {
                 self.clear_offline_skips();
             }
             UndoAction::Cas(mutations) => self.run_cas(&result.entry_id, &label, mutations, redo),
+            UndoAction::Snoozes(states) => self.apply_snooze_states(states),
             UndoAction::Nothing => {}
         }
         self.selection = result.target;
@@ -1437,6 +1451,7 @@ impl Actor {
                 }
             },
             volume_unknown: self.volume_control().0.is_none(),
+            snoozed_tracks: self.snoozed_ids(),
             library_pins: crate::actions::LibraryPin::list_from(
                 &self
                     .settings

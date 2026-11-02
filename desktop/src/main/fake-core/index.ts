@@ -137,6 +137,8 @@ export class FakeCore implements CoreHandle {
   private savedQueues: SavedQueue[] = [];
   /** The song stash, in order (no sync here: one fake device). */
   private stash: { entryId: string; trackId: string; addedAt: number; removed: boolean }[] = [];
+  /** track id → when the snooze ends. Null means it doesn't. */
+  private snoozes = new Map<string, number | null>();
   /** Resume points the album page reads. Tests can replace this. */
   albumResumes: { albumId: string; trackId: string; trackIndex: number; positionMs: number; durationMs: number; updatedAt: number }[] = [];
   private savedQueueCap = 10;
@@ -783,6 +785,12 @@ export class FakeCore implements CoreHandle {
         if (changed) this.emitStash();
         return;
       }
+      case "snooze":
+        this.applySnooze(cmd.data.track_ids, cmd.data.duration);
+        return;
+      case "unsnooze":
+        this.clearSnooze(cmd.data.track_ids);
+        return;
       default: {
         const never: never = cmd;
         void never;
@@ -1100,7 +1108,9 @@ export class FakeCore implements CoreHandle {
 
   private playContext(ctx: QueueContext, startIndex: number | undefined, shuffle: boolean, saveOutgoing: boolean): void {
     if (!this.lib) return;
-    const tracks = this.contextTracks(ctx);
+    const raw = this.contextTracks(ctx);
+    const { tracks, start: startIndexFiltered } = this.filterSnoozed(ctx.kind, raw, startIndex);
+    startIndex = startIndexFiltered;
     if (!tracks.length) return;
     const resolved: QueueContext = { ...ctx, tracks };
     const before = this.captureSession();
@@ -1724,6 +1734,65 @@ export class FakeCore implements CoreHandle {
     return out;
   }
 
+  private filterSnoozed(kind: QueueContext["kind"], tracks: string[], start: number | undefined): { tracks: string[]; start: number | undefined } {
+    const leaves = kind.type === "playlist" || kind.type === "artist" || kind.type === "genre" || kind.type === "filter" || kind.type === "autoplay";
+    if (!leaves || this.snoozes.size === 0) return { tracks, start };
+    const keep = start !== undefined && start >= 0 && start < tracks.length ? start : undefined;
+    const filtered = tracks.filter((id, i) => i === keep || !this.snoozes.has(id));
+    if (!filtered.length) return { tracks, start };
+    if (keep === undefined) return { tracks: filtered, start: undefined };
+    // Count what stays ahead of the picked song, as the core does: an earlier copy of it isn't it.
+    const at = tracks.slice(0, keep).filter((id) => !this.snoozes.has(id)).length;
+    return { tracks: filtered, start: at };
+  }
+
+  private snoozeItems(): import("@core/api").SnoozeItem[] {
+    const out: import("@core/api").SnoozeItem[] = [];
+    for (const [trackId, until] of this.snoozes) {
+      const track = this.lib?.tracksById.get(trackId);
+      if (track) out.push({ trackId, until: until ?? undefined, track });
+    }
+    return out;
+  }
+
+  private emitSnoozes(): void {
+    this.emit({ type: "snoozesChanged", data: { items: this.snoozeItems() } });
+  }
+
+  private untilFor(duration: import("@core/api").SnoozeFor): number | null {
+    const day = 86_400_000;
+    const now = Date.now();
+    switch (duration) {
+      case "day": return now + day;
+      case "threeDays": return now + 3 * day;
+      case "week": return now + 7 * day;
+      case "month": return now + 30 * day;
+      case "indefinite": return null;
+    }
+  }
+
+  private applySnooze(trackIds: string[], duration: import("@core/api").SnoozeFor): void {
+    const until = this.untilFor(duration);
+    let n = 0;
+    for (const id of trackIds) {
+      if (!this.lib?.tracksById.has(id)) continue;
+      this.snoozes.set(id, until);
+      n++;
+    }
+    if (!n) return;
+    this.emitSnoozes();
+    const length = duration === "day" ? "1 day" : duration === "threeDays" ? "3 days" : duration === "week" ? "1 week" : duration === "month" ? "1 month" : "indefinitely";
+    this.toast(duration === "indefinite" ? (n === 1 ? "Snoozed indefinitely" : `Snoozed ${n} songs indefinitely`) : (n === 1 ? `Snoozed for ${length}` : `Snoozed ${n} songs for ${length}`));
+  }
+
+  private clearSnooze(trackIds: string[]): void {
+    let n = 0;
+    for (const id of trackIds) if (this.snoozes.delete(id)) n++;
+    if (!n) return;
+    this.emitSnoozes();
+    this.toast(n === 1 ? "Unsnoozed" : `Unsnoozed ${n} songs`);
+  }
+
   private emitStash(): void {
     this.emit({ type: "stashChanged", data: { items: this.stashItems() } });
   }
@@ -2342,10 +2411,10 @@ export class FakeCore implements CoreHandle {
           if (a) this.playContext({ serverId: sid, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, 0, false, true);
         } else if (target.type === "playlists" && target.data.ids.length === 1) {
           const p = this.lib?.playlists.find((x) => x.playlist.id === target.data.ids[0]);
-          if (p) this.playContext({ serverId: sid, kind: { type: "playlist", data: { id: p.playlist.id } }, label: p.playlist.name, sort: "default", tracks: [] }, 0, false, true);
+          if (p) this.playContext({ serverId: sid, kind: { type: "playlist", data: { id: p.playlist.id } }, label: p.playlist.name, sort: "default", tracks: [] }, undefined, false, true);
         } else if (target.type === "artists" && target.data.ids.length === 1) {
           const a = this.lib?.artists.find((x) => x.id === target.data.ids[0]);
-          if (a) this.playContext({ serverId: sid, kind: { type: "artist", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, 0, false, true);
+          if (a) this.playContext({ serverId: sid, kind: { type: "artist", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, undefined, false, true);
         } else if (trackIds.length) {
           this.playContext({ serverId: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: "Selection", sort: "default", tracks: trackIds }, 0, false, true);
         }
@@ -2369,6 +2438,12 @@ export class FakeCore implements CoreHandle {
         return;
       case "stash":
         this.stashAdd(trackIds);
+        return;
+      case "snooze":
+        this.applySnooze(trackIds, "week");
+        return;
+      case "unsnooze":
+        this.clearSnooze(trackIds);
         return;
       case "clearStash":
         this.handle({ type: "stashClear" });
@@ -2766,6 +2841,8 @@ export class FakeCore implements CoreHandle {
         return { type: "reportUpload", data: this.reportUpload?.status };
       case "stash":
         return { type: "stashItems", data: this.stashItems() };
+      case "snoozes":
+        return { type: "snoozeItems", data: this.snoozeItems() };
       case "albumResume":
         return { type: "albumResumeState", data: this.albumResumes.find((x) => x.albumId === q.data.id) };
       default: {

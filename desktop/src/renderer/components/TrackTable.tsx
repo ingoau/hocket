@@ -133,6 +133,8 @@ export function TrackTable(props: TrackTableProps) {
   const selection = useApp((s) => (s.selectionScope === scope ? s.selection : EMPTY_SELECTION));
   const setSelection = useApp((s) => s.setSelection);
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const snoozedIds = useApp((s) => s.snoozes.map((x) => x.trackId).join("\n"));
+  const snoozed = useMemo(() => new Set(snoozedIds ? snoozedIds.split("\n") : []), [snoozedIds]);
   const [focusIdx, setFocusIdx] = useState(0);
   const typeBuf = useRef({ text: "", at: 0 });
   const dragFrom = useRef<number | undefined>(undefined);
@@ -314,10 +316,11 @@ export function TrackTable(props: TrackTableProps) {
             const selected = tr ? isSelected(selection, tr.id) : false;
             const focused = vi.index === focusIdx;
             const playing = !!tr && tr.id === playingTrackId;
+            const faded = !!tr && snoozed.has(tr.id);
             return (
               <div
                 key={vi.key}
-                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""}`}
+                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}`}
                 role="row"
                 aria-selected={selected}
                 aria-rowindex={vi.index + 2}

@@ -30,8 +30,8 @@ use typeshare::typeshare;
 use crate::api::{
     AlbumResumeEntry, AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
     LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey,
-    QueueMode, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, StashEntry,
-    TrackId, TransportLease, UndoEntry,
+    QueueMode, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, Snooze,
+    StashEntry, TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -213,6 +213,10 @@ pub struct ReplicaState {
     /// (`crate::stash`).
     #[serde(default)]
     pub stash: Vec<StashEntry>,
+    /// The account's snoozes: LWW set keyed on track id, tombstones included
+    /// (`crate::snooze`).
+    #[serde(default)]
+    pub snoozes: Vec<Snooze>,
     /// Where albums were left off: LWW set keyed on album id, tombstones included
     /// (`crate::album_resume`).
     #[serde(default)]
@@ -876,6 +880,11 @@ pub enum Msg {
     StashSync {
         entries: Vec<StashEntry>,
     },
+    /// Either direction. Snoozes, merged LWW on `updatedAt` per track id
+    /// (`crate::snooze::merge`). Older builds drop it.
+    SnoozeSync {
+        entries: Vec<Snooze>,
+    },
     /// Either direction. Album resume points, merged LWW per album id
     /// (`crate::album_resume::merge`). Older builds drop it.
     AlbumResumeSync {
@@ -995,6 +1004,7 @@ impl Msg {
         "savedQueuesSync",
         "settingsSync",
         "stashSync",
+        "snoozeSync",
         "albumResumeSync",
         "undoEntryShared",
         "libraryEdited",
@@ -1046,6 +1056,7 @@ impl Msg {
             Msg::SavedQueuesSync { .. } => "savedQueuesSync",
             Msg::SettingsSync { .. } => "settingsSync",
             Msg::StashSync { .. } => "stashSync",
+            Msg::SnoozeSync { .. } => "snoozeSync",
             Msg::AlbumResumeSync { .. } => "albumResumeSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
@@ -1323,6 +1334,7 @@ mod tests {
             saved_queues: vec![],
             settings: vec![],
             stash: vec![],
+            snoozes: vec![],
             album_resumes: vec![],
             devices: vec![],
             transport_lease: TransportLease::default(),

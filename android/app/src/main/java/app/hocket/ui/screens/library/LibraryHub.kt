@@ -167,7 +167,7 @@ fun LibraryScreen(nav: NavHostController) {
                 item(key = "gap.browse", span = full, contentType = "gap") { Spacer(Modifier.height(16.dp)) }
                 // Browse and the links are one connected group: the links carry on under the tiles.
                 item(key = "browse", span = full, contentType = "browse") {
-                    Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) { BrowseTiles(nav); LibraryLinks(nav, joinedAbove = true) }
+                    Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) { BrowseTiles(nav); LibraryLinks(nav, joinedAbove = true); SnoozedLink(nav) }
                 }
                 item(key = "recent.h", span = full, contentType = "header") {
                     Text(stringResource(R.string.library_recently_added), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
@@ -386,6 +386,25 @@ private fun AlbumFan(albums: List<Album>, share: List<Modifier>, modifier: Modif
                     },
                 )
             }
+        }
+    }
+}
+
+/** The Snoozed list: everything left out of shuffle, playlists and autoplay, and when each one ends. */
+@Composable
+private fun SnoozedLink(nav: NavHostController) {
+    Surface(
+        onClick = { nav.navigate(Route.Snoozed) { launchSingleTop = true } },
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp).heightIn(min = 64.dp).testTag("library.link.snoozed"),
+    ) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.tertiaryContainer, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
+                Icon(HocketIcons.Filled.Bedtime, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(stringResource(R.string.snooze_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         }
     }
 }

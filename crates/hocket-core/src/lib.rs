@@ -31,6 +31,7 @@ pub mod outbox;
 pub mod reports;
 pub mod session;
 pub mod settings;
+pub mod snooze;
 pub mod stash;
 pub mod stats;
 pub mod subsonic;

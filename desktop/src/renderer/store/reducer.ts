@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AlbumResumePoint, AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
+  AlbumResumePoint, AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, SnoozeItem, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -32,6 +32,8 @@ export interface CoreState {
   savedQueues: SavedQueue[];
   /** The song stash, in order (core's `StashChanged`). */
   stash: StashItem[];
+  /** Songs snoozed right now (core's `SnoozesChanged`). */
+  snoozes: SnoozeItem[];
   /** Albums that offer resume (core's `AlbumResumesChanged`). */
   albumResumes: AlbumResumePoint[];
   pins: Pin[];
@@ -89,6 +91,7 @@ export const initialCoreState: CoreState = {
   syncProgress: undefined,
   savedQueues: [],
   stash: [],
+  snoozes: [],
   albumResumes: [],
   pins: [],
   storage: undefined,
@@ -180,6 +183,8 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, savedQueues: e.data.queues };
     case "stashChanged":
       return { ...state, stash: e.data.items };
+    case "snoozesChanged":
+      return { ...state, snoozes: e.data.items };
     case "albumResumesChanged":
       return { ...state, albumResumes: e.data.points };
     case "undoChanged": {

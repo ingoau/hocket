@@ -51,7 +51,7 @@ export function ArtistDetail({ id }: { id: string }) {
     if (target && document.activeElement === document.body) document.querySelector<HTMLElement>(target)?.focus({ preventScroll: !grid });
   }, [grid]);
   const a = artist.data;
-  const play = (shuffle: boolean) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
+  const play = (shuffle: boolean) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
   const topAll = top.data ?? [];
   const topList = allTop ? topAll : topAll.slice(0, TOP_PREVIEW);
   const topSection = topSongsSection(top.data ? topList.length : undefined, top.error !== undefined);
