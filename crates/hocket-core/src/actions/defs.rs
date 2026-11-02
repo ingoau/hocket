@@ -742,7 +742,7 @@ static ALL: &[ActionDef] = &[
         ],
         has_items,
         stash,
-        default_shortcut = Some("S")
+        default_shortcut = Some("Mod+S")
     ),
     action!(
         "openStash",
@@ -752,7 +752,7 @@ static ALL: &[ActionDef] = &[
         GLOBAL,
         not_in_text_field,
         none,
-        default_shortcut = Some("Shift+S"),
+        default_shortcut = Some("Mod+Shift+S"),
         ui_handled = true
     ),
     action!(

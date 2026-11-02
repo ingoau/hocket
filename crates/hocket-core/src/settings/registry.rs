@@ -433,6 +433,7 @@ pub const SWIPE_LIST_ACTIONS: &[&str] = &[
     "love",
     "addToPlaylist",
     "download",
+    "stash",
 ];
 
 /// What swiping up on the phone's full player (on its artwork) opens: the
