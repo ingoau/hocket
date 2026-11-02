@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
+  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -30,6 +30,8 @@ export interface CoreState {
   batterySaver: boolean;
   syncProgress: SyncProgress | undefined;
   savedQueues: SavedQueue[];
+  /** The song stash, in order (core's `StashChanged`). */
+  stash: StashItem[];
   pins: Pin[];
   storage: StorageSummary | undefined;
   filters: Filter[];
@@ -84,6 +86,7 @@ export const initialCoreState: CoreState = {
   batterySaver: false,
   syncProgress: undefined,
   savedQueues: [],
+  stash: [],
   pins: [],
   storage: undefined,
   filters: [],
@@ -172,6 +175,8 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, nowPlaying: e.data.entry };
     case "savedQueuesChanged":
       return { ...state, savedQueues: e.data.queues };
+    case "stashChanged":
+      return { ...state, stash: e.data.items };
     case "undoChanged": {
       // design.md "Global undo": a fresh mutation that throws the queue away gets
       // one toast with the single Undo action; everything else stays quiet (the

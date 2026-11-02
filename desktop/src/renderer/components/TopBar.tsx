@@ -9,6 +9,7 @@ import { bridge } from "../core/bridge";
 import { clearSearches, forgetSearch, recentSearches, rememberSearch } from "../lib/recent-searches";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
+import { StashChip } from "./Stash";
 import { fmtRelative } from "../lib/format";
 import { usePresence } from "../lib/presence";
 
@@ -27,6 +28,7 @@ export function TopBar() {
       </div>
       <div className="grow" />
       <SearchBox />
+      <StashChip />
       <JobsIndicator />
       {platform !== "macOs" ? (
         <div className="window-controls">

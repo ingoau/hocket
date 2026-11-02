@@ -513,3 +513,59 @@
   .dialog { padding: 20px; }
   .dialog-title { font-size: 22px; }
 }
+
+/* The song stash (#150): a chip right of the search that grows in when something is stashed. */
+.stash-anchor { position: relative; display: flex; align-items: center; }
+.stash-chip-wrap { display: flex; overflow: visible; }
+.stash-chip-wrap.fade-in { animation: stash-chip-in var(--dur-spring-long, 500ms) var(--spring-fast) both; }
+.stash-chip-wrap.closing { animation: stash-chip-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
+@keyframes stash-chip-in { from { max-width: 0; opacity: 0; transform: scale(0.6); } 60% { opacity: 1; } to { max-width: 120px; opacity: 1; transform: none; } }
+@keyframes stash-chip-out { from { max-width: 120px; } to { max-width: 0; opacity: 0; transform: scale(0.6); } }
+.stash-chip {
+  -webkit-app-region: no-drag; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px 0 6px;
+  border: 0; border-radius: var(--shape-full); background: var(--bg-elev); color: var(--fg); font: inherit; font-weight: 600; cursor: pointer;
+  box-shadow: var(--shadow-1); white-space: nowrap;
+  transition: background-color var(--dur-short) var(--ease-emphasized), box-shadow var(--dur-short) var(--ease-emphasized), transform var(--dur-spring) var(--spring-bouncy);
+}
+.stash-chip:hover { box-shadow: var(--shadow-2); }
+.stash-chip:active { transform: scale(0.94); }
+.stash-chip.on { background: var(--accent); color: var(--accent-fg); }
+.stash-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.stash-fan { position: relative; width: 26px; height: 26px; flex: none; transition: width var(--dur-spring) var(--spring-fast); }
+.stash-fan.two { width: 34px; }
+.stash-card { position: absolute; top: 0; left: 0; width: 26px; height: 26px; border-radius: 7px; overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); transform-origin: 50% 90%; transition: transform var(--dur-spring) var(--spring-bouncy); }
+.stash-card .art { width: 100%; height: 100%; border-radius: 0; display: grid; place-items: center; object-fit: cover; }
+.stash-card.front { z-index: 1; animation: stash-card-in var(--dur-spring) var(--spring-bouncy); }
+.stash-fan.two .stash-card.front { transform: translateX(8px) rotate(7deg); }
+.stash-fan.two .stash-card.back { transform: rotate(-9deg); filter: brightness(0.85); }
+.stash-chip:hover .stash-fan.two .stash-card.front { transform: translateX(10px) rotate(11deg); }
+.stash-chip:hover .stash-fan.two .stash-card.back { transform: translateX(-2px) rotate(-13deg); }
+@keyframes stash-card-in { from { transform: translateY(-10px) scale(0.6) rotate(-20deg); opacity: 0; } }
+.stash-count { display: inline-block; min-width: 1ch; font-variant-numeric: tabular-nums; animation: stash-count-pop var(--dur-spring) var(--spring-bouncy); }
+@keyframes stash-count-pop { from { transform: scale(1.5); } }
+
+.stash-popover { top: 44px; width: 420px; padding: 0; display: flex; flex-direction: column; max-height: min(560px, 75vh); overflow: hidden; }
+.stash-head { display: flex; align-items: center; gap: 4px; padding: 14px 12px 6px 16px; }
+.stash-title { font-size: var(--fs-lg, 16px); font-weight: 600; }
+.stash-head .btn { display: inline-flex; align-items: center; gap: 4px; }
+.stash-actions { display: flex; align-items: center; gap: 2px; padding: 4px 12px 10px; border-bottom: 1px solid var(--border); }
+.stash-actions .btn.primary { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; padding-inline: 12px 14px; }
+.stash-list { overflow: auto; padding: 6px 4px 8px; min-height: 0; }
+.stash-row {
+  position: relative; display: grid; grid-template-columns: 16px 40px minmax(0, 1fr) auto 28px; align-items: center; gap: 10px;
+  padding: 6px 6px 6px 4px; border-radius: var(--shape-md); cursor: default; user-select: none;
+  transition: background-color var(--dur-short) var(--ease-emphasized), opacity var(--dur-short) var(--ease-emphasized);
+}
+.stash-row:hover { background: var(--bg-hover); }
+.stash-row.selected { background: var(--bg-active); }
+.stash-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.stash-row.dragging { opacity: 0.4; }
+.stash-row.drop-before::before, .stash-row.drop-after::after { content: ""; position: absolute; left: 8px; right: 8px; height: 2px; border-radius: 1px; background: var(--accent); }
+.stash-row.drop-before::before { top: -1px; }
+.stash-row.drop-after::after { bottom: -1px; }
+.stash-row .art { width: 40px; height: 40px; border-radius: var(--shape-sm, 8px); display: grid; place-items: center; object-fit: cover; }
+.stash-text { display: flex; flex-direction: column; min-width: 0; }
+.stash-grip { color: var(--fg-muted); opacity: 0; cursor: grab; transition: opacity var(--dur-short) var(--ease-emphasized); }
+.stash-row:hover .stash-grip, .stash-row:focus-visible .stash-grip { opacity: 1; }
+.stash-remove { opacity: 0; width: 28px !important; height: 28px !important; }
+.stash-row:hover .stash-remove, .stash-row:focus-within .stash-remove { opacity: 1; }

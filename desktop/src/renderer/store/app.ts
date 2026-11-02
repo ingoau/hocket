@@ -94,6 +94,8 @@ export interface UiState {
   panels: PanelState;
   fullscreen: boolean;
   paletteOpen: boolean;
+  /** The stash popover in the top bar. */
+  stashOpen: boolean;
   contextMenu: ContextMenuState | undefined;
   playlistPicker: PlaylistPickerState | undefined;
   dialog: DialogState | undefined;
@@ -134,6 +136,7 @@ export interface AppStore extends CoreState, UiState {
   setPanels(patch: Partial<PanelState>): void;
   setFullscreen(on: boolean): void;
   setPaletteOpen(open: boolean): void;
+  setStashOpen(open: boolean): void;
   openContextMenu(menu: ContextMenuState): void;
   closeContextMenu(): void;
   openPlaylistPicker(picker: PlaylistPickerState): void;
@@ -182,6 +185,7 @@ export const useApp = create<AppStore>((set, get) => ({
   panels: loadPanels(),
   fullscreen: false,
   paletteOpen: false,
+  stashOpen: false,
   contextMenu: undefined,
   playlistPicker: undefined,
   dialog: undefined,
@@ -237,6 +241,9 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   setPaletteOpen(open) {
     set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined });
+  },
+  setStashOpen(open) {
+    set({ stashOpen: open });
   },
   openContextMenu(menu) {
     set({ contextMenu: menu, playlistPicker: undefined });
@@ -397,6 +404,12 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
       if (r.type === "lyricsResult" && r.data) useApp.getState().applyEvent({ type: "lyricsChanged", data: { track_id: trackId, lyrics: r.data } });
     }).catch(() => undefined);
   };
+  // Stash events sent before this window subscribed are gone: ask once.
+  if (kind === "main") {
+    void b.query({ type: "stash" }).then((r) => {
+      if (r.type === "stashItems") useApp.getState().applyEvent({ type: "stashChanged", data: { items: r.data } });
+    }).catch(() => undefined);
+  }
   // A report upload already running (resumed as the core started) has sent its events by now: ask.
   let reportEventSeen = false;
   const offEvent = b.onEvent((e) => {

@@ -105,8 +105,8 @@ export function useGlobalKeyboard(enabled = true): void {
       if (id === "redoAlt") { app.dispatch({ type: "redo" }); return; }
       if (id === "undo") { app.dispatch({ type: "undo" }); return; }
       if (id === "redo") { app.dispatch({ type: "redo" }); return; }
-      if (/^rate[0-5]$/.test(id)) {
-        // Rate the current selection if any; the list handles it when focused.
+      if (/^rate[0-5]$/.test(id) || id === "stash") {
+        // Rate (or stash) the current selection if any; the list handles ratings when focused.
         if (app.selectionScope && !app.selection.all && app.selection.ids.size) {
           app.runAction(id, { type: "tracks", data: { ids: [...app.selection.ids] } });
         } else if (app.nowPlaying) {
