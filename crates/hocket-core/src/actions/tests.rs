@@ -165,11 +165,11 @@ fn shortcut_rebinding_and_conflicts() {
             other_action_id: "openCommandPalette".into()
         })
     );
-    r.set_shortcut("shuffle", Some("ctrl+shift+s")).unwrap();
-    assert_eq!(r.shortcut_for("shuffle").as_deref(), Some("Ctrl+Shift+S"));
-    assert_eq!(r.action_for_chord("Ctrl+Shift+S"), Some("shuffle"));
+    r.set_shortcut("shuffle", Some("ctrl+shift+u")).unwrap();
+    assert_eq!(r.shortcut_for("shuffle").as_deref(), Some("Ctrl+Shift+U"));
+    assert_eq!(r.action_for_chord("Ctrl+Shift+U"), Some("shuffle"));
     // Rebinding an action to its own chord is fine; unbinding frees the chord.
-    r.set_shortcut("shuffle", Some("Ctrl+Shift+S")).unwrap();
+    r.set_shortcut("shuffle", Some("Ctrl+Shift+U")).unwrap();
     r.set_shortcut("openCommandPalette", None).unwrap();
     assert_eq!(r.action_for_chord("Ctrl+K"), None);
     r.set_shortcut("shuffle", Some("Ctrl+K")).unwrap();
@@ -198,7 +198,7 @@ fn shortcut_rebinding_and_conflicts() {
 #[test]
 fn customisation_round_trips_across_platforms() {
     let mut linux = ActionRegistry::new(Platform::Linux);
-    linux.set_shortcut("shuffle", Some("Mod+S")).unwrap();
+    linux.set_shortcut("shuffle", Some("Mod+U")).unwrap();
     linux.set_shortcut("undo", None).unwrap();
     linux.set_order(
         Surface::MediaSession,
@@ -212,7 +212,7 @@ fn customisation_round_trips_across_platforms() {
     linux.set_order(Surface::Sidebar, linux.default_order(Surface::Sidebar));
     let json = linux.to_json();
     let c: ActionCustomisation = serde_json::from_str(&json).unwrap();
-    assert_eq!(c.shortcuts["shuffle"].as_deref(), Some("Mod+S"));
+    assert_eq!(c.shortcuts["shuffle"].as_deref(), Some("Mod+U"));
     assert_eq!(c.shortcuts["undo"], None);
     assert_eq!(c.orders["mediaSession"], vec!["togglePlay", "next"]);
     assert!(
@@ -222,7 +222,7 @@ fn customisation_round_trips_across_platforms() {
 
     let mut mac = ActionRegistry::new(Platform::MacOs);
     mac.from_json(&json).unwrap();
-    assert_eq!(mac.shortcut_for("shuffle").as_deref(), Some("Cmd+S"));
+    assert_eq!(mac.shortcut_for("shuffle").as_deref(), Some("Cmd+U"));
     assert_eq!(mac.shortcut_for("undo"), None);
     assert_eq!(mac.order(Surface::MediaSession), vec!["togglePlay", "next"]);
     assert_eq!(mac.to_json(), json);
