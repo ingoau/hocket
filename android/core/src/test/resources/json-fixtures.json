@@ -36,7 +36,8 @@
       ],
       "start_index": 0,
       "label": "Search: hello",
-      "shuffle": false
+      "shuffle": false,
+      "start_position_ms": 0
     }
   },
   "command.playContext": {

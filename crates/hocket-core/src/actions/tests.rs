@@ -397,7 +397,8 @@ fn handlers_map_to_commands() {
             track_ids: vec!["a".into(), "b".into()],
             start_index: 0,
             label: "Selection".into(),
-            shuffle: false
+            shuffle: false,
+            start_position_ms: 0,
         }]
     );
     let c = r

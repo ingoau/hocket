@@ -405,9 +405,11 @@ impl Actor {
             Output::StopListener => self.io_stop_listener(),
             Output::Advertise(a) => self.io_advertise(a),
             Output::VerifyCredential { peer, credential } => self.io_verify(peer, credential),
-            Output::DocumentChanged { document, cause } => {
-                self.on_document_changed(document, cause)
-            }
+            Output::DocumentChanged {
+                document,
+                cause,
+                start_position_ms,
+            } => self.on_document_changed(document, cause, start_position_ms),
             Output::TransportChanged { .. } => self.emit_transport(),
             Output::LeaseChanged {
                 owns,
@@ -529,7 +531,12 @@ impl Actor {
 
     // -- document changes -------------------------------------------------------
 
-    fn on_document_changed(&mut self, document: SessionDocument, cause: DocChange) {
+    fn on_document_changed(
+        &mut self,
+        document: SessionDocument,
+        cause: DocChange,
+        start_position_ms: Ms,
+    ) {
         if cause != DocChange::Local {
             self.on_offline_clear_refused(&document);
         }
@@ -596,6 +603,12 @@ impl Actor {
                 }
                 _ => {}
             }
+        }
+        // A remote `PlayTracks` carries its start time on the op. The document
+        // does not, and a remote change has no reducer effects, so without
+        // this the device that owns playback would load at the beginning.
+        if restore_position.is_none() && start_position_ms > 0 {
+            restore_position = Some(start_position_ms);
         }
         for key in skipped {
             let name = self.track_title_for_key(&document, &key);

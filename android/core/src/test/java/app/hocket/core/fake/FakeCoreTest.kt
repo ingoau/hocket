@@ -159,6 +159,16 @@ class FakeCoreTest {
     }
 
     @Test
+    fun playTracksStartsAtTheRequestedPosition() = runTest {
+        val core = core()
+        val id = core.queue().upcoming.first().track.id
+        core.dispatchAndWait(Command.PlayTracks(CommandPlayTracksInner(core.library.serverId, listOf(id), 0u, "Lyric", false, 42_000u)))
+        val t = core.snapshot().transport
+        assertEquals(id, core.queue().current!!.track.id)
+        assertEquals(42_000u, t.position.positionMs)
+    }
+
+    @Test
     fun seekAndPauseProduceStamps() = runTest {
         val core = core()
         core.dispatchAndWait(Commands.seekTo(60_000))

@@ -56,7 +56,9 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
       const ev = e as LyricLineMouseEvent;
       const m = mappedRef.current;
       const line = m.lines[ev.lineIndex];
-      if (line) bridge().dispatch({ type: "seekTo", data: { position_ms: Math.max(0, line.startTime - m.offsetMs) } });
+      // startTime already includes the user's offset (lyrics-map). Seeking there
+      // is the same audio position the core uses: line start plus offset.
+      if (line) bridge().dispatch({ type: "seekTo", data: { position_ms: Math.max(0, line.startTime) } });
     };
     loadAmll().then((amll) => {
       if (!alive) return;

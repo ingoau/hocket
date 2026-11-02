@@ -70,6 +70,7 @@ async fn queue(t: &TestCore, first: &str, later: &[&str]) {
         start_index: 0,
         label: "Mixed".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::PlayLater {
@@ -216,6 +217,7 @@ async fn the_clear_reaches_a_peer() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 3_000.0).await;
@@ -249,6 +251,7 @@ async fn a_repeating_queue_with_nothing_offline_stops_with_a_coded_notice() {
         start_index: 0,
         label: "Loop".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(2000.0).await;
@@ -297,6 +300,7 @@ async fn a_clear_refused_as_stale_is_run_again() {
             start_index: 0,
             label: "Sel".into(),
             shuffle: false,
+            start_position_ms: 0,
         })
         .await;
         TestCore::run_all_for(&[&a, &b], 3_000.0).await;

@@ -75,6 +75,11 @@ const STRINGS = {
   "search.kind.albums": "Albums",
   "search.kind.artists": "Artists",
   "search.kind.playlists": "Playlists",
+  "search.kind.lyrics": "Lyrics",
+  "search.lyrics": "Lyrics",
+  "search.lyricsScope": "Searching lyrics of songs you've played",
+  "search.lyricsNone": "No lyric matches in songs you've played",
+  "search.seeAllLyrics": "See all {count} lyric matches",
   "search.seeAllSongs": "See all {count} songs",
   "search.albumCount": "{count} albums",
   "search.songCount": "{count} songs",
@@ -1069,6 +1074,7 @@ const STRINGS = {
   "palette.placeholder": "Search songs, albums, artists, playlists, actions…",
   "palette.results": "Results",
   "palette.actions": "Actions",
+  "palette.lyrics": "Lyrics",
   "palette.empty": "Nothing matches",
 
   // Selection
