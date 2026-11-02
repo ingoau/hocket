@@ -1168,13 +1168,16 @@ impl NativeBackend {
         let parent = self.reports.clone();
         let current_key = self.preview_key.clone();
         let sink: ReportSink = Arc::new(move |report| {
-            let stale_end = match &report {
-                BackendReport::Ended { key } | BackendReport::Error { key, .. } => {
-                    key != &*current_key.lock()
-                }
-                _ => false,
+            let key = match &report {
+                BackendReport::Ready { key, .. }
+                | BackendReport::Playing { key, .. }
+                | BackendReport::Paused { key, .. }
+                | BackendReport::Position { key, .. }
+                | BackendReport::Ended { key }
+                | BackendReport::Error { key, .. } => Some(key),
+                _ => None,
             };
-            if stale_end {
+            if key.is_some_and(|k| k != &*current_key.lock()) {
                 return;
             }
             let mapped = match report {

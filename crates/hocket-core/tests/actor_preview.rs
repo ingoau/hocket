@@ -328,6 +328,44 @@ async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_after_pausing_a_buffering_track_stays_paused() {
+    let t = synced_core("preview-paused-buffering").await;
+    let sid = t.server_id.clone();
+    // Ready has not arrived, so the track is still marked buffering after pause.
+    t.backend.set_load_latency_ms(5_000.0);
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+    })
+    .await;
+    t.run(Command::Pause).await;
+    let transport = t.transport().await;
+    assert!(!transport.position.is_playing);
+    assert!(
+        transport.buffering,
+        "the pause landed while the track was still buffering"
+    );
+    t.run(Command::PreviewStart {
+        track_id: "t2".into(),
+    })
+    .await;
+    assert!(preview_of(&t.events.all()).is_some());
+    t.run(Command::PreviewStop).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+    assert!(
+        !t.transport().await.position.is_playing,
+        "pausing while the track is still buffering stays paused after the preview"
+    );
+    t.backend.set_load_latency_ms(0.0);
+    t.run_for(1_000.0).await;
+    assert!(!t.transport().await.position.is_playing);
+    assert!(!t.backend.is_playing());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn preview_while_the_track_is_still_loading_resumes_it() {
     let t = synced_core("preview-loading").await;
     let sid = t.server_id.clone();

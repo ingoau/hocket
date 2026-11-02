@@ -202,13 +202,11 @@ impl Actor {
         if !self.owns_transport() {
             return None;
         }
-        // Buffering with intent to play counts: the sound has not started,
-        // but the user expects it back when the preview ends.
-        let was_playing = self.playback.playing
-            || self.playback.focus_suspended
-            || self.playback.buffering
-            || self.playback.want_playing
-            || self.playback.pending_load.is_some();
+        // `want_playing` covers a load or a skip that has not become audible
+        // yet. Buffering and a pending load are also set when the user has
+        // paused, so they must not count or the preview would start the track.
+        let was_playing =
+            self.playback.playing || self.playback.focus_suspended || self.playback.want_playing;
         if was_playing {
             self.playback.want_playing = false;
             if self.playback.playing || self.playback.focus_suspended {

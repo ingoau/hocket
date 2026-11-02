@@ -469,6 +469,11 @@ class ExoBackend(
                     }
                 }
 
+                override fun onPlayerError(error: PlaybackException) {
+                    stopPreviewLoop()
+                    report(BackendReport.PreviewEnded)
+                }
+
                 override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                     if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
                         report(BackendReport.PreviewInterrupted)
