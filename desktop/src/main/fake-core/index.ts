@@ -736,12 +736,14 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "stashMove": {
-        const live = this.stash.filter((e) => !e.removed);
+        // Indices are into the list as shown (one entry per track, resolved), like the real core's.
+        const shown = new Set(this.stashItems().map((x) => x.entryId));
+        const live = this.stash.filter((e) => shown.has(e.entryId));
         const from = live.findIndex((e) => e.entryId === cmd.data.entry_id);
         if (from < 0) return;
         const [entry] = live.splice(from, 1);
         if (entry) live.splice(Math.min(cmd.data.to_index, live.length), 0, entry);
-        this.stash = [...live, ...this.stash.filter((e) => e.removed)];
+        this.stash = [...live, ...this.stash.filter((e) => !shown.has(e.entryId))];
         this.emitStash();
         return;
       }

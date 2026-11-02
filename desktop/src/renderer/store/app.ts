@@ -25,6 +25,7 @@ export interface Route {
 }
 
 /** What the fullscreen player's stage shows: the big artwork, or one of its panes (the artwork shrinks next to the title). */
+export type SelectionKind = "tracks" | "albums" | "artists" | "playlists" | "queueItems";
 export type NowPlayingMode = "art" | "lyrics" | "queue" | "about";
 const NOW_PLAYING_MODES: readonly NowPlayingMode[] = ["art", "lyrics", "queue", "about"];
 
@@ -102,6 +103,8 @@ export interface UiState {
   selection: Selection;
   /** View id the selection belongs to; a route change clears it. */
   selectionScope: string;
+  /** What the selected ids are (track ids, album ids, queue keys…), for shortcuts that act on it. */
+  selectionKind: SelectionKind | undefined;
   searchQuery: string;
   searchFocusNonce: number;
   accent: string | undefined;
@@ -143,7 +146,7 @@ export interface AppStore extends CoreState, UiState {
   closePlaylistPicker(): void;
   openDialog(dialog: DialogState): void;
   closeDialog(): void;
-  setSelection(selection: Selection, scope: string): void;
+  setSelection(selection: Selection, scope: string, kind?: SelectionKind): void;
   clearSelection(): void;
   setSearchQuery(q: string): void;
   focusSearch(): void;
@@ -191,6 +194,7 @@ export const useApp = create<AppStore>((set, get) => ({
   dialog: undefined,
   selection: EMPTY_SELECTION,
   selectionScope: "",
+  selectionKind: undefined,
   searchQuery: "",
   searchFocusNonce: 0,
   accent: undefined,
@@ -217,7 +221,7 @@ export const useApp = create<AppStore>((set, get) => ({
   navigate(route, replace = false) {
     const cur = get().route;
     if (cur.view === route.view && cur.id === route.id && cur.param === route.param) return;
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", contextMenu: undefined, playlistPicker: undefined }));
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, contextMenu: undefined, playlistPicker: undefined }));
   },
   back() {
     const { history, route } = get();
@@ -263,8 +267,8 @@ export const useApp = create<AppStore>((set, get) => ({
   closeDialog() {
     set({ dialog: undefined });
   },
-  setSelection(selection, scope) {
-    set({ selection, selectionScope: scope });
+  setSelection(selection, scope, kind) {
+    set({ selection, selectionScope: scope, selectionKind: kind });
   },
   clearSelection() {
     set({ selection: EMPTY_SELECTION });

@@ -516,7 +516,8 @@
 
 /* The song stash (#150): a chip right of the search that grows in when something is stashed. */
 .stash-anchor { position: relative; display: flex; align-items: center; }
-.stash-chip-wrap { display: flex; overflow: visible; }
+/* Clipped while it grows or folds, so it never draws over its neighbour (padded for the shadow). */
+.stash-chip-wrap { display: flex; overflow: hidden; padding: 6px; margin: -6px; }
 .stash-chip-wrap.fade-in { animation: stash-chip-in var(--dur-spring-long, 500ms) var(--spring-fast) both; }
 .stash-chip-wrap.closing { animation: stash-chip-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 @keyframes stash-chip-in { from { max-width: 0; opacity: 0; transform: scale(0.6); } 60% { opacity: 1; } to { max-width: 120px; opacity: 1; transform: none; } }

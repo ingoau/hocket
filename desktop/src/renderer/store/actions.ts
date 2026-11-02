@@ -89,6 +89,7 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       if (app.contextMenu) app.closeContextMenu();
       else if (app.dialog) app.closeDialog();
       else if (app.paletteOpen) app.setPaletteOpen(false);
+      else if (app.stashOpen) app.setStashOpen(false);
       else if (app.fullscreen) app.setFullscreen(false);
       else if (app.drawerOpen && isNarrow()) app.setDrawerOpen(false);
       else app.clearSelection();

@@ -156,7 +156,7 @@ export function TrackTable(props: TrackTableProps) {
   const loadedIds = useMemo(() => tracks.map((x) => x?.id ?? ""), [tracks]);
 
   const publish = useCallback((sel: Selection) => {
-    setSelection(sel, scope);
+    setSelection(sel, scope, "tracks");
     // Tell the core what the selection is so commands can snapshot it (undo restores it).
     const target: ActionTarget = sel.all ? { type: "none" } : { type: "tracks", data: { ids: [...sel.ids] } };
     bridge().dispatch({ type: "setSelection", data: { target } });
