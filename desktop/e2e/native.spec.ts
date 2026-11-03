@@ -75,8 +75,8 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("toggle-queue").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await expect(page.getByTestId("queue-row-current")).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByTestId("queue-row-upcoming")).toHaveCount(5);
-      await expect(page.getByTestId("queue-timeline")).toContainText("Continue playing");
+      await expect(page.getByTestId("queue-row-rest")).toHaveCount(5);
+      await expect(page.getByTestId("queue-timeline")).toContainText("Next from");
       const firstTitle = await page.getByTestId("queue-row-current").locator(".t1").textContent();
 
       // Position extrapolates from TransportChanged stamps while playing.

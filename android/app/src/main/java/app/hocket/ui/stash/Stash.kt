@@ -272,9 +272,11 @@ fun StashSheet(onDismiss: () -> Unit) {
     val serverId = items.firstOrNull()?.track?.serverId ?: ""
     val title = stringResource(R.string.stash_title)
     fun play(shuffle: Boolean, from: Int = 0, list: List<String> = ids) = client.dispatch(Commands.playTracks(serverId, list, from, title, shuffle))
-    fun queue(next: Boolean) {
-        client.dispatch(Commands.runAction(if (next) ActionIds.PLAY_NEXT else ActionIds.PLAY_LATER, Commands.tracks(ids)))
-        val text = resources.getQuantityString(if (next) R.plurals.stash_queued_next else R.plurals.stash_queued, ids.size, ids.size)
+    val section = app.hocket.ui.components.queueSectionOn()
+    fun queue(action: String) {
+        client.dispatch(Commands.runAction(action, Commands.tracks(ids)))
+        val plural = when (action) { ActionIds.PLAY_NEXT -> R.plurals.stash_queued_next; ActionIds.ADD_TO_QUEUE -> R.plurals.stash_queued; else -> R.plurals.stash_queued_later }
+        val text = resources.getQuantityString(plural, ids.size, ids.size)
         snackbar.launch { sheetSnackbars.showSnackbar(text) }
     }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, modifier = Modifier.testTag("stash.sheet")) {
@@ -310,8 +312,9 @@ fun StashSheet(onDismiss: () -> Unit) {
                     }
                 }
                 item { Action(HocketIcons.Filled.Shuffle, R.string.stash_shuffle, "stash.shuffle") { play(true) } }
-                item { Action(HocketIcons.AutoMirrored.Filled.PlaylistPlay, R.string.stash_play_next, "stash.playNext") { queue(true) } }
-                item { Action(HocketIcons.AutoMirrored.Filled.QueueMusic, R.string.stash_add_to_queue, "stash.playLater") { queue(false) } }
+                item { Action(HocketIcons.AutoMirrored.Filled.PlaylistPlay, R.string.stash_play_next, "stash.playNext") { queue(ActionIds.PLAY_NEXT) } }
+                if (section) item { Action(HocketIcons.AutoMirrored.Filled.QueueMusic, R.string.stash_add_to_queue, "stash.addToQueue") { queue(ActionIds.ADD_TO_QUEUE) } }
+                item { Action(HocketIcons.AutoMirrored.Filled.PlaylistAdd, R.string.stash_play_later, "stash.playLater") { queue(ActionIds.PLAY_LATER) } }
                 item { Action(HocketIcons.AutoMirrored.Filled.PlaylistAdd, R.string.stash_add_to_playlist, "stash.addToPlaylist") { playlistPicker = true } }
                 item { Action(HocketIcons.Filled.Add, R.string.stash_new_playlist, "stash.newPlaylist") { naming = true } }
                 item { Action(HocketIcons.Filled.Download, R.string.stash_download, "stash.download") { client.dispatch(Commands.runAction(ActionIds.DOWNLOAD, Commands.tracks(ids))) } }

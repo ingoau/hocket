@@ -22,8 +22,7 @@ async fn snoozed(t: &TestCore) -> Vec<String> {
 fn queue_ids(q: &QueueView) -> Vec<String> {
     q.current
         .iter()
-        .chain(q.playing_next.iter())
-        .chain(q.upcoming.iter())
+        .chain(q.upcoming())
         .map(|e| e.track.id.clone())
         .collect()
 }

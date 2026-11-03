@@ -18,7 +18,6 @@ import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueItem
-import app.hocket.core.api.QueueMode
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueSourceContextInner
 import app.hocket.core.api.QueueView

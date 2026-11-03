@@ -155,7 +155,8 @@ fun offlineStateText(state: OfflineState): String? = when (state) {
 }
 
 /**
- * The row menu as accessibility actions: play next, add to queue, go to album / artist (when a
+ * The row menu as accessibility actions: play next, add to queue (with the Queue section setting
+ * on, as the registry offers it), play later, go to album / artist (when a
  * [LocalDetailNavigator] is present), download or remove the download, rate (a dialog), and the full
  * menu. [target] is what the row menu acts on (queue rows pass their queue item).
  */
@@ -165,16 +166,19 @@ fun trackRowActions(track: TrackSummary, target: ActionTarget, onRate: () -> Uni
     val nav = LocalDetailNavigator.current
     val playNext = stringResource(R.string.action_play_next)
     val addToQueue = stringResource(R.string.a11y_add_to_queue)
+    val playLater = stringResource(R.string.queue_play_later)
+    val section = queueSectionOn()
     val goAlbum = stringResource(R.string.action_go_to_album)
     val goArtist = stringResource(R.string.action_go_to_artist)
     val download = stringResource(R.string.action_download)
     val removeDownload = stringResource(R.string.action_remove_download)
     val rate = stringResource(R.string.action_rate)
     val more = stringResource(R.string.action_more)
-    return remember(track, target, nav, onMore, extra, playNext) {
+    return remember(track, target, nav, onMore, extra, playNext, section) {
         buildList {
             add(CustomAccessibilityAction(playNext) { client.dispatch(Commands.runAction(ActionIds.PLAY_NEXT, target)); true })
-            add(CustomAccessibilityAction(addToQueue) { client.dispatch(Commands.runAction(ActionIds.PLAY_LATER, target)); true })
+            if (section) add(CustomAccessibilityAction(addToQueue) { client.dispatch(Commands.runAction(ActionIds.ADD_TO_QUEUE, target)); true })
+            add(CustomAccessibilityAction(playLater) { client.dispatch(Commands.runAction(ActionIds.PLAY_LATER, target)); true })
             addAll(extra)
             if (nav != null) {
                 track.albumId?.let { id -> add(CustomAccessibilityAction(goAlbum) { nav.openAlbum(id); true }) }
@@ -481,3 +485,7 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, action: (@Compos
         action?.invoke()
     }
 }
+
+/** The Queue section setting (`queue.section`, on by default): "Add to queue" and the "Next in queue" group are offered. */
+@Composable
+fun queueSectionOn(): Boolean = app.hocket.ui.screens.settings.setting(app.hocket.core.SettingKeys.QUEUE_SECTION).bool ?: true

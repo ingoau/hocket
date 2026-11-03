@@ -189,7 +189,7 @@ test.describe("cached and downloaded badges", () => {
     await showSideView(page, "queue");
     await expect(page.getByTestId("queue-row-current")).toBeVisible();
     await expect(page.getByTestId("queue-row-current").locator('[data-testid="offline-badge"][data-state="cached"]')).toBeVisible({ timeout: 12_000 });
-    await expect(page.getByTestId("queue-row-upcoming").nth(1).locator('[data-state="cached"]')).toBeVisible();
+    await expect(page.getByTestId("queue-row-rest").nth(1).locator('[data-state="cached"]')).toBeVisible();
     await expect(page.getByTestId("album-tracks").locator('[data-state="cached"]')).toHaveCount(3, { timeout: 5000 });
     await shot(page, "album");
     for (const theme of ["light", "dark"] as const) {

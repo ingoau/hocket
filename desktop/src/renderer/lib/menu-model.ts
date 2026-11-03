@@ -60,12 +60,14 @@ export type MenuRow =
   | { kind: "choices"; heading: MenuItem; items: MenuItem[] }
   | { kind: "sep" };
 
-/** The play group, in strip order: Play leads and is the filled one. */
-export const STRIP_IDS = ["play", "playShuffled", "playNext", "playLater"] as const;
+/** The play group, in strip order: Play leads and is the filled one. Add to queue is only there
+ * when the core offers it (the Queue section setting on). */
+export const STRIP_IDS = ["play", "playShuffled", "playNext", "addToQueue", "playLater"] as const;
 const STRIP: Record<string, { label: Parameters<typeof t>[0]; icon: string }> = {
   play: { label: "menu.play", icon: "play" },
   playShuffled: { label: "menu.shuffle", icon: "shuffle" },
   playNext: { label: "menu.playNext", icon: "playNext" },
+  addToQueue: { label: "menu.addToQueue", icon: "queue" },
   playLater: { label: "menu.playLater", icon: "playLater" },
 };
 export const RATE_IDS = ["rate0", "rate1", "rate2", "rate3", "rate4", "rate5"] as const;

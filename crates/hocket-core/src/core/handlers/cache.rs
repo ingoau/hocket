@@ -152,9 +152,28 @@ impl Actor {
             self.playback.want_playing = true;
             // Marked as an offline skip (cleared when the network returns),
             // not as a failure; the offline notice already said why.
-            self.local_reduced_op(QueueOp::SkipOffline { key }, |e| {
+            self.local_reduced_op(QueueOp::SkipOffline { key: key.clone() }, |e| {
                 !matches!(e, Effect::Skipped { .. })
             });
+            // Marks stay on the entries (nothing is consumed), so a queue with
+            // nothing playable offline stops here rather than looping: say why.
+            let stuck = self.doc().is_some_and(|d| {
+                d.current.as_ref().map(|c| &c.key) == Some(&key)
+                    && d.history
+                        .iter()
+                        .chain(d.current.iter())
+                        .chain(d.upcoming.iter())
+                        .all(|i| i.unavailable)
+            });
+            if stuck {
+                self.cache.offline_skips = 0;
+                self.playback.want_playing = false;
+                self.player_notice(
+                    PlayerNoticeCode::NothingAvailableOffline,
+                    "Nothing in the queue is available offline",
+                    None,
+                );
+            }
         }
     }
 

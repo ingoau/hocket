@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -11,6 +14,11 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import app.hocket.core.windowEnd
 import androidx.compose.ui.geometry.Offset
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
@@ -56,12 +64,13 @@ class QueueScreenTest {
         // No tabs: saved / recent queues and the undo history live in Library's "Recent queues".
         assertTrue(compose.onAllNodes(hasTestTagPrefix("queue.tab.")).fetchSemanticsNodes().isEmpty())
         compose.onNodeWithText("Now playing").assertIsDisplayed()
-        compose.onNodeWithText("Playing next").assertIsDisplayed()
-        compose.onNodeWithTag("queue.list").performScrollToNode(hasText("Continue playing"))
-        compose.onNodeWithText("Continue playing").assertIsDisplayed()
-        compose.onNodeWithText("From " + queue.contextLabel).assertIsDisplayed()
-        // Tap the first upcoming context item: it becomes current and the old one goes to history.
-        val target = queue.upcoming.first()
+        compose.onNodeWithText("Next in queue · 1").assertIsDisplayed()
+        compose.onNodeWithTag("queue.group.stash").assertIsDisplayed()
+        compose.onNodeWithTag("queue.group.clear").assertIsDisplayed()
+        compose.onNodeWithTag("queue.list").performScrollToNode(hasText("Next from: " + queue.contextLabel))
+        compose.onNodeWithText("Next from: " + queue.contextLabel).assertIsDisplayed()
+        // Tap the first entry after the group: it becomes current, the pointer passing the group.
+        val target = queue.restEntries.first()
         compose.onNodeWithTag("queue.list").performScrollToNode(hasText(target.track.title))
         compose.onAllNodesWithText(target.track.title).onFirst().performClick()
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == target.track.id }
@@ -98,37 +107,210 @@ class QueueScreenTest {
         compose.setThemedContent(core) { QueuePanel() }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
+        val h0 = core.client.queue.value.historyCount.toInt()
         repeat(3) { core.client.dispatch(Command.Next) }
-        compose.waitUntil(5_000) { core.client.queue.value.history.size == 3 }
+        compose.waitUntil(5_000) { core.client.queue.value.historyEntries.size == h0 + 3 }
         compose.waitForIdle()
         // The list follows the current track: "Now playing" at the top, history scrolled away above.
         compose.onNodeWithText("Now playing").assertIsDisplayed()
         compose.onNodeWithText("History").assertIsNotDisplayed()
-        val played = core.client.queue.value.history.first()
+        val played = core.client.queue.value.historyEntries.first()
         compose.onNodeWithTag("queue.list").performScrollToNode(hasText("History"))
         compose.onNodeWithText("History").assertIsDisplayed()
-        // Oldest first, directly under the header; tapping plays it again.
+        // Oldest first, directly under the header; tapping moves the pointer back to it.
+        val total = core.client.queue.value.total
         compose.onAllNodesWithText(played.track.title).onFirst().assertIsDisplayed().performClick()
         compose.waitUntil(5_000) { core.client.queue.value.current?.item?.key == played.item.key }
+        assertEquals("navigation never adds or removes", total, core.client.queue.value.total)
+        assertEquals(0u, core.client.queue.value.historyCount)
         // Build history again and clear it with the header's "Clear".
         repeat(2) { core.client.dispatch(Command.Next) }
-        compose.waitUntil(5_000) { core.client.queue.value.history.size >= 2 }
+        compose.waitUntil(5_000) { core.client.queue.value.historyEntries.size >= 2 }
         compose.onNodeWithTag("queue.list").performScrollToNode(hasText("History"))
         compose.onNodeWithContentDescription("Clear history").performClick()
-        compose.waitUntil(5_000) { core.client.queue.value.history.isEmpty() }
+        compose.waitUntil(5_000) { core.client.queue.value.historyEntries.isEmpty() }
         compose.onNodeWithText("History").assertDoesNotExist()
     }
 
     @Test
-    fun playingNextHasItsOwnClear() {
+    fun theGroupHasItsOwnClearWithUndo() {
+        val core = TestCore()
+        val snackbar = androidx.compose.material3.SnackbarHostState()
+        compose.setThemedContent(core) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            androidx.compose.runtime.CompositionLocalProvider(app.hocket.ui.components.LocalAppSnackbar provides app.hocket.ui.components.AppSnackbar(snackbar, scope)) {
+                androidx.compose.foundation.layout.Box { QueuePanel(); androidx.compose.material3.SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)) }
+            }
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        val group = core.client.queue.value.groupEntries.map { it.item.key }
+        assertTrue(group.isNotEmpty())
+        compose.onNodeWithContentDescription("Clear next in queue").performClick()
+        compose.waitUntil(5_000) { core.client.queue.value.groupCount == 0u }
+        // The heading goes with the group.
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Next in queue", substring = true).fetchSemanticsNodes().isEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Undo").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Cleared next in queue").assertIsDisplayed()
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.map { it.item.key } == group }
+    }
+
+    @Test
+    fun swipingARowAwayOffersUndo() {
+        val core = TestCore()
+        val snackbar = androidx.compose.material3.SnackbarHostState()
+        compose.setThemedContent(core) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            androidx.compose.runtime.CompositionLocalProvider(app.hocket.ui.components.LocalAppSnackbar provides app.hocket.ui.components.AppSnackbar(snackbar, scope)) {
+                androidx.compose.foundation.layout.Box { QueuePanel(); androidx.compose.material3.SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)) }
+            }
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.waitForIdle()
+        val gone = core.client.queue.value.restEntries.first()
+        compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${gone.item.key}"))
+        compose.onNodeWithTag("queue.row.${gone.item.key}").performTouchInput { swipeLeft() }
+        compose.waitUntil(5_000) { core.client.queue.value.entries.none { it.item.key == gone.item.key } }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Undo").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Removed from queue").assertIsDisplayed()
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(5_000) { core.client.queue.value.entries.any { it.item.key == gone.item.key } }
+    }
+
+    @Test
+    fun addedSongsOutsideTheGroupAndAutoplaySongsCarryMarkers() {
         val core = TestCore()
         compose.setThemedContent(core) { QueuePanel() }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
-        assertTrue(core.client.queue.value.playingNext.isNotEmpty())
-        compose.onNodeWithContentDescription("Clear playing next").performClick()
-        compose.waitUntil(5_000) { core.client.queue.value.playingNext.isEmpty() }
-        compose.onNodeWithText("Playing next").assertDoesNotExist()
+        // One song, so autoplay tops the list up, then a song added later and one added to the queue.
+        val lib = core.fake.library
+        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[5].id), 0, "One"))
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.any { it.autoplay == true } }
+        core.client.dispatch(Commands.playLater(lib.serverId, listOf(lib.tracks[6].id)))
+        core.client.dispatch(Commands.addToQueue(lib.serverId, listOf(lib.tracks[7].id)))
+        compose.waitUntil(5_000) { core.client.queue.value.groupCount == 1u && core.client.queue.value.restEntries.any { it.item.added == true } }
+        compose.waitForIdle()
+        val q = core.client.queue.value
+        // The group's own rows have no marker: the heading says it.
+        val grouped = q.groupEntries.single()
+        assertEquals(true, grouped.item.added)
+        compose.onNodeWithTag("queue.added.${grouped.item.key}", useUnmergedTree = true).assertDoesNotExist()
+        // An added song later on shows the queue icon, and says so.
+        val later = q.restEntries.first { it.item.added == true }
+        compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${later.item.key}"))
+        compose.onNodeWithTag("queue.added.${later.item.key}", useUnmergedTree = true).assertExists()
+        assertTrue(compose.onNodeWithTag("queue.row.${later.item.key}").fetchSemanticsNode().config[SemanticsProperties.StateDescription].contains("Added by you"))
+        // Context songs have none; autoplay's have its own.
+        compose.onNodeWithTag("queue.added.${q.current!!.item.key}", useUnmergedTree = true).assertDoesNotExist()
+        val auto = q.restEntries.first { it.autoplay == true }
+        compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${auto.item.key}"))
+        compose.onNodeWithTag("queue.autoplay.${auto.item.key}", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("queue.added.${auto.item.key}", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun withoutAContextTheRestIsLater() {
+        val core = TestCore()
+        compose.setThemedContent(core) { QueuePanel() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        core.client.dispatch(Command.ClearQueue)
+        core.client.dispatch(Commands.playLater(core.fake.library.serverId, listOf(core.fake.library.tracks[40].id)))
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.none { it.item.source is app.hocket.core.api.QueueSource.Context } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("queue.list").performScrollToNode(hasText("Later"))
+        compose.onNodeWithText("Later").assertIsDisplayed()
+    }
+
+    @Test
+    fun scrollingIntoALongHistoryPagesItIn() {
+        val core = TestCore()
+        compose.setThemedContent(core) { QueuePanel() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        val ids = core.fake.library.tracks.take(400).map { it.id }
+        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, ids, 250, "Long"))
+        compose.waitUntil(5_000) { core.client.queue.value.historyCount == 250u }
+        compose.waitForIdle()
+        // The core sends 100 rows each side of the pointer; the rest comes in on scroll.
+        assertEquals(150u, core.client.queue.value.windowStart)
+        repeat(60) {
+            if (core.client.queue.value.windowStart > 0u) {
+                compose.onNodeWithTag("queue.list").performTouchInput { swipeDown() }
+                compose.waitForIdle()
+            }
+        }
+        compose.waitUntil(5_000) { core.client.queue.value.windowStart == 0u }
+        assertEquals(ids.first(), core.client.queue.value.entries.first().track.id)
+        compose.onNodeWithTag("queue.list").performScrollToNode(hasText("History"))
+        compose.onNodeWithText("History").assertIsDisplayed()
+        // And past the end: rows after the window come in at the bottom.
+        repeat(80) {
+            if (core.client.queue.value.windowEnd < 400) {
+                compose.onNodeWithTag("queue.list").performTouchInput { swipeUp() }
+                compose.waitForIdle()
+            }
+        }
+        compose.waitUntil(5_000) { core.client.queue.value.windowEnd == 400 }
+    }
+
+    /** Dropping above the "Next from" heading puts a song in the group; below takes it out. */
+    @Test
+    fun dragMembershipFollowsTheNextFromHeading() {
+        val core = TestCore()
+        compose.setThemedContent(core) { QueuePanel() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.waitForIdle()
+        val q0 = core.client.queue.value
+        val entry = q0.restEntries[1]
+        val rowHeight = compose.onNodeWithTag("queue.row.${q0.groupEntries.single().item.key}").fetchSemanticsNode().size.height
+        // Up past the first rest row and the heading: into the group, at its end.
+        compose.onNodeWithTag("queue.handle.${entry.item.key}", useUnmergedTree = true).performTouchInput {
+            down(center)
+            repeat(28) { moveBy(Offset(0f, -rowHeight / 10f), delayMillis = 16) }
+            up()
+        }
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.any { it.item.key == entry.item.key } }
+        assertEquals(2u, core.client.queue.value.groupCount)
+        val move = core.fake.lastQueueMove!!
+        assertTrue(move.in_group)
+        // And back down below the heading: out of the group again.
+        compose.waitForIdle()
+        compose.onNodeWithTag("queue.handle.${entry.item.key}", useUnmergedTree = true).performTouchInput {
+            down(center)
+            repeat(28) { moveBy(Offset(0f, rowHeight / 10f), delayMillis = 16) }
+            up()
+        }
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.any { it.item.key == entry.item.key } }
+        assertEquals(1u, core.client.queue.value.groupCount)
+        assertEquals(false, core.fake.lastQueueMove!!.in_group)
+    }
+
+    @Test
+    fun historyAndNowPlayingTakeNoDrop() {
+        val core = TestCore()
+        compose.setThemedContent(core) { QueuePanel() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.waitForIdle()
+        val q0 = core.client.queue.value
+        val head = q0.groupEntries.single()
+        val rowHeight = compose.onNodeWithTag("queue.row.${head.item.key}").fetchSemanticsNode().size.height
+        // Far up, past Now playing and into history: it stays at the top of what follows the current song.
+        compose.onNodeWithTag("queue.handle.${head.item.key}", useUnmergedTree = true).performTouchInput {
+            down(center)
+            repeat(50) { moveBy(Offset(0f, -rowHeight / 10f), delayMillis = 16) }
+            up()
+        }
+        compose.waitForIdle()
+        val q = core.client.queue.value
+        assertEquals(q0.current!!.item.key, q.current!!.item.key)
+        assertEquals(q0.historyEntries.map { it.item.key }, q.historyEntries.map { it.item.key })
+        assertEquals(head.item.key, q.groupEntries.first().item.key)
     }
 
     @Test
@@ -186,11 +368,11 @@ class QueueScreenTest {
         compose.waitUntil(5_000) { core.client.started.value }
         compose.waitForIdle()
         val q0 = core.client.queue.value
-        fun tracks() = core.client.queue.value.let { q -> (q.playingNext + q.upcoming).map { it.track.id } }
+        fun tracks() = core.client.queue.value.let { q -> (q.groupEntries + q.restEntries).map { it.track.id } }
         val before = tracks()
-        val entry = q0.upcoming.first()
+        val entry = q0.restEntries.first()
         val from = before.indexOf(entry.track.id)
-        assertTrue(q0.upcoming.size >= 4)
+        assertTrue(q0.restEntries.size >= 4)
         val undoBefore = core.client.undo.value.history.size
         compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${entry.item.key}"))
         compose.waitForIdle()
@@ -206,8 +388,8 @@ class QueueScreenTest {
         assertEquals("only the dragged item moved", before - entry.track.id, tracks() - entry.track.id)
         assertEquals("one drag is one move (one undo entry)", undoBefore + 1, core.client.undo.value.history.size)
         // The moved row is on screen under its new key, and the rows still follow the queue.
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.any { it.track.id == entry.track.id } }
-        val key = core.client.queue.value.upcoming.first { it.track.id == entry.track.id }.item.key
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.any { it.track.id == entry.track.id } }
+        val key = core.client.queue.value.restEntries.first { it.track.id == entry.track.id }.item.key
         compose.onNodeWithTag("queue.row.$key").assertIsDisplayed()
     }
 
@@ -219,16 +401,16 @@ class QueueScreenTest {
         compose.waitUntil(5_000) { core.client.started.value }
         // A queue longer than the screen.
         val ids = core.fake.library.tracks.take(30).map { it.id }
-        core.client.dispatch(Commands.playLater(core.fake.library.serverId, ids))
-        compose.waitUntil(5_000) { core.client.queue.value.playingNext.size >= 30 }
+        core.client.dispatch(Commands.addToQueue(core.fake.library.serverId, ids))
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.size >= 30 }
         compose.waitForIdle()
-        val before = core.client.queue.value.let { q -> (q.playingNext + q.upcoming).map { it.item.key } }
+        val before = core.client.queue.value.let { q -> (q.groupEntries + q.restEntries).map { it.item.key } }
         compose.onNodeWithText("Now playing").assertIsDisplayed()
         // A vertical swipe over the rows (not on a handle) scrolls and never reorders or swipes a row.
         compose.onNodeWithTag("queue.list").performTouchInput { swipeUp(startY = bottom - 10f, endY = top + 10f) }
         compose.waitForIdle()
         compose.onNodeWithText("Now playing").assertIsNotDisplayed()
-        assertEquals(before, core.client.queue.value.let { q -> (q.playingNext + q.upcoming).map { it.item.key } })
+        assertEquals(before, core.client.queue.value.let { q -> (q.groupEntries + q.restEntries).map { it.item.key } })
     }
 
     private fun hasTestTagPrefix(prefix: String) = SemanticsMatcher("tag starts with $prefix") { it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith(prefix) == true }

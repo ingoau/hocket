@@ -148,6 +148,7 @@ async fn random_scenario(seed: u64, steps: usize) {
             4 => Command::PlayNext {
                 server_id: w.cores[i].server_id.clone(),
                 track_ids: vec![tracks.choose(&mut rng).cloned().unwrap()],
+                keys: vec![],
             },
             5 => Command::SeekTo {
                 position_ms: rng.random_range(0..50_000),

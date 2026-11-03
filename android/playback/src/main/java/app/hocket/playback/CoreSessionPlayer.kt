@@ -9,6 +9,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import androidx.media3.common.util.Util
 import app.hocket.core.Commands
+import app.hocket.core.historyEntries
+import app.hocket.core.upcomingEntries
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSessionAction
 import app.hocket.core.api.MediaSessionState
@@ -30,8 +32,8 @@ import android.os.Looper
  * device), so the OS notification, lockscreen, Bluetooth and headset controls must reflect the
  * session, not the local decoder. Position is extrapolated from the stamp the same way the UI does.
  *
- * The playlist is the core's queue ([applyQueue]): recent history, the current entry, playing next
- * and upcoming, keyed by queue key (media id `queue/<key>`), so controllers show it as the session
+ * The playlist is a window of the core's queue ([applyQueue]) around the current entry: recent
+ * history, the current entry and what follows it, keyed by queue key (media id `queue/<key>`), so controllers show it as the session
  * queue (Auto's queue view, legacy `MediaSession.setQueue`). Picking an entry is a
  * `JumpToQueueItem`, moving and removing upcoming entries are `MoveQueueItem` / `RemoveQueueItems`,
  * and items a controller sets or adds (library ids from [LibraryBrowser]) go to [MediaRequests].
@@ -64,7 +66,7 @@ class CoreSessionPlayer(
         const val HISTORY_SHOWN = 25
 
         /**
-         * Playing-next and upcoming entries shown after the current one. The playlist is rebuilt,
+         * Upcoming entries shown after the current one. The playlist is rebuilt,
          * diffed and sent over binder on every state change (each Next, each position update): a
          * long playlist in full made that slow on the main thread. Further entries come into view as
          * the queue moves.
@@ -84,7 +86,7 @@ class CoreSessionPlayer(
 
         /**
          * The timeline for [queue] around the playing track: the last [HISTORY_SHOWN] history
-         * entries, the current one, then the first [UPCOMING_SHOWN] of playing next and upcoming. Empty when the queue's current entry is
+         * entries, the current one, then the first [UPCOMING_SHOWN] upcoming ones. Empty when the queue's current entry is
          * not [currentTrackId] (or there is none).
          */
         fun timeline(queue: QueueView?, currentTrackId: String?): QueueTimeline {
@@ -93,11 +95,12 @@ class CoreSessionPlayer(
             // Media3 requires unique playlist UIDs and the UID is the queue key. A document from an
             // older core can repeat keys (#54); drop the repeats rather than crash, keeping current.
             val seen = hashSetOf(current.item.key)
-            val shownHistory = queue.history.takeLast(HISTORY_SHOWN)
+            val shownHistory = queue.historyEntries.takeLast(HISTORY_SHOWN)
             val history = shownHistory.filter { seen.add(it.item.key) }
             var dropped = shownHistory.size - history.size
-            val after = ArrayList<QueueEntry>(minOf(UPCOMING_SHOWN, queue.playingNext.size + queue.upcoming.size))
-            for (entry in queue.playingNext.asSequence() + queue.upcoming.asSequence()) {
+            val upcoming = queue.upcomingEntries
+            val after = ArrayList<QueueEntry>(minOf(UPCOMING_SHOWN, upcoming.size))
+            for (entry in upcoming) {
                 if (after.size >= UPCOMING_SHOWN) break
                 if (seen.add(entry.item.key)) after.add(entry) else dropped++
             }
@@ -109,8 +112,25 @@ class CoreSessionPlayer(
 
     /** The queue entries the playlist shows and where the current one is. */
     data class QueueTimeline(val entries: List<QueueEntry>, val currentIndex: Int) {
-        /** Index into the core's combined playing-next + upcoming list (`MoveQueueItem.toIndex`). */
-        fun upcomingIndex(index: Int): Int = index - currentIndex - 1
+        /**
+         * The `MoveQueueItem`s that put `entries[fromIndex until toIndex]` at [newIndex] (Media3's
+         * index of the first moved entry afterwards): each goes after the entry before it, in the
+         * "Next in queue" group when it lands inside it. Empty when the move touches history or
+         * the current entry.
+         */
+        fun moves(fromIndex: Int, toIndex: Int, newIndex: Int): List<Command> {
+            val from = fromIndex.coerceIn(0, entries.size)
+            val to = toIndex.coerceIn(from, entries.size)
+            val moved = entries.subList(from, to)
+            if (moved.isEmpty() || from <= currentIndex || newIndex <= currentIndex) return emptyList()
+            val rest = entries.subList(0, from) + entries.subList(to, entries.size)
+            val at = newIndex.coerceAtMost(rest.size)
+            val prev = rest[at - 1]
+            val next = rest.getOrNull(at)
+            val inGroup = if (at - 1 == currentIndex) next?.inGroup == true else prev.inGroup == true && next?.inGroup == true
+            var after = prev.item.key
+            return moved.map { e -> Commands.moveQueueItem(e.item.key, after, inGroup).also { after = e.item.key } }
+        }
 
         companion object { val EMPTY = QueueTimeline(emptyList(), 0) }
     }
@@ -176,7 +196,7 @@ class CoreSessionPlayer(
 
     /** The track behind queue entry [key] in the current queue view; null when it is not there. */
     fun trackIdForQueueKey(key: String): String? = queue?.let { q ->
-        (q.history.asSequence() + listOfNotNull(q.current) + q.playingNext + q.upcoming).firstOrNull { it.item.key == key }?.track?.id
+        (q.entries.asSequence() + listOfNotNull(q.current)).firstOrNull { it.item.key == key }?.track?.id
     }
 
     /** Playing on another device (see the class docs). */
@@ -346,11 +366,7 @@ class CoreSessionPlayer(
     override fun handleMoveMediaItems(fromIndex: Int, toIndex: Int, newIndex: Int): ListenableFuture<*> {
         // Only upcoming entries move, and only among upcoming entries: history and the current
         // entry are not the core's to reorder.
-        val t = timeline
-        val moved = t.entries.subList(fromIndex.coerceIn(0, t.entries.size), toIndex.coerceIn(0, t.entries.size))
-        if (moved.isNotEmpty() && fromIndex > t.currentIndex && newIndex > t.currentIndex) {
-            moved.forEachIndexed { i, entry -> dispatch(Commands.moveQueueItem(entry.item.key, t.upcomingIndex(newIndex) + i)) }
-        }
+        timeline.moves(fromIndex, toIndex, newIndex).forEach(dispatch)
         return Futures.immediateVoidFuture()
     }
 

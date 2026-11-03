@@ -102,7 +102,7 @@ class CoreClientTest {
         client.dispatch(Command.Next)
         runCurrent()
         assertTrue(client.nowPlaying.value!!.track.id != before)
-        assertTrue(client.undo.value.canUndo || client.queue.value.history.isNotEmpty())
+        assertTrue(client.undo.value.canUndo || client.queue.value.historyCount > 0u)
         client.dispatch(Command.Pause)
         runCurrent()
         assertFalse(client.isPlaying.value)

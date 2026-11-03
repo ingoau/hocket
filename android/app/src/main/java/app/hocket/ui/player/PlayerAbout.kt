@@ -70,6 +70,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -302,8 +303,16 @@ private fun AboutTab(albumInfo: ExternalInfo?, artistInfo: ExternalInfo?, simila
                                 row.forEach { r ->
                                     val playNext = { client.dispatch(Commands.playNext(r.track.serverId, listOf(r.track.id))) }
                                     val playNextLabel = stringResource(R.string.action_play_next)
+                                    // Tap plays next; Add to queue (when offered) and Play later are the card's other actions.
+                                    val addToQueueLabel = stringResource(R.string.action_label_add_to_queue)
+                                    val playLaterLabel = stringResource(R.string.queue_play_later)
+                                    val section = app.hocket.ui.components.queueSectionOn()
+                                    val more = buildList {
+                                        if (section) add(androidx.compose.ui.semantics.CustomAccessibilityAction(addToQueueLabel) { client.dispatch(Commands.addToQueue(r.track.serverId, listOf(r.track.id))); true })
+                                        add(androidx.compose.ui.semantics.CustomAccessibilityAction(playLaterLabel) { client.dispatch(Commands.playLater(r.track.serverId, listOf(r.track.id))); true })
+                                    }
                                     Surface(onClick = playNext, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.weight(1f)
-                                        .semantics { contentDescription = "${r.track.title}, ${r.track.artist.orEmpty()}"; onClick(label = playNextLabel) { playNext(); true } }) {
+                                        .semantics { contentDescription = "${r.track.title}, ${r.track.artist.orEmpty()}"; onClick(label = playNextLabel) { playNext(); true }; customActions = more }) {
                                         Row(Modifier.heightIn(min = 56.dp).padding(6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                             Artwork(r.track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(44.dp), RoundedCornerShape(12.dp))
                                             Column(Modifier.weight(1f)) {

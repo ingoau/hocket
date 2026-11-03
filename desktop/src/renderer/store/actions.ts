@@ -10,6 +10,7 @@ import { bridge } from "../core/bridge";
 import { isNarrow, showSideView, toggleSideView, useApp, type DialogState, type ViewName } from "./app";
 import { settingValue } from "./reducer";
 import { explicitIds } from "./selection";
+import { entryByKey } from "../lib/queue-view";
 
 export interface ActionContext {
   playlistId?: string;
@@ -225,6 +226,20 @@ export async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
       }
       return out;
     }
+    case "artists": {
+      // As the core resolves an artist: its albums oldest first, each in track order.
+      const out: string[] = [];
+      const serverId = useApp.getState().servers[0]?.id ?? "";
+      for (const id of target.data.ids) {
+        const r = await b.query({ type: "albums", data: { server_id: serverId, artist_id: id, genre: undefined, sort: "year", descending: false, page: { offset: 0, limit: 10_000 } } });
+        if (r.type !== "albums") continue;
+        for (const a of r.data.items) {
+          const tr = await b.query({ type: "albumTracks", data: { id: a.id } });
+          if (tr.type === "trackList") out.push(...tr.data.map((x) => x.id));
+        }
+      }
+      return out;
+    }
     case "playlists": {
       const out: string[] = [];
       for (const id of target.data.ids) {
@@ -235,8 +250,7 @@ export async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
     }
     case "queueItems": {
       const q = useApp.getState().queue;
-      const all = [...q.history, ...(q.current ? [q.current] : []), ...q.playingNext, ...q.upcoming];
-      return target.data.keys.map((k) => all.find((e) => e.item.key === k)?.track.id).filter((x): x is string => !!x);
+      return target.data.keys.map((k) => entryByKey(q, k)?.track.id).filter((x): x is string => !!x);
     }
     default:
       return [];

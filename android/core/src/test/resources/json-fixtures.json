@@ -24,7 +24,8 @@
       "track_ids": [
         "a",
         "b"
-      ]
+      ],
+      "keys": []
     }
   },
   "command.playTracks": {
@@ -406,7 +407,7 @@
     "type": "queue",
     "data": {
       "contextLabel": "Album",
-      "history": [
+      "entries": [
         {
           "item": {
             "key": "h1",
@@ -417,7 +418,10 @@
                 "index": 0
               }
             },
-            "unavailable": false
+            "unavailable": false,
+            "added": false,
+            "queued": false,
+            "ordinal": 0
           },
           "track": {
             "id": "t-h1",
@@ -438,43 +442,48 @@
                 "name": "Artist"
               }
             ]
-          }
-        }
-      ],
-      "current": {
-        "item": {
-          "key": "c",
-          "trackId": "t-c",
-          "source": {
-            "type": "context",
-            "data": {
-              "index": 1
-            }
           },
-          "unavailable": false
+          "inGroup": false,
+          "autoplay": false
         },
-        "track": {
-          "id": "t-c",
-          "serverId": "srv",
-          "title": "Title",
-          "artist": "Artist",
-          "album": "Album",
-          "albumId": "al1",
-          "artistId": null,
-          "durationMs": 213000,
-          "coverArt": "al1",
-          "rating": 3,
-          "loved": true,
-          "offline": "cached",
-          "artists": [
-            {
-              "id": "ar1",
-              "name": "Artist"
-            }
-          ]
-        }
-      },
-      "playingNext": [
+        {
+          "item": {
+            "key": "c",
+            "trackId": "t-c",
+            "source": {
+              "type": "context",
+              "data": {
+                "index": 1
+              }
+            },
+            "unavailable": false,
+            "added": false,
+            "queued": false,
+            "ordinal": 0
+          },
+          "track": {
+            "id": "t-c",
+            "serverId": "srv",
+            "title": "Title",
+            "artist": "Artist",
+            "album": "Album",
+            "albumId": "al1",
+            "artistId": null,
+            "durationMs": 213000,
+            "coverArt": "al1",
+            "rating": 3,
+            "loved": true,
+            "offline": "cached",
+            "artists": [
+              {
+                "id": "ar1",
+                "name": "Artist"
+              }
+            ]
+          },
+          "inGroup": false,
+          "autoplay": false
+        },
         {
           "item": {
             "key": "n1",
@@ -482,7 +491,10 @@
             "source": {
               "type": "inserted"
             },
-            "unavailable": false
+            "unavailable": false,
+            "added": true,
+            "queued": true,
+            "ordinal": 0
           },
           "track": {
             "id": "t-n1",
@@ -503,23 +515,24 @@
                 "name": "Artist"
               }
             ]
-          }
-        }
-      ],
-      "upcoming": [
+          },
+          "inGroup": true,
+          "autoplay": false
+        },
         {
           "item": {
             "key": "u1",
             "trackId": "t-u1",
             "source": {
-              "type": "autoplay",
+              "type": "context",
               "data": {
-                "provider": "sonicSimilarity",
-                "reason": "Similar to X",
-                "score": 0.91
+                "index": 2
               }
             },
-            "unavailable": false
+            "unavailable": false,
+            "added": false,
+            "queued": false,
+            "ordinal": 0
           },
           "track": {
             "id": "t-u1",
@@ -540,28 +553,74 @@
                 "name": "Artist"
               }
             ]
-          }
+          },
+          "inGroup": false,
+          "autoplay": false
+        },
+        {
+          "item": {
+            "key": "a1",
+            "trackId": "t-a1",
+            "source": {
+              "type": "autoplay",
+              "data": {
+                "provider": "sonicSimilarity",
+                "reason": "Similar to X",
+                "score": 0.91
+              }
+            },
+            "unavailable": false,
+            "added": false,
+            "queued": false,
+            "ordinal": 0
+          },
+          "track": {
+            "id": "t-a1",
+            "serverId": "srv",
+            "title": "Title",
+            "artist": "Artist",
+            "album": "Album",
+            "albumId": "al1",
+            "artistId": null,
+            "durationMs": 213000,
+            "coverArt": "al1",
+            "rating": 3,
+            "loved": true,
+            "offline": "cached",
+            "artists": [
+              {
+                "id": "ar1",
+                "name": "Artist"
+              }
+            ]
+          },
+          "inGroup": false,
+          "autoplay": true
         }
       ],
-      "shuffle": false,
-      "repeat": "all",
-      "autoplay": true,
-      "mode": "apple",
-      "totalUpcoming": 1,
-      "wrapNext": {
+      "windowStart": 0,
+      "total": 5,
+      "historyCount": 1,
+      "currentIndex": 1,
+      "groupCount": 1,
+      "totalUpcoming": 3,
+      "current": {
         "item": {
-          "key": "ctx-0",
-          "trackId": "t-ctx-0",
+          "key": "c",
+          "trackId": "t-c",
           "source": {
             "type": "context",
             "data": {
-              "index": 0
+              "index": 1
             }
           },
-          "unavailable": false
+          "unavailable": false,
+          "added": false,
+          "queued": false,
+          "ordinal": 0
         },
         "track": {
-          "id": "t-ctx-0",
+          "id": "t-c",
           "serverId": "srv",
           "title": "Title",
           "artist": "Artist",
@@ -579,8 +638,14 @@
               "name": "Artist"
             }
           ]
-        }
+        },
+        "inGroup": false,
+        "autoplay": false
       },
+      "shuffle": false,
+      "repeat": "all",
+      "autoplay": true,
+      "wrapNext": null,
       "previous": {
         "item": {
           "key": "h1",
@@ -591,7 +656,10 @@
               "index": 0
             }
           },
-          "unavailable": false
+          "unavailable": false,
+          "added": false,
+          "queued": false,
+          "ordinal": 0
         },
         "track": {
           "id": "t-h1",
@@ -612,7 +680,9 @@
               "name": "Artist"
             }
           ]
-        }
+        },
+        "inGroup": false,
+        "autoplay": false
       }
     }
   },
@@ -896,12 +966,10 @@
         "revision": 7,
         "updatedAt": 1700000000000.0,
         "context": null,
-        "mode": "apple",
-        "cursor": 0,
-        "current": null,
         "history": [],
-        "insertions": [],
-        "shuffle": null,
+        "current": null,
+        "upcoming": [],
+        "shuffle": false,
         "repeat": "off",
         "autoplay": false,
         "transport": {

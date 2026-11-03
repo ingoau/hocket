@@ -6,7 +6,8 @@ export const SK = {
   homeSections: "home.sections",
   /** What's pinned to the Library (the sidebar), [{kind, id, tap}] in order. Synced. */
   libraryPins: "library.pins",
-  queueMode: "queue.mode",
+  /** Show the "Next in queue" group and Add to queue. Synced; default true. */
+  queueSection: "queue.section",
   queueSavedCap: "queue.savedCap",
   /** Continue an album left unfinished. Synced. Off, Play always starts at the beginning. */
   resumeAlbums: "playback.resumeAlbums",

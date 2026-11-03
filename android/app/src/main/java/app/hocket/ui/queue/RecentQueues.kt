@@ -87,8 +87,8 @@ fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValue
     val pinned = saved.filter { it.pinned }.sortedByDescending { it.lastInteractedAt }
     val recent = saved.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt }
     val playingLabel = queue.contextLabel?.takeIf { it.isNotBlank() }
-    val playingCount = queue.history.size + (if (queue.current != null) 1 else 0) + queue.playingNext.size + queue.totalUpcoming.toInt()
-    val playingIndex = if (queue.current != null) queue.history.size + 1 else 0
+    val playingCount = queue.total.toInt()
+    val playingIndex = queue.currentIndex?.let { it.toInt() + 1 } ?: 0
     BoxWithConstraints(modifier) {
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = maxWidthListPadding(maxWidth, contentPadding.calculateTopPadding(), contentPadding.calculateBottomPadding(), horizontal = 16.dp)) {
             item(key = "playing.label") { GroupLabel(stringResource(R.string.queue_playing_now)) }

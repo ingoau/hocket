@@ -4,7 +4,7 @@
 // for sidebar / context menu / media session), keyboard shortcuts editor,
 // config backup, diagnostics, about.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActionDescriptor, AudioSettings, EqBand, QueueMode, ReplayGainMode, Setting } from "@core/api";
+import type { ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
 import { useQuery } from "../store/queries";
@@ -178,21 +178,9 @@ function General() {
           {[3, 4, 5].map((n) => <option key={n} value={n}>{t("settings.ratingBridgeStars", { n })}</option>)}
         </Select>
       </Row>
-      <QueueModeRow />
+      <Toggle anchor="queueSection" settingKey={SK.queueSection} title={t("settings.queueSection")} desc={t("settings.queueSectionDesc")} fallback />
       <Toggle anchor="resumeAlbums" settingKey={SK.resumeAlbums} title={t("settings.resumeAlbums")} desc={t("settings.resumeAlbumsDesc")} fallback />
     </>
-  );
-}
-
-function QueueModeRow() {
-  const mode = useApp((s) => s.queue.mode);
-  return (
-    <Row anchor="queueMode" title={t("settings.queueMode")} settingKey={SK.queueMode}>
-      <Select value={mode} aria-label={t("settings.queueMode")} onChange={(e) => bridge().dispatch({ type: "setQueueMode", data: { mode: e.target.value as QueueMode } })}>
-        <option value="apple">{t("queue.mode.apple")}</option>
-        <option value="youTube">{t("queue.mode.youtube")}</option>
-      </Select>
-    </Row>
   );
 }
 

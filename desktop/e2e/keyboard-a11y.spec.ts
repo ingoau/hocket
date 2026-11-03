@@ -257,16 +257,16 @@ test.describe("keyboard only", () => {
     await expect(list).toHaveAttribute("aria-activedescendant", currentId!);
     await expect(page.getByTestId("queue-row-current")).toHaveAttribute("aria-current", "true");
     await page.keyboard.press("ArrowDown");
-    const firstUp = page.getByTestId("queue-row-upcoming").first();
+    const firstUp = page.getByTestId("queue-row-rest").first();
     const moving = await firstUp.locator(".t1").textContent();
     await expect(list).toHaveAttribute("aria-activedescendant", (await firstUp.getAttribute("id"))!);
     // Alt+Down moves it one place later (the keyboard's drag and drop), and the cursor follows it.
     await page.keyboard.press("Alt+ArrowDown");
-    const second = page.getByTestId("queue-row-upcoming").nth(1);
+    const second = page.getByTestId("queue-row-rest").nth(1);
     await expect(second.locator(".t1")).toHaveText(moving!);
     await expect.poll(async () => (await list.getAttribute("aria-activedescendant")) === (await second.getAttribute("id"))).toBe(true);
     await page.keyboard.press("Alt+ArrowUp");
-    await expect(page.getByTestId("queue-row-upcoming").first().locator(".t1")).toHaveText(moving!);
+    await expect(page.getByTestId("queue-row-rest").first().locator(".t1")).toHaveText(moving!);
     // The queue's name opens the Queues page with focus on its back arrow; back returns focus to the name.
     await tabTo(page, byTestId("queue-selector"), "the queue's name", { back: true });
     await page.keyboard.press("Enter");

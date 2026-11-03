@@ -59,12 +59,12 @@ impl Actor {
         }
     }
 
-    /// Whether any of [ids] is the current item, history, an insertion, or in the playing context.
+    /// Whether any of [ids] is in the queue list or the playing context.
     fn queue_contains_any(&self, ids: &[String]) -> bool {
         self.doc().is_some_and(|d| {
             d.current
                 .iter()
-                .chain(d.insertions.iter())
+                .chain(d.upcoming.iter())
                 .chain(d.history.iter())
                 .any(|i| ids.contains(&i.track_id))
                 || d.context
@@ -1407,12 +1407,7 @@ impl Actor {
         self.lyrics_for = current.clone();
         let Some(id) = current else { return };
         self.fetch_lyrics(id, false);
-        if let Some(next) = queue
-            .playing_next
-            .iter()
-            .chain(queue.upcoming.iter())
-            .find(|e| !e.item.unavailable)
-        {
+        if let Some(next) = queue.upcoming().find(|e| !e.item.unavailable) {
             let next_id = next.track.id.clone();
             self.prefetch_lyrics(next_id);
         }

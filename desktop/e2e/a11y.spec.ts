@@ -17,7 +17,7 @@ async function populate(page: Page): Promise<void> {
   await playShowcase(page);
   const sid = await serverId(page);
   await page.evaluate((s) => window.hocket.dispatch({ type: "playNext", data: { server_id: s, track_ids: ["tr-2", "tr-3"] } }), sid);
-  await expect(page.getByTestId("queue-row-next").first()).toBeVisible();
+  await expect(page.getByTestId("queue-row-group").first()).toBeVisible();
   await showSideView(page, "lyrics");
   // The first syllable line is active from 1.5 s.
   await expect(page.locator('[data-testid="lyrics-sr-list"] li[aria-current="true"]')).toHaveCount(1, { timeout: 10_000 });

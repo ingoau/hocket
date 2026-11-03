@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
@@ -13,7 +16,7 @@ import org.junit.Test
 class CarouselCommitTest : PlayerRulesTestBase() {
     private fun keys(core: TestCore): List<String> {
         val q = core.client.queue.value
-        return listOfNotNull(q.current?.item?.trackId) + q.playingNext.map { it.item.trackId } + q.upcoming.map { it.item.trackId }
+        return listOfNotNull(q.current?.item?.trackId) + q.groupEntries.map { it.item.trackId } + q.restEntries.map { it.item.trackId }
     }
 
     /** A swipe towards next released [share] of the way (past half: a skip; the settle then runs on the test's clock). */
@@ -84,7 +87,7 @@ class CarouselCommitTest : PlayerRulesTestBase() {
         startExpanded(core)
         val first = core.client.nowPlaying.value?.item?.key
         core.client.dispatch(Command.Next)
-        compose.waitUntil(5_000) { core.client.queue.value.history.isNotEmpty() }
+        compose.waitUntil(5_000) { core.client.queue.value.historyEntries.isNotEmpty() }
         // Well past Previous's restart point.
         clock += 30_000.0
         core.client.requestSnapshot()
@@ -96,14 +99,14 @@ class CarouselCommitTest : PlayerRulesTestBase() {
         assertEquals("back a song, not restarted", first, core.client.nowPlaying.value?.item?.key)
     }
 
-    /** No history, but the album's earlier tracks (it was started from its third): back a track still. */
+    /** Started from the album's third track: its earlier tracks are the history before it, and back goes there. */
     @Test
-    fun aSwipeBackFromALaterTrackWithNoHistoryGoesBack() {
+    fun aSwipeBackFromALaterTrackGoesBackATrack() {
         var clock = 1_000_000.0
         val core = TestCore(now = { clock })
         startExpanded(core)
         val q = core.client.queue.value
-        assertTrue(q.history.isEmpty())
+        assertEquals((q.current?.item?.source as QueueSource.Context).data.index, q.historyCount)
         val index = (q.current?.item?.source as QueueSource.Context).data.index
         assertTrue(index > 0u)
         clock += 30_000.0
@@ -125,7 +128,7 @@ class CarouselCommitTest : PlayerRulesTestBase() {
             core.client.dispatch(Command.Previous)
             compose.waitForIdle()
         }
-        assertTrue(core.client.queue.value.history.isEmpty())
+        assertTrue(core.client.queue.value.historyEntries.isEmpty())
         clock += 30_000.0
         core.client.requestSnapshot()
         compose.waitForIdle()

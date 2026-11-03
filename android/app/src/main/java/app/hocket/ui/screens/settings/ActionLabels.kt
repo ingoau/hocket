@@ -17,6 +17,7 @@ object ActionLabels {
         ActionIds.PLAY -> R.string.action_label_play
         ActionIds.PLAY_SHUFFLED -> R.string.action_label_play_shuffled
         ActionIds.PLAY_NEXT -> R.string.action_label_play_next
+        ActionIds.ADD_TO_QUEUE -> R.string.action_label_add_to_queue
         ActionIds.PLAY_LATER -> R.string.action_label_play_later
         ActionIds.PREVIEW -> R.string.action_label_preview
         ActionIds.ADD_TO_PLAYLIST -> R.string.action_label_add_to_playlist

@@ -611,7 +611,7 @@ h3 { font-size: var(--fs-lg); }
 .qrow .dur { color: var(--fg-faint); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 .qrow .grip { color: var(--fg-faint); cursor: grab; opacity: 0; }
 button.qrow { width: 100%; }
-.qrow.next, .qrow.upcoming { cursor: grab; }
+.qrow.group, .qrow.rest { cursor: grab; }
 .qrow:hover .grip { opacity: 1; }
 .qrow.dragging { opacity: 0.4; cursor: grabbing; }
 /* Insertion line is a straight bar. An inset box-shadow would follow the row's radius. */

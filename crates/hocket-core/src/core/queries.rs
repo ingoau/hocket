@@ -170,11 +170,10 @@ impl Actor {
                 request_id,
             )),
             Query::Queue => QueryResult::Queue(self.queue_view()),
-            Query::SavedQueues => QueryResult::SavedQueues(
-                self.doc()
-                    .map(|d| d.saved_queues.clone())
-                    .unwrap_or_default(),
-            ),
+            Query::QueueRange { start, count } => {
+                QueryResult::Queue(self.queue_range_view(start, count))
+            }
+            Query::SavedQueues => QueryResult::SavedQueues(self.visible_saved_queues()),
             Query::Stash => QueryResult::StashItems(self.stash_items()),
             Query::Snoozes => QueryResult::SnoozeItems(self.snooze_items()),
             Query::AlbumResume { id } => {

@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -18,7 +21,6 @@ import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueItem
-import app.hocket.core.api.QueueMode
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueSourceContextInner
 import app.hocket.core.api.QueueView
@@ -48,7 +50,7 @@ class PreviousRestartTest : PlayerRulesTestBase() {
         compose.waitUntil(5_000) { core.client.started.value }
         // Something to go back to, and far enough into the track to restart it.
         core.client.dispatch(Command.Next)
-        compose.waitUntil(5_000) { core.client.queue.value.history.isNotEmpty() }
+        compose.waitUntil(5_000) { core.client.queue.value.historyEntries.isNotEmpty() }
         clock += 10_000.0
         core.client.requestSnapshot()
         compose.waitForIdle()

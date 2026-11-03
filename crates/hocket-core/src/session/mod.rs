@@ -3,8 +3,8 @@
 //! # Entry points for the actor
 //!
 //! - [`Session`] wraps the live [`api::SessionDocument`](crate::api::SessionDocument)
-//!   together with its policy, clock and entropy source:
-//!   - `Session::new(doc, config, clock, entropy)` / `Session::empty(scope, session_id, ..)`
+//!   together with its clock and entropy source:
+//!   - `Session::new(doc, clock, entropy)` / `Session::empty(scope, session_id, ..)`
 //!   - `session.apply(op, position_ms) -> Result<Vec<Effect>, ReduceError>` runs
 //!     the pure reducer and adopts the result;
 //!   - `session.derive() -> DerivedQueue` and `DerivedQueue::into_view(resolve)`
@@ -18,13 +18,12 @@
 //!   revisions and validates.
 //! - [`saved`] holds the saved-queue policy, snapshotting, dedupe / eviction
 //!   and `merge_saved_queues` (LWW sync).
-//! - [`shuffle`] is the deterministic permutation.
+//! - [`shuffle`] is the deterministic shuffle of the entries after the group.
 //! - [`reducer::previous_should_restart`] tells the actor whether a Previous
 //!   press should restart the track (position ≥ 3 s) instead of going back.
 //!
 //! Every queue mutation goes through the reducer. There is no other path.
 
-pub mod context_keys;
 pub mod document;
 pub mod reducer;
 pub mod saved;
@@ -41,9 +40,10 @@ use crate::util::Clock;
 
 pub use document::{load, new_document, save, validate, DocumentError, SESSION_SCHEMA_VERSION};
 pub use reducer::{
-    derive, derive_window, offline_skipped, previous_should_restart, reduce, upcoming_context,
-    AutoplayItem, DerivedQueue, Effect, QueueOp, ReduceCtx, ReduceError, DEFAULT_HISTORY_CAP,
-    OFFLINE_SKIPPED_FIELD, QUEUE_VIEW_UPCOMING,
+    derive, derive_range, derive_window, offline_skipped, previous_should_restart, reduce,
+    window_around, window_tracks, AutoplayItem, DerivedQueue, Effect, Flat, QueueOp,
+    QueuePlacement, ReduceCtx, ReduceError, HISTORY_CAP, MAX_QUEUE_LEN, OFFLINE_SKIPPED_FIELD,
+    QUEUE_VIEW_AFTER, QUEUE_VIEW_BEFORE,
 };
 pub use saved::{merge_saved_queues, SavedQueuePolicy};
 
@@ -95,40 +95,17 @@ impl Entropy for DeterministicEntropy {
     }
 }
 
-/// Tunables the settings subsystem feeds in.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SessionConfig {
-    pub history_cap: usize,
-    pub saved: SavedQueuePolicy,
-}
-
-impl Default for SessionConfig {
-    fn default() -> Self {
-        SessionConfig {
-            history_cap: DEFAULT_HISTORY_CAP,
-            saved: SavedQueuePolicy::default(),
-        }
-    }
-}
-
 /// The live session: one document plus what the reducer needs around it.
 pub struct Session {
     doc: SessionDocument,
-    config: SessionConfig,
     clock: Arc<dyn Clock>,
     entropy: Arc<dyn Entropy>,
 }
 
 impl Session {
-    pub fn new(
-        doc: SessionDocument,
-        config: SessionConfig,
-        clock: Arc<dyn Clock>,
-        entropy: Arc<dyn Entropy>,
-    ) -> Session {
+    pub fn new(doc: SessionDocument, clock: Arc<dyn Clock>, entropy: Arc<dyn Entropy>) -> Session {
         Session {
             doc,
-            config,
             clock,
             entropy,
         }
@@ -138,12 +115,11 @@ impl Session {
     pub fn empty(
         scope: &str,
         session_id: SessionId,
-        config: SessionConfig,
         clock: Arc<dyn Clock>,
         entropy: Arc<dyn Entropy>,
     ) -> Session {
         let doc = new_document(scope, session_id, clock.now_ms());
-        Session::new(doc, config, clock, entropy)
+        Session::new(doc, clock, entropy)
     }
 
     pub fn doc(&self) -> &SessionDocument {
@@ -153,14 +129,6 @@ impl Session {
     /// A clone of the document (undo snapshots, sync writes).
     pub fn snapshot(&self) -> SessionDocument {
         self.doc.clone()
-    }
-
-    pub fn config(&self) -> &SessionConfig {
-        &self.config
-    }
-
-    pub fn set_config(&mut self, config: SessionConfig) {
-        self.config = config;
     }
 
     /// Adopt a document from sync or undo. Validation is the caller's call
@@ -174,8 +142,6 @@ impl Session {
         let ctx = ReduceCtx {
             now: self.clock.now_ms(),
             position_ms,
-            history_cap: self.config.history_cap,
-            saved: self.config.saved.clone(),
             entropy: self.entropy.as_ref(),
         };
         let (doc, effects) = reduce(&self.doc, op, &ctx)?;
@@ -212,7 +178,6 @@ mod tests {
         let mut s = Session::empty(
             "srv:user",
             "sess".into(),
-            SessionConfig::default(),
             Arc::new(FixedClock(1000.0)),
             Arc::new(DeterministicEntropy::new(1)),
         );
@@ -241,7 +206,7 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(fx[0], Effect::CurrentChanged { .. }));
-        assert_eq!(s.derive().upcoming.len(), 1);
+        assert_eq!(s.derive().total_upcoming, 1);
         assert_eq!(s.doc().revision, 1);
         let err = s
             .apply(QueueOp::JumpToQueueItem { key: "nope".into() }, 0)

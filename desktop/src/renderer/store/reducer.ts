@@ -65,7 +65,7 @@ export interface CoreState {
   reportUpload: ReportUploadStatus | undefined;
 }
 
-export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, history: [], current: undefined, playingNext: [], upcoming: [], shuffle: false, repeat: "off", autoplay: false, mode: "apple", totalUpcoming: 0 };
+export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: false, repeat: "off", autoplay: false };
 
 export const EMPTY_TRANSPORT: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: 0, rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 1, muted: false, volumeDevice: undefined };
 
@@ -300,12 +300,10 @@ function sameEntryRefs(a: QueueEntry[], b: QueueEntry[]): boolean {
 }
 
 function patchQueue(q: QueueView, items: LibraryItemState[]): QueueView {
-  const history = q.history.map((e) => patchEntry(e, items));
+  const entries = q.entries.map((e) => patchEntry(e, items));
   const current = q.current && patchEntry(q.current, items);
-  const playingNext = q.playingNext.map((e) => patchEntry(e, items));
-  const upcoming = q.upcoming.map((e) => patchEntry(e, items));
-  if (sameEntryRefs(history, q.history) && current === q.current && sameEntryRefs(playingNext, q.playingNext) && sameEntryRefs(upcoming, q.upcoming)) return q;
-  return { ...q, history, current, playingNext, upcoming };
+  if (sameEntryRefs(entries, q.entries) && current === q.current) return q;
+  return { ...q, entries, current };
 }
 
 /** ~1 Hz position reports: keep the previous object so zustand subscribers do not re-render. */

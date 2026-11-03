@@ -51,6 +51,7 @@ import { Stars } from "../components/Stars";
 import { Slider } from "../components/controls";
 import { openMenuFromButton } from "../components/ContextMenu";
 import { trapTab, useReturnFocus } from "../lib/focus";
+import { upcomingEntries } from "../lib/queue-view";
 import { usePresence, type Presence } from "../lib/presence";
 import { useMediaQuery, usePrefersReducedMotion } from "../lib/media";
 import { drawContinuation, isFlat, prepareScene, sceneKey, useScene, withTone, type Orientation, type Scene } from "../lib/immersive";
@@ -179,7 +180,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   // The artwork, its layout and its continuation switch together, once the new cover's scene is
   // ready (the next track's is prepared ahead), and the new scene crossfades in over the last.
   const scene = useScene(track?.coverArt, preference, dark);
-  const next = (queue.playingNext[0] ?? queue.upcoming[0])?.track.coverArt;
+  const next = upcomingEntries(queue)[0]?.track.coverArt;
   useEffect(() => {
     if (next) void prepareScene(next, preference, dark);
   }, [next, preference, dark]);

@@ -895,9 +895,9 @@ async fn play_after_handing_off_during_a_call_starts_at_once() {
     assert!(a.backend.is_playing(), "play started at once");
 }
 
-/// Applies ops as a build from before stable context keys (#97) did: an
-/// album song made current is keyed `<op>-<n>`, where this build keys it
-/// `<op>-<n>.<index>`. Everything else is this build's reducer.
+/// Applies ops as a build that keys entries differently would: a song made
+/// current gets another key than this build gives it. Everything else is
+/// this build's reducer.
 struct OlderReducer;
 
 impl hocket_core::connect::SessionReducer for OlderReducer {
@@ -912,9 +912,7 @@ impl hocket_core::connect::SessionReducer for OlderReducer {
         let before = doc.current.as_ref().map(|c| c.key.clone());
         if let Some(c) = next.current.as_mut() {
             if Some(&c.key) != before.as_ref() {
-                if let Some((base, _)) = c.key.rsplit_once('.') {
-                    c.key = base.to_string();
-                }
+                c.key = format!("{}-old", c.key);
             }
         }
         Ok(next)

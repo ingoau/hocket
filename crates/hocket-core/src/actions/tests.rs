@@ -30,6 +30,7 @@ fn state() -> StateView {
         has_session: true,
         has_current: true,
         current_track_id: Some("cur".into()),
+        queue_section: true,
         ..Default::default()
     }
 }
@@ -55,7 +56,10 @@ fn registry_is_well_formed() {
     for required in [
         "play",
         "playNext",
+        "addToQueue",
         "playLater",
+        "clearQueueGroup",
+        "stashQueueGroup",
         "addToPlaylist",
         "removeFromPlaylist",
         "removeFromQueue",
@@ -286,9 +290,22 @@ fn surfaces_filter_and_order() {
     let menu = r.actions_for(Surface::ContextMenu, &tracks(&["a", "b"]), &s);
     let ids: Vec<&str> = menu.iter().map(|d| d.id.as_str()).collect();
     assert_eq!(
-        &ids[..4],
-        &["play", "playShuffled", "playNext", "playLater"]
+        &ids[..5],
+        &[
+            "play",
+            "playShuffled",
+            "playNext",
+            "addToQueue",
+            "playLater"
+        ]
     );
+    // With the Queue section off, "Add to queue" leaves the menu.
+    let off = StateView {
+        queue_section: false,
+        ..s.clone()
+    };
+    let menu = r.actions_for(Surface::ContextMenu, &tracks(&["a", "b"]), &off);
+    assert!(!menu.iter().any(|d| d.id == "addToQueue"));
     assert!(ids.contains(&"rate3") && ids.contains(&"download") && ids.contains(&"addToPlaylist"));
     assert!(!ids.contains(&"removeFromQueue"), "not for tracks");
     assert!(
@@ -502,50 +519,76 @@ fn handlers_map_to_commands() {
         .unwrap(),
         vec![Command::PlayNext {
             server_id: "srv".into(),
-            track_ids: vec!["track-1".into(), "track-2".into()]
+            track_ids: vec![],
+            keys: vec!["key-1".into(), "key-2".into()]
         }]
     );
-    // Items still to play move up instead of being queued twice (#37): removed in one op (their
-    // keys may be index-based) and queued again behind the played ones.
+    // Queue rows travel by key: the reducer moves the ones still to play and
+    // copies the ones already played.
     assert_eq!(
         r.commands(
-            "playNext",
+            "addToQueue",
             &ActionTarget::QueueItems {
-                keys: vec!["key-up1".into(), "key-1".into(), "key-up2".into()]
+                keys: vec!["key-up1".into(), "key-1".into()]
             },
             &s,
             &res
         )
         .unwrap(),
-        vec![
-            Command::RemoveQueueItems {
-                keys: vec!["key-up1".into(), "key-up2".into()]
-            },
-            Command::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["track-1".into(), "track-up1".into(), "track-up2".into()]
-            },
-        ]
+        vec![Command::AddToQueue {
+            server_id: "srv".into(),
+            track_ids: vec![],
+            keys: vec!["key-up1".into(), "key-1".into()]
+        }]
     );
     assert_eq!(
         r.commands(
-            "playNext",
-            &ActionTarget::QueueItems {
-                keys: vec!["key-up1".into()]
+            "addToQueue",
+            &ActionTarget::Tracks {
+                ids: vec!["t9".into()]
             },
             &s,
             &res
         )
         .unwrap(),
-        vec![
-            Command::RemoveQueueItems {
-                keys: vec!["key-up1".into()]
+        vec![Command::AddToQueue {
+            server_id: "srv".into(),
+            track_ids: vec!["t9".into()],
+            keys: vec![]
+        }]
+    );
+    // "Add to queue" is offered only with the Queue section setting on.
+    let off = StateView {
+        queue_section: false,
+        ..s.clone()
+    };
+    assert!(r
+        .commands(
+            "addToQueue",
+            &ActionTarget::Tracks {
+                ids: vec!["t9".into()]
             },
-            Command::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["track-up1".into()]
-            },
-        ]
+            &off,
+            &res
+        )
+        .is_err());
+    // The group's actions need a group.
+    assert!(r
+        .commands("clearQueueGroup", &ActionTarget::None, &s, &res)
+        .is_err());
+    let grouped = StateView {
+        queue_group_count: 2,
+        ..s.clone()
+    };
+    assert_eq!(
+        r.commands("clearQueueGroup", &ActionTarget::None, &grouped, &res)
+            .unwrap(),
+        vec![Command::ClearQueueGroup]
+    );
+    assert_eq!(
+        r.commands("stashQueueGroup", &ActionTarget::None, &grouped, &res)
+            .unwrap(),
+        vec![Command::StashQueueGroup]
     );
     assert_eq!(
         r.commands(
@@ -559,7 +602,8 @@ fn handlers_map_to_commands() {
         .unwrap(),
         vec![Command::PlayLater {
             server_id: "srv".into(),
-            track_ids: vec!["pl-a".into()]
+            track_ids: vec!["pl-a".into()],
+            keys: vec![]
         }]
     );
     assert_eq!(

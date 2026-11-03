@@ -334,17 +334,10 @@
     <!-- Queue -->
     <string name="queue_history">Played</string>
     <string name="queue_now">Now playing</string>
-    <string name="queue_playing_next">Playing next</string>
     <string name="queue_continuing">Continuing from %1$s</string>
     <string name="queue_up_next">Up next</string>
-    <string name="queue_autoplay_section">Autoplay</string>
     <string name="queue_removed">Removed from queue</string>
     <string name="queue_clear">Clear queue</string>
-    <string name="queue_clear_insertions">Clear playing next</string>
-    <string name="queue_mode">Queue mode</string>
-    <string name="queue_mode_apple">Playing next first</string>
-    <string name="queue_mode_youtube">Insert into context</string>
-    <string name="queue_more_upcoming">%1$d more</string>
     <string name="queue_save_as_playlist">Save as playlist</string>
     <string name="queues_title">Queues</string>
     <string name="stats_peak_hour">Most plays at %1$s</string>
@@ -396,7 +389,7 @@
     <string name="saved_unpin">Unpin</string>
     <string name="saved_tracks">%1$d tracks</string>
     <string name="saved_played">Played %1$s ago</string>
-    <string name="saved_cap">Keep up to %1$d recent queues</string>
+    <string name="saved_cap">Show up to %1$d recent queues</string>
 
     <!-- Undo history -->
     <string name="history_title">History</string>
@@ -699,7 +692,7 @@
     <string name="settings_lan_discovery">Find devices on this network</string>
     <string name="settings_device_name">This device: %1$s</string>
     <string name="settings_section_queue">Queue</string>
-    <string name="settings_saved_cap">Recent queues to keep</string>
+    <string name="settings_saved_cap">Recent queues to show</string>
     <string name="settings_saved_cap_zero">Only pinned</string>
     <string name="settings_autoplay">Autoplay when the queue ends</string>
     <string name="settings_resume_albums">Resume albums</string>
@@ -940,6 +933,7 @@
     <string name="action_label_play_shuffled">Shuffle play</string>
     <string name="action_label_play_next">Play next</string>
     <string name="action_label_play_later">Play later</string>
+    <string name="action_label_add_to_queue">Add to queue</string>
     <string name="action_label_preview">Preview</string>
     <string name="action_label_add_to_playlist">Add to playlist</string>
     <string name="action_label_love">Love</string>
@@ -1337,6 +1331,7 @@
     <string name="stash_shuffle">Shuffle</string>
     <string name="stash_play_next">Play next</string>
     <string name="stash_add_to_queue">Add to queue</string>
+    <string name="stash_play_later">Play later</string>
     <string name="stash_add_to_playlist">Add to playlist</string>
     <string name="stash_new_playlist">New playlist</string>
     <string name="stash_download">Download</string>
@@ -1350,6 +1345,10 @@
     <plurals name="stash_queued">
         <item quantity="one">Added %d song to the queue</item>
         <item quantity="other">Added %d songs to the queue</item>
+    </plurals>
+    <plurals name="stash_queued_later">
+        <item quantity="one">Playing %d song later</item>
+        <item quantity="other">Playing %d songs later</item>
     </plurals>
     <plurals name="stash_queued_next">
         <item quantity="one">Playing %d song next</item>

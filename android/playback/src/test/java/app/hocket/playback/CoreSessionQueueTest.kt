@@ -1,5 +1,6 @@
 package app.hocket.playback
 
+import app.hocket.core.queueViewOf
 import android.app.Application
 import android.os.Looper
 import androidx.media3.common.C
@@ -15,12 +16,12 @@ import app.hocket.core.api.OfflineState
 import app.hocket.core.api.PositionStamp
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueItem
-import app.hocket.core.api.QueueMode
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueView
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.api.TrackSummary
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -53,8 +54,10 @@ class CoreSessionQueueTest {
         listOf(MediaSessionAction.Play, MediaSessionAction.Pause, MediaSessionAction.Next, MediaSessionAction.Previous, MediaSessionAction.Seek), true,
     )
 
-    /** History k0,k1; current k2; playing next k3; upcoming k4,k5. */
-    private val queue = QueueView("Album", listOf(entry(0), entry(1)), entry(2), listOf(entry(3)), listOf(entry(4), entry(5)), false, RepeatMode.Off, false, QueueMode.Apple, 2u)
+    /** History k0,k1; current k2; the "Next in queue" group k3; then k4,k5. */
+    private fun view(history: List<QueueEntry> = listOf(entry(0), entry(1)), current: QueueEntry? = entry(2), group: List<QueueEntry> = listOf(entry(3)), rest: List<QueueEntry> = listOf(entry(4), entry(5))) =
+        queueViewOf(history, current, group, rest, contextLabel = "Album")
+    private val queue = view()
 
     private fun settle() = shadowOf(Looper.getMainLooper()).idle()
 
@@ -73,7 +76,7 @@ class CoreSessionQueueTest {
         assertTrue("a pause reuses the other entries", next === player.getMediaItemAt(3))
         // A renamed upcoming track (same keys, so applyQueue alone does not rebuild) shows on the next state.
         val renamed = entry(3).copy(track = entry(3).track.copy(title = "Renamed"))
-        player.applyQueue(queue.copy(playingNext = listOf(renamed)))
+        player.applyQueue(view(group = listOf(renamed)))
         player.apply(state("t2"))
         settle()
         assertEquals("Renamed", player.getMediaItemAt(3).mediaMetadata.title.toString())
@@ -136,10 +139,10 @@ class CoreSessionQueueTest {
         player.applyQueue(queue)
         settle()
         val loved = queue.current!!.track.copy(loved = true)
-        player.applyQueue(queue.copy(current = queue.current!!.copy(track = loved)))
+        player.applyQueue(view(current = queue.current!!.copy(track = loved)))
         settle()
         assertEquals("metadata-only queue views must not rebuild the playlist", start, timelineChanges)
-        player.applyQueue(queue.copy(upcoming = listOf(entry(9))))
+        player.applyQueue(view(rest = listOf(entry(9))))
         settle()
         assertTrue("a membership change still rebuilds", timelineChanges > start)
     }
@@ -158,7 +161,7 @@ class CoreSessionQueueTest {
     fun duplicateQueueKeysAreDroppedInsteadOfCrashing() {
         player.apply(state("t2"))
         // k2 (current) repeated in history and upcoming, k3 repeated in upcoming (#54).
-        player.applyQueue(queue.copy(history = listOf(entry(0), entry(2)), upcoming = listOf(entry(3), entry(4), entry(2))))
+        player.applyQueue(view(history = listOf(entry(0), entry(2)), rest = listOf(entry(3), entry(4), entry(2))))
         settle()
         assertEquals(4, player.mediaItemCount)
         assertEquals(1, player.currentMediaItemIndex)
@@ -176,14 +179,14 @@ class CoreSessionQueueTest {
 
     @Test
     fun historyIsCapped() {
-        val long = queue.copy(history = (100 until 160).map(::entry))
+        val long = view(history = (100 until 160).map(::entry))
         assertEquals(CoreSessionPlayer.HISTORY_SHOWN, CoreSessionPlayer.timeline(long, "t2").currentIndex)
         assertEquals("k159", CoreSessionPlayer.timeline(long, "t2").entries[CoreSessionPlayer.HISTORY_SHOWN - 1].item.key)
     }
 
     @Test
     fun upcomingIsCapped() {
-        val long = queue.copy(upcoming = (100 until 400).map(::entry))
+        val long = view(rest = (100 until 400).map(::entry))
         val t = CoreSessionPlayer.timeline(long, "t2")
         assertEquals(t.currentIndex + 1 + CoreSessionPlayer.UPCOMING_SHOWN, t.entries.size)
         assertEquals("k3", t.entries[t.currentIndex + 1].item.key)
@@ -233,12 +236,22 @@ class CoreSessionQueueTest {
     }
 
     @Test
-    fun movingAnUpcomingEntryUsesTheCombinedUpcomingIndex() {
+    fun movingAnUpcomingEntryNamesTheEntryItFollows() {
         setUp()
+        // To the top: after the current entry, and into the group (it lands before its head).
         player.moveMediaItem(5, 3)
         val move = sent.single() as Command.MoveQueueItem
         assertEquals("k5", move.data.key)
-        assertEquals(0u, move.data.to_index)
+        assertEquals("k2", move.data.after)
+        assertTrue(move.data.in_group)
+        sent.clear()
+        setUp()
+        // Down past the group: after k4, outside it.
+        player.moveMediaItem(3, 4)
+        val down = sent.single() as Command.MoveQueueItem
+        assertEquals("k3", down.data.key)
+        assertEquals("k4", down.data.after)
+        assertFalse(down.data.in_group)
         sent.clear()
         setUp()
         player.moveMediaItem(3, 1)

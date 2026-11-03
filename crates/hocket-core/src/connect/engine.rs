@@ -3276,6 +3276,7 @@ impl Engine {
     }
 
     fn on_local_op(&mut self, op: SessionOp) {
+        let op = op.within_caps(&self.doc);
         let base = self.doc.revision;
         let op_id = self.next_op_id();
         let at = self.now_session_ms();
@@ -3539,13 +3540,8 @@ impl Engine {
                 p.op
             }
             SessionOp::RemoveQueueItems { keys } => {
-                let q = crate::session::derive(&self.doc);
-                let to_come: BTreeSet<&str> = q
-                    .playing_next
-                    .iter()
-                    .chain(q.upcoming.iter())
-                    .map(|i| i.key.as_str())
-                    .collect();
+                let to_come: BTreeSet<&str> =
+                    self.doc.upcoming.iter().map(|i| i.key.as_str()).collect();
                 let keys: Vec<QueueKey> = keys
                     .into_iter()
                     .filter(|k| to_come.contains(k.as_str()))
@@ -5240,8 +5236,30 @@ mod tests {
             track_id: "t1".into(),
             source: crate::api::QueueSource::Context { index: 0 },
             unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: 0,
         });
-        room_doc.cursor = 1;
+        room_doc.upcoming = vec![
+            crate::api::QueueItem {
+                key: "k2".into(),
+                track_id: "t2".into(),
+                source: crate::api::QueueSource::Context { index: 1 },
+                unavailable: false,
+                added: false,
+                queued: false,
+                ordinal: 1,
+            },
+            crate::api::QueueItem {
+                key: "k3".into(),
+                track_id: "t3".into(),
+                source: crate::api::QueueSource::Context { index: 2 },
+                unavailable: false,
+                added: false,
+                queued: false,
+                ordinal: 2,
+            },
+        ];
         // attached and synced at revision 2
         attach(&mut e, Some(replica_with(room_doc.clone())), vec![]);
         assert_eq!(e.sync_base().unwrap().revision, 2);
@@ -5393,10 +5411,10 @@ mod tests {
     }
 
     fn upcoming_tracks(e: &Engine) -> Vec<String> {
-        crate::session::derive(e.document())
+        e.document()
             .upcoming
-            .into_iter()
-            .map(|i| i.track_id)
+            .iter()
+            .map(|i| i.track_id.clone())
             .collect()
     }
 
@@ -5454,10 +5472,28 @@ mod tests {
     }
 
     fn move_op(e: &Engine, upcoming: usize, to_index: u32) -> SessionOp {
-        let key = crate::session::derive(e.document()).upcoming[upcoming]
-            .key
-            .clone();
-        SessionOp::MoveQueueItem { key, to_index }
+        let key = e.document().upcoming[upcoming].key.clone();
+        move_to(e, key, to_index)
+    }
+
+    /// Move `key` to index `to_index` of the upcoming entries (out of any group).
+    fn move_to(e: &Engine, key: String, to_index: u32) -> SessionOp {
+        let doc = e.document();
+        let rest: Vec<&String> = doc
+            .upcoming
+            .iter()
+            .map(|i| &i.key)
+            .filter(|k| **k != key)
+            .collect();
+        let after = match to_index {
+            0 => doc.current.as_ref().unwrap().key.clone(),
+            i => rest[(i as usize - 1).min(rest.len() - 1)].clone(),
+        };
+        SessionOp::MoveQueueItem {
+            key,
+            after,
+            in_group: false,
+        }
     }
 
     #[test]
@@ -5562,15 +5598,12 @@ mod tests {
     fn a_drag_superseded_by_a_later_one_is_not_replayed() {
         let (mut e, _) = engine("a");
         joined_with_five(&mut e);
-        let key = crate::session::derive(e.document()).upcoming[3].key.clone();
+        let key = e.document().upcoming[3].key.clone();
         let a = sent_moves(&e.handle(Input::LocalOp {
-            op: SessionOp::MoveQueueItem {
-                key: key.clone(),
-                to_index: 0,
-            },
+            op: move_to(&e, key.clone(), 0),
         }));
         let b = sent_moves(&e.handle(Input::LocalOp {
-            op: SessionOp::MoveQueueItem { key, to_index: 2 },
+            op: move_to(&e, key, 2),
         }));
         assert_eq!(upcoming_tracks(&e), ["t2", "t3", "t5", "t4"]);
         commit_from_b(
@@ -5614,7 +5647,7 @@ mod tests {
     fn a_replayed_removal_never_skips_what_became_current() {
         let (mut e, _) = engine("a");
         joined_with_five(&mut e);
-        let next = crate::session::derive(e.document()).upcoming[0].key.clone();
+        let next = e.document().upcoming[0].key.clone();
         let first = wire_outs(&e.handle(Input::LocalOp {
             op: SessionOp::RemoveQueueItems { keys: vec![next] },
         }));
@@ -6415,6 +6448,9 @@ mod tests {
             track_id: "t".into(),
             source: crate::api::QueueSource::Inserted,
             unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: 0,
         });
         attach(&mut b, Some(replica_with(room_doc)), vec![dev("a")]);
         b.handle(Input::WireIn {
@@ -6503,6 +6539,9 @@ mod tests {
             track_id: "t".into(),
             source: crate::api::QueueSource::Inserted,
             unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: 0,
         });
         let mut rep = replica_with(room_doc);
         rep.last_stamp = Some(crate::connect::wire::LastStamp {
@@ -6704,6 +6743,9 @@ mod tests {
             track_id: "t".into(),
             source: crate::api::QueueSource::Inserted,
             unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: 0,
         });
         let mut rep = replica_with(room_doc);
         rep.last_stamp = Some(crate::connect::wire::LastStamp {
@@ -8237,6 +8279,9 @@ mod tests {
             track_id: "t".into(),
             source: crate::api::QueueSource::Inserted,
             unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: 0,
         });
         let mut rep = replica_with(room_doc);
         rep.last_stamp = Some(crate::connect::wire::LastStamp {

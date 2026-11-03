@@ -226,7 +226,7 @@ impl Actor {
             if let Some(s) = self.settings.setting(&key) {
                 self.emit(Event::SettingChanged { setting: s });
             }
-            self.apply_setting_side_effects(&key, false);
+            self.apply_setting_side_effects(&key);
         }
     }
 

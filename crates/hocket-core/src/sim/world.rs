@@ -793,6 +793,8 @@ impl World {
                 op: SessionOp::PlayNext {
                     server_id: "srv".into(),
                     track_ids: tracks,
+                    keys: vec![],
+                    queued: true,
                 },
             }),
             Action::Shuffle { enabled, .. } => self.devices[i].handle(Input::LocalOp {

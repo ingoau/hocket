@@ -33,6 +33,11 @@ describe("context menu layout", () => {
     expect(rows.find((r) => r.kind === "strip")).toMatchObject({ cells: [{ label: "Play" }, { label: "Shuffle" }, { label: "Play next" }, { label: "Play later" }] });
   });
 
+  it("puts Add to queue between Play next and Play later when the core offers it", () => {
+    const withQueue = songActions.flatMap((a) => (a.id === "playNext" ? [a, d("addToQueue", "queue", { label: "Add to queue" })] : [a]));
+    expect(buildMenu(withQueue, [], song).find((r) => r.kind === "strip")).toMatchObject({ cells: [{ id: "play" }, { id: "playShuffled" }, { id: "playNext" }, { id: "addToQueue", label: "Add to queue", icon: "queue" }, { id: "playLater" }] });
+  });
+
   it("drops Remove from playlist outside a playlist and New playlist beside the submenu", () => {
     const ids = shape(buildMenu(songActions, [], song));
     expect(ids).not.toContain("removeFromPlaylist");

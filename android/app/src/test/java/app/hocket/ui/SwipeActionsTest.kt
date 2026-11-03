@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -66,9 +69,10 @@ class SwipeActionsTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         compose.onNodeWithTag("row.a").performTouchInput { swipeRight() }
-        compose.waitUntil(5_000) { core.client.queue.value.playingNext.firstOrNull()?.track?.id == a.id }
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.firstOrNull()?.track?.id == a.id }
         compose.onNodeWithTag("row.b").performTouchInput { swipeLeft() }
-        compose.waitUntil(5_000) { core.client.queue.value.playingNext.lastOrNull()?.track?.id == b.id }
+        // Play later: the end of the whole list.
+        compose.waitUntil(5_000) { core.client.queue.value.entries.lastOrNull()?.track?.id == b.id }
     }
 
     @Test
@@ -104,21 +108,21 @@ class SwipeActionsTest {
         }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
-        val next0 = core.client.queue.value.playingNext.size
+        val next0 = core.client.queue.value.groupEntries.size
         // Short of the threshold: springs back, nothing runs.
         compose.onNodeWithTag("row").performTouchInput { swipeRight(startX = left + 10f, endX = left + width * 0.15f) }
         compose.waitForIdle()
-        assertEquals(next0, core.client.queue.value.playingNext.size)
+        assertEquals(next0, core.client.queue.value.groupEntries.size)
         // "None" on a side: that side does not move at all.
         core.set(SettingKeys.SWIPE_LIST_START_TO_END, SwipeOptions.NONE)
         compose.onNodeWithTag("row").performTouchInput { swipeRight() }
         compose.waitForIdle()
-        assertEquals(next0, core.client.queue.value.playingNext.size)
+        assertEquals(next0, core.client.queue.value.groupEntries.size)
         // Love through the registry.
         core.set(SettingKeys.SWIPE_LIST_END_TO_START, ActionIds.LOVE)
         compose.onNodeWithTag("row").performTouchInput { swipeLeft() }
         compose.waitUntil(5_000) { core.fake.library.track(track.id)!!.loved }
-        assertEquals(next0, core.client.queue.value.playingNext.size)
+        assertEquals(next0, core.client.queue.value.groupEntries.size)
     }
 
     @Test
@@ -128,20 +132,20 @@ class SwipeActionsTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         compose.waitForIdle()
-        val gone = core.client.queue.value.upcoming.first()
+        val gone = core.client.queue.value.restEntries.first()
         compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${gone.item.key}"))
         compose.onNodeWithTag("queue.row.${gone.item.key}").performTouchInput { swipeLeft() }
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.none { it.item.key == gone.item.key } }
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.none { it.item.key == gone.item.key } }
         // The queue's own setting: swiping right now loves, and the list's setting does not apply here.
         core.set(SettingKeys.SWIPE_QUEUE_START_TO_END, ActionIds.LOVE)
         core.set(SettingKeys.SWIPE_LIST_START_TO_END, ActionIds.PLAY_NEXT)
         compose.waitForIdle()
-        val loved = core.client.queue.value.upcoming.first { !it.track.loved }
-        val count = core.client.queue.value.let { it.playingNext.size + it.upcoming.size }
+        val loved = core.client.queue.value.restEntries.first { !it.track.loved }
+        val count = core.client.queue.value.let { it.groupEntries.size + it.restEntries.size }
         compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${loved.item.key}"))
         compose.onNodeWithTag("queue.row.${loved.item.key}").performTouchInput { swipeRight() }
         compose.waitUntil(5_000) { core.fake.library.track(loved.track.id)!!.loved }
-        assertEquals(count, core.client.queue.value.let { it.playingNext.size + it.upcoming.size })
+        assertEquals(count, core.client.queue.value.let { it.groupEntries.size + it.restEntries.size })
     }
 
     @Test

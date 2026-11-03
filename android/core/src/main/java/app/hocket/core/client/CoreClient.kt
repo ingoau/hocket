@@ -4,6 +4,7 @@ import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.Queries
+import app.hocket.core.QueueWindows
 import app.hocket.core.api.*
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -75,7 +76,18 @@ class CoreClient(
     private val _session = MutableStateFlow<SessionDocument?>(null)
     val session: StateFlow<SessionDocument?> = _session.asStateFlow()
     private val _queue = MutableStateFlow(emptyQueue())
+    /**
+     * The queue view: the core's window around the pointer, extended with the rows the queue
+     * screen paged in ([extendQueue]) with `Query.QueueRange`.
+     */
     val queue: StateFlow<QueueView> = _queue.asStateFlow()
+    /** The core's own window, as last sent. */
+    private var queueBase: QueueView = emptyQueue()
+    /** [queueBase] plus the pages fetched since it came (all current), where paging carries on from. */
+    private var queueFetched: QueueView = emptyQueue()
+    /** Rows wanted behind and ahead of the pointer ([extendQueue]); the core's window covers [QUEUE_WINDOW_SIDE] each way. */
+    private var queueWant = QUEUE_WINDOW_SIDE to QUEUE_WINDOW_SIDE
+    private var queuePaging: kotlinx.coroutines.Job? = null
     private val _transport = MutableStateFlow(emptyTransport())
     val transport: StateFlow<TransportState> = _transport.asStateFlow()
     private val _preview = MutableStateFlow<PreviewState?>(null)
@@ -474,7 +486,7 @@ class CoreClient(
     fun applySnapshot(s: Snapshot) {
         _servers.value = s.servers
         _session.value = s.session
-        _queue.value = s.queue
+        setQueue(s.queue)
         clockTransport = s.transport
         _transport.value = s.transport
         _nowPlaying.value = s.queue.current
@@ -517,6 +529,8 @@ class CoreClient(
                 val items = event.data.items
                 // The core re-emits these when the item is queued; patching now keeps the player
                 // and the queue in step with the rows that change below.
+                queueBase = LibraryPatches.queue(queueBase, items)
+                queueFetched = LibraryPatches.queue(queueFetched, items)
                 _queue.update { prev ->
                     val next = LibraryPatches.queue(prev, items)
                     if (next === prev) prev else next
@@ -535,7 +549,7 @@ class CoreClient(
                 _savedQueues.value = event.data.document.savedQueues
             }
             is Event.QueueChanged -> {
-                _queue.value = event.data.queue
+                setQueue(event.data.queue)
                 _nowPlaying.value = event.data.queue.current
             }
             is Event.TransportChanged -> {
@@ -591,6 +605,64 @@ class CoreClient(
         }
     }
 
+    /**
+     * A new window from the core. Rows paged in beyond it stay on screen while they still fit: the
+     * list keeps its shape, or only the pointer moved (same total, the rows both hold line up).
+     * They are refetched right away, as an edit may have moved them. Otherwise the old rows stay
+     * until the refetched pages are published, so the list never shrinks to the core's window
+     * under the user's scroll position.
+     */
+    private fun setQueue(base: QueueView) {
+        queueBase = base
+        queueFetched = base
+        val prev = _queue.value
+        val paged = QueueWindows.missing(base, queueWant.first, queueWant.second) != null
+        _queue.value = when {
+            !paged || prev === base -> base
+            QueueWindows.sameShape(prev, base) -> QueueWindows.merge(base, prev)
+            else -> QueueWindows.realign(base, prev) ?: prev
+        }
+        pageQueue()
+    }
+
+    /**
+     * Have [queue] reach at least [before] rows behind the pointer and [after] ahead of it, paging
+     * them in from the core; the queue screen calls this as it scrolls near either loaded end.
+     */
+    fun extendQueue(before: Int, after: Int) {
+        val (b, a) = queueWant
+        if (before <= b && after <= a) return
+        queueWant = maxOf(b, before) to maxOf(a, after)
+        pageQueue()
+    }
+
+    /** Back to the core's window alone (the queue screen closed). */
+    fun resetQueueWindow() {
+        queueWant = QUEUE_WINDOW_SIDE to QUEUE_WINDOW_SIDE
+    }
+
+    /** Page in what [queueWant] still lacks, carrying on from the pages already fetched for this window. */
+    private fun pageQueue() {
+        val base = queueBase
+        val (before, after) = queueWant
+        queuePaging?.cancel()
+        if (QueueWindows.missing(queueFetched, before, after) == null) return
+        queuePaging = scope.launch {
+            var view = queueFetched
+            while (true) {
+                val (start, count) = QueueWindows.missing(view, before, after) ?: break
+                val page = (query(Commands.queueRange(start, count)) as? QueryResult.Queue)?.data ?: break
+                // A newer window from the core cancels this; it may already have replaced the base.
+                if (queueBase !== base) return@launch
+                val merged = QueueWindows.merge(view, page)
+                if (merged === view) break
+                view = merged
+                queueFetched = view
+            }
+            _queue.value = view
+        }
+    }
+
     /** Stops following the core: the flows keep their last values and nothing here runs any more. */
     fun close() {
         scope.cancel()
@@ -598,7 +670,9 @@ class CoreClient(
 
     companion object {
         private const val TAG = "CoreClient"
-        fun emptyQueue() = QueueView(null, emptyList(), null, emptyList(), emptyList(), false, RepeatMode.Off, false, QueueMode.Apple, 0u)
+        /** Rows the core's queue window carries on each side of the pointer. */
+        const val QUEUE_WINDOW_SIDE = 100
+        fun emptyQueue() = QueueView(null, emptyList(), 0u, 0u, 0u, null, 0u, 0u, null, false, RepeatMode.Off, false)
         fun emptyTransport() = TransportState(TransportLease(null, 0u, 0.0), PositionStamp(0u, 0.0, 1.0, false), false, 0u, 1.0)
         fun emptyConnection() = ConnectionState(ConnectionTier.Local, false, null, 0.0, null, 0u, null)
         fun emptyUndo() = UndoState(false, null, false, null, emptyList())

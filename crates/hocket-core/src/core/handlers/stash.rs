@@ -2,7 +2,7 @@
 //! `stash:{scope}` and hands every local change to the engine, which syncs it to the room and the
 //! coordinator. Remote copies come back as `Output::StashMerged`.
 
-use crate::api::{Command, Event, StashEntry, StashItem, Track, TrackId};
+use crate::api::{Command, Event, QueueKey, StashEntry, StashItem, Track, TrackId};
 use crate::connect::engine::Input;
 use crate::core::actor::Actor;
 use crate::stash;
@@ -88,6 +88,45 @@ impl Actor {
             self.save_stash();
             self.emit_stash();
             self.emit_media_session();
+        }
+    }
+
+    /// Stash the "Next in queue" group: its songs go to the stash and leave the queue. A song
+    /// the stash had no room for stays queued.
+    pub(crate) fn stash_queue_group(&mut self) {
+        let Some(doc) = self.doc() else { return };
+        if doc.current.is_none() {
+            return;
+        }
+        let group: Vec<(QueueKey, TrackId)> = doc
+            .upcoming
+            .iter()
+            .take_while(|i| i.queued)
+            .map(|i| (i.key.clone(), i.track_id.clone()))
+            .collect();
+        if group.is_empty() {
+            return;
+        }
+        let mut track_ids: Vec<TrackId> = vec![];
+        for (_, t) in &group {
+            if !track_ids.contains(t) {
+                track_ids.push(t.clone());
+            }
+        }
+        self.stash_command(Command::StashAdd { track_ids });
+        let stashed: std::collections::HashSet<&TrackId> = self
+            .stash
+            .iter()
+            .filter(|e| !e.removed)
+            .map(|e| &e.track_id)
+            .collect();
+        let keys: Vec<QueueKey> = group
+            .iter()
+            .filter(|(_, t)| stashed.contains(t))
+            .map(|(k, _)| k.clone())
+            .collect();
+        if !keys.is_empty() {
+            self.queue_command(Command::RemoveQueueItems { keys });
         }
     }
 
