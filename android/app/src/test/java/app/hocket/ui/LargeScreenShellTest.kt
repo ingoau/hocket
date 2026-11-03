@@ -125,7 +125,9 @@ class LargeScreenShellTest {
         tap("player.mode.lyrics")
         compose.mainClock.advanceTimeBy(1_000)
         assertTrue("the lyrics take over the main screen", exists("panelPage.lyrics"))
-        assertTrue("the lyrics are beside the panel", bounds("panelPage").right <= sheet.left + 1f)
+        // Their backdrop runs on behind the panel; the lines stay beside it.
+        assertTrue("the lyrics' backdrop runs behind the panel", bounds("panelPage").right >= sheet.right - 1f)
+        assertTrue("the lyrics are beside the panel", bounds("panelPage.lyrics").right <= sheet.left + 1f)
         tap("panelPage.close")
         compose.mainClock.advanceTimeBy(1_000)
         assertFalse("back to the page", exists("panelPage"))

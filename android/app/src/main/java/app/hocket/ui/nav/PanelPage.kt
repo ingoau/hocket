@@ -36,10 +36,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
+import app.hocket.core.SettingKeys
+import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.icons.HocketIcons
+import app.hocket.ui.lyrics.LyricsBackground
 import app.hocket.ui.lyrics.LyricsPage
 import app.hocket.ui.player.PlayerMode
 import app.hocket.ui.queue.QueueList
@@ -51,7 +56,7 @@ import app.hocket.ui.queue.QueueList
  * to the page ([onClose]). Null [page]: nothing shown.
  */
 @Composable
-internal fun PanelPageHost(page: PlayerMode?, onClose: () -> Unit) {
+internal fun PanelPageHost(page: PlayerMode?, onClose: () -> Unit, endInset: Dp = 0.dp) {
     val reduced = LocalReducedMotion.current
     // The page last shown, so it stays while it fades away.
     var held by remember { mutableStateOf(page) }
@@ -63,23 +68,33 @@ internal fun PanelPageHost(page: PlayerMode?, onClose: () -> Unit) {
         exit = if (reduced) fadeOut(tween(0)) else fadeOut(tween(150)),
     ) {
         val shown = held ?: return@AnimatedVisibility
-        // The lyrics bring their own backdrop (the artwork's colours, dark): the whole main screen, the
-        // heading over it in light text, the lines in a centred column under the heading.
+        // The lyrics bring their own backdrop (the artwork's colours, dark): the whole screen, on
+        // behind the side panel ([endInset] is the panel's room), the heading over it in light text,
+        // the lines in a centred column under the heading, beside the panel.
         if (shown == PlayerMode.Lyrics) {
             // (It takes every touch: nothing reaches the page underneath.)
             Box(Modifier.fillMaxSize().blockTouchesBehind().testTag("panelPage")) {
-                LyricsPage(
-                    visible = page == PlayerMode.Lyrics,
-                    modifier = Modifier.fillMaxSize().testTag("panelPage.lyrics"),
-                    listModifier = Modifier.fillMaxWidth().wrapContentWidth().widthIn(max = 680.dp).padding(top = PanelHeaderHeight).clipToBounds(),
-                )
-                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) {
-                    PanelHeader(shown, onClose)
+                val client = LocalCoreClient.current
+                val entry by client.nowPlaying.collectAsStateWithLifecycle()
+                val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
+                val settings by client.settings.collectAsStateWithLifecycle()
+                val animated = settings[SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false" && !batterySaver
+                LyricsBackground(entry?.track?.coverArt, animated = animated, visible = page == PlayerMode.Lyrics, modifier = Modifier.fillMaxSize())
+                Box(Modifier.fillMaxSize().padding(end = endInset)) {
+                    LyricsPage(
+                        visible = page == PlayerMode.Lyrics,
+                        modifier = Modifier.fillMaxSize().testTag("panelPage.lyrics"),
+                        backdrop = false,
+                        listModifier = Modifier.fillMaxWidth().wrapContentWidth().widthIn(max = 680.dp).padding(top = PanelHeaderHeight).clipToBounds(),
+                    )
+                    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) {
+                        PanelHeader(shown, onClose)
+                    }
                 }
             }
             return@AnimatedVisibility
         }
-        Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize().testTag("panelPage")) {
+        Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize().padding(end = endInset).testTag("panelPage")) {
             Column(Modifier.fillMaxSize()) {
                 PanelHeader(shown, onClose)
                 // Rows stay a readable width on a wide screen, centred.

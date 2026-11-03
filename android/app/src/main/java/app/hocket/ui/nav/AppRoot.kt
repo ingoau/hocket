@@ -645,7 +645,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     if (LocalReducedMotion.current) androidx.compose.animation.core.snap() else androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 400f),
                     label = "panelRoom",
                 )
-                Box(Modifier.weight(1f).fillMaxSize().padding(end = panelRoom)) {
+                Box(Modifier.weight(1f).fillMaxSize()) {
                     val contentNavigator = remember(nav, sharedArtwork) {
                         app.hocket.ui.DetailNavigator(
                             { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); nav.navigate(Route.Album(id)) },
@@ -655,10 +655,11 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     }
                     CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
                         // Under the panel's lyrics or queue, the page leaves the accessibility tree.
-                        AppNavHost(nav, transitions, Modifier.fillMaxSize().then(if (panelOpen && sheet.panelPage != null) Modifier.clearAndSetSemantics { } else Modifier))
+                        AppNavHost(nav, transitions, Modifier.fillMaxSize().padding(end = panelRoom).then(if (panelOpen && sheet.panelPage != null) Modifier.clearAndSetSemantics { } else Modifier))
                     }
-                    // The panel's Lyrics and Queue take over the main screen beside it.
-                    PanelPageHost(page = if (panelOpen) sheet.panelPage else null, onClose = { sheet.panelPage = null })
+                    // The panel's Lyrics and Queue take over the main screen beside it (the lyrics'
+                    // backdrop runs on behind the panel too).
+                    PanelPageHost(page = if (panelOpen) sheet.panelPage else null, onClose = { sheet.panelPage = null }, endInset = panelRoom)
                 }
             }
             // Links inside the full player (album/artist, the "More" sheet's go-to actions, rows'
@@ -712,10 +713,12 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // The status bar's icons for the page on top (a detail page over its cover), unless the
             // full player covers it and sets its own.
             PageStatusBar(backStack.lastOrNull()?.id, appDark = app.hocket.ui.theme.LocalDarkTheme.current, suspended = covered)
-            if (!wide || playerVisible) {
+            // Phones only: on a large screen the bar and the mini player float in a row (or beside
+            // the rail) with their own shadows, and a band across the whole width reads as a shadow.
+            if (!wide && !barRow) {
                 // Fully faded a little past half-way up the floating mini player (it has its own card
                 // and shadow); without one, a gentle fade above the bar. (Beside the bar, the bar's row.)
-                val scrimHeight = bottomInset + (if (barRow) 0.dp else if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() * 0.6f else 32.dp)
+                val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() * 0.6f else 32.dp)
                 // Over a page in its own colours (a detail page in its artwork's), into those instead.
                 // (The page's own colours already ease in, so no animation of its own here: the bar
                 // and the scrim under it always change together.)

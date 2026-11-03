@@ -271,9 +271,14 @@ internal fun FullPlayer(
         // Landscape (a phone on its side, a tablet's full screen): artwork beside the controls, so
         // nothing has to scroll.
         val wide = !asPanel && pageWidth > viewport && pageWidth >= WIDE_MIN_WIDTH
+        // On a tall enough side-by-side page (a tablet's full screen) the artwork leaves the lyrics or
+        // the queue for a slot above the title, not the thumbnail beside it.
+        val artAbove = wide && viewport >= ART_ABOVE_MIN_HEIGHT
+        hero.artAbove = artAbove
         Box(Modifier.fillMaxSize().verticalScroll(scroll, overscrollEffect = null).testTag("player.page")) {
             PlayerLayout(
                 wide = wide,
+                artAbove = artAbove,
                 minHeight = viewport,
                 hero = hero,
                 // The artwork is drawn over the page: under an immersive one (or one sliding in
@@ -287,7 +292,7 @@ internal fun FullPlayer(
                     ) { header() }
                 },
                 area = { ModeArea(mode, hero, lyricsVisible) },
-                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
+                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
                 seek = { PlayerSeek(position) },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -365,6 +370,9 @@ private val TALL_MAX_WIDTH = 600.dp
 private val WIDE_MIN_WIDTH = 560.dp
 /** In the side-by-side layout, the controls' column is at most this wide (centred in what the artwork leaves). */
 private val WIDE_CONTROLS_MAX = 560.dp
+/** The least page height for the artwork above the title in the side-by-side layout, and its largest size. */
+private val ART_ABOVE_MIN_HEIGHT = 600.dp
+private val ART_ABOVE_MAX = 280.dp
 /** The gaps between the title, the seek bar, the transport and the actions in the side-by-side layout. */
 private val WIDE_GAP = 20.dp
 
@@ -408,6 +416,7 @@ private val MAX_GAP = 40.dp
 @Composable
 private fun PlayerLayout(
     wide: Boolean,
+    artAbove: Boolean,
     minHeight: Dp,
     hero: HeroGeometry,
     header: @Composable () -> Unit,
@@ -417,7 +426,7 @@ private fun PlayerLayout(
     transport: @Composable () -> Unit,
     actions: @Composable () -> Unit,
 ) {
-    if (wide) PlayerLayoutWide(minHeight, hero, header, area, title, seek, transport, actions)
+    if (wide) PlayerLayoutWide(minHeight, hero, artAbove, header, area, title, seek, transport, actions)
     else PlayerLayoutTall(minHeight, hero, header, area, title, seek, transport, actions)
 }
 
@@ -515,6 +524,7 @@ private fun PlayerLayoutTall(
 private fun PlayerLayoutWide(
     minHeight: Dp,
     hero: HeroGeometry,
+    artAbove: Boolean,
     header: @Composable () -> Unit,
     area: @Composable () -> Unit,
     title: @Composable () -> Unit,
@@ -522,7 +532,9 @@ private fun PlayerLayoutWide(
     transport: @Composable () -> Unit,
     actions: @Composable () -> Unit,
 ) {
-    Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
+    // Where the artwork lands above the title in a non-artwork mode ([artAbove]); empty itself.
+    val artSlot = @Composable { if (artAbove) Box(Modifier.onGloballyPositioned { hero.small = hero.measure(it) }) }
+    Layout(contents = listOf(header, area, title, seek, transport, actions, artSlot)) { slots, constraints ->
         val w = constraints.maxWidth
         val view = minHeight.roundToPx()
         val margin = PAGE_PADDING.roundToPx()
@@ -550,7 +562,13 @@ private fun PlayerLayoutWide(
         val ah = height(ap)
         // The gaps share what the column leaves on a short page (a phone on its side), down to 8 dp.
         val gap = ((avail - th - sh - xh - ah) / 3).coerceIn(8.dp.roundToPx(), WIDE_GAP.roundToPx())
-        val block = th + gap + sh + gap + xh + gap + ah
+        val rest = th + gap + sh + gap + xh + gap + ah
+        // The artwork above the title (a non-artwork mode): as large as the column and the page
+        // leave, up to [ART_ABOVE_MAX]; its room opens with the mode, the column staying centred.
+        val artSide = if (artAbove) minOf(ART_ABOVE_MAX.roundToPx(), colW - 2 * margin, avail - rest - gap - 2 * margin).coerceAtLeast(0) else 0
+        val artRoom = if (artSide > 0) ((artSide + gap) * hero.modeFraction().coerceIn(0f, 1f)).roundToInt() else 0
+        val artP = slots[6].map { it.measure(Constraints.fixed(artSide, artSide)) }
+        val block = artRoom + rest
         val top = hh + ((avail - block) / 2).coerceAtLeast(0)
         val areaH = maxOf(avail, block)
         hero.artTop = ((areaH - side) / 2).toFloat()
@@ -559,7 +577,8 @@ private fun PlayerLayoutWide(
         layout(w, maxOf(hh + areaH, view)) {
             hp.forEach { it.place(0, 0) }
             mp.forEach { it.place(0, hh) }
-            var y = top
+            var y = top + artRoom
+            artP.forEach { it.place(colX + margin, y - artSide - gap) }
             tp.forEach { it.place(colX, y) }
             y += th + gap
             sp.forEach { it.place(colX, y) }
@@ -675,7 +694,7 @@ private fun Modifier.fadingEdges(top: Dp = 20.dp, bottom: Dp = 28.dp): Modifier 
 
 /** The title row ([TitleRow]), or what to do when nothing is queued. */
 @Composable
-private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
+private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val track = entry?.track
@@ -686,7 +705,7 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
                 Text(stringResource(R.string.empty_queue_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         } else {
-            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, onInfo, onArtists, onAddTo)
+            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, thumbInRow, onInfo, onArtists, onAddTo)
         }
     }
 }
@@ -763,7 +782,7 @@ private fun SeekStatus() {
  * with the swipe.
  */
 @Composable
-private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
+private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val infoLabel = stringResource(R.string.player_about_title)
     val artistsLabel = stringResource(R.string.player_artists_action)
@@ -781,8 +800,9 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
     Layout(
         contents = listOf(
             {
-                // The thumbnail slot (the one artwork lands in it); empty itself.
-                Box(Modifier.onGloballyPositioned { hero.small = hero.measure(it) })
+                // The thumbnail slot (the one artwork lands in it); empty itself. (Not where the
+                // artwork goes above the title instead: [PlayerLayoutWide].)
+                Box(if (thumbInRow) Modifier.onGloballyPositioned { hero.small = hero.measure(it) } else Modifier)
             },
             {
                 Box(Modifier.fillMaxWidth()) {
@@ -850,7 +870,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
         val a = add.first().measure(Constraints())
         // The thumbnail's width opens with the mode (it lands as the mode animates).
         val side0 = thumbSide.takeIf { it > 0 } ?: HeroGeometry.SMALL_SIZE.roundToPx()
-        val reserve = ((side0 + gap) * f).roundToInt()
+        val reserve = if (thumbInRow) ((side0 + gap) * f).roundToInt() else 0
         val textW = (w - reserve - addGap - a.width).coerceAtLeast(0)
         val t = text.first().measure(Constraints(minWidth = textW, maxWidth = textW))
         val sp = stars.firstOrNull()?.measure(Constraints(maxWidth = textW))

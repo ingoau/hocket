@@ -120,11 +120,12 @@ import app.hocket.ui.icons.HocketIcons
  * Holding a line opens the share screen ([LyricsShareDialog]) with that line on a card.
  *
  * [listModifier] applies to the lines only (the full player fades them out at its slot's edges).
+ * [backdrop] draws the artwork's backdrop behind the lines (on unless [embedded]).
  * [embedded] (the full player) also leaves out the tier, source and timing row under the lines: the
  * player offers it from the song menu ([LyricsTimingSheet]).
  */
 @Composable
-fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolean = false, listModifier: Modifier = Modifier) {
+fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolean = false, listModifier: Modifier = Modifier, backdrop: Boolean = !embedded) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
@@ -163,8 +164,9 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
 
     val pageLabel = stringResource(R.string.lyrics_page_a11y)
     Box(modifier.fillMaxSize().semantics { contentDescription = pageLabel; isTraversalGroup = true }.testTag("lyrics.page")) {
-        // Inside the full player (embedded) the player's own artwork gradient shows through.
-        if (!embedded) LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !batterySaver, visible = visible, modifier = Modifier.fillMaxSize())
+        // Inside the full player (embedded) the player's own artwork gradient shows through (and the
+        // side panel's lyrics page draws its own, wider than the page).
+        if (backdrop) LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !batterySaver, visible = visible, modifier = Modifier.fillMaxSize())
         if (trackId == null) { EmptyState(stringResource(R.string.empty_queue_title), stringResource(R.string.empty_queue_body)); return@Box }
         if (current.loaded && lyrics == null) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {

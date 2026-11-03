@@ -274,6 +274,8 @@ internal class HeroGeometry {
     /** The corners at both ends (px), set from the density. */
     var bigCorner = 0f
     var smallCorner = 0f
+    /** The small slot is the large one above the title ([PlayerLayoutWide]), not the thumbnail: it keeps the big corners. */
+    var artAbove = false
     /** The mode animation (0 = artwork mode, 1 = another mode), read in layout and draw lambdas. */
     var modeFraction: () -> Float = { 0f }
     /**
@@ -346,7 +348,7 @@ internal class HeroGeometry {
     }
 
     /** The visible corner radius at mode fraction [f]. */
-    fun cornerFor(f: Float, @Suppress("UNUSED_PARAMETER") width: Float): Float = lerpF(if (immersive) 0f else bigCorner, smallCorner, f.coerceIn(0f, 1f))
+    fun cornerFor(f: Float, @Suppress("UNUSED_PARAMETER") width: Float): Float = lerpF(if (immersive) 0f else bigCorner, if (artAbove) bigCorner else smallCorner, f.coerceIn(0f, 1f))
 
     /**
      * Where the artwork in flight is at sheet progress [p] (0 = the mini player's thumbnail, 1 =
