@@ -521,8 +521,8 @@ fun MenuSheet(
         // Inside the sheet: its window has its own back dispatcher, and this callback, added after
         // the sheet's own, takes back first while a sub-page shows.
         // The gesture scrubs the first part of the slide back to the menu (the sub-page fading as the
-        // menu comes in) and draws the sheet in a little; letting go plays the rest, cancelling slides
-        // the sub-page back. A back key (no gesture) just goes.
+        // menu comes in, the height heading its way) and draws the sheet in a little; letting go plays
+        // the rest, cancelling slides the sub-page back. A back key (no gesture) just goes.
         // Back during a slide in already goes back; once back is let go the page is the menu, so a
         // second back (even mid-slide) is the sheet's own and closes it.
         PredictiveBackHandler(enabled = page != MenuPage.Main) { events ->
