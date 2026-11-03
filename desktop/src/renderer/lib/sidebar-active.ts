@@ -15,13 +15,13 @@ function ownActive(view: ViewName, route: Route): boolean {
 
 /**
  * Whether the sidebar item for [view] is highlighted. Only one item ever is: Library stands in for library
- * pages with no item of their own, but not when another item (or an open pin, [pinnedOpen]) already claims the page.
+ * pages with no item of their own, but not when another item already claims the page. An open pin ([pinnedOpen])
+ * is the page's most specific item, so it claims the page from all of them.
  */
 export function isSidebarItemActive(view: ViewName | undefined, route: Route, itemViews: (ViewName | undefined)[], pinnedOpen: boolean): boolean {
-  if (!view) return false;
+  if (!view || pinnedOpen) return false;
   if (view !== "library") return ownActive(view, route);
   if (route.view === "library") return true;
-  return !pinnedOpen
-    && LIBRARY_VIEWS.includes(route.view)
+  return LIBRARY_VIEWS.includes(route.view)
     && !itemViews.some((v) => v === route.view || (!!v && v !== "library" && ownActive(v, route)));
 }

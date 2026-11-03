@@ -31,9 +31,9 @@ describe("the highlighted sidebar item", () => {
     expect(active({ view: "snoozed" })).toEqual(["library"]);
   });
 
-  it("is nothing in the sidebar list when a pin is the open page", () => {
+  it("is nothing in the sidebar list when a pin is the open page (the pin is)", () => {
     expect(active({ view: "album", id: "a1" }, ["home", "library"], true)).toEqual([]);
-    expect(active({ view: "album", id: "a1" }, ALL, true)).toEqual(["albums"]);
+    expect(active({ view: "album", id: "a1" }, ALL, true)).toEqual([]);
   });
 
   it("is not Library on pages outside the library", () => {
