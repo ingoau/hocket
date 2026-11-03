@@ -442,6 +442,10 @@ Server setup is the entire first screen, nothing else. Every other empty state n
 
 Media notification only. Lockscreen comes free with MediaSession. Now-playing screen with queue and lyrics reachable by swipe or tab rather than a side panel — the split panel and fullscreen player are desktop shapes. Widget, quick settings tile, Auto and Wear come later; they're shallow but they multiply the surface area of every playback state bug not yet found. *(Since: Auto, Wear and media browsers through the library session; system playback resumption; a now-playing widget naming the Connect device that plays; launcher shortcuts; Assistant's play-from-search; the audio-effect session broadcast for equalizer apps.)*
 
+### Android on large screens
+
+Phones (under 600 dp wide) keep the stacked, centred bar and mini player. Wider, the floating pill sits at the bottom start and the mini player at the end, on one row (as long as a mini player of 320 dp fits beside the widest pill); with the floating bar off, a standing rail takes the start edge (its menu shows the labels) and the mini player still sits at the end. Landscape pages lay the full player out in two columns, artwork beside the controls, so a phone on its side never scrolls; an upright tablet keeps the one column, its controls in a centred column. Landscape windows of 960 dp and wider open the player as a side panel grown out of the mini player rather than over the page — the desktop's split panel, the one exception to the line above: the page stays usable beside it, its Lyrics and Queue take over the main screen (lyrics in a readable column, the queue at full size), and its own button goes full screen and back. A panel left open is remembered across restarts; a rotation to portrait folds it back to the mini player rather than turning it into the full-screen player. The panel's tall shape takes an immersive artwork even on a landscape screen.
+
 
 ## Licence  
 *Status: decided*
