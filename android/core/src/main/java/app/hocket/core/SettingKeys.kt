@@ -6,7 +6,8 @@ package app.hocket.core
  * (the core refuses unknown keys).
  */
 object SettingKeys {
-    const val QUEUE_MODE = "queue.mode"
+    /** Offer "Add to queue" and the "Next in queue" group (bool, on by default). */
+    const val QUEUE_SECTION = "queue.section"
     const val QUEUE_SAVED_CAP = "queue.savedCap"
     const val QUEUE_HISTORY_CAP = "queue.historyCap"
     /** Offer to continue an album left unfinished. Off, Play always starts at the beginning. */
@@ -103,7 +104,10 @@ object ActionIds {
     const val NEXT = "next"
     const val PREVIOUS = "previous"
     const val PLAY_NEXT = "playNext"
+    const val ADD_TO_QUEUE = "addToQueue" // hidden with the Queue section setting off
     const val PLAY_LATER = "playLater"
+    const val CLEAR_QUEUE_GROUP = "clearQueueGroup"
+    const val STASH_QUEUE_GROUP = "stashQueueGroup"
     const val PREVIEW = "preview"
     const val REMOVE_FROM_QUEUE = "removeFromQueue"
     const val SHUFFLE = "shuffle"
@@ -144,7 +148,7 @@ object ActionIds {
         "navigateRecent", "navigateFilters", "navigateDownloads", "navigateStats", "navigateSettings")
 
     /** The registry's default context-menu order (surface `contextMenu`). */
-    val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, PLAY_LATER, PREVIEW, ADD_TO_PLAYLIST, STASH, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
+    val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, ADD_TO_QUEUE, PLAY_LATER, PREVIEW, ADD_TO_PLAYLIST, STASH, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
         DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, SNOOZE, UNSNOOZE, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
         SAVE_QUEUE_AS_PLAYLIST, DELETE_SAVED_QUEUE, DELETE_PLAYLIST)
     /** Default media-session buttons. Stash is a choice, not part of this set. */

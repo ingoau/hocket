@@ -55,7 +55,6 @@ import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueryResult
-import app.hocket.core.api.QueueMode
 import app.hocket.playback.CoreHost
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ConfirmDialog
@@ -179,7 +178,7 @@ private fun AccentChoices(dynamicLabel: String, swatches: List<Pair<String, Stri
 }
 
 /**
- * Playback & queue: queue mode, how many recent queues to keep, autoplay, sleep-timer defaults, and
+ * Playback & queue: the Queue section, how many recent queues to keep, autoplay, sleep-timer defaults, and
  * whether other apps (media browsers, Android Auto) may browse and control playback.
  */
 @Composable
@@ -187,16 +186,13 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val queue by client.queue.collectAsStateWithLifecycle()
     val savedCap = setting(SettingKeys.QUEUE_SAVED_CAP)
-    val mode = setting(SettingKeys.QUEUE_MODE)
+    val section = setting(SettingKeys.QUEUE_SECTION)
     val sleepMinutes = setting(SettingKeys.SLEEP_DEFAULT_MINUTES)
     val sleepEnd = setting(SettingKeys.SLEEP_STOP_AT_END_OF_TRACK)
     val externalControl = setting(SettingKeys.MEDIA_EXTERNAL_CONTROL)
     SubScreen(nav, stringResource(R.string.settings_category_playback)) {
-        val current = queue.mode
-        val appleLabel = stringResource(R.string.queue_mode_apple)
-        val youTubeLabel = stringResource(R.string.queue_mode_youtube)
-        SettingRow(stringResource(R.string.queue_mode), scope = mode.scope, tag = "queue.mode")
-        ChoiceRow(listOf(QueueMode.Apple to appleLabel, QueueMode.YouTube to youTubeLabel), isSelected = { current == it }, onSelect = { client.dispatch(Commands.setQueueMode(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+        SwitchRow(stringResource(R.string.settings_queue_section), section.bool ?: true, { section.setBool(it) },
+            subtitle = stringResource(R.string.settings_queue_section_desc), scope = section.scope, tag = "queue.section")
         val cap = savedCap.int ?: 10
         var dragging by remember(cap) { mutableFloatStateOf(cap.toFloat()) }
         val shown = dragging.roundToInt()

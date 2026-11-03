@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
@@ -104,12 +107,12 @@ class NowPlayingSheetTest {
         collapseByDrag()
     }
 
-    /** A one-track queue with autoplay off, so skipping past it leaves nothing current. */
+    /** A one-track queue with autoplay off: skipping past it stops on it, removing it leaves nothing current. */
     private fun playOnlyOneTrack(core: TestCore): String {
         val track = core.client.nowPlaying.value!!.track.id
         core.client.dispatch(Commands.setAutoplay(false))
         core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "One track"))
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
         return track
     }
 
@@ -123,8 +126,14 @@ class NowPlayingSheetTest {
         compose.waitForIdle()
         compose.onNodeWithTag("miniPlayer").assertIsDisplayed()
         assertEquals(track, core.client.nowPlaying.value!!.track.id)
-        // Forward on the last track: nothing is current any more and the player goes away mid-gesture.
+        // Forward on the last track: playback stops there (the pointer never runs off the list) and the bar stays.
         compose.onNodeWithTag("miniPlayer").performTouchInput { swipe(start = center, end = center - Offset(300f, 0f), durationMillis = 150) }
+        compose.waitUntil(5_000) { !core.client.isPlaying.value }
+        compose.waitForIdle()
+        assertEquals(track, core.client.nowPlaying.value?.track?.id)
+        assertTrue(displayed("miniPlayer"))
+        // Removing it leaves nothing current: the player goes away.
+        core.client.dispatch(Commands.removeQueueItems(listOf(core.client.nowPlaying.value!!.item.key)))
         compose.waitUntil(5_000) { core.client.nowPlaying.value == null }
         compose.waitForIdle()
         assertFalse(displayed("miniPlayer"))
@@ -257,8 +266,8 @@ class NowPlayingSheetTest {
         start(core)
         playOnlyOneTrack(core)
         expand()
-        // Skip past the only track from the full player: nothing is current, the sheet stays open.
-        compose.onNodeWithTag("player.next").performClick()
+        // Remove the only track while the full player shows it: nothing is current, the sheet stays open.
+        core.client.dispatch(Commands.removeQueueItems(listOf(core.client.nowPlaying.value!!.item.key)))
         compose.waitUntil(5_000) { core.client.nowPlaying.value == null }
         compose.waitForIdle()
         // Swiping it away with no current item removes the whole sheet.
@@ -494,7 +503,7 @@ class NowPlayingSheetTest {
         val core = TestCore()
         start(core)
         val before = core.client.nowPlaying.value!!.item.key
-        val next = core.client.queue.value.let { it.playingNext.firstOrNull() ?: it.upcoming.first() }
+        val next = core.client.queue.value.let { it.groupEntries.firstOrNull() ?: it.restEntries.first() }
         val width = compose.onNodeWithTag("miniPlayer").fetchSemanticsNode().size.width.toFloat()
         assertFalse(displayed("miniPlayer.next"))
         compose.onNodeWithTag("miniPlayer").performTouchInput {

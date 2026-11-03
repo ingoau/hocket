@@ -169,6 +169,8 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       // Like the core: offered for one album, artist, playlist or song; the one that doesn't apply is disabled.
       if ((e.id === "pinToLibrary" || e.id === "unpinFromLibrary") && ctx.libraryPinned === undefined) return false;
       if (e.id === "resumeHere" && !ctx.hasResumeOffer) return false;
+      // Like the core's `visible` hook: hidden, not just disabled, with the Queue section off.
+      if (e.id === "addToQueue" && ctx.queueSection === false) return false;
       return true;
     })
     .map((e) => ({

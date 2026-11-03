@@ -7,6 +7,9 @@ import app.hocket.core.api.*
  * `core.dispatch(Commands.playNext(serverId, ids))` rather than nesting `*Inner` payloads.
  */
 object Commands {
+    /** The most rows one `Query.QueueRange` returns. */
+    const val QUEUE_RANGE_MAX = 201
+
     fun seekTo(positionMs: Long) = Command.SeekTo(CommandSeekToInner(positionMs.coerceAtLeast(0).toUInt()))
     fun seekBy(deltaMs: Int) = Command.SeekBy(CommandSeekByInner(deltaMs))
     fun setVolume(volume: Double) = Command.SetVolume(CommandSetVolumeInner(volume))
@@ -36,14 +39,16 @@ object Commands {
     fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false, startPositionMs: Long = 0) =
         Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, startIndex.toUInt(), label, shuffle, startPositionMs.coerceAtLeast(0).toUInt()))
     fun playNext(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayNext(CommandPlayNextInner(serverId, trackIds))
+    fun addToQueue(serverId: ServerId, trackIds: List<TrackId>) = Command.AddToQueue(CommandAddToQueueInner(serverId, trackIds))
     fun playLater(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayLater(CommandPlayLaterInner(serverId, trackIds))
     fun jumpToQueueItem(key: QueueKey) = Command.JumpToQueueItem(CommandJumpToQueueItemInner(key))
     fun removeQueueItems(keys: List<QueueKey>) = Command.RemoveQueueItems(CommandRemoveQueueItemsInner(keys))
-    fun moveQueueItem(key: QueueKey, toIndex: Int) = Command.MoveQueueItem(CommandMoveQueueItemInner(key, toIndex.toUInt()))
+    /** Moves [key] to just after [after] (the current entry's key for the top of the upcoming list), in or out of the "Next in queue" group. */
+    fun moveQueueItem(key: QueueKey, after: QueueKey, inGroup: Boolean) = Command.MoveQueueItem(CommandMoveQueueItemInner(key, after, inGroup))
+    fun queueRange(start: Int, count: Int) = Query.QueueRange(QueryQueueRangeInner(start.coerceAtLeast(0).toUInt(), count.coerceIn(0, QUEUE_RANGE_MAX).toUInt()))
     fun setShuffle(enabled: Boolean) = Command.SetShuffle(CommandSetShuffleInner(enabled))
     fun setRepeat(mode: RepeatMode) = Command.SetRepeat(CommandSetRepeatInner(mode))
     fun setAutoplay(enabled: Boolean) = Command.SetAutoplay(CommandSetAutoplayInner(enabled))
-    fun setQueueMode(mode: QueueMode) = Command.SetQueueMode(CommandSetQueueModeInner(mode))
     fun skipUnavailable(key: QueueKey) = Command.SkipUnavailable(CommandSkipUnavailableInner(key))
 
     fun restoreSavedQueue(id: String) = Command.RestoreSavedQueue(CommandRestoreSavedQueueInner(id))

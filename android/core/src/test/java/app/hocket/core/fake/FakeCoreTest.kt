@@ -1,6 +1,12 @@
 package app.hocket.core.fake
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
+import app.hocket.core.ActionIds
 import app.hocket.core.Commands
+import app.hocket.core.QueueWindows
+import app.hocket.core.SettingKeys
 import app.hocket.core.Queries
 import app.hocket.core.api.*
 import kotlinx.coroutines.Dispatchers
@@ -37,8 +43,8 @@ class FakeCoreTest {
         assertEquals(1, snap.servers.size)
         assertTrue(snap.servers[0].capabilities.meetsFloor)
         assertNotNull(snap.queue.current)
-        assertTrue(snap.queue.upcoming.isNotEmpty())
-        assertEquals(1, snap.queue.playingNext.size)
+        assertTrue(snap.queue.restEntries.isNotEmpty())
+        assertEquals(1, snap.queue.groupEntries.size)
         assertNotNull(snap.resumeOffer)
         assertTrue(snap.transport.position.isPlaying)
     }
@@ -92,12 +98,13 @@ class FakeCoreTest {
         val before = core.queue()
         core.dispatchAndWait(Command.Next)
         val after = core.queue()
-        assertEquals(before.playingNext[0].track.id, after.current!!.track.id) // Apple mode: insertion first
-        assertEquals(before.current!!.item.key, after.history.last().item.key)
+        assertEquals(before.groupEntries[0].track.id, after.current!!.track.id) // the group plays first
+        assertEquals(before.current!!.item.key, after.historyEntries.last().item.key)
         core.dispatchAndWait(Command.Previous)
         val back = core.queue()
         assertEquals(before.current!!.item.key, back.current!!.item.key)
-        assertEquals(before.playingNext.map { it.track.id }, back.playingNext.map { it.track.id })
+        // Back at the head of the group: membership rides with the entry.
+        assertEquals(before.groupEntries.map { it.item.key }, back.groupEntries.map { it.item.key })
     }
 
     @Test
@@ -122,14 +129,102 @@ class FakeCoreTest {
     fun removeQueueItemsAndMove() = runTest {
         val core = core()
         val q = core.queue()
-        val victim = q.upcoming[0]
+        val victim = q.restEntries[0]
         core.dispatchAndWait(Commands.removeQueueItems(listOf(victim.item.key)))
         val after = core.queue()
-        assertFalse(after.upcoming.any { it.track.id == victim.track.id && it.item.source is QueueSource.Context })
-        val mover = after.upcoming[2]
-        core.dispatchAndWait(Commands.moveQueueItem(mover.item.key, 0))
+        assertFalse(after.entries.any { it.item.key == victim.item.key })
+        // Into the group: right after the current entry, in it.
+        val mover = after.restEntries[2]
+        core.dispatchAndWait(Commands.moveQueueItem(mover.item.key, after.current!!.item.key, inGroup = true))
         val moved = core.queue()
-        assertEquals(mover.track.id, moved.playingNext[0].track.id)
+        assertEquals(mover.item.key, moved.groupEntries[0].item.key)
+        assertEquals(2u, moved.groupCount)
+        // And out again, after the first entry past the group.
+        val anchor = moved.restEntries[0]
+        core.dispatchAndWait(Commands.moveQueueItem(mover.item.key, anchor.item.key, inGroup = false))
+        val out = core.queue()
+        assertEquals(1u, out.groupCount)
+        assertEquals(mover.item.key, out.restEntries[1].item.key)
+        assertEquals(false, out.restEntries[1].inGroup)
+    }
+
+    @Test
+    fun playNextAddToQueueAndPlayLaterPlaceSongs() = runTest {
+        val core = core()
+        val server = core.library.serverId
+        val ids = core.library.tracks.map { it.id }
+        val group0 = core.queue().groupEntries.map { it.item.key }
+        core.dispatchAndWait(Commands.addToQueue(server, listOf(ids[10])))
+        var q = core.queue()
+        // Add to queue: the end of the group.
+        assertEquals(group0 + q.groupEntries.last().item.key, q.groupEntries.map { it.item.key })
+        assertEquals(ids[10], q.groupEntries.last().track.id)
+        core.dispatchAndWait(Commands.playNext(server, listOf(ids[11])))
+        q = core.queue()
+        // Play next: straight after the current song, ahead of the group, in it.
+        assertEquals(ids[11], q.groupEntries.first().track.id)
+        assertEquals(group0.size + 2, q.groupCount.toInt())
+        core.dispatchAndWait(Commands.playLater(server, listOf(ids[12])))
+        q = core.queue()
+        // Play later: the end of the whole list, not queued but added.
+        val last = q.entries.last()
+        assertEquals(ids[12], last.track.id)
+        assertEquals(true, last.item.added)
+        assertEquals(false, last.inGroup)
+        assertEquals(group0.size + 2, q.groupCount.toInt())
+    }
+
+    @Test
+    fun clearAndStashTheGroup() = runTest {
+        val core = core()
+        core.dispatchAndWait(Commands.addToQueue(core.library.serverId, listOf(core.library.tracks[20].id)))
+        val total = core.queue().total
+        core.dispatchAndWait(Command.ClearQueueGroup)
+        assertEquals(0u, core.queue().groupCount)
+        assertEquals(total - 2u, core.queue().total)
+        core.dispatchAndWait(Command.Undo)
+        assertEquals(2u, core.queue().groupCount)
+        val ids = core.queue().groupEntries.map { it.track.id }
+        core.dispatchAndWait(Command.StashQueueGroup)
+        assertEquals(0u, core.queue().groupCount)
+        val stash = (core.query(Query.Stash) as QueryResult.StashItems).data.map { it.track.id }
+        assertTrue(stash.containsAll(ids))
+    }
+
+    @Test
+    fun theQueueSectionSettingHidesAddToQueue() = runTest {
+        val core = core()
+        val target = Commands.tracks(listOf(core.library.tracks[0].id))
+        suspend fun ids() = (core.query(Queries.actions("contextMenu", target)) as QueryResult.Actions).data.map { it.id }
+        assertTrue(ActionIds.ADD_TO_QUEUE in ids())
+        core.dispatchAndWait(Commands.setSetting(SettingKeys.QUEUE_SECTION, "false"))
+        assertFalse(ActionIds.ADD_TO_QUEUE in ids())
+        assertTrue(ActionIds.PLAY_NEXT in ids() && ActionIds.PLAY_LATER in ids())
+        // Off, nothing is queued: the group is gone and Play next makes none.
+        assertEquals(0u, core.queue().groupCount)
+        core.dispatchAndWait(Commands.playNext(core.library.serverId, listOf(core.library.tracks[1].id)))
+        assertEquals(0u, core.queue().groupCount)
+        assertEquals(core.library.tracks[1].id, core.queue().restEntries.first().track.id)
+    }
+
+    @Test
+    fun theViewIsAWindowAndQueueRangePagesTheRest() = runTest {
+        val core = core()
+        val many = core.library.tracks.take(400).map { it.id }
+        core.dispatchAndWait(Command.PlayTracks(CommandPlayTracksInner(core.library.serverId, many, 250u, "Many", false)))
+        val q = core.queue()
+        assertEquals(250u, q.currentIndex)
+        assertEquals(250u, q.historyCount)
+        assertEquals(150u, q.windowStart)
+        assertEquals(201, q.entries.size)
+        val page = (core.query(Commands.queueRange(0, 150)) as QueryResult.Queue).data
+        assertEquals(0u, page.windowStart)
+        assertEquals(many.take(150), page.entries.map { it.track.id })
+        val merged = QueueWindows.merge(q, page)
+        assertEquals(0u, merged.windowStart)
+        assertEquals(many.take(351), merged.entries.map { it.track.id })
+        assertEquals(null, QueueWindows.missing(merged, 250, 100))
+        assertEquals(351 to 49, QueueWindows.missing(merged, 250, 149))
     }
 
     @Test
@@ -139,7 +234,7 @@ class FakeCoreTest {
         core.dispatchAndWait(Commands.setRepeat(RepeatMode.All))
         assertNull(core.queue().wrapNext)
         var guard = 0
-        while (core.queue().let { it.playingNext.isNotEmpty() || it.upcoming.isNotEmpty() } && guard++ < 500) core.dispatchAndWait(Command.Next)
+        while (core.queue().let { it.groupEntries.isNotEmpty() || it.restEntries.isNotEmpty() } && guard++ < 500) core.dispatchAndWait(Command.Next)
         val peek = core.queue().wrapNext
         assertNotNull(peek)
         core.dispatchAndWait(Command.Next)
@@ -155,13 +250,13 @@ class FakeCoreTest {
         assertTrue(shuffled.shuffle)
         assertEquals(before.current!!.track.id, shuffled.current!!.track.id)
         core.dispatchAndWait(Commands.setShuffle(false))
-        assertEquals(before.upcoming.map { it.track.id }, core.queue().upcoming.map { it.track.id })
+        assertEquals(before.restEntries.map { it.track.id }, core.queue().restEntries.map { it.track.id })
     }
 
     @Test
     fun playTracksStartsAtTheRequestedPosition() = runTest {
         val core = core()
-        val id = core.queue().upcoming.first().track.id
+        val id = core.queue().restEntries.first().track.id
         core.dispatchAndWait(Command.PlayTracks(CommandPlayTracksInner(core.library.serverId, listOf(id), 0u, "Lyric", false, 42_000u)))
         val t = core.snapshot().transport
         assertEquals(id, core.queue().current!!.track.id)

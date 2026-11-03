@@ -65,6 +65,29 @@ describe("FakeCore queue", () => {
     v = await view();
     expect(v.groupCount).toBe(0);
     expect(v.total).toBe(250);
+
+    // Clearing the group is a session op: Undo brings it back.
+    core.dispatch({ type: "undo" });
+    v = await view();
+    expect(v.groupCount).toBe(2);
+    expect(v.total).toBe(252);
+
+    // Dragging a group entry below the "Next from" heading takes it out of the group.
+    const [g0, g1] = v.entries.slice(v.currentIndex! - v.windowStart + 1, v.currentIndex! - v.windowStart + 3);
+    core.dispatch({ type: "moveQueueItem", data: { key: g0!.item.key, after: g1!.item.key, in_group: false } });
+    v = await view();
+    expect(v.groupCount).toBe(1);
+    const moved = v.entries.find((e) => e.item.key === g0!.item.key);
+    expect(moved?.inGroup).toBeFalsy();
+    expect(moved?.item.added).toBe(true);
+  });
+
+  it("hides Add to queue with the Queue section off", async () => {
+    const ids = async () => expectResult(await core.query({ type: "actions", data: { surface: "contextMenu", target: { type: "tracks", data: { ids: ["x"] } } } }), "actions").map((a) => a.id);
+    expect(await ids()).toContain("addToQueue");
+    core.dispatch({ type: "setSetting", data: { key: "queue.section", value: "false" } });
+    expect(await ids()).not.toContain("addToQueue");
+    expect(await ids()).toContain("playNext");
   });
 
   it("replacing the context auto-saves the outgoing list", async () => {

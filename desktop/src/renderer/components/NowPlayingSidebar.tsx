@@ -20,6 +20,7 @@ import { usePositionValue } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
+import { upcomingEntries } from "../lib/queue-view";
 import { mapLyrics } from "../lib/lyrics-map";
 import { NARROW, useMediaQuery, usePrefersReducedMotion } from "../lib/media";
 import { usePresence } from "../lib/presence";
@@ -221,7 +222,7 @@ function useOverviewScene(coverArt: string | undefined) {
   const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
   const dark = themeSetting === "dark" || (themeSetting === "system" && systemDark);
   const scene = useScene(coverArt, preference, dark);
-  const next = useApp((s) => (s.queue.playingNext[0] ?? s.queue.upcoming[0])?.track.coverArt);
+  const next = useApp((s) => upcomingEntries(s.queue)[0]?.track.coverArt);
   useEffect(() => {
     if (next) void prepareScene(next, preference, dark);
   }, [next, preference, dark]);
@@ -369,7 +370,7 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
 
 function UpNextCard() {
   const queue = useApp((s) => s.queue);
-  const next: QueueEntry[] = [...queue.playingNext, ...queue.upcoming].slice(0, 3);
+  const next: QueueEntry[] = upcomingEntries(queue).slice(0, 3);
   const d = bridge().dispatch;
   return (
     <Card id="upnext" title={t("nowPlaying.upNext")} link={t("nowPlaying.openQueue")} onLink={() => showSideView("queue")} drill="queue" testId="sidebar-upnext-card">

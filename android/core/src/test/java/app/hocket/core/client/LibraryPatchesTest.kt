@@ -43,7 +43,7 @@ class LibraryPatchesTest {
             QueueItem("k", "t1", QueueSource.Inserted, false),
             summary("t1"),
         )
-        val q = QueueView("Album", emptyList(), current, emptyList(), emptyList(), false, RepeatMode.Off, false, QueueMode.Apple, 0u)
+        val q = app.hocket.core.queueViewOf(current = current, contextLabel = "Album")
         assertSame(q, LibraryPatches.queue(q, items))
     }
 

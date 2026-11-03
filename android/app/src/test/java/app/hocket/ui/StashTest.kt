@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
@@ -44,7 +47,7 @@ class StashTest {
 
     private fun stashSome(core: TestCore, n: Int): List<String> {
         val q = core.client.queue.value
-        val ids = (listOfNotNull(q.current) + q.playingNext + q.upcoming).map { it.track.id }.distinct().take(n)
+        val ids = (listOfNotNull(q.current) + q.groupEntries + q.restEntries).map { it.track.id }.distinct().take(n)
         core.client.dispatch(Command.StashAdd(CommandStashAddInner(ids)))
         compose.waitUntil(5_000) { core.client.stash.value.size == ids.size }
         compose.waitForIdle()

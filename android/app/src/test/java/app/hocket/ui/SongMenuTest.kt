@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
@@ -161,7 +164,7 @@ class SongMenuTest {
 
         compose.onNodeWithTag("player.mode.queue").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { present("queue.list") }
-        val before = core.client.queue.value.let { it.history.size + it.playingNext.size + it.upcoming.size }
+        val before = core.client.queue.value.let { it.historyEntries.size + it.groupEntries.size + it.restEntries.size }
         val more = SemanticsMatcher("offers More options") { n -> n.config.getOrNull(SemanticsActions.CustomActions)?.any { it.label == "More options" } == true }
         val row = compose.onAllNodes(more and hasAnyAncestor(hasTestTag("queue.list"))).fetchSemanticsNodes()
             .first { n -> n.config.getOrNull(SemanticsActions.CustomActions)?.any { it.label == "Remove from queue" } == true }
@@ -178,7 +181,7 @@ class SongMenuTest {
         assertTrue(top(remove) > top("songMenu.action.${ActionIds.PLAY_NEXT}"))
         compose.onNodeWithTag(remove).performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { !present("songMenu.header") }
-        compose.waitUntil(5_000) { core.client.queue.value.let { it.history.size + it.playingNext.size + it.upcoming.size } == before - 1 }
+        compose.waitUntil(5_000) { core.client.queue.value.let { it.historyEntries.size + it.groupEntries.size + it.restEntries.size } == before - 1 }
         assertTrue(displayed("player.playPause"))
     }
 

@@ -1,5 +1,6 @@
 package app.hocket.ui.components
 
+import app.hocket.core.queueViewOf
 import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.Queries
@@ -8,7 +9,6 @@ import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.ActionTargetAlbumsInner
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueItem
-import app.hocket.core.api.QueueMode
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueView
 import app.hocket.core.api.RepeatMode
@@ -44,10 +44,9 @@ class MenuLogicTest {
             QueueItem(key, track, QueueSource.Inserted),
             TrackSummary(id = track, serverId = "s", title = track, durationMs = 1u, rating = 0u, loved = false, offline = OfflineState.None),
         )
-        val queue = QueueView(
+        val queue = queueViewOf(
             history = listOf(entry("k0", "a")), current = entry("k1", "b"),
-            playingNext = listOf(entry("k2", "c")), upcoming = listOf(entry("k3", "d"), entry("k4", "c")),
-            shuffle = false, repeat = RepeatMode.Off, autoplay = false, mode = QueueMode.Apple, totalUpcoming = 2u,
+            group = listOf(entry("k2", "c")), rest = listOf(entry("k3", "d"), entry("k4", "c")),
         )
         assertEquals(listOf("d", "c", "a"), snoozeTrackIds(Commands.queueItems(listOf("k3", "k2", "k4", "k0")), null, queue))
         assertEquals(listOf("x"), snoozeTrackIds(Commands.queueItems(listOf("gone")), "x", queue))

@@ -67,7 +67,7 @@ class SettingsCategoriesTest {
     private val advancedRows = setOf("developer.mode", "developer.open")
 
     /** Registry settings the old page did not show, now in their category. */
-    private val added = setOf("queue.mode", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",
+    private val added = setOf("queue.section", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",
         "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists") + pebbleRows + advancedRows
 
     /** Categories that open one of the older sub-screens: the old page's row for it. */
@@ -79,7 +79,7 @@ class SettingsCategoriesTest {
     private val expected = mapOf(
         SettingsCategory.Account to setOf("sync.master", "server.info", "server.syncNow", "server.fullSync", "server.remove"),
         SettingsCategory.Appearance to setOf("display.theme", "display.accent", "display.artworkColour", "display.animatedBackground", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists"),
-        SettingsCategory.Playback to setOf("queue.mode", "queue.savedCap", "queue.autoplay", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "media.externalControl"),
+        SettingsCategory.Playback to setOf("queue.section", "queue.savedCap", "queue.autoplay", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "media.externalControl"),
         SettingsCategory.Downloads to setOf("open.downloads", "downloads.wifiOnly", "storage.clearCache", "storage.warnThreshold", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved"),
         SettingsCategory.Lyrics to setOf("lyrics.external", "lyrics.defaultOffsetMs", "lyrics.showTranslations"),
         SettingsCategory.Library to setOf("ratings.loveThreshold", "open.filters", "open.stats"),

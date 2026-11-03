@@ -3,6 +3,8 @@ package app.hocket.playback.pebble
 import android.content.Context
 import android.os.SystemClock
 import app.hocket.core.Commands
+import app.hocket.core.historyEntries
+import app.hocket.core.upcomingEntries
 import app.hocket.core.CoreHandle
 import app.hocket.core.HocketJson
 import app.hocket.core.Queries
@@ -560,8 +562,8 @@ class PebbleBridge(
 
     private fun trackRow(t: TrackSummary) = Row("track:${t.id}", t.title, t.artist ?: "", RowFlag.TRACK)
 
-    /** Recent history (enough to scroll back a little), the current track, Playing Next and the rest. */
-    private fun queueEntries() = queue?.let { it.history.takeLast(QUEUE_HISTORY) + listOfNotNull(it.current) + it.playingNext + it.upcoming }.orEmpty()
+    /** Recent history (enough to scroll back a little), the current track and what follows it. */
+    private fun queueEntries() = queue?.let { it.historyEntries.takeLast(QUEUE_HISTORY) + listOfNotNull(it.current) + it.upcomingEntries }.orEmpty()
 
     /** The queue entry a row id the watch sent back stands for ([PebbleProtocol.queueRowId]). */
     private fun queueEntry(rowId: String) = queueEntries().firstOrNull { PebbleProtocol.queueRowId(it.item.key) == rowId }

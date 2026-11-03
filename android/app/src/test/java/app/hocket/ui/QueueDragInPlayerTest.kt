@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -19,10 +22,10 @@ class QueueDragInPlayerTest : PlayerRulesTestBase() {
         compose.waitUntil(5_000) { exists("queue.list") }
         compose.mainClock.advanceTimeBy(1_500)
         compose.waitForIdle()
-        fun tracks() = core.client.queue.value.let { q -> (q.playingNext + q.upcoming).map { it.track.id } }
+        fun tracks() = core.client.queue.value.let { q -> (q.groupEntries + q.restEntries).map { it.track.id } }
         fun drag(index: Int, rows: Float) {
             val q = core.client.queue.value
-            val entry = (q.playingNext + q.upcoming)[index]
+            val entry = (q.groupEntries + q.restEntries)[index]
             compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${entry.item.key}"))
             compose.waitForIdle()
             val rowHeight = compose.onNodeWithTag("queue.row.${entry.item.key}").fetchSemanticsNode().size.height
@@ -35,7 +38,8 @@ class QueueDragInPlayerTest : PlayerRulesTestBase() {
         }
         val undo0 = core.client.undo.value.history.size
         val t0 = tracks()
-        drag(1, 2.5f)
+        // The first song after the group, up past the "Next from" heading: into the group.
+        drag(1, -1.5f)
         compose.mainClock.advanceTimeBy(500)
         compose.waitForIdle()
         val t1 = tracks()

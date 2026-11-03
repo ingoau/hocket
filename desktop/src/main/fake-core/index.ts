@@ -1386,7 +1386,14 @@ export class FakeCore implements CoreHandle {
     this.transport = { ...this.transport, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: play }, playedMs: 0 };
     // Skipped on the next turn, never from inside the load.
     this.later(0, () => {
-      if (this.cur()?.key === cur.key) this.next(false);
+      if (this.cur()?.key !== cur.key) return;
+      this.next(false);
+      // Next doesn't move past the end of the list (the pointer stays on the last entry):
+      // skipping ran out of queue, so nothing in it is available offline.
+      if (this.cur()?.key === cur.key && this.offlineSkips > 0) {
+        this.offlineSkips = 0;
+        this.setNotice("nothingAvailableOffline");
+      }
     });
     return true;
   }

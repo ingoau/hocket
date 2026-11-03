@@ -6,7 +6,10 @@
 // place; the player comes back when the drag ends.
 import { useEffect, type DragEvent as ReactDragEvent } from "react";
 import type { ActionTarget } from "@core/api";
+import { SK } from "@shared/settings-keys";
 import { useApp } from "../store/app";
+import { settingValue } from "../store/reducer";
+import { queueSections, upcomingEntries } from "./queue-view";
 
 export const LIBRARY_MIME = "application/x-hocket-library";
 
@@ -92,63 +95,142 @@ export function libraryDragProps(target: ActionTarget | undefined): {
   };
 }
 
-/**
- * After Play next the new items sit at the front of playing-next. These `to_index`
- * values (last of the block first) slide that block to `toIndex` in the combined
- * playing-next + upcoming list.
- */
-export function movesToInsertBlock(addedCount: number, toIndex: number): number[] {
-  if (addedCount <= 0 || toIndex <= 0) return [];
-  const to: number[] = [];
-  for (let i = addedCount - 1; i >= 0; i--) to.push(toIndex + i);
-  return to;
+/** The sortable id of the "Next from" heading: rows above it are in the "Next in queue" group. */
+export const GROUP_END = "\u0000next-from";
+
+export interface QueueMove {
+  key: string;
+  /** The entry it goes directly after: the current entry's key for the top of the list. */
+  after: string;
+  in_group: boolean;
 }
 
 /**
- * The moves that put `block` (keys of `order`, kept in their queue order) together just
- * before `before`, or at the end when it is undefined. Each `to_index` is the item's
- * final index once that move is made, as MoveQueueItem takes it; items already in place
- * are not moved.
+ * The upcoming rows as the panel sorts them: the group's keys, the "Next from" heading
+ * (only with the Queue section on, else nothing can join a group), then the rest.
  */
-export function moveBlock(order: readonly string[], block: readonly string[], before: string | undefined): { key: string; to_index: number }[] {
-  const inBlock = new Set(block);
-  if (before !== undefined && (inBlock.has(before) || !order.includes(before))) return [];
-  const work = [...order];
-  const moves: { key: string; to_index: number }[] = [];
-  // Last first: each one goes in front of the one placed after it.
-  let next = before;
-  for (const key of order.filter((k) => inBlock.has(k)).reverse()) {
-    const from = work.indexOf(key);
-    work.splice(from, 1);
-    const to = next === undefined ? work.length : work.indexOf(next);
-    work.splice(to, 0, key);
-    if (to !== from) moves.push({ key, to_index: to });
-    next = key;
+export function sortableOrder(group: readonly string[], rest: readonly string[], section: boolean): string[] {
+  return section ? [...group, GROUP_END, ...rest] : [...group, ...rest];
+}
+
+/**
+ * Where a drop before `order[index]` lands: the entry it follows, and whether it joins the
+ * group. Without the heading in `order`, membership is `noHeading` (true when everything
+ * upcoming is the group, false with the Queue section off).
+ */
+export function dropSlot(order: readonly string[], index: number, currentKey: string, skip: ReadonlySet<string> = new Set(), noHeading = false): { after: string; inGroup: boolean } {
+  const head = order.indexOf(GROUP_END);
+  const i = Math.max(0, Math.min(order.length, index));
+  let after = currentKey;
+  for (let j = i - 1; j >= 0; j--) {
+    const k = order[j]!;
+    if (k !== GROUP_END && !skip.has(k)) {
+      after = k;
+      break;
+    }
+  }
+  return { after, inGroup: head >= 0 ? i <= head : noHeading };
+}
+
+/**
+ * MoveQueueItem as the core applies it, on a sortable order (with GROUP_END marking the
+ * group's end): out of place, then directly after `after`; an in-group drop past the
+ * group's end lands at its end, an out-of-group drop inside the group just after it.
+ */
+export function applyMove(order: readonly string[], move: QueueMove): string[] {
+  const out = order.filter((k) => k !== move.key);
+  let at = out.indexOf(move.after) + 1; // the current key isn't in the order: 0
+  const head = out.indexOf(GROUP_END);
+  if (head >= 0) {
+    if (move.in_group && at > head) at = head;
+    if (!move.in_group && at <= head) at = head + 1;
+  }
+  out.splice(at, 0, move.key);
+  return out;
+}
+
+/**
+ * The moves that put `block` (keys in queue order) together where the dragged row `active`
+ * sits in `dropped` (the order with only it moved, as dnd-kit leaves it). Moves that would
+ * change nothing are left out.
+ */
+export function placeBlock(order: readonly string[], dropped: readonly string[], active: string, block: readonly string[], currentKey: string, noHeading = false): QueueMove[] {
+  const at = dropped.indexOf(active);
+  if (at < 0) return [];
+  const { after, inGroup } = dropSlot(dropped, at, currentKey, new Set(block), noHeading);
+  const moves: QueueMove[] = [];
+  let work = [...order];
+  let prev = after;
+  for (const key of block) {
+    const m = { key, after: prev, in_group: inGroup };
+    const next = applyMove(work, m);
+    if (next.some((k, i) => k !== work[i])) {
+      moves.push(m);
+      work = next;
+    }
+    prev = key;
   }
   return moves;
 }
 
-/** Play next, then move the inserted block to `toIndex` when that is not already the front. */
-export function addToQueue(target: ActionTarget, toIndex = 0): void {
+/** Alt+Up/Down: one place up or down, crossing the "Next from" heading counts as a step. */
+export function stepMove(order: readonly string[], key: string, dir: 1 | -1, currentKey: string, noHeading = false): QueueMove[] {
+  const from = order.indexOf(key);
+  const to = from + dir;
+  if (from < 0 || to < 0 || to >= order.length) return [];
+  const dropped = [...order];
+  dropped.splice(from, 1);
+  dropped.splice(to, 0, key);
+  return placeBlock(order, dropped, key, [key], currentKey, noHeading);
+}
+
+function queueSectionOn(): boolean {
+  return settingValue(useApp.getState(), SK.queueSection, true);
+}
+
+/**
+ * A library item dropped on the player or the queue. Without a place it is added to the
+ * queue (Add to queue with the Queue section on, else Play next). With one (`after`, the
+ * key it follows, and whether it joins the group) the closest command does it: Play next
+ * for the top, Add to queue for the group's end; anywhere else it is Played next and then
+ * moved into place.
+ */
+export function addToQueue(target: ActionTarget, slot?: { after: string; inGroup: boolean }): void {
   if (!isLibraryTarget(target)) return;
-  const before = new Set(useApp.getState().queue.playingNext.map((e) => e.item.key));
-  useApp.getState().runAction("playNext", target);
-  if (toIndex <= 0) return;
-  const queueBefore = useApp.getState().queue;
+  const app = useApp.getState();
+  const section = queueSectionOn();
+  const queue = app.queue;
+  const currentKey = queue.current?.item.key;
+  if (!slot || !currentKey) {
+    app.runAction(section ? "addToQueue" : "playNext", target);
+    return;
+  }
+  const inGroup = section && slot.inGroup;
+  const { group } = queueSections(queue);
+  const groupEnd = group[group.length - 1]?.item.key ?? currentKey;
+  if (slot.after === currentKey && inGroup === section) {
+    app.runAction("playNext", target);
+    return;
+  }
+  if (inGroup && slot.after === groupEnd) {
+    app.runAction("addToQueue", target);
+    return;
+  }
+  const before = new Set(upcomingEntries(queue).map((e) => e.item.key));
+  app.runAction("playNext", target);
+  const queueBefore = queue;
   const apply = (): boolean => {
-    const queue = useApp.getState().queue;
+    const q = useApp.getState().queue;
     // Only the first queue change after the drop is ours to place: if it added nothing
     // (our Play next failed, or something else changed first), stop rather than later
     // moving someone else's items.
-    if (queue === queueBefore) return false;
-    const added = queue.playingNext.filter((e) => !before.has(e.item.key));
-    if (!added.length) return true;
-    const dest = movesToInsertBlock(added.length, toIndex);
-    const d = useApp.getState().dispatch;
-    dest.forEach((to, i) => {
-      const key = added[added.length - 1 - i]?.item.key;
-      if (key) d({ type: "moveQueueItem", data: { key, to_index: to } });
-    });
+    if (q === queueBefore) return false;
+    const added = upcomingEntries(q).filter((e) => !before.has(e.item.key)).map((e) => e.item.key);
+    let prev = slot.after;
+    for (const key of added) {
+      useApp.getState().dispatch({ type: "moveQueueItem", data: { key, after: prev, in_group: inGroup } });
+      prev = key;
+    }
     return true;
   };
   if (apply()) return;
@@ -166,7 +248,7 @@ function overSelector(x: number, y: number, selector: string): boolean {
 /**
  * While a library drag is over the player, show the queue there (the side panel
  * or the fullscreen view) without writing the remembered view. Dropping on the
- * player itself (not a row) Plays next; dropping on the timeline is the panel's.
+ * player itself (not a row) adds it to the queue; dropping on the timeline is the panel's.
  */
 export function useQueueDropReveal(): void {
   useEffect(() => {
@@ -191,7 +273,7 @@ export function useQueueDropReveal(): void {
       if (!target || onQueue) return;
       if (overSelector(e.clientX, e.clientY, PLAYER_ZONE)) {
         e.preventDefault();
-        addToQueue(target, 0);
+        addToQueue(target);
       }
     };
     const end = () => {

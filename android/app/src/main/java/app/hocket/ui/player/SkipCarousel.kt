@@ -1,5 +1,6 @@
 package app.hocket.ui.player
 
+import app.hocket.core.nextEntry
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -51,7 +52,7 @@ internal data class Neighbours(val previous: QueueEntry?, val next: QueueEntry?)
         val None = Neighbours(null, null)
 
         fun of(queue: QueueView): Neighbours {
-            val next = queue.playingNext.firstOrNull() ?: queue.upcoming.firstOrNull() ?: queue.wrapNext
+            val next = queue.nextEntry
             return Neighbours(previous = queue.previous, next = next)
         }
     }

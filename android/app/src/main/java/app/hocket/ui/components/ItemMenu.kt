@@ -195,7 +195,7 @@ data class MenuLayout(
 }
 
 /** The play group, in its fixed order. */
-private val PLAY_IDS = listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER)
+private val PLAY_IDS = listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.ADD_TO_QUEUE, ActionIds.PLAY_LATER)
 
 /** The registry's rate entries: the star row (or the Rate row) replaces them. */
 private val RATE_IDS = (0..5).map { ActionIds.rate(it) }.toSet() + ActionIds.RATE
@@ -208,7 +208,7 @@ private val UNPERFORMABLE = ActionIds.UI_HANDLED - setOf(ActionIds.ADD_TO_PLAYLI
 
 /**
  * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play, Shuffle,
- * Play next, Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
+ * Play next, Add to queue (the registry leaves it out with the Queue section setting off), Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
  * More: Pin to Library, Go to artist, Song info; then the destructive rows (Remove from Late night).
  * Album: the same without the stars, Go to artist in the short list and Album info under More.
  * Artist and playlist: no go-to rows. Several songs: no go-to, pin or info. Availability and
@@ -657,7 +657,7 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
     }
 }
 
-/** Play / Shuffle / Play next / Play later as one connected group, Play filled and wider. */
+/** Play / Shuffle / Play next / Add to queue (when offered) / Play later as one connected group, Play filled and wider. */
 @Composable
 private fun PlayGroup(play: List<ActionDescriptor>, tag: String, onRun: (ActionDescriptor) -> Unit) {
     val groupLabel = stringResource(R.string.menu_play_group)
@@ -670,7 +670,8 @@ private fun PlayGroup(play: List<ActionDescriptor>, tag: String, onRun: (ActionD
                 ActionIds.PLAY -> stringResource(R.string.action_play) to HocketIcons.Filled.PlayArrow
                 ActionIds.PLAY_SHUFFLED -> stringResource(R.string.action_shuffle) to HocketIcons.Filled.Shuffle
                 ActionIds.PLAY_NEXT -> stringResource(R.string.action_play_next) to HocketIcons.Filled.PlaylistPlay
-                else -> stringResource(R.string.action_play_later) to HocketIcons.Filled.QueueMusic
+                ActionIds.ADD_TO_QUEUE -> stringResource(R.string.action_label_add_to_queue) to HocketIcons.Filled.QueueMusic
+                else -> stringResource(R.string.action_play_later) to HocketIcons.Filled.PlaylistAdd
             }
             Surface(
                 onClick = { onRun(a) },
@@ -718,7 +719,7 @@ private fun RatingRow(rating: Int?, onRate: (Int) -> Unit) {
 internal fun snoozeTrackIds(target: app.hocket.core.api.ActionTarget, trackId: String?, queue: app.hocket.core.api.QueueView): List<String> = when (target) {
     is app.hocket.core.api.ActionTarget.Tracks -> target.data.ids
     is app.hocket.core.api.ActionTarget.QueueItems -> {
-        val entries = queue.history + listOfNotNull(queue.current) + queue.playingNext + queue.upcoming
+        val entries = queue.entries + listOfNotNull(queue.current)
         val byKey = entries.associate { it.item.key to it.item.trackId }
         target.data.keys.mapNotNull { byKey[it] }.distinct().ifEmpty { listOfNotNull(trackId) }
     }

@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -773,7 +776,7 @@ class FullPlayerLayoutTest {
     fun halfASwipeShowsTheNextCoverAndSkipsNothing() {
         startExpanded()
         val before = core.client.nowPlaying.value!!.item.key
-        val next = core.client.queue.value.let { it.playingNext.firstOrNull() ?: it.upcoming.first() }
+        val next = core.client.queue.value.let { it.groupEntries.firstOrNull() ?: it.restEntries.first() }
         assertFalse("the next cover waits off screen", displayed("player.artwork.next"))
         val width = bounds("player.artwork").width
         // Slowly, under half the width: the next cover peeks in.
@@ -793,8 +796,8 @@ class FullPlayerLayoutTest {
     fun aFullSwipeSkipsToTheNextSongOnce() {
         startExpanded()
         val q = core.client.queue.value
-        val next = q.playingNext.firstOrNull() ?: q.upcoming.first()
-        val history = q.history.size
+        val next = q.groupEntries.firstOrNull() ?: q.restEntries.first()
+        val history = q.historyEntries.size
         val width = bounds("player.artwork").width
         dragArtwork(width * 0.7f)
         compose.mainClock.advanceTimeBy(500)
@@ -803,7 +806,7 @@ class FullPlayerLayoutTest {
         compose.mainClock.advanceTimeBy(1_500)
         compose.waitForIdle()
         assertEquals("one skip", next.item.key, core.client.nowPlaying.value!!.item.key)
-        assertEquals(history + 1, core.client.queue.value.history.size)
+        assertEquals(history + 1, core.client.queue.value.historyEntries.size)
         // The strip is back under the new current cover.
         assertTrue(displayed("player.artwork"))
         assertFalse(displayed("player.artwork.next"))
@@ -815,7 +818,7 @@ class FullPlayerLayoutTest {
         val track = core.client.nowPlaying.value!!.track.id
         core.client.dispatch(Commands.setAutoplay(false))
         core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "One track"))
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
         compose.waitForIdle()
         val rest = bounds("player.artwork")
         // Under the rubber band's threshold: no neighbour, the cover lags the finger, springs back.

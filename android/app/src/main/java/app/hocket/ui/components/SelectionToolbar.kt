@@ -164,7 +164,7 @@ internal suspend fun selectionSubject(client: CoreClient, selection: Selection, 
     val tracks: List<TrackSummary> = if (selection.inverted) emptyList() else when (kind) {
         SelectionKind.QueueItems -> {
             val q = client.queue.value
-            val all = q.history + listOfNotNull(q.current) + q.playingNext + q.upcoming
+            val all = q.entries + listOfNotNull(q.current)
             selection.ids.mapNotNull { k -> all.firstOrNull { it.item.key == k }?.track }
         }
         else -> (client.query(Queries.tracksByIds(selection.ids.toList())) as? QueryResult.TrackList)?.data?.map { it.toSummary() }.orEmpty()

@@ -20,8 +20,8 @@ import { executeAction } from "../store/actions";
 export function SavedQueues() {
   const queues = useApp((s) => s.savedQueues);
   const label = useApp((s) => s.queue.contextLabel);
-  const count = useApp((s) => s.queue.history.length + (s.queue.current ? 1 : 0) + s.queue.playingNext.length + s.queue.totalUpcoming);
-  const position = useApp((s) => (s.queue.current ? s.queue.history.length + 1 : 0));
+  const count = useApp((s) => s.queue.total);
+  const position = useApp((s) => (s.queue.currentIndex !== undefined ? s.queue.currentIndex + 1 : 0));
   const [renaming, setRenaming] = useState<string | null | undefined>(undefined);
   const d = bridge().dispatch;
   // After Enter or Escape in a rename, focus goes back to that queue's Rename button (it unmounted the field).

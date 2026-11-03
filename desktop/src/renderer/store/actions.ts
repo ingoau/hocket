@@ -10,6 +10,7 @@ import { bridge } from "../core/bridge";
 import { isNarrow, showSideView, toggleSideView, useApp, type DialogState, type ViewName } from "./app";
 import { settingValue } from "./reducer";
 import { explicitIds } from "./selection";
+import { entryByKey } from "../lib/queue-view";
 
 export interface ActionContext {
   playlistId?: string;
@@ -235,8 +236,7 @@ export async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
     }
     case "queueItems": {
       const q = useApp.getState().queue;
-      const all = [...q.history, ...(q.current ? [q.current] : []), ...q.playingNext, ...q.upcoming];
-      return target.data.keys.map((k) => all.find((e) => e.item.key === k)?.track.id).filter((x): x is string => !!x);
+      return target.data.keys.map((k) => entryByKey(q, k)?.track.id).filter((x): x is string => !!x);
     }
     default:
       return [];
