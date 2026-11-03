@@ -180,7 +180,7 @@ sealed interface MenuEntry {
     /** A row the context adds (the player's sleep timer, a playlist's remove). */
     data class Extra(val extra: SongMenuExtra) : MenuEntry { override val key get() = extra.testTag ?: extra.label }
 
-    /** Share: drills into Navidrome, Song.link and (one song) the file. */
+    /** Share: drills into Navidrome, Squigly and (one song) the file. */
     data object Share : MenuEntry { override val key get() = "share" }
 
     /** Open in Genius: a search for this one song, on the menu itself. */

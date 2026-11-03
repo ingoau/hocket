@@ -34,11 +34,11 @@ test.describe("context menu", () => {
     await expect(menu.locator('[data-action="removeFromPlaylist"]')).toHaveText(/^Remove from Slow SundaysDel$/);
 
     await expect(menu.getByRole("menuitem", { name: "Open in Genius" })).toBeVisible();
-    // Share opens beside the menu: Navidrome, Song.link and the file.
+    // Share opens beside the menu: Navidrome, Squigly and the file.
     await menu.locator('[data-action="share"]').hover();
     const share = page.getByTestId("share-submenu");
     await expect(share.getByRole("menuitem", { name: "Navidrome" })).toBeVisible();
-    await expect(share.getByRole("menuitem", { name: "Song.link" })).toBeVisible();
+    await expect(share.getByRole("menuitem", { name: "Squigly" })).toBeVisible();
     await expect(share.getByRole("menuitem", { name: "File" })).toBeVisible();
     await expect(share.getByRole("menuitem", { name: "Open in Genius" })).toHaveCount(0);
     await share.getByRole("menuitem", { name: "Navidrome" }).click();

@@ -1,4 +1,4 @@
-// What Share offers, and doing it: a Navidrome public link (createShare), a Song.link page the
+// What Share offers, and doing it: a Navidrome public link (createShare), a Squigly page the
 // core finds on Deezer, or the audio file itself. Open in Genius is a row of the menu, not of Share. The file never
 // comes back to the page as a path.
 import type { ActionTarget } from "@core/api";
@@ -16,7 +16,7 @@ export interface ShareChoices {
 
 const NONE: ShareChoices = { navidrome: false, songLink: false, file: false };
 
-/** Which of these a target can offer. One song has all three. Song.link has no artist pages. */
+/** Which of these a target can offer. One song has all three. Squigly gets no artist pages from us. */
 export function shareChoices(facts: { kind?: MenuFacts["kind"]; count: number } | undefined): ShareChoices {
   if (!facts || facts.count < 1) return NONE;
   const one = facts.count === 1;
@@ -78,7 +78,7 @@ export async function copyNavidromeShare(target: ActionTarget, facts: MenuFacts)
   copied(r.type === "share" ? r.data?.url : undefined);
 }
 
-/** Song.link takes a platform id, not a search: the core finds the song on Deezer first. */
+/** Squigly takes another service's link, not a search: the core finds the song on Deezer first. */
 export async function copySongLink(target: ActionTarget, facts: MenuFacts): Promise<void> {
   const ids = songLinkIds(target, facts);
   if (!ids) {

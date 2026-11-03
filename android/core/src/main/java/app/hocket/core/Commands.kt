@@ -194,7 +194,7 @@ object Queries {
     fun configDocument(includeSecrets: Boolean) = Query.ConfigDocument(QueryConfigDocumentInner(includeSecrets))
     fun createShare(ids: List<String>) = Query.CreateShare(QueryCreateShareInner(ids))
     fun exportAudio(trackId: TrackId) = Query.ExportAudio(QueryExportAudioInner(trackId))
-    /** A Song.link (track) or Album.link (album) URL, found on Deezer by the core. */
+    /** A Squigly URL for a track or an album, made from its Deezer link by the core. */
     fun songLink(trackId: TrackId? = null, albumId: AlbumId? = null) = Query.SongLink(QuerySongLinkInner(trackId, albumId))
 }
 

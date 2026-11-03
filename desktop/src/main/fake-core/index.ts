@@ -2908,7 +2908,7 @@ export class FakeCore implements CoreHandle {
         return { type: "audioFile", data: undefined };
       case "songLink": {
         const id = q.data.track_id || q.data.album_id;
-        return { type: "songLink", data: id ? `https://${q.data.track_id ? "song" : "album"}.link/d/${id}` : undefined };
+        return { type: "songLink", data: id ? `https://squigly.link/${q.data.track_id ? "song" : "album"}/fake/${id}` : undefined };
       }
       case "reportUpload":
         return { type: "reportUpload", data: this.reportUpload?.status };
