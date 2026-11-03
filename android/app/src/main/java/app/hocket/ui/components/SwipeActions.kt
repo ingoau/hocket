@@ -98,7 +98,8 @@ fun swipeActionIds(surface: SwipeSurface): Pair<String, String> {
 /**
  * The [SwipeAction] a swipe setting's [id] means for one song row, or null (none, or nothing to do:
  * "download" on a row that is already downloaded). Everything runs through the core's action
- * registry on [target]; "love" runs love or unlove by the row's state, "addToPlaylist" (handled by
+ * registry on [target]; "love" runs love or unlove by the row's state, "addToQueue" runs play later
+ * while the queue section is off, "addToPlaylist" (handled by
  * the platform) calls [onAddToPlaylist] to open the picker.
  */
 @Composable
@@ -110,6 +111,9 @@ fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAd
         ActionIds.REMOVE_FROM_QUEUE -> SwipeAction(id, actionLabel(id), HocketIcons.Filled.Delete, scheme.errorContainer, scheme.onErrorContainer, dismisses = true, run(id))
         ActionIds.PLAY_NEXT -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.PlaylistPlay, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
         ActionIds.PLAY_LATER -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, run(id))
+        // Without the queue section there is no queue to add to: the song goes to the end, as play later.
+        ActionIds.ADD_TO_QUEUE -> if (!queueSectionOn()) trackSwipeAction(ActionIds.PLAY_LATER, track, target, onAddToPlaylist)
+            else SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
         ActionIds.LOVE -> {
             val action = if (track.loved) ActionIds.UNLOVE else ActionIds.LOVE
             SwipeAction(action, actionLabel(action), if (track.loved) HocketIcons.Filled.FavoriteBorder else HocketIcons.Filled.Favorite, scheme.tertiaryContainer, scheme.onTertiaryContainer, dismisses = false, run(action))

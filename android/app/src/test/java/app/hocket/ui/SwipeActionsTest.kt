@@ -76,6 +76,35 @@ class SwipeActionsTest {
     }
 
     @Test
+    fun addToQueueSwipesToTheQueuesEndAndPlaysLaterWithoutTheSection() {
+        val core = TestCore()
+        val (a, b, c) = core.fake.library.tracks.takeLast(3)
+        compose.setThemedContent(core) {
+            Column {
+                TrackRow(a.toSummary(), onClick = {}, onMore = {}, modifier = Modifier.testTag("row.a"))
+                TrackRow(b.toSummary(), onClick = {}, onMore = {}, modifier = Modifier.testTag("row.b"))
+                TrackRow(c.toSummary(), onClick = {}, onMore = {}, modifier = Modifier.testTag("row.c"))
+            }
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.onNodeWithTag("row.a").performTouchInput { swipeRight() }
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.firstOrNull()?.track?.id == a.id }
+        // Add to queue: after what is already queued, not first.
+        core.set(SettingKeys.SWIPE_LIST_START_TO_END, ActionIds.ADD_TO_QUEUE)
+        compose.onNodeWithTag("row.b").performTouchInput { swipeRight() }
+        compose.waitUntil(5_000) {
+            val ids = core.client.queue.value.groupEntries.map { it.track.id }
+            ids.firstOrNull() == a.id && ids.lastOrNull() == b.id
+        }
+        // Queue section off: the same swipe plays later, at the end of the whole list.
+        core.client.dispatch(Commands.setSetting(SettingKeys.QUEUE_SECTION, "false"))
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.QUEUE_SECTION]?.value == "false" }
+        compose.onNodeWithTag("row.c").performTouchInput { swipeRight() }
+        compose.waitUntil(5_000) { core.client.queue.value.entries.lastOrNull()?.track?.id == c.id }
+    }
+
+    @Test
     fun aSegmentedRowSlidesOpaqueOverTheActionsBackground() {
         // An album's tracks are segments; mid-swipe, the action's colour must show only beside the
         // sliding row, never through it (it read "Play next" through the title).

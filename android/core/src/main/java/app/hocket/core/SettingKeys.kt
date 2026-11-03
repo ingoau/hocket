@@ -179,7 +179,7 @@ object ActionIds {
 object SwipeOptions {
     const val NONE = "none"
     val QUEUE = listOf(NONE, ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
-    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.STASH, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
+    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.ADD_TO_QUEUE, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.STASH, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
     val DEFAULTS = mapOf(
         SettingKeys.SWIPE_QUEUE_START_TO_END to ActionIds.REMOVE_FROM_QUEUE,
         SettingKeys.SWIPE_QUEUE_END_TO_START to ActionIds.REMOVE_FROM_QUEUE,

@@ -434,9 +434,11 @@ fn pebble_library_valid(v: &Value) -> Result<(), String> {
 
 /// What a swipe on a song row in any other list can do (album, playlist,
 /// search results, library songs): an action registry id, or `none`.
+/// `addToQueue` runs as `playLater` while the queue section is off.
 pub const SWIPE_LIST_ACTIONS: &[&str] = &[
     "none",
     "playNext",
+    "addToQueue",
     "playLater",
     "love",
     "addToPlaylist",
