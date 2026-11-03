@@ -190,7 +190,7 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarCol
         wasSelected[0] = selected
         val target = if (selected) 1f else 0f
         if (reduced) {
-            open.snapTo(target); bounce.snapTo(target)
+            open.snapTo(target); bounce.snapTo(target); iconPop.snapTo(1f)
             return@LaunchedEffect
         }
         launch { open.animateTo(target, if (selected) NavItemMotion.Grow else NavItemMotion.Fold) }
@@ -198,6 +198,9 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarCol
         if (became) {
             iconPop.snapTo(NavItemMotion.POP_FROM)
             iconPop.animateTo(1f, NavItemMotion.Pop)
+        } else if (iconPop.value != 1f) {
+            // Deselected mid-pop (a quick second tap): settle rather than freeze at the cut-off scale.
+            iconPop.animateTo(1f, NavItemMotion.Fold)
         }
     }
     val labelAlpha by androidx.compose.animation.core.animateFloatAsState(
@@ -205,6 +208,9 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarCol
         if (reduced) snap() else if (selected) androidx.compose.animation.core.tween(160, delayMillis = 90) else androidx.compose.animation.core.tween(70),
         label = "navItemLabel",
     )
+    // Read in composition only through here, so the place recomposes when the label comes or goes,
+    // not on every frame of the animation.
+    val showLabel by remember { androidx.compose.runtime.derivedStateOf { open.value > 0f || labelAlpha > 0f } }
     val cellPadding = (FloatingNavBarDefaults.ItemWidth - 24.dp) / 2
     // The label's room (gap and text) at full width, measured as it lays out.
     val labelRoomPx = remember { floatArrayOf(0f) }
@@ -212,9 +218,11 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarCol
         Modifier
             .fillMaxHeight()
             // The capsule, drawn unclipped: wider than the place by the bounce's lead on the layout
-            // (spread to both sides), so it overshoots and settles while the place does not.
+            // (spread to both sides, at most the bar's padding each way so it never pokes past the
+            // bar's ends), so it overshoots and settles while the place does not.
             .drawBehind {
-                val extra = (bounce.value - open.value) * (labelRoomPx[0] + 2 * (16.dp - cellPadding).toPx())
+                val most = FloatingNavBarDefaults.Padding.toPx() * 2
+                val extra = ((bounce.value - open.value) * (labelRoomPx[0] + 2 * (16.dp - cellPadding).toPx())).coerceIn(-most, most)
                 drawRoundRect(container, topLeft = Offset(-extra / 2f, 0f), size = Size(size.width + extra, size.height), cornerRadius = CornerRadius(size.height / 2f))
             }
             .clip(CircleShape)
@@ -233,16 +241,17 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarCol
         // width springs.
         Row(Modifier.graphicsLayer { val s = press.value; scaleX = s; scaleY = s }, verticalAlignment = Alignment.CenterVertically) {
             Icon(item.icon(selected), null, tint = content, modifier = Modifier.size(24.dp).graphicsLayer { val s = iconPop.value; scaleX = s; scaleY = s })
-            if (selected || labelAlpha > 0f || open.value > 0f) {
+            if (selected || showLabel) {
                 Row(
                     Modifier
                         .clipToBounds()
                         .layout { measurable, constraints ->
-                            // Laid out at full width, shown as much as the place is open.
+                            // Laid out at full width, shown as much as the place is open (from the
+                            // icon's side, so mirrored in RTL).
                             val placeable = measurable.measure(constraints.copy(minWidth = 0))
                             labelRoomPx[0] = placeable.width.toFloat()
                             val shown = (placeable.width * open.value.coerceIn(0f, 1f)).roundToInt()
-                            layout(shown, placeable.height) { placeable.place(0, 0) }
+                            layout(shown, placeable.height) { placeable.placeRelative(0, 0) }
                         }
                         .graphicsLayer { alpha = labelAlpha },
                     verticalAlignment = Alignment.CenterVertically,
@@ -274,15 +283,18 @@ private fun rememberPressScale(interactions: MutableInteractionSource, reduced: 
     androidx.compose.runtime.LaunchedEffect(interactions, reduced) {
         if (reduced) { scale.snapTo(1f); return@LaunchedEffect }
         var down: kotlinx.coroutines.Job? = null
+        var up: kotlinx.coroutines.Job? = null
         interactions.interactions.collect { interaction ->
             when (interaction) {
                 is androidx.compose.foundation.interaction.PressInteraction.Press -> {
+                    // A new press overrides a pending spring-back (a fast double tap).
+                    up?.cancel()
                     down = launch { scale.animateTo(NavItemMotion.PRESSED, NavItemMotion.PressDown) }
                 }
                 is androidx.compose.foundation.interaction.PressInteraction.Release,
                 is androidx.compose.foundation.interaction.PressInteraction.Cancel -> {
                     val pressing = down
-                    launch {
+                    up = launch {
                         pressing?.join()
                         scale.animateTo(1f, NavItemMotion.Release)
                     }

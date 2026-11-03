@@ -454,13 +454,13 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     }
                 }
             }
-            // A tap on a bar or rail place: a tick as the page changes (a softer one on a reselect,
+            // A tap on a bar or rail place: a tick as the page changes (a lighter one on a reselect,
             // which scrolls up or pops back), then [go]. Places opened from elsewhere (links, the
             // shell navigator) stay silent.
             val haptics = LocalHapticFeedback.current
             val tap: (NavItem) -> Unit = remember(go, haptics) {
                 { item ->
-                    haptics.performHapticFeedback(if (item == currentSelected) HapticFeedbackType.ContextClick else HapticFeedbackType.SegmentTick)
+                    haptics.performHapticFeedback(if (item == currentSelected) HapticFeedbackType.SegmentFrequentTick else HapticFeedbackType.SegmentTick)
                     go(item)
                 }
             }
