@@ -200,7 +200,8 @@ fun HomeScreen(nav: NavHostController) {
     // Until the cover's been read, the slide shows the page's own surface: the theme's ink.
     val topLight = slides.getOrNull(pager.currentPage)?.coverArt?.let { c -> key(c) { artworkTopLight(c).value } } ?: !dark
     val barInk = if (topLight) Brand.inkOnLight else Brand.inkOnDark
-    PageColors(pageScheme, statusLight = if (overArt) topLight else !dark)
+    // Only with Spotlight showing: otherwise Home leaves the chrome and status bar to the app theme, as before.
+    if (heroFirst) PageColors(pageScheme, statusLight = if (overArt) topLight else !dark)
     val hiddenLabel = stringResource(R.string.home_section_hidden, "%s")
     val undoLabel = stringResource(R.string.action_undo)
     fun hide(pref: SectionPref, title: String) {
