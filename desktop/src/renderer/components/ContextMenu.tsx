@@ -7,7 +7,9 @@
 // focus moves into the menu with the first item active, ↑↓ move between rows and ←→ along the strip
 // and the stars, Home/End jump, Enter/Space run, → (or Enter) opens the submenu, a letter jumps to
 // the next item starting with it, a shortcut shown in the menu runs on the menu's item, Escape/Tab
-// close and focus returns to whatever opened it.
+// close and focus returns to whatever opened it. The mouse's back button leaves the submenu, else
+// closes the menu. A submenu slides out from the menu's edge on the side it opens, and back in when
+// it closes; the pointer can cross other rows on its way to it without losing it.
 // Pointer: like a native menu, the right button can be held, dragged onto an item and released to
 // run it; released where it was pressed, the menu stays open for a click.
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
@@ -22,6 +24,7 @@ import { executeAction, type ActionContext } from "../store/actions";
 import { Icon } from "./Icon";
 import { Artwork } from "./Artwork";
 import { PlaylistSubmenu } from "./PlaylistSubmenu";
+import { MOUSE_BACK } from "./MenuFlyout";
 import { SnoozeSubmenu } from "./SnoozeSubmenu";
 import { ShareSubmenu } from "./ShareSubmenu";
 import { handOnFocus } from "../lib/focus";
@@ -44,6 +47,8 @@ let rightHeld: { x: number; y: number } | null = null;
 let pressedAt: { x: number; y: number } | null = null;
 /** How far the pointer must move from the press before a release picks an item. */
 const DRAG_SLOP = 8;
+/** How long the pointer can cross other rows on its way to an open submenu before it switches. */
+const SUB_SWITCH_MS = 220;
 
 /** Pin to Library and Unpin from Library: only the one that applies is shown (the other is disabled). */
 const LIBRARY_PIN_IDS = new Set(["pinToLibrary", "unpinFromLibrary"]);
@@ -134,9 +139,31 @@ export function ContextMenu() {
   /** The active cell was reached by keyboard (it gets a ring), not the pointer. */
   const [keys, setKeys] = useState(false);
   /** The open submenu (Add to playlist or Share), with where it opens from. */
-  const [sub, setSub] = useState<{ id: string; left: number; right: number; top: number } | null>(null);
+  const [sub, setSub] = useState<{ id: string; left: number; right: number; top: number; n: number } | null>(null);
+  /** Counts opens, so each one mounts its submenu afresh (and takes focus) even mid-exit. */
+  const opens = useRef(0);
   const subOpen = useRef(false);
   subOpen.current = !!sub;
+  // The submenu slides out on its own when it closes back to the menu (and with the menu when that
+  // closes); a hover onto another submenu's row swaps it at once.
+  // Once the menu is gone, so is the submenu, at once: nothing of it is left to show at the next open.
+  const subPresence = usePresence<typeof sub, HTMLDivElement>(sub, undefined, { instant: !menu });
+  const shownSub = subPresence.value;
+  /** A submenu switch the pointer asked for, held a moment in case it is only crossing to the submenu. */
+  const pendingSub = useRef<{ timer: number; cell: number } | undefined>(undefined);
+  const cancelPendingSub = () => {
+    if (pendingSub.current) clearTimeout(pendingSub.current.timer);
+    pendingSub.current = undefined;
+  };
+  useEffect(() => cancelPendingSub, []);
+  // A switch the pointer asked for never lands on a closing menu; the submenu itself goes when the
+  // menu's exit ends (it leaves with it until then).
+  useEffect(() => {
+    if (!live) cancelPendingSub();
+  }, [live]);
+  useEffect(() => {
+    if (!menu) setSub(null);
+  }, [menu]);
   const model = useMemo(() => (menu ? buildMenu(menu.actions, menu.items ?? [], menu.facts, { inPlaylist: !!menu.context?.playlistId }) : []), [menu]);
 
   useLayoutEffect(() => {
@@ -147,6 +174,7 @@ export function ContextMenu() {
     const y = Math.min(live.y, window.innerHeight - r.height - 6);
     setPos({ x: Math.max(4, x), y: Math.max(4, y) });
     setSub(null);
+    cancelPendingSub();
     setKeys(!!live.keyboard);
     // Keyboard-opened menus start on the first enabled item, like native menus.
     setActive(live.keyboard ? firstEnabled(ref.current) : -1);
@@ -224,6 +252,7 @@ export function ContextMenu() {
 
   if (!menu) return null;
   const facts = menu.facts;
+  const subMotion = motion === "closing" || subPresence.closing ? "closing" : "fade-in";
   const trackId = menu.target.type === "tracks" && menu.target.data.ids.length === 1
     ? menu.target.data.ids[0]
     : facts?.trackIds?.length === 1 ? facts.trackIds[0] : undefined;
@@ -248,13 +277,15 @@ export function ContextMenu() {
     else go();
   });
   const openSub = (cell: number, id: string) => {
+    cancelPendingSub();
     const row = document.getElementById(`cm-item-${cell}`);
     if (!ref.current || !row) return;
     const box = ref.current.getBoundingClientRect();
     setActive(cell);
-    setSub({ id, left: box.left, right: box.right, top: row.getBoundingClientRect().top });
+    setSub({ id, left: box.left, right: box.right, top: row.getBoundingClientRect().top, n: ++opens.current });
   };
   const closeSub = () => {
+    cancelPendingSub();
     if (!sub) return;
     setSub(null);
     ref.current?.focus({ preventScroll: true });
@@ -396,16 +427,28 @@ export function ContextMenu() {
     }
   };
 
-  /** Pointer over a cell: it becomes the active one, and the submenu closes unless it's its row. */
+  /**
+   * Pointer over a cell: it becomes the active one, and the submenu closes (or switches to the
+   * cell's own) unless it's its row. That waits a moment, so a diagonal path to the submenu that
+   * crosses the rows below its row doesn't lose it; reaching the submenu (or coming back to its
+   * row) calls it off.
+   */
   const hover = (i: number) => (e: React.MouseEvent) => {
     if (!e.movementX && !e.movementY) return;
     setKeys(false);
     if (active !== i) setActive(i);
     const id = cells[i]?.submenu;
-    if (sub && id !== sub.id) {
+    if (!sub) return;
+    if (id === sub.id) { cancelPendingSub(); return; }
+    // The cell the pointer is on when the wait ends decides: a newer cell starts it over.
+    if (pendingSub.current?.cell === i) return;
+    cancelPendingSub();
+    const timer = window.setTimeout(() => {
+      pendingSub.current = undefined;
       if (id) openSub(i, id);
       else closeSub();
-    }
+    }, SUB_SWITCH_MS);
+    pendingSub.current = { timer, cell: i };
   };
   const cellProps = (i: number) => ({
     id: `cm-item-${i}`,
@@ -478,7 +521,7 @@ export function ContextMenu() {
           <div
             key={r.id}
             {...cellProps(first)}
-            onMouseMove={(e) => { hover(first)(e); if (r.enabled && (e.movementX || e.movementY) && sub?.id !== r.id) openSub(first, r.id); }}
+            onMouseMove={(e) => { hover(first)(e); if (r.enabled && (e.movementX || e.movementY) && !sub) openSub(first, r.id); }}
             role="menuitem"
             aria-haspopup="menu"
             aria-expanded={sub?.id === r.id}
@@ -545,21 +588,31 @@ export function ContextMenu() {
         tabIndex={-1}
         style={{ left: pos.x, top: pos.y }}
         onKeyDown={onKey}
+        onMouseUp={(e) => {
+          // The mouse's back button: back out of the submenu, else close the menu.
+          if (e.button !== MOUSE_BACK) return;
+          e.preventDefault();
+          if (sub) closeSub();
+          else close();
+        }}
         data-context-layer=""
         data-testid="context-menu"
       >
         {facts?.header ? <Header header={facts.header} /> : null}
         {model.map(renderRow)}
       </div>
-      {sub?.id === "addToPlaylist" && facts?.trackIds?.length ? (
-        <PlaylistSubmenu trackIds={facts.trackIds} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
-      ) : null}
-      {sub?.id === "snooze" && facts?.trackIds?.length ? (
-        <SnoozeSubmenu trackIds={facts.trackIds} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
-      ) : null}
-      {sub?.id === "share" && facts ? (
-        <ShareSubmenu facts={facts} target={menu.target} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
-      ) : null}
+      {/* Reaching the submenu keeps it: a switch the pointer's path asked for on the way is called off. */}
+      <div style={{ display: "contents" }} onMouseMove={cancelPendingSub}>
+        {shownSub?.id === "addToPlaylist" && facts?.trackIds?.length ? (
+          <PlaylistSubmenu key={`addToPlaylist-${shownSub.n}`} trackIds={facts.trackIds} anchor={shownSub} closing={subMotion === "closing"} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        ) : null}
+        {shownSub?.id === "snooze" && facts?.trackIds?.length ? (
+          <SnoozeSubmenu key={`snooze-${shownSub.n}`} trackIds={facts.trackIds} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        ) : null}
+        {shownSub?.id === "share" && facts ? (
+          <ShareSubmenu key={`share-${shownSub.n}`} facts={facts} target={menu.target} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        ) : null}
+      </div>
     </Fragment>
   );
 }

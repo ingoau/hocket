@@ -7,7 +7,7 @@
 //
 // Keyboard: focus stays in the search field; ↑↓ move through the rows (aria-activedescendant),
 // Enter (or Space while the field is empty) toggles, Shift+Enter adds another copy, ← at the start
-// of the field or Escape goes back to the menu, Tab closes both.
+// of the field, Escape or the mouse's back button go back to the menu, Tab closes both.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActionTarget, Playlist } from "@core/api";
 import type { ExitProps } from "../lib/presence";
@@ -18,7 +18,9 @@ import { executeAction } from "../store/actions";
 import { usePins } from "../lib/use-pins";
 import { showToast, toastUndoable } from "../lib/ui-toast";
 import { clickIntent, keepLayout, layoutPlaylists, pickerGroups, rowState, type PickerGroupId, type PickerLayout, type RowState } from "../lib/playlist-picker";
+import { placeFlyout, type FlyoutSide } from "../lib/flyout";
 import { Icon } from "./Icon";
+import { MOUSE_BACK } from "./MenuFlyout";
 
 const GROUP_LABEL: Record<PickerGroupId, Parameters<typeof t>[0]> = { pinned: "picker.pinned", recent: "picker.recent", all: "picker.all", matches: "picker.matches" };
 
@@ -54,7 +56,7 @@ export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onC
   const [active, setActive] = useState(-1);
   /** The playlist whose Remove both / Remove one is open, and which of the two is active. */
   const [asking, setAsking] = useState<{ id: string; active: number } | null>(null);
-  const [pos, setPos] = useState<{ x: number; y: number } | undefined>(undefined);
+  const [pos, setPos] = useState<{ x: number; y: number; side?: FlyoutSide } | undefined>(undefined);
   const own = useRef<HTMLDivElement>(null);
   const ref = exitProps?.ref ?? own;
   const input = useRef<HTMLInputElement>(null);
@@ -86,11 +88,10 @@ export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onC
       const y = anchor.bottom + 6 + h <= window.innerHeight - 6 ? anchor.bottom + 6 : Math.max(4, anchor.top - h - 6);
       setPos({ x, y });
     } else if (!pos) {
-      const x = anchor.right - 4 + w <= window.innerWidth - 6 ? anchor.right - 4 : Math.max(4, anchor.left - w + 4);
-      setPos({ x, y: Math.max(4, Math.min(anchor.top - 6, window.innerHeight - h - 6)) });
+      setPos(placeFlyout(anchor, w, h, window.innerWidth, window.innerHeight));
     } else if (pos.y + h > window.innerHeight - 6) {
       // Grown past the bottom (the playlists arrived, a search was cleared): lift it, never lower it.
-      setPos({ x: pos.x, y: Math.max(4, window.innerHeight - h - 6) });
+      setPos({ ...pos, y: Math.max(4, window.innerHeight - h - 6) });
     }
   }, [ready, pos, anchor, layout, query, membership]);
 
@@ -228,7 +229,9 @@ export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onC
       role={anchor.bottom !== undefined ? "dialog" : undefined}
       aria-label={anchor.bottom !== undefined ? t("menu.addToPlaylist") : undefined}
       data-context-layer=""
+      data-side={pos?.side}
       data-testid="playlist-submenu"
+      onMouseUp={(e) => { if (e.button === MOUSE_BACK) { e.preventDefault(); onBack(); } }}
       // Clicks on rows keep the focus in the field.
       onMouseDown={(e) => { if (e.target !== input.current) e.preventDefault(); }}
     >

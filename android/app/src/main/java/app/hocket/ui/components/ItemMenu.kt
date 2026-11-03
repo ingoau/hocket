@@ -1,6 +1,18 @@
 package app.hocket.ui.components
 
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.SeekableTransitionState
+import androidx.compose.animation.core.rememberTransition
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -24,6 +36,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -331,8 +344,19 @@ fun MenuSheet(
         menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null, count = subject.count, snoozed = snoozed)
     }
     var expanded by rememberSaveable { mutableStateOf(false) }
-    var sharePage by remember { mutableStateOf(false) }
-    var snoozePage by remember { mutableStateOf(false) }
+    // The sub-page in view (Share, Snooze), or the menu itself. Back (the header's arrow, the
+    // system's back or its gesture) returns to the menu rather than closing the sheet.
+    // Seekable, so a predictive back gesture can scrub the way back to the menu.
+    val pages = remember { SeekableTransitionState(MenuPage.Main) }
+    val pageTransition = rememberTransition(pages, label = "menuPage")
+    /**
+     * The page the menu is on as far as back is concerned: set as soon as it is asked for, while the
+     * transition may still be playing (whose own current state only moves when it finishes).
+     */
+    var page by remember { mutableStateOf(MenuPage.Main) }
+    fun goTo(to: MenuPage) { page = to; scope.launch { pages.animateTo(to) } }
+    /** How far a predictive back gesture has pulled the sheet in, 0 to 1 (the sheet scales with it). */
+    val backPull = remember { Animatable(0f) }
     val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
     var loved by remember { mutableStateOf(subject.loved) }
     var rating by remember { mutableStateOf(subject.rating) }
@@ -433,7 +457,7 @@ fun MenuSheet(
                 ) {
                     when (a.id) {
                         ActionIds.ADD_TO_PLAYLIST -> hideThen(onAddToPlaylist)
-                        ActionIds.SNOOZE -> snoozePage = true
+                        ActionIds.SNOOZE -> goTo(MenuPage.Snooze)
                         else -> runAndClose(a)
                     }
                 }
@@ -478,7 +502,7 @@ fun MenuSheet(
             MenuEntry.Rate -> MenuRow(AnnotatedString(stringResource(R.string.action_rate)), HocketIcons.Filled.Star, shape, tag = "$tag.rate") { rateDialog = true }
             MenuEntry.Share -> MenuRow(AnnotatedString(stringResource(R.string.action_share)), HocketIcons.Filled.Share, shape, tag = "$tag.share",
                 trailing = { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-            ) { sharePage = true }
+            ) { goTo(MenuPage.Share) }
             MenuEntry.Genius -> MenuRow(AnnotatedString(stringResource(R.string.menu_open_genius)), HocketIcons.Filled.Lyrics, shape, tag = "$tag.genius") { hideThen { onShare(ShareChoice.Genius) } }
             is MenuEntry.Extra -> {
                 val e = entry.extra
@@ -492,23 +516,61 @@ fun MenuSheet(
         sheetState = sheetState,
         scrimColor = pulledScrim(pull),
         dragHandle = { MenuHandle(expanded, canExpand) { expanded = !expanded } },
-        modifier = Modifier.pulled(pull).testTag(tag),
+        modifier = Modifier.pulled(pull).backPulled { backPull.value }.testTag(tag),
     ) {
+        // Inside the sheet: its window has its own back dispatcher, and this callback, added after
+        // the sheet's own, takes back first while a sub-page shows.
+        // The gesture scrubs the first part of the slide back to the menu (the sub-page fading as the
+        // menu comes in) and draws the sheet in a little; letting go plays the rest, cancelling slides
+        // the sub-page back. A back key (no gesture) just goes.
+        // Back during a slide in already goes back; once back is let go the page is the menu, so a
+        // second back (even mid-slide) is the sheet's own and closes it.
+        PredictiveBackHandler(enabled = page != MenuPage.Main) { events ->
+            val from = page
+            try {
+                events.collect { e ->
+                    val p = PredictiveBackEasing.transform(e.progress)
+                    backPull.snapTo(p)
+                    pages.seekTo(p * BACK_PEEK, MenuPage.Main)
+                }
+                scope.launch { backPull.animateTo(0f, settleSpec) }
+                goTo(MenuPage.Main)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                scope.launch { backPull.animateTo(0f, settleSpec) }
+                // Only if nothing else (a tap) has moved the page meanwhile.
+                if (page == from) scope.launch { pages.animateTo(from) }
+                throw e
+            }
+        }
         Column(Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
             MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
-            if (sharePage) {
-                SharePage(shareOptions, tag) { choice -> if (choice == null) sharePage = false else hideThen { onShare(choice) } }
-            } else if (snoozePage) {
-                SnoozePage(tag) { duration ->
-                    if (duration == null) snoozePage = false
-                    else hideThen {
-                        val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
-                        if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
-                    }
+            // A sub-page slides in from the end, the menu slides back from the start. The new page's
+            // height is taken at once, so the sheet glides to it (its own settle) alongside the slide
+            // rather than after it. Going back cross-fades over longer, so a back gesture scrubbing
+            // its first part shows the sub-page giving way to the menu.
+            pageTransition.AnimatedContent(
+                transitionSpec = {
+                    val forward = targetState != MenuPage.Main
+                    val spec = tween<androidx.compose.ui.unit.IntOffset>(PAGE_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                    val fadeOutMs = if (forward) PAGE_MS / 3 else PAGE_MS / 2
+                    (slideInHorizontally(spec) { w -> if (forward) w / 4 else -w / 4 } + fadeIn(tween(PAGE_MS / 2, delayMillis = PAGE_MS / 6)))
+                        .togetherWith(slideOutHorizontally(spec) { w -> if (forward) -w / 4 else w / 4 } + fadeOut(tween(fadeOutMs)))
+                        .using(SizeTransform(clip = false) { _, _ -> androidx.compose.animation.core.snap() })
+                },
+                contentAlignment = Alignment.TopCenter,
+            ) { shownPage ->
+            when (shownPage) {
+            MenuPage.Share -> SharePage(shareOptions, tag) { choice -> if (choice == null) goTo(MenuPage.Main) else hideThen { onShare(choice) } }
+            MenuPage.Snooze -> SnoozePage(tag) { duration ->
+                if (duration == null) goTo(MenuPage.Main)
+                else hideThen {
+                    val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
+                    if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
                 }
-            } else {
+            }
+            MenuPage.Main -> Column {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
             if (layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { runAndClose(it) }
             if (layout.rating) {
@@ -553,12 +615,39 @@ fun MenuSheet(
                 }
             }
             }
+            }
+            }
         }
     }
     if (rateDialog) {
         RatingDialog(current = 0, onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rateDialog = false; hideThen(onRan) }, onDismiss = { rateDialog = false }, offerClear = true)
     }
 }
+
+/** What the sheet shows under its header: the menu, or one of its sub-pages. */
+private enum class MenuPage { Main, Share, Snooze }
+
+/** Material's predictive back easing: the gesture's progress as the sheet follows it. */
+private val PredictiveBackEasing = CubicBezierEasing(0.1f, 0.1f, 0f, 1f)
+
+/**
+ * Draws the sheet in from its bottom edge as a predictive back gesture pulls ([pull], 0 to 1), as
+ * Material's sheets do: 48dp narrower and 24dp shorter at the full pull.
+ */
+private fun Modifier.backPulled(pull: () -> Float): Modifier = graphicsLayer {
+    val p = pull()
+    if (p > 0f && size.width > 0f && size.height > 0f) {
+        scaleX = 1f - p * 48.dp.toPx() / size.width
+        scaleY = 1f - p * 24.dp.toPx() / size.height
+        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)
+    }
+}
+
+/** How much of the way back to the menu a full predictive back gesture scrubs before it is let go. */
+private const val BACK_PEEK = 0.5f
+
+/** How long a sub-page takes to slide in or out. */
+private const val PAGE_MS = 300
 
 /** Past this speed (px/s) a released drag finishes the way it was going. */
 private const val FLICK_VELOCITY = 1200f
@@ -733,7 +822,7 @@ private fun snoozeEnds(until: Double?): String = if (until == null) {
     stringResource(R.string.snooze_until, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(until.toLong())))
 }
 
-/** Snooze's page: back, then each duration. Null from [onChoose] is back. */
+/** Snooze's page: its title with back, then each duration. Null from [onChoose] is back. */
 @Composable
 private fun SnoozePage(tag: String, onChoose: (SnoozeFor?) -> Unit) {
     val rows = listOf(
@@ -743,15 +832,14 @@ private fun SnoozePage(tag: String, onChoose: (SnoozeFor?) -> Unit) {
         SnoozeFor.Month to R.string.snooze_month,
         SnoozeFor.Indefinite to R.string.snooze_indefinite,
     )
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        MenuRow(AnnotatedString(stringResource(R.string.action_back)), HocketIcons.AutoMirrored.Filled.ArrowBack, connectedShape(0, rows.size + 1), tag = "$tag.snooze.back") { onChoose(null) }
+    SubPage(stringResource(R.string.action_snooze), "$tag.snooze", onBack = { onChoose(null) }) {
         rows.forEachIndexed { i, (duration, label) ->
-            MenuRow(AnnotatedString(stringResource(label)), HocketIcons.Filled.Bedtime, connectedShape(i + 1, rows.size + 1), tag = "$tag.snooze.${duration.string}") { onChoose(duration) }
+            MenuRow(AnnotatedString(stringResource(label)), HocketIcons.Filled.Bedtime, connectedShape(i, rows.size), tag = "$tag.snooze.${duration.string}") { onChoose(duration) }
         }
     }
 }
 
-/** Share's page: back, then the links and (one song) the file. Null from [onChoose] is back. */
+/** Share's page: its title with back, then the links and (one song) the file. Null from [onChoose] is back. */
 @Composable
 private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onChoose: (ShareChoice?) -> Unit) {
     val rows = listOfNotNull(
@@ -759,8 +847,7 @@ private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onCho
         ShareChoice.SongLink.takeIf { choices.songLink },
         ShareChoice.File.takeIf { choices.file },
     )
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        MenuRow(AnnotatedString(stringResource(R.string.action_back)), HocketIcons.AutoMirrored.Filled.ArrowBack, connectedShape(0, rows.size + 1), tag = "$tag.share.back") { onChoose(null) }
+    SubPage(stringResource(R.string.action_share), "$tag.share", onBack = { onChoose(null) }) {
         rows.forEachIndexed { i, choice ->
             val (label, icon, id) = when (choice) {
                 ShareChoice.Navidrome -> Triple(R.string.menu_share_navidrome, HocketIcons.Filled.Share, "navidrome")
@@ -768,8 +855,26 @@ private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onCho
                 ShareChoice.File -> Triple(R.string.menu_share_file, HocketIcons.Filled.Download, "file")
                 ShareChoice.Genius -> error("Open in Genius is a row of the menu")
             }
-            MenuRow(AnnotatedString(stringResource(label)), icon, connectedShape(i + 1, rows.size + 1), tag = "$tag.share.$id") { onChoose(choice) }
+            MenuRow(AnnotatedString(stringResource(label)), icon, connectedShape(i, rows.size), tag = "$tag.share.$id") { onChoose(choice) }
         }
+    }
+}
+
+/**
+ * A sub-page of the menu (Share, Snooze): a back arrow and the row's name as its title, then its
+ * own connected list. Tags: `[tag].back`, `[tag].title`.
+ */
+@Composable
+private fun SubPage(title: String, tag: String, onBack: () -> Unit, rows: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp).testTag("$tag.back")) {
+                Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+            }
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 8.dp).semantics { heading() }.testTag("$tag.title"))
+        }
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) { rows() }
     }
 }
 
