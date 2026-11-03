@@ -49,6 +49,7 @@ import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.BottomContentInset
+import app.hocket.ui.components.contentMaxWidth
 import app.hocket.core.Commands
 import app.hocket.core.api.SettingScope
 import app.hocket.ui.LocalCoreClient
@@ -171,6 +172,9 @@ fun SettingsSection(title: String, tag: String? = null) {
     Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth().settingAnchor(tag).let { if (tag != null) it.testTag(settingTag(tag)) else it }.padding(start = 16.dp, top = 20.dp, bottom = 4.dp).semantics { heading() })
 }
 
+/** True for a category's screen in the pane beside the settings list: there is nothing to go back to. */
+val LocalSettingsPane = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 /** A settings sub-screen: large flexible top app bar that collapses as the page scrolls, back arrow, scrolling rows. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -185,14 +189,17 @@ fun SubScreen(nav: NavHostController, title: String, content: @Composable androi
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(title, modifier = Modifier.semantics { heading() }.testTag("settings.title")) },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                navigationIcon = { if (!LocalSettingsPane.current) IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,
             )
         },
     ) { padding ->
         // Top only: the shell already keeps content clear of the navigation bar.
         androidx.compose.runtime.CompositionLocalProvider(LocalJumpTarget provides jump) {
-            Column(Modifier.padding(top = padding.calculateTopPadding()).verticalScroll(scrollState).padding(bottom = BottomContentInset)) { content() }
+            // The scroll spans the screen; the rows stop at ContentMaxWidth, centred.
+            Column(Modifier.padding(top = padding.calculateTopPadding()).verticalScroll(scrollState).padding(bottom = BottomContentInset)) {
+                Column(Modifier.contentMaxWidth()) { content() }
+            }
         }
     }
 }
