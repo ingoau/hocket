@@ -35,6 +35,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.lerp
+import androidx.compose.ui.unit.offset
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -164,39 +175,136 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarCol
     val colourSpec = if (reduced) snap() else spring<Color>(stiffness = Spring.StiffnessMediumLow)
     val container by animateColorAsState(if (selected) colours.indicator else colours.indicator.copy(alpha = 0f), colourSpec, label = "navItemContainer")
     val content by animateColorAsState(if (selected) colours.selected else colours.unselected, colourSpec, label = "navItemContent")
-    // An unselected place is a fixed-width cell; the selected one pads out around its label.
-    val sidePadding by androidx.compose.animation.core.animateDpAsState(if (selected) 16.dp else (FloatingNavBarDefaults.ItemWidth - 24.dp) / 2, if (reduced) snap() else spring(dampingRatio = 0.9f, stiffness = 500f), label = "navItemPadding")
+    // How open the place is (0, an icon-only cell; 1, the capsule round its label). It drives the
+    // layout without overshoot, so the bar's own width never bulges past where it lands; the
+    // capsule's drawn width follows [bounce], which overshoots, and so it alone springs.
+    val open = remember { androidx.compose.animation.core.Animatable(if (selected) 1f else 0f) }
+    val bounce = remember { androidx.compose.animation.core.Animatable(if (selected) 1f else 0f) }
+    val interactions = remember { MutableInteractionSource() }
+    val press = rememberPressScale(interactions, reduced)
+    // The icon pops (dips, then springs past full size) as its place becomes the selected one.
+    val iconPop = remember { androidx.compose.animation.core.Animatable(1f) }
+    val wasSelected = remember { arrayOf(selected) }
+    androidx.compose.runtime.LaunchedEffect(selected, reduced) {
+        val became = selected && !wasSelected[0]
+        wasSelected[0] = selected
+        val target = if (selected) 1f else 0f
+        if (reduced) {
+            open.snapTo(target); bounce.snapTo(target)
+            return@LaunchedEffect
+        }
+        launch { open.animateTo(target, if (selected) NavItemMotion.Grow else NavItemMotion.Fold) }
+        launch { bounce.animateTo(target, if (selected) NavItemMotion.Bounce else NavItemMotion.Fold) }
+        if (became) {
+            iconPop.snapTo(NavItemMotion.POP_FROM)
+            iconPop.animateTo(1f, NavItemMotion.Pop)
+        }
+    }
+    val labelAlpha by androidx.compose.animation.core.animateFloatAsState(
+        if (selected) 1f else 0f,
+        if (reduced) snap() else if (selected) androidx.compose.animation.core.tween(160, delayMillis = 90) else androidx.compose.animation.core.tween(70),
+        label = "navItemLabel",
+    )
+    val cellPadding = (FloatingNavBarDefaults.ItemWidth - 24.dp) / 2
+    // The label's room (gap and text) at full width, measured as it lays out.
+    val labelRoomPx = remember { floatArrayOf(0f) }
     Row(
         Modifier
             .fillMaxHeight()
+            // The capsule, drawn unclipped: wider than the place by the bounce's lead on the layout
+            // (spread to both sides), so it overshoots and settles while the place does not.
+            .drawBehind {
+                val extra = (bounce.value - open.value) * (labelRoomPx[0] + 2 * (16.dp - cellPadding).toPx())
+                drawRoundRect(container, topLeft = Offset(-extra / 2f, 0f), size = Size(size.width + extra, size.height), cornerRadius = CornerRadius(size.height / 2f))
+            }
             .clip(CircleShape)
-            .background(container)
-            .selectable(selected = selected, onClick = onClick, role = Role.Tab, interactionSource = remember { MutableInteractionSource() }, indication = ripple())
+            .selectable(selected = selected, onClick = onClick, role = Role.Tab, interactionSource = interactions, indication = ripple())
             .semantics { contentDescription = label }
             .testTag("navBar." + item.id)
-            .padding(horizontal = sidePadding),
+            .layout { measurable, constraints ->
+                // Side padding from the cell's to the capsule's as the place opens.
+                val pad = lerp(cellPadding, 16.dp, open.value).roundToPx()
+                val placeable = measurable.measure(constraints.offset(horizontal = -pad * 2))
+                layout(placeable.width + pad * 2, placeable.height) { placeable.place(pad, 0) }
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(item.icon(selected), null, tint = content, modifier = Modifier.size(24.dp))
-        AnimatedVisibility(
-            visible = selected,
-            enter = if (reduced) fadeIn() else expandHorizontally(spring(dampingRatio = 0.9f, stiffness = 500f), expandFrom = Alignment.Start) + fadeIn(androidx.compose.animation.core.tween(160, delayMillis = 110)),
-            exit = if (reduced) fadeOut() else fadeOut(androidx.compose.animation.core.tween(70)) + shrinkHorizontally(spring(dampingRatio = 1f, stiffness = 600f), shrinkTowards = Alignment.Start),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = content,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = labelMax).clearAndSetSemantics { },
-                )
+        // The press dips the icon and label, never the capsule: its height stays put and only its
+        // width springs.
+        Row(Modifier.graphicsLayer { val s = press.value; scaleX = s; scaleY = s }, verticalAlignment = Alignment.CenterVertically) {
+            Icon(item.icon(selected), null, tint = content, modifier = Modifier.size(24.dp).graphicsLayer { val s = iconPop.value; scaleX = s; scaleY = s })
+            if (selected || labelAlpha > 0f || open.value > 0f) {
+                Row(
+                    Modifier
+                        .clipToBounds()
+                        .layout { measurable, constraints ->
+                            // Laid out at full width, shown as much as the place is open.
+                            val placeable = measurable.measure(constraints.copy(minWidth = 0))
+                            labelRoomPx[0] = placeable.width.toFloat()
+                            val shown = (placeable.width * open.value.coerceIn(0f, 1f)).roundToInt()
+                            layout(shown, placeable.height) { placeable.place(0, 0) }
+                        }
+                        .graphicsLayer { alpha = labelAlpha },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = content,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = labelMax).clearAndSetSemantics { },
+                    )
+                }
             }
         }
     }
+}
+
+/**
+ * A place's content scale while pressed: it eases down to [NavItemMotion.PRESSED] as the finger lands and
+ * springs back past full size when it lifts. A quick tap still shows the whole dip: the release
+ * waits for the press-down to finish first.
+ */
+@Composable
+private fun rememberPressScale(interactions: MutableInteractionSource, reduced: Boolean): androidx.compose.runtime.State<Float> {
+    val scale = remember { androidx.compose.animation.core.Animatable(1f) }
+    androidx.compose.runtime.LaunchedEffect(interactions, reduced) {
+        if (reduced) { scale.snapTo(1f); return@LaunchedEffect }
+        var down: kotlinx.coroutines.Job? = null
+        interactions.interactions.collect { interaction ->
+            when (interaction) {
+                is androidx.compose.foundation.interaction.PressInteraction.Press -> {
+                    down = launch { scale.animateTo(NavItemMotion.PRESSED, NavItemMotion.PressDown) }
+                }
+                is androidx.compose.foundation.interaction.PressInteraction.Release,
+                is androidx.compose.foundation.interaction.PressInteraction.Cancel -> {
+                    val pressing = down
+                    launch {
+                        pressing?.join()
+                        scale.animateTo(1f, NavItemMotion.Release)
+                    }
+                }
+            }
+        }
+    }
+    return scale.asState()
+}
+
+/** The floating bar's springs: a pressed place's dip and rebound, and the selected capsule's bounce. */
+private object NavItemMotion {
+    const val PRESSED = 0.9f
+    const val POP_FROM = 0.84f
+    val PressDown = androidx.compose.animation.core.tween<Float>(durationMillis = 90, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+    val Release = spring<Float>(dampingRatio = 0.45f, stiffness = 420f)
+    val Pop = spring<Float>(dampingRatio = 0.42f, stiffness = 380f)
+    /** The place opening round its label: critically damped, so the bar never grows past its width. */
+    val Grow = spring<Float>(dampingRatio = 1f, stiffness = 420f)
+    /** The capsule's drawn width as it opens: underdamped, so it overshoots and settles. */
+    val Bounce = spring<Float>(dampingRatio = 0.6f, stiffness = 420f)
+    val Fold = spring<Float>(dampingRatio = 1f, stiffness = 600f)
 }
 
 /** The bar's colours: its pill, the selected capsule, and the selected and other places' content. */
