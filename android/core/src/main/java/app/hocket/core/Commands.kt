@@ -194,6 +194,8 @@ object Queries {
     fun configDocument(includeSecrets: Boolean) = Query.ConfigDocument(QueryConfigDocumentInner(includeSecrets))
     fun createShare(ids: List<String>) = Query.CreateShare(QueryCreateShareInner(ids))
     fun exportAudio(trackId: TrackId) = Query.ExportAudio(QueryExportAudioInner(trackId))
+    /** A Song.link (track) or Album.link (album) URL, found on Deezer by the core. */
+    fun songLink(trackId: TrackId? = null, albumId: AlbumId? = null) = Query.SongLink(QuerySongLinkInner(trackId, albumId))
 }
 
 /** The fixed artwork sizes the core caches. Never request anything else. */

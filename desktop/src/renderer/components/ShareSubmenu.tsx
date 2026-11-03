@@ -1,5 +1,5 @@
-// The context menu's Share flyout: a Navidrome public link, a Song.link search page, and the audio
-// file. Each row closes the menu and does the share. Open in Genius is a row of the menu itself.
+// The context menu's Share flyout: a Navidrome public link, a Song.link page, and the audio file.
+// Each row closes the menu and does the share. Open in Genius is a row of the menu itself.
 import type { ActionTarget } from "@core/api";
 import { t } from "@shared/strings";
 import { copyNavidromeShare, copySongLink, shareAudioFile, shareChoices } from "../lib/share";

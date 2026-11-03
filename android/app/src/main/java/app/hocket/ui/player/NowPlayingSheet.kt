@@ -622,10 +622,12 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val portrait = if (panelMode && !state.fullScreen) panelWidth <= (panelBottom - panelTop) * ImmersiveArtwork.MAX_WIDTH_SHARE
             else constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
         fun ArtworkLayout?.immersiveOrNull() = this?.takeIf { portrait && it.bottom.style != ArtworkStyle.Card }
-        // The scene (the cover, its layout and its colours) changes as one: a new cover waits until
-        // its layout and seed are known (at once for one already worked out, a neighbour's, say),
-        // so it never shows as a card and then turns immersive, or in the wrong colours. A slow
-        // one gives up waiting after [SCENE_HOLD_MS] and shows as a card until it is known.
+        // The scene's style (the layout and colours) changes as one: a new cover's waits until its
+        // layout and seed are known (at once for one already worked out, a neighbour's, say), so
+        // it never shows as a card and then turns immersive, or in the wrong colours. Meanwhile the
+        // last style holds around the new cover (never the last cover itself: that is another
+        // song's art). A slow one gives up waiting after [SCENE_HOLD_MS] and shows as a card until
+        // it is known.
         val trackLayout by rememberArtworkLayout(trackCover, preference, dark = appDark)
         val trackSeed by artworkSeed(trackCover)
         val carousel = remember { SkipCarousel() }
@@ -633,12 +635,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         var held by remember { mutableStateOf<Scene?>(null) }
         var holdOver by remember(trackCover) { mutableStateOf(false) }
         LaunchedEffect(trackCover) { kotlinx.coroutines.delay(SCENE_HOLD_MS); holdOver = true }
-        val scene = when {
-            ready -> Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed)
-            // A skip swipe has already shown the new song in its own style: no holding the old one.
-            !holdOver && held != null && !carousel.committing -> held!!
-            else -> Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed)
-        }
+        // A skip swipe has already shown the new song in its own style: no holding the old one.
+        val scene = sceneShown(Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed), ready, held, holding = !holdOver && !carousel.committing)
         SideEffect { if (ready) held = scene }
         val coverArt = scene.coverArt
         val seed = scene.seed ?: coverArt?.let { ArtworkColors.seedFor(it) }
@@ -927,7 +925,19 @@ private fun StatusBarOver(light: Boolean?) {
 private val IMMERSIVE_DARK = Color(0xFF1C1B1F)
 
 /** What the player shows for a song: its cover, its immersive layout (null: a card) and its seed colour. */
-private data class Scene(val coverArt: String?, val layout: ArtworkLayout?, val seed: Color?)
+internal data class Scene(val coverArt: String?, val layout: ArtworkLayout?, val seed: Color?)
+
+/**
+ * The scene the full player shows for the current track's [current]: itself once [ready]; while
+ * [holding], the [held] (last ready) scene's layout and colours around the current cover; else
+ * itself as it is. The cover is always the current track's (issue #147: a skip showed the last
+ * song's cover until the new one's layout was worked out).
+ */
+internal fun sceneShown(current: Scene, ready: Boolean, held: Scene?, holding: Boolean): Scene = when {
+    ready -> current
+    holding && held != null -> held.copy(coverArt = current.coverArt)
+    else -> current
+}
 
 /** How long a new cover's scene waits for its layout and colours before showing as a card. */
 private const val SCENE_HOLD_MS = 400L

@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -105,7 +106,9 @@ fun Artwork(
         var loaded by remember(path) { mutableStateOf(false) }
         // The gradient stays under the stand-in while that decodes, never an empty card.
         if (path == null) ArtworkPlaceholder(coverArt, Modifier.fillMaxSize())
-        if (!loaded && stand != null && !standFailed) {
+        // Each file in its own painter (key): a painter handed a new file keeps drawing the one it
+        // had until the new one decodes, which on a track change is another song's cover (#147).
+        if (!loaded && stand != null && !standFailed) key(stand.path) {
             AsyncImage(
                 model = remember(stand, requested) { ImageRequest.Builder(platformContext).data(File(stand.path.removePrefix("file://"))).size(requested).build() },
                 contentDescription = null,
@@ -114,7 +117,7 @@ fun Artwork(
                 onError = { ArtworkPathCache.remove(stand.key); standFailed = true },
             )
         }
-        if (path != null) {
+        if (path != null) key(path) {
             val request = remember(path, requested, startedWithCachedPath) {
                 // Decoded at the requested artwork size, not the view's: a view that resizes (the
                 // player's artwork going edge to edge) keeps its image instead of reloading it.

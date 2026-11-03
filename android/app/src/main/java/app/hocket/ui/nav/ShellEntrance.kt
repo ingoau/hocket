@@ -15,30 +15,34 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * The shell's entrance as the splash screen leaves: the page rises into place, then the navigation
- * bar and the mini player slide up after it. Armed by a fresh MainActivity start (only then is there
- * a splash to come out of) and started when the splash begins to leave, so the shell builds itself
- * under the dissolving tile. Never armed otherwise (a recreation, tests): the shell is just there.
+ * bar and the mini player slide up after it. Only a splash exit plays it: it [hide]s the shell
+ * under the still-opaque splash, then [play]s the entrance once the tile has begun to clear, so
+ * the entrance is seen rather than spent under the tile. Without a splash exit (a launch the
+ * system showed no splash for, a recreation, tests) nothing hides the shell: it is just there.
  */
 object ShellEntrance {
-    private val armed = MutableStateFlow(false)
-    private val _revealed = MutableStateFlow(false)
-    internal val revealed: StateFlow<Boolean> = _revealed.asStateFlow()
+    internal enum class Phase { Shown, Hidden, Entering }
 
-    /** A fresh start: the next shell to appear plays the entrance, once the splash leaves. */
-    fun arm() {
-        armed.value = true
-        _revealed.value = false
+    private val _phase = MutableStateFlow(Phase.Shown)
+    internal val phase: StateFlow<Phase> = _phase.asStateFlow()
+
+    /** The splash is about to leave: the shell waits, unseen, under it for [play]. */
+    fun hide() {
+        _phase.value = Phase.Hidden
     }
 
-    /** The splash is leaving (or there is none left to wait for). */
-    fun reveal() {
-        _revealed.value = true
+    /** The splash is clearing (or the wait was cut short): a hidden shell comes in. */
+    fun play() {
+        _phase.compareAndSet(Phase.Hidden, Phase.Entering)
     }
 
-    internal val isArmed: Boolean get() = armed.value
+    /** No entrance after all (a recreation has no splash): the shell is just there. */
+    fun finish() {
+        _phase.value = Phase.Shown
+    }
 
     internal fun played() {
-        armed.value = false
+        _phase.compareAndSet(Phase.Entering, Phase.Shown)
     }
 
     /** The whole entrance; each part takes its own stretch of it ([entrancePart]). */
@@ -60,12 +64,16 @@ private val EmphasizedDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
  */
 @Composable
 internal fun rememberShellEntrance(): () -> Float {
-    val progress = remember { Animatable(if (ShellEntrance.isArmed) 0f else 1f) }
-    val revealed by ShellEntrance.revealed.collectAsState()
-    LaunchedEffect(revealed) {
-        if (revealed && progress.value < 1f) {
-            ShellEntrance.played()
-            progress.animateTo(1f, tween(ShellEntrance.DURATION_MS, easing = LinearEasing))
+    val progress = remember { Animatable(if (ShellEntrance.phase.value == ShellEntrance.Phase.Shown) 1f else 0f) }
+    val phase by ShellEntrance.phase.collectAsState()
+    LaunchedEffect(phase) {
+        when (phase) {
+            ShellEntrance.Phase.Shown -> progress.snapTo(1f)
+            ShellEntrance.Phase.Hidden -> progress.snapTo(0f)
+            ShellEntrance.Phase.Entering -> {
+                progress.animateTo(1f, tween(ShellEntrance.DURATION_MS, easing = LinearEasing))
+                ShellEntrance.played()
+            }
         }
     }
     return { progress.value }

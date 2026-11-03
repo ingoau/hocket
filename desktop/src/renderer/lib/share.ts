@@ -1,5 +1,5 @@
-// What Share offers, and doing it: a Navidrome public link (createShare), a Song.link search page,
-// or the audio file itself. Open in Genius is a row of the menu, not of Share. The file never
+// What Share offers, and doing it: a Navidrome public link (createShare), a Song.link page the
+// core finds on Deezer, or the audio file itself. Open in Genius is a row of the menu, not of Share. The file never
 // comes back to the page as a path.
 import type { ActionTarget } from "@core/api";
 import { t } from "@shared/strings";
@@ -16,7 +16,7 @@ export interface ShareChoices {
 
 const NONE: ShareChoices = { navidrome: false, songLink: false, file: false };
 
-/** Which of these a target can offer. One song has all three; an artist only Song.link. */
+/** Which of these a target can offer. One song has all three. Song.link has no artist pages. */
 export function shareChoices(facts: { kind?: MenuFacts["kind"]; count: number } | undefined): ShareChoices {
   if (!facts || facts.count < 1) return NONE;
   const one = facts.count === 1;
@@ -25,18 +25,11 @@ export function shareChoices(facts: { kind?: MenuFacts["kind"]; count: number } 
       return { navidrome: true, songLink: one, file: one };
     case "album":
       return { navidrome: true, songLink: one, file: false };
-    case "artist":
-      return { navidrome: false, songLink: one, file: false };
     case "playlist":
       return { navidrome: true, songLink: false, file: false };
     default:
       return NONE;
   }
-}
-
-/** Song.link's search page. The renderer cannot call api.song.link (the page's connect-src is 'self'). */
-export function songLinkSearch(query: string): string {
-  return `https://song.link/s/${encodeURIComponent(query.trim())}`;
 }
 
 /** Genius search for `"title" "artist"`. Undefined when there is no title. */
@@ -56,21 +49,13 @@ export async function navidromeShareIds(target: ActionTarget, facts: MenuFacts):
   return [];
 }
 
-async function songLinkQuery(target: ActionTarget, facts: MenuFacts): Promise<string | undefined> {
-  const b = bridge();
+/** What the core's `songLink` query looks up: one song, or one album. */
+export function songLinkIds(target: ActionTarget, facts: MenuFacts): { track_id?: string; album_id?: string } | undefined {
   if (facts.kind === "song") {
-    const id = facts.trackIds?.[0];
-    if (!id) return facts.header?.title;
-    const r = await b.query({ type: "track", data: { id } });
-    const track = r.type === "trackDetail" ? r.data : undefined;
-    return [track?.artist, track?.title ?? facts.header?.title].filter(Boolean).join(" ") || undefined;
+    const id = facts.trackIds?.[0] ?? (target.type === "tracks" ? target.data.ids[0] : undefined);
+    return id ? { track_id: id } : undefined;
   }
-  if (facts.kind === "album" && target.type === "albums" && target.data.ids[0]) {
-    const r = await b.query({ type: "album", data: { id: target.data.ids[0] } });
-    const album = r.type === "albumDetail" ? r.data : undefined;
-    return [album?.artist, album?.name ?? facts.header?.title].filter(Boolean).join(" ") || undefined;
-  }
-  if (facts.kind === "artist") return facts.header?.title;
+  if (facts.kind === "album" && target.type === "albums" && target.data.ids[0]) return { album_id: target.data.ids[0] };
   return undefined;
 }
 
@@ -93,9 +78,15 @@ export async function copyNavidromeShare(target: ActionTarget, facts: MenuFacts)
   copied(r.type === "share" ? r.data?.url : undefined);
 }
 
+/** Song.link takes a platform id, not a search: the core finds the song on Deezer first. */
 export async function copySongLink(target: ActionTarget, facts: MenuFacts): Promise<void> {
-  const query = (await songLinkQuery(target, facts))?.trim();
-  copied(query ? songLinkSearch(query) : undefined);
+  const ids = songLinkIds(target, facts);
+  if (!ids) {
+    copied(undefined);
+    return;
+  }
+  const r = await bridge().query({ type: "songLink", data: ids });
+  copied(r.type === "songLink" ? r.data : undefined);
 }
 
 /** Open Genius's search for this one song: `"title" "artist"`. */

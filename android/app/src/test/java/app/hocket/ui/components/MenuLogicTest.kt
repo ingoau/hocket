@@ -2,7 +2,10 @@ package app.hocket.ui.components
 
 import app.hocket.core.ActionIds
 import app.hocket.core.Commands
+import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
+import app.hocket.core.api.ActionTarget
+import app.hocket.core.api.ActionTargetAlbumsInner
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueItem
 import app.hocket.core.api.QueueMode
@@ -16,7 +19,7 @@ import app.hocket.core.api.PlaylistEntryRef
 import app.hocket.core.api.PlaylistMembership
 import app.hocket.share.geniusSearch
 import app.hocket.share.shareChoices
-import app.hocket.share.songLinkSearch
+import app.hocket.share.songLinkQuery
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -105,10 +108,12 @@ class MenuLogicTest {
         assertTrue(shareChoices(MenuKind.Song).file && shareChoices(MenuKind.Song).songLink)
         assertTrue(!shareChoices(MenuKind.Songs).file && !shareChoices(MenuKind.Songs).songLink && shareChoices(MenuKind.Songs).navidrome)
         assertTrue(shareChoices(MenuKind.Album).songLink && !shareChoices(MenuKind.Album).file)
-        assertTrue(shareChoices(MenuKind.Artist).songLink && !shareChoices(MenuKind.Artist).navidrome)
+        assertTrue(!shareChoices(MenuKind.Artist).any)
         assertTrue(shareChoices(MenuKind.Playlist).navidrome && !shareChoices(MenuKind.Playlist).songLink)
         assertTrue(!shareChoices(MenuKind.Other).any)
-        assertEquals("https://song.link/s/Boards%20of%20Canada%20Roygbiv", songLinkSearch("Boards of Canada Roygbiv"))
+        assertEquals(Queries.songLink(trackId = "t1"), songLinkQuery(MenuSubject(MenuKind.Song, "Roygbiv", trackId = "t1"), ActionTarget.None))
+        assertEquals(Queries.songLink(albumId = "al1"), songLinkQuery(MenuSubject(MenuKind.Album, "Geogaddi"), ActionTarget.Albums(ActionTargetAlbumsInner(listOf("al1")))))
+        assertNull(songLinkQuery(MenuSubject(MenuKind.Artist, "Boards of Canada", artistId = "ar1"), ActionTarget.None))
         assertEquals("https://genius.com/search?q=%22Roygbiv%22%20%22Boards%20of%20Canada%22", geniusSearch("Roygbiv", "Boards of Canada"))
         assertNull(geniusSearch("  ", "Boards of Canada"))
     }
