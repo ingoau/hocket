@@ -91,7 +91,8 @@ class LargeScreenShellTest {
         assertTrue("and the whole artwork ($art)", art.bottom <= heightPx)
         assertFalse("no panel toggle on a phone", exists("player.fullScreen"))
         // The skip swipe's next cover waits off the page, not over the controls beside the artwork.
-        if (exists("player.artwork.next")) assertTrue("next cover off screen (${bounds("player.artwork.next")})", bounds("player.artwork.next").left >= widthPx - 1f)
+        // (Clipped away entirely, its bounds are empty.)
+        if (exists("player.artwork.next")) bounds("player.artwork.next").let { assertTrue("next cover off screen ($it)", it.isEmpty || it.left >= widthPx - 1f) }
     }
 
     @Test
