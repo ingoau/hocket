@@ -13,7 +13,7 @@
 use serde::Deserialize;
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
-use crate::lyrics::LyricsHttp;
+use crate::lyrics::{LyricsError, LyricsHttp};
 
 const DEEZER: &str = "https://api.deezer.com";
 const SQUIGLY: &str = "https://squigly.link";
@@ -92,7 +92,12 @@ pub async fn album_url(http: &dyn LyricsHttp, name: &str, artist: Option<&str>) 
 /// The Squigly page for a Deezer link: made now if Squigly answers, else made when opened.
 async fn squigly(http: &dyn LyricsHttp, deezer: &str) -> String {
     let body = serde_json::json!({ "url": deezer }).to_string();
-    match http.post_json(&format!("{SQUIGLY}/api/create"), body).await {
+    let create = http.post_json(&format!("{SQUIGLY}/api/create"), body);
+    // Share waits on this, and the fallback works too: don't wait long.
+    match tokio::time::timeout(std::time::Duration::from_secs(4), create)
+        .await
+        .unwrap_or_else(|_| Err(LyricsError::Network("timed out".into())))
+    {
         Ok(answer) => {
             if let Some(url) = parse_created(&answer) {
                 return url;
@@ -297,7 +302,6 @@ fn fold(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lyrics::LyricsError;
     use futures::future::BoxFuture;
     use std::sync::Mutex;
 
@@ -530,6 +534,31 @@ mod tests {
         let asked = http.asked.lock().unwrap().clone();
         assert!(
             asked.contains(&r#"{"url":"https://www.deezer.com/track/138547415"}"#.to_string()),
+            "{asked:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_album_page_from_the_deezer_album_link() {
+        let http = FakeHttp::new(vec![
+            (
+                "/search/album?",
+                Ok(r#"{"data":[{"id":14879699,"title":"OK Computer","artist":{"name":"Radiohead"}}]}"#.into()),
+            ),
+            (
+                "squigly.link/api/create",
+                Ok(r#"{"url":"/aB12cD","pretty_url":"/album/radiohead/ok-computer"}"#.into()),
+            ),
+        ]);
+        assert_eq!(
+            album_url(&http, "OK Computer", Some("Radiohead"))
+                .await
+                .as_deref(),
+            Some("https://squigly.link/album/radiohead/ok-computer")
+        );
+        let asked = http.asked.lock().unwrap().clone();
+        assert!(
+            asked.contains(&r#"{"url":"https://www.deezer.com/album/14879699"}"#.to_string()),
             "{asked:?}"
         );
     }
