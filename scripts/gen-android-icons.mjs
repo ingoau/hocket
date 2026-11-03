@@ -28,7 +28,7 @@ const SYMBOLS = {
   AccountCircle: "account_circle", Add: "add", Album: "album", AllInclusive: "all_inclusive", ArrowBack: "arrow_back",
   ArrowDropDown: "arrow_drop_down", BarChart: "bar_chart", BatterySaver: "battery_saver", Bedtime: "bedtime", Cancel: "cancel",
   Cast: "cast", Category: "category", Check: "check", CheckCircle: "check_circle", ChevronRight: "chevron_right",
-  ClearAll: "clear_all", Inventory2: "inventory_2", Close: "close", CloudOff: "cloud_off", Computer: "computer", Delete: "delete", Devices: "devices", Dns: "dns",
+  ClearAll: "clear_all", Inventory2: "inventory_2", Close: "close", CloseFullscreen: "close_fullscreen", OpenInFull: "open_in_full", Menu: "menu", MenuOpen: "menu_open", CloudOff: "cloud_off", Computer: "computer", Delete: "delete", Devices: "devices", Dns: "dns",
   Download: "download", DownloadDone: "download_done", DownloadForOffline: "download_for_offline", DragHandle: "drag_handle", Edit: "edit",
   ErrorOutline: "error:outline", Favorite: "favorite", FavoriteBorder: "favorite:outline", FilterAlt: "filter_alt",
   GraphicEq: "graphic_eq", History: "history", Home: "home", Info: "info", KeyboardArrowDown: "keyboard_arrow_down",
@@ -65,6 +65,8 @@ const GROUPS = [
     "OpenInNew", "Laptop", "DesktopWindows", "Warning", "Equalizer",
     // The song stash (#150).
     "Inventory2",
+    // Large screens: the player panel's full-screen toggle and the navigation rail's menu.
+    "OpenInFull", "CloseFullscreen", "Menu", "MenuOpen",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",

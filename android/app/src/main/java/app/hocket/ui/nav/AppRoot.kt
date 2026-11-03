@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalWideNavigationRail
+import androidx.compose.material3.WideNavigationRail
 import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.Snackbar
@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -90,6 +91,9 @@ import app.hocket.BuildConfig
 import app.hocket.HocketApp
 import androidx.compose.ui.platform.LocalContext
 import app.hocket.R
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import app.hocket.ui.icons.HocketIcons
 import app.hocket.core.CoreKind
 import app.hocket.core.HocketJson
 import app.hocket.playback.CoreHost
@@ -323,6 +327,49 @@ val LocalBottomBarInset = compositionLocalOf { 0.dp }
  */
 val LocalStashRoom = compositionLocalOf { 0.dp }
 
+/**
+ * Whether the mini player sits beside the floating bar (wide screens: the pill at the bottom start,
+ * the mini player at the end) rather than above it: [LocalBottomBarInset] then already covers both,
+ * so [BottomContentInset] and [BottomOverlayInset] add nothing for the mini player.
+ */
+val LocalMiniBesideBar = compositionLocalOf { false }
+
+/**
+ * The shell's shape for a window: the navigation (the floating pill or the standard bar at the
+ * bottom, or a [rail] at the start edge) and where the mini player sits ([miniWidth] wide at the end
+ * edge, or centred when null). [barRow]: the pill at the bottom start with the mini player beside it.
+ * [panel]: the player opens as a side panel beside the page rather than over it.
+ */
+internal data class ShellLayout(val rail: Boolean, val barRow: Boolean, val miniWidth: Dp?, val panel: Boolean)
+
+/** The mini player's width at the end edge, and the side panel's (the panel grows out of a mini player as wide). */
+internal val EndMiniWidth = 400.dp
+internal val PanelWidth = 420.dp
+
+/** The narrowest the mini player gets beside the pill before the two stack again. */
+private val MinMiniBesideBar = 320.dp
+
+/**
+ * The layout for a [width] × [height] window: phones (under 600 dp) keep the stacked, centred bar
+ * and mini player; wider, the floating pill and the mini player share one row (as long as a mini
+ * player of [MinMiniBesideBar] fits beside the widest pill of [places]), or with the floating bar
+ * turned off a rail takes the start edge and the mini player the end. Landscape windows of 960 dp
+ * and wider open the player as a side panel.
+ */
+internal fun shellLayout(width: Dp, height: Dp, floatingBar: Boolean, places: Int): ShellLayout {
+    if (width < 600.dp) return ShellLayout(rail = false, barRow = false, miniWidth = null, panel = false)
+    val panel = width >= 960.dp && width > height
+    val endWidth = if (panel) PanelWidth else EndMiniWidth
+    val margin = app.hocket.ui.player.HeroGeometry.MINI_MARGIN
+    if (!floatingBar) {
+        val room = width - CollapsedRailWidth - margin * 2
+        return ShellLayout(rail = true, barRow = false, miniWidth = minOf(endWidth, room), panel = panel && room >= PanelWidth)
+    }
+    val room = width - floatingPillMaxWidth(places) - margin * 3
+    if (room < MinMiniBesideBar) return ShellLayout(rail = false, barRow = false, miniWidth = null, panel = false)
+    return ShellLayout(rail = false, barRow = true, miniWidth = minOf(endWidth, room), panel = panel && room >= PanelWidth)
+}
+
 /** The gap the mini player keeps above the navigation bar. */
 private val MiniPlayerGap = app.hocket.ui.player.NowPlayingSheetState.MINI_GAP
 
@@ -332,11 +379,11 @@ private val MiniPlayerGap = app.hocket.ui.player.NowPlayingSheetState.MINI_GAP
  * both; otherwise only the bar and a small margin, so nothing leaves an empty band at the bottom.
  */
 val BottomContentInset: Dp
-    @Composable get() = LocalBottomBarInset.current + LocalStashRoom.current + if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap + 24.dp else 24.dp
+    @Composable get() = LocalBottomBarInset.current + LocalStashRoom.current + if (LocalPlayerVisible.current && !LocalMiniBesideBar.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap + 24.dp else 24.dp
 
 /** Where a screen's bottom overlay (a selection toolbar, a floating button) sits clear of the bar and the mini player. */
 val BottomOverlayInset: Dp
-    @Composable get() = LocalBottomBarInset.current + LocalStashRoom.current + (if (LocalPlayerVisible.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
+    @Composable get() = LocalBottomBarInset.current + LocalStashRoom.current + (if (LocalPlayerVisible.current && !LocalMiniBesideBar.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
 
 /**
  * The standard phone navigation bar's height before it has been measured (Material's short
@@ -353,7 +400,11 @@ private const val RecedeScale = 0.05f
 private val RecedeCorner = 20.dp
 
 /** The collapsed wide navigation rail's width, before it is measured. */
-private val CollapsedRailWidth = 96.dp
+internal val CollapsedRailWidth = 96.dp
+
+/** Where the shell remembers whether the side panel was left open (across restarts). */
+private const val SHELL_PREFS = "hocket.shell"
+private const val PANEL_OPEN = "player.panelOpen"
 
 @Composable
 private fun MainShell(snackbar: SnackbarHostState) {
@@ -365,7 +416,12 @@ private fun MainShell(snackbar: SnackbarHostState) {
     val nowPlaying = client.nowPlaying.collectAsStateWithLifecycle()
     val playerVisible by remember { derivedStateOf { nowPlaying.value != null } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val wide = maxWidth >= 600.dp
+        // The phone's bar: the compact floating pill, or the standard full-width bar.
+        val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR).bool ?: true
+        val shellLayout = shellLayout(maxWidth, maxHeight, floatingBar, navItems().size)
+        // A rail at the start edge in place of a bottom bar.
+        val wide = shellLayout.rail
+        val barRow = shellLayout.barRow
         val sharedArtwork = remember { SharedArtworkSession() }
         val screenCache = remember { app.hocket.ui.ScreenCache() }
         // Each page takes the flight prepared for it as it becomes current (synchronously, inside
@@ -383,8 +439,6 @@ private fun MainShell(snackbar: SnackbarHostState) {
         }
         // Developer mode: a shake (or Ctrl+Shift+D) opens developer diagnostics.
         val developerMode = setting(SettingKeys.DEVELOPER_MODE).bool ?: false
-        // The phone's bar: the compact floating pill, or the standard full-width bar.
-        val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR).bool ?: true
         DeveloperTriggerEffect(developerMode) {
             if (nav.currentDestination?.hasRoute(Route.DeveloperDiagnostics::class) != true) nav.navigate(Route.DeveloperDiagnostics)
         }
@@ -397,12 +451,14 @@ private fun MainShell(snackbar: SnackbarHostState) {
         val stash by client.stash.collectAsStateWithLifecycle()
         var stashOpen by rememberSaveable { mutableStateOf(false) }
         val fontScale = LocalDensity.current.fontScale
-        val stashAlone = wide || !floatingBar || !stashFitsBesideBar(maxWidth, navItems().size, fontScale)
+        // The bar's room: beside the mini player in the bar row.
+        val barWidth = if (barRow) maxWidth - (shellLayout.miniWidth ?: 0.dp) - app.hocket.ui.player.HeroGeometry.MINI_MARGIN - 8.dp else maxWidth
+        val stashAlone = wide || !floatingBar || !stashFitsBesideBar(barWidth, navItems().size, fontScale)
         // Eased, so the content's bottom padding follows the chip in rather than jumping.
         val stashRoom by androidx.compose.animation.core.animateDpAsState(
             if (stashAlone && stash.isNotEmpty()) app.hocket.ui.stash.StashChipDefaults.StandaloneRoom else 0.dp, label = "stashRoom",
         )
-        CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalWideLayout provides wide, LocalPlayerVisible provides playerVisible, LocalStashRoom provides stashRoom, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
+        CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalWideLayout provides (maxWidth >= 600.dp), LocalPlayerVisible provides playerVisible, LocalMiniBesideBar provides barRow, LocalStashRoom provides stashRoom, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -419,12 +475,23 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val systemBottomPx = WindowInsets.navigationBars.getBottom(density)
             var navBarMeasuredPx by remember(floatingBar) { mutableIntStateOf(-1) }
             val navBarHeightPx = if (navBarMeasuredPx >= 0) navBarMeasuredPx else with(density) { (if (floatingBar) FloatingNavBarDefaults.Height else ShortNavBarHeight).roundToPx() } + systemBottomPx
-            val bottomInsetPx = if (wide) systemBottomPx else navBarHeightPx
+            // The bar row: the pill and the mini player centred on one row (as tall as the taller),
+            // its bottom 8 dp above the system bar.
+            val miniHeightDp = app.hocket.ui.player.miniPlayerHeight()
+            val rowHeight = maxOf(FloatingNavBarDefaults.PillHeight, miniHeightDp)
+            val rowBottomPx = systemBottomPx + with(density) { FloatingNavBarDefaults.BottomMargin.roundToPx() }
+            val bottomInsetPx = when {
+                wide -> systemBottomPx
+                barRow -> rowBottomPx + with(density) { rowHeight.roundToPx() }
+                else -> navBarHeightPx
+            }
+            // The sheet's own inset: under the mini player's resting place (it adds its gap above that).
+            val sheetInsetPx = if (barRow) rowBottomPx + with(density) { ((rowHeight - miniHeightDp) / 2 - MiniPlayerGap).roundToPx() } else bottomInsetPx
             var railWidthPx by remember { mutableIntStateOf(-1) }
             // While the full player covers the screen, what is behind it (the page, the navigation
             // bar and rail) leaves the accessibility tree, as a modal would: TalkBack must not wander
             // into content nobody can see.
-            val covered by remember(sheet) { derivedStateOf { sheet.progress >= 0.6f } }
+            val covered by remember(sheet) { derivedStateOf { sheet.coverProgress >= 0.6f } }
             val hiddenWhenCovered = if (covered) Modifier.clearAndSetSemantics { } else Modifier
             // Transitions: what the last bar/rail switch was, so the NavHost can tell it from a push.
             val transitions = remember { ShellTransitionInfo() }
@@ -436,6 +503,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val currentItems by rememberUpdatedState(items)
             val go: (NavItem) -> Unit = remember(nav) {
                 go@{ item ->
+                    // A place in the bar hands the main screen back from the panel's lyrics or queue.
+                    sheet.panelPage = null
                     if (item.route() == null) { openQueues(); return@go }
                     val from = currentSelected
                     val handled = from == item && when (nav.reselectPlace(item)) {
@@ -464,6 +533,26 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
             }
             val bottomInset = with(density) { bottomInsetPx.toDp() }
+            // The side panel is remembered: left open, it opens again with the app (and on turning
+            // back to landscape); a panel never turns into the full-screen player on a rotation.
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val shellPrefs = remember(context) { context.getSharedPreferences(SHELL_PREFS, android.content.Context.MODE_PRIVATE) }
+            LaunchedEffect(sheet, shellLayout.panel, playerVisible) {
+                if (!shellLayout.panel || !playerVisible || sheet.isExpanded || !shellPrefs.getBoolean(PANEL_OPEN, false)) return@LaunchedEffect
+                androidx.compose.runtime.snapshotFlow { sheet.collapsedOffset > 0f }.first { it }
+                sheet.expand()
+            }
+            LaunchedEffect(sheet, shellLayout.panel) {
+                if (!shellLayout.panel) return@LaunchedEffect
+                androidx.compose.runtime.snapshotFlow { sheet.draggable.settledValue to sheet.fullScreen }.drop(1).collect { (value, full) ->
+                    if (!full) shellPrefs.edit().putBoolean(PANEL_OPEN, value == app.hocket.ui.player.SheetValue.Expanded).apply()
+                }
+            }
+            var wasPanel by remember { mutableStateOf(shellLayout.panel) }
+            LaunchedEffect(shellLayout.panel) {
+                if (wasPanel && !shellLayout.panel && sheet.isExpanded && !sheet.fullScreen) sheet.collapse()
+                wasPanel = shellLayout.panel
+            }
             CompositionLocalProvider(LocalShellNavigator provides shell, LocalTabReselected provides reselected, LocalBottomBarInset provides bottomInset) {
             // As the full player rises, the page behind it recedes: it shrinks a little into rounded
             // corners over black, as a card pushed back under the sheet (read in the draw phase, so
@@ -476,10 +565,10 @@ private fun MainShell(snackbar: SnackbarHostState) {
             val entranceRise = with(density) { 32.dp.toPx() }
             val miniRise = with(density) { 64.dp.toPx() }
             // (The sheet's own scrim dims the page itself as it recedes.)
-            if (recede) Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheet.progress.coerceIn(0f, 1f) }.background(Color.Black))
+            if (recede) Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheet.coverProgress.coerceIn(0f, 1f) }.background(Color.Black))
             Row(
                 Modifier.fillMaxSize().then(hiddenWhenCovered).graphicsLayer {
-                    val p = sheet.progress.coerceIn(0f, 1f)
+                    val p = sheet.coverProgress.coerceIn(0f, 1f)
                     // Fully under the open player: not drawn at all (and left at its own size,
                     // so whatever reads its bounds meanwhile sees the page as laid out).
                     val e = entrancePart(entrance(), ShellEntrance.CONTENT_START_MS, ShellEntrance.CONTENT_END_MS)
@@ -499,14 +588,26 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 },
             ) {
                 if (wide) {
-                    val railState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
+                    // A standing rail (not a modal one): its menu button shows the places' labels
+                    // beside their icons, and it stays that way (remembered across rotation).
+                    var railOpen by rememberSaveable { mutableStateOf(false) }
+                    val railState = rememberWideNavigationRailState(if (railOpen) WideNavigationRailValue.Expanded else WideNavigationRailValue.Collapsed)
+                    LaunchedEffect(railOpen) { if (railOpen) railState.expand() else railState.collapse() }
+                    val railLabel = stringResource(if (railOpen) R.string.nav_rail_collapse else R.string.nav_rail_expand)
                     Box(Modifier.onSizeChanged { railWidthPx = it.width }) {
-                        ModalWideNavigationRail(state = railState, hideOnCollapse = false) {
+                        WideNavigationRail(
+                            state = railState,
+                            header = {
+                                androidx.compose.material3.IconButton(onClick = { railOpen = !railOpen }, modifier = Modifier.padding(start = 24.dp).testTag("navRail.menu")) {
+                                    Icon(if (railOpen) HocketIcons.Filled.MenuOpen else HocketIcons.Filled.Menu, railLabel)
+                                }
+                            },
+                        ) {
                             items.forEach { item ->
                                 val isSelected = item == selected
                                 WideNavigationRailItem(
                                     selected = isSelected,
-                                    onClick = { go(item); scope.launch { railState.collapse() } },
+                                    onClick = { go(item) },
                                     icon = { Icon(item.icon(isSelected), null) },
                                     label = { Text(item.label()) },
                                     railExpanded = railState.targetValue == WideNavigationRailValue.Expanded,
@@ -518,7 +619,14 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
                 // Content runs to the bottom of the screen: the floating navigation bar and the
                 // mini player float over it, over the scrim below ([BottomContentInset]).
-                Box(Modifier.weight(1f).fillMaxSize()) {
+                // Beside the open side panel the page narrows to what the panel leaves.
+                val panelOpen by remember(sheet, shellLayout.panel) { derivedStateOf { shellLayout.panel && sheet.draggable.targetValue == app.hocket.ui.player.SheetValue.Expanded && !sheet.fullScreen } }
+                val panelRoom by androidx.compose.animation.core.animateDpAsState(
+                    if (panelOpen) PanelWidth + app.hocket.ui.player.HeroGeometry.MINI_MARGIN * 2 else 0.dp,
+                    if (LocalReducedMotion.current) androidx.compose.animation.core.snap() else androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 400f),
+                    label = "panelRoom",
+                )
+                Box(Modifier.weight(1f).fillMaxSize().padding(end = panelRoom)) {
                     val contentNavigator = remember(nav, sharedArtwork) {
                         app.hocket.ui.DetailNavigator(
                             { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); nav.navigate(Route.Album(id)) },
@@ -529,6 +637,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
                         AppNavHost(nav, transitions, Modifier.fillMaxSize())
                     }
+                    // The panel's Lyrics and Queue take over the main screen beside it.
+                    PanelPageHost(page = if (panelOpen) sheet.panelPage else null, onClose = { sheet.panelPage = null })
                 }
             }
             // Links inside the full player (album/artist, the "More" sheet's go-to actions, rows'
@@ -545,7 +655,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // mini player, all on the solid scrim) takes touches: under the sheet and the bar, so
             // those still get theirs, but over the page, so a row hidden behind them is never tapped.
             if (!wide || playerVisible) {
-                val chromeHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() else 0.dp)
+                val chromeHeight = bottomInset + (if (playerVisible && !barRow) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() else 0.dp)
                 // Beside the rail on wide layouts (its lowest places stay tappable).
                 val railStart = if (wide) with(density) { (if (railWidthPx >= 0) railWidthPx else CollapsedRailWidth.roundToPx()).toDp() } else 0.dp
                 Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = railStart).height(chromeHeight).then(if (covered) Modifier else Modifier.blockTouchesBehind()).testTag("bottomChromeBlocker"))
@@ -563,7 +673,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             }) {
             NowPlayingSheet(
                 state = sheet,
-                bottomInset = with(density) { bottomInsetPx.toDp() },
+                bottomInset = with(density) { sheetInsetPx.toDp() },
+                placement = app.hocket.ui.player.PlayerPlacement(miniWidth = shellLayout.miniWidth, panel = shellLayout.panel),
                 onOpenAlbum = navigator.openAlbum,
                 onOpenArtist = navigator.openArtist,
             )
@@ -578,7 +689,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             if (!wide || playerVisible) {
                 // Fully faded by about half-way up the floating mini player (it has its own card and
                 // shadow); without one, a short fade above the bar.
-                val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
+                val scrimHeight = bottomInset + (if (barRow) 0.dp else if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
                 // Over a page in its own colours (a detail page in its artwork's), into those instead.
                 // (The page's own colours already ease in, so no animation of its own here: the bar
                 // and the scrim under it always change together.)
@@ -587,7 +698,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // in above.
                 val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.progress, SCRIM_FADE_END) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }.background(scrim).testTag("bottomScrim"))
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.coverProgress, SCRIM_FADE_END) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }.background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
@@ -595,17 +706,19 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // dragging the sheet does not recompose the bar). Holding it does nothing special: the
                 // editor lives in Settings > Customise and the account sheet.
                 MaterialTheme(colorScheme = LocalPageChrome.current.chromeScheme(backStack.lastOrNull()?.id, MaterialTheme.colorScheme)) {
+                // In the bar row: at the bottom start, beside the mini player, centred on the row.
                 val barModifier = Modifier
-                    .align(Alignment.BottomCenter)
+                    .align(if (barRow) Alignment.BottomStart else Alignment.BottomCenter)
                     .zIndex(20f)
+                    .then(if (barRow) Modifier.width(barWidth).padding(bottom = (rowHeight - FloatingNavBarDefaults.PillHeight) / 2) else Modifier)
                     .onSizeChanged { navBarMeasuredPx = it.height }
                     // Its part of the entrance: up from below the screen's edge, after the page.
                     .offset {
                         val e = entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS)
-                        IntOffset(0, ((sheet.progress + if (entranceMoves) 1f - e else 0f) * navBarHeightPx).roundToInt())
+                        IntOffset(0, ((sheet.coverProgress + if (entranceMoves) 1f - e else 0f) * navBarHeightPx).roundToInt())
                     }
                     // It fades out gently as the player grows over it.
-                    .graphicsLayer { alpha = barFade(sheet.progress) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }
+                    .graphicsLayer { alpha = barFade(sheet.coverProgress) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }
                     .testTag("navBar")
                     // The bar's whole strip (the pill, the margins around it and the system bar
                     // under it, all on the solid scrim) takes the touches its places leave, so
@@ -613,7 +726,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     .blockTouchesBehind()
                     .then(hiddenWhenCovered)
                 if (floatingBar) {
-                    FloatingNavBar(items = items, selected = selected, onSelect = go, modifier = barModifier, stash = if (stashAlone) emptyList() else stash, onOpenStash = { stashOpen = true })
+                    FloatingNavBar(items = items, selected = selected, onSelect = go, modifier = barModifier, stash = if (stashAlone) emptyList() else stash, onOpenStash = { stashOpen = true }, alignment = if (barRow) Alignment.CenterStart else Alignment.Center)
                 } else {
                     // Transparent over the scrim, along the bottom edge.
                     ShortNavigationBar(containerColor = Color.Transparent, modifier = barModifier) {
@@ -631,7 +744,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             if (stashAlone) {
                 // Above the mini player (or the bar when nothing plays) at the end edge, leaving with
                 // the bar as the full player rises.
-                val miniRoom = if (playerVisible) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp
+                val miniRoom = if (playerVisible && !barRow) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp
                 val held = remember { arrayOf(stash) }
                 if (stash.isNotEmpty()) held[0] = stash
                 val reducedMotion = LocalReducedMotion.current
@@ -647,7 +760,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         .align(Alignment.BottomEnd)
                         .zIndex(20f)
                         .padding(end = app.hocket.ui.player.HeroGeometry.MINI_MARGIN, bottom = bottomInset + miniRoom + 8.dp)
-                        .offset { IntOffset(0, (sheet.progress * navBarHeightPx).roundToInt()) }
+                        .offset { IntOffset(0, (sheet.coverProgress * navBarHeightPx).roundToInt()) }
                         .graphicsLayer { alpha = (1f - sheet.progress * 3f).coerceIn(0f, 1f) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }
                         .then(hiddenWhenCovered),
                 ) {
@@ -658,7 +771,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // Snackbars sit just above the mini player (or the bar when nothing plays), centred on
             // the content beside the rail on wide layouts; as the full player opens they ease down
             // to the bottom of the screen instead of floating over its controls.
-            val miniPx = if (playerVisible) with(density) { (app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap).roundToPx() } else 0
+            val miniPx = if (playerVisible && !barRow) with(density) { (app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap).roundToPx() } else 0
             val marginPx = with(density) { 8.dp.roundToPx() }
             val collapsedBottomPx = bottomInsetPx + miniPx + marginPx + with(density) { stashRoom.roundToPx() }
             val expandedBottomPx = systemBottomPx + marginPx
@@ -669,7 +782,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     .align(Alignment.BottomCenter)
                     .zIndex(30f)
                     .padding(start = with(density) { railPx.toDp() }, bottom = with(density) { collapsedBottomPx.toDp() })
-                    .offset { IntOffset(0, (sheet.progress * (collapsedBottomPx - expandedBottomPx)).roundToInt()) },
+                    .offset { IntOffset(0, (sheet.coverProgress * (collapsedBottomPx - expandedBottomPx)).roundToInt()) },
             ) { data -> Snackbar(data) }
             if (accountOpen) {
                 AccountSheet(

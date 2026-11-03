@@ -24,6 +24,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
@@ -74,6 +77,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -137,6 +141,38 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed, initialMo
         }
     val isExpanded: Boolean get() = draggable.currentValue == SheetValue.Expanded || draggable.targetValue == SheetValue.Expanded
 
+    /**
+     * Large screens' panel layout ([PlayerPlacement.panel]): whether the open player has gone full
+     * screen; otherwise it is the side panel beside the page. Cleared as the player closes.
+     */
+    var fullScreen by mutableStateOf(false)
+
+    /** Beside the open panel: what takes over the main screen ([PlayerMode.Lyrics] or [PlayerMode.Queue]; null: the page). */
+    var panelPage by mutableStateOf<PlayerMode?>(null)
+
+    /** 1 while the player opens over the whole screen (always, outside the panel layout), 0 as the side panel; eased between. */
+    internal val cover = Animatable(1f)
+
+    /**
+     * How far the player covers the screen: [progress], times [cover]. What sits behind a full
+     * player (the receding page, the bar fading out, the scrim) follows this, so the side panel
+     * leaves the page as it is.
+     */
+    val coverProgress: Float get() = progress * cover.value
+
+    /** From the panel to the full-screen player: what the main screen showed beside it becomes the player's mode. */
+    fun enterFullScreen() {
+        mode = panelPage ?: PlayerMode.Artwork
+        panelPage = null
+        fullScreen = true
+    }
+
+    /** Back to the panel: lyrics or the queue go back to the main screen beside it. */
+    fun exitFullScreen() {
+        panelPage = mode.takeIf { it == PlayerMode.Lyrics || it == PlayerMode.Queue }
+        fullScreen = false
+    }
+
     /** Fling speed (px/s) past which a release settles in the fling's direction; set from the density. */
     internal var velocityThreshold by mutableStateOf(Float.POSITIVE_INFINITY)
 
@@ -178,14 +214,17 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed, initialMo
     companion object {
         /** Saves where the sheet is headed and the player's mode, so a rotation keeps both. */
         val Saver: Saver<NowPlayingSheetState, String> = Saver(
-            save = { it.draggable.targetValue.name + "|" + it.mode.name },
+            save = { it.draggable.targetValue.name + "|" + it.mode.name + "|" + it.fullScreen + "|" + (it.panelPage?.name ?: "") },
             restore = { saved ->
                 val parts = saved.split("|")
                 NowPlayingSheetState(
                     SheetValue.valueOf(parts[0]),
                     // About is a sheet now (from the title): a saved About mode opens on the artwork.
                     parts.getOrNull(1)?.let { m -> PlayerMode.entries.firstOrNull { it.name == m } }?.takeIf { it != PlayerMode.About } ?: PlayerMode.Artwork,
-                )
+                ).apply {
+                    fullScreen = parts.getOrNull(2) == "true"
+                    panelPage = parts.getOrNull(3)?.let { p -> PlayerMode.entries.firstOrNull { it.name == p } }
+                }
             },
         )
         val MINI_HEIGHT: Dp = 64.dp
@@ -394,6 +433,21 @@ internal class HeroGeometry {
 }
 
 /**
+ * Where the player sits. By default ([miniWidth] null) the phone's: the floating card centred above
+ * the navigation bar (up to [HeroGeometry.MINI_MAX_WIDTH]), growing into the full-screen player.
+ * With a [miniWidth], the card keeps that width at the end edge (beside the floating bar on wide
+ * screens, or beside the rail). With [panel] too (landscape tablets), it grows up into a side panel
+ * of the same width instead, leaving the page usable beside it; the panel's own button takes it full
+ * screen ([NowPlayingSheetState.fullScreen]).
+ */
+@androidx.compose.runtime.Immutable
+data class PlayerPlacement(val miniWidth: Dp? = null, val panel: Boolean = false)
+
+/** The side panel's corners and its gap under the status bar. */
+private val PANEL_CORNER = 28.dp
+private val PANEL_TOP_GAP = 12.dp
+
+/**
  * The player as one morphing sheet (Metrolist): a floating mini-player pill above the navigation bar
  * that grows into the full player. Everything that follows the finger (the sheet's position, its
  * inset and corners, the fading layers, the artwork flying from thumbnail to hero) is read in layout
@@ -402,7 +456,7 @@ internal class HeroGeometry {
  * track changes. The pill slides in when something starts playing and out when nothing is left.
  */
 @Composable
-fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit) {
+fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit, placement: PlayerPlacement = PlayerPlacement()) {
     val client = LocalCoreClient.current
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -428,6 +482,30 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val miniHeight = miniPlayerHeight()
         val miniHeightPx = with(density) { miniHeight.toPx() }
         val collapsedOffset = maxHeightPx - miniHeightPx - with(density) { HeroGeometry.MINI_GAP.toPx() } - navPx
+        // The frame the sheet lives in: the whole screen, or (the panel layout) the side panel's
+        // column at the end edge, under the status bar and down to the mini player's bottom line,
+        // easing out to the whole screen as the player goes full screen ([NowPlayingSheetState.cover]).
+        val widthPx = constraints.maxWidth.toFloat()
+        val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+        val panelMode = placement.panel && placement.miniWidth != null
+        val edgeMargin = with(density) { HeroGeometry.MINI_MARGIN.toPx() }
+        val endCardWidth = placement.miniWidth?.let { with(density) { it.toPx() } }
+        val panelWidth = endCardWidth ?: widthPx
+        val panelLeft = if (rtl) edgeMargin else widthPx - edgeMargin - panelWidth
+        val panelTop = WindowInsets.statusBars.getTop(density) + with(density) { PANEL_TOP_GAP.toPx() }
+        val panelBottom = collapsedOffset + miniHeightPx
+        val coverNow: () -> Float = { if (panelMode) state.cover.value else 1f }
+        val reducedCover = LocalReducedMotion.current
+        LaunchedEffect(panelMode, state.fullScreen, reducedCover) {
+            val target = if (!panelMode || state.fullScreen) 1f else 0f
+            if (reducedCover || !state.isExpanded) state.cover.snapTo(target) else state.cover.animateTo(target, Motion.sheet)
+        }
+        // Closing the player leaves full screen and hands the main screen back to the page.
+        LaunchedEffect(state) {
+            snapshotFlow { state.draggable.targetValue }.collect { if (it == SheetValue.Collapsed) { state.fullScreen = false; state.panelPage = null } }
+        }
+        // What the player shows: always the artwork as the panel (lyrics and the queue go to the main screen).
+        val shownMode: () -> PlayerMode = { if (panelMode && !state.fullScreen) PlayerMode.Artwork else state.mode }
         LaunchedEffect(collapsedOffset, density) {
             state.collapsedOffset = collapsedOffset
             state.velocityThreshold = with(density) { NowPlayingSheetState.VELOCITY_THRESHOLD.toPx() }
@@ -446,7 +524,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val fling = AnchoredDraggableDefaults.flingBehavior(state.draggable, positionalThreshold = { d -> d * NowPlayingSheetState.POSITIONAL_THRESHOLD }, animationSpec = Motion.sheet)
 
         // Predictive back drives the sheet down with the gesture, then settles either way.
-        PredictiveBackHandler(enabled = state.isExpanded) { events ->
+        // (The side panel is part of the page, not a modal: back does not close it. Full screen
+        // from the panel, back returns to the panel.)
+        PredictiveBackHandler(enabled = state.isExpanded && !panelMode) { events ->
             try {
                 events.collect { ev ->
                     val target = collapsedOffset * (ev.progress * 0.35f)
@@ -457,19 +537,20 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 state.expand()
             }
         }
+        androidx.activity.compose.BackHandler(enabled = panelMode && state.fullScreen && state.isExpanded) { state.exitFullScreen() }
 
         // Thresholds of the progress, as derived state: composition reacts when one is crossed,
         // never on every frame of a drag.
         val fullPlayerAccessible by remember(state) { derivedStateOf { state.progress >= FULL_PLAYER_A11Y_PROGRESS } }
-        val scrimShown by remember(state) { derivedStateOf { state.progress > 0f } }
-        val scrimTappable by remember(state) { derivedStateOf { state.progress > 0.5f } }
+        val scrimShown by remember(state) { derivedStateOf { state.coverProgress > 0f } }
+        val scrimTappable by remember(state) { derivedStateOf { state.coverProgress > 0.5f } }
         val settledOpen by remember(state) { derivedStateOf { state.progress > 0.9f } }
         // Only the big artwork flies to and from the mini player. In lyrics / queue / about the
         // artwork is a thumbnail beside the title near the bottom of the page: flown opaque from
         // there to the mini player's thumbnail it would float over the fading, shrinking sheet and
         // over the screen behind it, so instead it stays on the page (sliding and fading with it)
         // while the mini player's own thumbnail fades in with the bar.
-        val flying by remember(state) { derivedStateOf { state.mode == PlayerMode.Artwork && state.progress.let { it > FLY_EPSILON && it < 1f - FLY_EPSILON } } }
+        val flying by remember(state, panelMode) { derivedStateOf { shownMode() == PlayerMode.Artwork && state.progress.let { it > FLY_EPSILON && it < 1f - FLY_EPSILON } } }
         // Whether the full player's backdrop shows at all ([backgroundAlpha] is 0 up to 0.1).
         val backdropShown by remember(state) { derivedStateOf { backgroundAlpha(state.progress) > 0f } }
 
@@ -479,7 +560,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             // clearAndSetSemantics first: semantics modifiers after it on the same node (the click)
             // would otherwise survive.
             Box(
-                Modifier.fillMaxSize().clearAndSetSemantics { }.graphicsLayer { alpha = state.progress * 0.6f }.background(Color.Black)
+                Modifier.fillMaxSize().clearAndSetSemantics { }.graphicsLayer { alpha = state.coverProgress * 0.6f }.background(Color.Black)
                     .let { if (scrimTappable) it.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { scope.launch { state.collapse() } } else it },
             )
         }
@@ -524,7 +605,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // Immersive artwork on a portrait screen (the square artwork leaves room for the controls).
         val settings by client.settings.collectAsStateWithLifecycle()
         val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
-        val portrait = constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
+        // (The panel's own shape: a tall panel takes an immersive artwork even on a landscape screen.)
+        val portrait = if (panelMode && !state.fullScreen) panelWidth <= (panelBottom - panelTop) * ImmersiveArtwork.MAX_WIDTH_SHARE
+            else constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
         fun ArtworkLayout?.immersiveOrNull() = this?.takeIf { portrait && it.bottom.style != ArtworkStyle.Card }
         // The scene (the cover, its layout and its colours) changes as one: a new cover waits until
         // its layout and seed are known (at once for one already worked out, a neighbour's, say),
@@ -570,7 +653,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // artwork mode over a light immersive continuation (a white cover carried on in white): dark
         // controls there. The scheme crossfades on a track or mode change while the player is
         // showing, snaps while hidden, and follows a skip swipe towards the neighbour's.
-        val artworkMode = state.mode == PlayerMode.Artwork
+        val artworkMode = shownMode() == PlayerMode.Artwork
         val lightPlayer = immersiveEdge?.light == true && artworkMode
         val targetScheme = remember(seed, lightPlayer) { playerSchemeFor(seed, lightPlayer) }
         // Read as derived state: the swipe's offset changes every frame, the flag only twice a swipe.
@@ -594,7 +677,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         hero.smallCorner = with(density) { HeroGeometry.SMALL_CORNER.toPx() }
         // The mode's animation: 0 with the big artwork, 1 with lyrics / queue / about (the artwork
         // then small beside the title). Snaps while the full player is not showing.
-        val mode = state.mode
+        val mode = shownMode()
         val modeAnim = remember { Animatable(if (mode == PlayerMode.Artwork) 0f else 1f) }
         LaunchedEffect(mode, reducedMotion) {
             val target = if (mode == PlayerMode.Artwork) 0f else 1f
@@ -607,7 +690,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // Only from a player already resting open: an expand drag that carries on past the top
         // (settledValue stays Collapsed until it ends) never turns into a pull.
         queuePull.enabled = {
-            state.mode == PlayerMode.Artwork && state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded &&
+            shownMode() == PlayerMode.Artwork && state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded && (!panelMode || state.fullScreen) &&
                 !carousel.busy && !state.draggable.isAnimationRunning
         }
         // `swipe.playerUp`: the queue or the lyrics take the artwork's place; the device picker and
@@ -638,11 +721,18 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val sheetOffset: () -> Float = { state.draggable.offset.takeIf { !it.isNaN() } ?: if (state.draggable.currentValue == SheetValue.Expanded) 0f else collapsedOffset }
         // The sheet, and above it (outside its clip) the artwork in flight, so the artwork is
         // whole while it grows out of the small card at the start of a swipe up.
+        // The frame's top: the sheet's, plus (as the panel) the gap under the status bar as it opens.
+        val frameTop: () -> Float = { sheetOffset() + state.progress * (1f - coverNow()) * panelTop }
         Box(
             Modifier
-                .fillMaxWidth()
-                .height(with(density) { maxHeightPx.toDp() })
-                .offset { IntOffset(0, sheetOffset().roundToInt()) },
+                .absoluteOffset { IntOffset(lerpF(panelLeft, 0f, coverNow()).roundToInt(), frameTop().roundToInt()) }
+                .layout { measurable, _ ->
+                    val f = coverNow()
+                    val w = lerpF(panelWidth, widthPx, f).roundToInt()
+                    val h = lerpF(panelBottom - panelTop, maxHeightPx, f).roundToInt()
+                    val p = measurable.measure(Constraints.fixed(w, h))
+                    layout(w, h) { p.place(0, 0) }
+                },
         ) {
         Box(
             Modifier
@@ -654,18 +744,23 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                     val p = state.progress
                     alpha = appear.value
                     translationY = (1f - appear.value) * appearShift
-                    val cardInset = maxOf(margin, (size.width - maxCard) / 2f + margin)
-                    val screenBottom = maxHeightPx - sheetOffset()
+                    val f = coverNow()
+                    val spread = 1f - (p / CARD_TO_SHEET).coerceIn(0f, 1f)
+                    val (startInset, endInset) = cardInsets(size.width, margin, maxCard, endCardWidth, panelMode)
+                    // The frame's bottom (the screen's, or the panel's) from the frame's top.
+                    val screenBottom = lerpF(panelBottom, maxHeightPx, f) - frameTop()
+                    val panelCorner = lerpF(corner, PANEL_CORNER.toPx(), p)
                     shape = SheetShape(
-                        inset = cardInset * (1f - (p / CARD_TO_SHEET).coerceIn(0f, 1f)),
-                        topCorner = sheetTopCorner(p, corner, sheetCorner),
-                        bottomCorner = corner * (1f - p),
+                        start = startInset * spread,
+                        end = endInset * spread,
+                        topCorner = lerpF(panelCorner, sheetTopCorner(p, corner, sheetCorner), f),
+                        bottomCorner = lerpF(panelCorner, corner * (1f - p), f),
                         // Never short of the artwork in flight: the card grows around it from the
                         // start, so the artwork never hangs out below a strip of a card.
                         bottom = maxOf(lerpF(miniHeightPx, screenBottom, (p / 0.5f).coerceIn(0f, 1f)), if (flying) hero.flightRect(p, modeAnim.value, artScale.value, thumbFallback).bottom + thumbPad else 0f),
                     )
                     clip = true
-                    shadowElevation = cardElevation * (1f - p * 3f).coerceIn(0f, 1f)
+                    shadowElevation = lerpF(cardElevation, cardElevation * (1f - p * 3f).coerceIn(0f, 1f), coverNow())
                 }
                 .nestedScroll(nested)
                 .anchoredDraggable(state.draggable, Orientation.Vertical, overscrollEffect = queuePull, flingBehavior = fling)
@@ -738,9 +833,15 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 }
                                 .then(if (fullPlayerAccessible) Modifier else Modifier.clearAndSetSemantics { }),
                         ) {
+                            val asPanel = panelMode && !state.fullScreen
                             FullPlayer(
                                 mode = mode,
-                                onMode = { state.mode = it },
+                                // As the panel, Lyrics and the Queue take over the main screen instead.
+                                onMode = { m -> if (asPanel) state.panelPage = m.takeIf { it == PlayerMode.Lyrics || it == PlayerMode.Queue } else state.mode = m },
+                                actionsMode = if (asPanel) state.panelPage ?: PlayerMode.Artwork else mode,
+                                fullScreenToggle = if (panelMode) state.fullScreen else null,
+                                onToggleFullScreen = { if (state.fullScreen) state.exitFullScreen() else state.enterFullScreen() },
+                                asPanel = asPanel,
                                 onCollapse = { scope.launch { state.collapse() } },
                                 onOpenAlbum = onOpenAlbum,
                                 onOpenArtist = onOpenArtist,
@@ -767,7 +868,11 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // player is what accessibility sees).
                 if (!fullPlayerAccessible) {
                     Box(Modifier.fillMaxWidth().height(miniHeight).graphicsLayer { alpha = 1f - (state.progress * 4f).coerceAtMost(1f) }) {
-                        MiniPlayerBar(onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, liveNeighbours = liveNeighbours)
+                        val (miniStart, miniEnd) = cardInsets(lerpF(panelWidth, widthPx, coverNow()), edgeMargin, maxCard, endCardWidth, panelMode)
+                        MiniPlayerBar(
+                            onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, liveNeighbours = liveNeighbours,
+                            start = with(density) { miniStart.toDp() }, end = with(density) { miniEnd.toDp() },
+                        )
                     }
                 }
             }
@@ -877,14 +982,25 @@ internal fun sheetTopCorner(p: Float, miniCorner: Float, sheetCorner: Float): Fl
  * growing into a full-screen rectangle; its top corners per [sheetTopCorner], its bottom ones
  * going from the card's to square (the bottom reaches the screen's).
  */
-private class SheetShape(private val inset: Float, private val topCorner: Float, private val bottomCorner: Float, private val bottom: Float) : Shape {
+private class SheetShape(private val start: Float, private val end: Float, private val topCorner: Float, private val bottomCorner: Float, private val bottom: Float) : Shape {
     override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
         val top = CornerRadius(topCorner)
         val low = CornerRadius(bottomCorner)
-        return Outline.Rounded(RoundRect(left = inset, top = 0f, right = size.width - inset, bottom = bottom.coerceIn(0f, size.height), topLeftCornerRadius = top, topRightCornerRadius = top, bottomRightCornerRadius = low, bottomLeftCornerRadius = low))
+        val (left, right) = if (layoutDirection == LayoutDirection.Rtl) end to start else start to end
+        return Outline.Rounded(RoundRect(left = left, top = 0f, right = size.width - right, bottom = bottom.coerceIn(0f, size.height), topLeftCornerRadius = top, topRightCornerRadius = top, bottomRightCornerRadius = low, bottomLeftCornerRadius = low))
     }
-    override fun equals(other: Any?): Boolean = other is SheetShape && other.inset == inset && other.topCorner == topCorner && other.bottomCorner == bottomCorner && other.bottom == bottom
-    override fun hashCode(): Int = ((31 * inset.hashCode() + topCorner.hashCode()) * 31 + bottomCorner.hashCode()) * 31 + bottom.hashCode()
+    override fun equals(other: Any?): Boolean = other is SheetShape && other.start == start && other.end == end && other.topCorner == topCorner && other.bottomCorner == bottomCorner && other.bottom == bottom
+    override fun hashCode(): Int = (((31 * start.hashCode() + end.hashCode()) * 31 + topCorner.hashCode()) * 31 + bottomCorner.hashCode()) * 31 + bottom.hashCode()
+}
+
+/**
+ * The floating card's insets from a [width]-wide frame's start and end (px): centred up to
+ * [maxCard] by default; [endCardWidth] wide at the end edge; none as the panel (its frame is the card).
+ */
+internal fun cardInsets(width: Float, margin: Float, maxCard: Float, endCardWidth: Float?, panel: Boolean): Pair<Float, Float> = when {
+    panel -> 0f to 0f
+    endCardWidth != null -> maxOf(margin, width - margin - endCardWidth) to margin
+    else -> maxOf(margin, (width - maxCard) / 2f + margin).let { it to it }
 }
 
 /** A scale about the top-left corner, then a translation (px). */

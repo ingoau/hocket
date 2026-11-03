@@ -258,6 +258,11 @@
     <string name="player_track_a11y">%1$s by %2$s</string>
     <string name="player_expand">Open now playing</string>
     <string name="player_collapse">Close now playing</string>
+    <string name="player_full_screen">Full screen</string>
+    <string name="player_exit_full_screen">Exit full screen</string>
+    <string name="nav_rail_expand">Show labels</string>
+    <string name="nav_rail_collapse">Hide labels</string>
+    <string name="panel_close">Back to the page</string>
     <string name="player_tab_now_playing">Now playing</string>
     <string name="player_tab_queue">Queue</string>
     <string name="player_tab_lyrics">Lyrics</string>

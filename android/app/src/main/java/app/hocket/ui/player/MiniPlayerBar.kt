@@ -1,7 +1,7 @@
 package app.hocket.ui.player
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.unit.Dp
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.basicMarquee
@@ -91,7 +91,15 @@ import app.hocket.ui.theme.Motion
  * position never is (the progress line is not exposed; the full player's seek bar carries it).
  */
 @Composable
-internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: HeroGeometry, thumbHidden: () -> Boolean, liveNeighbours: Neighbours = Neighbours.None) {
+internal fun MiniPlayerBar(
+    onExpand: () -> Unit,
+    position: () -> Long,
+    hero: HeroGeometry,
+    thumbHidden: () -> Boolean,
+    liveNeighbours: Neighbours = Neighbours.None,
+    start: Dp = HeroGeometry.MINI_MARGIN,
+    end: Dp = HeroGeometry.MINI_MARGIN,
+) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -125,12 +133,12 @@ internal fun MiniPlayerBar(onExpand: () -> Unit, position: () -> Long, hero: Her
     // The item's description already carries both lines; the scrolling texts themselves stay out of
     // the tree (a marquee is laid out wider than its box on purpose).
     val marquee = if (reducedMotion) Modifier else Modifier.clearAndSetSemantics { }.basicMarquee(iterations = 1, initialDelayMillis = 3_000, velocity = 30.dp)
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // The card's edges ([start], [end]: the sheet's card insets, centred or at the end edge).
+    Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
-                .widthIn(max = HeroGeometry.MINI_MAX_WIDTH)
                 .fillMaxSize()
-                .padding(horizontal = HeroGeometry.MINI_MARGIN)
+                .padding(start = start, end = end)
                 .background(colours.container)
                 // The skip swipe: the artwork and the text slide, the neighbour's sliding in.
                 .then(with(carousel) { Modifier.gesture(client, scope, haptics, enabled = true, reduced = reducedMotion, rubberThreshold = threshold) })
