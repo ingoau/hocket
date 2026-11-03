@@ -292,13 +292,15 @@ private fun SwipeChoices(title: String, options: List<String>, surface: SwipeSur
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val (startToEnd, endToStart) = swipeActionIds(surface)
     val none = stringResource(R.string.settings_swipe_none)
+    val section = app.hocket.ui.components.queueSectionOn()
     Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
     for ((key, current) in listOf(surface.startToEndKey to startToEnd, surface.endToStartKey to endToStart)) {
         val handle = setting(key)
         val right = (key == surface.startToEndKey) != rtl
         Text(stringResource(if (right) R.string.settings_swipe_right else R.string.settings_swipe_left), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp))
         ChoiceRow(
-            options.map { id -> id to if (id == SwipeOptions.NONE) none else actionLabel(id) },
+            // Add to queue is offered with the queue section on (off, it runs as play later).
+            options.filter { it != ActionIds.ADD_TO_QUEUE || section || it == current }.map { id -> id to if (id == SwipeOptions.NONE) none else actionLabel(id) },
             isSelected = { it == current },
             onSelect = { handle.setString(it) },
             modifier = Modifier.padding(horizontal = 16.dp).testTag("customise.$key"),
