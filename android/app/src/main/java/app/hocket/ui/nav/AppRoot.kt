@@ -24,6 +24,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalWideNavigationRail
 import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -452,6 +454,16 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     }
                 }
             }
+            // A tap on a bar or rail place: a tick as the page changes (a lighter one on a reselect,
+            // which scrolls up or pops back), then [go]. Places opened from elsewhere (links, the
+            // shell navigator) stay silent.
+            val haptics = LocalHapticFeedback.current
+            val tap: (NavItem) -> Unit = remember(go, haptics) {
+                { item ->
+                    haptics.performHapticFeedback(if (item == currentSelected) HapticFeedbackType.SegmentFrequentTick else HapticFeedbackType.SegmentTick)
+                    go(item)
+                }
+            }
             val shell = remember(items, nav) { ShellNavigator(items, goTo = go, openAccount = { accountOpen = true }, openBarEditor = { editorOpen = true }, openAvailableOffline = { nav.navigate(Route.AvailableOffline) { launchSingleTop = true } }) }
             // Search opened from outside (a launcher shortcut, Assistant): the search screen takes the
             // query and consumes the link.
@@ -506,7 +518,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                                 val isSelected = item == selected
                                 WideNavigationRailItem(
                                     selected = isSelected,
-                                    onClick = { go(item); scope.launch { railState.collapse() } },
+                                    onClick = { tap(item); scope.launch { railState.collapse() } },
                                     icon = { Icon(item.icon(isSelected), null) },
                                     label = { Text(item.label()) },
                                     railExpanded = railState.targetValue == WideNavigationRailValue.Expanded,
@@ -576,16 +588,16 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // full player covers it and sets its own.
             PageStatusBar(backStack.lastOrNull()?.id, appDark = app.hocket.ui.theme.LocalDarkTheme.current, suspended = covered)
             if (!wide || playerVisible) {
-                // Fully faded by about half-way up the floating mini player (it has its own card and
-                // shadow); without one, a short fade above the bar.
-                val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() / 2 else 16.dp)
+                // Fully faded a little past half-way up the floating mini player (it has its own card
+                // and shadow); without one, a gentle fade above the bar.
+                val scrimHeight = bottomInset + (if (playerVisible) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() * 0.6f else 32.dp)
                 // Over a page in its own colours (a detail page in its artwork's), into those instead.
                 // (The page's own colours already ease in, so no animation of its own here: the bar
                 // and the scrim under it always change together.)
                 val surface = LocalPageChrome.current.chromeScheme(backStack.lastOrNull()?.id, MaterialTheme.colorScheme).surface
-                // Solid around the bar (so rows scrolling past its edges don't show through), eased
-                // in above.
-                val solid = ((bottomInset - 20.dp) / scrimHeight).coerceIn(0f, 0.9f)
+                // Solid around the bar's lower part (so rows scrolling past its edges barely show
+                // through), eased in from well above it.
+                val solid = ((bottomInset - 36.dp) / scrimHeight).coerceIn(0f, 0.8f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
                 Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.progress, SCRIM_FADE_END) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }.background(scrim).testTag("bottomScrim"))
             }
@@ -613,14 +625,14 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     .blockTouchesBehind()
                     .then(hiddenWhenCovered)
                 if (floatingBar) {
-                    FloatingNavBar(items = items, selected = selected, onSelect = go, modifier = barModifier, stash = if (stashAlone) emptyList() else stash, onOpenStash = { stashOpen = true })
+                    FloatingNavBar(items = items, selected = selected, onSelect = tap, modifier = barModifier, stash = if (stashAlone) emptyList() else stash, onOpenStash = { stashOpen = true })
                 } else {
                     // Transparent over the scrim, along the bottom edge.
                     ShortNavigationBar(containerColor = Color.Transparent, modifier = barModifier) {
                         items.forEach { item ->
                             val isSelected = item == selected
                             ShortNavigationBarItem(
-                                selected = isSelected, onClick = { go(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
+                                selected = isSelected, onClick = { tap(item) }, icon = { Icon(item.icon(isSelected), null) }, label = { Text(item.barLabel(), maxLines = 1) },
                                 modifier = Modifier.testTag("navBar." + item.id),
                             )
                         }
@@ -706,18 +718,23 @@ internal fun barFade(p: Float, end: Float = BAR_FADE_END): Float {
 }
 
 /**
- * A vertical gradient from transparent (top) to [color] (bottom) with an eased curve (circular
- * ease-in, measured from the bottom), so the scrim is nearly solid behind the bar and fades out
- * softly above the mini player instead of showing a hard band. The lowest [solid] share is solid.
+ * A vertical gradient from transparent (top) to [color] (bottom) on a smoothstep curve, so the scrim
+ * eases in slowly from its top edge and levels off towards the bar instead of showing a band. It
+ * peaks at [SCRIM_PEAK] (a hint of the page shows through); the lowest [solid] share holds there.
  */
-private fun easedScrim(color: Color, stops: Int = 16, solid: Float = 0f): Brush = Brush.verticalGradient(
-    *Array(stops) { i ->
-        val t = i / (stops - 1f)
-        val fromBottom = 1f - t
-        t * (1f - solid) to color.copy(alpha = color.alpha * kotlin.math.sqrt((1f - fromBottom * fromBottom).coerceAtLeast(0f)))
-    },
-    1f to color,
-)
+private fun easedScrim(color: Color, stops: Int = 24, solid: Float = 0f): Brush {
+    val peak = color.copy(alpha = color.alpha * SCRIM_PEAK)
+    return Brush.verticalGradient(
+        *Array(stops) { i ->
+            val t = i / (stops - 1f)
+            t * (1f - solid) to color.copy(alpha = peak.alpha * t * t * (3f - 2f * t))
+        },
+        1f to peak,
+    )
+}
+
+/** The bottom scrim's strongest opacity. */
+private const val SCRIM_PEAK = 0.94f
 
 /**
  * A NavHost destination drawn inside [PageTransitionLayer], so every screen (places, details,
