@@ -1,5 +1,7 @@
 package app.hocket.ui.queue
 
+import app.hocket.ui.components.maxWidthListPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.FlowRow
@@ -87,25 +89,27 @@ fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValue
     val playingLabel = queue.contextLabel?.takeIf { it.isNotBlank() }
     val playingCount = queue.history.size + (if (queue.current != null) 1 else 0) + queue.playingNext.size + queue.totalUpcoming.toInt()
     val playingIndex = if (queue.current != null) queue.history.size + 1 else 0
-    LazyColumn(modifier, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = contentPadding.calculateTopPadding(), bottom = contentPadding.calculateBottomPadding())) {
-        item(key = "playing.label") { GroupLabel(stringResource(R.string.queue_playing_now)) }
-        item(key = "playing") {
-            PlayingQueueCard(playingLabel, playingCount, playingIndex, onRename = { renaming = "" }, onCreatePlaylist = { naming = true })
-        }
-        if (pinned.isNotEmpty()) {
-            item(key = "pinned.label") { GroupLabel(stringResource(R.string.saved_pinned), Modifier.padding(top = 12.dp)) }
-            itemsIndexed(pinned, key = { _, q -> q.id }) { i, q -> SavedQueueRow(q, i, pinned.size, onRename = { renaming = q.id }, onRestore = onRestore) }
-        }
-        item(key = "recent.label") { GroupLabel(stringResource(R.string.saved_recent), Modifier.padding(top = 12.dp)) }
-        if (recent.isEmpty()) item(key = "recent.empty") {
-            Segment(0, 1) {
-                Text(
-                    if (!connection.connected && saved.isEmpty()) stringResource(R.string.empty_recent_offline) else stringResource(R.string.empty_saved_queues_body),
-                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp),
-                )
+    BoxWithConstraints(modifier) {
+        LazyColumn(Modifier.fillMaxWidth(), contentPadding = maxWidthListPadding(maxWidth, contentPadding.calculateTopPadding(), contentPadding.calculateBottomPadding(), horizontal = 16.dp)) {
+            item(key = "playing.label") { GroupLabel(stringResource(R.string.queue_playing_now)) }
+            item(key = "playing") {
+                PlayingQueueCard(playingLabel, playingCount, playingIndex, onRename = { renaming = "" }, onCreatePlaylist = { naming = true })
             }
+            if (pinned.isNotEmpty()) {
+                item(key = "pinned.label") { GroupLabel(stringResource(R.string.saved_pinned), Modifier.padding(top = 12.dp)) }
+                itemsIndexed(pinned, key = { _, q -> q.id }) { i, q -> SavedQueueRow(q, i, pinned.size, onRename = { renaming = q.id }, onRestore = onRestore) }
+            }
+            item(key = "recent.label") { GroupLabel(stringResource(R.string.saved_recent), Modifier.padding(top = 12.dp)) }
+            if (recent.isEmpty()) item(key = "recent.empty") {
+                Segment(0, 1) {
+                    Text(
+                        if (!connection.connected && saved.isEmpty()) stringResource(R.string.empty_recent_offline) else stringResource(R.string.empty_saved_queues_body),
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp),
+                    )
+                }
+            }
+            itemsIndexed(recent, key = { _, q -> q.id }) { i, q -> SavedQueueRow(q, i, recent.size, onRename = { renaming = q.id }, onRestore = onRestore) }
         }
-        itemsIndexed(recent, key = { _, q -> q.id }) { i, q -> SavedQueueRow(q, i, recent.size, onRename = { renaming = q.id }, onRestore = onRestore) }
     }
     renaming?.let { id ->
         val initial = if (id.isEmpty()) playingLabel.orEmpty() else saved.firstOrNull { it.id == id }?.label.orEmpty()

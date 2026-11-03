@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.filters
 
+import app.hocket.ui.components.maxWidthListPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import android.content.Intent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.FlowRow
@@ -318,53 +320,55 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
             }
         },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 4.dp, bottom = padding.calculateBottomPadding() + 24.dp, start = 16.dp, end = 16.dp)) {
-            item(key = "name") {
-                OutlinedTextField(value = filter.name, onValueChange = { filter = filter.copy(name = it) }, label = { Text(stringResource(R.string.filter_name)) }, singleLine = true,
-                    shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().testTag("filter.name"))
-            }
-            item(key = "rules") {
-                Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
-                    Column(Modifier.padding(12.dp)) {
-                        RulesGroup(filter.root, path = emptyList(), top = true, onChange = { filter = filter.copy(root = it) }, onEdit = { editing = it })
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = maxWidthListPadding(maxWidth, padding.calculateTopPadding() + 4.dp, padding.calculateBottomPadding() + 24.dp, horizontal = 16.dp)) {
+                item(key = "name") {
+                    OutlinedTextField(value = filter.name, onValueChange = { filter = filter.copy(name = it) }, label = { Text(stringResource(R.string.filter_name)) }, singleLine = true,
+                        shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().testTag("filter.name"))
+                }
+                item(key = "rules") {
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            RulesGroup(filter.root, path = emptyList(), top = true, onChange = { filter = filter.copy(root = it) }, onEdit = { editing = it })
+                        }
                     }
                 }
-            }
-            item(key = "order") {
-                SegmentedGroup(Modifier.padding(top = 20.dp)) {
-                    Segment(0, 3) {
-                        Column(Modifier.padding(top = 12.dp, bottom = 12.dp)) {
-                            Text(stringResource(R.string.filter_sort), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
-                            // Album and song counts order artists only (for songs they are the default order).
-                            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.selectableGroup()) {
-                                items(SortOrder.entries.filter { it != SortOrder.AlbumCount && it != SortOrder.SongCount }, key = { it.string }) { o ->
-                                    FilterChip(selected = filter.sort == o, onClick = { filter = filter.copy(sort = o) }, label = { Text(sortLabel(o)) }, modifier = Modifier.semantics { role = Role.RadioButton })
+                item(key = "order") {
+                    SegmentedGroup(Modifier.padding(top = 20.dp)) {
+                        Segment(0, 3) {
+                            Column(Modifier.padding(top = 12.dp, bottom = 12.dp)) {
+                                Text(stringResource(R.string.filter_sort), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+                                // Album and song counts order artists only (for songs they are the default order).
+                                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.selectableGroup()) {
+                                    items(SortOrder.entries.filter { it != SortOrder.AlbumCount && it != SortOrder.SongCount }, key = { it.string }) { o ->
+                                        FilterChip(selected = filter.sort == o, onClick = { filter = filter.copy(sort = o) }, label = { Text(sortLabel(o)) }, modifier = Modifier.semantics { role = Role.RadioButton })
+                                    }
                                 }
                             }
                         }
-                    }
-                    Segment(1, 3) {
-                        Row(Modifier.heightIn(min = 60.dp).toggleable(filter.descending, role = Role.Switch) { filter = filter.copy(descending = it) }.padding(start = 16.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.sort_descending), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                            Switch(checked = filter.descending, onCheckedChange = null)
+                        Segment(1, 3) {
+                            Row(Modifier.heightIn(min = 60.dp).toggleable(filter.descending, role = Role.Switch) { filter = filter.copy(descending = it) }.padding(start = 16.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(stringResource(R.string.sort_descending), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                                Switch(checked = filter.descending, onCheckedChange = null)
+                            }
                         }
-                    }
-                    Segment(2, 3) {
-                        Row(Modifier.heightIn(min = 60.dp).padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            val limitLabel = stringResource(R.string.filter_limit)
-                            Text(limitLabel, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                            OutlinedTextField(value = filter.limit?.toString() ?: "", onValueChange = { filter = filter.copy(limit = it.toUIntOrNull()) }, placeholder = { Text(stringResource(R.string.filter_no_limit), textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth()) },
-                                singleLine = true, shape = RoundedCornerShape(12.dp), textStyle = MaterialTheme.typography.bodyLarge.copy(textAlign = TextAlign.End),
-                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.width(128.dp).semantics { contentDescription = limitLabel })
+                        Segment(2, 3) {
+                            Row(Modifier.heightIn(min = 60.dp).padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                val limitLabel = stringResource(R.string.filter_limit)
+                                Text(limitLabel, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                                OutlinedTextField(value = filter.limit?.toString() ?: "", onValueChange = { filter = filter.copy(limit = it.toUIntOrNull()) }, placeholder = { Text(stringResource(R.string.filter_no_limit), textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth()) },
+                                    singleLine = true, shape = RoundedCornerShape(12.dp), textStyle = MaterialTheme.typography.bodyLarge.copy(textAlign = TextAlign.End),
+                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.width(128.dp).semantics { contentDescription = limitLabel })
+                            }
                         }
                     }
                 }
-            }
-            preview?.sample?.takeIf { it.isNotEmpty() }?.let { sample ->
-                item(key = "h.sample") { Text(stringResource(R.string.filter_sample), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 8.dp).semantics { heading() }) }
-                itemsIndexed(sample, key = { _, t -> t.id }) { i, t ->
-                    TrackRow(t, onClick = {}, segment = i to sample.size, showDuration = false, subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
-                        modifier = Modifier.padding(top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp))
+                preview?.sample?.takeIf { it.isNotEmpty() }?.let { sample ->
+                    item(key = "h.sample") { Text(stringResource(R.string.filter_sample), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 8.dp).semantics { heading() }) }
+                    itemsIndexed(sample, key = { _, t -> t.id }) { i, t ->
+                        TrackRow(t, onClick = {}, segment = i to sample.size, showDuration = false, subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
+                            modifier = Modifier.padding(top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp))
+                    }
                 }
             }
         }

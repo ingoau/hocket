@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.downloads
 
+import app.hocket.ui.components.maxWidthListPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import app.hocket.core.api.PinTarget
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.draw.clip
@@ -102,55 +104,57 @@ fun DownloadsScreen(nav: NavHostController) {
             )
         },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
-            item(key = "storage") { StorageCard(storage.downloadsBytes, storage.cacheBytes, storage.freeBytes) }
-            // Everything that plays offline: downloads plus complete stream-cache entries.
-            item(key = "availableOffline") {
-                Surface(onClick = { nav.navigate(Route.AvailableOffline) }, shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.secondaryContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("downloads.availableOffline")) {
-                    Row(Modifier.heightIn(min = 72.dp).padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Icon(HocketIcons.Filled.Bolt, null, tint = MaterialTheme.colorScheme.primary)
-                        Column(Modifier.weight(1f)) {
-                            Text(stringResource(R.string.available_offline), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            Text(stringResource(R.string.settings_available_offline_body), style = MaterialTheme.typography.bodyMedium)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = maxWidthListPadding(maxWidth, padding.calculateTopPadding(), BottomContentInset)) {
+                item(key = "storage") { StorageCard(storage.downloadsBytes, storage.cacheBytes, storage.freeBytes) }
+                // Everything that plays offline: downloads plus complete stream-cache entries.
+                item(key = "availableOffline") {
+                    Surface(onClick = { nav.navigate(Route.AvailableOffline) }, shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("downloads.availableOffline")) {
+                        Row(Modifier.heightIn(min = 72.dp).padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Icon(HocketIcons.Filled.Bolt, null, tint = MaterialTheme.colorScheme.primary)
+                            Column(Modifier.weight(1f)) {
+                                Text(stringResource(R.string.available_offline), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text(stringResource(R.string.settings_available_offline_body), style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Icon(HocketIcons.Filled.ChevronRight, null)
                         }
-                        Icon(HocketIcons.Filled.ChevronRight, null)
                     }
                 }
-            }
-            if (pins.isNotEmpty()) item(key = "h.pins") { GroupLabel(pluralStringResource(R.plurals.downloads_count, pins.size, pins.size), Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) }
-            if (pins.isEmpty()) item(key = "empty") { EmptyState(stringResource(R.string.empty_downloads_title), stringResource(R.string.empty_downloads_body)) }
-            if (warn != null && storage.downloadsBytes > warn) {
-                item { Text(stringResource(R.string.downloads_warn, formatBytes(warn)), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
-            }
-            itemsIndexed(pins, key = { _, p -> p.label + p.createdAt }) { i, pin ->
-                Segment(i, pins.size, Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp)) {
-                    Row(Modifier.heightIn(min = 72.dp).padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Artwork(pin.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(14.dp))
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(pin.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(pinKind(pin.target)) + stringResource(R.string.dot_separator) + stringResource(R.string.downloads_progress, pin.downloadedCount.toInt(), pin.trackCount.toInt()) + stringResource(R.string.dot_separator) + formatBytes(pin.bytes),
-                                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                                Badge(stringResource(if (pin.transcoded) R.string.downloads_transcoded else R.string.downloads_original), container = MaterialTheme.colorScheme.surfaceContainerHigh)
+                if (pins.isNotEmpty()) item(key = "h.pins") { GroupLabel(pluralStringResource(R.plurals.downloads_count, pins.size, pins.size), Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) }
+                if (pins.isEmpty()) item(key = "empty") { EmptyState(stringResource(R.string.empty_downloads_title), stringResource(R.string.empty_downloads_body)) }
+                if (warn != null && storage.downloadsBytes > warn) {
+                    item { Text(stringResource(R.string.downloads_warn, formatBytes(warn)), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
+                }
+                itemsIndexed(pins, key = { _, p -> p.label + p.createdAt }) { i, pin ->
+                    Segment(i, pins.size, Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp)) {
+                        Row(Modifier.heightIn(min = 72.dp).padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Artwork(pin.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(14.dp))
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(pin.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(stringResource(pinKind(pin.target)) + stringResource(R.string.dot_separator) + stringResource(R.string.downloads_progress, pin.downloadedCount.toInt(), pin.trackCount.toInt()) + stringResource(R.string.dot_separator) + formatBytes(pin.bytes),
+                                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                    Badge(stringResource(if (pin.transcoded) R.string.downloads_transcoded else R.string.downloads_original), container = MaterialTheme.colorScheme.surfaceContainerHigh)
+                                }
+                                if (pin.downloadedCount < pin.trackCount) {
+                                    LinearProgressIndicator(progress = { pin.downloadedCount.toFloat() / pin.trackCount.toFloat().coerceAtLeast(1f) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp))
+                                }
                             }
-                            if (pin.downloadedCount < pin.trackCount) {
-                                LinearProgressIndicator(progress = { pin.downloadedCount.toFloat() / pin.trackCount.toFloat().coerceAtLeast(1f) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp))
-                            }
+                            IconButton(onClick = { removing = pin }, shapes = IconButtonDefaults.shapes()) { Icon(HocketIcons.Outlined.Delete, stringResource(R.string.action_remove_download)) }
                         }
-                        IconButton(onClick = { removing = pin }, shapes = IconButtonDefaults.shapes()) { Icon(HocketIcons.Outlined.Delete, stringResource(R.string.action_remove_download)) }
                     }
                 }
-            }
-            item(key = "tools") {
-                SegmentedGroup(Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp)) {
-                    SegmentedListItem(onClick = { client.dispatch(Command.ClearStreamCache) }, shapes = ListItemDefaults.segmentedShapes(0, 2), colors = segmentedListColors(),
-                        leadingContent = { Icon(HocketIcons.Outlined.Delete, null) }, trailingContent = { Text(formatBytes(storage.cacheBytes)) }, modifier = Modifier.testTag("downloads.clearCache"),
-                    ) { Text(stringResource(R.string.downloads_clear_cache)) }
-                    SegmentedListItem(onClick = { nav.navigate(Route.SettingsDownloads) }, shapes = ListItemDefaults.segmentedShapes(1, 2), colors = segmentedListColors(),
-                        leadingContent = { Icon(HocketIcons.Outlined.Warning, null) }, trailingContent = { Text(warn?.let { formatBytes(it) } ?: stringResource(R.string.downloads_threshold_none)) },
-                    ) { Text(stringResource(R.string.downloads_threshold)) }
+                item(key = "tools") {
+                    SegmentedGroup(Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp)) {
+                        SegmentedListItem(onClick = { client.dispatch(Command.ClearStreamCache) }, shapes = ListItemDefaults.segmentedShapes(0, 2), colors = segmentedListColors(),
+                            leadingContent = { Icon(HocketIcons.Outlined.Delete, null) }, trailingContent = { Text(formatBytes(storage.cacheBytes)) }, modifier = Modifier.testTag("downloads.clearCache"),
+                        ) { Text(stringResource(R.string.downloads_clear_cache)) }
+                        SegmentedListItem(onClick = { nav.navigate(Route.SettingsDownloads) }, shapes = ListItemDefaults.segmentedShapes(1, 2), colors = segmentedListColors(),
+                            leadingContent = { Icon(HocketIcons.Outlined.Warning, null) }, trailingContent = { Text(warn?.let { formatBytes(it) } ?: stringResource(R.string.downloads_threshold_none)) },
+                        ) { Text(stringResource(R.string.downloads_threshold)) }
+                    }
                 }
             }
         }

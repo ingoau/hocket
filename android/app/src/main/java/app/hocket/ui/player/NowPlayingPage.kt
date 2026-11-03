@@ -34,6 +34,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -187,6 +190,10 @@ internal fun FullPlayer(
     headerAlpha: () -> Float = { 1f },
     swipeUp: SwipeUpPull? = null,
     swipeUpAction: String? = null,
+    actionsMode: PlayerMode = mode,
+    fullScreenToggle: Boolean? = null,
+    onToggleFullScreen: () -> Unit = {},
+    asPanel: Boolean = false,
 ) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
@@ -243,13 +250,35 @@ internal fun FullPlayer(
             else -> null
         }
     }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // As the side panel, the player sits clear of the system bars already (under the status bar,
+    // above the mini player's line): its handle and action row add no room for them.
+    BoxWithConstraints(Modifier.fillMaxSize().then(if (asPanel) Modifier.consumeWindowInsets(WindowInsets.systemBars) else Modifier)) {
         val viewport = maxHeight
         val pageWidth = maxWidth
         val scroll = rememberScrollState()
-        val header = @Composable { PlayerHandle(onCollapse) }
+        // The panel layout's full-screen toggle sits at the handle's end ([fullScreenToggle]: whether it is full screen now).
+        val fullScreenLabel = stringResource(if (fullScreenToggle == true) R.string.player_exit_full_screen else R.string.player_full_screen)
+        val header = @Composable {
+            Box(Modifier.fillMaxWidth()) {
+                PlayerHandle(onCollapse)
+                if (fullScreenToggle != null) {
+                    IconButton(onClick = onToggleFullScreen, modifier = Modifier.align(Alignment.BottomEnd).padding(end = PAGE_PADDING - 12.dp).testTag("player.fullScreen")) {
+                        Icon(if (fullScreenToggle) HocketIcons.Filled.CloseFullscreen else HocketIcons.Filled.OpenInFull, fullScreenLabel)
+                    }
+                }
+            }
+        }
+        // Landscape (a phone on its side, a tablet's full screen): artwork beside the controls, so
+        // nothing has to scroll.
+        val wide = !asPanel && pageWidth > viewport && pageWidth >= WIDE_MIN_WIDTH
+        // On a tall enough side-by-side page (a tablet's full screen) the artwork leaves the lyrics or
+        // the queue for a slot above the title, not the thumbnail beside it.
+        val artAbove = wide && viewport >= ART_ABOVE_MIN_HEIGHT
+        hero.artAbove = artAbove
         Box(Modifier.fillMaxSize().verticalScroll(scroll, overscrollEffect = null).testTag("player.page")) {
             PlayerLayout(
+                wide = wide,
+                artAbove = artAbove,
                 minHeight = viewport,
                 hero = hero,
                 // The artwork is drawn over the page: under an immersive one (or one sliding in
@@ -263,7 +292,7 @@ internal fun FullPlayer(
                     ) { header() }
                 },
                 area = { ModeArea(mode, hero, lyricsVisible) },
-                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
+                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
                 seek = { PlayerSeek(position) },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -275,13 +304,14 @@ internal fun FullPlayer(
                         onPrevious = { client.dispatch(Command.Previous) },
                         onToggle = { client.dispatch(Command.TogglePlay) },
                         onNext = { client.dispatch(Command.Next) },
-                        height = if (pageWidth < 360.dp) 68.dp else TRANSPORT_HEIGHT,
+                        // (And beside the artwork on a short page: a phone on its side.)
+                        height = if (pageWidth < 360.dp || (wide && viewport < 480.dp)) 68.dp else TRANSPORT_HEIGHT,
                         modifier = Modifier.padding(horizontal = PAGE_PADDING),
                     )
                 },
                 actions = {
                     PlayerActions(
-                        mode = mode,
+                        mode = actionsMode,
                         onMode = onMode,
                         switcherOpen = queues,
                         onSwitchQueue = { queues = true },
@@ -333,6 +363,19 @@ internal fun FullPlayer(
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
 }
 
+/** The upright layout's column on a wide page (a tablet held upright): the artwork's largest size plus its margins and a little. */
+private val TALL_MAX_WIDTH = 600.dp
+
+/** The least width for the side-by-side layout (a landscape phone is about 700 dp and up). */
+private val WIDE_MIN_WIDTH = 560.dp
+/** In the side-by-side layout, the controls' column is at most this wide (centred in what the artwork leaves). */
+private val WIDE_CONTROLS_MAX = 560.dp
+/** The least page height for the artwork above the title in the side-by-side layout, and its largest size. */
+private val ART_ABOVE_MIN_HEIGHT = 600.dp
+private val ART_ABOVE_MAX = 280.dp
+/** The gaps between the title, the seek bar, the transport and the actions in the side-by-side layout. */
+private val WIDE_GAP = 20.dp
+
 /** The page's side margins (everything aligns to them), the artwork's largest size and its vertical margin. */
 internal val PAGE_PADDING = 20.dp
 private val MAX_ART = 520.dp
@@ -372,6 +415,23 @@ private val MAX_GAP = 40.dp
  */
 @Composable
 private fun PlayerLayout(
+    wide: Boolean,
+    artAbove: Boolean,
+    minHeight: Dp,
+    hero: HeroGeometry,
+    header: @Composable () -> Unit,
+    area: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    seek: @Composable () -> Unit,
+    transport: @Composable () -> Unit,
+    actions: @Composable () -> Unit,
+) {
+    if (wide) PlayerLayoutWide(minHeight, hero, artAbove, header, area, title, seek, transport, actions)
+    else PlayerLayoutTall(minHeight, hero, header, area, title, seek, transport, actions)
+}
+
+@Composable
+private fun PlayerLayoutTall(
     minHeight: Dp,
     hero: HeroGeometry,
     header: @Composable () -> Unit,
@@ -382,10 +442,17 @@ private fun PlayerLayout(
     actions: @Composable () -> Unit,
 ) {
     Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
-        val w = constraints.maxWidth
+        val full = constraints.maxWidth
+        // On a wide page (a tablet held upright) the controls (and a card's area) keep to a centred
+        // column, so the seek bar and the buttons don't stretch edge to edge; an immersive artwork
+        // still takes the page's full width.
+        val w = minOf(full, TALL_MAX_WIDTH.roundToPx())
+        val x0 = (full - w) / 2
+        val areaW = if (hero.immersive) full else w
+        val areaX = if (hero.immersive) 0 else x0
         val loose = Constraints(maxWidth = w)
         fun measure(i: Int) = slots[i].map { it.measure(loose) }
-        val hp = measure(0)
+        val hp = slots[0].map { it.measure(Constraints(maxWidth = full)) }
         val tp = measure(2)
         val sp = measure(3)
         val xp = measure(4)
@@ -429,19 +496,96 @@ private fun PlayerLayout(
         hero.artTop = (pad + extra / 2).toFloat()
         // An immersive artwork from the top of the area (under the status bar and the handle: the
         // room there is its top strip), raised only as far as it must be to end above the title.
-        hero.immersiveTop = minOf(0, areaH - w).toFloat()
-        val mp = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
+        hero.immersiveTop = minOf(0, areaH - areaW).toFloat()
+        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaH + fold)) }
         val titleTop = hh + areaH + fold
         val seekTop = hh + areaH + th + seekGap
         val transportTop = seekTop + sh + gapX + share
         val actionsTop = transportTop + xh + gapA + share
-        layout(w, maxOf(actionsTop + ah + share, view)) {
+        layout(full, maxOf(actionsTop + ah + share, view)) {
+            hp.forEach { it.place(0, 0) }
+            mp.forEach { it.place(areaX, hh) }
+            tp.forEach { it.place(x0, titleTop) }
+            sp.forEach { it.place(x0, seekTop) }
+            xp.forEach { it.place(x0, transportTop) }
+            ap.forEach { it.place(x0, actionsTop) }
+        }
+    }
+}
+
+/**
+ * The landscape layout: the header across the top, the mode area on the start side as a square as
+ * tall as the page allows (lyrics and the queue take its place, as in [PlayerLayout], the artwork then
+ * small beside the title), and the controls stacked in a column beside it, centred on the page's
+ * height. [HeroGeometry.artSide] is the square's side; nothing is immersive here (the sheet keeps an
+ * immersive artwork to portrait shapes).
+ */
+@Composable
+private fun PlayerLayoutWide(
+    minHeight: Dp,
+    hero: HeroGeometry,
+    artAbove: Boolean,
+    header: @Composable () -> Unit,
+    area: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    seek: @Composable () -> Unit,
+    transport: @Composable () -> Unit,
+    actions: @Composable () -> Unit,
+) {
+    // Where the artwork lands above the title in a non-artwork mode ([artAbove]); empty itself.
+    val artSlot = @Composable { if (artAbove) Box(Modifier.onGloballyPositioned { hero.small = hero.measure(it) }) }
+    Layout(contents = listOf(header, area, title, seek, transport, actions, artSlot)) { slots, constraints ->
+        val w = constraints.maxWidth
+        val view = minHeight.roundToPx()
+        val margin = PAGE_PADDING.roundToPx()
+        val pad = ART_PAD.roundToPx()
+        val hp = slots[0].map { it.measure(Constraints(maxWidth = w)) }
+        val hh = hp.maxOfOrNull { it.height } ?: 0
+        val avail = (view - hh).coerceAtLeast(0)
+        // The square: as tall as the page below the header allows, at most half the width.
+        val side = minOf(avail - 2 * pad - margin, w / 2 - 2 * margin).coerceAtLeast(0)
+        val areaW = side + 2 * margin
+        hero.artSide = side.toFloat()
+        hero.headerHeight = hh.toFloat()
+        val restW = w - areaW
+        val colW = minOf(restW, WIDE_CONTROLS_MAX.roundToPx())
+        val colX = areaW + (restW - colW) / 2
+        val col = Constraints(maxWidth = colW)
+        val tp = slots[2].map { it.measure(col) }
+        val sp = slots[3].map { it.measure(col) }
+        val xp = slots[4].map { it.measure(col) }
+        val ap = slots[5].map { it.measure(col) }
+        fun height(p: List<Placeable>) = p.maxOfOrNull { it.height } ?: 0
+        val th = height(tp)
+        val sh = height(sp)
+        val xh = height(xp)
+        val ah = height(ap)
+        // The gaps share what the column leaves on a short page (a phone on its side), down to 8 dp.
+        val gap = ((avail - th - sh - xh - ah) / 3).coerceIn(8.dp.roundToPx(), WIDE_GAP.roundToPx())
+        val rest = th + gap + sh + gap + xh + gap + ah
+        // The artwork above the title (a non-artwork mode): as large as the column and the page
+        // leave, up to [ART_ABOVE_MAX]; its room opens with the mode, the column staying centred.
+        val artSide = if (artAbove) minOf(ART_ABOVE_MAX.roundToPx(), colW - 2 * margin, avail - rest - gap - 2 * margin).coerceAtLeast(0) else 0
+        val artRoom = if (artSide > 0) ((artSide + gap) * hero.modeFraction().coerceIn(0f, 1f)).roundToInt() else 0
+        val artP = slots[6].map { it.measure(Constraints.fixed(artSide, artSide)) }
+        val block = artRoom + rest
+        val top = hh + ((avail - block) / 2).coerceAtLeast(0)
+        val areaH = maxOf(avail, block)
+        hero.artTop = ((areaH - side) / 2).toFloat()
+        hero.immersiveTop = 0f
+        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaH)) }
+        layout(w, maxOf(hh + areaH, view)) {
             hp.forEach { it.place(0, 0) }
             mp.forEach { it.place(0, hh) }
-            tp.forEach { it.place(0, titleTop) }
-            sp.forEach { it.place(0, seekTop) }
-            xp.forEach { it.place(0, transportTop) }
-            ap.forEach { it.place(0, actionsTop) }
+            var y = top + artRoom
+            artP.forEach { it.place(colX + margin, y - artSide - gap) }
+            tp.forEach { it.place(colX, y) }
+            y += th + gap
+            sp.forEach { it.place(colX, y) }
+            y += sh + gap
+            xp.forEach { it.place(colX, y) }
+            y += xh + gap
+            ap.forEach { it.place(colX, y) }
         }
     }
 }
@@ -550,7 +694,7 @@ private fun Modifier.fadingEdges(top: Dp = 20.dp, bottom: Dp = 28.dp): Modifier 
 
 /** The title row ([TitleRow]), or what to do when nothing is queued. */
 @Composable
-private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
+private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val track = entry?.track
@@ -561,7 +705,7 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
                 Text(stringResource(R.string.empty_queue_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         } else {
-            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, onInfo, onArtists, onAddTo)
+            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, thumbInRow, onInfo, onArtists, onAddTo)
         }
     }
 }
@@ -638,7 +782,7 @@ private fun SeekStatus() {
  * with the swipe.
  */
 @Composable
-private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
+private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val infoLabel = stringResource(R.string.player_about_title)
     val artistsLabel = stringResource(R.string.player_artists_action)
@@ -656,8 +800,9 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
     Layout(
         contents = listOf(
             {
-                // The thumbnail slot (the one artwork lands in it); empty itself.
-                Box(Modifier.onGloballyPositioned { hero.small = hero.measure(it) })
+                // The thumbnail slot (the one artwork lands in it); empty itself. (Not where the
+                // artwork goes above the title instead: [PlayerLayoutWide].)
+                Box(if (thumbInRow) Modifier.onGloballyPositioned { hero.small = hero.measure(it) } else Modifier)
             },
             {
                 Box(Modifier.fillMaxWidth()) {
@@ -725,7 +870,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
         val a = add.first().measure(Constraints())
         // The thumbnail's width opens with the mode (it lands as the mode animates).
         val side0 = thumbSide.takeIf { it > 0 } ?: HeroGeometry.SMALL_SIZE.roundToPx()
-        val reserve = ((side0 + gap) * f).roundToInt()
+        val reserve = if (thumbInRow) ((side0 + gap) * f).roundToInt() else 0
         val textW = (w - reserve - addGap - a.width).coerceAtLeast(0)
         val t = text.first().measure(Constraints(minWidth = textW, maxWidth = textW))
         val sp = stars.firstOrNull()?.measure(Constraints(maxWidth = textW))
@@ -1152,7 +1297,10 @@ internal fun pageSpan(hero: HeroGeometry, anyImmersive: Boolean): Float {
     val a = hero.area
     if (anyImmersive) return a.width.coerceAtLeast(1f)
     val card = hero.cardSlot()
-    return maxOf(card.width + hero.artInset, a.width - card.left, card.right).coerceAtLeast(1f)
+    // Past the page's own edge too: beside the controls (the landscape layout) the area ends long
+    // before the page does, and a neighbour a page away must still be off screen.
+    val page = hero.root?.takeIf { it.isAttached }?.size?.width?.toFloat() ?: 0f
+    return maxOf(card.width + hero.artInset, a.width - card.left, card.right, page - card.left).coerceAtLeast(1f)
 }
 
 /** A neighbour's cover and, when it is shown immersive, its layout. */

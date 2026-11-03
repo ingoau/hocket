@@ -294,24 +294,28 @@ private fun AboutTab(albumInfo: ExternalInfo?, artistInfo: ExternalInfo?, simila
             Surface(shape = shape, color = segmentColor()) {
                 Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 12.dp)) {
                     Text(stringResource(R.string.about_similar_songs), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp).semantics { heading() })
-                    similar.chunked(2).forEach { row ->
-                        Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            row.forEach { r ->
-                                val playNext = { client.dispatch(Commands.playNext(r.track.serverId, listOf(r.track.id))) }
-                                val playNextLabel = stringResource(R.string.action_play_next)
-                                Surface(onClick = playNext, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.weight(1f)
-                                    .semantics { contentDescription = "${r.track.title}, ${r.track.artist.orEmpty()}"; onClick(label = playNextLabel) { playNext(); true } }) {
-                                    Row(Modifier.heightIn(min = 56.dp).padding(6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        Artwork(r.track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(44.dp), RoundedCornerShape(12.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(r.track.title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            Text(r.track.artist.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    androidx.compose.foundation.layout.BoxWithConstraints {
+                        // Two to a row on a phone; more once each still has room for its title.
+                        val columns = app.hocket.ui.components.adaptiveColumns(maxWidth, 220.dp, 8.dp)
+                        Column { similar.chunked(columns).forEach { row ->
+                            Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { r ->
+                                    val playNext = { client.dispatch(Commands.playNext(r.track.serverId, listOf(r.track.id))) }
+                                    val playNextLabel = stringResource(R.string.action_play_next)
+                                    Surface(onClick = playNext, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.weight(1f)
+                                        .semantics { contentDescription = "${r.track.title}, ${r.track.artist.orEmpty()}"; onClick(label = playNextLabel) { playNext(); true } }) {
+                                        Row(Modifier.heightIn(min = 56.dp).padding(6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            Artwork(r.track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(44.dp), RoundedCornerShape(12.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(r.track.title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                Text(r.track.artist.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            }
                                         }
                                     }
                                 }
+                                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                             }
-                            if (row.size == 1) Spacer(Modifier.weight(1f))
-                        }
+                        } }
                     }
                 }
             }

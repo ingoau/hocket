@@ -77,6 +77,7 @@ import app.hocket.core.ArtworkSizes
 import app.hocket.core.api.Album
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.Artwork
+import app.hocket.ui.components.contentMaxWidth
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ArtworkShare
 import app.hocket.ui.nav.rememberArtworkShareSource
@@ -237,8 +238,9 @@ private fun HeroText(title: String?, eyebrow: (@Composable () -> Unit)?, below: 
             below()
         }
         // The actions and the card under them are one connected group: round outside, a small
-        // radius wherever two of them meet; as wide as the songs under them.
-        Column(Modifier.padding(top = 16.dp, start = 16.dp, end = 16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+        // radius wherever two of them meet; as wide as the songs under them (at most
+        // [ContentMaxWidth], centred, as their rows are: [segmentItem]).
+        Column(Modifier.contentMaxWidth().padding(top = 16.dp, start = 16.dp, end = 16.dp), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
             androidx.compose.runtime.CompositionLocalProvider(LocalJoinedBelow provides (footer != null)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GROUP_GAP), verticalAlignment = Alignment.CenterVertically) { actions() }
             }

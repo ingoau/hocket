@@ -174,6 +174,7 @@
     <string name="sort_chip_a11y">Sort: %1$s, %2$s</string>
     <!-- The sort chip for an order without a direction (Random): "Sort: Random". -->
     <string name="sort_chip_a11y_no_direction">Sort: %1$s</string>
+    <string name="library_pane_empty">Pick something to see it here</string>
     <string name="library_group_pinned">Pinned</string>
     <string name="library_group_recent">Recent</string>
     <string name="library_all_albums">All albums</string>
@@ -258,6 +259,11 @@
     <string name="player_track_a11y">%1$s by %2$s</string>
     <string name="player_expand">Open now playing</string>
     <string name="player_collapse">Close now playing</string>
+    <string name="player_full_screen">Full screen</string>
+    <string name="player_exit_full_screen">Exit full screen</string>
+    <string name="nav_rail_expand">Show labels</string>
+    <string name="nav_rail_collapse">Hide labels</string>
+    <string name="panel_close">Back to the page</string>
     <string name="player_tab_now_playing">Now playing</string>
     <string name="player_tab_queue">Queue</string>
     <string name="player_tab_lyrics">Lyrics</string>

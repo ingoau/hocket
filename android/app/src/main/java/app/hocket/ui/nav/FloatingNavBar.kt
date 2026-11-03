@@ -84,6 +84,7 @@ internal fun FloatingNavBar(
     modifier: Modifier = Modifier,
     stash: List<app.hocket.core.api.StashItem> = emptyList(),
     onOpenStash: () -> Unit = {},
+    alignment: Alignment = Alignment.Center,
 ) {
     val client = app.hocket.ui.LocalCoreClient.current
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
@@ -93,7 +94,8 @@ internal fun FloatingNavBar(
             .fillMaxWidth()
             .navigationBarsPadding()
             .padding(start = FloatingNavBarDefaults.SideMargin, end = FloatingNavBarDefaults.SideMargin, bottom = FloatingNavBarDefaults.BottomMargin),
-        contentAlignment = Alignment.Center,
+        // (At the start, beside the mini player, on wide screens.)
+        contentAlignment = alignment,
     ) {
         // The selected label gets whatever the icon-only places leave (ellipsized past that), so
         // five places fit on a narrow phone at a large font size.
@@ -150,6 +152,13 @@ internal fun FloatingNavBar(
         }
     }
 }
+
+/**
+ * The widest the pill of [places] gets: every place but the selected one an icon, the selected one's
+ * label at its longest (120 dp). What the shell leaves for it beside the mini player on wide screens.
+ */
+internal fun floatingPillMaxWidth(places: Int): Dp =
+    FloatingNavBarDefaults.Padding * 2 + FloatingNavBarDefaults.ItemWidth * (places - 1).coerceAtLeast(0) + SelectedChrome + 120.dp
 
 /** The gap between the pill and the stash chip. */
 private val StashGap = 8.dp

@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -91,11 +92,14 @@ import app.hocket.core.client.SelectionKind
 import app.hocket.core.toSummary
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.rememberCachedState
-import app.hocket.ui.LocalWideLayout
 import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.Badge
 import app.hocket.ui.components.EmptyState
+import app.hocket.ui.components.ContentMaxWidth
+import app.hocket.ui.components.adaptiveColumns
+import app.hocket.ui.components.contentMaxWidth
+import app.hocket.ui.components.maxWidthListPadding
 import app.hocket.ui.components.RatingStars
 import app.hocket.ui.components.SectionHeader
 import app.hocket.ui.components.SelectionToolbar
@@ -117,17 +121,29 @@ import app.hocket.ui.screens.library.DetailTarget
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
-/** The right-hand pane on wide layouts. */
+/**
+ * The right-hand pane of the two-pane library. Keyed on the target, so picking another item starts
+ * its page afresh (scroll, sheets) as a push would.
+ */
 @Composable
-fun DetailPane(nav: NavHostController, target: DetailTarget?) {
-    when (target) {
-        is DetailTarget.Album -> AlbumDetailScreen(nav, target.id, embedded = true)
-        is DetailTarget.Artist -> ArtistDetailScreen(nav, target.id, embedded = true)
-        is DetailTarget.Playlist -> PlaylistDetailScreen(nav, target.id, embedded = true)
-        is DetailTarget.Genre -> GenreDetailScreen(nav, target.name, embedded = true)
-        null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(stringResource(R.string.nav_library), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+fun DetailPane(nav: NavHostController, target: DetailTarget?, modifier: Modifier = Modifier) {
+    Box(modifier.testTag("library.pane")) {
+        androidx.compose.runtime.key(target) {
+            when (target) {
+                is DetailTarget.Album -> AlbumDetailScreen(nav, target.id, embedded = true)
+                is DetailTarget.Artist -> ArtistDetailScreen(nav, target.id, embedded = true)
+                is DetailTarget.Playlist -> PlaylistDetailScreen(nav, target.id, embedded = true)
+                is DetailTarget.Genre -> GenreDetailScreen(nav, target.name, embedded = true)
+                null -> Box(Modifier.fillMaxSize().testTag("library.pane.empty"), contentAlignment = Alignment.Center) {
+                    Text(stringResource(R.string.library_pane_empty), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
     }
 }
+
+/** In a pane beside the library list, a detail page's toolbar is for its songs only; the list's own covers the rest. */
+private fun paneSelectionKinds(embedded: Boolean): Set<SelectionKind>? = if (embedded) setOf(SelectionKind.Tracks) else null
 
 /**
  * A detail page: the header ([DetailHero], in the mode the artwork allows) as the list's first item
@@ -150,7 +166,7 @@ private fun DetailScaffold(
     heroActions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     /** A card joined under Play and Shuffle (an album's notes). */
     heroFooter: (@Composable () -> Unit)? = null,
-    overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = { SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset)) },
+    overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = { SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), kinds = paneSelectionKinds(embedded)) },
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -201,8 +217,11 @@ private fun DetailScaffold(
     }
 }
 
-/** A group's rows in a list: inset from the screen's edges, 2dp below the one before. */
-internal fun Modifier.segmentItem(index: Int): Modifier = padding(start = 16.dp, end = 16.dp, top = if (index > 0) androidx.compose.material3.ListItemDefaults.SegmentedGap else 0.dp)
+/**
+ * A group's rows in a list: inset from the screen's edges, 2dp below the one before, and no wider
+ * than [ContentMaxWidth] (centred) on a wide content area.
+ */
+internal fun Modifier.segmentItem(index: Int): Modifier = contentMaxWidth().padding(start = 16.dp, end = 16.dp, top = if (index > 0) androidx.compose.material3.ListItemDefaults.SegmentedGap else 0.dp)
 
 /** How long an album page stays resumed and on screen before its first track is primed. */
 internal const val PRIME_DWELL_MS = 2_000L
@@ -336,7 +355,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
                 a.created?.let { stringResource(R.string.album_added, date.format(java.util.Date(it.toLong()))) },
                 pluralStringResource(R.plurals.album_plays, a.playCount.toInt(), a.playCount.toInt()),
             )
-            Text(facts.joinToString(dot), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp))
+            Text(facts.joinToString(dot), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.contentMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp))
         }
         if (more.isNotEmpty() && a.artistId != null) {
             item(key = "h.more") {
@@ -396,6 +415,12 @@ private const val ARTIST_TOP_SONGS = 10
 
 /** Top songs to a column of the sideways pager. */
 private const val TOP_PER_COLUMN = 3
+
+/** The widest a column of the top songs pager grows. */
+private val TOP_COLUMN_MAX_WIDTH = 420.dp
+
+/** The narrowest a release tile gets once a sub-page's grid holds more than two to a row. */
+private val RELEASE_TILE_MIN = 160.dp
 
 /** Releases on a shelf before "View more" opens the kind's full grid. */
 private const val SHELF = 8
@@ -494,14 +519,15 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
             val meta = @Composable { al: Album -> if (kind == null) featuredMeta(al) else releaseMeta(al) }
             ArtistSubPage(ar.name, stringResource(if (kind == null) R.string.artist_featured_on else releaseKindRes(kind)), pluralStringResource(countRes, list.size, list.size), onBack = { view = null }, trailing = {
                 ConnectedPair(stringResource(R.string.release_newest), stringResource(R.string.release_oldest), first = !oldest, onPick = { oldest = !it })
-            }) {
+            }) { width ->
                 val ordered = if (oldest) list.reversed() else list
-                items(ordered.chunked(2), key = { row -> "grid." + row.first().id }) { row ->
+                val columns = adaptiveColumns(width - 32.dp, RELEASE_TILE_MIN, 12.dp)
+                items(ordered.chunked(columns), key = { row -> "grid." + row.first().id }) { row ->
                     Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         row.forEach { al ->
                             BoxWithConstraints(Modifier.weight(1f)) { ReleaseTile(al, meta(al), onOpen = { openAlbum(al) }, onPlay = { playAlbum(al) }, size = maxWidth) }
                         }
-                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                        repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }
@@ -527,7 +553,8 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
                 // Columns of three, paged sideways: the next column peeks in at the edge.
                 item(key = "top") {
                     BoxWithConstraints(Modifier.fillMaxWidth()) {
-                        val columnWidth = maxWidth - 72.dp
+                        // A phone's column leaves the next one peeking in; a wide one caps it so several show.
+                        val columnWidth = (maxWidth - 72.dp).coerceAtMost(TOP_COLUMN_MAX_WIDTH)
                         val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
                         androidx.compose.foundation.lazy.LazyRow(
                             state = rowState,
@@ -580,12 +607,14 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
  * over the view's title, a count, an optional control on the right, then [content].
  */
 @Composable
-private fun ArtistSubPage(artist: String, title: String, count: String?, onBack: () -> Unit, trailing: (@Composable () -> Unit)? = null, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
+private fun ArtistSubPage(artist: String, title: String, count: String?, onBack: () -> Unit, trailing: (@Composable () -> Unit)? = null, content: androidx.compose.foundation.lazy.LazyListScope.(width: Dp) -> Unit) {
     val listState = rememberLazyListState()
     val collapsed by remember { androidx.compose.runtime.derivedStateOf { listState.firstVisibleItemIndex > 0 } }
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        // The view's content, centred at ContentMaxWidth: [content] is told the width it gets.
+        val width = maxWidth.coerceAtMost(ContentMaxWidth)
         androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
-            LazyColumn(state = listState, contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("artist.subpage")) {
+            LazyColumn(state = listState, contentPadding = maxWidthListPadding(maxWidth, bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("artist.subpage")) {
                 item(key = "head") {
                     Column(Modifier.statusBarsPadding().padding(top = 72.dp, start = 16.dp, end = 16.dp, bottom = 16.dp)) {
                         Text(artist, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -596,7 +625,7 @@ private fun ArtistSubPage(artist: String, title: String, count: String?, onBack:
                         if (count != null) Text(count, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                     }
                 }
-                content()
+                content(width)
             }
             DetailTopBar(title, collapsed = collapsed, onBack = onBack, actions = {})
         }
@@ -730,7 +759,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
             HeroMoreButton(onClick = { playlistSheet = true })
         },
         overlay = {
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), context = p.name,
+            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), context = p.name, kinds = paneSelectionKinds(embedded),
                 onRemoveFromContext = if (editable) ({
                     // The selected songs' entries, by position (highest first, so each index stays valid).
                     val sel = client.selection.value
@@ -783,7 +812,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
         // How many songs and how long, at the foot.
         if (!list.isNullOrEmpty()) item(key = "footer") {
             Text(pluralStringResource(R.plurals.album_tracks_count, list.size, list.size, formatDurationWords(list.sumOf { it.track.durationMs.toLong() })), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp))
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.contentMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp))
         }
     }
     if (playlistSheet) ActionSheet(target, p.name, p.owner, onDismiss = { playlistSheet = false },

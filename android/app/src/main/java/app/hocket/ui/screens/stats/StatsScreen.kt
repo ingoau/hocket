@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.stats
 
+import app.hocket.ui.components.maxWidthListPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -100,85 +102,87 @@ fun StatsScreen(nav: NavHostController) {
         topBar = { MediumFlexibleTopAppBar(title = { Text(stringResource(R.string.stats_title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }, scrollBehavior = scroll) },
     ) { padding ->
         val s = stats
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
-            item(key = "periods") {
-                val periods = listOf(7 to stringResource(R.string.stats_period_7), 30 to stringResource(R.string.stats_period_30), 365 to stringResource(R.string.stats_period_365))
-                // M3 Expressive's connected button group: the three periods share the row, the chosen one filled with a check.
-                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                    periods.forEachIndexed { i, (days, label) ->
-                        ToggleButton(
-                            checked = period == days, onCheckedChange = { period = days },
-                            shapes = when (i) { 0 -> ButtonGroupDefaults.connectedLeadingButtonShapes(); periods.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes(); else -> ButtonGroupDefaults.connectedMiddleButtonShapes() },
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).semantics { role = Role.RadioButton }.testTag("stats.period.$days"),
-                        ) {
-                            if (period == days) { Icon(HocketIcons.Filled.Check, null, Modifier.size(ToggleButtonDefaults.IconSize)); Spacer(Modifier.width(ToggleButtonDefaults.IconSpacing)) }
-                            Text(label)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = maxWidthListPadding(maxWidth, padding.calculateTopPadding(), BottomContentInset)) {
+                item(key = "periods") {
+                    val periods = listOf(7 to stringResource(R.string.stats_period_7), 30 to stringResource(R.string.stats_period_30), 365 to stringResource(R.string.stats_period_365))
+                    // M3 Expressive's connected button group: the three periods share the row, the chosen one filled with a check.
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+                        periods.forEachIndexed { i, (days, label) ->
+                            ToggleButton(
+                                checked = period == days, onCheckedChange = { period = days },
+                                shapes = when (i) { 0 -> ButtonGroupDefaults.connectedLeadingButtonShapes(); periods.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes(); else -> ButtonGroupDefaults.connectedMiddleButtonShapes() },
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp).semantics { role = Role.RadioButton }.testTag("stats.period.$days"),
+                            ) {
+                                if (period == days) { Icon(HocketIcons.Filled.Check, null, Modifier.size(ToggleButtonDefaults.IconSize)); Spacer(Modifier.width(ToggleButtonDefaults.IconSpacing)) }
+                                Text(label)
+                            }
                         }
                     }
                 }
-            }
-            if (s == null) {
-                item(key = "skeleton") {
-                    ShimmerHost {
-                        Column {
-                            SectionHeaderSkeleton()
-                            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(120.dp).skeleton(RoundedCornerShape(12.dp)))
-                            SectionHeaderSkeleton()
-                            repeat(5) { TrackRowSkeleton() }
+                if (s == null) {
+                    item(key = "skeleton") {
+                        ShimmerHost {
+                            Column {
+                                SectionHeaderSkeleton()
+                                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(120.dp).skeleton(RoundedCornerShape(12.dp)))
+                                SectionHeaderSkeleton()
+                                repeat(5) { TrackRowSkeleton() }
+                            }
+                        }
+                    }
+                    return@LazyColumn
+                }
+                if (s.totalPlays == 0u) { item { EmptyState(stringResource(R.string.empty_stats_title), stringResource(R.string.empty_stats_body)) }; return@LazyColumn }
+                item(key = "summary") {
+                    val minutes = s.totalMs.toLong() / 60_000
+                    val (big, small) = if (minutes >= 60) stringResource(R.string.stats_hours, (minutes / 60).toInt()) to stringResource(R.string.stats_minutes_listened, (minutes % 60).toInt())
+                        else stringResource(R.string.stats_minutes, minutes.toInt()) to stringResource(R.string.stats_listened)
+                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                        SummaryTile(s.totalPlays.toString(), pluralStringResource(R.plurals.stats_plays_unit, s.totalPlays.toInt()), RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 8.dp, bottomEnd = 8.dp),
+                            MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer, Modifier.weight(1f).fillMaxHeight())
+                        SummaryTile(big, small, RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp, topStart = 8.dp, bottomStart = 8.dp),
+                            MaterialTheme.colorScheme.surfaceContainer, MaterialTheme.colorScheme.onSurface, Modifier.weight(1f).fillMaxHeight())
+                    }
+                }
+                item(key = "hours") {
+                    StatsHeading(stringResource(R.string.stats_by_hour))
+                    ChartCard {
+                        BarChart(s.playsByHour.map { it.toInt() }, labels = listOf("0", "6", "12", "18", "23"), spreadLabels = true, height = 120.dp, gap = 3.dp, corner = 5.dp,
+                            readout = { peak -> stringResource(R.string.stats_peak_hour, "%02d:00–%02d:00".format(peak, (peak + 1) % 24)) })
+                    }
+                }
+                item(key = "days") {
+                    val days = listOf(R.string.weekday_mon, R.string.weekday_tue, R.string.weekday_wed, R.string.weekday_thu, R.string.weekday_fri, R.string.weekday_sat, R.string.weekday_sun).map { stringResource(it) }
+                    StatsHeading(stringResource(R.string.stats_by_weekday))
+                    ChartCard { BarChart(s.playsByWeekday.map { it.toInt() }, labels = days, height = 96.dp, gap = 8.dp, corner = 10.dp, centredLabels = true) }
+                }
+                if (s.topTracks.isNotEmpty()) {
+                    item(key = "h.tracks") { StatsHeading(stringResource(R.string.stats_top_tracks)) }
+                    itemsIndexed(s.topTracks, key = { _, t -> t.id }) { i, t ->
+                        TrackRow(t, onClick = { t.albumId?.let { nav.navigate(Route.Album(it)) } }, segment = i to s.topTracks.size, showDuration = false,
+                            subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
+                            leading = { Text((i + 1).toString(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.width(28.dp)); Spacer(Modifier.width(4.dp)) },
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp))
+                    }
+                }
+                if (s.topAlbums.isNotEmpty()) item(key = "albums") {
+                    StatsHeading(stringResource(R.string.stats_top_albums))
+                    androidx.compose.foundation.lazy.LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(s.topAlbums, key = { it.id }) { a ->
+                            Column(Modifier.width(128.dp).clickable { nav.navigate(Route.Album(a.id)) }) {
+                                app.hocket.ui.components.Artwork(a.coverArt, app.hocket.core.ArtworkSizes.GRID, stringResource(R.string.row_album_a11y, a.name, a.artist ?: ""), Modifier.size(128.dp), RoundedCornerShape(20.dp))
+                                Text(a.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
+                                Text(a.artist.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 }
-                return@LazyColumn
-            }
-            if (s.totalPlays == 0u) { item { EmptyState(stringResource(R.string.empty_stats_title), stringResource(R.string.empty_stats_body)) }; return@LazyColumn }
-            item(key = "summary") {
-                val minutes = s.totalMs.toLong() / 60_000
-                val (big, small) = if (minutes >= 60) stringResource(R.string.stats_hours, (minutes / 60).toInt()) to stringResource(R.string.stats_minutes_listened, (minutes % 60).toInt())
-                    else stringResource(R.string.stats_minutes, minutes.toInt()) to stringResource(R.string.stats_listened)
-                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-                    SummaryTile(s.totalPlays.toString(), pluralStringResource(R.plurals.stats_plays_unit, s.totalPlays.toInt()), RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 8.dp, bottomEnd = 8.dp),
-                        MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer, Modifier.weight(1f).fillMaxHeight())
-                    SummaryTile(big, small, RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp, topStart = 8.dp, bottomStart = 8.dp),
-                        MaterialTheme.colorScheme.surfaceContainer, MaterialTheme.colorScheme.onSurface, Modifier.weight(1f).fillMaxHeight())
+                if (s.topArtists.isNotEmpty()) {
+                    item(key = "h.artists") { StatsHeading(stringResource(R.string.stats_top_artists)) }
+                    itemsIndexed(s.topArtists, key = { _, a -> a.id }) { i, a -> app.hocket.ui.components.ArtistRow(a, onClick = { nav.navigate(Route.Artist(a.id)) }, segment = i to s.topArtists.size,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp)) }
                 }
-            }
-            item(key = "hours") {
-                StatsHeading(stringResource(R.string.stats_by_hour))
-                ChartCard {
-                    BarChart(s.playsByHour.map { it.toInt() }, labels = listOf("0", "6", "12", "18", "23"), spreadLabels = true, height = 120.dp, gap = 3.dp, corner = 5.dp,
-                        readout = { peak -> stringResource(R.string.stats_peak_hour, "%02d:00–%02d:00".format(peak, (peak + 1) % 24)) })
-                }
-            }
-            item(key = "days") {
-                val days = listOf(R.string.weekday_mon, R.string.weekday_tue, R.string.weekday_wed, R.string.weekday_thu, R.string.weekday_fri, R.string.weekday_sat, R.string.weekday_sun).map { stringResource(it) }
-                StatsHeading(stringResource(R.string.stats_by_weekday))
-                ChartCard { BarChart(s.playsByWeekday.map { it.toInt() }, labels = days, height = 96.dp, gap = 8.dp, corner = 10.dp, centredLabels = true) }
-            }
-            if (s.topTracks.isNotEmpty()) {
-                item(key = "h.tracks") { StatsHeading(stringResource(R.string.stats_top_tracks)) }
-                itemsIndexed(s.topTracks, key = { _, t -> t.id }) { i, t ->
-                    TrackRow(t, onClick = { t.albumId?.let { nav.navigate(Route.Album(it)) } }, segment = i to s.topTracks.size, showDuration = false,
-                        subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
-                        leading = { Text((i + 1).toString(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.width(28.dp)); Spacer(Modifier.width(4.dp)) },
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp))
-                }
-            }
-            if (s.topAlbums.isNotEmpty()) item(key = "albums") {
-                StatsHeading(stringResource(R.string.stats_top_albums))
-                androidx.compose.foundation.lazy.LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(s.topAlbums, key = { it.id }) { a ->
-                        Column(Modifier.width(128.dp).clickable { nav.navigate(Route.Album(a.id)) }) {
-                            app.hocket.ui.components.Artwork(a.coverArt, app.hocket.core.ArtworkSizes.GRID, stringResource(R.string.row_album_a11y, a.name, a.artist ?: ""), Modifier.size(128.dp), RoundedCornerShape(20.dp))
-                            Text(a.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
-                            Text(a.artist.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                }
-            }
-            if (s.topArtists.isNotEmpty()) {
-                item(key = "h.artists") { StatsHeading(stringResource(R.string.stats_top_artists)) }
-                itemsIndexed(s.topArtists, key = { _, a -> a.id }) { i, a -> app.hocket.ui.components.ArtistRow(a, onClick = { nav.navigate(Route.Artist(a.id)) }, segment = i to s.topArtists.size,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp)) }
             }
         }
     }
