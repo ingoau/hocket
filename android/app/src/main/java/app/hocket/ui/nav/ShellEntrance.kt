@@ -36,6 +36,11 @@ object ShellEntrance {
         _phase.compareAndSet(Phase.Hidden, Phase.Entering)
     }
 
+    /** No entrance after all (a recreation has no splash): the shell is just there. */
+    fun finish() {
+        _phase.value = Phase.Shown
+    }
+
     internal fun played() {
         _phase.compareAndSet(Phase.Entering, Phase.Shown)
     }

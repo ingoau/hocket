@@ -24,15 +24,26 @@ import app.hocket.ui.theme.HocketTheme
 class MainActivity : ComponentActivity() {
     /** Set once AppRoot shows something other than its loading state: the splash may go. */
     @Volatile private var firstScreenReady = false
-    /** When this activity's splash went up (uptime): close to when its mark started drawing in. */
+    /**
+     * About when this activity's splash went up and its mark started drawing in (uptime): the
+     * process's start for the first activity of a cold start (the system puts the splash up as it
+     * launches the process), else this activity's creation.
+     */
     private var splashStart = 0L
+    /** This instance is a recreation: there is no splash, only (below API 31) the compat one to clear. */
+    private var recreated = false
     override fun onCreate(savedInstanceState: Bundle?) {
         // The splash (Theme.Hocket.Starting) stands in for the loading screen: it stays until the
         // core is up and the first real screen is composed, or for SPLASH_MAX_MS at most (AppRoot's
         // LoadingScreen, which looks the same, takes over after that). The core is built meanwhile.
         (application as HocketApp).prewarmCore()
         val splash = installSplashScreen()
-        splashStart = SystemClock.uptimeMillis()
+        val now = SystemClock.uptimeMillis()
+        val processStart = android.os.Process.getStartUptimeMillis()
+        // (A process the media service started long before any activity is not a cold start.)
+        splashStart = if (firstActivityOfProcess && now - processStart < SPLASH_ICON_MS) processStart else now
+        firstActivityOfProcess = false
+        recreated = savedInstanceState != null
         // Only on a fresh start: a recreation has no system splash to hold, and holding the first
         // draw would leave the window blank instead.
         if (savedInstanceState == null) {
@@ -45,8 +56,9 @@ class MainActivity : ComponentActivity() {
                 shown < SPLASH_MAX_MS && (!firstScreenReady || shown < minMs)
             }
         }
-        // An entrance a previous instance hid the shell for, but never got to play, plays now.
-        ShellEntrance.play()
+        // An entrance a previous instance hid the shell for but never got to play plays now, on a
+        // fresh start; a recreation (even mid-entrance) just shows the shell.
+        if (recreated) ShellEntrance.finish() else ShellEntrance.play()
         splash.setOnExitAnimationListener(::exitSplash)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -83,6 +95,12 @@ class MainActivity : ComponentActivity() {
      * away, swelling as it fades, as the shell's entrance plays underneath ([ShellEntrance]).
      */
     private fun exitSplash(provider: SplashScreenViewProvider) {
+        // Below API 31 the compat splash hands over an exit on every creation, a recreation too:
+        // there it just goes, and the shell stays as it is.
+        if (recreated) {
+            provider.remove()
+            return
+        }
         // The shell is drawn whole until now (so a launch with no splash just shows it); under the
         // opaque splash it steps back, unseen, to wait for its entrance.
         ShellEntrance.hide()
@@ -135,6 +153,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
+        /** No activity has been created in this process yet (see [splashStart]). */
+        var firstActivityOfProcess = true
         /** The longest the splash waits for the first screen. */
         const val SPLASH_MAX_MS = 8_000L
         /** The longest the exit waits for the mark to finish drawing in. */
