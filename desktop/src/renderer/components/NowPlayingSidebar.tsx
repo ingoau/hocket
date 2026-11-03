@@ -33,7 +33,7 @@ import { AboutSong, formatLine } from "./AboutSong";
 import { ArtistChooser } from "./ArtistChooser";
 import { Icon } from "./Icon";
 import { LyricsOptionsButton } from "./LyricsOptions";
-import { drawContinuation, endColour, isFlat, prepareScene, scrimOver, toneForText, useScene, withTone, type Scene } from "../lib/immersive";
+import { drawContinuation, endColour, isFlat, prepareScene, sceneKey, scrimOver, toneForText, useScene, withTone, type Scene } from "../lib/immersive";
 
 const MIN_W = 300;
 const MAX_W = 560;
@@ -171,11 +171,11 @@ function Overview() {
       <div ref={overview} className={`side-overview ${edge ? "immersive" : ""}`} data-style={edge?.style} data-tone={edge ? (edge.light ? "light" : "dark") : undefined} data-flat={edge && isFlat(edge) ? "" : undefined} data-fill={fill ? "" : undefined} data-testid="side-overview">
       {edge ? (
         <div className="side-backdrop" aria-hidden="true">
-          {layers.map((l, i) => (l.edge ? <SideContinuation key={l.scene.coverArt} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
+          {layers.map((l, i) => (l.edge ? <SideContinuation key={sceneKey(l.scene)} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
         </div>
       ) : null}
       <div className="side-art" data-testid="sidebar-art" data-immersive={edge ? edge.style : undefined}>
-        {layers.length ? layers.map((l, i) => (l.scene.url ? <img key={l.scene.coverArt} src={l.scene.url} alt="" draggable={false} className={fading && i === layers.length - 1 ? "fade-in-art" : ""} onAnimationEnd={settle} /> : <div key={l.scene.coverArt} className="placeholder"><Icon name="music" size={48} /></div>)) : <div className="placeholder"><Icon name="music" size={48} /></div>}
+        {layers.length ? layers.map((l, i) => (l.scene.url ? <img key={sceneKey(l.scene)} src={l.scene.url} alt="" draggable={false} className={fading && i === layers.length - 1 ? "fade-in-art" : ""} onAnimationEnd={settle} /> : <div key={sceneKey(l.scene)} className="placeholder"><Icon name="music" size={48} /></div>)) : <div className="placeholder"><Icon name="music" size={48} /></div>}
       </div>
       <div className="side-title-row">
         <div className="side-titles">

@@ -4,7 +4,7 @@
 // (hocket_core::artwork, over IPC); this side reads the cover's pixels from a
 // canvas and draws the continuation, once per track and window size, as a
 // still on a canvas: nothing redraws per frame.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ArtworkEdge, ArtworkLayout, ImmersiveArtwork } from "@core/api";
 import { bridge } from "../core/bridge";
 import { resolveArtwork } from "../components/Artwork";
@@ -72,7 +72,12 @@ export interface Scene {
   img: HTMLImageElement | undefined;
   /** Undefined without the native core (or for a cover that could not be read): a card. */
   layout: ArtworkLayout | undefined;
+  /** Still being prepared: the last scene's layout around no image (a placeholder), see [useScene]. */
+  pending?: boolean;
 }
+
+/** A React key for a scene on screen (a pending one and the ready one it becomes are both there while it fades in). */
+export const sceneKey = (s: Scene) => (s.pending ? `${s.coverArt}~pending` : s.coverArt);
 
 /** Scenes being prepared or ready, most recent last; a few are kept (the current, the next, the last). */
 const scenes = new Map<string, Promise<Scene>>();
@@ -107,8 +112,10 @@ export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dar
 }
 
 /**
- * The scene to show for `coverArt`, once ready (at once for one prepared ahead, the next track's);
- * undefined until then, or without a cover.
+ * The scene to show for `coverArt`, once ready (at once for one prepared ahead, the next track's).
+ * Until then a pending one: the last ready scene's layout (so the layout does not jump to a card and
+ * back) with no image, a placeholder, never the last cover itself (#147). Undefined without a cover,
+ * or before the first.
  */
 export function useScene(coverArt: string | undefined, preference: ImmersiveArtwork, dark: boolean): Scene | undefined {
   const key = coverArt ? `${coverArt}|${preference}|${dark}` : undefined;
@@ -126,9 +133,17 @@ export function useScene(coverArt: string | undefined, preference: ImmersiveArtw
       alive = false;
     };
   }, [coverArt, preference, dark]);
-  // Only this cover's own scene: the last one would show another track's cover until this one is
-  // ready (#147); a placeholder shows meanwhile.
-  return coverArt && scene?.coverArt === coverArt ? scene : undefined;
+  const current = coverArt && scene?.coverArt === coverArt ? scene : undefined;
+  const last = useRef<Scene | undefined>(undefined);
+  if (!coverArt) last.current = undefined;
+  else if (current) last.current = current;
+  const held = last.current;
+  // One object while it waits: the consumers compare scenes by identity.
+  const pending = useMemo<Scene | undefined>(
+    () => (coverArt && !current && held ? { coverArt, url: undefined, img: undefined, layout: held.layout, pending: true } : undefined),
+    [coverArt, current, held],
+  );
+  return current ?? pending;
 }
 
 /**
