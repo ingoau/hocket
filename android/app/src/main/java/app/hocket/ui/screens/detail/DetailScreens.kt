@@ -92,7 +92,6 @@ import app.hocket.core.client.SelectionKind
 import app.hocket.core.toSummary
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.rememberCachedState
-import app.hocket.ui.LocalWideLayout
 import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.Badge

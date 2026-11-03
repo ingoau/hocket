@@ -102,7 +102,6 @@ import app.hocket.core.api.ErrorKind
 import app.hocket.core.api.PlayerNoticeCode
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.LocalWideLayout
 import app.hocket.ui.components.ConfirmDialog
 import app.hocket.ui.player.NowPlayingSheet
 import app.hocket.ui.player.NowPlayingSheetState
@@ -458,7 +457,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
         val stashRoom by androidx.compose.animation.core.animateDpAsState(
             if (stashAlone && stash.isNotEmpty()) app.hocket.ui.stash.StashChipDefaults.StandaloneRoom else 0.dp, label = "stashRoom",
         )
-        CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalWideLayout provides (maxWidth >= 600.dp), LocalPlayerVisible provides playerVisible, LocalMiniBesideBar provides barRow, LocalStashRoom provides stashRoom, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
+        CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalPlayerVisible provides playerVisible, LocalMiniBesideBar provides barRow, LocalStashRoom provides stashRoom, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
