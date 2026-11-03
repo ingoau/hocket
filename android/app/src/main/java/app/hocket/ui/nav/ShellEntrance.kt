@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * The shell's entrance as the splash screen leaves: the page rises into place, then the navigation
@@ -84,4 +85,29 @@ internal fun entrancePart(t: Float, startMs: Int, endMs: Int): Float {
     if (t >= 1f) return 1f
     val x = ((t * ShellEntrance.DURATION_MS - startMs) / (endMs - startMs)).coerceIn(0f, 1f)
     return EmphasizedDecelerate.transform(x)
+}
+
+/**
+ * Lets the first screen keep the splash up while its content loads, so a cold launch goes from the
+ * splash straight to a full page instead of to skeletons. The splash still leaves at its own cap
+ * (MainActivity's SPLASH_CONTENT_MAX_MS) if the content is slow; [covering] then turns false and
+ * the screen carries on with its own loading state.
+ */
+object SplashHold {
+    private val _covering = MutableStateFlow(false)
+    /** The splash is on screen (from a fresh start until its exit begins). */
+    val covering: StateFlow<Boolean> = _covering.asStateFlow()
+
+    private val _holds = MutableStateFlow(0)
+    /** Some screen is still loading under the splash. */
+    val holding: Boolean get() = _holds.value > 0
+
+    /** A fresh start: the splash is up. */
+    fun splashShown() { _covering.value = true }
+
+    /** The splash is leaving (or there is none): holds no longer matter. */
+    fun splashGone() { _covering.value = false }
+
+    fun hold() { _holds.update { it + 1 } }
+    fun release() { _holds.update { (it - 1).coerceAtLeast(0) } }
 }

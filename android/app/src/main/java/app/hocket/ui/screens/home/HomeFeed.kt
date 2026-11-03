@@ -55,9 +55,15 @@ suspend fun moreFromArtist(client: CoreClient): Artist? = favouriteStats(client)
 /**
  * Loads the sections in [shown] (only those: a hidden section costs nothing). Listening stats are
  * read once and shared; a month with no plays falls back to the year, so a quiet month still has
- * favourites.
+ * favourites. [onSection] sees the feed so far after each section, so a slow section needn't hold
+ * back the ones already read.
  */
-suspend fun loadHomeFeed(client: CoreClient, serverId: String, shown: Set<HomeSection>): Map<HomeSection, SectionContent> {
+suspend fun loadHomeFeed(
+    client: CoreClient,
+    serverId: String,
+    shown: Set<HomeSection>,
+    onSection: (Map<HomeSection, SectionContent>) -> Unit = {},
+): Map<HomeSection, SectionContent> {
     val needsStats = shown.any { it == HomeSection.FavouriteArtists || it == HomeSection.TopGenre || it == HomeSection.MoreFromArtist || it == HomeSection.OnRepeat }
     val stats = if (needsStats) favouriteStats(client) else null
     val out = LinkedHashMap<HomeSection, SectionContent>()
@@ -92,6 +98,7 @@ suspend fun loadHomeFeed(client: CoreClient, serverId: String, shown: Set<HomeSe
             }
         }
         if (content != null) out[section] = content
+        onSection(LinkedHashMap(out))
     }
     return out
 }

@@ -152,9 +152,12 @@ fun HomeScreen(nav: NavHostController) {
     // rows on the first frame — the artwork that flew out has somewhere to fly back to.
     var feed by rememberCachedState<Map<HomeSection, SectionContent>?>(listOf("home.feed", serverId)) { null }
     val feedSections = shownSet - HomeSection.Spotlight
+    // The sections read so far on a cold load (no feed yet), for a reveal that can't wait any longer.
+    var partial by remember(serverId) { mutableStateOf<Map<HomeSection, SectionContent>>(emptyMap()) }
     LaunchedEffect(serverId, libraryGen, feedSections, nowPlayingId) {
         if (libraryGen < 0) return@LaunchedEffect
-        feed = loadHomeFeed(client, serverId, feedSections)
+        // Merged, not replaced: a reload mid-cold-load (a track change, a sync) keeps what's revealed.
+        feed = loadHomeFeed(client, serverId, feedSections) { if (feed == null) partial = partial + it }
     }
     // Spotlight loads on its own: on arriving at Home, when another album starts, and when the
     // library or the albums to resume change; not per track. What's playing as it loads is left
@@ -185,7 +188,9 @@ fun HomeScreen(nav: NavHostController) {
         slides.mapIndexed { i, s -> if (dynamicColour) ArtworkColors.scheme(slideSeeds[i] ?: ArtworkColors.seedFor(s.coverArt), dark) else appScheme }
     }
     val pageScheme = slideSchemes.getOrNull(pager.currentPage) ?: appScheme
-    val heroFirst = slides.isNotEmpty()
+    // A cold load reveals Spotlight with the rest, so the carousel and the sections come in together.
+    val reveal = rememberHomeReveal(serverId, ready = { feed != null && (!spotlightOn || spotlight != null) })
+    val heroFirst = slides.isNotEmpty() && reveal.phase == RevealPhase.Shown
     var customising by remember { mutableStateOf(false) }
     var sectionMenu by remember { mutableStateOf<SectionPref?>(null) }
     var jobs by remember { mutableStateOf(false) }
@@ -233,11 +238,14 @@ fun HomeScreen(nav: NavHostController) {
         },
         snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset)) },
     ) { padding ->
-        val loaded = feed
+        // Nothing until the reveal says so, even a feed that's in (the skeleton's minimum, the entrance).
+        val loaded = if (reveal.phase == RevealPhase.Shown) feed ?: partial else null
         val listState = rememberLazyListState()
         ScrollToTopOnReselect(listState)
         ShimmerHost {
             LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = if (heroFirst) 0.dp else padding.calculateTopPadding(), bottom = BottomContentInset)) {
+                // Nothing yet: blank at first (most loads land before a skeleton would be worth showing).
+                if (reveal.phase == RevealPhase.Waiting) return@LazyColumn
                 if (loaded == null) {
                     item(key = "sk.h1", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
                     item(key = "sk.s1", contentType = "stripSkeleton") { AlbumStripSkeleton() }
@@ -246,21 +254,33 @@ fun HomeScreen(nav: NavHostController) {
                     return@LazyColumn
                 }
                 var any = false
+                var order = 0
                 if (heroFirst) {
                     any = true
+                    val step = order++
                     item(key = "spotlight", contentType = "spotlight") {
                         SpotlightCarousel(
                             slides, pager, slideSchemes,
                             onOpen = { s -> openSlide(nav, s) },
                             onPlay = { s, shuffle -> playSlide(client, serverId, s, shuffle) },
                             onMenu = { s -> s.album?.let { sheets.album = it } ?: s.artist?.let { sheets.artist = it } ?: s.playlist?.let { sheets.playlist = it } },
+                            modifier = Modifier.homeEntrance(reveal, step),
                         )
                     }
                 }
                 shown.forEach { pref ->
                     val section = pref.section ?: return@forEach
                     if (section == HomeSection.Spotlight) return@forEach
-                    val content = loaded[section] ?: return@forEach
+                    val content = loaded[section]
+                    if (content == null) {
+                        // Revealed at the cap before this one was read: hold its place until it is.
+                        if (feed == null) {
+                            any = true
+                            item(key = "sk.h.${pref.id}", contentType = "sectionSkeleton") { SectionHeaderSkeleton(Modifier.animateItem()) }
+                            item(key = "sk.s.${pref.id}", contentType = "stripSkeleton") { AlbumStripSkeleton(Modifier.animateItem()) }
+                        }
+                        return@forEach
+                    }
                     val empty = when (section) {
                         HomeSection.Filters -> filters.isEmpty()
                         HomeSection.RecentQueues -> saved.isEmpty()
@@ -268,12 +288,13 @@ fun HomeScreen(nav: NavHostController) {
                     }
                     if (empty) return@forEach
                     any = true
+                    val step = order++
                     item(key = "h.${pref.id}", contentType = "sectionHeader") {
                         val title = sectionTitle(section, content)
-                        HomeSectionHeader(title, Modifier.animateItem().testTag("home.section.${pref.id}"), onMenu = { sectionMenu = pref })
+                        HomeSectionHeader(title, Modifier.animateItem().homeEntrance(reveal, step).testTag("home.section.${pref.id}"), onMenu = { sectionMenu = pref })
                     }
                     item(key = "s.${pref.id}", contentType = "section.${pref.resolvedStyle.id}") {
-                        Box(Modifier.animateItem()) {
+                        Box(Modifier.animateItem().homeEntrance(reveal, step)) {
                             SectionBody(section, content, pref.resolvedStyle, filters, saved, nav, serverId, sheets, onSongMore = { songMenu.open(it) })
                         }
                     }
