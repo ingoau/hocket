@@ -139,12 +139,15 @@ export function ContextMenu() {
   /** The active cell was reached by keyboard (it gets a ring), not the pointer. */
   const [keys, setKeys] = useState(false);
   /** The open submenu (Add to playlist or Share), with where it opens from. */
-  const [sub, setSub] = useState<{ id: string; left: number; right: number; top: number } | null>(null);
+  const [sub, setSub] = useState<{ id: string; left: number; right: number; top: number; n: number } | null>(null);
+  /** Counts opens, so each one mounts its submenu afresh (and takes focus) even mid-exit. */
+  const opens = useRef(0);
   const subOpen = useRef(false);
   subOpen.current = !!sub;
   // The submenu slides out on its own when it closes back to the menu (and with the menu when that
   // closes); a hover onto another submenu's row swaps it at once.
-  const subPresence = usePresence<typeof sub, HTMLDivElement>(sub);
+  // Once the menu is gone, so is the submenu, at once: nothing of it is left to show at the next open.
+  const subPresence = usePresence<typeof sub, HTMLDivElement>(sub, undefined, { instant: !menu });
   const shownSub = subPresence.value;
   /** A submenu switch the pointer asked for, held a moment in case it is only crossing to the submenu. */
   const pendingSub = useRef<{ timer: number; cell: number } | undefined>(undefined);
@@ -153,6 +156,14 @@ export function ContextMenu() {
     pendingSub.current = undefined;
   };
   useEffect(() => cancelPendingSub, []);
+  // A switch the pointer asked for never lands on a closing menu; the submenu itself goes when the
+  // menu's exit ends (it leaves with it until then).
+  useEffect(() => {
+    if (!live) cancelPendingSub();
+  }, [live]);
+  useEffect(() => {
+    if (!menu) setSub(null);
+  }, [menu]);
   const model = useMemo(() => (menu ? buildMenu(menu.actions, menu.items ?? [], menu.facts, { inPlaylist: !!menu.context?.playlistId }) : []), [menu]);
 
   useLayoutEffect(() => {
@@ -271,7 +282,7 @@ export function ContextMenu() {
     if (!ref.current || !row) return;
     const box = ref.current.getBoundingClientRect();
     setActive(cell);
-    setSub({ id, left: box.left, right: box.right, top: row.getBoundingClientRect().top });
+    setSub({ id, left: box.left, right: box.right, top: row.getBoundingClientRect().top, n: ++opens.current });
   };
   const closeSub = () => {
     cancelPendingSub();
@@ -593,13 +604,13 @@ export function ContextMenu() {
       {/* Reaching the submenu keeps it: a switch the pointer's path asked for on the way is called off. */}
       <div style={{ display: "contents" }} onMouseMove={cancelPendingSub}>
         {shownSub?.id === "addToPlaylist" && facts?.trackIds?.length ? (
-          <PlaylistSubmenu key="addToPlaylist" trackIds={facts.trackIds} anchor={shownSub} closing={subMotion === "closing"} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+          <PlaylistSubmenu key={`addToPlaylist-${shownSub.n}`} trackIds={facts.trackIds} anchor={shownSub} closing={subMotion === "closing"} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
         ) : null}
         {shownSub?.id === "snooze" && facts?.trackIds?.length ? (
-          <SnoozeSubmenu key="snooze" trackIds={facts.trackIds} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+          <SnoozeSubmenu key={`snooze-${shownSub.n}`} trackIds={facts.trackIds} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
         ) : null}
         {shownSub?.id === "share" && facts ? (
-          <ShareSubmenu key="share" facts={facts} target={menu.target} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+          <ShareSubmenu key={`share-${shownSub.n}`} facts={facts} target={menu.target} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
         ) : null}
       </div>
     </Fragment>
