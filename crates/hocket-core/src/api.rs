@@ -516,8 +516,8 @@ pub enum SortOrder {
     SongCount,
 }
 
-/// What is being played. The visible queue is derived from this plus the cursor,
-/// the shuffle permutation and the insertion list — never stored flat.
+/// What is being played: the identity and label of what started the queue. The queue itself is
+/// the session document's flat entry list; `tracks` is the list it was started from.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -526,21 +526,21 @@ pub struct QueueContext {
     pub kind: ContextKind,
     pub label: String,
     pub sort: SortOrder,
-    /// Resolved track order. Present in the live document; snapshots omit it
-    /// for ID-referenced contexts and re-resolve on restore.
+    /// Resolved track order the queue was started from. Present in the live document; a
+    /// snapshot too large to store whole omits it (and its entries) for ID-referenced contexts
+    /// and re-resolves on restore.
     #[serde(default)]
     pub tracks: Vec<TrackId>,
 }
 
-/// Where a queue item came from. Persists so previous/next stay inverses and
-/// the UI can show "from playlist" vs "queued" vs "autoplay".
+/// Where a queue entry came from: the context, a user action, or autoplay.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum QueueSource {
-    /// Index into the context's *unshuffled* track list.
+    /// Index into the context's track list when the queue was started.
     Context { index: u32 },
-    /// Play next / play later.
+    /// Play next / add to queue / play later.
     Inserted,
     Autoplay {
         provider: AutoplayProvider,
@@ -553,23 +553,24 @@ pub enum QueueSource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueItem {
+    /// Stable for the entry's life: every op names entries by key, never by index.
     pub key: QueueKey,
     pub track_id: TrackId,
     pub source: QueueSource,
     /// Marked when a device could not play it; skipped, never scrobbled.
     #[serde(default)]
     pub unavailable: bool,
-}
-
-#[typeshare]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum QueueMode {
-    /// Insertions live in a separate "Playing Next" list ahead of the context.
-    #[default]
-    Apple,
-    /// Insertions splice into the context order after the cursor.
-    YouTube,
+    /// The user put it in the queue (play next, add to queue, play later). Never changes.
+    #[serde(default)]
+    pub added: bool,
+    /// In the "Next in queue" group, which is the contiguous run of `queued` entries directly
+    /// after the current one. The flag rides with the entry through Next and Previous.
+    #[serde(default)]
+    pub queued: bool,
+    /// Place in the unshuffled order: turning shuffle off sorts the entries after the group by
+    /// it. Equal to the list index while shuffle is off.
+    #[serde(default)]
+    pub ordinal: u32,
 }
 
 #[typeshare]
@@ -578,30 +579,11 @@ pub enum QueueMode {
 pub enum RepeatMode {
     #[default]
     Off,
-    /// Loops the context only.
+    /// Loops the whole list: Next on the last entry wraps to the first, Previous on the first
+    /// to the last.
     All,
     /// Repeats whatever is playing, regardless of where it came from.
     One,
-}
-
-#[typeshare]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ShuffleState {
-    /// The permutation is derived deterministically from the seed over the
-    /// context length, so it costs 4 bytes to store and sync.
-    pub seed: u32,
-    /// Unshuffled context index pinned to permuted position 0: the item that
-    /// was current when shuffle was enabled, so it keeps its place.
-    #[serde(default)]
-    pub anchor: Option<u32>,
-    /// Explicit permutation (a bijection over `0..tracks.len()`). Only present
-    /// after a structural edit while shuffled (remove, move, YouTube-mode
-    /// splice), where a seed alone can no longer express the order without
-    /// rescrambling what the user already saw. Takes precedence over `seed`
-    /// when present and valid; cleared by a reshuffle.
-    #[serde(default)]
-    pub order: Option<Vec<u32>>,
 }
 
 /// Last known transport sample. Receivers extrapolate; it is never sent on a timer.
@@ -666,11 +648,13 @@ pub struct SavedQueue {
     pub id: String,
     pub context: QueueContext,
     pub label: String,
-    pub cursor: u32,
-    pub current: Option<QueueItem>,
+    /// The list as it was left: the entries behind the pointer (the most recent few hundred),
+    /// the current one and the ones after it. All three are empty for an ID-referenced
+    /// context too long to store, which restores from its re-resolved track list.
     pub history: Vec<QueueItem>,
-    pub insertions: Vec<QueueItem>,
-    pub shuffle: Option<ShuffleState>,
+    pub current: Option<QueueItem>,
+    pub upcoming: Vec<QueueItem>,
+    pub shuffle: bool,
     pub repeat: RepeatMode,
     pub position_ms: Ms,
     pub pinned: bool,
@@ -819,15 +803,18 @@ pub struct SessionDocument {
     pub revision: u32,
     pub updated_at: EpochMs,
     pub context: Option<QueueContext>,
-    pub mode: QueueMode,
-    /// Index into the *permuted* context order of the current context item.
-    pub cursor: u32,
-    pub current: Option<QueueItem>,
-    /// Already played, still reachable. Capped (~200).
+    /// The queue is one flat list with a pointer, stored as the three runs the pointer splits
+    /// it into: `history ++ [current] ++ upcoming`. Entries behind the pointer, oldest first.
+    /// Capped (~5000), trimmed from the oldest end.
     pub history: Vec<QueueItem>,
-    /// Play next / play later, in order.
-    pub insertions: Vec<QueueItem>,
-    pub shuffle: Option<ShuffleState>,
+    /// The entry under the pointer. `None` only when the list is empty or the current entry
+    /// was removed with nothing after it (then `upcoming` is empty too).
+    pub current: Option<QueueItem>,
+    /// Entries after the pointer, in play order: the "Next in queue" group first (the
+    /// `queued` run), then the rest.
+    pub upcoming: Vec<QueueItem>,
+    /// The entries after the group are in shuffled order.
+    pub shuffle: bool,
     pub repeat: RepeatMode,
     pub autoplay: bool,
     pub transport: TransportState,
@@ -845,38 +832,85 @@ pub struct SessionDocument {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueEntry {
+    /// Key, track, source and the `added` / `queued` / `unavailable` flags.
     pub item: QueueItem,
     pub track: TrackSummary,
+    /// Inside the "Next in queue" group (shown under its heading, without a per-row marker).
+    #[serde(default)]
+    pub in_group: bool,
+    /// Appended by autoplay.
+    #[serde(default)]
+    pub autoplay: bool,
 }
 
+/// The queue as the UI renders it: a window onto the flat list around the pointer.
+///
+/// List indices: `0..historyCount` are history (oldest first), `currentIndex` (== historyCount)
+/// is the current entry, the next `groupCount` are the "Next in queue" group, the rest follow.
+/// `entries` holds the rows `windowStart..windowStart + entries.len()`; page in more with
+/// `Query::QueueRange`.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueView {
     pub context_label: Option<String>,
-    pub history: Vec<QueueEntry>,
+    /// The rows of the window, in list order.
+    pub entries: Vec<QueueEntry>,
+    /// List index of `entries[0]`.
+    pub window_start: u32,
+    /// Entries in the whole list (exact, whatever the window).
+    pub total: u32,
+    /// Entries behind the pointer (exact).
+    pub history_count: u32,
+    /// List index of the current entry; `None` when nothing is current.
+    pub current_index: Option<u32>,
+    /// Entries in the "Next in queue" group, directly after the current one.
+    pub group_count: u32,
+    /// Entries after the current one (group included; exact).
+    pub total_upcoming: u32,
+    /// The current entry, also in `entries` when the window covers it.
     pub current: Option<QueueEntry>,
-    /// From the insertion list.
-    pub playing_next: Vec<QueueEntry>,
-    /// Continuing from the context, in permuted order.
-    pub upcoming: Vec<QueueEntry>,
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub autoplay: bool,
-    pub mode: QueueMode,
-    pub total_upcoming: u32,
-    /// What plays after the last entry when the queue would wrap (Repeat
-    /// All with nothing in `playing_next` or `upcoming`): the first entry of
-    /// the context in play order, which with shuffle on only the core knows.
-    /// `None` when the queue does not wrap.
+    /// What Next plays from the last entry under Repeat All: the first playable entry. `None`
+    /// when the queue does not wrap here.
     #[serde(default)]
     pub wrap_next: Option<QueueEntry>,
-    /// What going back a track ([`Command::PreviousTrack`], Previous short
-    /// of its restart) makes current: the last history entry still playable,
-    /// or with none the context's entry before this one in play order.
-    /// `None` when there is nothing before (going back restarts the track).
+    /// What going back a track ([`Command::PreviousTrack`], Previous short of its restart)
+    /// makes current: the nearest playable entry behind the pointer, or under Repeat All the
+    /// last one. `None` when there is nothing before (going back restarts the track).
     #[serde(default)]
     pub previous: Option<QueueEntry>,
+}
+
+impl QueueView {
+    /// The window's entries after the current one, in play order.
+    pub fn upcoming(&self) -> impl Iterator<Item = &QueueEntry> {
+        let first = self.current_index.map(|c| c + 1).unwrap_or(self.total);
+        let start = self.window_start;
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(move |(i, _)| start + *i as u32 >= first)
+            .map(|(_, e)| e)
+    }
+
+    /// The window's entries behind the pointer, oldest first.
+    pub fn history(&self) -> impl Iterator<Item = &QueueEntry> {
+        let end = self.history_count;
+        let start = self.window_start;
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(move |(i, _)| start + (*i as u32) < end)
+            .map(|(_, e)| e)
+    }
+
+    /// The window's "Next in queue" group.
+    pub fn group(&self) -> impl Iterator<Item = &QueueEntry> {
+        self.entries.iter().filter(|e| e.in_group)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2092,28 +2126,51 @@ pub enum Command {
         #[serde(default)]
         start_position_ms: Ms,
     },
+    /// Directly after the current entry (ahead of the group), in the group when the Queue
+    /// section setting is on. `keys` names queue entries to put there instead of new copies:
+    /// one ahead of the pointer moves, one behind it (or the current one) is copied.
     PlayNext {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        #[serde(default)]
+        keys: Vec<QueueKey>,
     },
+    /// At the end of the "Next in queue" group. `keys` as for `PlayNext`.
+    AddToQueue {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        #[serde(default)]
+        keys: Vec<QueueKey>,
+    },
+    /// At the end of the whole list, outside the group. `keys` as for `PlayNext`.
     PlayLater {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        #[serde(default)]
+        keys: Vec<QueueKey>,
     },
+    /// Move the pointer to this entry. Nothing in the list changes: the entries jumped over
+    /// end up behind the pointer.
     JumpToQueueItem {
         key: QueueKey,
     },
     RemoveQueueItems {
         keys: Vec<QueueKey>,
     },
-    /// `to_index` is within the combined playing-next + upcoming list.
+    /// Drag an entry ahead of the pointer to directly after `after` (the current entry's key
+    /// for the top of the list), in the group or out of it. Nothing moves above the current
+    /// entry or into history. An `inGroup` drop past the group's end lands at its end; an
+    /// out-of-group drop inside the group lands just after it.
     MoveQueueItem {
         key: QueueKey,
-        to_index: u32,
+        after: QueueKey,
+        in_group: bool,
     },
     ClearQueue,
-    /// Clears playing-next only.
-    ClearInsertions,
+    /// Remove the "Next in queue" group's entries.
+    ClearQueueGroup,
+    /// Send the "Next in queue" group's songs to the stash and remove them from the queue.
+    StashQueueGroup,
     SetShuffle {
         enabled: bool,
     },
@@ -2122,9 +2179,6 @@ pub enum Command {
     },
     SetAutoplay {
         enabled: bool,
-    },
-    SetQueueMode {
-        mode: QueueMode,
     },
     /// Mark the current item unplayable on this device and move on.
     SkipUnavailable {
@@ -2601,6 +2655,12 @@ pub enum Query {
         request_id: String,
     },
     Queue,
+    /// Rows `start..start + count` of the queue list (clamped), with the same totals as the
+    /// `Queue` view: how the UI pages in more history or more upcoming entries on scroll.
+    QueueRange {
+        start: u32,
+        count: u32,
+    },
     SavedQueues,
     /// The stash, in order.
     Stash,

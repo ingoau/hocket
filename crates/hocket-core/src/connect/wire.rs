@@ -30,8 +30,8 @@ use typeshare::typeshare;
 use crate::api::{
     AlbumResumeEntry, AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
     LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey,
-    QueueMode, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, Snooze,
-    StashEntry, TrackId, TransportLease, UndoEntry,
+    RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, Snooze, StashEntry,
+    TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -39,10 +39,12 @@ use crate::api::{
 /// History: 1 = initial; 2 = LAN rooms authenticate with
 /// [`Msg::Challenge`]/[`Msg::Proof`] and a `Hello` on the LAN never carries a
 /// credential. Version 1 peers are refused (they would hand a credential to
-/// any LAN host).
-pub const PROTOCOL: u32 = 2;
+/// any LAN host); 3 = the flat queue model (one list with a pointer, no
+/// queue modes, keyed moves, the "Next in queue" group). Version 2 peers
+/// reduce ops differently and can't share a session with this one.
+pub const PROTOCOL: u32 = 3;
 /// Hard floor. The handshake refuses anything older.
-pub const PROTOCOL_MIN: u32 = 2;
+pub const PROTOCOL_MIN: u32 = 3;
 
 /// Extra fields preserved verbatim. Typeshare never sees it.
 pub type Extra = HashMap<String, Value>;
@@ -357,13 +359,23 @@ pub enum SessionOp {
         #[serde(default)]
         start_position_ms: Ms,
     },
+    /// `queued`: into the "Next in queue" group (the sender's Queue section
+    /// setting), decided by the sender so every replica agrees.
     PlayNext {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+        queued: bool,
+    },
+    AddToQueue {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
     },
     PlayLater {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
     },
     JumpToQueueItem {
         key: QueueKey,
@@ -373,10 +385,11 @@ pub enum SessionOp {
     },
     MoveQueueItem {
         key: QueueKey,
-        to_index: u32,
+        after: QueueKey,
+        in_group: bool,
     },
     ClearQueue,
-    ClearInsertions,
+    ClearQueueGroup,
     SetShuffle {
         enabled: bool,
     },
@@ -386,9 +399,6 @@ pub enum SessionOp {
     },
     SetAutoplay {
         enabled: bool,
-    },
-    SetQueueMode {
-        mode: QueueMode,
     },
     Next,
     Previous,
@@ -461,31 +471,49 @@ impl SessionOp {
             Command::PlayNext {
                 server_id,
                 track_ids,
+                keys,
             } => SessionOp::PlayNext {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
+                keys: keys.clone(),
+                queued: true,
+            },
+            Command::AddToQueue {
+                server_id,
+                track_ids,
+                keys,
+            } => SessionOp::AddToQueue {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+                keys: keys.clone(),
             },
             Command::PlayLater {
                 server_id,
                 track_ids,
+                keys,
             } => SessionOp::PlayLater {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
+                keys: keys.clone(),
             },
             Command::JumpToQueueItem { key } => SessionOp::JumpToQueueItem { key: key.clone() },
             Command::RemoveQueueItems { keys } => {
                 SessionOp::RemoveQueueItems { keys: keys.clone() }
             }
-            Command::MoveQueueItem { key, to_index } => SessionOp::MoveQueueItem {
+            Command::MoveQueueItem {
+                key,
+                after,
+                in_group,
+            } => SessionOp::MoveQueueItem {
                 key: key.clone(),
-                to_index: *to_index,
+                after: after.clone(),
+                in_group: *in_group,
             },
             Command::ClearQueue => SessionOp::ClearQueue,
-            Command::ClearInsertions => SessionOp::ClearInsertions,
+            Command::ClearQueueGroup => SessionOp::ClearQueueGroup,
             Command::SetShuffle { enabled } => SessionOp::SetShuffle { enabled: *enabled },
             Command::SetRepeat { mode } => SessionOp::SetRepeat { mode: *mode },
             Command::SetAutoplay { enabled } => SessionOp::SetAutoplay { enabled: *enabled },
-            Command::SetQueueMode { mode } => SessionOp::SetQueueMode { mode: *mode },
             Command::Next => SessionOp::Next,
             Command::Previous | Command::PreviousTrack => SessionOp::Previous,
             Command::SkipUnavailable { key } => SessionOp::SkipUnavailable { key: key.clone() },
@@ -552,17 +580,33 @@ impl SessionOp {
     /// track lists a queue replacement carries).
     pub fn summary(&self) -> String {
         match self {
-            SessionOp::MoveQueueItem { key, to_index } => {
-                format!("moveQueueItem {key} to {to_index}")
+            SessionOp::MoveQueueItem {
+                key,
+                after,
+                in_group,
+            } => {
+                let place = if *in_group { "in group" } else { "" };
+                format!("moveQueueItem {key} after {after} {place}")
+                    .trim_end()
+                    .to_string()
             }
             SessionOp::RemoveQueueItems { keys } => format!("removeQueueItems {}", keys.join(" ")),
             SessionOp::JumpToQueueItem { key } => format!("jumpToQueueItem {key}"),
             SessionOp::SkipUnavailable { key } => format!("skipUnavailable {key}"),
-            SessionOp::PlayNext { track_ids, .. } => {
-                format!("playNext ({} tracks)", track_ids.len())
+            SessionOp::PlayNext {
+                track_ids, keys, ..
+            } => {
+                format!("playNext ({} tracks)", track_ids.len() + keys.len())
             }
-            SessionOp::PlayLater { track_ids, .. } => {
-                format!("playLater ({} tracks)", track_ids.len())
+            SessionOp::AddToQueue {
+                track_ids, keys, ..
+            } => {
+                format!("addToQueue ({} tracks)", track_ids.len() + keys.len())
+            }
+            SessionOp::PlayLater {
+                track_ids, keys, ..
+            } => {
+                format!("playLater ({} tracks)", track_ids.len() + keys.len())
             }
             other => serde_json::to_value(other)
                 .ok()
@@ -1115,7 +1159,7 @@ pub fn merge_settings(ours: &[Setting], theirs: &[Setting]) -> (Vec<Setting>, bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{Platform, QueueMode, RepeatMode, SettingScope, TransportState};
+    use crate::api::{Platform, RepeatMode, SettingScope, TransportState};
 
     pub(crate) fn device(id: &str) -> DeviceInfo {
         DeviceInfo {
@@ -1132,18 +1176,16 @@ mod tests {
 
     pub(crate) fn doc() -> SessionDocument {
         SessionDocument {
-            schema_version: 1,
+            schema_version: crate::session::SESSION_SCHEMA_VERSION,
             session_id: "s1".into(),
             scope: "srv|user".into(),
             revision: 3,
             updated_at: 10.0,
             context: None,
-            mode: QueueMode::Apple,
-            cursor: 0,
-            current: None,
             history: vec![],
-            insertions: vec![],
-            shuffle: None,
+            current: None,
+            upcoming: vec![],
+            shuffle: false,
             repeat: RepeatMode::Off,
             autoplay: false,
             transport: TransportState::default(),
@@ -1434,11 +1476,10 @@ mod tests {
                 tracks: vec![],
             },
             label: id.into(),
-            cursor: 0,
-            current: None,
             history: vec![],
-            insertions: vec![],
-            shuffle: None,
+            current: None,
+            upcoming: vec![],
+            shuffle: false,
             repeat: RepeatMode::Off,
             position_ms: 0,
             pinned,

@@ -111,7 +111,7 @@ async fn preview_pauses_here_and_resumes_at_the_same_position() {
         after.position.position_ms
     );
     assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
-    assert!(t.queue().await.history.is_empty(), "the queue did not move");
+    assert!(t.queue().await.history_count == 0, "the queue did not move");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

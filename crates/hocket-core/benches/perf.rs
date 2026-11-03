@@ -18,8 +18,8 @@ use hocket_core::audio::dsp::biquad::{Biquad, BiquadKind, Coefficients};
 use hocket_core::audio::dsp::eq::{preset, EqOptions, Equalizer};
 use hocket_core::lyrics::LyricsCursor;
 use hocket_core::session::{
-    derive, new_document, reduce, DeterministicEntropy, QueueOp, ReduceCtx, SavedQueuePolicy,
-    DEFAULT_HISTORY_CAP,
+    derive, derive_window, new_document, reduce, DeterministicEntropy, QueueOp, ReduceCtx,
+    SavedQueuePolicy, DEFAULT_HISTORY_CAP, QUEUE_VIEW_AFTER, QUEUE_VIEW_BEFORE,
 };
 
 fn criterion_config() -> Criterion {
@@ -75,10 +75,11 @@ fn resolve(id: &TrackId) -> TrackSummary {
 }
 
 fn queue_event(doc: &SessionDocument, window: bool) -> Event {
-    let mut derived = derive(doc);
-    if window {
-        derived.window_for_view();
-    }
+    let derived = if window {
+        derive_window(doc, QUEUE_VIEW_BEFORE, QUEUE_VIEW_AFTER)
+    } else {
+        derive(doc)
+    };
     Event::QueueChanged {
         queue: derived.into_view(resolve),
     }

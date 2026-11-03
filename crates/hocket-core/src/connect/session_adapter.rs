@@ -161,30 +161,49 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
         SessionOp::PlayNext {
             server_id,
             track_ids,
+            keys,
+            queued,
         } => QueueOp::PlayNext {
             server_id: server_id.clone(),
             track_ids: track_ids.clone(),
+            keys: keys.clone(),
+            queued: *queued,
+        },
+        SessionOp::AddToQueue {
+            server_id,
+            track_ids,
+            keys,
+        } => QueueOp::AddToQueue {
+            server_id: server_id.clone(),
+            track_ids: track_ids.clone(),
+            keys: keys.clone(),
         },
         SessionOp::PlayLater {
             server_id,
             track_ids,
+            keys,
         } => QueueOp::PlayLater {
             server_id: server_id.clone(),
             track_ids: track_ids.clone(),
+            keys: keys.clone(),
         },
         SessionOp::JumpToQueueItem { key } => QueueOp::JumpToQueueItem { key: key.clone() },
         SessionOp::RemoveQueueItems { keys } => QueueOp::RemoveQueueItems { keys: keys.clone() },
-        SessionOp::MoveQueueItem { key, to_index } => QueueOp::MoveQueueItem {
+        SessionOp::MoveQueueItem {
+            key,
+            after,
+            in_group,
+        } => QueueOp::MoveQueueItem {
             key: key.clone(),
-            to_index: *to_index,
+            after: after.clone(),
+            in_group: *in_group,
         },
         SessionOp::ClearQueue => QueueOp::ClearQueue,
-        SessionOp::ClearInsertions => QueueOp::ClearInsertions,
+        SessionOp::ClearQueueGroup => QueueOp::ClearQueueGroup,
         SessionOp::SetShuffle { enabled } => QueueOp::SetShuffle { enabled: *enabled },
         SessionOp::Reshuffle => QueueOp::Reshuffle,
         SessionOp::SetRepeat { mode } => QueueOp::SetRepeat { mode: *mode },
         SessionOp::SetAutoplay { enabled } => QueueOp::SetAutoplay { enabled: *enabled },
-        SessionOp::SetQueueMode { mode } => QueueOp::SetQueueMode { mode: *mode },
         SessionOp::Next => QueueOp::Next,
         SessionOp::Previous => QueueOp::Previous,
         SessionOp::SkipUnavailable { key } => QueueOp::SkipUnavailable { key: key.clone() },
@@ -281,9 +300,9 @@ mod tests {
         let b = apply_op(&r, &base, &ctx_op(12), &ctx, 1).unwrap();
         assert_eq!(a, b);
         assert_eq!(a.revision, 1);
-        assert!(a.shuffle.is_some());
+        assert!(a.shuffle);
         let ctx2 = op_context("op-2", 11.0, 0);
-        let shown_next = crate::session::derive(&a).upcoming[0].key.clone();
+        let shown_next = a.upcoming[0].key.clone();
         let a2 = apply_op(&r, &a, &SessionOp::Next, &ctx2, 2).unwrap();
         let b2 = apply_op(&r, &b, &SessionOp::Next, &ctx2, 2).unwrap();
         assert_eq!(a2, b2);
@@ -381,33 +400,39 @@ mod tests {
 
     #[test]
     fn every_wire_op_maps() {
-        use crate::api::{QueueMode, RepeatMode};
+        use crate::api::RepeatMode;
         let ops = vec![
             SessionOp::PlayNext {
                 server_id: "s".into(),
                 track_ids: vec![],
+                keys: vec![],
+                queued: true,
+            },
+            SessionOp::AddToQueue {
+                server_id: "s".into(),
+                track_ids: vec![],
+                keys: vec![],
             },
             SessionOp::PlayLater {
                 server_id: "s".into(),
                 track_ids: vec![],
+                keys: vec![],
             },
             SessionOp::JumpToQueueItem { key: "k".into() },
             SessionOp::RemoveQueueItems { keys: vec![] },
             SessionOp::MoveQueueItem {
                 key: "k".into(),
-                to_index: 0,
+                after: "c".into(),
+                in_group: true,
             },
             SessionOp::ClearQueue,
-            SessionOp::ClearInsertions,
+            SessionOp::ClearQueueGroup,
             SessionOp::SetShuffle { enabled: true },
             SessionOp::Reshuffle,
             SessionOp::SetRepeat {
                 mode: RepeatMode::All,
             },
             SessionOp::SetAutoplay { enabled: true },
-            SessionOp::SetQueueMode {
-                mode: QueueMode::YouTube,
-            },
             SessionOp::Next,
             SessionOp::Previous,
             SessionOp::SkipUnavailable { key: "k".into() },

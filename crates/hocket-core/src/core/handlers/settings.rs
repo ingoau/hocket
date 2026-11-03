@@ -4,7 +4,6 @@
 use crate::actions::canonical_id;
 use crate::api::*;
 use crate::connect::engine::Input;
-use crate::connect::wire::SessionOp;
 use crate::core::actor::Actor;
 use crate::core::handlers::session::DbResolver;
 use crate::settings::{keys, ConfigInputs};
@@ -41,23 +40,20 @@ impl Actor {
         self.emit(Event::SettingChanged {
             setting: setting.clone(),
         });
-        self.apply_setting_side_effects(&setting.key, local);
+        self.apply_setting_side_effects(&setting.key);
         if local && setting.scope == SettingScope::AccountSynced && self.settings.sync_enabled() {
             self.engine_input(Input::SettingChanged(setting));
         }
     }
 
     /// What a changed key means for the running subsystems.
-    pub(crate) fn apply_setting_side_effects(&mut self, key: &str, local: bool) {
+    pub(crate) fn apply_setting_side_effects(&mut self, key: &str) {
         match key {
-            keys::QUEUE_MODE => {
-                let mode = match self.settings.get_string(key).as_deref() {
-                    Some("youTube") => QueueMode::YouTube,
-                    _ => QueueMode::Apple,
-                };
-                if local && self.doc().is_some_and(|d| d.mode != mode) {
-                    self.local_op(SessionOp::SetQueueMode { mode });
-                }
+            keys::QUEUE_SECTION => {
+                // "Add to queue" comes and goes with it.
+                self.emit(Event::ActionsChanged {
+                    surface: "contextMenu".into(),
+                });
             }
             keys::QUEUE_SAVED_CAP => {
                 let cap = self.settings.get_i64(key).max(0) as u32;
@@ -361,7 +357,7 @@ impl Actor {
         }
         for key in &out.applied {
             if !changed_synced.contains(key.as_str()) {
-                self.apply_setting_side_effects(key, true);
+                self.apply_setting_side_effects(key);
             }
         }
         for s in all {

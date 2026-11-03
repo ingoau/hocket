@@ -49,7 +49,9 @@ pub struct SettingDef {
 
 /// Well-known keys. Keep in step with [`REGISTRY`] and [`super::strings`].
 pub mod keys {
-    pub const QUEUE_MODE: &str = "queue.mode";
+    /// Offer "Add to queue" and the "Next in queue" group; off, Play Next
+    /// inserts after the current song without starting a group.
+    pub const QUEUE_SECTION: &str = "queue.section";
     pub const QUEUE_SAVED_CAP: &str = "queue.savedCap";
     pub const QUEUE_HISTORY_CAP: &str = "queue.historyCap";
     /// Offer to continue an album that was started from the album and left unfinished.
@@ -453,12 +455,7 @@ pub const SWIPE_PLAYER_UP_ACTIONS: &[&str] = &["queue", "lyrics", "connect", "me
 
 /// Every setting. Order is the settings screen's order.
 pub static REGISTRY: &[SettingDef] = &[
-    def(
-        QUEUE_MODE,
-        Synced,
-        SettingKind::Enum(&["apple", "youTube"]),
-        || json!("apple"),
-    ),
+    def(QUEUE_SECTION, Synced, SettingKind::Bool, || json!(true)),
     def(
         QUEUE_SAVED_CAP,
         Synced,
@@ -468,8 +465,8 @@ pub static REGISTRY: &[SettingDef] = &[
     def(
         QUEUE_HISTORY_CAP,
         Synced,
-        SettingKind::Int { min: 10, max: 1000 },
-        || json!(200),
+        SettingKind::Int { min: 10, max: 5000 },
+        || json!(5000),
     ),
     def(PLAYBACK_RESUME_ALBUMS, Synced, SettingKind::Bool, || {
         json!(true)

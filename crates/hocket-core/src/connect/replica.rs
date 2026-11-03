@@ -4,7 +4,7 @@
 //!
 //! | Stored | Detail |
 //! |---|---|
-//! | Session | context, cursor, history, shuffle, insertions, `(position, takenAt, isPlaying)` as last received |
+//! | Session | context, history, current, upcoming, shuffle, `(position, takenAt, isPlaying)` as last received |
 //! | Saved queues | the LWW set, per Navidrome user scope |
 //! | Settings | account-synced keys, LWW |
 //! | Leases | per-device last-seen and the transport lease |
@@ -37,7 +37,7 @@ pub const SCROBBLE_LOG_CAP: usize = 500;
 /// Device leases not seen for this long are forgotten.
 pub const DEVICE_TTL_MS: f64 = 7.0 * 24.0 * 3_600_000.0;
 /// Cap on stored history (mirrors the session module's own cap).
-pub const HISTORY_CAP: usize = 200;
+pub const HISTORY_CAP: usize = crate::session::DEFAULT_HISTORY_CAP;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplicaError {
@@ -464,7 +464,7 @@ impl ReplicaStore for FileReplicaStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{Platform, QueueMode, RepeatMode, SettingScope, TransportState};
+    use crate::api::{Platform, RepeatMode, SettingScope, TransportState};
 
     fn doc() -> SessionDocument {
         SessionDocument {
@@ -474,12 +474,10 @@ mod tests {
             revision: 1,
             updated_at: 0.0,
             context: None,
-            mode: QueueMode::Apple,
-            cursor: 0,
-            current: None,
             history: vec![],
-            insertions: vec![],
-            shuffle: None,
+            current: None,
+            upcoming: vec![],
+            shuffle: false,
             repeat: RepeatMode::Off,
             autoplay: false,
             transport: TransportState::default(),
@@ -549,12 +547,15 @@ mod tests {
     fn history_is_capped_when_stored() {
         let mut r = new_replica(doc(), 0.0);
         let mut d = doc();
-        for i in 0..300 {
+        for i in 0..HISTORY_CAP + 100 {
             d.history.push(crate::api::QueueItem {
                 key: format!("k{i}"),
                 track_id: format!("t{i}"),
                 source: crate::api::QueueSource::Inserted,
                 unavailable: false,
+                added: false,
+                queued: false,
+                ordinal: i as u32,
             });
         }
         r.set_document(d, 5.0);

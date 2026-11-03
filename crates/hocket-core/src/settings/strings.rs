@@ -10,7 +10,7 @@ pub struct SettingText {
 }
 
 pub const TEXTS: &[SettingText] = &[
-    t("queue.mode", "Queue mode", "How Play Next behaves: a separate Playing Next list (Apple) or spliced into the context after the current track (YouTube)."),
+    t("queue.section", "Queue section", "Show the \"Next in queue\" group and the Add to queue action. Off, Play next puts songs straight after the current one."),
     t("queue.savedCap", "Saved queues to keep", "How many unpinned recent queues are kept. Zero keeps only pinned queues."),
     t("queue.historyCap", "Playback history length", "How many played items stay reachable with Previous."),
     t("playback.resumeAlbums", "Resume albums", "Offer to continue an album you started from the album and didn't finish, at the track and moment you left it. Off, Play always starts at the beginning. Turning it back on brings back albums left in the last 30 days."),

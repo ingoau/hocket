@@ -42,9 +42,24 @@ mod tests {
                 track_id: format!("t-{key}"),
                 source,
                 unavailable: false,
+                added: false,
+                queued: false,
+                ordinal: 0,
             },
             track: summary(&format!("t-{key}")),
+            in_group: false,
+            autoplay: source_is_autoplay(key),
         }
+    }
+
+    fn source_is_autoplay(key: &str) -> bool {
+        key.starts_with('a')
+    }
+
+    fn queued(mut e: QueueEntry) -> QueueEntry {
+        e.item.added = true;
+        e.item.queued = true;
+        e
     }
 
     fn fixtures() -> Vec<(&'static str, Value)> {
@@ -68,7 +83,8 @@ mod tests {
             "command.playNext",
             json!(Command::PlayNext {
                 server_id: "srv".into(),
-                track_ids: vec!["a".into(), "b".into()]
+                track_ids: vec!["a".into(), "b".into()],
+                keys: vec![]
             }),
         );
         push(
@@ -344,23 +360,34 @@ mod tests {
             "result.queue",
             json!(QueryResult::Queue(QueueView {
                 context_label: Some("Album".into()),
-                history: vec![entry("h1", QueueSource::Context { index: 0 })],
+                entries: vec![
+                    entry("h1", QueueSource::Context { index: 0 }),
+                    entry("c", QueueSource::Context { index: 1 }),
+                    QueueEntry {
+                        in_group: true,
+                        ..queued(entry("n1", QueueSource::Inserted))
+                    },
+                    entry("u1", QueueSource::Context { index: 2 }),
+                    entry(
+                        "a1",
+                        QueueSource::Autoplay {
+                            provider: AutoplayProvider::SonicSimilarity,
+                            reason: "Similar to X".into(),
+                            score: Some(0.91)
+                        }
+                    ),
+                ],
+                window_start: 0,
+                total: 5,
+                history_count: 1,
+                current_index: Some(1),
+                group_count: 1,
+                total_upcoming: 3,
                 current: Some(entry("c", QueueSource::Context { index: 1 })),
-                playing_next: vec![entry("n1", QueueSource::Inserted)],
-                upcoming: vec![entry(
-                    "u1",
-                    QueueSource::Autoplay {
-                        provider: AutoplayProvider::SonicSimilarity,
-                        reason: "Similar to X".into(),
-                        score: Some(0.91)
-                    }
-                )],
                 shuffle: false,
                 repeat: RepeatMode::All,
                 autoplay: true,
-                mode: QueueMode::Apple,
-                total_upcoming: 1,
-                wrap_next: Some(entry("ctx-0", QueueSource::Context { index: 0 })),
+                wrap_next: None,
                 previous: Some(entry("h1", QueueSource::Context { index: 0 })),
             })),
         );
@@ -593,12 +620,10 @@ mod tests {
                     revision: 7,
                     updated_at: 1_700_000_000_000.0,
                     context: None,
-                    mode: QueueMode::Apple,
-                    cursor: 0,
-                    current: None,
                     history: vec![],
-                    insertions: vec![],
-                    shuffle: None,
+                    current: None,
+                    upcoming: vec![],
+                    shuffle: false,
                     repeat: RepeatMode::Off,
                     autoplay: false,
                     transport: TransportState::default(),
@@ -671,9 +696,10 @@ mod tests {
         assert_eq!(
             json!(Command::PlayNext {
                 server_id: "s".into(),
-                track_ids: vec![]
+                track_ids: vec![],
+                keys: vec![]
             }),
-            json!({"type": "playNext", "data": {"server_id": "s", "track_ids": []}})
+            json!({"type": "playNext", "data": {"server_id": "s", "track_ids": [], "keys": []}})
         );
         assert_eq!(
             json!(QueryResult::Count(1)),

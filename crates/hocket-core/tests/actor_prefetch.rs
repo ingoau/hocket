@@ -71,8 +71,7 @@ async fn the_next_two_items_are_prefetched_and_play_from_disk() {
     // The queue shows them cached.
     let q = t.queue().await;
     let up: Vec<_> = q
-        .upcoming
-        .iter()
+        .upcoming()
         .map(|e| (e.track.id.clone(), e.track.offline))
         .collect();
     assert_eq!(up[0], ("t1".into(), OfflineState::Cached), "{up:?}");

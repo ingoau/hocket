@@ -38,7 +38,6 @@ use crate::core::actor::Actor;
 use crate::core::stream_reader::{StreamReader, MAX_READ, STREAM_URL_PREFIX};
 use crate::core::{ActorMsg, Internal};
 use crate::downloads::{StreamMinter, TrackKey};
-use crate::session::reducer::upcoming_context;
 use crate::settings::keys;
 
 /// How many upcoming items are prefetched.
@@ -183,12 +182,10 @@ impl Actor {
         }
         let current = doc.current.as_ref().map(|i| i.track_id.clone());
         let items: Vec<TrackId> = doc
-            .insertions
+            .upcoming
             .iter()
-            .cloned()
-            .chain(upcoming_context(doc))
             .filter(|i| !i.unavailable && Some(&i.track_id) != current.as_ref())
-            .map(|i| i.track_id)
+            .map(|i| i.track_id.clone())
             .take(PREFETCH_AHEAD)
             .collect();
         let share = self.downloads.cache_budget() * PREFETCH_BUDGET_SHARE;

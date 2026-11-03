@@ -20,7 +20,6 @@ use crate::core::Internal;
 use crate::db::DbResult;
 use crate::media_session::{command_for, derive_media_session_state};
 use crate::outbox::{ScrobbleAction, Verdict};
-use crate::session::reducer::derive_window;
 
 impl Actor {
     // -- loading ----------------------------------------------------------------
@@ -79,14 +78,14 @@ impl Actor {
             return None;
         }
         let offline = self.is_offline();
-        // Context items are never marked unavailable: online, the first
-        // upcoming one is as far as the search below can get.
-        let d = derive_window(doc, if offline { usize::MAX } else { 1 });
-        // Repeat All wraps to the top: that item is next too (#13).
-        d.playing_next
+        // Repeat All wraps to the top: those entries are next too (#13).
+        let wrapped = (doc.repeat == RepeatMode::All)
+            .then(|| doc.history.iter().chain(doc.current.iter()))
             .into_iter()
-            .chain(d.upcoming)
-            .chain(d.wrap_next)
+            .flatten();
+        doc.upcoming
+            .iter()
+            .chain(wrapped)
             .filter(|i| !i.unavailable)
             .find(|i| {
                 !offline
@@ -94,6 +93,7 @@ impl Actor {
                         .track_or_bare(&i.track_id)
                         .is_some_and(|t| self.available_offline(&t))
             })
+            .cloned()
     }
 
     pub(crate) fn refresh_next(&mut self) {
@@ -178,7 +178,7 @@ impl Actor {
         let in_queue = self.doc().is_some_and(|d| {
             d.current
                 .iter()
-                .chain(d.insertions.iter())
+                .chain(d.upcoming.iter())
                 .any(|i| all.contains(&i.track_id))
                 || d.context
                     .as_ref()
@@ -559,7 +559,7 @@ impl Actor {
                 d.current
                     .iter()
                     .chain(d.history.iter())
-                    .chain(d.insertions.iter())
+                    .chain(d.upcoming.iter())
                     .find(|i| i.key == key)
                     .cloned()
             })
@@ -568,6 +568,9 @@ impl Actor {
                 track_id: track_id.clone(),
                 source: QueueSource::Inserted,
                 unavailable: false,
+                added: false,
+                queued: false,
+                ordinal: 0,
             });
         self.playback.want_playing = play;
         self.load_item(

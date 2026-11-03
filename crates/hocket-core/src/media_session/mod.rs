@@ -345,6 +345,9 @@ mod tests {
                     track_id: "t1".into(),
                     source: QueueSource::Inserted,
                     unavailable: false,
+                    added: false,
+                    queued: false,
+                    ordinal: 0,
                 },
                 track: TrackSummary {
                     id: "t1".into(),
@@ -356,6 +359,8 @@ mod tests {
                     rating: 7,
                     ..Default::default()
                 },
+                in_group: false,
+                autoplay: false,
             });
         }
         q

@@ -64,7 +64,10 @@ async fn previous_track_never_restarts() {
     })
     .await;
     t.run_for(5_000.0).await;
-    assert!(t.queue().await.history.is_empty());
+    assert!(
+        t.queue().await.history_count == 2,
+        "the songs before it are behind the pointer"
+    );
     t.run(Command::PreviousTrack).await;
     t.run_for(500.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
@@ -83,7 +86,7 @@ async fn play_album_then_next_previous_and_undo() {
     let q = t.queue().await;
     assert_eq!(q.context_label.as_deref(), Some("Album al0"));
     assert_eq!(q.current.as_ref().unwrap().track.id, "t0");
-    assert_eq!(q.upcoming.len(), 3);
+    assert_eq!(q.total_upcoming as usize, 3);
     assert!(t.backend.is_playing(), "the owner drives audio");
     let snap = t.snapshot().await;
     assert!(snap.transport.position.is_playing);
@@ -116,8 +119,8 @@ async fn play_album_then_next_previous_and_undo() {
     t.run_for(500.0).await;
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t0");
-    assert_eq!(q.upcoming.len(), 3);
-    assert!(q.history.is_empty());
+    assert_eq!(q.total_upcoming as usize, 3);
+    assert!(q.history_count == 0);
 
     // Previous after 3 s restarts the track instead.
     t.run(Command::Next).await;
@@ -186,8 +189,14 @@ async fn playing_something_new_saves_the_outgoing_queue_and_restore_lands_mid_tr
     t.run_for(500.0).await;
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t1");
-    assert_eq!(q.history.len(), 1, "history travels with the snapshot");
-    assert_eq!(q.upcoming.len(), 2, "context re-resolved on restore");
+    assert_eq!(
+        q.history_count as usize, 1,
+        "history travels with the snapshot"
+    );
+    assert_eq!(
+        q.total_upcoming as usize, 2,
+        "context re-resolved on restore"
+    );
     let pos = t.backend.current().unwrap().1;
     assert!(pos >= 40_000, "landed mid-track at {pos}");
     // Restoring bumps the entry (dedupe on identity) and al1 was saved.
@@ -332,8 +341,7 @@ async fn unplayable_items_are_skipped_with_a_notice() {
         "skipped to the next playable item"
     );
     assert!(q
-        .history
-        .iter()
+        .history()
         .any(|e| e.item.track_id == "t1" && e.item.unavailable));
     assert!(t
         .events
@@ -789,16 +797,10 @@ async fn play_next_on_an_upcoming_item_moves_it() {
     })
     .await;
     t.run_for(500.0).await;
-    let ids = |q: &QueueView| {
-        q.playing_next
-            .iter()
-            .chain(q.upcoming.iter())
-            .map(|e| e.track.id.clone())
-            .collect::<Vec<_>>()
-    };
+    let ids = |q: &QueueView| q.upcoming().map(|e| e.track.id.clone()).collect::<Vec<_>>();
     let q = t.queue().await;
     assert_eq!(ids(&q), ["t1", "t2", "t3"]);
-    let last = q.upcoming.last().unwrap().clone();
+    let last = q.upcoming().last().unwrap().clone();
     t.run(Command::RunAction {
         action_id: "playNext".into(),
         target: ActionTarget::QueueItems {
@@ -833,21 +835,15 @@ async fn play_next_on_several_upcoming_items_moves_each_of_them() {
     })
     .await;
     t.run_for(500.0).await;
-    let ids = |q: &QueueView| {
-        q.playing_next
-            .iter()
-            .chain(q.upcoming.iter())
-            .map(|e| e.track.id.clone())
-            .collect::<Vec<_>>()
-    };
+    let ids = |q: &QueueView| q.upcoming().map(|e| e.track.id.clone()).collect::<Vec<_>>();
     let q = t.queue().await;
     assert_eq!(ids(&q), ["t1", "t2", "t3"]);
     t.run(Command::RunAction {
         action_id: "playNext".into(),
         target: ActionTarget::QueueItems {
             keys: vec![
-                q.upcoming[2].item.key.clone(),
-                q.upcoming[0].item.key.clone(),
+                q.upcoming().nth(2).unwrap().item.key.clone(),
+                q.upcoming().next().unwrap().item.key.clone(),
             ],
         },
     })
@@ -942,7 +938,7 @@ async fn removing_the_next_song_replaces_the_gapless_preload() {
     .await;
     t.run_for(500.0).await;
     let q = t.queue().await;
-    let next = q.upcoming[0].clone();
+    let next = q.upcoming().next().unwrap().clone();
     assert_eq!(next.track.id, "t1");
     t.backend.clear_log();
 
@@ -952,8 +948,8 @@ async fn removing_the_next_song_replaces_the_gapless_preload() {
     .await;
     t.run_for(500.0).await;
     let q = t.queue().await;
-    assert_eq!(q.upcoming[0].track.id, "t2");
-    let replacement = q.upcoming[0].item.key.clone();
+    assert_eq!(q.upcoming().next().unwrap().track.id, "t2");
+    let replacement = q.upcoming().next().unwrap().item.key.clone();
     assert_ne!(replacement, next.item.key, "another song, another key");
     assert!(
         t.backend
@@ -1025,8 +1021,8 @@ async fn autoplay_is_fetched_and_preloaded_before_the_queue_ends() {
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t3", "still playing");
     let pick = q
-        .playing_next
-        .first()
+        .upcoming()
+        .next()
         .cloned()
         .expect("autoplay joined the queue ahead of the end");
     assert!(matches!(pick.item.source, QueueSource::Autoplay { .. }));
@@ -1075,13 +1071,12 @@ async fn autoplay_fetched_ahead_does_not_jump_a_new_queue() {
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t4");
     assert!(
-        !q.playing_next
-            .iter()
+        !q.upcoming()
             .any(|e| matches!(e.item.source, QueueSource::Autoplay { .. })),
         "the stale batch stayed out: {:?}",
-        q.playing_next
+        q.entries
     );
-    assert_eq!(q.upcoming.len(), 3);
+    assert_eq!(q.total_upcoming as usize, 3);
 }
 
 /// Autoplay asked for when the queue ran out does not skip a song the user

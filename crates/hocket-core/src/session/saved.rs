@@ -85,20 +85,28 @@ pub fn identity_of(saved: &SavedQueue) -> String {
     context_identity(&saved.context)
 }
 
+/// History entries a snapshot keeps (the most recent ones).
+pub const SNAPSHOT_HISTORY: usize = 200;
+/// Entries past which a snapshot stores only the current entry and
+/// rebuilds the rest from the context's track list on restore (re-resolved
+/// for ID-referenced contexts), so one long queue can't take the byte budget.
+pub const SNAPSHOT_MAX_ENTRIES: usize = 1000;
+
 /// A queue not worth keeping: nothing was ever played from it, or it holds at
-/// most one item in total.
+/// most one entry.
 pub fn is_trivial(doc: &SessionDocument) -> bool {
-    let Some(ctx) = &doc.context else { return true };
-    if doc.current.is_none() {
-        return true;
-    }
-    ctx.tracks.len() + doc.insertions.len() + doc.history.len() <= 1
+    doc.context.is_none()
+        || doc.current.is_none()
+        || doc.history.len() + 1 + doc.upcoming.len() <= 1
 }
 
-/// A snapshot needs the actor to re-resolve its track list before it can be
-/// fully restored.
+/// A snapshot stored without its entries needs the actor to re-resolve its
+/// track list before it can be fully restored.
 pub fn needs_resolution(saved: &SavedQueue) -> bool {
-    is_id_referenced(&saved.context.kind) && saved.context.tracks.is_empty()
+    is_id_referenced(&saved.context.kind)
+        && saved.context.tracks.is_empty()
+        && saved.history.is_empty()
+        && saved.upcoming.is_empty()
 }
 
 /// Snapshot the live queue. `None` when trivial. `id` is the new entry's id
@@ -109,12 +117,37 @@ pub fn snapshot(
     now: EpochMs,
     id: String,
 ) -> Option<SavedQueue> {
-    if is_trivial(doc) {
+    let mut list = doc.history.clone();
+    let ptr = list.len();
+    list.extend(doc.current.iter().cloned());
+    list.extend(doc.upcoming.iter().cloned());
+    snapshot_parts(doc, &list, ptr, position_ms, now, id)
+}
+
+/// [`snapshot`] of a list held apart from its document (the reducer's).
+pub fn snapshot_parts(
+    doc: &SessionDocument,
+    list: &[crate::api::QueueItem],
+    ptr: usize,
+    position_ms: Ms,
+    now: EpochMs,
+    id: String,
+) -> Option<SavedQueue> {
+    let ctx = doc.context.as_ref()?;
+    let current = list.get(ptr)?.clone();
+    if list.len() <= 1 {
         return None;
     }
-    let ctx = doc.context.as_ref()?;
-    let track_count = ctx.tracks.len() as u32;
+    let history_start = ptr.saturating_sub(SNAPSHOT_HISTORY);
+    let kept = list.len() - history_start;
     let mut context = ctx.clone();
+    let (history, upcoming) = if kept > SNAPSHOT_MAX_ENTRIES {
+        (vec![], vec![])
+    } else {
+        (list[history_start..ptr].to_vec(), list[ptr + 1..].to_vec())
+    };
+    // ID-referenced contexts re-resolve their tracks; ad-hoc ones keep them
+    // (they are also their identity).
     if is_id_referenced(&context.kind) {
         context.tracks.clear();
     }
@@ -122,18 +155,17 @@ pub fn snapshot(
         id,
         label: ctx.label.clone(),
         context,
-        cursor: doc.cursor,
-        current: doc.current.clone(),
-        history: doc.history.clone(),
-        insertions: doc.insertions.clone(),
-        shuffle: doc.shuffle.clone(),
+        history,
+        current: Some(current),
+        upcoming,
+        shuffle: doc.shuffle,
         repeat: doc.repeat,
         position_ms,
         pinned: false,
         created_at: now,
         last_interacted_at: now,
         updated_at: now,
-        track_count,
+        track_count: list.len() as u32,
         cover_art: None,
     })
 }
@@ -271,11 +303,10 @@ mod tests {
             id: id.into(),
             context: ctx(kind, tracks),
             label: "L".into(),
-            cursor: 0,
-            current: None,
             history: vec![],
-            insertions: vec![],
-            shuffle: None,
+            current: None,
+            upcoming: vec![],
+            shuffle: false,
             repeat: Default::default(),
             position_ms: 0,
             pinned: false,
@@ -313,19 +344,30 @@ mod tests {
         assert_ne!(context_identity(&adhoc), context_identity(&adhoc3));
     }
 
+    fn item(key: &str, track: &str, index: u32) -> QueueItem {
+        QueueItem {
+            key: key.into(),
+            track_id: track.into(),
+            source: QueueSource::Context { index },
+            unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: index,
+        }
+    }
+
     #[test]
-    fn snapshot_omits_tracks_for_id_referenced_only() {
+    fn snapshot_keeps_the_list_and_omits_tracks_for_id_referenced_only() {
         let mut doc = crate::session::document::new_document("s", "id".into(), 0.0);
         doc.context = Some(ctx(album("a"), &["t1", "t2", "t3"]));
-        doc.current = Some(QueueItem {
-            key: "k".into(),
-            track_id: "t1".into(),
-            source: QueueSource::Context { index: 0 },
-            unavailable: false,
-        });
+        doc.history = vec![item("k0", "t1", 0)];
+        doc.current = Some(item("k1", "t2", 1));
+        doc.upcoming = vec![item("k2", "t3", 2)];
         let s = snapshot(&doc, 1234, 10.0, "sq1".into()).unwrap();
         assert!(s.context.tracks.is_empty());
-        assert!(needs_resolution(&s));
+        assert!(!needs_resolution(&s), "the entries are kept");
+        assert_eq!(s.history.len(), 1);
+        assert_eq!(s.upcoming.len(), 1);
         assert_eq!(s.track_count, 3);
         assert_eq!(s.position_ms, 1234);
 
@@ -341,22 +383,43 @@ mod tests {
     }
 
     #[test]
+    fn long_queues_keep_only_the_current_entry_and_recent_history() {
+        let mut doc = crate::session::document::new_document("s", "id".into(), 0.0);
+        let n = SNAPSHOT_MAX_ENTRIES + 10;
+        let names: Vec<String> = (0..n).map(|i| format!("t{i}")).collect();
+        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        doc.context = Some(ctx(album("a"), &refs));
+        doc.current = Some(item("k0", "t0", 0));
+        doc.upcoming = (1..n)
+            .map(|i| item(&format!("k{i}"), &names[i], i as u32))
+            .collect();
+        let s = snapshot(&doc, 0, 10.0, "sq".into()).unwrap();
+        assert!(s.upcoming.is_empty() && s.history.is_empty());
+        assert!(needs_resolution(&s));
+        assert_eq!(s.track_count, n as u32);
+
+        // A long history is cut to the most recent entries.
+        let mut doc = crate::session::document::new_document("s", "id".into(), 0.0);
+        doc.context = Some(ctx(album("a"), &["t"]));
+        doc.history = (0..500).map(|i| item(&format!("h{i}"), "t", 0)).collect();
+        doc.current = Some(item("c", "t", 0));
+        let s = snapshot(&doc, 0, 10.0, "sq".into()).unwrap();
+        assert_eq!(s.history.len(), SNAPSHOT_HISTORY);
+        assert_eq!(s.history[0].key, "h300");
+    }
+
+    #[test]
     fn trivial_queues_are_skipped() {
         let mut doc = crate::session::document::new_document("s", "id".into(), 0.0);
         assert!(snapshot(&doc, 0, 0.0, "x".into()).is_none());
         doc.context = Some(ctx(album("a"), &["t1", "t2"]));
         // Never played from.
         assert!(snapshot(&doc, 0, 0.0, "x".into()).is_none());
-        doc.current = Some(QueueItem {
-            key: "k".into(),
-            track_id: "t1".into(),
-            source: QueueSource::Context { index: 0 },
-            unavailable: false,
-        });
-        assert!(snapshot(&doc, 0, 0.0, "x".into()).is_some());
-        // Single track.
-        doc.context.as_mut().unwrap().tracks.truncate(1);
+        doc.current = Some(item("k", "t1", 0));
+        // Single entry.
         assert!(snapshot(&doc, 0, 0.0, "x".into()).is_none());
+        doc.upcoming = vec![item("k2", "t2", 1)];
+        assert!(snapshot(&doc, 0, 0.0, "x".into()).is_some());
     }
 
     #[test]

@@ -2,45 +2,54 @@
 //! `(document, effects)`. Every queue mutation in the product goes through
 //! here; there is no other path.
 //!
-//! # Model
+//! # Model (design.md "Queue model")
 //!
-//! The queue is derived from four pieces of the [`SessionDocument`]: the
-//! context and its unshuffled track list, a shuffle permutation over it (see
-//! [`super::shuffle`]), the insertion list, and the cursor. History and the
-//! current item are stored [`QueueItem`]s; upcoming context items are derived
-//! on demand. Their keys are kept per context index beside the context (see
-//! [`super::context_keys`]) and follow the song through edits, shuffle and
-//! becoming current, so a key names the same song for as long as it is
-//! queued (#97). Without them (a document an older peer edited) upcoming
-//! items fall back to a synthetic `ctx-<index>`, still accepted on input.
+//! The queue is **one flat list with a pointer**. The document stores it as
+//! the three runs the pointer splits it into (`history ++ [current] ++
+//! upcoming`); the reducer joins them into a [`Flat`] list, applies the op and
+//! splits it again. There are no queue modes.
 //!
-//! **Cursor semantics.** `doc.cursor` is the permuted position of the *next*
-//! context item to play — the boundary between what has played and what will.
-//! `upcoming = perm[cursor..]`. The current item sits outside that range, so
-//! pushing it "back to the front of the future" on Previous is exactly
-//! `cursor = position(current)`, and this works identically after a jump or a
-//! Repeat-All wrap. Next and Previous are inverses; property-tested.
+//! **Navigation never edits the list.** Next and Previous move the pointer one
+//! playable entry along it; a jump moves it straight to the tapped entry, so
+//! the entries jumped over end up behind it, in history. Nothing is consumed:
+//! Next^k then Previous^k lands on the same entry, and after jumping k rows
+//! ahead Previous^k returns (property-tested). Entries flagged `unavailable`
+//! are passed over in both directions and only play when jumped to (which
+//! clears the flag). Repeat All wraps Next from the last entry to the first
+//! and Previous from the first to the last; Repeat One only replays on a
+//! natural track end. The "Previous restarts after 3 s" rule is the actor's
+//! ([`previous_should_restart`]); here Previous always steps.
 //!
-//! **Nothing is consumed.** Next moves the current item to `history` and takes
-//! the next item from the future: the insertion list first, then the context
-//! at the cursor, then (Repeat All) the context from the top. Previous pops
-//! `history` and pushes the current item back where it came from: inserted
-//! and autoplay items to the front of `insertions`, context items by moving
-//! the cursor. Items flagged `unavailable` are skipped in both directions and
-//! only play again when explicitly jumped to (which clears the flag).
+//! **Entries.** Each entry has a stable key (ops name entries by key, never by
+//! index), its track, `added` (the user put it there; never changes),
+//! `queued` (in the "Next in queue" group: the contiguous run of `queued`
+//! entries directly after the current one) and `ordinal` (its place in the
+//! unshuffled order). Because group membership is a flag that rides with the
+//! entry, Previous after playing a queued entry puts it back at the head of
+//! the group.
 //!
-//! **Modes.** In `QueueMode::Apple`, Play Next / Play Later go into the
-//! insertion list, which plays ahead of the context. In `QueueMode::YouTube`,
-//! they are spliced into the context itself: the track is inserted into
-//! `context.tracks` (right after the cursor in unshuffled order when shuffle is
-//! off; appended when shuffle is on) and every stored `Context { index }`
-//! reference at or above the insertion point is renumbered. When shuffled, the
-//! explicit `ShuffleState::order` is materialised first so the new item can
-//! be placed at the wanted permuted position without rescrambling the rest.
-//! The same two helpers (`remove_context_index`, `insert_context_track`) back
-//! removal and reordering of context items in both modes. A consequence worth
-//! knowing: an ID-referenced context whose tracks were edited this way is
-//! snapshotted by ID only, so the edit is not preserved through a saved queue.
+//! **Edits.** Play Next puts entries directly after the current one (queued
+//! when the op says so, which the actor takes from the Queue section
+//! setting), Add To Queue at the end of the group (queued), Play Later at the
+//! end of the list (not queued). Naming an entry ahead of the pointer moves
+//! it; naming one in history (or the current one) inserts a copy, so history
+//! is never rewritten. A move carries its target and an explicit `in_group`,
+//! never re-derived from neighbours, and cannot go above the current entry or
+//! into history. Starting a new context replaces the whole list and
+//! auto-saves the outgoing one as a saved queue.
+//!
+//! **Shuffle** reorders only the entries after the group; history and the
+//! group stay put. Turning it off sorts those entries by `ordinal` again,
+//! starting after the current entry's ordinal (the ones before it follow), so
+//! added entries go back where they were added. While shuffle is off every
+//! ordinal is its list index.
+//!
+//! **Limits.** History keeps up to `history_cap` entries (default
+//! [`DEFAULT_HISTORY_CAP`]), trimmed from the oldest end after every op.
+//!
+//! **Determinism.** Keys and shuffle seeds come only from the op's
+//! [`Entropy`], so every Connect replica and the coordinator reduce the same
+//! op to the same document.
 //!
 //! **Revision.** The revision is bumped exactly once per op that changed the
 //! document (compared without revision / `updated_at`); no-ops leave it alone.
@@ -49,22 +58,23 @@ use std::collections::{BTreeSet, HashSet};
 
 use crate::api::{
     AutoplayProvider, Command, ContextKind, EpochMs, Ms, PlayContextArgs, QueueContext, QueueItem,
-    QueueKey, QueueMode, QueueSource, QueueView, RepeatMode, SavedQueue, ServerId, SessionDocument,
-    ShuffleState, SortOrder, TrackId, TrackSummary,
+    QueueKey, QueueSource, QueueView, RepeatMode, SavedQueue, ServerId, SessionDocument, SortOrder,
+    TrackId, TrackSummary,
 };
 
-use super::context_keys::{self, ContextKeys};
 use super::document::{bump_revision, same_state};
 use super::saved::{self, SavedQueuePolicy};
-use super::shuffle::{order_insert_index, order_remove_index, Permutation};
+use super::shuffle::shuffle_in_place;
 use super::Entropy;
 
-/// Default history cap.
-pub const DEFAULT_HISTORY_CAP: usize = 200;
-/// How much of the upcoming context the UI queue view materialises. The
-/// remainder is counted in `total_upcoming` (both platforms already render
-/// a "N more" footer when the view is shorter than the total).
-pub const QUEUE_VIEW_UPCOMING: usize = 100;
+/// Default history cap: entries kept behind the pointer.
+pub const DEFAULT_HISTORY_CAP: usize = 5000;
+/// Rows of history the UI queue view carries by default (the window behind
+/// the pointer). The rest are counted in `history_count` and paged in with
+/// `Query::QueueRange`.
+pub const QUEUE_VIEW_BEFORE: usize = 100;
+/// Rows after the current entry the UI queue view carries by default.
+pub const QUEUE_VIEW_AFTER: usize = 100;
 /// Previous within this many milliseconds goes to the previous item; after
 /// that it restarts the current one. Symfonium's documented behaviour
 /// (support.symfonium.app: "previous only goes back within the first 3 s").
@@ -88,6 +98,17 @@ pub struct AutoplayItem {
     pub score: Option<f64>,
 }
 
+/// Where a queueing op puts its entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuePlacement {
+    /// Directly after the current entry.
+    Next,
+    /// At the end of the "Next in queue" group.
+    Group,
+    /// At the end of the list.
+    Later,
+}
+
 /// Every queue-affecting operation. Mirrors the queue half of
 /// [`api::Command`](crate::api::Command) plus the internal ops the actor
 /// issues itself (autoplay results, track end, resolved context tracks).
@@ -106,13 +127,26 @@ pub enum QueueOp {
         /// Where the chosen track starts, in audio time.
         start_position_ms: Ms,
     },
+    /// Directly after the current entry. `queued`: into the group (the Queue
+    /// section setting); with a group already there the entries join it
+    /// regardless, so the group stays attached to the current entry.
     PlayNext {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+        queued: bool,
     },
+    /// At the end of the "Next in queue" group, queued.
+    AddToQueue {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+    },
+    /// At the end of the list, not queued.
     PlayLater {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
     },
     JumpToQueueItem {
         key: QueueKey,
@@ -120,27 +154,26 @@ pub enum QueueOp {
     RemoveQueueItems {
         keys: Vec<QueueKey>,
     },
-    /// `to_index` is the final index in the combined playing-next + upcoming
-    /// list after the move (what a drag-and-drop reports).
+    /// Move an entry ahead of the pointer to directly after `after` (the
+    /// current entry or one ahead of the pointer), in or out of the group.
     MoveQueueItem {
         key: QueueKey,
-        to_index: u32,
+        after: QueueKey,
+        in_group: bool,
     },
     ClearQueue,
-    ClearInsertions,
+    /// Remove the "Next in queue" group's entries.
+    ClearQueueGroup,
     SetShuffle {
         enabled: bool,
     },
-    /// New seed; keeps the current item in place.
+    /// New seed for the entries after the group.
     Reshuffle,
     SetRepeat {
         mode: RepeatMode,
     },
     SetAutoplay {
         enabled: bool,
-    },
-    SetQueueMode {
-        mode: QueueMode,
     },
     Next,
     Previous,
@@ -151,8 +184,7 @@ pub enum QueueOp {
     /// neither downloaded nor cached: the same mark, plus the key in the
     /// document's offline set (see [`offline_skipped`]) so that coming back
     /// online can clear it. Local only: not a wire op; the actor pushes the
-    /// result as a whole-document replace, which every peer (older builds
-    /// included) adopts.
+    /// result as a whole-document replace.
     SkipOffline {
         key: QueueKey,
     },
@@ -164,8 +196,8 @@ pub enum QueueOp {
         items: Vec<AutoplayItem>,
     },
     TrackEnded,
-    /// `tracks` carries the re-resolved track list for an ID-referenced
-    /// snapshot; `None` restores as stored and asks for resolution.
+    /// `tracks` carries the re-resolved track list for a snapshot stored
+    /// without its entries; `None` restores as stored and asks for resolution.
     RestoreSavedQueue {
         id: String,
         tracks: Option<Vec<TrackId>>,
@@ -202,7 +234,8 @@ pub enum QueueOp {
 
 impl QueueOp {
     /// The reducer op for a public command, or `None` when the command does
-    /// not touch the queue.
+    /// not touch the queue. `PlayNext` is queued (the Queue section setting's
+    /// default); the actor overrides it from the setting.
     pub fn from_command(cmd: &Command) -> Option<QueueOp> {
         Some(match cmd {
             Command::PlayContext { args } => QueueOp::PlayContext { args: args.clone() },
@@ -225,29 +258,47 @@ impl QueueOp {
             Command::PlayNext {
                 server_id,
                 track_ids,
+                keys,
             } => QueueOp::PlayNext {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
+                keys: keys.clone(),
+                queued: true,
+            },
+            Command::AddToQueue {
+                server_id,
+                track_ids,
+                keys,
+            } => QueueOp::AddToQueue {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+                keys: keys.clone(),
             },
             Command::PlayLater {
                 server_id,
                 track_ids,
+                keys,
             } => QueueOp::PlayLater {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
+                keys: keys.clone(),
             },
             Command::JumpToQueueItem { key } => QueueOp::JumpToQueueItem { key: key.clone() },
             Command::RemoveQueueItems { keys } => QueueOp::RemoveQueueItems { keys: keys.clone() },
-            Command::MoveQueueItem { key, to_index } => QueueOp::MoveQueueItem {
+            Command::MoveQueueItem {
+                key,
+                after,
+                in_group,
+            } => QueueOp::MoveQueueItem {
                 key: key.clone(),
-                to_index: *to_index,
+                after: after.clone(),
+                in_group: *in_group,
             },
             Command::ClearQueue => QueueOp::ClearQueue,
-            Command::ClearInsertions => QueueOp::ClearInsertions,
+            Command::ClearQueueGroup => QueueOp::ClearQueueGroup,
             Command::SetShuffle { enabled } => QueueOp::SetShuffle { enabled: *enabled },
             Command::SetRepeat { mode } => QueueOp::SetRepeat { mode: *mode },
             Command::SetAutoplay { enabled } => QueueOp::SetAutoplay { enabled: *enabled },
-            Command::SetQueueMode { mode } => QueueOp::SetQueueMode { mode: *mode },
             Command::Next => QueueOp::Next,
             Command::Previous | Command::PreviousTrack => QueueOp::Previous,
             Command::SkipUnavailable { key } => QueueOp::SkipUnavailable { key: key.clone() },
@@ -271,7 +322,7 @@ impl QueueOp {
         })
     }
 
-    /// Whether the op replaces the whole context (and so snapshots the old one).
+    /// Whether the op replaces the whole list (and so snapshots the old one).
     pub fn replaces_context(&self) -> bool {
         matches!(
             self,
@@ -306,7 +357,7 @@ pub enum Effect {
     PositionRestore { position_ms: Ms },
     /// A restored context has no track list; resolve it and `SetContextTracks`.
     ResolveContext { context: QueueContext },
-    /// The context was replaced (new album / playlist / selection / restore).
+    /// The list was replaced (new album / playlist / selection / restore).
     ContextReplaced,
     /// An item flagged unavailable was passed over.
     Skipped { key: QueueKey },
@@ -322,6 +373,8 @@ pub enum ReduceError {
     Empty,
     #[error("a queue name can't be empty")]
     EmptyName,
+    #[error("queue entries can't be moved above the current one or into history")]
+    BadMove,
 }
 
 /// Environment for one reduction. `position_ms` is the playback position of
@@ -334,19 +387,200 @@ pub struct ReduceCtx<'a> {
     pub entropy: &'a dyn Entropy,
 }
 
-/// The queue as the UI sees it, before track summaries are resolved.
+// ---------------------------------------------------------------------------
+// The flat list
+// ---------------------------------------------------------------------------
+
+/// The queue as one list and a pointer. `ptr == list.len()` means nothing is
+/// current (the list is all history).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Flat {
+    pub list: Vec<QueueItem>,
+    pub ptr: usize,
+}
+
+impl Flat {
+    /// Join a document's runs (moves them out of the document).
+    pub fn take(doc: &mut SessionDocument) -> Flat {
+        let mut list = std::mem::take(&mut doc.history);
+        let ptr = list.len();
+        list.extend(doc.current.take());
+        // With nothing current, entries after the pointer (not a state the
+        // reducer writes) make the first of them current.
+        list.append(&mut doc.upcoming);
+        Flat { list, ptr }
+    }
+
+    /// A copy of a document's list.
+    pub fn of(doc: &SessionDocument) -> Flat {
+        let mut list = Vec::with_capacity(doc.history.len() + 1 + doc.upcoming.len());
+        list.extend(doc.history.iter().cloned());
+        let ptr = list.len();
+        list.extend(doc.current.iter().cloned());
+        list.extend(doc.upcoming.iter().cloned());
+        Flat { list, ptr }
+    }
+
+    /// Split back into the document's runs.
+    pub fn put(mut self, doc: &mut SessionDocument) {
+        let ptr = self.ptr.min(self.list.len());
+        let mut rest = self.list.split_off(ptr);
+        doc.history = self.list;
+        if rest.is_empty() {
+            doc.current = None;
+            doc.upcoming = vec![];
+        } else {
+            doc.upcoming = rest.split_off(1);
+            doc.current = rest.pop();
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    pub fn current(&self) -> Option<&QueueItem> {
+        self.list.get(self.ptr)
+    }
+
+    pub fn has_current(&self) -> bool {
+        self.ptr < self.list.len()
+    }
+
+    pub fn index_of(&self, key: &str) -> Option<usize> {
+        self.list.iter().position(|i| i.key == key)
+    }
+
+    /// Where "directly after the current entry" is.
+    fn after_current(&self) -> usize {
+        if self.has_current() {
+            self.ptr + 1
+        } else {
+            self.ptr
+        }
+    }
+
+    /// One past the "Next in queue" group: the end of the run of `queued`
+    /// entries directly after the current one.
+    pub fn group_end(&self) -> usize {
+        let start = self.after_current();
+        let mut end = start;
+        if self.has_current() {
+            while end < self.list.len() && self.list[end].queued {
+                end += 1;
+            }
+        }
+        end
+    }
+
+    /// The nearest playable entry after the pointer, wrapping under Repeat All
+    /// (to the current entry itself last). Also returns the unavailable
+    /// entries passed over.
+    fn forward(&self, wrap: bool) -> Option<(usize, Vec<usize>)> {
+        let n = self.list.len();
+        let mut passed = vec![];
+        let start = self.after_current();
+        let wrap_end = if self.has_current() { self.ptr + 1 } else { n };
+        let order = (start..n).chain((0..wrap_end).filter(|_| wrap));
+        for i in order {
+            if self.list[i].unavailable {
+                passed.push(i);
+            } else {
+                return Some((i, passed));
+            }
+        }
+        None
+    }
+
+    /// The nearest playable entry before the pointer, wrapping under Repeat
+    /// All to the last one (and the current entry itself last).
+    fn backward(&self, wrap: bool) -> Option<usize> {
+        let n = self.list.len();
+        let behind = (0..self.ptr.min(n)).rev();
+        let wrap_from = if self.has_current() { self.ptr } else { n };
+        let wrapped = (wrap_from..n).rev().filter(|_| wrap);
+        behind.chain(wrapped).find(|&i| !self.list[i].unavailable)
+    }
+
+    /// Drop the oldest history beyond `cap`.
+    fn trim_history(&mut self, cap: usize) {
+        if self.ptr > cap {
+            let excess = self.ptr - cap;
+            self.list.drain(..excess);
+            self.ptr -= excess;
+        }
+    }
+
+    /// While shuffle is off, the list order is the unshuffled order.
+    fn renumber(&mut self) {
+        for (i, item) in self.list.iter_mut().enumerate() {
+            item.ordinal = i as u32;
+        }
+    }
+
+    /// Give `count` entries just inserted at `at` the ordinals right after
+    /// the entry before them, shifting every later ordinal up (shuffle on).
+    fn ordinals_after_previous(&mut self, at: usize, count: usize) {
+        let base = match at.checked_sub(1).and_then(|p| self.list.get(p)) {
+            Some(prev) => prev.ordinal.saturating_add(1),
+            None => 0,
+        };
+        let range = at..at + count;
+        for (i, item) in self.list.iter_mut().enumerate() {
+            if !range.contains(&i) && item.ordinal >= base {
+                item.ordinal = item.ordinal.saturating_add(count as u32);
+            }
+        }
+        for (k, i) in range.enumerate() {
+            if let Some(item) = self.list.get_mut(i) {
+                item.ordinal = base.saturating_add(k as u32);
+            }
+        }
+    }
+
+    /// Ordinals at the end of the unshuffled order for `count` entries at `at`.
+    fn ordinals_at_end(&mut self, at: usize, count: usize) {
+        let others = self
+            .list
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !(at..at + count).contains(i))
+            .map(|(_, it)| it.ordinal)
+            .max();
+        let base = others.map(|m| m.saturating_add(1)).unwrap_or(0);
+        for (k, i) in (at..at + count).enumerate() {
+            if let Some(item) = self.list.get_mut(i) {
+                item.ordinal = base.saturating_add(k as u32);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Derived view
+// ---------------------------------------------------------------------------
+
+/// The queue as the UI sees it, before track summaries are resolved: a
+/// window of rows from the flat list plus exact totals.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DerivedQueue {
     pub context_label: Option<String>,
-    pub history: Vec<QueueItem>,
+    /// `(entry, in the group)`, in list order.
+    pub entries: Vec<(QueueItem, bool)>,
+    pub window_start: u32,
+    pub total: u32,
+    pub history_count: u32,
+    pub current_index: Option<u32>,
+    pub group_count: u32,
+    pub total_upcoming: u32,
     pub current: Option<QueueItem>,
-    pub playing_next: Vec<QueueItem>,
-    pub upcoming: Vec<QueueItem>,
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub autoplay: bool,
-    pub mode: QueueMode,
-    pub total_upcoming: u32,
     /// See [`crate::api::QueueView::wrap_next`].
     pub wrap_next: Option<QueueItem>,
     /// See [`crate::api::QueueView::previous`].
@@ -357,165 +591,164 @@ impl DerivedQueue {
     /// Resolve into the wire shape. `resolve` maps a track id to its summary
     /// (the actor answers from the mirror; unknown ids get a bare summary).
     pub fn into_view(self, mut resolve: impl FnMut(&TrackId) -> TrackSummary) -> QueueView {
-        let mut entry = |item: QueueItem| crate::api::QueueEntry {
+        let mut entry = |item: QueueItem, in_group: bool| crate::api::QueueEntry {
             track: resolve(&item.track_id),
+            autoplay: matches!(item.source, QueueSource::Autoplay { .. }),
+            in_group,
             item,
         };
         QueueView {
             context_label: self.context_label,
-            history: self.history.into_iter().map(&mut entry).collect(),
-            current: self.current.map(&mut entry),
-            playing_next: self.playing_next.into_iter().map(&mut entry).collect(),
-            upcoming: self.upcoming.into_iter().map(&mut entry).collect(),
+            entries: self.entries.into_iter().map(|(i, g)| entry(i, g)).collect(),
+            window_start: self.window_start,
+            total: self.total,
+            history_count: self.history_count,
+            current_index: self.current_index,
+            group_count: self.group_count,
+            total_upcoming: self.total_upcoming,
+            current: self.current.map(|i| entry(i, false)),
             shuffle: self.shuffle,
             repeat: self.repeat,
             autoplay: self.autoplay,
-            mode: self.mode,
-            total_upcoming: self.total_upcoming,
-            wrap_next: self.wrap_next.map(&mut entry),
-            previous: self.previous.map(&mut entry),
+            wrap_next: self.wrap_next.map(|i| entry(i, false)),
+            previous: self.previous.map(|i| entry(i, false)),
         }
     }
 
-    /// Bound the rows a `QueueView` carries so Next on a long playlist is
-    /// O(window) JSON rather than O(library). `total_upcoming` is left exact.
-    /// History is left whole: it is already capped (`queue.historyCap`), and
-    /// both apps clear it by sending back every key the view carries.
-    pub fn window_for_view(&mut self) {
-        self.upcoming.truncate(QUEUE_VIEW_UPCOMING);
-    }
-
-    /// Every item that is not history, in play order: current, playing next, upcoming.
-    pub fn future_keys(&self) -> Vec<QueueKey> {
-        self.current
+    /// The window's entries after the current one, in play order.
+    pub fn upcoming(&self) -> impl Iterator<Item = &QueueItem> {
+        let first = self.current_index.map(|c| c + 1).unwrap_or(self.total);
+        let start = self.window_start;
+        self.entries
             .iter()
-            .chain(self.playing_next.iter())
-            .chain(self.upcoming.iter())
-            .map(|i| i.key.clone())
-            .collect()
+            .enumerate()
+            .filter(move |(i, _)| start + *i as u32 >= first)
+            .map(|(_, (item, _))| item)
+    }
+
+    /// The window's entries behind the pointer, oldest first.
+    pub fn history(&self) -> impl Iterator<Item = &QueueItem> {
+        let end = self.history_count;
+        let start = self.window_start;
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(move |(i, _)| start + (*i as u32) < end)
+            .map(|(_, (item, _))| item)
     }
 }
 
-/// Synthetic key of a not-yet-materialised context item.
-pub fn context_key(index: u32) -> QueueKey {
-    format!("ctx-{index}")
-}
-
-/// Parse a synthetic context key.
-pub fn parse_context_key(key: &str) -> Option<u32> {
-    key.strip_prefix("ctx-")?.parse().ok()
-}
-
-fn tracks(doc: &SessionDocument) -> &[TrackId] {
-    doc.context
-        .as_ref()
-        .map(|c| c.tracks.as_slice())
-        .unwrap_or(&[])
-}
-
-fn track_count(doc: &SessionDocument) -> usize {
-    tracks(doc).len()
-}
-
-fn perm(doc: &SessionDocument) -> Permutation {
-    Permutation::from_state(doc.shuffle.as_ref(), track_count(doc))
-}
-
-/// Derive the visible queue.
+/// The whole list as the UI sees it.
 pub fn derive(doc: &SessionDocument) -> DerivedQueue {
-    derive_window(doc, usize::MAX)
+    derive_range(doc, 0, usize::MAX)
 }
 
-/// The upcoming context item at unshuffled `index`.
-fn context_item(keys: Option<&ContextKeys>, ts: &[TrackId], index: u32) -> QueueItem {
-    QueueItem {
-        key: keys
-            .and_then(|k| k.key(index as usize))
-            .unwrap_or_else(|| context_key(index)),
-        track_id: ts.get(index as usize).cloned().unwrap_or_default(),
-        source: QueueSource::Context { index },
-        unavailable: false,
-    }
+/// The view with at most `before` rows of history and `after` rows past the
+/// current entry: what the UI is sent on every change. Totals are exact.
+pub fn derive_window(doc: &SessionDocument, before: usize, after: usize) -> DerivedQueue {
+    let ptr = doc.history.len();
+    let start = ptr.saturating_sub(before);
+    let count = (ptr - start).saturating_add(1).saturating_add(after);
+    derive_range(doc, start, count)
 }
 
-/// The upcoming context items in play order (what [`derive`] lists after
-/// Playing Next), each built only when the iterator gets to it.
-pub fn upcoming_context(doc: &SessionDocument) -> impl Iterator<Item = QueueItem> + '_ {
-    let p = perm(doc);
-    let start = (doc.cursor as usize).min(p.len());
-    let ts = tracks(doc);
-    let keys = (start < p.len()).then(|| context_keys::read(doc)).flatten();
-    (start..p.len())
-        .filter_map(move |pos| p.to_context(pos as u32))
-        .map(move |index| context_item(keys.as_ref(), ts, index))
-}
-
-/// [`derive`] with at most `limit` upcoming context items built: a long
-/// context costs only the rows asked for. `total_upcoming` and `wrap_next`
-/// are exact; with `limit` 0 nothing per item is built at all.
-pub fn derive_window(doc: &SessionDocument, limit: usize) -> DerivedQueue {
-    let p = perm(doc);
-    let n = p.len();
-    let start = (doc.cursor as usize).min(n);
-    let ts = tracks(doc);
-    // Every position below `n` maps to a context index.
-    let remaining = n - start;
-    // Mirrors `Candidate::Wrap` in `advance`.
-    let wraps = doc.insertions.is_empty() && remaining == 0 && doc.repeat == RepeatMode::All;
-    let keys = (wraps || (limit > 0 && remaining > 0))
-        .then(|| context_keys::read(doc))
-        .flatten();
-    let upcoming: Vec<QueueItem> = (start..n)
-        .take(limit)
-        .filter_map(|pos| p.to_context(pos as u32))
-        .map(|index| context_item(keys.as_ref(), ts, index))
+/// Rows `start..start + count` of the list (clamped), with exact totals.
+pub fn derive_range(doc: &SessionDocument, start: usize, count: usize) -> DerivedQueue {
+    let h = doc.history.len();
+    let has_current = doc.current.is_some();
+    let total = h + usize::from(has_current) + doc.upcoming.len();
+    let group_count = if has_current {
+        doc.upcoming.iter().take_while(|i| i.queued).count()
+    } else {
+        0
+    };
+    let start = start.min(total);
+    let end = start.saturating_add(count).min(total);
+    let item_at = |i: usize| -> &QueueItem {
+        if i < h {
+            &doc.history[i]
+        } else if has_current && i == h {
+            doc.current.as_ref().expect("checked")
+        } else {
+            &doc.upcoming[i - h - usize::from(has_current)]
+        }
+    };
+    let entries = (start..end)
+        .map(|i| {
+            let in_group = has_current && i > h && i <= h + group_count;
+            (item_at(i).clone(), in_group)
+        })
         .collect();
-    let wrap_next = wraps
-        .then(|| p.to_context(0))
-        .flatten()
-        .filter(|index| (*index as usize) < ts.len())
-        .map(|index| context_item(keys.as_ref(), ts, index));
-    let previous = previous_item(doc, &p, ts);
+    let wrap = doc.repeat == RepeatMode::All;
+    let flat_view = FlatView { doc };
+    let wrap_next = if wrap && !doc.upcoming.iter().any(|i| !i.unavailable) {
+        flat_view
+            .first_playable_through_current()
+            .map(|i| item_at(i).clone())
+    } else {
+        None
+    };
+    let previous = flat_view.previous(wrap).map(|i| item_at(i).clone());
     DerivedQueue {
         context_label: doc.context.as_ref().map(|c| c.label.clone()),
-        history: doc.history.clone(),
+        entries,
+        window_start: start as u32,
+        total: total as u32,
+        history_count: h as u32,
+        current_index: has_current.then_some(h as u32),
+        group_count: group_count as u32,
+        total_upcoming: doc.upcoming.len() as u32,
         current: doc.current.clone(),
-        playing_next: doc.insertions.clone(),
-        total_upcoming: (doc.insertions.len() + remaining) as u32,
-        upcoming,
-        shuffle: doc.shuffle.is_some(),
+        shuffle: doc.shuffle,
         repeat: doc.repeat,
         autoplay: doc.autoplay,
-        mode: doc.mode,
         wrap_next,
         previous,
     }
 }
 
-/// What Previous short of its restart makes current, as `Reducer::previous`
-/// with no target: the last history item not marked unavailable, else the
-/// context's item before the current one in play order. `None` where it
-/// restarts the current track.
-fn previous_item(doc: &SessionDocument, p: &Permutation, ts: &[TrackId]) -> Option<QueueItem> {
-    if let Some(item) = doc.history.iter().rev().find(|h| !h.unavailable) {
-        return Some(item.clone());
-    }
-    let position = match doc.current.as_ref()?.source {
-        QueueSource::Context { index } => p.to_position(index).filter(|q| *q > 0)? - 1,
-        _ if !p.is_empty() && doc.cursor > 0 => doc.cursor - 1,
-        _ => return None,
-    };
-    let index = p
-        .to_context(position)
-        .filter(|i| (*i as usize) < ts.len())?;
-    Some(context_item(context_keys::read(doc).as_ref(), ts, index))
+/// Searches over a document's runs without joining them.
+struct FlatView<'a> {
+    doc: &'a SessionDocument,
 }
 
-/// Top-level document field (kept in [`SessionDocument::extra`], so the
-/// public document shape is unchanged) listing the keys of items marked
-/// unavailable only because the owning device was offline. A build that
-/// predates it sees plain marks (skipped until jumped to) and carries the
-/// field along untouched.
+impl FlatView<'_> {
+    /// Under Repeat All with nothing playable ahead: the first playable entry
+    /// from the top, the current one last.
+    fn first_playable_through_current(&self) -> Option<usize> {
+        let h = self.doc.history.len();
+        if let Some(i) = self.doc.history.iter().position(|i| !i.unavailable) {
+            return Some(i);
+        }
+        self.doc
+            .current
+            .as_ref()
+            .filter(|c| !c.unavailable)
+            .map(|_| h)
+    }
+
+    /// What Previous lands on: the nearest playable entry behind the pointer,
+    /// or under Repeat All the last playable one ahead of it.
+    fn previous(&self, wrap: bool) -> Option<usize> {
+        let h = self.doc.history.len();
+        if let Some(i) = self.doc.history.iter().rposition(|i| !i.unavailable) {
+            return Some(i);
+        }
+        if !wrap {
+            return None;
+        }
+        let first_upcoming = h + usize::from(self.doc.current.is_some());
+        self.doc
+            .upcoming
+            .iter()
+            .rposition(|i| !i.unavailable)
+            .map(|i| first_upcoming + i)
+    }
+}
+
+/// Top-level document field (kept in [`SessionDocument::extra`]) listing the
+/// keys of items marked unavailable only because the owning device was
+/// offline.
 pub const OFFLINE_SKIPPED_FIELD: &str = "offlineSkipped";
 
 /// Keys marked unavailable because the device was offline (see
@@ -535,18 +768,16 @@ fn set_offline_skipped(doc: &mut SessionDocument, keys: &BTreeSet<QueueKey>) {
     }
 }
 
-/// Keep the offline set to items that are still stored and still marked: a
-/// jump clears the mark, history drops old items, removal drops the item.
-/// Documents without the field are untouched.
+/// Keep the offline set to items that are still in the list and still marked.
 fn prune_offline_skipped(doc: &mut SessionDocument) {
     if !doc.extra.contains_key(OFFLINE_SKIPPED_FIELD) {
         return;
     }
     let marked: HashSet<&str> = doc
-        .current
+        .history
         .iter()
-        .chain(doc.history.iter())
-        .chain(doc.insertions.iter())
+        .chain(doc.current.iter())
+        .chain(doc.upcoming.iter())
         .filter(|i| i.unavailable)
         .map(|i| i.key.as_str())
         .collect();
@@ -564,16 +795,22 @@ pub fn reduce(
     let mut next = doc.clone();
     let mut effects = Vec::new();
     let mut start_position: Ms = 0;
+    let flat = Flat::take(&mut next);
     let mut r = Reducer {
         doc: &mut next,
+        q: flat,
         ctx,
         effects: &mut effects,
         start_position: &mut start_position,
     };
     r.repair_duplicate_keys();
-    context_keys::ensure(r.doc, ctx.entropy);
     r.apply(op)?;
-    r.drop_upcoming_returned();
+    r.q.trim_history(ctx.history_cap.max(1));
+    if !r.doc.shuffle {
+        r.q.renumber();
+    }
+    let Reducer { q, .. } = r;
+    q.put(&mut next);
     prune_offline_skipped(&mut next);
     if next.current.as_ref().map(|c| &c.key) != doc.current.as_ref().map(|c| &c.key) {
         effects.insert(
@@ -594,29 +831,27 @@ pub fn reduce(
 }
 
 struct Reducer<'a, 'c> {
+    /// Everything but the list (moved out into `q` until the end).
     doc: &'a mut SessionDocument,
+    q: Flat,
     ctx: &'a ReduceCtx<'c>,
     effects: &'a mut Vec<Effect>,
     start_position: &'a mut Ms,
 }
 
-/// Where a Next would take an item from.
-enum Candidate {
-    Insertion,
-    Context { position: u32 },
-    Wrap,
-}
-
 impl Reducer<'_, '_> {
     fn apply(&mut self, op: QueueOp) -> Result<(), ReduceError> {
         match op {
-            QueueOp::PlayContext { args } => self.play_context(
-                args.context,
-                args.start_index,
-                args.shuffle,
-                args.save_outgoing,
-                args.start_position_ms.unwrap_or(0),
-            ),
+            QueueOp::PlayContext { args } => {
+                self.play_context(
+                    args.context,
+                    args.start_index,
+                    args.shuffle,
+                    args.save_outgoing,
+                    args.start_position_ms.unwrap_or(0),
+                );
+                Ok(())
+            }
             QueueOp::PlayTracks {
                 server_id,
                 track_ids,
@@ -626,55 +861,60 @@ impl Reducer<'_, '_> {
                 save_outgoing,
                 start_position_ms,
             } => {
-                let context = QueueContext {
-                    server_id,
-                    kind: ContextKind::AdHoc {
-                        label: label.clone(),
-                    },
-                    label,
-                    sort: SortOrder::Default,
-                    tracks: track_ids,
-                };
+                let context = adhoc_context(server_id, label, track_ids);
                 self.play_context(
                     context,
                     Some(start_index),
                     shuffle,
                     save_outgoing,
                     start_position_ms,
-                )
+                );
+                Ok(())
             }
             QueueOp::PlayNext {
                 server_id,
                 track_ids,
-            } => self.queue_tracks(server_id, track_ids, true),
+                keys,
+                queued,
+            } => self.queue(server_id, track_ids, keys, QueuePlacement::Next, queued),
+            QueueOp::AddToQueue {
+                server_id,
+                track_ids,
+                keys,
+            } => self.queue(server_id, track_ids, keys, QueuePlacement::Group, true),
             QueueOp::PlayLater {
                 server_id,
                 track_ids,
-            } => self.queue_tracks(server_id, track_ids, false),
+                keys,
+            } => self.queue(server_id, track_ids, keys, QueuePlacement::Later, false),
             QueueOp::JumpToQueueItem { key } => self.jump(&key),
             QueueOp::RemoveQueueItems { keys } => self.remove(&keys),
-            QueueOp::MoveQueueItem { key, to_index } => self.move_item(&key, to_index as usize),
-            QueueOp::ClearQueue => self.clear_queue(),
-            QueueOp::ClearInsertions => {
-                // Context items Previous put back here are the context's own
-                // future, not something the user queued.
-                self.doc
-                    .insertions
-                    .retain(|i| matches!(i.source, QueueSource::Context { .. }));
+            QueueOp::MoveQueueItem {
+                key,
+                after,
+                in_group,
+            } => self.move_item(&key, &after, in_group),
+            QueueOp::ClearQueue => {
+                self.clear_queue();
+                Ok(())
+            }
+            QueueOp::ClearQueueGroup => {
+                let (start, end) = (self.q.after_current(), self.q.group_end());
+                self.q.list.drain(start..end);
                 Ok(())
             }
             QueueOp::SetShuffle { enabled } => {
                 if enabled {
-                    if self.doc.shuffle.is_none() {
-                        self.shuffle_on();
+                    if !self.doc.shuffle {
+                        self.shuffle_tail();
                     }
-                } else {
-                    self.shuffle_off();
+                } else if self.doc.shuffle {
+                    self.unshuffle_tail();
                 }
                 Ok(())
             }
             QueueOp::Reshuffle => {
-                self.shuffle_on();
+                self.shuffle_tail();
                 Ok(())
             }
             QueueOp::SetRepeat { mode } => {
@@ -685,20 +925,16 @@ impl Reducer<'_, '_> {
                 self.doc.autoplay = enabled;
                 Ok(())
             }
-            QueueOp::SetQueueMode { mode } => {
-                self.doc.mode = mode;
-                if mode == QueueMode::YouTube {
-                    self.fold_insertions();
-                }
-                Ok(())
-            }
             QueueOp::Next => {
                 if !self.advance() {
                     self.end_of_queue();
                 }
                 Ok(())
             }
-            QueueOp::Previous => self.previous(None),
+            QueueOp::Previous => {
+                self.previous();
+                Ok(())
+            }
             QueueOp::SkipUnavailable { key } => {
                 // A real failure: whatever the item was skipped for before,
                 // it is not an offline mark any more.
@@ -710,7 +946,7 @@ impl Reducer<'_, '_> {
             }
             QueueOp::SkipOffline { key } => {
                 self.skip_unavailable(&key)?;
-                if self.is_marked(&key) {
+                if self.q.list.iter().any(|i| i.key == key && i.unavailable) {
                     let mut offline = offline_skipped(self.doc);
                     offline.insert(key);
                     set_offline_skipped(self.doc, &offline);
@@ -719,13 +955,7 @@ impl Reducer<'_, '_> {
             }
             QueueOp::ClearOfflineSkips => {
                 let offline = offline_skipped(self.doc);
-                let d = &mut *self.doc;
-                for item in d
-                    .current
-                    .iter_mut()
-                    .chain(d.history.iter_mut())
-                    .chain(d.insertions.iter_mut())
-                {
+                for item in self.q.list.iter_mut() {
                     if offline.contains(&item.key) {
                         item.unavailable = false;
                     }
@@ -734,9 +964,11 @@ impl Reducer<'_, '_> {
                 Ok(())
             }
             QueueOp::AppendAutoplay { items } => {
+                let at = self.q.len();
+                let count = items.len();
                 for it in items {
                     let key = self.ctx.entropy.next_key();
-                    self.doc.insertions.push(QueueItem {
+                    self.q.list.push(QueueItem {
                         key,
                         track_id: it.track_id,
                         source: QueueSource::Autoplay {
@@ -745,12 +977,16 @@ impl Reducer<'_, '_> {
                             score: it.score,
                         },
                         unavailable: false,
+                        added: false,
+                        queued: false,
+                        ordinal: 0,
                     });
                 }
+                self.q.ordinals_at_end(at, count);
                 Ok(())
             }
             QueueOp::TrackEnded => {
-                if self.doc.repeat == RepeatMode::One && self.doc.current.is_some() {
+                if self.doc.repeat == RepeatMode::One && self.q.has_current() {
                     self.effects.push(Effect::RestartCurrent);
                 } else if !self.advance() {
                     self.end_of_queue();
@@ -759,27 +995,20 @@ impl Reducer<'_, '_> {
             }
             QueueOp::RestoreSavedQueue { id, tracks } => self.restore(&id, tracks),
             QueueOp::SetContextTracks { tracks } => {
-                let old_keys = self.keys();
                 let Some(c) = self.doc.context.as_mut() else {
                     return Ok(());
                 };
-                // Each track keeps its key where it is still in the list.
-                let keys = match old_keys {
-                    Some(k) if k.len() == c.tracks.len() => {
-                        k.realign(&c.tracks, &tracks, self.ctx.entropy)
-                    }
-                    _ => ContextKeys::fresh(self.ctx.entropy, tracks.len()),
-                };
-                c.tracks = tracks;
-                self.put_keys(keys);
-                self.reconcile();
+                c.tracks = tracks.clone();
+                // A list waiting for its tracks (a context started or restored
+                // without them) is built from them, around its current entry.
+                if self.q.len() <= 1 {
+                    self.expand_from_tracks(&tracks);
+                }
                 Ok(())
             }
             QueueOp::SaveCurrentQueue { pinned } => {
                 let id = self.ctx.entropy.next_key();
-                if let Some(mut s) =
-                    saved::snapshot(self.doc, self.ctx.position_ms, self.ctx.now, id)
-                {
+                if let Some(mut s) = self.snapshot(id) {
                     s.pinned = pinned;
                     saved::upsert(&mut self.doc.saved_queues, s, &self.ctx.saved, self.ctx.now);
                     // An explicit pin must win over a pre-existing unpinned entry.
@@ -814,45 +1043,7 @@ impl Reducer<'_, '_> {
                 }
                 Ok(())
             }
-            QueueOp::RenameQueue { id, label } => {
-                let label = label.trim().to_string();
-                if label.is_empty() {
-                    return Err(ReduceError::EmptyName);
-                }
-                // The playing queue and its saved entry are one queue to the user: a saved queue
-                // is re-snapshotted from the live context when it is left (matched by identity,
-                // not label), so renaming either renames both, or the old name would come back.
-                let identity = match &id {
-                    None => saved::context_identity(
-                        self.doc.context.as_ref().ok_or(ReduceError::Empty)?,
-                    ),
-                    Some(id) => saved::context_identity(
-                        &self
-                            .doc
-                            .saved_queues
-                            .iter()
-                            .find(|q| &q.id == id)
-                            .ok_or_else(|| ReduceError::UnknownSavedQueue(id.clone()))?
-                            .context,
-                    ),
-                };
-                if let Some(ctx) = self.doc.context.as_mut() {
-                    if saved::context_identity(ctx) == identity {
-                        ctx.label = label.clone();
-                    }
-                }
-                let now = self.ctx.now;
-                for q in self.doc.saved_queues.iter_mut() {
-                    if id.as_deref().is_some_and(|id| q.id == id)
-                        || saved::context_identity(&q.context) == identity
-                    {
-                        q.label = label.clone();
-                        q.context.label = label.clone();
-                        q.updated_at = now;
-                    }
-                }
-                Ok(())
-            }
+            QueueOp::RenameQueue { id, label } => self.rename(id, label),
             QueueOp::TouchSavedQueue { id } => {
                 let q = self
                     .doc
@@ -875,247 +1066,74 @@ impl Reducer<'_, '_> {
 
     // -- helpers -----------------------------------------------------------
 
-    fn n(&self) -> usize {
-        track_count(self.doc)
-    }
-
-    fn perm(&self) -> Permutation {
-        perm(self.doc)
-    }
-
-    /// The context's key slots (kept in step with the track list by every
-    /// helper here; [`context_keys::ensure`] ran before the op).
-    fn keys(&self) -> Option<ContextKeys> {
-        context_keys::read_unchecked(self.doc)
-    }
-
-    fn put_keys(&mut self, keys: ContextKeys) {
-        context_keys::write(self.doc, keys);
-    }
-
-    fn with_keys(&mut self, f: impl FnOnce(&mut ContextKeys, &dyn Entropy)) {
-        if let Some(mut k) = self.keys() {
-            f(&mut k, self.ctx.entropy);
-            self.put_keys(k);
-        }
-    }
-
-    /// Unshuffled index of the context item `key` names: its slot, or a
-    /// synthetic `ctx-<index>` (older peers still send those).
-    fn context_index_of(&self, key: &str) -> Option<u32> {
-        self.keys()
-            .and_then(|k| k.index_of(key))
-            .or_else(|| parse_context_key(key))
-    }
-
-    /// The key an upcoming context item at `index` shows.
-    fn slot_key(&self, index: u32) -> QueueKey {
-        self.keys()
-            .and_then(|k| k.key(index as usize))
-            .unwrap_or_else(|| context_key(index))
-    }
-
-    /// The context item at `index`, made current: it takes its slot's key.
-    fn fresh_context_item(&mut self, index: u32) -> Option<QueueItem> {
-        let track_id = tracks(self.doc).get(index as usize)?.clone();
-        let mut key = None;
-        self.with_keys(|k, e| key = k.take(index as usize, e));
-        Some(QueueItem {
-            key: key.unwrap_or_else(|| self.ctx.entropy.next_key()),
+    fn fresh(&self, track_id: TrackId, source: QueueSource, added: bool) -> QueueItem {
+        QueueItem {
+            key: self.ctx.entropy.next_key(),
             track_id,
-            source: QueueSource::Context { index },
+            source,
             unavailable: false,
-        })
-    }
-
-    /// A context item going back to the context's future gives its key back
-    /// to its slot, so it shows (and is addressed) as before.
-    fn return_key_to_slot(&mut self, item: &QueueItem) {
-        if let QueueSource::Context { index } = item.source {
-            self.with_keys(|k, _| k.set(index as usize, &item.key));
+            added,
+            queued: false,
+            ordinal: 0,
         }
     }
 
-    fn push_history(&mut self, item: QueueItem) {
-        self.doc.history.push(item);
-        let cap = self.ctx.history_cap;
-        if self.doc.history.len() > cap {
-            let excess = self.doc.history.len() - cap;
-            self.doc.history.drain(..excess);
-        }
+    /// Entries for a context's tracks, ordinals by index.
+    fn context_entries(&self, tracks: &[TrackId]) -> Vec<QueueItem> {
+        tracks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let mut item =
+                    self.fresh(t.clone(), QueueSource::Context { index: i as u32 }, false);
+                item.ordinal = i as u32;
+                item
+            })
+            .collect()
     }
 
-    /// Unshuffled index of the context item that played most recently
-    /// (the current one if it is a context item, else the one before the cursor).
-    fn last_played_context_index(&self) -> Option<u32> {
-        if let Some(QueueItem {
-            source: QueueSource::Context { index },
-            ..
-        }) = &self.doc.current
-        {
-            return Some(*index);
-        }
-        if self.doc.cursor > 0 {
-            return self.perm().to_context(self.doc.cursor - 1);
-        }
-        None
-    }
-
-    /// Materialise the explicit order so it can be edited.
-    fn ensure_order(&mut self) {
-        let n = self.n();
-        let p = self.perm();
-        if let Some(s) = self.doc.shuffle.as_mut() {
-            if s.order.as_ref().map(|o| o.len() != n).unwrap_or(true) {
-                s.order = Some(p.into_order());
-            }
-        }
-    }
-
-    fn shift_refs(&mut self, from_index: u32, delta: i64, removed: Option<u32>) {
-        let fix = |item: &mut QueueItem| {
-            if let QueueSource::Context { index } = item.source {
-                if Some(index) == removed {
-                    // The track it referenced is gone from the context; keep the
-                    // item playable by its track id.
-                    item.source = QueueSource::Inserted;
-                } else if index >= from_index {
-                    let new = (index as i64 + delta).max(0) as u32;
-                    item.source = QueueSource::Context { index: new };
-                }
-            }
-        };
-        if let Some(c) = self.doc.current.as_mut() {
-            fix(c);
-        }
-        for h in self.doc.history.iter_mut() {
-            fix(h);
-        }
-        for i in self.doc.insertions.iter_mut() {
-            fix(i);
-        }
-    }
-
-    /// Remove `index` from the context, renumbering everything above it.
-    fn remove_context_index(&mut self, index: u32) {
-        let n = self.n();
-        if index as usize >= n {
-            return;
-        }
-        let position = self.perm().to_position(index);
-        if self.doc.shuffle.is_some() {
-            self.ensure_order();
-            if let Some(s) = self.doc.shuffle.as_mut() {
-                if let Some(o) = s.order.as_mut() {
-                    order_remove_index(o, index);
-                }
-                s.anchor = match s.anchor {
-                    Some(a) if a == index => None,
-                    Some(a) if a > index => Some(a - 1),
-                    other => other,
-                };
-            }
-        }
-        if let Some(c) = self.doc.context.as_mut() {
-            c.tracks.remove(index as usize);
-        }
-        self.with_keys(|k, _| k.remove(index as usize));
-        self.shift_refs(index + 1, -1, Some(index));
-        if let Some(p) = position {
-            if p < self.doc.cursor {
-                self.doc.cursor -= 1;
-            }
-        }
-        self.clamp_cursor();
-    }
-
-    /// Insert a track at unshuffled `index`, showing at permuted `position`,
-    /// under `key` (an item moved here keeps its own) or a new one.
-    fn insert_context_track(
-        &mut self,
-        index: u32,
-        position: u32,
-        track_id: TrackId,
-        key: Option<QueueKey>,
-    ) {
-        let n = self.n() as u32;
-        let index = index.min(n);
-        let position = position.min(n);
-        if self.doc.shuffle.is_some() {
-            self.ensure_order();
-            if let Some(s) = self.doc.shuffle.as_mut() {
-                if let Some(o) = s.order.as_mut() {
-                    order_insert_index(o, index, position as usize);
-                }
-                if let Some(a) = s.anchor {
-                    if a >= index {
-                        s.anchor = Some(a + 1);
-                    }
-                }
-            }
-        }
-        if let Some(c) = self.doc.context.as_mut() {
-            c.tracks.insert(index as usize, track_id);
-        }
-        self.with_keys(|k, e| k.insert(index as usize, key.as_deref(), e));
-        self.shift_refs(index, 1, None);
-        if position < self.doc.cursor {
-            self.doc.cursor += 1;
-        }
-    }
-
-    fn clamp_cursor(&mut self) {
-        let n = self.n() as u32;
-        if self.doc.cursor > n {
-            self.doc.cursor = n;
-        }
-    }
-
-    /// After the track list changed under stored items: fix indices whose
-    /// track no longer matches, drop a stale explicit order, clamp.
-    fn reconcile(&mut self) {
-        let n = self.n();
-        let ts: Vec<TrackId> = tracks(self.doc).to_vec();
-        let fix = |item: &mut QueueItem| {
-            if let QueueSource::Context { index } = item.source {
-                if ts.get(index as usize) != Some(&item.track_id) {
-                    match ts.iter().position(|t| *t == item.track_id) {
-                        Some(i) => item.source = QueueSource::Context { index: i as u32 },
-                        None => item.source = QueueSource::Inserted,
-                    }
-                }
-            }
-        };
-        if let Some(c) = self.doc.current.as_mut() {
-            fix(c);
-        }
-        self.doc.history.iter_mut().for_each(fix);
-        self.doc.insertions.iter_mut().for_each(fix);
-        if let Some(s) = self.doc.shuffle.as_mut() {
-            if s.order.as_ref().map(|o| o.len() != n).unwrap_or(false) {
-                s.order = None;
-            }
-            if s.anchor.map(|a| a as usize >= n).unwrap_or(false) {
-                s.anchor = None;
-            }
-        }
-        // The context plays on from wherever the current track now is.
-        if let Some(QueueSource::Context { index }) = self.doc.current.as_ref().map(|c| &c.source) {
-            if let Some(pos) = self.perm().to_position(*index) {
-                self.doc.cursor = pos + 1;
-            }
-        }
-        self.clamp_cursor();
+    /// Snapshot of the live queue (the list is in `q` while reducing).
+    fn snapshot(&self, id: String) -> Option<SavedQueue> {
+        saved::snapshot_parts(
+            self.doc,
+            &self.q.list,
+            self.q.ptr,
+            self.ctx.position_ms,
+            self.ctx.now,
+            id,
+        )
     }
 
     fn snapshot_outgoing(&mut self) {
         let id = self.ctx.entropy.next_key();
-        if let Some(s) = saved::snapshot(self.doc, self.ctx.position_ms, self.ctx.now, id) {
+        if let Some(s) = self.snapshot(id) {
             saved::upsert(&mut self.doc.saved_queues, s, &self.ctx.saved, self.ctx.now);
         }
     }
 
-    // -- context replacement -------------------------------------------------
+    /// Earlier builds and peers could produce duplicate keys; a live document
+    /// carrying them crashes clients that need unique keys. Rename all but
+    /// the first of each before every op; the current entry keeps its key so
+    /// playback isn't disturbed. Draws entropy only when a duplicate exists,
+    /// and the entropy is per op, so every replica repairs the same way.
+    fn repair_duplicate_keys(&mut self) {
+        let mut seen: HashSet<QueueKey> = HashSet::new();
+        if let Some(c) = self.q.current() {
+            seen.insert(c.key.clone());
+        }
+        let ptr = self.q.ptr;
+        let entropy = self.ctx.entropy;
+        for (i, item) in self.q.list.iter_mut().enumerate() {
+            if i == ptr {
+                continue;
+            }
+            while !seen.insert(item.key.clone()) {
+                item.key = entropy.next_key();
+            }
+        }
+    }
+
+    // -- replacing the list --------------------------------------------------
 
     fn play_context(
         &mut self,
@@ -1124,45 +1142,38 @@ impl Reducer<'_, '_> {
         shuffle: bool,
         save_outgoing: bool,
         start_position_ms: Ms,
-    ) -> Result<(), ReduceError> {
+    ) {
         if save_outgoing {
             self.snapshot_outgoing();
         }
-        let n = context.tracks.len() as u32;
-        let start = start_index.map(|s| if n == 0 { 0 } else { s.min(n - 1) });
-        self.doc.context = Some(context);
-        self.put_keys(ContextKeys::fresh(self.ctx.entropy, n as usize));
-        self.doc.history.clear();
-        self.doc.insertions.clear();
-        self.doc.current = None;
-        self.doc.cursor = 0;
-        self.doc.shuffle = if shuffle {
-            Some(ShuffleState {
-                seed: self.ctx.entropy.next_seed(),
-                anchor: start.filter(|_| n > 0),
-                order: None,
-            })
-        } else {
-            None
-        };
-        if n > 0 {
-            let p = self.perm();
-            let position = match (shuffle, start) {
-                (true, _) => 0,
-                (false, Some(s)) => s,
-                (false, None) => 0,
-            };
-            if let Some(index) = p.to_context(position) {
-                self.doc.current = self.fresh_context_item(index);
-                self.doc.cursor = position + 1;
-                *self.start_position = start_position_ms;
+        let n = context.tracks.len();
+        let mut list = self.context_entries(&context.tracks);
+        let start = start_index.map(|s| (s as usize).min(n.saturating_sub(1)));
+        let ptr = if shuffle && n > 0 {
+            let seed = self.ctx.entropy.next_seed();
+            match start {
+                Some(s) => {
+                    // The chosen track plays first; the rest follow shuffled.
+                    let chosen = list.remove(s);
+                    shuffle_in_place(&mut list, seed);
+                    list.insert(0, chosen);
+                }
+                None => shuffle_in_place(&mut list, seed),
             }
+            0
+        } else {
+            start.unwrap_or(0)
+        };
+        self.doc.context = Some(context);
+        self.doc.shuffle = shuffle;
+        self.q = Flat { list, ptr };
+        if self.q.has_current() {
+            *self.start_position = start_position_ms;
         }
         self.effects.push(Effect::ContextReplaced);
-        Ok(())
     }
 
-    fn clear_queue(&mut self) -> Result<(), ReduceError> {
+    fn clear_queue(&mut self) {
         self.snapshot_outgoing();
         let server_id = self
             .doc
@@ -1170,2484 +1181,423 @@ impl Reducer<'_, '_> {
             .as_ref()
             .map(|c| c.server_id.clone())
             .unwrap_or_default();
-        self.doc.history.clear();
-        self.doc.insertions.clear();
-        self.doc.shuffle = None;
-        match self.doc.current.as_mut() {
-            Some(cur) => {
+        self.doc.shuffle = false;
+        match self.q.current().cloned() {
+            Some(mut cur) => {
                 cur.source = QueueSource::Context { index: 0 };
-                let tracks = vec![cur.track_id.clone()];
-                self.doc.context = Some(QueueContext {
+                cur.queued = false;
+                cur.ordinal = 0;
+                self.doc.context = Some(adhoc_context(
                     server_id,
-                    kind: ContextKind::AdHoc {
-                        label: ADHOC_QUEUE_LABEL.into(),
-                    },
-                    label: ADHOC_QUEUE_LABEL.into(),
-                    sort: SortOrder::Default,
-                    tracks,
-                });
-                self.doc.cursor = 1;
+                    ADHOC_QUEUE_LABEL.into(),
+                    vec![cur.track_id.clone()],
+                ));
+                self.q = Flat {
+                    list: vec![cur],
+                    ptr: 0,
+                };
             }
             None => {
                 self.doc.context = None;
-                self.doc.cursor = 0;
+                self.q = Flat::default();
             }
         }
-        let n = self.n();
-        self.put_keys(ContextKeys::fresh(self.ctx.entropy, n));
         self.effects.push(Effect::ContextReplaced);
-        Ok(())
     }
 
     fn restore(&mut self, id: &str, tracks: Option<Vec<TrackId>>) -> Result<(), ReduceError> {
-        let pos = self
+        let entry = self
             .doc
             .saved_queues
             .iter()
-            .position(|q| q.id == id)
+            .find(|q| q.id == id)
+            .cloned()
             .ok_or_else(|| ReduceError::UnknownSavedQueue(id.into()))?;
-        let saved_entry = self.doc.saved_queues[pos].clone();
         self.snapshot_outgoing();
         // The entry may have moved (or been merged) by the snapshot's dedupe.
         if let Some(q) = self
             .doc
             .saved_queues
             .iter_mut()
-            .find(|q| saved::identity_of(q) == saved::identity_of(&saved_entry))
+            .find(|q| saved::identity_of(q) == saved::identity_of(&entry))
         {
             q.last_interacted_at = self.ctx.now;
             q.updated_at = self.ctx.now;
         }
-        let mut context = saved_entry.context.clone();
-        if let Some(t) = tracks {
+        let mut context = entry.context.clone();
+        if let Some(t) = tracks.clone() {
             context.tracks = t;
         }
-        let unresolved = saved::is_id_referenced(&context.kind) && context.tracks.is_empty();
+        let mut list = entry.history.clone();
+        let ptr = list.len();
+        list.extend(entry.current.clone());
+        list.extend(entry.upcoming.iter().cloned());
         self.doc.context = Some(context.clone());
-        self.doc.cursor = saved_entry.cursor;
-        self.doc.current = saved_entry.current.clone();
-        self.doc.history = saved_entry.history.clone();
-        self.doc.insertions = saved_entry.insertions.clone();
-        self.doc.shuffle = saved_entry.shuffle.clone();
-        self.doc.repeat = saved_entry.repeat;
-        self.dedupe_keys();
-        let n = self.n();
-        self.put_keys(ContextKeys::fresh(self.ctx.entropy, n));
-        if unresolved {
-            self.effects.push(Effect::ResolveContext { context });
-        } else {
-            self.reconcile();
+        self.doc.shuffle = entry.shuffle;
+        self.doc.repeat = entry.repeat;
+        self.q = Flat { list, ptr };
+        self.repair_duplicate_keys();
+        if self.q.len() <= 1 {
+            // Stored without its entries (too long to keep): rebuild them
+            // from the track list, or ask for it.
+            if !context.tracks.is_empty() {
+                self.expand_from_tracks(&context.tracks);
+            } else if saved::is_id_referenced(&context.kind) {
+                self.effects.push(Effect::ResolveContext { context });
+            }
         }
-        *self.start_position = saved_entry.position_ms;
+        *self.start_position = entry.position_ms;
         self.effects.push(Effect::ContextReplaced);
         self.effects.push(Effect::PositionRestore {
-            position_ms: saved_entry.position_ms,
+            position_ms: entry.position_ms,
         });
         Ok(())
     }
 
-    /// A snapshot written by another build could carry duplicate keys; make
-    /// them unique so the invariant holds for everything the reducer emits.
-    fn dedupe_keys(&mut self) {
-        let mut seen: HashSet<QueueKey> = HashSet::new();
-        let entropy = self.ctx.entropy;
-        let mut fix = |item: &mut QueueItem| {
-            while !seen.insert(item.key.clone()) || parse_context_key(&item.key).is_some() {
-                item.key = entropy.next_key();
-            }
-        };
-        self.doc.history.iter_mut().for_each(&mut fix);
-        if let Some(c) = self.doc.current.as_mut() {
-            fix(c);
+    /// Build the list from a resolved track list around the current entry
+    /// (kept, with its key), or from the top with nothing current.
+    fn expand_from_tracks(&mut self, tracks: &[TrackId]) {
+        if tracks.is_empty() {
+            return;
         }
-        self.doc.insertions.iter_mut().for_each(&mut fix);
+        let current = self.q.current().cloned();
+        let mut list = self.context_entries(tracks);
+        let ptr = match current {
+            Some(cur) => {
+                let at = match cur.source {
+                    QueueSource::Context { index }
+                        if tracks.get(index as usize) == Some(&cur.track_id) =>
+                    {
+                        Some(index as usize)
+                    }
+                    _ => tracks.iter().position(|t| *t == cur.track_id),
+                };
+                match at {
+                    Some(i) => {
+                        let ordinal = list[i].ordinal;
+                        list[i] = QueueItem { ordinal, ..cur };
+                        i
+                    }
+                    None => {
+                        list.insert(0, cur);
+                        0
+                    }
+                }
+            }
+            None => 0,
+        };
+        self.q = Flat { list, ptr };
+        if self.doc.shuffle {
+            self.q.renumber();
+            self.shuffle_tail();
+        }
     }
 
-    /// Earlier builds could reuse queue keys across restarts (#54), and a
-    /// live document carrying such duplicates crashes clients that need
-    /// unique keys. Rename all but the first of each key before every op;
-    /// the current item keeps its key so playback isn't disturbed. Draws
-    /// entropy only when a duplicate exists, and the entropy is per op, so
-    /// every replica repairs the same way.
-    fn repair_duplicate_keys(&mut self) {
-        let mut seen: HashSet<QueueKey> = HashSet::new();
-        let entropy = self.ctx.entropy;
-        let mut fix = |item: &mut QueueItem| {
-            while !seen.insert(item.key.clone()) {
-                item.key = entropy.next_key();
-            }
-        };
-        if let Some(c) = self.doc.current.as_mut() {
-            fix(c);
+    fn rename(&mut self, id: Option<String>, label: String) -> Result<(), ReduceError> {
+        let label = label.trim().to_string();
+        if label.is_empty() {
+            return Err(ReduceError::EmptyName);
         }
-        self.doc.history.iter_mut().for_each(&mut fix);
-        self.doc.insertions.iter_mut().for_each(&mut fix);
+        // The playing queue and its saved entry are one queue to the user: a saved queue
+        // is re-snapshotted from the live context when it is left (matched by identity,
+        // not label), so renaming either renames both, or the old name would come back.
+        let identity = match &id {
+            None => saved::context_identity(self.doc.context.as_ref().ok_or(ReduceError::Empty)?),
+            Some(id) => saved::context_identity(
+                &self
+                    .doc
+                    .saved_queues
+                    .iter()
+                    .find(|q| &q.id == id)
+                    .ok_or_else(|| ReduceError::UnknownSavedQueue(id.clone()))?
+                    .context,
+            ),
+        };
+        if let Some(ctx) = self.doc.context.as_mut() {
+            if saved::context_identity(ctx) == identity {
+                ctx.label = label.clone();
+            }
+        }
+        let now = self.ctx.now;
+        for q in self.doc.saved_queues.iter_mut() {
+            if id.as_deref().is_some_and(|id| q.id == id)
+                || saved::context_identity(&q.context) == identity
+            {
+                q.label = label.clone();
+                q.context.label = label.clone();
+                q.updated_at = now;
+            }
+        }
+        Ok(())
     }
 
     // -- queueing ----------------------------------------------------------
 
-    fn queue_tracks(
+    fn queue(
         &mut self,
         server_id: ServerId,
         track_ids: Vec<TrackId>,
-        next: bool,
+        keys: Vec<QueueKey>,
+        placement: QueuePlacement,
+        queued: bool,
     ) -> Result<(), ReduceError> {
-        if track_ids.is_empty() {
+        if track_ids.is_empty() && keys.is_empty() {
             return Ok(());
         }
-        if self.doc.context.is_none() {
+        if self.doc.context.is_none() && self.q.is_empty() && keys.is_empty() {
             // Nothing to queue behind: this becomes the queue and starts playing.
-            let context = QueueContext {
-                server_id,
-                kind: ContextKind::AdHoc {
-                    label: ADHOC_QUEUE_LABEL.into(),
-                },
-                label: ADHOC_QUEUE_LABEL.into(),
-                sort: SortOrder::Default,
-                tracks: track_ids,
-            };
-            return self.play_context(context, Some(0), false, false, 0);
+            let context = adhoc_context(server_id, ADHOC_QUEUE_LABEL.into(), track_ids);
+            self.play_context(context, Some(0), false, false, 0);
+            return Ok(());
         }
-        // Context items Previous put back in Playing Next (see
-        // `push_current_to_future`) play before the context resumes, so in
-        // YouTube mode too, "next" means ahead of them, in Playing Next.
-        let behind_returned = next
-            && self
-                .doc
-                .insertions
-                .iter()
-                .any(|i| matches!(i.source, QueueSource::Context { .. }));
-        match self.doc.mode {
-            mode if mode == QueueMode::Apple || behind_returned => {
-                let items: Vec<QueueItem> = track_ids
-                    .into_iter()
-                    .map(|t| QueueItem {
-                        key: self.ctx.entropy.next_key(),
-                        track_id: t,
-                        source: QueueSource::Inserted,
-                        unavailable: false,
-                    })
-                    .collect();
-                let at = if next {
-                    0
-                } else {
-                    // After the last explicitly queued item, ahead of any autoplay tail.
-                    self.doc
-                        .insertions
-                        .iter()
-                        .rposition(|i| matches!(i.source, QueueSource::Inserted))
-                        .map(|p| p + 1)
-                        .unwrap_or(0)
-                };
-                let tail = self.doc.insertions.split_off(at);
-                self.doc.insertions.extend(items);
-                self.doc.insertions.extend(tail);
+        // Entries named by key: ahead of the pointer they move, elsewhere
+        // they are copied (history is never rewritten).
+        let mut items: Vec<QueueItem> = vec![];
+        let mut found_any = false;
+        for key in &keys {
+            let Some(i) = self.q.index_of(key) else {
+                continue;
+            };
+            found_any = true;
+            if i > self.q.ptr && self.q.has_current() {
+                items.push(self.q.list.remove(i));
+            } else {
+                let track = self.q.list[i].track_id.clone();
+                items.push(self.fresh(track, QueueSource::Inserted, true));
             }
-            _ => {
-                for (k, t) in track_ids.into_iter().enumerate() {
-                    let n = self.n() as u32;
-                    let (index, position) = if next {
-                        let position = self.doc.cursor + k as u32;
-                        let index = if self.doc.shuffle.is_none() {
-                            position
-                        } else {
-                            n
-                        };
-                        (index, position)
-                    } else {
-                        (n, n)
-                    };
-                    self.insert_context_track(index, position, t, None);
-                }
+        }
+        if !keys.is_empty() && !found_any && track_ids.is_empty() {
+            return Err(ReduceError::UnknownKey(keys.join(",")));
+        }
+        for t in track_ids {
+            items.push(self.fresh(t, QueueSource::Inserted, true));
+        }
+        if items.is_empty() {
+            return Ok(());
+        }
+        let has_group = self.q.group_end() > self.q.after_current();
+        let flag = match placement {
+            // A group already after the current entry stays attached to it.
+            QueuePlacement::Next => queued || has_group,
+            QueuePlacement::Group => true,
+            QueuePlacement::Later => false,
+        };
+        for item in items.iter_mut() {
+            item.queued = flag;
+        }
+        let at = match placement {
+            QueuePlacement::Next => self.q.after_current(),
+            QueuePlacement::Group => self.q.group_end(),
+            QueuePlacement::Later => self.q.len(),
+        };
+        let count = items.len();
+        self.q.list.splice(at..at, items);
+        if self.doc.shuffle {
+            match placement {
+                QueuePlacement::Later => self.q.ordinals_at_end(at, count),
+                _ => self.q.ordinals_after_previous(at, count),
             }
+        }
+        if !self.q.has_current() {
+            // Queued onto a list whose current entry was removed: the first
+            // of them is current now.
+            self.q.ptr = at.min(self.q.ptr);
         }
         Ok(())
     }
 
-    /// YouTube mode has no separate insertion list: splice pending Play Next
-    /// items into the context after the cursor. Autoplay items stay.
-    fn fold_insertions(&mut self) {
-        if self.doc.context.is_none() {
-            return;
-        }
-        // Items queued ahead of a context item Previous put back stay there:
-        // spliced in at the cursor they'd play after it.
-        let from = self
-            .doc
-            .insertions
-            .iter()
-            .rposition(|i| matches!(i.source, QueueSource::Context { .. }))
-            .map_or(0, |p| p + 1);
-        let pending: Vec<QueueItem> = self.doc.insertions[from..]
-            .iter()
-            .filter(|i| matches!(i.source, QueueSource::Inserted))
-            .cloned()
-            .collect();
-        if pending.is_empty() {
-            return;
-        }
-        let mut k = 0;
-        self.doc.insertions.retain(|i| {
-            k += 1;
-            k <= from || !matches!(i.source, QueueSource::Inserted)
-        });
-        for (k, item) in pending.into_iter().enumerate() {
-            let n = self.n() as u32;
-            let position = self.doc.cursor + k as u32;
-            let index = if self.doc.shuffle.is_none() {
-                position
-            } else {
-                n
-            };
-            self.insert_context_track(index, position, item.track_id, Some(item.key));
-        }
-    }
-
     // -- shuffle -------------------------------------------------------------
 
-    /// Context items Previous put back in Playing Next (see
-    /// [`Self::push_current_to_future`]) are part of the context's future; a
-    /// new play order replaces that future, so they go (else they'd play twice).
-    fn drop_returned_context_items(&mut self) {
-        let (returned, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.doc.insertions)
-            .into_iter()
-            .partition(|i| matches!(i.source, QueueSource::Context { .. }));
-        self.doc.insertions = rest;
-        for item in &returned {
-            self.return_key_to_slot(item);
-        }
+    /// Shuffle the entries after the group. Queued entries further down (a
+    /// group left behind by going back, which re-forms on return) keep their
+    /// places, so shuffling never changes what is in the group.
+    fn shuffle_tail(&mut self) {
+        let seed = self.ctx.entropy.next_seed();
+        self.reorder_tail(|items| shuffle_in_place(items, seed));
+        self.doc.shuffle = true;
     }
 
-    /// A context item Previous put back in Playing Next stands for a played
-    /// position (behind the cursor). Once it is not one (a shuffle toggle, new
-    /// context tracks, history from another play order), the context already
-    /// plays it from upcoming: drop it rather than play it twice. Run after
-    /// every op.
-    fn drop_upcoming_returned(&mut self) {
-        let p = self.perm();
-        let cursor = self.doc.cursor;
-        let (keep, upcoming): (Vec<_>, Vec<_>) = std::mem::take(&mut self.doc.insertions)
-            .into_iter()
-            .partition(|i| match i.source {
-                QueueSource::Context { index } => {
-                    p.to_position(index).is_some_and(|pos| pos < cursor)
-                }
-                _ => true,
-            });
-        self.doc.insertions = keep;
-        for item in &upcoming {
-            self.return_key_to_slot(item);
-        }
-    }
-
-    fn shuffle_on(&mut self) {
-        self.drop_returned_context_items();
-        let anchor = self
-            .last_played_context_index()
-            .filter(|&a| (a as usize) < self.n());
-        self.doc.shuffle = Some(ShuffleState {
-            seed: self.ctx.entropy.next_seed(),
-            anchor,
-            order: None,
+    /// Put the entries after the group back in unshuffled order, continuing
+    /// from the current entry's place in it (the ones before it follow).
+    fn unshuffle_tail(&mut self) {
+        let pivot = self.q.current().map(|c| c.ordinal);
+        self.reorder_tail(|items| {
+            items.sort_by_key(|i| (pivot.is_some_and(|p| i.ordinal < p), i.ordinal))
         });
-        self.doc.cursor = if anchor.is_some() { 1 } else { 0 };
-        self.clamp_cursor();
+        self.doc.shuffle = false;
     }
 
-    fn shuffle_off(&mut self) {
-        if self.doc.shuffle.is_none() {
-            return;
+    /// Reorder the unqueued entries after the group among their own slots.
+    fn reorder_tail(&mut self, f: impl FnOnce(&mut [QueueItem])) {
+        let from = self.q.group_end();
+        let tail: Vec<QueueItem> = self.q.list.drain(from..).collect();
+        let fixed: Vec<bool> = tail.iter().map(|i| i.queued).collect();
+        let (mut queued, mut movable): (Vec<QueueItem>, Vec<QueueItem>) =
+            tail.into_iter().partition(|i| i.queued);
+        f(&mut movable);
+        queued.reverse();
+        movable.reverse();
+        for is_fixed in fixed {
+            let next = if is_fixed {
+                queued.pop()
+            } else {
+                movable.pop()
+            };
+            self.q.list.extend(next);
         }
-        self.drop_returned_context_items();
-        let last = self.last_played_context_index();
-        self.doc.shuffle = None;
-        self.doc.cursor = last.map(|i| i + 1).unwrap_or(0);
-        self.clamp_cursor();
     }
 
     // -- navigation ----------------------------------------------------------
 
-    fn candidate(&self) -> Option<Candidate> {
-        if !self.doc.insertions.is_empty() {
-            return Some(Candidate::Insertion);
-        }
-        let n = self.n() as u32;
-        if self.doc.cursor < n {
-            return Some(Candidate::Context {
-                position: self.doc.cursor,
+    /// Move to the next playable entry. Returns false (and leaves the pointer
+    /// alone) when there is none.
+    fn advance(&mut self) -> bool {
+        let wrap = self.doc.repeat == RepeatMode::All;
+        let Some((to, passed)) = self.q.forward(wrap) else {
+            return false;
+        };
+        for i in passed {
+            self.effects.push(Effect::Skipped {
+                key: self.q.list[i].key.clone(),
             });
         }
-        if self.doc.repeat == RepeatMode::All && n > 0 {
-            return Some(Candidate::Wrap);
+        if to == self.q.ptr {
+            // Repeat All around a one-song list.
+            self.effects.push(Effect::RestartCurrent);
         }
-        None
-    }
-
-    /// Move to the next playable item. Returns false (and leaves the document
-    /// untouched) when there is none.
-    fn advance(&mut self) -> bool {
-        // Only these change before a way forward is found (the context and
-        // its keys only once one is): keep them, not a copy of the whole
-        // document, whose context can run to thousands of tracks.
-        let snapshot = (
-            self.doc.current.clone(),
-            self.doc.history.clone(),
-            self.doc.insertions.clone(),
-            self.doc.cursor,
-        );
-        let effects_len = self.effects.len();
-        // The outgoing item precedes anything skipped on the way to the next one.
-        if let Some(cur) = self.doc.current.take() {
-            self.push_history(cur);
-        }
-        loop {
-            let Some(c) = self.candidate() else {
-                self.put_back(snapshot);
-                self.effects.truncate(effects_len);
-                return false;
-            };
-            let item = match c {
-                Candidate::Insertion => {
-                    let item = self.doc.insertions.remove(0);
-                    if item.unavailable {
-                        self.effects.push(Effect::Skipped {
-                            key: item.key.clone(),
-                        });
-                        self.push_history(item);
-                        continue;
-                    }
-                    item
-                }
-                Candidate::Context { position } => {
-                    let Some(item) = self
-                        .perm()
-                        .to_context(position)
-                        .and_then(|i| self.fresh_context_item(i))
-                    else {
-                        self.doc.cursor = self.n() as u32;
-                        continue;
-                    };
-                    self.doc.cursor = position + 1;
-                    item
-                }
-                Candidate::Wrap => {
-                    let Some(item) = self
-                        .perm()
-                        .to_context(0)
-                        .and_then(|i| self.fresh_context_item(i))
-                    else {
-                        self.put_back(snapshot);
-                        self.effects.truncate(effects_len);
-                        return false;
-                    };
-                    self.doc.cursor = 1;
-                    item
-                }
-            };
-            self.doc.current = Some(item);
-            return true;
-        }
-    }
-
-    /// Put back what [`Self::advance`] kept.
-    fn put_back(&mut self, kept: (Option<QueueItem>, Vec<QueueItem>, Vec<QueueItem>, u32)) {
-        let (current, history, insertions, cursor) = kept;
-        self.doc.current = current;
-        self.doc.history = history;
-        self.doc.insertions = insertions;
-        self.doc.cursor = cursor;
+        self.q.ptr = to;
+        true
     }
 
     fn end_of_queue(&mut self) {
-        if self.doc.autoplay && self.doc.current.is_some() {
+        if self.doc.autoplay && self.q.has_current() {
             self.effects.push(Effect::NeedsAutoplay);
         } else {
             self.effects.push(Effect::Stopped);
         }
     }
 
-    /// Push the current item back to the front of the future, preserving its
-    /// source. A context item that sits just behind the cursor, with nothing
-    /// in Playing Next, goes back by moving the cursor onto it; if the most
-    /// recent context item in history sits at or after its position under
-    /// Repeat All, it was reached by a wrap and the cursor goes back to the
-    /// end instead, so the wrap replays.
-    ///
-    /// Any other context item goes to the front of Playing Next (keeping its
-    /// key and source) and the cursor stays. Moving the cursor would put it
-    /// behind whatever is in Playing Next, or bring back the items between it
-    /// and the cursor, so Previous then Next would not land on it again.
-    fn push_current_to_future(&mut self) {
-        let Some(cur) = self.doc.current.take() else {
-            return;
-        };
-        match cur.source {
-            QueueSource::Context { index } => {
-                let p = self.perm();
-                match p.to_position(index) {
-                    Some(pos) if self.doc.insertions.is_empty() && pos + 1 == self.doc.cursor => {
-                        let last_played =
-                            self.doc.history.iter().rev().find_map(|h| match h.source {
-                                QueueSource::Context { index } => p.to_position(index),
-                                _ => None,
-                            });
-                        // Only Repeat All wraps (and replays the wrap); with
-                        // it off since, the item just goes back.
-                        let wrapped = self.doc.repeat == RepeatMode::All
-                            && last_played.map(|q| q >= pos).unwrap_or(false);
-                        self.doc.cursor = if wrapped { p.len() as u32 } else { pos };
-                        self.return_key_to_slot(&cur);
-                    }
-                    _ => self.doc.insertions.insert(0, cur),
-                }
-            }
-            QueueSource::Inserted | QueueSource::Autoplay { .. } => {
-                self.doc.insertions.insert(0, cur);
-            }
+    fn previous(&mut self) {
+        let wrap = self.doc.repeat == RepeatMode::All;
+        match self.q.backward(wrap) {
+            Some(i) if i != self.q.ptr => self.q.ptr = i,
+            _ if self.q.has_current() => self.effects.push(Effect::RestartCurrent),
+            _ => {}
         }
-    }
-
-    /// Walk history back one playable item (or to `target`, which is allowed
-    /// even when flagged).
-    fn previous(&mut self, target: Option<&str>) -> Result<(), ReduceError> {
-        let snapshot = self.doc.clone();
-        while !self.doc.history.is_empty() {
-            self.push_current_to_future();
-            let Some(item) = self.doc.history.pop() else {
-                break;
-            };
-            let is_target = target == Some(item.key.as_str());
-            if item.unavailable && !is_target {
-                // Skipped going forward, skipped going back.
-                self.doc.current = Some(item);
-                self.push_current_to_future();
-                continue;
-            }
-            let mut item = item;
-            if is_target {
-                item.unavailable = false;
-            }
-            if let QueueSource::Context { index } = item.source {
-                // Its own position is behind the cursor by construction; keep the
-                // cursor where the outgoing item put it unless that is stale. One
-                // at or past the cursor (history from another play order, or a
-                // repeat) is upcoming too: going back to it is a replay.
-                let cursor = self.doc.cursor;
-                if !self
-                    .perm()
-                    .to_position(index)
-                    .is_some_and(|pos| pos < cursor)
-                {
-                    item.source = QueueSource::Inserted;
-                }
-            }
-            self.doc.current = Some(item);
-            if target.is_some() && !is_target {
-                continue;
-            }
-            return Ok(());
-        }
-        if target.is_some() {
-            *self.doc = snapshot;
-            return Err(ReduceError::UnknownKey(target.unwrap_or_default().into()));
-        }
-        // History exhausted (or capped away): fall back to context order.
-        *self.doc = snapshot;
-        let n = self.n() as u32;
-        match self.doc.current.clone() {
-            Some(QueueItem {
-                source: QueueSource::Context { index },
-                ..
-            }) => {
-                let p = self.perm();
-                match p.to_position(index) {
-                    Some(q) if q > 0 => {
-                        if let Some(item) =
-                            p.to_context(q - 1).and_then(|i| self.fresh_context_item(i))
-                        {
-                            if self.doc.insertions.is_empty() && q + 1 == self.doc.cursor {
-                                if let Some(cur) = self.doc.current.replace(item) {
-                                    self.return_key_to_slot(&cur);
-                                }
-                                self.doc.cursor = q;
-                            } else if let Some(cur) = self.doc.current.replace(item) {
-                                // As in `push_current_to_future`.
-                                self.doc.insertions.insert(0, cur);
-                            }
-                        }
-                    }
-                    _ => self.effects.push(Effect::RestartCurrent),
-                }
-            }
-            Some(_) if n > 0 && self.doc.cursor > 0 => {
-                let q = self.doc.cursor - 1;
-                if let Some(item) = self
-                    .perm()
-                    .to_context(q)
-                    .and_then(|i| self.fresh_context_item(i))
-                {
-                    self.push_current_to_future();
-                    self.doc.current = Some(item);
-                    self.doc.cursor = q + 1;
-                } else {
-                    self.effects.push(Effect::RestartCurrent);
-                }
-            }
-            Some(_) => self.effects.push(Effect::RestartCurrent),
-            None => {}
-        }
-        Ok(())
     }
 
     fn jump(&mut self, key: &str) -> Result<(), ReduceError> {
-        if self.doc.current.as_ref().map(|c| c.key.as_str()) == Some(key) {
-            if let Some(c) = self.doc.current.as_mut() {
-                c.unavailable = false;
-            }
+        let i = self
+            .q
+            .index_of(key)
+            .ok_or_else(|| ReduceError::UnknownKey(key.into()))?;
+        self.q.list[i].unavailable = false;
+        if i == self.q.ptr {
             self.effects.push(Effect::RestartCurrent);
-            return Ok(());
         }
-        if self.doc.history.iter().any(|h| h.key == key) {
-            return self.previous(Some(key));
-        }
-        if let Some(i) = self.doc.insertions.iter().position(|it| it.key == key) {
-            let mut item = self.doc.insertions.remove(i);
-            item.unavailable = false;
-            if let Some(cur) = self.doc.current.take() {
-                self.push_history(cur);
-            }
-            self.doc.current = Some(item);
-            return Ok(());
-        }
-        if let Some(index) = self.context_index_of(key) {
-            let p = self.perm();
-            if let Some(position) = p.to_position(index) {
-                if position >= self.doc.cursor {
-                    if let Some(item) = self.fresh_context_item(index) {
-                        if let Some(cur) = self.doc.current.take() {
-                            self.push_history(cur);
-                        }
-                        // A forward jump skips the context items before it,
-                        // those Previous put back in Playing Next included.
-                        self.drop_returned_context_items();
-                        self.doc.current = Some(item);
-                        self.doc.cursor = position + 1;
-                        return Ok(());
-                    }
-                }
-            }
-        }
-        Err(ReduceError::UnknownKey(key.into()))
-    }
-
-    /// A stored item with this key carries the unavailable mark.
-    fn is_marked(&self, key: &str) -> bool {
-        let d = &*self.doc;
-        d.current
-            .iter()
-            .chain(d.history.iter())
-            .chain(d.insertions.iter())
-            .any(|i| i.key == key && i.unavailable)
+        self.q.ptr = i;
+        Ok(())
     }
 
     fn skip_unavailable(&mut self, key: &str) -> Result<(), ReduceError> {
-        if self.doc.current.as_ref().map(|c| c.key.as_str()) == Some(key) {
-            if let Some(c) = self.doc.current.as_mut() {
-                c.unavailable = true;
-            }
+        let i = self
+            .q
+            .index_of(key)
+            .ok_or_else(|| ReduceError::UnknownKey(key.into()))?;
+        self.q.list[i].unavailable = true;
+        if i == self.q.ptr {
             self.effects.push(Effect::Skipped { key: key.into() });
             if !self.advance() {
                 self.end_of_queue();
             }
-            return Ok(());
         }
-        if let Some(h) = self.doc.history.iter_mut().find(|h| h.key == key) {
-            h.unavailable = true;
-            return Ok(());
-        }
-        if let Some(i) = self.doc.insertions.iter_mut().find(|i| i.key == key) {
-            i.unavailable = true;
-            return Ok(());
-        }
-        if let Some(index) = self.context_index_of(key) {
-            // Not materialised, so nowhere to keep the flag: drop it from the queue.
-            if (index as usize) < self.n() {
-                self.remove_context_index(index);
-                self.effects.push(Effect::Skipped { key: key.into() });
-                return Ok(());
-            }
-        }
-        Err(ReduceError::UnknownKey(key.into()))
+        Ok(())
     }
 
-    // -- editing ---------------------------------------------------------
+    // -- editing -------------------------------------------------------------
 
     fn remove(&mut self, keys: &[QueueKey]) -> Result<(), ReduceError> {
         let wanted: HashSet<&str> = keys.iter().map(|k| k.as_str()).collect();
-        let mut found = false;
-        let before = self.doc.history.len();
-        self.doc
-            .history
-            .retain(|h| !wanted.contains(h.key.as_str()));
-        found |= self.doc.history.len() != before;
-        let before = self.doc.insertions.len();
-        self.doc
-            .insertions
-            .retain(|i| !wanted.contains(i.key.as_str()));
-        found |= self.doc.insertions.len() != before;
-
-        let mut context_indices: Vec<u32> = keys
+        let had_current = self.q.has_current();
+        let current_removed = self
+            .q
+            .current()
+            .is_some_and(|c| wanted.contains(c.key.as_str()));
+        let before_ptr = self.q.list[..self.q.ptr.min(self.q.len())]
             .iter()
-            .filter_map(|k| self.context_index_of(k))
-            .collect();
-        let n = self.n();
-        let p = self.perm();
-        // Only items actually visible as upcoming are removable this way.
-        context_indices.retain(|&i| {
-            (i as usize) < n
-                && p.to_position(i)
-                    .map(|pos| pos >= self.doc.cursor)
-                    .unwrap_or(false)
-        });
-
-        if let Some(cur) = self.doc.current.clone() {
-            if wanted.contains(cur.key.as_str()) {
-                found = true;
-                let removed_index = match cur.source {
-                    QueueSource::Context { index } => Some(index),
-                    _ => None,
-                };
-                // Advance without keeping the removed item in history.
-                self.doc.current = None;
-                if !self.advance() {
-                    self.effects.push(Effect::Stopped);
-                }
-                if let Some(i) = removed_index {
-                    // The new current may reference an index above it; renumbering handles that.
-                    self.remove_context_index(i);
-                    context_indices = context_indices
-                        .into_iter()
-                        .filter(|&x| x != i)
-                        .map(|x| if x > i { x - 1 } else { x })
-                        .collect();
+            .filter(|i| wanted.contains(i.key.as_str()))
+            .count();
+        let before = self.q.len();
+        self.q.list.retain(|i| !wanted.contains(i.key.as_str()));
+        if self.q.len() == before {
+            return Err(ReduceError::UnknownKey(keys.join(",")));
+        }
+        self.q.ptr -= before_ptr;
+        if current_removed {
+            // The next playable entry takes its place; the unavailable ones
+            // on the way end up behind the pointer.
+            let next = (self.q.ptr..self.q.len()).find(|&i| !self.q.list[i].unavailable);
+            match next {
+                Some(i) => self.q.ptr = i,
+                None => {
+                    self.q.ptr = self.q.len();
+                    if had_current {
+                        self.effects.push(Effect::Stopped);
+                    }
                 }
             }
         }
-        if !context_indices.is_empty() {
-            found = true;
-            context_indices.sort_unstable();
-            context_indices.dedup();
-            for i in context_indices.into_iter().rev() {
-                self.remove_context_index(i);
-            }
-        }
-        if found {
-            Ok(())
-        } else {
-            Err(ReduceError::UnknownKey(keys.join(",")))
-        }
+        Ok(())
     }
 
-    fn move_item(&mut self, key: &str, to_index: usize) -> Result<(), ReduceError> {
-        // Take the item out. `returned`: a context item Previous put back in
-        // Playing Next, whose index is still its own (behind the cursor).
-        // The item keeps its key wherever it goes (#97).
-        let mut returned = false;
-        let (track_id, source, key): (TrackId, QueueSource, QueueKey) =
-            if let Some(i) = self.doc.insertions.iter().position(|it| it.key == key) {
-                let it = self.doc.insertions.remove(i);
-                returned = matches!(it.source, QueueSource::Context { .. });
-                (it.track_id, it.source, it.key)
-            } else if let Some(index) = self.context_index_of(key) {
-                let p = self.perm();
-                let visible = (index as usize) < self.n()
-                    && p.to_position(index)
-                        .map(|pos| pos >= self.doc.cursor)
-                        .unwrap_or(false);
-                if !visible {
-                    return Err(ReduceError::UnknownKey(key.into()));
-                }
-                let track_id = tracks(self.doc)[index as usize].clone();
-                let key = self.slot_key(index);
-                self.remove_context_index(index);
-                (track_id, QueueSource::Context { index }, key)
-            } else {
-                return Err(ReduceError::UnknownKey(key.into()));
-            };
-        // Place it.
-        let ins_len = self.doc.insertions.len();
-        let ctx_len = (self.n() as u32).saturating_sub(self.doc.cursor) as usize;
-        let has_context = self.doc.context.is_some();
-        let target = to_index.min(ins_len + ctx_len);
-        if target < ins_len || !has_context {
-            let source = match source {
-                QueueSource::Autoplay { .. } => source,
-                QueueSource::Context { .. } if returned => source,
-                _ => QueueSource::Inserted,
-            };
-            let at = target.min(ins_len);
-            self.doc.insertions.insert(
-                at,
-                QueueItem {
-                    key,
-                    track_id,
-                    source,
-                    unavailable: false,
-                },
-            );
+    fn move_item(&mut self, key: &str, after: &str, in_group: bool) -> Result<(), ReduceError> {
+        let i = self
+            .q
+            .index_of(key)
+            .ok_or_else(|| ReduceError::UnknownKey(key.into()))?;
+        let a = self
+            .q
+            .index_of(after)
+            .ok_or_else(|| ReduceError::UnknownKey(after.into()))?;
+        if !self.q.has_current() || i <= self.q.ptr || a < self.q.ptr {
+            return Err(ReduceError::BadMove);
+        }
+        let mut item = self.q.list.remove(i);
+        // Where `after` is now; dropping onto itself keeps its place.
+        let target = if a == i {
+            i
+        } else if a > i {
+            a
         } else {
-            if let (true, QueueSource::Context { index }) = (returned, &source) {
-                // Moved into the context: out of its played position first,
-                // as an upcoming one is, so the track is not in it twice.
-                self.remove_context_index(*index);
-            }
-            let position = self.doc.cursor + (target - ins_len) as u32;
-            let index = if self.doc.shuffle.is_none() {
-                position
-            } else {
-                self.n() as u32
-            };
-            self.insert_context_track(index, position, track_id, Some(key));
+            a + 1
+        };
+        let group_end = self.q.group_end();
+        let at = if in_group {
+            target.min(group_end)
+        } else {
+            target.max(group_end)
+        };
+        item.queued = in_group;
+        self.q.list.insert(at, item);
+        if self.doc.shuffle {
+            self.q.ordinals_after_previous(at, 1);
         }
         Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::api::{QueueEntry, RatingTarget};
-    use crate::session::document::{new_document, validate};
-    use crate::session::DeterministicEntropy;
-
-    fn ctx<'a>(e: &'a DeterministicEntropy, now: f64, position_ms: Ms) -> ReduceCtx<'a> {
-        ReduceCtx {
-            now,
-            position_ms,
-            history_cap: DEFAULT_HISTORY_CAP,
-            saved: SavedQueuePolicy::default(),
-            entropy: e,
-        }
-    }
-
-    fn album(id: &str, n: usize) -> QueueContext {
-        QueueContext {
-            server_id: "srv".into(),
-            kind: ContextKind::Album { id: id.into() },
-            label: format!("Album {id}"),
-            sort: SortOrder::Default,
-            tracks: (0..n).map(|i| format!("{id}-t{i}")).collect(),
-        }
-    }
-
-    fn play(
-        doc: &SessionDocument,
-        e: &DeterministicEntropy,
-        context: QueueContext,
-        start: Option<u32>,
-        shuffle: bool,
-    ) -> SessionDocument {
-        let args = PlayContextArgs {
-            context,
-            start_index: start,
-            shuffle,
-            save_outgoing: true,
-            start_position_ms: None,
-        };
-        reduce(doc, QueueOp::PlayContext { args }, &ctx(e, 1.0, 0))
-            .unwrap()
-            .0
-    }
-
-    fn step(
-        doc: &SessionDocument,
-        e: &DeterministicEntropy,
-        op: QueueOp,
-    ) -> (SessionDocument, Vec<Effect>) {
-        let out = reduce(doc, op, &ctx(e, 2.0, 5000)).unwrap();
-        validate(&out.0).unwrap();
-        out
-    }
-
-    fn cur_track(doc: &SessionDocument) -> &str {
-        doc.current
-            .as_ref()
-            .map(|c| c.track_id.as_str())
-            .unwrap_or("")
-    }
-
-    fn upcoming_tracks(doc: &SessionDocument) -> Vec<String> {
-        derive(doc)
-            .upcoming
-            .into_iter()
-            .map(|i| i.track_id)
-            .collect()
-    }
-
-    fn playing_next_tracks(doc: &SessionDocument) -> Vec<String> {
-        derive(doc)
-            .playing_next
-            .into_iter()
-            .map(|i| i.track_id)
-            .collect()
-    }
-
-    #[test]
-    fn play_context_and_walk() {
-        let e = DeterministicEntropy::new(1);
-        let d0 = new_document("s", "id".into(), 0.0);
-        let d1 = play(&d0, &e, album("a", 3), Some(1), false);
-        assert_eq!(d1.revision, 1);
-        assert_eq!(cur_track(&d1), "a-t1");
-        assert_eq!(upcoming_tracks(&d1), vec!["a-t2"]);
-        let (d2, fx) = step(&d1, &e, QueueOp::Next);
-        assert_eq!(cur_track(&d2), "a-t2");
-        assert!(matches!(fx[0], Effect::CurrentChanged { .. }));
-        assert_eq!(d2.history.len(), 1);
-        let (d3, fx) = step(&d2, &e, QueueOp::Next);
-        assert_eq!(fx, vec![Effect::Stopped]);
-        assert_eq!(d3.revision, d2.revision, "no-op does not bump the revision");
-        let (d4, _) = step(&d3, &e, QueueOp::SetAutoplay { enabled: true });
-        let (_, fx) = step(&d4, &e, QueueOp::TrackEnded);
-        assert_eq!(fx, vec![Effect::NeedsAutoplay]);
-    }
-
-    /// `previous` is what Previous (short of its restart) makes current, and
-    /// `None` exactly where it restarts the track instead: across starts,
-    /// shuffle, insertions and items skipped as unavailable.
-    #[test]
-    fn previous_is_what_going_back_plays() {
-        for seed in 0..40u64 {
-            let e = DeterministicEntropy::new(seed);
-            let mut d = play(
-                &new_document("s", "id".into(), 0.0),
-                &e,
-                album("a", 6),
-                Some((seed % 4) as u32),
-                seed % 3 == 0,
-            );
-            for i in 0..12u64 {
-                let derived = derive(&d);
-                let (back, fx) = step(&d, &e, QueueOp::Previous);
-                match &derived.previous {
-                    Some(item) => assert_eq!(
-                        back.current.as_ref().map(|c| &c.track_id),
-                        Some(&item.track_id),
-                        "seed {seed} step {i}"
-                    ),
-                    None => assert!(
-                        fx.contains(&Effect::RestartCurrent),
-                        "seed {seed} step {i}: went to {:?}",
-                        back.current
-                    ),
-                }
-                let op = match (seed + i * 7) % 5 {
-                    0 | 1 => QueueOp::Next,
-                    2 => QueueOp::Previous,
-                    3 => QueueOp::PlayNext {
-                        server_id: "srv".into(),
-                        track_ids: vec![format!("x{i}")],
-                    },
-                    _ => match d.current.as_ref() {
-                        Some(c) => QueueOp::SkipUnavailable { key: c.key.clone() },
-                        None => QueueOp::Next,
-                    },
-                };
-                d = step(&d, &e, op).0;
-            }
-        }
-    }
-
-    #[test]
-    fn wrap_next_is_what_repeat_all_plays_after_the_end() {
-        let e = DeterministicEntropy::new(4);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 5),
-            Some(0),
-            true,
-        );
-        assert_eq!(derive(&d).wrap_next, None, "repeat off: no wrap");
-        let (mut d, _) = step(
-            &d,
-            &e,
-            QueueOp::SetRepeat {
-                mode: RepeatMode::All,
-            },
-        );
-        assert_eq!(derive(&d).wrap_next, None, "upcoming left: no wrap");
-        while !derive(&d).upcoming.is_empty() {
-            d = step(&d, &e, QueueOp::Next).0;
-        }
-        let peek = derive(&d).wrap_next.expect("wraps");
-        let (wrapped, _) = step(&d, &e, QueueOp::Next);
-        assert_eq!(cur_track(&wrapped), peek.track_id);
-        assert_eq!(wrapped.current.unwrap().source, peek.source);
-        // Something in playing next plays first, so nothing wraps yet.
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into()],
-            },
-        );
-        assert_eq!(derive(&d).wrap_next, None);
-    }
-
-    /// The windowed derive and the lazy upcoming list are the full derive,
-    /// cut short: same rows, same keys, exact totals and wrap.
-    #[test]
-    fn windowed_derive_is_the_full_one_cut_short() {
-        let e = DeterministicEntropy::new(9);
-        let check = |d: &SessionDocument| {
-            let full = derive(d);
-            assert_eq!(upcoming_context(d).collect::<Vec<_>>(), full.upcoming);
-            for limit in [0, 1, 2, 7, 1_000] {
-                let w = derive_window(d, limit);
-                let mut cut = full.clone();
-                cut.upcoming.truncate(limit);
-                assert_eq!(w, cut, "limit {limit}");
-            }
-        };
-        let mut d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 9),
-            Some(2),
-            true,
-        );
-        check(&d);
-        d = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into(), "y".into()],
-            },
-        )
-        .0;
-        check(&d);
-        d = step(
-            &d,
-            &e,
-            QueueOp::SetRepeat {
-                mode: RepeatMode::All,
-            },
-        )
-        .0;
-        while derive(&d).total_upcoming > 0 {
-            d = step(&d, &e, QueueOp::Next).0;
-            check(&d);
-        }
-        assert!(derive_window(&d, 0).wrap_next.is_some());
-        d = step(&d, &e, QueueOp::SetShuffle { enabled: false }).0;
-        check(&d);
-    }
-
-    #[test]
-    fn duplicate_keys_are_repaired_without_touching_current() {
-        let e = DeterministicEntropy::new(3);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 4),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(&d, &e, QueueOp::Next);
-        let (mut d, _) = step(&d, &e, QueueOp::Next);
-        // A document from a build that reused keys across restarts (#54).
-        let cur_key = d.current.as_ref().unwrap().key.clone();
-        d.history[0].key = cur_key.clone();
-        d.history[1].key = cur_key.clone();
-        let out = reduce(&d, QueueOp::SetAutoplay { enabled: true }, &ctx(&e, 2.0, 0)).unwrap();
-        let next = out.0;
-        validate(&next).unwrap();
-        assert_eq!(next.current.as_ref().unwrap().key, cur_key);
-        let mut keys: Vec<_> = next.history.iter().map(|i| i.key.clone()).collect();
-        keys.push(cur_key);
-        let unique: HashSet<_> = keys.iter().collect();
-        assert_eq!(unique.len(), keys.len());
-        assert!(!out
-            .1
-            .iter()
-            .any(|fx| matches!(fx, Effect::CurrentChanged { .. })));
-    }
-
-    #[test]
-    fn next_then_previous_is_identity_with_insertions() {
-        let e = DeterministicEntropy::new(2);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 4),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into(), "y".into()],
-            },
-        );
-        assert_eq!(playing_next_tracks(&d), vec!["x", "y"]);
-        let (n1, _) = step(&d, &e, QueueOp::Next);
-        assert_eq!(cur_track(&n1), "x");
-        let (p1, _) = step(&n1, &e, QueueOp::Previous);
-        assert!(same_state(&d, &p1));
-        assert!(p1.revision > n1.revision);
-        // Through the whole queue and back.
-        let mut walk = vec![d.clone()];
-        let mut cur = d.clone();
-        loop {
-            let (n, fx) = step(&cur, &e, QueueOp::Next);
-            if fx.contains(&Effect::Stopped) {
-                break;
-            }
-            walk.push(n.clone());
-            cur = n;
-        }
-        assert_eq!(cur_track(&cur), "a-t3");
-        assert_eq!(cur.history.len(), 5);
-        while let Some(expected) = walk.pop() {
-            assert!(
-                same_state(&expected, &cur),
-                "walk back mismatch at {}",
-                cur_track(&expected)
-            );
-            let (p, _) = step(&cur, &e, QueueOp::Previous);
-            cur = p;
-        }
-    }
-
-    /// Previous then Next lands on the same track and leaves the queue as it
-    /// was, Playing Next items included: going back must not move them ahead
-    /// of the item gone back from.
-    #[test]
-    fn previous_then_next_returns_past_insertions() {
-        let e = DeterministicEntropy::new(2);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 4),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(&d, &e, QueueOp::Next);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into()],
-            },
-        );
-        let future = |d: &SessionDocument| {
-            let mut f = vec![cur_track(d).to_string()];
-            f.extend(playing_next_tracks(d));
-            f.extend(upcoming_tracks(d));
-            f
-        };
-        assert_eq!(future(&d), ["a-t1", "x", "a-t2", "a-t3"]);
-        let t1 = d.current.as_ref().unwrap().key.clone();
-
-        let (b, _) = step(&d, &e, QueueOp::Previous);
-        assert_eq!(future(&b), ["a-t0", "a-t1", "x", "a-t2", "a-t3"]);
-        let (n, _) = step(&b, &e, QueueOp::Next);
-        assert!(same_state(&d, &n), "previous then next is the identity");
-        assert_eq!(n.current.as_ref().unwrap().key, t1, "same item, same key");
-
-        // Further back and forward again through the whole queue.
-        let (n, _) = step(&n, &e, QueueOp::Next);
-        assert_eq!(cur_track(&n), "x");
-        let (b, _) = step(&n, &e, QueueOp::Previous);
-        let (b, _) = step(&b, &e, QueueOp::Previous);
-        assert_eq!(future(&b), ["a-t0", "a-t1", "x", "a-t2", "a-t3"]);
-        let mut cur = b;
-        let mut played = vec![cur_track(&cur).to_string()];
-        loop {
-            let (n, fx) = step(&cur, &e, QueueOp::Next);
-            if fx.contains(&Effect::Stopped) {
-                break;
-            }
-            played.push(cur_track(&n).to_string());
-            cur = n;
-        }
-        assert_eq!(played, ["a-t0", "a-t1", "x", "a-t2", "a-t3"]);
-    }
-
-    /// After going back, Play Next goes right after the current item, ahead of
-    /// the items gone back from, in either queue mode.
-    #[test]
-    fn play_next_after_previous_goes_ahead_of_the_returned_items() {
-        for mode in [QueueMode::Apple, QueueMode::YouTube] {
-            let e = DeterministicEntropy::new(4);
-            let d = play(
-                &new_document("s", "id".into(), 0.0),
-                &e,
-                album("a", 4),
-                Some(0),
-                false,
-            );
-            let (d, _) = step(&d, &e, QueueOp::SetQueueMode { mode });
-            let (d, _) = step(&d, &e, QueueOp::Next);
-            let (d, _) = step(
-                &d,
-                &e,
-                QueueOp::AppendAutoplay {
-                    items: vec![AutoplayItem {
-                        track_id: "auto".into(),
-                        provider: crate::api::AutoplayProvider::Random,
-                        reason: "r".into(),
-                        score: None,
-                    }],
-                },
-            );
-            let (d, _) = step(&d, &e, QueueOp::Previous);
-            assert_eq!(playing_next_tracks(&d), ["a-t1", "auto"], "{mode:?}");
-            let (d, _) = step(
-                &d,
-                &e,
-                QueueOp::PlayNext {
-                    server_id: "srv".into(),
-                    track_ids: vec!["y".into()],
-                },
-            );
-            let mut f = playing_next_tracks(&d);
-            f.extend(upcoming_tracks(&d));
-            assert_eq!(f, ["y", "a-t1", "auto", "a-t2", "a-t3"], "{mode:?}");
-        }
-    }
-
-    /// A new play order replaces the context's future, items gone back from
-    /// included: they don't also stay in Playing Next to play twice.
-    #[test]
-    fn shuffle_drops_the_returned_context_items() {
-        let e = DeterministicEntropy::new(5);
-        // Back over an item with something in Playing Next, then toggle shuffle.
-        let gone_back = |shuffle: bool| {
-            let d = play(
-                &new_document("s", "id".into(), 0.0),
-                &e,
-                album("a", 4),
-                Some(0),
-                shuffle,
-            );
-            let (d, _) = step(&d, &e, QueueOp::Next);
-            let (d, _) = step(
-                &d,
-                &e,
-                QueueOp::PlayNext {
-                    server_id: "srv".into(),
-                    track_ids: vec!["x".into()],
-                },
-            );
-            let (d, _) = step(&d, &e, QueueOp::Previous);
-            assert_eq!(cur_track(&d), "a-t0");
-            assert_eq!(playing_next_tracks(&d).len(), 2);
-            let (d, _) = step(&d, &e, QueueOp::SetShuffle { enabled: !shuffle });
-            d
-        };
-        for shuffle in [false, true] {
-            let d = gone_back(shuffle);
-            assert_eq!(playing_next_tracks(&d), ["x"], "shuffle was {shuffle}");
-            let mut rest = upcoming_tracks(&d);
-            rest.sort();
-            assert_eq!(rest, ["a-t1", "a-t2", "a-t3"], "shuffle was {shuffle}");
-        }
-    }
-
-    /// Album a-t0..a-t{n-1} playing a-t1, `x` queued to play next, then
-    /// Previous: Playing Next is [a-t1, x].
-    fn gone_back_over_a_queued_item(e: &DeterministicEntropy, n: usize) -> SessionDocument {
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            e,
-            album("a", n),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(&d, e, QueueOp::Next);
-        let (d, _) = step(
-            &d,
-            e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into()],
-            },
-        );
-        let (d, _) = step(&d, e, QueueOp::Previous);
-        assert_eq!(playing_next_tracks(&d), ["a-t1", "x"]);
-        d
-    }
-
-    fn future(d: &SessionDocument) -> Vec<String> {
-        let mut f: Vec<String> = d.current.iter().map(|c| c.track_id.clone()).collect();
-        f.extend(playing_next_tracks(d));
-        f.extend(upcoming_tracks(d));
-        f
-    }
-
-    #[test]
-    fn clearing_playing_next_keeps_the_items_gone_back_from() {
-        let e = DeterministicEntropy::new(6);
-        let d = gone_back_over_a_queued_item(&e, 4);
-        let (d, _) = step(&d, &e, QueueOp::ClearInsertions);
-        assert_eq!(future(&d), ["a-t0", "a-t1", "a-t2", "a-t3"]);
-    }
-
-    #[test]
-    fn new_context_tracks_do_not_queue_an_item_gone_back_from_twice() {
-        let e = DeterministicEntropy::new(7);
-        let d = gone_back_over_a_queued_item(&e, 4);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::SetContextTracks {
-                tracks: ["a-t0", "a-t2", "a-t1", "a-t3"].map(String::from).to_vec(),
-            },
-        );
-        let f = future(&d);
-        assert_eq!(f.iter().filter(|t| *t == "a-t1").count(), 1, "{f:?}");
-    }
-
-    #[test]
-    fn moving_an_item_gone_back_from_keeps_one_copy() {
-        let e = DeterministicEntropy::new(8);
-        let d = gone_back_over_a_queued_item(&e, 4);
-        let t1 = d.insertions[0].key.clone();
-        // Into the context part of the queue: moved, not copied.
-        let (m, _) = step(
-            &d,
-            &e,
-            QueueOp::MoveQueueItem {
-                key: t1.clone(),
-                to_index: 2,
-            },
-        );
-        assert_eq!(future(&m), ["a-t0", "x", "a-t2", "a-t1", "a-t3"]);
-        let tracks = &m.context.as_ref().unwrap().tracks;
-        assert_eq!(tracks.iter().filter(|t| *t == "a-t1").count(), 1);
-        // Within Playing Next: still the context's own item.
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayLater {
-                server_id: "srv".into(),
-                track_ids: vec!["z".into()],
-            },
-        );
-        let (m, _) = step(
-            &d,
-            &e,
-            QueueOp::MoveQueueItem {
-                key: t1,
-                to_index: 1,
-            },
-        );
-        assert_eq!(future(&m), ["a-t0", "x", "a-t1", "z", "a-t2", "a-t3"]);
-        assert!(matches!(
-            m.insertions[1].source,
-            QueueSource::Context { .. }
-        ));
-    }
-
-    #[test]
-    fn switching_to_youtube_keeps_play_next_ahead_of_items_gone_back_from() {
-        let e = DeterministicEntropy::new(9);
-        let d = gone_back_over_a_queued_item(&e, 4);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["y".into()],
-            },
-        );
-        assert_eq!(future(&d), ["a-t0", "y", "a-t1", "x", "a-t2", "a-t3"]);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::SetQueueMode {
-                mode: QueueMode::YouTube,
-            },
-        );
-        assert_eq!(future(&d), ["a-t0", "y", "a-t1", "x", "a-t2", "a-t3"]);
-    }
-
-    #[test]
-    fn jumping_forward_skips_items_gone_back_from() {
-        let e = DeterministicEntropy::new(10);
-        let d = gone_back_over_a_queued_item(&e, 5);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::JumpToQueueItem {
-                key: context_key(3),
-            },
-        );
-        assert_eq!(future(&d), ["a-t3", "x", "a-t4"]);
-    }
-
-    /// History from before a shuffle toggle is not the new order's past:
-    /// going back over it replays it (an inserted item) rather than putting a
-    /// context item that is still upcoming in Playing Next, and it does not
-    /// empty the rest of the queue.
-    #[test]
-    fn previous_after_a_shuffle_toggle() {
-        for seed in 0..20 {
-            let e = DeterministicEntropy::new(seed);
-            let d = play(
-                &new_document("s", "id".into(), 0.0),
-                &e,
-                album("a", 5),
-                Some(0),
-                false,
-            );
-            let (d, _) = step(&d, &e, QueueOp::Next);
-            let (d, _) = step(&d, &e, QueueOp::Next);
-            let (d, _) = step(&d, &e, QueueOp::SetShuffle { enabled: true });
-            let (b1, _) = step(&d, &e, QueueOp::Previous);
-            let (b2, _) = step(&b1, &e, QueueOp::Previous);
-            for b in [&b1, &b2] {
-                assert!(
-                    b.insertions
-                        .iter()
-                        .all(|i| !matches!(i.source, QueueSource::Context { .. })),
-                    "seed {seed}: {:?}",
-                    b.insertions
-                );
-                let mut all = future(b);
-                all.sort();
-                all.dedup();
-                assert_eq!(
-                    all.len(),
-                    5,
-                    "seed {seed}: every track still to come: {:?}",
-                    future(b)
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn previous_at_start_restarts() {
-        let e = DeterministicEntropy::new(3);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 2),
-            Some(0),
-            false,
-        );
-        let (p, fx) = step(&d, &e, QueueOp::Previous);
-        assert_eq!(fx, vec![Effect::RestartCurrent]);
-        assert!(same_state(&d, &p));
-        assert!(!previous_should_restart(2999));
-        assert!(previous_should_restart(3000));
-    }
-
-    #[test]
-    fn history_cap_falls_back_to_context_order() {
-        let e = DeterministicEntropy::new(4);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 6),
-            Some(0),
-            false,
-        );
-        let small = ReduceCtx {
-            now: 1.0,
-            position_ms: 0,
-            history_cap: 2,
-            saved: SavedQueuePolicy::default(),
-            entropy: &e,
-        };
-        let mut cur = d;
-        for _ in 0..4 {
-            cur = reduce(&cur, QueueOp::Next, &small).unwrap().0;
-        }
-        assert_eq!(cur_track(&cur), "a-t4");
-        assert_eq!(cur.history.len(), 2);
-        for expect in ["a-t3", "a-t2", "a-t1", "a-t0"] {
-            cur = reduce(&cur, QueueOp::Previous, &small).unwrap().0;
-            assert_eq!(cur_track(&cur), expect);
-            validate(&cur).unwrap();
-        }
-        let (_, fx) = reduce(&cur, QueueOp::Previous, &small).unwrap();
-        assert_eq!(fx, vec![Effect::RestartCurrent]);
-    }
-
-    #[test]
-    fn repeat_modes() {
-        let e = DeterministicEntropy::new(5);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 2),
-            Some(1),
-            false,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::SetRepeat {
-                mode: RepeatMode::All,
-            },
-        );
-        let (w, fx) = step(&d, &e, QueueOp::TrackEnded);
-        assert_eq!(cur_track(&w), "a-t0");
-        assert!(matches!(fx[0], Effect::CurrentChanged { .. }));
-        // Wrap then previous returns to the end.
-        let (b, _) = step(&w, &e, QueueOp::Previous);
-        assert!(same_state(&d, &b));
-        // Repeat one restarts on end, but a manual next still advances.
-        let (one, _) = step(
-            &d,
-            &e,
-            QueueOp::SetRepeat {
-                mode: RepeatMode::One,
-            },
-        );
-        let (_, fx) = step(&one, &e, QueueOp::TrackEnded);
-        assert_eq!(fx, vec![Effect::RestartCurrent]);
-        let (_, fx) = step(&one, &e, QueueOp::Next);
-        assert_eq!(fx, vec![Effect::Stopped]);
-        // Repeat all loops the context only: an inserted item is not replayed.
-        let (d2, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into()],
-            },
-        );
-        let (d3, _) = step(&d2, &e, QueueOp::Next);
-        assert_eq!(cur_track(&d3), "x");
-        let (d4, _) = step(&d3, &e, QueueOp::Next);
-        assert_eq!(cur_track(&d4), "a-t0");
-        let (d5, _) = step(&d4, &e, QueueOp::Next);
-        assert_eq!(cur_track(&d5), "a-t1");
-        let (d6, _) = step(&d5, &e, QueueOp::Next);
-        assert_eq!(cur_track(&d6), "a-t0");
-        assert!(d6.insertions.is_empty());
-    }
-
-    #[test]
-    fn shuffle_keeps_current_first_and_off_restores_place() {
-        let e = DeterministicEntropy::new(6);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 10),
-            Some(4),
-            false,
-        );
-        let (s, _) = step(&d, &e, QueueOp::SetShuffle { enabled: true });
-        assert_eq!(cur_track(&s), "a-t4");
-        assert_eq!(s.shuffle.as_ref().unwrap().anchor, Some(4));
-        assert_eq!(s.cursor, 1);
-        let up = upcoming_tracks(&s);
-        assert_eq!(up.len(), 9);
-        assert!(!up.contains(&"a-t4".to_string()));
-        assert_ne!(
-            up,
-            (5..10)
-                .chain(0..4)
-                .map(|i| format!("a-t{i}"))
-                .collect::<Vec<_>>()
-        );
-        let (s2, _) = step(&s, &e, QueueOp::Next);
-        let (s3, _) = step(&s2, &e, QueueOp::Next);
-        let (off, _) = step(&s3, &e, QueueOp::SetShuffle { enabled: false });
-        let idx = match off.current.as_ref().unwrap().source {
-            QueueSource::Context { index } => index,
-            _ => panic!(),
-        };
-        assert_eq!(off.cursor, idx + 1);
-        assert_eq!(
-            upcoming_tracks(&off),
-            (idx + 1..10).map(|i| format!("a-t{i}")).collect::<Vec<_>>()
-        );
-        // Previous still walks the real history, not the unshuffled order.
-        let (back, _) = step(&off, &e, QueueOp::Previous);
-        assert_eq!(cur_track(&back), cur_track(&s2));
-        // Reshuffle keeps the current item and changes the seed.
-        let (re, _) = step(&s3, &e, QueueOp::Reshuffle);
-        assert_eq!(cur_track(&re), cur_track(&s3));
-        assert_ne!(
-            re.shuffle.as_ref().unwrap().seed,
-            s3.shuffle.as_ref().unwrap().seed
-        );
-        assert_eq!(re.cursor, 1);
-    }
-
-    #[test]
-    fn shuffled_play_context_without_start_picks_random_first() {
-        let e = DeterministicEntropy::new(7);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 20),
-            None,
-            true,
-        );
-        assert!(d.current.is_some());
-        assert_eq!(d.cursor, 1);
-        assert_eq!(upcoming_tracks(&d).len(), 19);
-        let with_start = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 20),
-            Some(7),
-            true,
-        );
-        assert_eq!(cur_track(&with_start), "a-t7");
-    }
-
-    #[test]
-    fn youtube_mode_splices_into_context() {
-        let e = DeterministicEntropy::new(8);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 3),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::SetQueueMode {
-                mode: QueueMode::YouTube,
-            },
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into(), "y".into()],
-            },
-        );
-        assert!(d.insertions.is_empty());
-        assert_eq!(
-            d.context.as_ref().unwrap().tracks,
-            vec!["a-t0", "x", "y", "a-t1", "a-t2"]
-        );
-        assert_eq!(upcoming_tracks(&d), vec!["x", "y", "a-t1", "a-t2"]);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayLater {
-                server_id: "srv".into(),
-                track_ids: vec!["z".into()],
-            },
-        );
-        assert_eq!(upcoming_tracks(&d), vec!["x", "y", "a-t1", "a-t2", "z"]);
-        // Repeat All now loops the spliced items too.
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::SetRepeat {
-                mode: RepeatMode::All,
-            },
-        );
-        let mut cur = d;
-        let mut seen = vec![];
-        for _ in 0..7 {
-            cur = step(&cur, &e, QueueOp::Next).0;
-            seen.push(cur_track(&cur).to_string());
-        }
-        assert_eq!(seen, vec!["x", "y", "a-t1", "a-t2", "z", "a-t0", "x"]);
-        // Shuffled YouTube mode: play-next still lands right after the current item.
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("b", 8),
-            Some(3),
-            true,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::SetQueueMode {
-                mode: QueueMode::YouTube,
-            },
-        );
-        let before = upcoming_tracks(&d);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["p".into(), "q".into()],
-            },
-        );
-        let after = upcoming_tracks(&d);
-        assert_eq!(&after[..2], &["p", "q"]);
-        assert_eq!(
-            &after[2..],
-            &before[..],
-            "the rest of the shuffled order is untouched"
-        );
-        assert!(d.shuffle.as_ref().unwrap().order.is_some());
-        // Switching to YouTube mode folds pending insertions into the context.
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("c", 2),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["i".into()],
-            },
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::SetQueueMode {
-                mode: QueueMode::YouTube,
-            },
-        );
-        assert!(d.insertions.is_empty());
-        assert_eq!(upcoming_tracks(&d), vec!["i", "c-t1"]);
-    }
-
-    #[test]
-    fn remove_and_move() {
-        let e = DeterministicEntropy::new(9);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 5),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into(), "y".into()],
-            },
-        );
-        // Remove an upcoming context item and an inserted one.
-        let y = derive(&d).playing_next[1].key.clone();
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::RemoveQueueItems {
-                keys: vec![context_key(2), y],
-            },
-        );
-        assert_eq!(playing_next_tracks(&d), vec!["x"]);
-        assert_eq!(upcoming_tracks(&d), vec!["a-t1", "a-t3", "a-t4"]);
-        assert_eq!(cur_track(&d), "a-t0");
-        // Move a context item into playing next: it becomes Inserted. Synthetic
-        // keys are index-based, so they are re-read from the derived queue
-        // after every change (the UI gets a fresh QueueView each time).
-        let t3 = derive(&d)
-            .upcoming
-            .iter()
-            .find(|i| i.track_id == "a-t3")
-            .unwrap()
-            .key
-            .clone();
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::MoveQueueItem {
-                key: t3,
-                to_index: 0,
-            },
-        );
-        assert_eq!(playing_next_tracks(&d), vec!["a-t3", "x"]);
-        assert_eq!(d.insertions[0].source, QueueSource::Inserted);
-        assert_eq!(upcoming_tracks(&d), vec!["a-t1", "a-t4"]);
-        // Move an inserted item into upcoming: it becomes a context item.
-        let x = d.insertions[1].key.clone();
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::MoveQueueItem {
-                key: x,
-                to_index: 2,
-            },
-        );
-        assert_eq!(playing_next_tracks(&d), vec!["a-t3"]);
-        assert_eq!(upcoming_tracks(&d), vec!["a-t1", "x", "a-t4"]);
-        // Reorder within upcoming.
-        let key = derive(&d).upcoming[2].key.clone();
-        let (d, _) = step(&d, &e, QueueOp::MoveQueueItem { key, to_index: 1 });
-        assert_eq!(upcoming_tracks(&d), vec!["a-t4", "a-t1", "x"]);
-        // Removing the current item advances and drops it.
-        let cur_key = d.current.as_ref().unwrap().key.clone();
-        let (d, fx) = step(
-            &d,
-            &e,
-            QueueOp::RemoveQueueItems {
-                keys: vec![cur_key],
-            },
-        );
-        assert_eq!(cur_track(&d), "a-t3");
-        assert!(d.history.is_empty());
-        assert!(matches!(fx[0], Effect::CurrentChanged { .. }));
-        assert!(!d
-            .context
-            .as_ref()
-            .unwrap()
-            .tracks
-            .contains(&"a-t0".to_string()));
-        // Unknown key is an error, not a panic.
-        assert_eq!(
-            step_err(
-                &d,
-                &e,
-                QueueOp::RemoveQueueItems {
-                    keys: vec!["nope".into()]
-                }
-            ),
-            ReduceError::UnknownKey("nope".into())
-        );
-    }
-
-    fn step_err(doc: &SessionDocument, e: &DeterministicEntropy, op: QueueOp) -> ReduceError {
-        reduce(doc, op, &ctx(e, 2.0, 0)).unwrap_err()
-    }
-
-    #[test]
-    fn remove_under_shuffle_keeps_order() {
-        let e = DeterministicEntropy::new(10);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 8),
-            Some(0),
-            true,
-        );
-        let before = upcoming_tracks(&d);
-        let victim = derive(&d).upcoming[3].clone();
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::RemoveQueueItems {
-                keys: vec![victim.key],
-            },
-        );
-        let after = upcoming_tracks(&d);
-        let expected: Vec<String> = before
-            .into_iter()
-            .filter(|t| *t != victim.track_id)
-            .collect();
-        assert_eq!(after, expected);
-    }
-
-    #[test]
-    fn jump_semantics() {
-        let e = DeterministicEntropy::new(11);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 5),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into()],
-            },
-        );
-        // Jump ahead in the context keeps the insertion for later.
-        let (j, _) = step(
-            &d,
-            &e,
-            QueueOp::JumpToQueueItem {
-                key: context_key(3),
-            },
-        );
-        assert_eq!(cur_track(&j), "a-t3");
-        assert_eq!(playing_next_tracks(&j), vec!["x"]);
-        assert_eq!(upcoming_tracks(&j), vec!["a-t4"]);
-        assert_eq!(j.history.len(), 1);
-        // Jump back into history rewinds; the items the forward jump skipped
-        // stay skipped (Apple / Spotify semantics), the insertion is still
-        // pending, and the item jumped back from comes next, ahead of it.
-        let h = j.history[0].key.clone();
-        let (b, _) = step(&j, &e, QueueOp::JumpToQueueItem { key: h });
-        assert_eq!(cur_track(&b), "a-t0");
-        assert!(b.history.is_empty());
-        assert_eq!(playing_next_tracks(&b), vec!["a-t3", "x"]);
-        assert_eq!(upcoming_tracks(&b), vec!["a-t4"]);
-        // Jump to current restarts.
-        let (_, fx) = step(
-            &d,
-            &e,
-            QueueOp::JumpToQueueItem {
-                key: d.current.as_ref().unwrap().key.clone(),
-            },
-        );
-        assert_eq!(fx, vec![Effect::RestartCurrent]);
-        // Jump to an inserted item.
-        let x = d.insertions[0].key.clone();
-        let (i, _) = step(&d, &e, QueueOp::JumpToQueueItem { key: x });
-        assert_eq!(cur_track(&i), "x");
-        assert_eq!(
-            step_err(&d, &e, QueueOp::JumpToQueueItem { key: "zzz".into() }),
-            ReduceError::UnknownKey("zzz".into())
-        );
-    }
-
-    #[test]
-    fn unavailable_items_are_skipped_both_ways_unless_jumped_to() {
-        let e = DeterministicEntropy::new(12);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 3),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["bad".into(), "good".into()],
-            },
-        );
-        let bad = d.insertions[0].key.clone();
-        let (d, _) = step(&d, &e, QueueOp::SkipUnavailable { key: bad.clone() });
-        let (n, fx) = step(&d, &e, QueueOp::Next);
-        assert_eq!(cur_track(&n), "good");
-        assert!(fx.contains(&Effect::Skipped { key: bad.clone() }));
-        assert!(n.history.iter().any(|h| h.key == bad && h.unavailable));
-        let (p, _) = step(&n, &e, QueueOp::Previous);
-        assert_eq!(cur_track(&p), "a-t0");
-        assert!(same_state(&p, &d));
-        let (j, _) = step(&n, &e, QueueOp::JumpToQueueItem { key: bad.clone() });
-        assert_eq!(cur_track(&j), "bad");
-        assert!(!j.current.as_ref().unwrap().unavailable);
-        // Skip the current: flagged, advanced.
-        let cur = d.current.as_ref().unwrap().key.clone();
-        let (s, fx) = step(&d, &e, QueueOp::SkipUnavailable { key: cur.clone() });
-        assert_eq!(cur_track(&s), "good");
-        assert!(fx.contains(&Effect::Skipped { key: cur.clone() }));
-        assert!(s.history.iter().any(|h| h.key == cur && h.unavailable));
-        // Skipping the last playable item stops (or asks for autoplay).
-        let last = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("z", 1),
-            Some(0),
-            false,
-        );
-        let k = last.current.as_ref().unwrap().key.clone();
-        let (l, fx) = step(&last, &e, QueueOp::SkipUnavailable { key: k });
-        assert!(l.current.as_ref().unwrap().unavailable);
-        assert!(fx.contains(&Effect::Stopped));
-        // Skipping a derived upcoming item removes it.
-        let (r, _) = step(
-            &d,
-            &e,
-            QueueOp::SkipUnavailable {
-                key: context_key(2),
-            },
-        );
-        assert_eq!(upcoming_tracks(&r), vec!["a-t1"]);
-    }
-
-    #[test]
-    fn offline_marks_clear_and_real_failures_stay() {
-        let e = DeterministicEntropy::new(21);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 1),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["off1".into(), "broken".into(), "off2".into(), "ok".into()],
-            },
-        );
-        let keys: Vec<QueueKey> = d.insertions.iter().map(|i| i.key.clone()).collect();
-        let (off1, broken, off2) = (keys[0].clone(), keys[1].clone(), keys[2].clone());
-        // The current item goes offline-skipped; the others are marked while queued.
-        let (d, _) = step(&d, &e, QueueOp::Next);
-        assert_eq!(cur_track(&d), "off1");
-        let (d, fx) = step(&d, &e, QueueOp::SkipOffline { key: off1.clone() });
-        assert!(fx.contains(&Effect::Skipped { key: off1.clone() }));
-        assert_eq!(cur_track(&d), "broken");
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::SkipUnavailable {
-                key: broken.clone(),
-            },
-        );
-        let (d, _) = step(&d, &e, QueueOp::SkipOffline { key: off2.clone() });
-        assert_eq!(cur_track(&d), "ok");
-        assert_eq!(
-            offline_skipped(&d),
-            [off1.clone(), off2.clone()].into_iter().collect()
-        );
-        // An older build sees the set as an opaque top-level field.
-        let json = super::super::save(&d).unwrap();
-        assert!(json.contains(OFFLINE_SKIPPED_FIELD), "{json}");
-        let (c, fx) = step(&d, &e, QueueOp::ClearOfflineSkips);
-        assert!(fx.is_empty(), "{fx:?}");
-        assert!(offline_skipped(&c).is_empty());
-        assert!(!c.extra.contains_key(OFFLINE_SKIPPED_FIELD));
-        let marked = |doc: &SessionDocument, k: &str| {
-            doc.history
-                .iter()
-                .chain(doc.insertions.iter())
-                .any(|i| i.key == k && i.unavailable)
-        };
-        assert!(!marked(&c, &off1));
-        assert!(!marked(&c, &off2));
-        assert!(marked(&c, &broken), "a load failure stays marked");
-        assert!(c.revision > d.revision);
-        // Nothing to clear is a no-op.
-        let (c2, _) = step(&c, &e, QueueOp::ClearOfflineSkips);
-        assert!(same_state(&c, &c2));
-        // A later real failure of an offline-skipped item is a real failure.
-        let (j, _) = step(&d, &e, QueueOp::SkipUnavailable { key: off1.clone() });
-        assert!(!offline_skipped(&j).contains(&off1));
-        // A jump clears the mark and drops the key from the set.
-        let (j, _) = step(&d, &e, QueueOp::JumpToQueueItem { key: off2.clone() });
-        assert_eq!(offline_skipped(&j), [off1.clone()].into_iter().collect());
-        // A plain mark from an older build (no set) is never cleared.
-        let mut old = d.clone();
-        old.extra.clear();
-        let (o, _) = step(&old, &e, QueueOp::ClearOfflineSkips);
-        assert!(marked(&o, &off1) && marked(&o, &off2));
-    }
-
-    #[test]
-    fn saved_queue_round_trip_with_position_and_history() {
-        let e = DeterministicEntropy::new(13);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 4),
-            Some(0),
-            false,
-        );
-        let (d, _) = step(&d, &e, QueueOp::Next);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into()],
-            },
-        );
-        // Replacing the context snapshots the outgoing one, position included.
-        let args = PlayContextArgs {
-            context: album("b", 3),
-            start_index: Some(0),
-            shuffle: false,
-            save_outgoing: true,
-            start_position_ms: None,
-        };
-        let (d2, fx) = reduce(&d, QueueOp::PlayContext { args }, &ctx(&e, 50.0, 42_000)).unwrap();
-        assert!(fx.contains(&Effect::SavedQueuesChanged));
-        assert!(fx.contains(&Effect::ContextReplaced));
-        assert_eq!(d2.saved_queues.len(), 1);
-        let sq = &d2.saved_queues[0];
-        assert_eq!(sq.position_ms, 42_000);
-        assert!(
-            sq.context.tracks.is_empty(),
-            "ID-referenced snapshots omit tracks"
-        );
-        assert_eq!(sq.history.len(), 1);
-        assert_eq!(sq.insertions.len(), 1);
-        assert!(saved::needs_resolution(sq));
-        // Restore without tracks asks for resolution; with tracks it is complete.
-        let (r, fx) = step(
-            &d2,
-            &e,
-            QueueOp::RestoreSavedQueue {
-                id: sq.id.clone(),
-                tracks: None,
-            },
-        );
-        assert!(fx
-            .iter()
-            .any(|f| matches!(f, Effect::ResolveContext { .. })));
-        assert!(fx.contains(&Effect::PositionRestore {
-            position_ms: 42_000
-        }));
-        assert!(matches!(
-            fx[0],
-            Effect::CurrentChanged {
-                position_ms: 42_000,
-                ..
-            }
-        ));
-        assert_eq!(cur_track(&r), "a-t1");
-        let (r2, _) = step(
-            &r,
-            &e,
-            QueueOp::SetContextTracks {
-                tracks: album("a", 4).tracks,
-            },
-        );
-        assert!(same_state_ignoring_saved(&r2, &d));
-        // The album-b queue got saved on the way out, and the restored entry was touched.
-        assert_eq!(r2.saved_queues.len(), 2);
-        let (full, fx) = step(
-            &d2,
-            &e,
-            QueueOp::RestoreSavedQueue {
-                id: sq.id.clone(),
-                tracks: Some(album("a", 4).tracks),
-            },
-        );
-        assert!(!fx
-            .iter()
-            .any(|f| matches!(f, Effect::ResolveContext { .. })));
-        assert_eq!(upcoming_tracks(&full), vec!["a-t2", "a-t3"]);
-        assert_eq!(playing_next_tracks(&full), vec!["x"]);
-        assert_eq!(full.history.len(), 1);
-        // Playlist changed since: the stored index no longer matches and is repaired.
-        let mut moved = album("a", 4).tracks;
-        moved.swap(1, 3);
-        let (fixed, _) = step(
-            &d2,
-            &e,
-            QueueOp::RestoreSavedQueue {
-                id: sq.id.clone(),
-                tracks: Some(moved),
-            },
-        );
-        assert_eq!(cur_track(&fixed), "a-t1");
-        assert_eq!(
-            fixed.current.as_ref().unwrap().source,
-            QueueSource::Context { index: 3 }
-        );
-        assert_eq!(
-            step_err(
-                &d2,
-                &e,
-                QueueOp::RestoreSavedQueue {
-                    id: "nope".into(),
-                    tracks: None
-                }
-            ),
-            ReduceError::UnknownSavedQueue("nope".into())
-        );
-    }
-
-    fn same_state_ignoring_saved(a: &SessionDocument, b: &SessionDocument) -> bool {
-        let mut a = a.clone();
-        let mut b = b.clone();
-        a.saved_queues.clear();
-        b.saved_queues.clear();
-        // A restore keys the restored context afresh.
-        a.extra.remove(context_keys::CONTEXT_KEYS_FIELD);
-        b.extra.remove(context_keys::CONTEXT_KEYS_FIELD);
-        same_state(&a, &b)
-    }
-
-    #[test]
-    fn saved_queue_management_ops() {
-        let e = DeterministicEntropy::new(14);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 2),
-            Some(0),
-            false,
-        );
-        let (d, fx) = step(&d, &e, QueueOp::SaveCurrentQueue { pinned: true });
-        assert!(fx.contains(&Effect::SavedQueuesChanged));
-        let id = d.saved_queues[0].id.clone();
-        assert!(d.saved_queues[0].pinned);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PinSavedQueue {
-                id: id.clone(),
-                pinned: false,
-            },
-        );
-        assert!(!d.saved_queues[0].pinned);
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::RenameQueue {
-                id: Some(id.clone()),
-                label: "  Friday drive ".into(),
-            },
-        );
-        assert_eq!(d.saved_queues[0].label, "Friday drive");
-        assert_eq!(d.saved_queues[0].context.label, "Friday drive");
-        // It is the queue playing (saved from it): the live context takes the name too, or leaving
-        // it would re-snapshot the old name over the new one.
-        assert_eq!(d.context.as_ref().unwrap().label, "Friday drive");
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::RenameQueue {
-                id: None,
-                label: "Now".into(),
-            },
-        );
-        assert_eq!(d.context.as_ref().unwrap().label, "Now");
-        assert_eq!(d.saved_queues[0].label, "Now");
-        // Playing something else keeps the name on the saved entry.
-        let left = play(&d, &e, album("b", 2), Some(0), false);
-        assert!(
-            left.saved_queues
-                .iter()
-                .any(|q| q.id == id && q.label == "Now"),
-            "{:?}",
-            left.saved_queues
-                .iter()
-                .map(|q| &q.label)
-                .collect::<Vec<_>>()
-        );
-        assert!(matches!(
-            step_err(
-                &d,
-                &e,
-                QueueOp::RenameQueue {
-                    id: None,
-                    label: "  ".into(),
-                },
-            ),
-            ReduceError::EmptyName
-        ));
-        let (d, _) = step(&d, &e, QueueOp::TouchSavedQueue { id: id.clone() });
-        assert_eq!(d.saved_queues[0].last_interacted_at, 2.0);
-        let mut remote = d.saved_queues[0].clone();
-        remote.id = "remote".into();
-        remote.pinned = true;
-        remote.updated_at = 999.0;
-        let (m, _) = step(
-            &d,
-            &e,
-            QueueOp::MergeSavedQueues {
-                remote: vec![remote],
-            },
-        );
-        assert_eq!(m.saved_queues.len(), 1);
-        assert_eq!(m.saved_queues[0].id, "remote");
-        let (gone, _) = step(
-            &m,
-            &e,
-            QueueOp::DeleteSavedQueue {
-                id: "remote".into(),
-            },
-        );
-        assert!(gone.saved_queues.is_empty());
-        assert_eq!(
-            step_err(
-                &gone,
-                &e,
-                QueueOp::DeleteSavedQueue {
-                    id: "remote".into()
-                }
-            ),
-            ReduceError::UnknownSavedQueue("remote".into())
-        );
-        // Trivial queues are not auto-saved.
-        let single = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("one", 1),
-            Some(0),
-            false,
-        );
-        let next = play(&single, &e, album("two", 3), Some(0), false);
-        assert!(next.saved_queues.is_empty());
-    }
-
-    #[test]
-    fn clear_queue_keeps_the_playing_track() {
-        let e = DeterministicEntropy::new(15);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 4),
-            Some(1),
-            true,
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayLater {
-                server_id: "srv".into(),
-                track_ids: vec!["x".into()],
-            },
-        );
-        let key = d.current.as_ref().unwrap().key.clone();
-        let (c, fx) = step(&d, &e, QueueOp::ClearQueue);
-        assert_eq!(c.current.as_ref().unwrap().key, key);
-        assert!(!fx
-            .iter()
-            .any(|f| matches!(f, Effect::CurrentChanged { .. })));
-        assert!(fx.contains(&Effect::SavedQueuesChanged));
-        assert!(derive(&c).upcoming.is_empty());
-        assert!(derive(&c).playing_next.is_empty());
-        assert!(c.shuffle.is_none());
-        assert_eq!(c.context.as_ref().unwrap().tracks, vec!["a-t1"]);
-        let (_, fx) = step(&c, &e, QueueOp::Next);
-        assert_eq!(fx, vec![Effect::Stopped]);
-        // Queueing onto an empty session starts playing.
-        let empty = new_document("s", "id".into(), 0.0);
-        let (q, fx) = step(
-            &empty,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["a".into(), "b".into()],
-            },
-        );
-        assert_eq!(cur_track(&q), "a");
-        assert!(matches!(fx[0], Effect::CurrentChanged { .. }));
-        assert_eq!(upcoming_tracks(&q), vec!["b"]);
-        assert!(q.saved_queues.is_empty());
-    }
-
-    #[test]
-    fn autoplay_items_append_and_play_last() {
-        let e = DeterministicEntropy::new(16);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 1),
-            Some(0),
-            false,
-        );
-        let items = vec![AutoplayItem {
-            track_id: "r1".into(),
-            provider: AutoplayProvider::SonicSimilarity,
-            reason: "similar".into(),
-            score: Some(0.9),
-        }];
-        let (d, _) = step(&d, &e, QueueOp::AppendAutoplay { items });
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayLater {
-                server_id: "srv".into(),
-                track_ids: vec!["later".into()],
-            },
-        );
-        assert_eq!(
-            playing_next_tracks(&d),
-            vec!["later", "r1"],
-            "play later goes ahead of the autoplay tail"
-        );
-        let (d, _) = step(
-            &d,
-            &e,
-            QueueOp::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["next".into()],
-            },
-        );
-        assert_eq!(playing_next_tracks(&d), vec!["next", "later", "r1"]);
-        let (d, _) = step(&d, &e, QueueOp::ClearInsertions);
-        assert!(d.insertions.is_empty());
-    }
-
-    #[test]
-    fn derived_view_resolves_tracks() {
-        let e = DeterministicEntropy::new(17);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 3),
-            Some(0),
-            false,
-        );
-        let v = derive(&d).into_view(|id| TrackSummary {
-            id: id.clone(),
-            title: id.to_uppercase(),
-            ..Default::default()
-        });
-        assert_eq!(
-            v.current
-                .as_ref()
-                .map(|c: &QueueEntry| c.track.title.as_str()),
-            Some("A-T0")
-        );
-        assert_eq!(v.upcoming.len(), 2);
-        assert_eq!(v.total_upcoming, 2);
-        assert_eq!(v.context_label.as_deref(), Some("Album a"));
-    }
-
-    #[test]
-    fn queue_view_window_keeps_total_and_truncates_rows() {
-        let e = DeterministicEntropy::new(17);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 300),
-            Some(0),
-            false,
-        );
-        let mut derived = derive(&d);
-        assert_eq!(derived.upcoming.len(), 299);
-        assert_eq!(derived.total_upcoming, 299);
-        derived.window_for_view();
-        assert_eq!(derived.upcoming.len(), QUEUE_VIEW_UPCOMING);
-        assert_eq!(derived.total_upcoming, 299);
-        assert_eq!(derived.history.len(), 0);
-    }
-
-    #[test]
-    fn queue_view_window_keeps_all_history() {
-        let e = DeterministicEntropy::new(17);
-        let mut d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 300),
-            Some(0),
-            false,
-        );
-        for _ in 0..120 {
-            d = step(&d, &e, QueueOp::Next).0;
-        }
-        let mut derived = derive(&d);
-        assert_eq!(derived.history.len(), 120);
-        derived.window_for_view();
-        assert_eq!(
-            derived.history.len(),
-            120,
-            "Clear history sends back every key the view carries"
-        );
-    }
-
-    #[test]
-    fn queue_view_json_window_is_bounded() {
-        use crate::api::Event;
-        let e = DeterministicEntropy::new(1);
-        let d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 1_000),
-            Some(0),
-            false,
-        );
-        let resolve = |id: &TrackId| TrackSummary {
-            id: id.clone(),
-            title: id.clone(),
-            artist: Some("Artist".into()),
-            album: Some("Album".into()),
-            duration_ms: 180_000,
-            ..Default::default()
-        };
-        let full = serde_json::to_vec(&Event::QueueChanged {
-            queue: derive(&d).into_view(resolve),
-        })
-        .unwrap();
-        let mut derived = derive(&d);
-        derived.window_for_view();
-        let win = serde_json::to_vec(&Event::QueueChanged {
-            queue: derived.into_view(resolve),
-        })
-        .unwrap();
-        assert!(
-            win.len() * 4 < full.len(),
-            "windowed {} B should be much smaller than full {} B",
-            win.len(),
-            full.len()
-        );
-        assert!(
-            win.len() < 80_000,
-            "windowed QueueChanged should stay under 80 KiB, got {}",
-            win.len()
-        );
-        eprintln!(
-            "queue JSON 1000 tracks: full={} B windowed={} B ({:.1}×)",
-            full.len(),
-            win.len(),
-            full.len() as f64 / win.len() as f64
-        );
-    }
-
-    #[test]
-    fn from_command_covers_queue_commands() {
-        assert!(QueueOp::from_command(&Command::Next).is_some());
-        assert!(QueueOp::from_command(&Command::ClearQueue).is_some());
-        assert!(QueueOp::from_command(&Command::SetRating {
-            targets: vec![RatingTarget::Track { id: "t".into() }],
-            rating: 3
-        })
-        .is_none());
-        assert!(QueueOp::PlayContext {
-            args: PlayContextArgs {
-                context: album("a", 1),
-                start_index: None,
-                shuffle: false,
-                save_outgoing: true,
-                start_position_ms: None,
-            }
-        }
-        .replaces_context());
-    }
-
-    #[test]
-    fn garbage_documents_do_not_panic() {
-        let e = DeterministicEntropy::new(18);
-        let mut d = play(
-            &new_document("s", "id".into(), 0.0),
-            &e,
-            album("a", 3),
-            Some(0),
-            true,
-        );
-        d.cursor = 99;
-        d.history.push(QueueItem {
-            key: "h".into(),
-            track_id: "gone".into(),
-            source: QueueSource::Context { index: 77 },
-            unavailable: false,
-        });
-        d.shuffle = Some(ShuffleState {
-            seed: 1,
-            anchor: Some(50),
-            order: Some(vec![9, 9]),
-        });
-        for op in [
-            QueueOp::Next,
-            QueueOp::Previous,
-            QueueOp::TrackEnded,
-            QueueOp::SetShuffle { enabled: false },
-            QueueOp::JumpToQueueItem { key: "h".into() },
-            QueueOp::MoveQueueItem {
-                key: context_key(1),
-                to_index: 50,
-            },
-            QueueOp::RemoveQueueItems {
-                keys: vec![context_key(2)],
-            },
-            QueueOp::ClearQueue,
-        ] {
-            let _ = reduce(&d, op, &ctx(&e, 1.0, 0));
-        }
+/// An ad-hoc context over a track list.
+fn adhoc_context(server_id: ServerId, label: String, tracks: Vec<TrackId>) -> QueueContext {
+    QueueContext {
+        server_id,
+        kind: ContextKind::AdHoc {
+            label: label.clone(),
+        },
+        label,
+        sort: SortOrder::Default,
+        tracks,
     }
 }
+
+#[cfg(test)]
+mod tests;

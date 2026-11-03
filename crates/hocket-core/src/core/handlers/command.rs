@@ -78,6 +78,7 @@ impl Actor {
             | Command::StashMove { .. }
             | Command::StashClear
             | Command::StashRestore { .. }) => self.stash_command(c),
+            Command::StashQueueGroup => self.stash_queue_group(),
             Command::ResumeAlbum { album_id } => self.resume_album(album_id),
             Command::ClearAlbumResume { album_id } => self.clear_album_resume(&album_id, true),
 
@@ -87,16 +88,16 @@ impl Actor {
             Command::PlayContext { args } => self.play_context(args),
             c @ (Command::PlayTracks { .. }
             | Command::PlayNext { .. }
+            | Command::AddToQueue { .. }
             | Command::PlayLater { .. }
             | Command::JumpToQueueItem { .. }
             | Command::RemoveQueueItems { .. }
             | Command::MoveQueueItem { .. }
             | Command::ClearQueue
-            | Command::ClearInsertions
+            | Command::ClearQueueGroup
             | Command::SetShuffle { .. }
             | Command::SetRepeat { .. }
             | Command::SetAutoplay { .. }
-            | Command::SetQueueMode { .. }
             | Command::SkipUnavailable { .. }
             | Command::PinSavedQueue { .. }
             | Command::DeleteSavedQueue { .. }

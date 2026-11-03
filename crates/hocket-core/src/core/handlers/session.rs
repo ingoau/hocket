@@ -16,7 +16,7 @@ use crate::connect::wire::{scope_key, SessionOp, TransportCommand};
 use crate::core::actor::{Actor, AUTOPLAY_BATCH};
 use crate::core::state::SavedPosition;
 use crate::session::reducer::{
-    derive, derive_window, reduce, upcoming_context, QueueOp, ReduceCtx, QUEUE_VIEW_UPCOMING,
+    derive_range, derive_window, reduce, QueueOp, ReduceCtx, QUEUE_VIEW_AFTER, QUEUE_VIEW_BEFORE,
 };
 use crate::session::{saved, Effect};
 use crate::undo::{SessionUndo, UndoAction, UndoTier};
@@ -29,19 +29,12 @@ pub(crate) struct DbResolver<'a> {
 impl Resolver for DbResolver<'_> {
     fn track_for_key(&self, key: &QueueKey) -> Option<TrackId> {
         let doc = self.actor.engine.as_ref()?.document();
-        if let Some(c) = &doc.current {
-            if &c.key == key {
-                return Some(c.track_id.clone());
-            }
-        }
-        for i in doc.history.iter().chain(doc.insertions.iter()) {
-            if &i.key == key {
-                return Some(i.track_id.clone());
-            }
-        }
-        upcoming_context(doc)
+        doc.history
+            .iter()
+            .chain(doc.current.iter())
+            .chain(doc.upcoming.iter())
             .find(|i| &i.key == key)
-            .map(|i| i.track_id)
+            .map(|i| i.track_id.clone())
     }
 
     fn is_upcoming(&self, key: &QueueKey) -> bool {
@@ -49,7 +42,7 @@ impl Resolver for DbResolver<'_> {
             return false;
         };
         let doc = e.document();
-        doc.insertions.iter().any(|i| &i.key == key) || upcoming_context(doc).any(|i| &i.key == key)
+        doc.upcoming.iter().any(|i| &i.key == key)
     }
 
     fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
@@ -338,9 +331,14 @@ impl Actor {
 
     /// A public queue command: undo snapshot around the op.
     pub(crate) fn queue_command(&mut self, cmd: Command) {
-        let Some(op) = SessionOp::from_command(&cmd) else {
+        let Some(mut op) = SessionOp::from_command(&cmd) else {
             return;
         };
+        // Whether Play Next starts or joins the "Next in queue" group is the
+        // Queue section setting's call, made here so every replica agrees.
+        if let SessionOp::PlayNext { queued, .. } = &mut op {
+            *queued = self.settings.get_bool(crate::settings::keys::QUEUE_SECTION);
+        }
         let label = command_label(&cmd);
         self.undoable_op(op, &label, command_kind(&cmd));
     }
@@ -811,7 +809,7 @@ impl Actor {
         let last = doc.autoplay
             && doc.repeat == RepeatMode::Off
             && self.playback.loaded
-            && derive_window(doc, 0).total_upcoming == 0;
+            && doc.upcoming.is_empty();
         if !last
             || self.autoplay.is_none()
             || self.autoplay_prefetched.as_ref() == Some(&current.key)
@@ -854,7 +852,7 @@ impl Actor {
             .as_ref()
             .map(|c| c.tracks.clone())
             .unwrap_or_default();
-        exclude.extend(doc.insertions.iter().map(|i| i.track_id.clone()));
+        exclude.extend(doc.upcoming.iter().map(|i| i.track_id.clone()));
         exclude.extend(recent_ids);
         exclude.extend(self.snoozed_ids());
         let seeds = crate::autoplay::SeedInput {
@@ -931,10 +929,7 @@ impl Actor {
         // Dropped; the end of the queue asks again if it still needs to.
         let wanted = self.doc().is_some_and(|d| {
             d.current.as_ref().map(|c| &c.key) == self.autoplay_prefetched.as_ref()
-                && (advance
-                    || (d.autoplay
-                        && d.repeat == RepeatMode::Off
-                        && derive_window(d, 0).total_upcoming == 0))
+                && (advance || (d.autoplay && d.repeat == RepeatMode::Off && d.upcoming.is_empty()))
         });
         if !wanted {
             // The engine is back: fetch ahead for whatever is last now.
@@ -980,11 +975,7 @@ impl Actor {
             let changed = vec![None; tracks.len()];
             let _ = self.db.upsert_tracks(&tracks, &changed, 0);
         }
-        let queue_ran_out = advance
-            && self
-                .doc()
-                .map(|d| derive_window(d, 0).total_upcoming == 0)
-                .unwrap_or(false);
+        let queue_ran_out = advance && self.doc().map(|d| d.upcoming.is_empty()).unwrap_or(false);
         self.local_op(SessionOp::AppendAutoplay { items });
         if queue_ran_out && self.owns_transport() {
             self.playback.want_playing = true;
@@ -1089,37 +1080,32 @@ impl Actor {
                     self.toast("That saved queue is gone", None);
                     return;
                 };
-                let mut tracks = sq.context.tracks.clone();
-                if tracks.is_empty() {
-                    tracks =
-                        self.resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
-                }
-                let mut ids: Vec<TrackId> = sq.history.iter().map(|i| i.track_id.clone()).collect();
-                ids.extend(sq.current.iter().map(|i| i.track_id.clone()));
-                ids.extend(sq.insertions.iter().map(|i| i.track_id.clone()));
-                let perm = crate::session::shuffle::Permutation::from_state(
-                    sq.shuffle.as_ref(),
-                    tracks.len(),
-                );
-                for pos in sq.cursor..perm.len() as u32 {
-                    if let Some(i) = perm.to_context(pos) {
-                        if let Some(t) = tracks.get(i as usize) {
-                            ids.push(t.clone());
-                        }
+                if crate::session::saved::needs_resolution(sq)
+                    || (sq.history.is_empty() && sq.upcoming.is_empty())
+                {
+                    // Stored without its entries: the context's tracks are the list.
+                    let mut tracks = sq.context.tracks.clone();
+                    if tracks.is_empty() {
+                        tracks = self
+                            .resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
                     }
+                    tracks
+                } else {
+                    sq.history
+                        .iter()
+                        .chain(sq.current.iter())
+                        .chain(sq.upcoming.iter())
+                        .map(|i| i.track_id.clone())
+                        .collect()
                 }
-                ids
             }
-            None => {
-                let d = derive(&doc);
-                d.history
-                    .iter()
-                    .chain(d.current.iter())
-                    .chain(d.playing_next.iter())
-                    .chain(d.upcoming.iter())
-                    .map(|i| i.track_id.clone())
-                    .collect()
-            }
+            None => doc
+                .history
+                .iter()
+                .chain(doc.current.iter())
+                .chain(doc.upcoming.iter())
+                .map(|i| i.track_id.clone())
+                .collect(),
         };
         if ids.is_empty() {
             self.toast("Nothing to save", None);
@@ -1202,19 +1188,34 @@ impl Actor {
 
     // -- views ------------------------------------------------------------------
 
+    /// The queue view every change sends: a window of rows around the
+    /// pointer (`QUEUE_VIEW_BEFORE` behind, `QUEUE_VIEW_AFTER` ahead) with
+    /// exact totals, so a long history or context costs the same as a short one.
     pub(crate) fn queue_view(&self) -> QueueView {
         let Some(doc) = self.doc() else {
             return QueueView::default();
         };
-        let derived = derive_window(doc, QUEUE_VIEW_UPCOMING);
+        self.resolve_view(derive_window(doc, QUEUE_VIEW_BEFORE, QUEUE_VIEW_AFTER))
+    }
+
+    /// Rows `start..start + count` of the queue list (`Query::QueueRange`).
+    pub(crate) fn queue_range_view(&self, start: u32, count: u32) -> QueueView {
+        let Some(doc) = self.doc() else {
+            return QueueView::default();
+        };
+        // One page at a time: a runaway count can't ask for the whole list.
+        let count = (count as usize).min(QUEUE_VIEW_BEFORE + QUEUE_VIEW_AFTER + 1);
+        self.resolve_view(derive_range(doc, start as usize, count))
+    }
+
+    fn resolve_view(&self, derived: crate::session::DerivedQueue) -> QueueView {
         let mut seen: HashSet<&TrackId> = HashSet::new();
         let mut ids: Vec<TrackId> = vec![];
         for i in derived
-            .history
+            .entries
             .iter()
+            .map(|(i, _)| i)
             .chain(derived.current.iter())
-            .chain(derived.playing_next.iter())
-            .chain(derived.upcoming.iter())
             .chain(derived.wrap_next.iter())
             .chain(derived.previous.iter())
         {
@@ -1233,15 +1234,27 @@ impl Actor {
         let Some(doc) = self.doc() else {
             return QueueView::default();
         };
+        let history_count = doc.history.len() as u32;
         QueueView {
             current: doc.current.as_ref().map(|item| QueueEntry {
                 track: self.summary_or_bare(&item.track_id),
                 item: item.clone(),
+                in_group: false,
+                autoplay: matches!(item.source, QueueSource::Autoplay { .. }),
             }),
-            shuffle: doc.shuffle.is_some(),
+            window_start: history_count,
+            total: history_count + u32::from(doc.current.is_some()) + doc.upcoming.len() as u32,
+            history_count,
+            current_index: doc.current.as_ref().map(|_| history_count),
+            group_count: if doc.current.is_some() {
+                doc.upcoming.iter().take_while(|i| i.queued).count() as u32
+            } else {
+                0
+            },
+            total_upcoming: doc.upcoming.len() as u32,
+            shuffle: doc.shuffle,
             repeat: doc.repeat,
             autoplay: doc.autoplay,
-            mode: doc.mode,
             ..QueueView::default()
         }
     }
@@ -1315,7 +1328,7 @@ impl Actor {
             .history
             .iter()
             .chain(doc.current.iter())
-            .chain(doc.insertions.iter())
+            .chain(doc.upcoming.iter())
             .find(|i| &i.key == key)
             .map(|i| i.track_id.clone());
         match id {
@@ -1422,7 +1435,7 @@ impl Actor {
                         .is_some_and(|e| e.transport().position.is_playing),
             can_undo: self.undo.can_undo(),
             can_redo: self.undo.can_redo(),
-            shuffle: doc.is_some_and(|d| d.shuffle.is_some()),
+            shuffle: doc.is_some_and(|d| d.shuffle),
             repeat: doc.map(|d| d.repeat).unwrap_or_default(),
             autoplay: doc.is_some_and(|d| d.autoplay),
             current_track_id: current.map(|c| c.track_id.clone()),
@@ -1457,6 +1470,13 @@ impl Actor {
                     .settings
                     .get(crate::settings::registry::keys::LIBRARY_PINS),
             ),
+            queue_section: self
+                .settings
+                .get_bool(crate::settings::registry::keys::QUEUE_SECTION),
+            queue_group_count: doc
+                .filter(|d| d.current.is_some())
+                .map(|d| d.upcoming.iter().take_while(|i| i.queued).count() as u32)
+                .unwrap_or(0),
         }
     }
 
@@ -1588,16 +1608,16 @@ fn command_kind(cmd: &Command) -> &'static str {
         Command::PlayContext { .. } => "playContext",
         Command::PlayTracks { .. } => "playTracks",
         Command::PlayNext { .. } => "playNext",
+        Command::AddToQueue { .. } => "addToQueue",
         Command::PlayLater { .. } => "playLater",
         Command::JumpToQueueItem { .. } => "jump",
         Command::RemoveQueueItems { .. } => "removeFromQueue",
         Command::MoveQueueItem { .. } => "moveQueueItem",
         Command::ClearQueue => "clearQueue",
-        Command::ClearInsertions => "clearInsertions",
+        Command::ClearQueueGroup => "clearQueueGroup",
         Command::SetShuffle { .. } => "shuffle",
         Command::SetRepeat { .. } => "repeat",
         Command::SetAutoplay { .. } => "autoplay",
-        Command::SetQueueMode { .. } => "queueMode",
         Command::Next => "next",
         Command::Previous | Command::PreviousTrack => "previous",
         Command::SkipUnavailable { .. } => "skipUnavailable",
@@ -1612,13 +1632,20 @@ fn command_kind(cmd: &Command) -> &'static str {
 fn command_label(cmd: &Command) -> String {
     match cmd {
         Command::PlayTracks { label, .. } => format!("Play {label}"),
-        Command::PlayNext { track_ids, .. } => plural("Play next", track_ids.len()),
-        Command::PlayLater { track_ids, .. } => plural("Play later", track_ids.len()),
+        Command::PlayNext {
+            track_ids, keys, ..
+        } => plural("Play next", track_ids.len() + keys.len()),
+        Command::AddToQueue {
+            track_ids, keys, ..
+        } => plural("Add to queue", track_ids.len() + keys.len()),
+        Command::PlayLater {
+            track_ids, keys, ..
+        } => plural("Play later", track_ids.len() + keys.len()),
         Command::JumpToQueueItem { .. } => "Jump to track".into(),
         Command::RemoveQueueItems { keys } => plural("Remove from queue", keys.len()),
         Command::MoveQueueItem { .. } => "Move track".into(),
         Command::ClearQueue => "Clear queue".into(),
-        Command::ClearInsertions => "Clear playing next".into(),
+        Command::ClearQueueGroup => "Clear next in queue".into(),
         Command::SetShuffle { enabled } => {
             if *enabled {
                 "Shuffle on".into()
@@ -1634,7 +1661,6 @@ fn command_label(cmd: &Command) -> String {
                 "Autoplay off".into()
             }
         }
-        Command::SetQueueMode { mode } => format!("Queue mode {mode:?}"),
         Command::Next => "Next track".into(),
         Command::Previous | Command::PreviousTrack => "Previous track".into(),
         Command::SkipUnavailable { .. } => "Skip unavailable".into(),

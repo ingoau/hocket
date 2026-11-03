@@ -170,6 +170,9 @@ impl Actor {
                 request_id,
             )),
             Query::Queue => QueryResult::Queue(self.queue_view()),
+            Query::QueueRange { start, count } => {
+                QueryResult::Queue(self.queue_range_view(start, count))
+            }
             Query::SavedQueues => QueryResult::SavedQueues(
                 self.doc()
                     .map(|d| d.saved_queues.clone())

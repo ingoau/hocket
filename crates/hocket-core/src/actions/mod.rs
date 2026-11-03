@@ -137,6 +137,11 @@ pub struct StateView {
     pub library_pins: Vec<LibraryPin>,
     /// Track ids snoozed right now.
     pub snoozed_tracks: Vec<TrackId>,
+    /// The Queue section setting (`queue.section`): "Add to queue" and the
+    /// "Next in queue" group are offered.
+    pub queue_section: bool,
+    /// Entries in the "Next in queue" group.
+    pub queue_group_count: u32,
 }
 
 /// One entry of `library.pins`.
@@ -173,7 +178,7 @@ impl LibraryPin {
 /// [`NoResolver`] answers nothing (tests, pure descriptors).
 pub trait Resolver {
     fn track_for_key(&self, key: &QueueKey) -> Option<TrackId>;
-    /// The queue item is still to play (in playing next or upcoming).
+    /// The queue item is still to play (after the pointer).
     fn is_upcoming(&self, _key: &QueueKey) -> bool {
         false
     }
@@ -451,8 +456,15 @@ impl ActionRegistry {
             .iter()
             .filter_map(|id| self.get(id))
             .filter(|d| Self::applies(d, target, Some(surface)))
+            .filter(|d| Self::offered(d, target, state))
             .map(|d| self.describe(d, target, state))
             .collect()
+    }
+
+    /// The action's availability hook: hidden actions (e.g. "Add to queue"
+    /// with the Queue section setting off) are left out of every surface.
+    pub fn offered(def: &ActionDef, target: &ActionTarget, state: &StateView) -> bool {
+        def.visible.is_none_or(|v| v(target, state))
     }
 
     pub fn actions_for_str(
@@ -473,6 +485,7 @@ impl ActionRegistry {
             .iter()
             .filter(|d| d.id != "preview")
             .filter(|d| Self::applies(d, target, Some(Surface::Palette)))
+            .filter(|d| Self::offered(d, target, state))
             .map(|d| self.describe(d, target, state))
             .collect()
     }
@@ -922,53 +935,41 @@ fn play_commands(
     }
 }
 
-fn queue_commands(
+/// Play next / add to queue / play later. Queue rows are named by key, so
+/// the reducer can move the ones still to play and copy the ones already
+/// played (it decides which; every replica agrees).
+pub(crate) fn queue_commands(
     target: &ActionTarget,
     state: &StateView,
     resolver: &dyn Resolver,
-    next: bool,
+    placement: crate::session::QueuePlacement,
 ) -> Vec<Command> {
+    use crate::session::QueuePlacement;
     let server_id = state.server_id.clone().unwrap_or_default();
-    // Play next on queue items still to play moves them up rather than queueing them again (#37):
-    // they are removed and queued again by the same PlayNext, behind the played ones (history, the
-    // current item), which are queued again as before. Removing them all in one op keeps every key
-    // valid even when a peer still keys context items by index (`ctx-<n>`), where a MoveQueueItem per
-    // key would renumber the others.
-    let (track_ids, remove) = match target {
-        ActionTarget::QueueItems { keys } if next => {
-            let (upcoming, played): (Vec<_>, Vec<_>) =
-                keys.iter().cloned().partition(|k| resolver.is_upcoming(k));
-            let mut track_ids =
-                track_ids_of(&ActionTarget::QueueItems { keys: played }, state, resolver);
-            let upcoming: Vec<_> = upcoming
-                .into_iter()
-                .filter_map(|k| resolver.track_for_key(&k).map(|t| (k, t)))
-                .collect();
-            let (remove, moved): (Vec<_>, Vec<_>) = upcoming.into_iter().unzip();
-            track_ids.extend(moved);
-            (track_ids, remove)
-        }
+    let (track_ids, keys) = match target {
+        ActionTarget::QueueItems { keys } => (vec![], keys.clone()),
         _ => (track_ids_of(target, state, resolver), vec![]),
     };
-    if track_ids.is_empty() {
+    if track_ids.is_empty() && keys.is_empty() {
         return vec![];
     }
-    let mut out = vec![];
-    if !remove.is_empty() {
-        out.push(Command::RemoveQueueItems { keys: remove });
-    }
-    out.push(if next {
-        Command::PlayNext {
+    vec![match placement {
+        QueuePlacement::Next => Command::PlayNext {
             server_id,
             track_ids,
-        }
-    } else {
-        Command::PlayLater {
+            keys,
+        },
+        QueuePlacement::Group => Command::AddToQueue {
             server_id,
             track_ids,
-        }
-    });
-    out
+            keys,
+        },
+        QueuePlacement::Later => Command::PlayLater {
+            server_id,
+            track_ids,
+            keys,
+        },
+    }]
 }
 
 #[cfg(test)]

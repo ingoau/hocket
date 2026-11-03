@@ -347,7 +347,7 @@ fn snapshot_of(
     };
     Snapshot {
         album_id,
-        shuffled: doc.shuffle.is_some(),
+        shuffled: doc.shuffle,
         track_count,
         from_context,
         index,
