@@ -82,6 +82,18 @@
 /* Its changes apply at once with a toast: the toasts (and their Undo) stay above it. */
 .menu.cm ~ .toasts { z-index: 101; }
 .menu.cm-sub { width: 260px; overflow: hidden; }
+/* A submenu beside the menu (data-side, where it landed) slides out from under the menu's edge and
+   grows from that edge; going back (or the menu closing) slides it in under the edge again. */
+.menu.cm-sub[data-side="right"] { transform-origin: left top; }
+.menu.cm-sub[data-side="left"] { transform-origin: right top; }
+.menu.cm-sub[data-side="right"].fade-in { animation: cm-sub-in-right var(--dur-spring) var(--spring-fast); }
+.menu.cm-sub[data-side="left"].fade-in { animation: cm-sub-in-left var(--dur-spring) var(--spring-fast); }
+.menu.cm-sub[data-side="right"].closing { animation: cm-sub-out-right var(--dur-short) var(--ease-emphasized-accel) forwards; }
+.menu.cm-sub[data-side="left"].closing { animation: cm-sub-out-left var(--dur-short) var(--ease-emphasized-accel) forwards; }
+@keyframes cm-sub-in-right { from { opacity: 0; transform: translateX(-10px) scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes cm-sub-in-left { from { opacity: 0; transform: translateX(10px) scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes cm-sub-out-right { to { opacity: 0; transform: translateX(-8px) scale(0.97); } }
+@keyframes cm-sub-out-left { to { opacity: 0; transform: translateX(8px) scale(0.97); } }
 .cm-search { flex: 0 0 auto; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px; margin-bottom: 4px; border-radius: 10px; background: var(--bg-elev); box-shadow: inset 0 0 0 1.5px var(--border-strong); color: var(--fg-muted); cursor: text; }
 /* The field is focused whenever the submenu is open: its 2px ring is drawn on its box. */
 .cm-search:focus-within { box-shadow: inset 0 0 0 2px var(--focus-ring); }

@@ -1,6 +1,15 @@
 package app.hocket.ui.components
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -24,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -331,8 +341,9 @@ fun MenuSheet(
         menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null, count = subject.count, snoozed = snoozed)
     }
     var expanded by rememberSaveable { mutableStateOf(false) }
-    var sharePage by remember { mutableStateOf(false) }
-    var snoozePage by remember { mutableStateOf(false) }
+    // The sub-page in view (Share, Snooze), or the menu itself. Back (the header's arrow, the
+    // system's back or its gesture) returns to the menu rather than closing the sheet.
+    var page by remember { mutableStateOf(MenuPage.Main) }
     val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
     var loved by remember { mutableStateOf(subject.loved) }
     var rating by remember { mutableStateOf(subject.rating) }
@@ -433,7 +444,7 @@ fun MenuSheet(
                 ) {
                     when (a.id) {
                         ActionIds.ADD_TO_PLAYLIST -> hideThen(onAddToPlaylist)
-                        ActionIds.SNOOZE -> snoozePage = true
+                        ActionIds.SNOOZE -> page = MenuPage.Snooze
                         else -> runAndClose(a)
                     }
                 }
@@ -478,7 +489,7 @@ fun MenuSheet(
             MenuEntry.Rate -> MenuRow(AnnotatedString(stringResource(R.string.action_rate)), HocketIcons.Filled.Star, shape, tag = "$tag.rate") { rateDialog = true }
             MenuEntry.Share -> MenuRow(AnnotatedString(stringResource(R.string.action_share)), HocketIcons.Filled.Share, shape, tag = "$tag.share",
                 trailing = { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-            ) { sharePage = true }
+            ) { page = MenuPage.Share }
             MenuEntry.Genius -> MenuRow(AnnotatedString(stringResource(R.string.menu_open_genius)), HocketIcons.Filled.Lyrics, shape, tag = "$tag.genius") { hideThen { onShare(ShareChoice.Genius) } }
             is MenuEntry.Extra -> {
                 val e = entry.extra
@@ -494,21 +505,37 @@ fun MenuSheet(
         dragHandle = { MenuHandle(expanded, canExpand) { expanded = !expanded } },
         modifier = Modifier.pulled(pull).testTag(tag),
     ) {
+        // Inside the sheet: its window has its own back dispatcher, and this callback, added after
+        // the sheet's own, takes back first while a sub-page shows.
+        BackHandler(enabled = page != MenuPage.Main) { page = MenuPage.Main }
         Column(Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
             MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
-            if (sharePage) {
-                SharePage(shareOptions, tag) { choice -> if (choice == null) sharePage = false else hideThen { onShare(choice) } }
-            } else if (snoozePage) {
-                SnoozePage(tag) { duration ->
-                    if (duration == null) snoozePage = false
-                    else hideThen {
-                        val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
-                        if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
-                    }
+            // A sub-page slides in from the end, the menu slides back from the start; the sheet's
+            // height follows whichever is showing.
+            AnimatedContent(
+                targetState = page,
+                transitionSpec = {
+                    val forward = targetState != MenuPage.Main
+                    val spec = tween<androidx.compose.ui.unit.IntOffset>(PAGE_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                    (slideInHorizontally(spec) { w -> if (forward) w / 4 else -w / 4 } + fadeIn(tween(PAGE_MS / 2, delayMillis = PAGE_MS / 6)))
+                        .togetherWith(slideOutHorizontally(spec) { w -> if (forward) -w / 4 else w / 4 } + fadeOut(tween(PAGE_MS / 3)))
+                        .using(SizeTransform(clip = false) { _, _ -> tween(PAGE_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing) })
+                },
+                contentAlignment = Alignment.TopCenter,
+                label = "menuPage",
+            ) { shownPage ->
+            when (shownPage) {
+            MenuPage.Share -> SharePage(shareOptions, tag) { choice -> if (choice == null) page = MenuPage.Main else hideThen { onShare(choice) } }
+            MenuPage.Snooze -> SnoozePage(tag) { duration ->
+                if (duration == null) page = MenuPage.Main
+                else hideThen {
+                    val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
+                    if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
                 }
-            } else {
+            }
+            MenuPage.Main -> Column {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
             if (layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { runAndClose(it) }
             if (layout.rating) {
@@ -553,12 +580,20 @@ fun MenuSheet(
                 }
             }
             }
+            }
+            }
         }
     }
     if (rateDialog) {
         RatingDialog(current = 0, onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rateDialog = false; hideThen(onRan) }, onDismiss = { rateDialog = false }, offerClear = true)
     }
 }
+
+/** What the sheet shows under its header: the menu, or one of its sub-pages. */
+private enum class MenuPage { Main, Share, Snooze }
+
+/** How long a sub-page takes to slide in or out. */
+private const val PAGE_MS = 300
 
 /** Past this speed (px/s) a released drag finishes the way it was going. */
 private const val FLICK_VELOCITY = 1200f
@@ -733,7 +768,7 @@ private fun snoozeEnds(until: Double?): String = if (until == null) {
     stringResource(R.string.snooze_until, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(until.toLong())))
 }
 
-/** Snooze's page: back, then each duration. Null from [onChoose] is back. */
+/** Snooze's page: its title with back, then each duration. Null from [onChoose] is back. */
 @Composable
 private fun SnoozePage(tag: String, onChoose: (SnoozeFor?) -> Unit) {
     val rows = listOf(
@@ -743,15 +778,14 @@ private fun SnoozePage(tag: String, onChoose: (SnoozeFor?) -> Unit) {
         SnoozeFor.Month to R.string.snooze_month,
         SnoozeFor.Indefinite to R.string.snooze_indefinite,
     )
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        MenuRow(AnnotatedString(stringResource(R.string.action_back)), HocketIcons.AutoMirrored.Filled.ArrowBack, connectedShape(0, rows.size + 1), tag = "$tag.snooze.back") { onChoose(null) }
+    SubPage(stringResource(R.string.action_snooze), "$tag.snooze", onBack = { onChoose(null) }) {
         rows.forEachIndexed { i, (duration, label) ->
-            MenuRow(AnnotatedString(stringResource(label)), HocketIcons.Filled.Bedtime, connectedShape(i + 1, rows.size + 1), tag = "$tag.snooze.${duration.string}") { onChoose(duration) }
+            MenuRow(AnnotatedString(stringResource(label)), HocketIcons.Filled.Bedtime, connectedShape(i, rows.size), tag = "$tag.snooze.${duration.string}") { onChoose(duration) }
         }
     }
 }
 
-/** Share's page: back, then the links and (one song) the file. Null from [onChoose] is back. */
+/** Share's page: its title with back, then the links and (one song) the file. Null from [onChoose] is back. */
 @Composable
 private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onChoose: (ShareChoice?) -> Unit) {
     val rows = listOfNotNull(
@@ -759,8 +793,7 @@ private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onCho
         ShareChoice.SongLink.takeIf { choices.songLink },
         ShareChoice.File.takeIf { choices.file },
     )
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        MenuRow(AnnotatedString(stringResource(R.string.action_back)), HocketIcons.AutoMirrored.Filled.ArrowBack, connectedShape(0, rows.size + 1), tag = "$tag.share.back") { onChoose(null) }
+    SubPage(stringResource(R.string.action_share), "$tag.share", onBack = { onChoose(null) }) {
         rows.forEachIndexed { i, choice ->
             val (label, icon, id) = when (choice) {
                 ShareChoice.Navidrome -> Triple(R.string.menu_share_navidrome, HocketIcons.Filled.Share, "navidrome")
@@ -768,8 +801,26 @@ private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onCho
                 ShareChoice.File -> Triple(R.string.menu_share_file, HocketIcons.Filled.Download, "file")
                 ShareChoice.Genius -> error("Open in Genius is a row of the menu")
             }
-            MenuRow(AnnotatedString(stringResource(label)), icon, connectedShape(i + 1, rows.size + 1), tag = "$tag.share.$id") { onChoose(choice) }
+            MenuRow(AnnotatedString(stringResource(label)), icon, connectedShape(i, rows.size), tag = "$tag.share.$id") { onChoose(choice) }
         }
+    }
+}
+
+/**
+ * A sub-page of the menu (Share, Snooze): a back arrow and the row's name as its title, then its
+ * own connected list. Tags: `[tag].back`, `[tag].title`.
+ */
+@Composable
+private fun SubPage(title: String, tag: String, onBack: () -> Unit, rows: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp).testTag("$tag.back")) {
+                Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+            }
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 8.dp).semantics { heading() }.testTag("$tag.title"))
+        }
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) { rows() }
     }
 }
 
