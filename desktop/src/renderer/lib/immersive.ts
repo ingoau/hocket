@@ -107,8 +107,8 @@ export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dar
 }
 
 /**
- * The scene to show for `coverArt`: the one before it until its own is ready (undefined only
- * before the first, or without a cover).
+ * The scene to show for `coverArt`, once ready (at once for one prepared ahead, the next track's);
+ * undefined until then, or without a cover.
  */
 export function useScene(coverArt: string | undefined, preference: ImmersiveArtwork, dark: boolean): Scene | undefined {
   const key = coverArt ? `${coverArt}|${preference}|${dark}` : undefined;
@@ -126,7 +126,9 @@ export function useScene(coverArt: string | undefined, preference: ImmersiveArtw
       alive = false;
     };
   }, [coverArt, preference, dark]);
-  return coverArt ? scene : undefined;
+  // Only this cover's own scene: the last one would show another track's cover until this one is
+  // ready (#147); a placeholder shows meanwhile.
+  return coverArt && scene?.coverArt === coverArt ? scene : undefined;
 }
 
 /**
