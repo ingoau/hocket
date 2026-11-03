@@ -269,6 +269,9 @@ class FullPlayerLayoutTest {
      * the strip's colour while the player is open, and go back when it closes.
      */
     private fun assertImmersiveArtworkUnderTheHandle(room: Boolean) {
+        // Home under the sheet without Spotlight, which sets the status bar from its cover: the
+        // collapse below should hand the icons back to the theme's.
+        core.fake.dispatch(app.hocket.core.Commands.setSetting(app.hocket.core.SettingKeys.HOME_SECTIONS, """[{"id":"spotlight","on":false}]"""))
         startExpanded()
         val first = core.client.nowPlaying.value!!.track
         val next = core.fake.library.tracks.first { it.coverArt != null && it.coverArt != first.coverArt && it.id != first.id }

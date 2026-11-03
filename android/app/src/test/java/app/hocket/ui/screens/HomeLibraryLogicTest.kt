@@ -24,7 +24,7 @@ class HomeLibraryLogicTest {
     fun catalogueMatchesTheDesktops() {
         assertEquals(
             listOf(
-                "rediscover:on:row", "filters:on:row", "favouriteArtists:on:row", "topGenre:on:grid", "newInLibrary:on:row",
+                "spotlight:on:hero", "rediscover:on:row", "filters:on:row", "favouriteArtists:on:row", "topGenre:on:grid", "newInLibrary:on:row",
                 "moreFromArtist:off:list", "onRepeat:off:row", "recentlyPlayed:off:row", "recentQueues:off:list", "stats:off:tile",
             ),
             HomeSection.entries.map { "${it.id}:${if (it.defaultOn) "on" else "off"}:${it.defaultStyle.id}" },
@@ -36,10 +36,24 @@ class HomeLibraryLogicTest {
         assertEquals(HomeSections.DEFAULT, HomeSections.parse("[]"))
         assertEquals(HomeSections.DEFAULT, HomeSections.parse("not json"))
         val parsed = HomeSections.parse("""[{"id":"stats","on":true},{"id":"fromTheFuture","on":true,"style":"wall"},{"id":"stats","on":false}]""")
-        assertEquals(SectionPref("stats", true, null), parsed[0])
-        assertEquals(SectionPref("fromTheFuture", true, "wall"), parsed[1])
+        // Spotlight (pinned) arrives first and on; every other new section arrives off.
+        assertEquals(SectionPref("spotlight", true, "hero"), parsed[0])
+        assertEquals(SectionPref("stats", true, null), parsed[1])
+        assertEquals(SectionPref("fromTheFuture", true, "wall"), parsed[2])
         assertEquals(HomeSection.entries.size + 1, parsed.size)
-        assertEquals(listOf(false), parsed.drop(2).map { it.on }.distinct())
+        assertEquals(listOf(false), parsed.drop(3).map { it.on }.distinct())
+    }
+
+    @Test
+    fun spotlightStaysFirstAndNeverMoves() {
+        // Stored anywhere (an older device, say), it's read back first; switched off, it stays off.
+        val parsed = HomeSections.parse("""[{"id":"stats","on":true},{"id":"spotlight","on":false}]""")
+        assertEquals(SectionPref("spotlight", false, null), parsed[0])
+        val prefs = listOf(SectionPref("spotlight", true, null), SectionPref("rediscover", true, null), SectionPref("filters", true, null))
+        assertEquals(prefs, HomeSections.moveShown(prefs, "spotlight", 1))
+        assertEquals(prefs, HomeSections.moveShown(prefs, "rediscover", -1))
+        assertEquals(prefs, HomeSections.move(prefs, 1, 0))
+        assertEquals(listOf("spotlight", "filters", "rediscover"), HomeSections.moveShown(prefs, "rediscover", 1).map { it.id })
     }
 
     @Test

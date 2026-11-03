@@ -43,6 +43,18 @@ import androidx.compose.material3.TopAppBarDefaults
 import app.hocket.ui.brand.HeaderLockup
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.ui.graphics.Color
+import app.hocket.ui.a11y.LocalReducedMotion
+import app.hocket.ui.player.artworkSeed
+import app.hocket.ui.theme.ArtworkColors
+import app.hocket.ui.theme.LocalDarkTheme
+import app.hocket.ui.theme.animatedScheme
+import app.hocket.ui.brand.Brand
+import app.hocket.ui.nav.PageColors
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,6 +91,7 @@ import app.hocket.core.SettingKeys
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Filter
+import app.hocket.core.api.Playlist
 import app.hocket.core.api.SavedQueue
 import app.hocket.core.api.TrackSummary
 import app.hocket.ui.LocalCoreClient
@@ -127,21 +140,57 @@ fun HomeScreen(nav: NavHostController) {
     val filters by client.filters.collectAsStateWithLifecycle()
     val saved by client.savedQueues.collectAsStateWithLifecycle()
     // A new song starting changes what "most played" and "lately" mean: re-read on track change.
-    val nowPlayingId = client.nowPlaying.collectAsStateWithLifecycle().value?.track?.id
+    val playing = client.nowPlaying.collectAsStateWithLifecycle().value?.track
+    val nowPlayingId = playing?.id
+    val resumePoints = client.albumResumes.collectAsStateWithLifecycle().value
+    // Spotlight's Resume slide: re-read when an album gains or loses its resume point.
+    val resumeAlbums = resumePoints.map { it.albumId }.toSet()
     val prefs = remember(settings[SettingKeys.HOME_SECTIONS]?.value) { HomeSections.parse(settings[SettingKeys.HOME_SECTIONS]?.value) }
     val shown = prefs.filter { it.on && it.section != null }
     val shownSet = shown.mapNotNull { it.section }.toSet()
     // Starts from the last feed, so coming back to Home (a pop from a page opened here) shows its
     // rows on the first frame — the artwork that flew out has somewhere to fly back to.
     var feed by rememberCachedState<Map<HomeSection, SectionContent>?>(listOf("home.feed", serverId)) { null }
+    val feedSections = shownSet - HomeSection.Spotlight
     // The sections read so far on a cold load (no feed yet), for a reveal that can't wait any longer.
     var partial by remember(serverId) { mutableStateOf<Map<HomeSection, SectionContent>>(emptyMap()) }
-    LaunchedEffect(serverId, libraryGen, shownSet, nowPlayingId) {
+    LaunchedEffect(serverId, libraryGen, feedSections, nowPlayingId) {
         if (libraryGen < 0) return@LaunchedEffect
         // Merged, not replaced: a reload mid-cold-load (a track change, a sync) keeps what's revealed.
-        feed = loadHomeFeed(client, serverId, shownSet) { if (feed == null) partial = partial + it }
+        feed = loadHomeFeed(client, serverId, feedSections) { if (feed == null) partial = partial + it }
     }
-    val reveal = rememberHomeReveal(serverId, ready = { feed != null })
+    // Spotlight loads on its own: on arriving at Home, when another album starts, and when the
+    // library or the albums to resume change; not per track. What's playing as it loads is left
+    // out, except from the slide in view: Play on a slide keeps it under the user's thumb.
+    val spotlightOn = HomeSection.Spotlight in shownSet
+    var spotlight by rememberCachedState<List<SpotlightSlide>?>(listOf("home.spotlight", serverId)) { null }
+    val shownSlide = remember { mutableStateOf<SpotlightSlide?>(null) }
+    LaunchedEffect(serverId, libraryGen, spotlightOn, resumeAlbums, playing?.albumId) {
+        if (libraryGen < 0 || !spotlightOn) return@LaunchedEffect
+        val track = client.nowPlaying.value?.track
+        val inView = shownSlide.value
+        val fromInView = track != null && inView != null && (inView.album?.id == track.albumId || (inView.album == null && inView.artist?.id == track.artistId))
+        spotlight = loadSpotlight(client, serverId, client.albumResumes.value, track.takeUnless { fromInView }, favouriteStats(client), spotlightSeed())
+    }
+    // Spotlight comes first whatever the stored order (it's pinned), drawn without a header. A
+    // Resume slide shows the album's latest point (positions save without reloading).
+    val latestResume = resumePoints.associateBy { it.albumId }
+    val slides = spotlight.orEmpty().takeIf { spotlightOn }.orEmpty().map { s -> s.resume?.let { latestResume[it.albumId] }?.let { s.copy(resume = it) } ?: s }
+    val pager = rememberPagerState { slides.size }
+    shownSlide.value = slides.getOrNull(pager.currentPage)
+    val dark = LocalDarkTheme.current
+    val slideSeeds = slides.map { key(it.key) { artworkSeed(it.coverArt).value } }
+    // The slides, and the rest of Home, take the colours of the slide in view (as the app does from
+    // what's playing), unless colour from artwork is off.
+    val dynamicColour = settings[SettingKeys.DISPLAY_DYNAMIC_COLOUR]?.value?.trim() != "false"
+    val appScheme = MaterialTheme.colorScheme
+    val slideSchemes = remember(slides, slideSeeds, dark, dynamicColour, appScheme) {
+        slides.mapIndexed { i, s -> if (dynamicColour) ArtworkColors.scheme(slideSeeds[i] ?: ArtworkColors.seedFor(s.coverArt), dark) else appScheme }
+    }
+    val pageScheme = slideSchemes.getOrNull(pager.currentPage) ?: appScheme
+    // A cold load reveals Spotlight with the rest, so the carousel and the sections come in together.
+    val reveal = rememberHomeReveal(serverId, ready = { feed != null && (!spotlightOn || spotlight != null) })
+    val heroFirst = slides.isNotEmpty() && reveal.phase == RevealPhase.Shown
     var customising by remember { mutableStateOf(false) }
     var sectionMenu by remember { mutableStateOf<SectionPref?>(null) }
     var jobs by remember { mutableStateOf(false) }
@@ -150,6 +199,14 @@ fun HomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val songMenu = rememberSongMenu()
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    // Over the cover (Spotlight first, the page not scrolled under the bar) the bar's lockup, icons
+    // and the status bar take the ink that reads on the top of the slide in view.
+    val overArt = heroFirst && scroll.state.overlappedFraction < 0.01f
+    // Until the cover's been read, the slide shows the page's own surface: the theme's ink.
+    val topLight = slides.getOrNull(pager.currentPage)?.coverArt?.let { c -> key(c) { artworkTopLight(c).value } } ?: !dark
+    val barInk = if (topLight) Brand.inkOnLight else Brand.inkOnDark
+    // Only with Spotlight showing: otherwise Home leaves the chrome and status bar to the app theme, as before.
+    if (heroFirst) PageColors(pageScheme, statusLight = if (overArt) topLight else !dark)
     val hiddenLabel = stringResource(R.string.home_section_hidden, "%s")
     val undoLabel = stringResource(R.string.action_undo)
     fun hide(pref: SectionPref, title: String) {
@@ -161,11 +218,19 @@ fun HomeScreen(nav: NavHostController) {
             }
         }
     }
+    MaterialExpressiveTheme(colorScheme = animatedScheme(pageScheme, LocalReducedMotion.current), motionScheme = MaterialTheme.motionScheme, typography = MaterialTheme.typography) {
+    CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("home.screen"),
         // The app's lockup as the title, at the Library header's size; the server is in the account sheet (#29).
+        // Clear over Spotlight's artwork until the page scrolls under it.
         topBar = {
-            MediumFlexibleTopAppBar(title = { HeaderLockup() }, actions = {
+            val barColors = when {
+                overArt -> TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer, actionIconContentColor = barInk, navigationIconContentColor = barInk, titleContentColor = barInk)
+                heroFirst -> TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer)
+                else -> TopAppBarDefaults.topAppBarColors()
+            }
+            MediumFlexibleTopAppBar(title = { if (overArt) HeaderLockup(ink = barInk) else HeaderLockup() }, colors = barColors, actions = {
                 IconButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise")) { Icon(HocketIcons.Filled.Tune, stringResource(R.string.home_customise)) }
                 JobsIndicator(onClick = { jobs = true })
                 AccountButton()
@@ -178,7 +243,7 @@ fun HomeScreen(nav: NavHostController) {
         val listState = rememberLazyListState()
         ScrollToTopOnReselect(listState)
         ShimmerHost {
-            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = if (heroFirst) 0.dp else padding.calculateTopPadding(), bottom = BottomContentInset)) {
                 // Nothing yet: blank at first (most loads land before a skeleton would be worth showing).
                 if (reveal.phase == RevealPhase.Waiting) return@LazyColumn
                 if (loaded == null) {
@@ -190,8 +255,22 @@ fun HomeScreen(nav: NavHostController) {
                 }
                 var any = false
                 var order = 0
+                if (heroFirst) {
+                    any = true
+                    val step = order++
+                    item(key = "spotlight", contentType = "spotlight") {
+                        SpotlightCarousel(
+                            slides, pager, slideSchemes,
+                            onOpen = { s -> openSlide(nav, s) },
+                            onPlay = { s, shuffle -> playSlide(client, serverId, s, shuffle) },
+                            onMenu = { s -> s.album?.let { sheets.album = it } ?: s.artist?.let { sheets.artist = it } ?: s.playlist?.let { sheets.playlist = it } },
+                            modifier = Modifier.homeEntrance(reveal, step),
+                        )
+                    }
+                }
                 shown.forEach { pref ->
                     val section = pref.section ?: return@forEach
+                    if (section == HomeSection.Spotlight) return@forEach
                     val content = loaded[section]
                     if (content == null) {
                         // Revealed at the cap before this one was read: hold its place until it is.
@@ -250,7 +329,33 @@ fun HomeScreen(nav: NavHostController) {
     sheets.artist?.let { a -> ActionSheet(Commands.artists(listOf(a.id)), a.name, null, onDismiss = { sheets.artist = null }) }
     sheets.queue?.let { q -> ActionSheet(Commands.savedQueue(q.id), q.label, null, onDismiss = { sheets.queue = null }) }
     sheets.filter?.let { f -> FilterMenuSheet(f, nav, serverId, onDismiss = { sheets.filter = null }) }
+    sheets.playlist?.let { p -> ActionSheet(Commands.playlists(listOf(p.id)), p.name, null, onDismiss = { sheets.playlist = null }) }
     if (jobs) JobsSheet { jobs = false }
+    }
+    }
+}
+
+private fun openSlide(nav: NavHostController, s: SpotlightSlide) {
+    when {
+        s.album != null -> nav.navigate(Route.Album(s.album.id))
+        s.artist != null -> nav.navigate(Route.Artist(s.artist.id))
+        s.playlist != null -> nav.navigate(Route.Playlist(s.playlist.id))
+    }
+}
+
+/** Play (or shuffle) a slide's album, artist or playlist; Resume carries on from the saved point. */
+private fun playSlide(client: app.hocket.core.client.CoreClient, serverId: String, s: SpotlightSlide, shuffle: Boolean) {
+    if (s.resume != null && !shuffle) {
+        client.dispatch(Commands.resumeAlbum(s.resume.albumId))
+        return
+    }
+    val context = when {
+        s.album != null -> Commands.albumContext(serverId, s.album.id, s.album.name)
+        s.artist != null -> Commands.artistContext(serverId, s.artist.id, s.artist.name)
+        s.playlist != null -> Commands.playlistContext(serverId, s.playlist.id, s.playlist.name)
+        else -> return
+    }
+    client.dispatch(Commands.playContext(context, shuffle = shuffle))
 }
 
 /** The item menus Home can have open (one at a time). */
@@ -259,6 +364,7 @@ class HomeSheets {
     var artist by mutableStateOf<Artist?>(null)
     var queue by mutableStateOf<SavedQueue?>(null)
     var filter by mutableStateOf<Filter?>(null)
+    var playlist by mutableStateOf<Playlist?>(null)
 }
 
 /** A section's title: its topic where it has one ("More from Theo Lund", "More Indie rock"). */
@@ -337,6 +443,8 @@ private fun SectionBody(
         )
     }
     when (style) {
+        // Spotlight's carousel is drawn by Home itself, ahead of every section.
+        SectionStyle.Hero -> Unit
         SectionStyle.Tile -> (content as? SectionContent.Listening)?.let { ListeningTile(it) { nav.navigate(Route.Stats) } }
         SectionStyle.Row -> LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(items, key = { it.key }) { HomeCell(it, actions, Modifier.width(if (it is HomeItem.ArtistItem) 124.dp else CellWidth)) }

@@ -142,6 +142,9 @@ class CoreClient(
     private val _albumResumeRevision = MutableStateFlow(0)
     /** Bumped when album resume points change, so an open album page refetches. */
     val albumResumeRevision: StateFlow<Int> = _albumResumeRevision.asStateFlow()
+    private val _albumResumes = MutableStateFlow<List<AlbumResumePoint>>(emptyList())
+    /** Every album with a resume point (empty while resume is off), as the core last announced. */
+    val albumResumes: StateFlow<List<AlbumResumePoint>> = _albumResumes.asStateFlow()
     private val _pins = MutableStateFlow<List<Pin>>(emptyList())
     val pins: StateFlow<List<Pin>> = _pins.asStateFlow()
     private val _storage = MutableStateFlow(StorageSummary(0.0, 0.0, 0.0))
@@ -563,7 +566,7 @@ class CoreClient(
             is Event.SavedQueuesChanged -> _savedQueues.value = event.data.queues
             is Event.StashChanged -> { stashEvents++; _stash.value = event.data.items }
             is Event.SnoozesChanged -> { snoozeEvents++; _snoozes.value = event.data.items }
-            is Event.AlbumResumesChanged -> _albumResumeRevision.value++
+            is Event.AlbumResumesChanged -> { _albumResumes.value = event.data.points; _albumResumeRevision.value++ }
             is Event.UndoChanged -> _undo.value = event.data.state
             is Event.Toast -> _toasts.tryEmit(event.data.toast)
             is Event.PlayerNotice -> _playerNotice.value = event.data.takeIf { it.message != null || it.code != null }

@@ -796,3 +796,72 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .setup-cleartext .icon { flex: 0 0 auto; color: var(--warn, #b26a00); margin-top: 1px; }
 /* A badge on the selected filter keeps its contrast on the tonal fill. */
 .filter-row.selected .badge { background: var(--bg-elev); color: var(--fg); }
+
+/* ---- Home: Spotlight carousel (pinned first) --------------------------------
+   Each slide: its cover blurred across the slide and sharp at the right, under a wash of the
+   theme's own background (tinted by the cover), so a pale cover never lights a slide in the dark
+   theme. Text and buttons sit on the wash at the left. */
+/* The tokens global.css derives from the accent, derived again here: a custom property resolves
+   where it's declared, so without these Home's tonal surfaces and selections keep the old accent. */
+.page-home.spot-tinted {
+  --accent-soft: color-mix(in srgb, var(--accent-tint) 18%, transparent);
+  --accent-ring: var(--focus-ring);
+  --surface-tonal: color-mix(in srgb, var(--accent-tint) 5%, var(--bg-elev));
+  --surface-tonal-sunken: color-mix(in srgb, var(--accent-tint) 5%, var(--bg-sunken));
+  --selection: color-mix(in srgb, var(--accent-tint) 22%, transparent);
+  --state-selected: color-mix(in srgb, var(--accent-tint) 22%, var(--bg-elev));
+}
+:root[data-theme="dark"] .page-home.spot-tinted {
+  --selection: color-mix(in srgb, var(--accent-tint) 30%, transparent);
+  --state-selected: color-mix(in srgb, var(--accent-tint) 30%, var(--bg-elev));
+}
+.page-home.spot-tinted .home-main { background: linear-gradient(180deg, color-mix(in srgb, var(--home-tint) 22%, var(--bg)) 0, var(--bg) 640px); }
+.home-spotlight { position: relative; margin: 0 0 28px; border-radius: 32px; overflow: hidden; isolation: isolate; }
+.spot-track { display: flex; transition: transform 520ms var(--ease-emphasized, cubic-bezier(0.2, 0, 0, 1)); }
+@media (prefers-reduced-motion: reduce) { .spot-track { transition: none; } }
+.spot-slide {
+  --spot-surface: color-mix(in srgb, var(--spot-tint, var(--accent-tint)) 26%, var(--bg));
+  position: relative; flex: 0 0 100%; min-width: 0; height: clamp(300px, 38vh, 400px); overflow: hidden;
+  background: var(--spot-surface); display: flex; align-items: flex-end;
+}
+.spot-bg { position: absolute; inset: -40px; width: calc(100% + 80px); height: calc(100% + 80px); object-fit: cover; filter: blur(48px) saturate(1.2); opacity: 0.55; }
+.spot-bg-empty { background: var(--spot-tint, var(--accent-tint)); }
+.spot-art {
+  position: absolute; top: 0; right: 0; height: 100%; aspect-ratio: 1; object-fit: cover; max-width: 62%;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 45%); mask-image: linear-gradient(90deg, transparent 0, #000 45%);
+}
+.spot-scrim {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(90deg, var(--spot-surface) 0, color-mix(in srgb, var(--spot-surface) 88%, transparent) 38%, color-mix(in srgb, var(--spot-surface) 30%, transparent) 64%, transparent 82%),
+    linear-gradient(0deg, color-mix(in srgb, var(--spot-surface) 70%, transparent) 0, transparent 45%);
+}
+.spot-content { position: relative; padding: 32px 40px 32px; max-width: min(620px, 62%); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.spot-eyebrow {
+  font-size: 12px; font-weight: 650; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 11%, transparent); padding: 6px 14px; border-radius: 999px; margin-bottom: 6px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.spot-title { margin: 0; max-width: 100%; }
+.spot-open {
+  font-family: "Unbounded", var(--font-ui); font-weight: 600; font-size: clamp(30px, 3.4vw, 46px); line-height: 1.08; letter-spacing: -0.03em;
+  color: var(--fg); text-align: left; padding: 0; background: none; border: 0; cursor: pointer; max-width: 100%;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.spot-open:hover { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.spot-sub { margin: 0; color: var(--fg-muted); font-size: var(--fs-md, 15px); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spot-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+.btn.spot-play { height: 52px; padding: 0 26px 0 20px; gap: 8px; border-radius: 999px; font-size: 16px; font-weight: 650; background: var(--spot-accent, var(--accent)); color: var(--spot-accent-fg, var(--accent-fg)); border-color: transparent; box-shadow: var(--shadow-1); }
+.btn.spot-play:hover { filter: brightness(1.08); box-shadow: var(--shadow-2); }
+.btn.icon.spot-shuffle { width: 52px; height: 52px; border-radius: 18px; background: color-mix(in srgb, var(--spot-accent, var(--accent)) 24%, var(--spot-surface)); color: var(--fg); }
+.btn.icon.spot-more { width: 44px; height: 44px; color: var(--fg); }
+/* On a pill of the page's own background, so they read over any cover, pale ones included. */
+.spot-nav { position: absolute; right: 20px; top: 20px; display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px; background: color-mix(in srgb, var(--bg) 82%, transparent); box-shadow: var(--shadow-1); }
+.btn.icon.spot-arrow { width: 34px; height: 34px; color: var(--fg); }
+.spot-dots { display: flex; gap: 6px; padding: 0 6px; }
+.spot-dot { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 4px; background: color-mix(in srgb, var(--fg) 45%, transparent); cursor: pointer; transition: width var(--dur-short, 160ms) var(--ease-emphasized, ease), background-color var(--dur-short, 160ms); }
+.spot-dot.on { width: 22px; background: var(--accent-text); }
+.customise-row.pinned .grip { visibility: hidden; }
+/* In the dark theme a bright cover is kept a little down, so the slide reads as part of a dark page. */
+:root[data-theme="dark"] .spot-bg { opacity: 0.4; }
+:root[data-theme="dark"] .spot-art { filter: brightness(0.88); }

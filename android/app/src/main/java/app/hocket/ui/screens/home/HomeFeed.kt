@@ -43,7 +43,7 @@ private val REDISCOVER: FilterNode = FilterNode.All(listOf(
 ))
 
 /** Listening stats for favourites: the last month's, or the year's when the month has no plays. */
-private suspend fun favouriteStats(client: CoreClient): ListeningStats? {
+internal suspend fun favouriteStats(client: CoreClient): ListeningStats? {
     val month = (client.query(Queries.stats(30)) as? QueryResult.Stats)?.data
     if (month != null && month.totalPlays != 0u) return month
     return (client.query(Queries.stats(365)) as? QueryResult.Stats)?.data ?: month
@@ -69,6 +69,8 @@ suspend fun loadHomeFeed(
     val out = LinkedHashMap<HomeSection, SectionContent>()
     for (section in shown) {
         val content: SectionContent? = when (section) {
+            // Loaded on its own (HomeScreen), not with the feed.
+            HomeSection.Spotlight -> null
             HomeSection.Rediscover -> (client.query(Queries.tracks(serverId, Page(0u, SECTION_ITEMS.toUInt()), SortOrder.Rating, descending = true, filter = REDISCOVER)) as? QueryResult.Tracks)
                 ?.data?.items?.map { it.toSummary() }?.let { SectionContent.Tracks(it) }
             HomeSection.Filters, HomeSection.RecentQueues -> SectionContent.FromFlow
