@@ -26,7 +26,12 @@ pub struct SongFacts {
 
 /// The Song.link page for a song: by ISRC, else by search. None when nothing matches.
 pub async fn song_url(http: &dyn LyricsHttp, song: &SongFacts) -> Option<String> {
-    for isrc in song.isrc.iter().map(|s| s.trim()).filter(|s| valid_isrc(s)) {
+    let isrcs = song
+        .isrc
+        .iter()
+        .map(|s| s.replace(['-', ' '], ""))
+        .filter(|s| valid_isrc(s));
+    for isrc in isrcs {
         let url = format!("{DEEZER}/track/isrc:{isrc}");
         match http.get(&url).await {
             Ok(body) => {
@@ -85,7 +90,8 @@ fn search_url(path: &str, q: &str) -> String {
     url.into()
 }
 
-/// Twelve letters and digits: anything else is not worth a request (and must not reach the path).
+/// Twelve letters and digits (tags may write `GB-AYE-92-00070`; the dashes go first). Anything
+/// else is not worth a request, and must not reach the path.
 fn valid_isrc(s: &str) -> bool {
     s.len() == 12 && s.bytes().all(|b| b.is_ascii_alphanumeric())
 }
@@ -131,6 +137,10 @@ pub fn pick_track(body: &str, artist: &str, title: &str, duration_ms: Option<u64
     let list: DeezerList = serde_json::from_str(body).ok()?;
     let want = fold(title);
     let want_base = fold(&base_title(title));
+    // A title of symbols only ("?", "♥") folds to nothing and would equal any other.
+    if want.is_empty() {
+        return None;
+    }
     let secs = duration_ms.map(|ms| ms / 1000);
     list.data
         .iter()
@@ -167,6 +177,9 @@ pub fn pick_album(body: &str, artist: &str, name: &str) -> Option<u64> {
     let list: DeezerList = serde_json::from_str(body).ok()?;
     let want = fold(name);
     let want_base = fold(&base_title(name));
+    if want.is_empty() {
+        return None;
+    }
     list.data
         .iter()
         .filter(|a| a.id > 0 && artist_matches(artist, a.artist.as_ref()))
@@ -184,13 +197,19 @@ pub fn pick_album(body: &str, artist: &str, name: &str) -> Option<u64> {
         .map(|(_, id)| id)
 }
 
-/// Deezer names one main artist; the server may name several ("A feat. B", "A, B").
+/// Deezer names one main artist; the server may name several ("A feat. B", "A, B"). So Deezer's
+/// words must open ours, word for word: "Air" is not "Airbourne", nor "Queen" "Queens of…".
 fn artist_matches(ours: &str, theirs: Option<&DeezerArtist>) -> bool {
-    let Some(theirs) = theirs.map(|a| fold(&a.name)).filter(|n| !n.is_empty()) else {
+    let Some(theirs) = theirs.map(|a| a.name.as_str()) else {
         return false;
     };
-    let ours = fold(ours);
-    ours == theirs || ours.starts_with(&theirs) || theirs.starts_with(&ours)
+    let (ours_words, theirs_words) = (words(ours), words(theirs));
+    if ours_words.is_empty() || theirs_words.is_empty() {
+        // "!!!" has no words: only the same name will do.
+        let raw = |s: &str| s.trim().to_lowercase();
+        return !raw(ours).is_empty() && raw(ours) == raw(theirs);
+    }
+    ours_words.starts_with(&theirs_words)
 }
 
 /// The title without a bracketed tail: "Creep (Remastered 2009)" → "Creep".
@@ -203,6 +222,20 @@ fn base_title(s: &str) -> String {
     } else {
         base.to_string()
     }
+}
+
+/// Lowercase words of letters and digits, accents dropped: "Beyoncé feat. X" → ["beyonce", "feat", "x"].
+fn words(s: &str) -> Vec<String> {
+    let folded: String = s
+        .to_lowercase()
+        .nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .collect();
+    folded
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Lowercase letters and digits only, accents dropped: "Beyoncé" → "beyonce".
@@ -291,6 +324,33 @@ mod tests {
     }
 
     #[test]
+    fn artists_match_word_for_word() {
+        let deezer = |name: &str| DeezerArtist { name: name.into() };
+        assert!(artist_matches(
+            "Beyoncé feat. Jay-Z",
+            Some(&deezer("Beyonce"))
+        ));
+        assert!(artist_matches("AC/DC", Some(&deezer("AC/DC"))));
+        assert!(!artist_matches("Airbourne", Some(&deezer("Air"))));
+        assert!(!artist_matches(
+            "Queen",
+            Some(&deezer("Queens of the Stone Age"))
+        ));
+        assert!(!artist_matches("Muse", Some(&deezer("Museum"))));
+        assert!(artist_matches("!!!", Some(&deezer("!!!"))));
+        assert!(!artist_matches("!!!", Some(&deezer("Beyoncé"))));
+        assert!(!artist_matches("Beyoncé", Some(&deezer("!!!"))));
+        assert!(!artist_matches("Beyoncé", None));
+    }
+
+    #[test]
+    fn a_title_of_symbols_matches_nothing() {
+        let body = r#"{"data":[{"id":1,"title":"♥","duration":200,"artist":{"name":"Beyoncé"}}]}"#;
+        assert_eq!(pick_track(body, "Beyoncé", "?", None), None);
+        assert_eq!(pick_album(body, "Beyoncé", "?"), None);
+    }
+
+    #[test]
     fn nothing_from_another_artist_or_another_title() {
         assert_eq!(pick_track(SEARCH, "Radiohead", "Halo", None), None);
         assert_eq!(pick_track(SEARCH, "Beyoncé", "Crazy in Love", None), None);
@@ -334,7 +394,7 @@ mod tests {
             title: "Creep".into(),
             artist: Some("Radiohead".into()),
             duration_ms: Some(238_000),
-            isrc: vec!["GBAYE9200070".into()],
+            isrc: vec!["GB-AYE-92-00070".into()],
         };
         assert_eq!(
             song_url(&http, &song).await.as_deref(),
@@ -392,6 +452,7 @@ mod tests {
             let _ = pick_track(&body, &artist, &title, Some(1));
             let _ = pick_album(&body, &artist, &title);
             let _ = base_title(&title);
+            let _ = words(&artist);
         }
     }
 }
