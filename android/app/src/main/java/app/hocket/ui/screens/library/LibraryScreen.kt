@@ -47,6 +47,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import androidx.annotation.StringRes
@@ -483,13 +484,21 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
             if (!twoPane) { push(target); return }
             // No page is pushed, so the flight the card prepared is spent here, not on the next push.
             sharedArtwork?.prepareAll(emptyList())
+            // Songs picked on the page in the pane belong to that page: another pick drops them, as
+            // leaving the page does on a phone.
+            if (target != paneTarget && client.selection.value.active && client.selectionKind.value == SelectionKind.Tracks) client.clearSelection()
             paneTarget = target
         }
         // Narrowed (a rotation, the side panel opening) with something in the pane: carry on with it
         // as its own page rather than drop it. Back stays the list's: the pane isn't a page of its own.
-        LaunchedEffect(twoPane) {
-            val target = paneTarget
-            if (!twoPane && target != null) { paneTarget = null; push(target) }
+        // (Only while this is the page showing: composed underneath, as the page under a back
+        // gesture is, it waits.)
+        val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(twoPane, lifecycle) {
+            lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+                val target = paneTarget
+                if (!twoPane && target != null) { paneTarget = null; push(target) }
+            }
         }
         Row(Modifier.fillMaxSize()) {
             Scaffold(

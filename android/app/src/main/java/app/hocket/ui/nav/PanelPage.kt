@@ -66,7 +66,8 @@ internal fun PanelPageHost(page: PlayerMode?, onClose: () -> Unit) {
         // The lyrics bring their own backdrop (the artwork's colours, dark): the whole main screen, the
         // heading over it in light text, the lines in a centred column under the heading.
         if (shown == PlayerMode.Lyrics) {
-            Box(Modifier.fillMaxSize().testTag("panelPage")) {
+            // (It takes every touch: nothing reaches the page underneath.)
+            Box(Modifier.fillMaxSize().blockTouchesBehind().testTag("panelPage")) {
                 LyricsPage(
                     visible = page == PlayerMode.Lyrics,
                     modifier = Modifier.fillMaxSize().testTag("panelPage.lyrics"),

@@ -619,7 +619,15 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // Content runs to the bottom of the screen: the floating navigation bar and the
                 // mini player float over it, over the scrim below ([BottomContentInset]).
                 // Beside the open side panel the page narrows to what the panel leaves.
-                val panelOpen by remember(sheet, shellLayout.panel) { derivedStateOf { shellLayout.panel && sheet.draggable.targetValue == app.hocket.ui.player.SheetValue.Expanded && !sheet.fullScreen } }
+                // Open, or opening (not closing): read from where it rests and where it is animating,
+                // never from a drag's nearest anchor, so the page does not reflow under a drag.
+                val panelOpen by remember(sheet, shellLayout.panel) {
+                    derivedStateOf {
+                        val d = sheet.draggable
+                        val expanded = app.hocket.ui.player.SheetValue.Expanded
+                        shellLayout.panel && !sheet.fullScreen && if (d.isAnimationRunning) d.targetValue == expanded else d.settledValue == expanded
+                    }
+                }
                 val panelRoom by androidx.compose.animation.core.animateDpAsState(
                     if (panelOpen) PanelWidth + app.hocket.ui.player.HeroGeometry.MINI_MARGIN * 2 else 0.dp,
                     if (LocalReducedMotion.current) androidx.compose.animation.core.snap() else androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 400f),
@@ -634,7 +642,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         )
                     }
                     CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
-                        AppNavHost(nav, transitions, Modifier.fillMaxSize())
+                        // Under the panel's lyrics or queue, the page leaves the accessibility tree.
+                        AppNavHost(nav, transitions, Modifier.fillMaxSize().then(if (panelOpen && sheet.panelPage != null) Modifier.clearAndSetSemantics { } else Modifier))
                     }
                     // The panel's Lyrics and Queue take over the main screen beside it.
                     PanelPageHost(page = if (panelOpen) sheet.panelPage else null, onClose = { sheet.panelPage = null })
@@ -643,11 +652,17 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // Links inside the full player (album/artist, the "More" sheet's go-to actions, rows'
             // accessibility actions) collapse it as they navigate: the page opens in view, not
             // behind the player.
+            // (The side panel is part of the page: it stays open, the page it opens showing beside it.)
+            val asPanel by rememberUpdatedState(shellLayout.panel)
             val navigator = remember(nav, sheet, sharedArtwork) {
+                val leavePlayer = {
+                    sheet.panelPage = null
+                    if (!asPanel || sheet.fullScreen) scope.launch { sheet.collapse() }
+                }
                 app.hocket.ui.DetailNavigator(
-                    openAlbum = { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); scope.launch { sheet.collapse() }; nav.navigate(Route.Album(id)) },
-                    openArtist = { id -> sharedArtwork.prepareDestination(ArtworkShare.artist(id)); scope.launch { sheet.collapse() }; nav.navigate(Route.Artist(id)) },
-                    openPlaylist = { id -> sharedArtwork.prepareDestination(ArtworkShare.playlist(id)); scope.launch { sheet.collapse() }; nav.navigate(Route.Playlist(id)) },
+                    openAlbum = { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); leavePlayer(); nav.navigate(Route.Album(id)) },
+                    openArtist = { id -> sharedArtwork.prepareDestination(ArtworkShare.artist(id)); leavePlayer(); nav.navigate(Route.Artist(id)) },
+                    openPlaylist = { id -> sharedArtwork.prepareDestination(ArtworkShare.playlist(id)); leavePlayer(); nav.navigate(Route.Playlist(id)) },
                 )
             }
             // The bottom chrome's whole strip (the bar, the gap above it and the margins beside the
@@ -740,6 +755,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
                 }
             }
+            val sheetRising by remember(sheet) { derivedStateOf { sheet.progress > 1f / 3f } }
             if (stashAlone) {
                 // Above the mini player (or the bar when nothing plays) at the end edge, leaving with
                 // the bar as the full player rises.
@@ -751,7 +767,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 val edgeX = if (LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 0f else 1f
                 androidx.compose.animation.AnimatedVisibility(
                     // Not under the full player either: faded out there, it would still take taps.
-                    visible = stash.isNotEmpty() && !covered,
+                    // (Nor over the side panel: it does not cover the screen, but it does cover the chip's corner.)
+                    visible = stash.isNotEmpty() && !covered && !sheetRising,
                     enter = if (reducedMotion) androidx.compose.animation.fadeIn() else androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(edgeX, 1f)) +
                         androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 380f)) { it / 2 } + androidx.compose.animation.fadeIn(),
                     exit = if (reducedMotion) androidx.compose.animation.fadeOut() else androidx.compose.animation.scaleOut(androidx.compose.animation.core.spring(stiffness = 600f), targetScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(edgeX, 1f)) + androidx.compose.animation.fadeOut(),

@@ -496,13 +496,24 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val panelBottom = collapsedOffset + miniHeightPx
         val coverNow: () -> Float = { if (panelMode) state.cover.value else 1f }
         val reducedCover = LocalReducedMotion.current
+        // (The first run snaps: a player restored open is already where it belongs.)
+        var coverSettled by remember { mutableStateOf(false) }
         LaunchedEffect(panelMode, state.fullScreen, reducedCover) {
             val target = if (!panelMode || state.fullScreen) 1f else 0f
-            if (reducedCover || !state.isExpanded) state.cover.snapTo(target) else state.cover.animateTo(target, Motion.sheet)
+            if (reducedCover || !state.isExpanded || !coverSettled) state.cover.snapTo(target) else state.cover.animateTo(target, Motion.sheet)
+            coverSettled = true
         }
-        // Closing the player leaves full screen and hands the main screen back to the page.
+        // Turning into the panel layout with the player open (a rotation to landscape), lyrics or
+        // the queue it showed move to the main screen beside the panel.
+        LaunchedEffect(panelMode) {
+            if (panelMode && state.isExpanded && !state.fullScreen && state.panelPage == null) {
+                state.panelPage = state.mode.takeIf { it == PlayerMode.Lyrics || it == PlayerMode.Queue }
+            }
+        }
+        // Closing the player leaves full screen and hands the main screen back to the page (once it
+        // has closed: a drag passing half way, then back up, keeps both).
         LaunchedEffect(state) {
-            snapshotFlow { state.draggable.targetValue }.collect { if (it == SheetValue.Collapsed) { state.fullScreen = false; state.panelPage = null } }
+            snapshotFlow { state.draggable.settledValue }.collect { if (it == SheetValue.Collapsed) { state.fullScreen = false; state.panelPage = null } }
         }
         // What the player shows: always the artwork as the panel (lyrics and the queue go to the main screen).
         val shownMode: () -> PlayerMode = { if (panelMode && !state.fullScreen) PlayerMode.Artwork else state.mode }
@@ -725,6 +736,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val frameTop: () -> Float = { sheetOffset() + state.progress * (1f - coverNow()) * panelTop }
         Box(
             Modifier
+                // From the left edge whatever the layout direction (the offset is absolute too).
+                .align(androidx.compose.ui.AbsoluteAlignment.TopLeft)
                 .absoluteOffset { IntOffset(lerpF(panelLeft, 0f, coverNow()).roundToInt(), frameTop().roundToInt()) }
                 .layout { measurable, _ ->
                     val f = coverNow()
@@ -868,7 +881,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // player is what accessibility sees).
                 if (!fullPlayerAccessible) {
                     Box(Modifier.fillMaxWidth().height(miniHeight).graphicsLayer { alpha = 1f - (state.progress * 4f).coerceAtMost(1f) }) {
-                        val (miniStart, miniEnd) = cardInsets(lerpF(panelWidth, widthPx, coverNow()), edgeMargin, maxCard, endCardWidth, panelMode)
+                        // (As the panel the insets are none whatever the width: nothing to follow per frame.)
+                        val (miniStart, miniEnd) = cardInsets(widthPx, edgeMargin, maxCard, endCardWidth, panelMode)
                         MiniPlayerBar(
                             onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, liveNeighbours = liveNeighbours,
                             start = with(density) { miniStart.toDp() }, end = with(density) { miniEnd.toDp() },

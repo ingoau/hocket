@@ -70,6 +70,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.ui.LocalCoreClient
@@ -126,9 +127,13 @@ fun SettingsScreen(nav: NavHostController) {
         val shown = SettingsCategory.entries.firstOrNull { it.id == picked } ?: SettingsCategory.Account
         fun open(category: SettingsCategory) { if (twoPane) picked = category.id else nav.navigate(category.route) }
         // Narrowed with a category picked: carry on in it as its own screen.
-        LaunchedEffect(twoPane) {
-            val category = SettingsCategory.entries.firstOrNull { it.id == picked }
-            if (!twoPane && category != null) { picked = null; nav.navigate(category.route) }
+        // (Only while this is the page showing, as in the library's list.)
+        val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(twoPane, lifecycle) {
+            lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+                val category = SettingsCategory.entries.firstOrNull { it.id == picked }
+                if (!twoPane && category != null) { picked = null; nav.navigate(category.route) }
+            }
         }
         Row(Modifier.fillMaxSize()) {
             SettingsList(
@@ -176,7 +181,7 @@ private fun SettingsList(nav: NavHostController, selected: SettingsCategory?, on
                         Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
                             GroupLabel(stringResource(titleRes), color = MaterialTheme.colorScheme.primary)
                             group.forEachIndexed { i, category ->
-                                CategoryRow(category, i, group.size, selected = category == selected, onClick = { onOpen(category) })
+                                CategoryRow(category, i, group.size, selected = selected?.let { category == it }, onClick = { onOpen(category) })
                             }
                         }
                     }
@@ -272,19 +277,19 @@ private fun AccountTile(label: String, icon: ImageVector, shape: Shape, onClick:
 }
 
 @Composable
-private fun CategoryRow(category: SettingsCategory, index: Int, count: Int, selected: Boolean, onClick: () -> Unit) {
+private fun CategoryRow(category: SettingsCategory, index: Int, count: Int, selected: Boolean?, onClick: () -> Unit) {
     SegmentedListItem(
         onClick = onClick,
         shapes = ListItemDefaults.segmentedShapes(index, count),
         // The category the pane beside the list is showing.
-        colors = if (selected) segmentedListColors(MaterialTheme.colorScheme.secondaryContainer) else segmentedListColors(),
+        colors = if (selected == true) segmentedListColors(MaterialTheme.colorScheme.secondaryContainer) else segmentedListColors(),
         leadingContent = {
             Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
                 Icon(category.icon(), null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
             }
         },
         trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
-        modifier = Modifier.testTag("settings.category.${category.id}").semantics { this.selected = selected },
+        modifier = Modifier.testTag("settings.category.${category.id}").then(if (selected != null) Modifier.semantics { this.selected = selected } else Modifier),
     ) { Text(category.title()) }
 }
 
