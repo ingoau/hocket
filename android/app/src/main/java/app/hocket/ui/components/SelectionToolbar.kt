@@ -61,10 +61,12 @@ import kotlinx.coroutines.launch
  * editable playlist) removes the selected entries from it ("Remove 3 from Late night").
  */
 @Composable
-fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = null, context: String? = null, onRemoveFromContext: (() -> Unit)? = null) {
+fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = null, context: String? = null, onRemoveFromContext: (() -> Unit)? = null, kinds: Set<SelectionKind>? = null) {
     val client = LocalCoreClient.current
-    val selection by client.selection.collectAsStateWithLifecycleCompat()
+    val selectionAll by client.selection.collectAsStateWithLifecycleCompat()
     val kind by client.selectionKind.collectAsStateWithLifecycleCompat()
+    // Two panes side by side each have a toolbar: [kinds] keeps each to what its own pane selects.
+    val selection = if (kinds == null || kind in kinds) selectionAll else Selection()
     var actions by remember { mutableStateOf<List<ActionDescriptor>>(emptyList()) }
     var menu by remember { mutableStateOf(false) }
     var playlistPicker by remember { mutableStateOf(false) }
