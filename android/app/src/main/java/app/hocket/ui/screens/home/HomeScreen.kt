@@ -138,7 +138,8 @@ fun HomeScreen(nav: NavHostController) {
     var partial by remember(serverId) { mutableStateOf<Map<HomeSection, SectionContent>>(emptyMap()) }
     LaunchedEffect(serverId, libraryGen, shownSet, nowPlayingId) {
         if (libraryGen < 0) return@LaunchedEffect
-        feed = loadHomeFeed(client, serverId, shownSet) { if (feed == null) partial = it }
+        // Merged, not replaced: a reload mid-cold-load (a track change, a sync) keeps what's revealed.
+        feed = loadHomeFeed(client, serverId, shownSet) { if (feed == null) partial = partial + it }
     }
     val reveal = rememberHomeReveal(serverId, ready = { feed != null })
     var customising by remember { mutableStateOf(false) }
@@ -172,7 +173,8 @@ fun HomeScreen(nav: NavHostController) {
         },
         snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset)) },
     ) { padding ->
-        val loaded = feed ?: partial.takeIf { reveal.phase == RevealPhase.Shown }
+        // Nothing until the reveal says so, even a feed that's in (the skeleton's minimum, the entrance).
+        val loaded = if (reveal.phase == RevealPhase.Shown) feed ?: partial else null
         val listState = rememberLazyListState()
         ScrollToTopOnReselect(listState)
         ShimmerHost {

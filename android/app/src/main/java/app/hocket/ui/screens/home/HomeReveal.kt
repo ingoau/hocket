@@ -1,5 +1,6 @@
 package app.hocket.ui.screens.home
 
+import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.tween
@@ -36,6 +37,9 @@ internal const val SKELETON_MIN_MS = 350L
 
 /** From the start of a cold load, how long Home waits for every section before showing the ones it has. */
 internal const val REVEAL_CAP_MS = 900L
+
+/** The most Home waits under the splash itself (the splash's own cap, MainActivity's SPLASH_CONTENT_MAX_MS, normally ends it first). */
+private const val SPLASH_HOLD_MAX_MS = 2_000L
 
 /** Sections composed within this long of the reveal play the entrance; later ones (scrolled to) just appear. */
 private const val ENTRANCE_WINDOW_MS = 600L
@@ -90,7 +94,10 @@ internal fun rememberHomeReveal(key: Any, ready: () -> Boolean): HomeReveal {
         val readyFlow = snapshotFlow { isReady() }
         if (reveal.holdingSplash) {
             // The splash lifts once the feed is in: the page is simply there under it.
-            readyFlow.combine(SplashHold.covering) { done, covered -> done || !covered }.first { it }
+            // Capped here too, in case nothing ever reports the splash gone.
+            withTimeoutOrNull(SPLASH_HOLD_MAX_MS) {
+                readyFlow.combine(SplashHold.covering) { done, covered -> done || !covered }.first { it }
+            }
             reveal.releaseSplash()
             if (isReady()) {
                 reveal.phase = RevealPhase.Shown
@@ -98,15 +105,15 @@ internal fun rememberHomeReveal(key: Any, ready: () -> Boolean): HomeReveal {
             }
             // The splash waited as long as it would: no blank beat after it, skeletons now.
             reveal.phase = RevealPhase.Skeleton
-            val shownAt = System.currentTimeMillis()
+            val shownAt = SystemClock.uptimeMillis()
             withTimeoutOrNull(REVEAL_CAP_MS) { readyFlow.first { it } }
-            val held = System.currentTimeMillis() - shownAt
+            val held = SystemClock.uptimeMillis() - shownAt
             if (held < SKELETON_MIN_MS) delay(SKELETON_MIN_MS - held)
         } else if (withTimeoutOrNull(SKELETON_DELAY_MS) { readyFlow.first { it } } == null) {
             reveal.phase = RevealPhase.Skeleton
-            val shownAt = System.currentTimeMillis()
+            val shownAt = SystemClock.uptimeMillis()
             withTimeoutOrNull(REVEAL_CAP_MS - SKELETON_DELAY_MS) { readyFlow.first { it } }
-            val held = System.currentTimeMillis() - shownAt
+            val held = SystemClock.uptimeMillis() - shownAt
             if (held < SKELETON_MIN_MS) delay(SKELETON_MIN_MS - held)
         }
         reveal.entrance = !reducedMotion

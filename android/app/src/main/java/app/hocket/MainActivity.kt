@@ -57,7 +57,11 @@ class MainActivity : ComponentActivity() {
             SplashHold.splashShown()
             splash.setKeepOnScreenCondition {
                 val shown = SystemClock.uptimeMillis() - splashStart
-                shown < SPLASH_MAX_MS && (!firstScreenReady || shown < minMs || (SplashHold.holding && shown < SPLASH_CONTENT_MAX_MS))
+                val keep = shown < SPLASH_MAX_MS && (!firstScreenReady || shown < minMs || (SplashHold.holding && shown < SPLASH_CONTENT_MAX_MS))
+                // Polled every frame even when the system showed no splash (and so never calls
+                // exitSplash): the first "let go" is when nothing is covering any more.
+                if (!keep) SplashHold.splashGone()
+                keep
             }
         } else {
             SplashHold.splashGone()
