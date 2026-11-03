@@ -134,10 +134,13 @@ fun HomeScreen(nav: NavHostController) {
     // Starts from the last feed, so coming back to Home (a pop from a page opened here) shows its
     // rows on the first frame — the artwork that flew out has somewhere to fly back to.
     var feed by rememberCachedState<Map<HomeSection, SectionContent>?>(listOf("home.feed", serverId)) { null }
+    // The sections read so far on a cold load (no feed yet), for a reveal that can't wait any longer.
+    var partial by remember(serverId) { mutableStateOf<Map<HomeSection, SectionContent>>(emptyMap()) }
     LaunchedEffect(serverId, libraryGen, shownSet, nowPlayingId) {
         if (libraryGen < 0) return@LaunchedEffect
-        feed = loadHomeFeed(client, serverId, shownSet)
+        feed = loadHomeFeed(client, serverId, shownSet) { if (feed == null) partial = it }
     }
+    val reveal = rememberHomeReveal(serverId, ready = { feed != null })
     var customising by remember { mutableStateOf(false) }
     var sectionMenu by remember { mutableStateOf<SectionPref?>(null) }
     var jobs by remember { mutableStateOf(false) }
@@ -169,11 +172,13 @@ fun HomeScreen(nav: NavHostController) {
         },
         snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset)) },
     ) { padding ->
-        val loaded = feed
+        val loaded = feed ?: partial.takeIf { reveal.phase == RevealPhase.Shown }
         val listState = rememberLazyListState()
         ScrollToTopOnReselect(listState)
         ShimmerHost {
             LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
+                // Nothing yet: blank at first (most loads land before a skeleton would be worth showing).
+                if (reveal.phase == RevealPhase.Waiting) return@LazyColumn
                 if (loaded == null) {
                     item(key = "sk.h1", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
                     item(key = "sk.s1", contentType = "stripSkeleton") { AlbumStripSkeleton() }
@@ -182,9 +187,19 @@ fun HomeScreen(nav: NavHostController) {
                     return@LazyColumn
                 }
                 var any = false
+                var order = 0
                 shown.forEach { pref ->
                     val section = pref.section ?: return@forEach
-                    val content = loaded[section] ?: return@forEach
+                    val content = loaded[section]
+                    if (content == null) {
+                        // Revealed at the cap before this one was read: hold its place until it is.
+                        if (feed == null) {
+                            any = true
+                            item(key = "sk.h.${pref.id}", contentType = "sectionSkeleton") { SectionHeaderSkeleton(Modifier.animateItem()) }
+                            item(key = "sk.s.${pref.id}", contentType = "stripSkeleton") { AlbumStripSkeleton(Modifier.animateItem()) }
+                        }
+                        return@forEach
+                    }
                     val empty = when (section) {
                         HomeSection.Filters -> filters.isEmpty()
                         HomeSection.RecentQueues -> saved.isEmpty()
@@ -192,12 +207,13 @@ fun HomeScreen(nav: NavHostController) {
                     }
                     if (empty) return@forEach
                     any = true
+                    val step = order++
                     item(key = "h.${pref.id}", contentType = "sectionHeader") {
                         val title = sectionTitle(section, content)
-                        HomeSectionHeader(title, Modifier.animateItem().testTag("home.section.${pref.id}"), onMenu = { sectionMenu = pref })
+                        HomeSectionHeader(title, Modifier.animateItem().homeEntrance(reveal, step).testTag("home.section.${pref.id}"), onMenu = { sectionMenu = pref })
                     }
                     item(key = "s.${pref.id}", contentType = "section.${pref.resolvedStyle.id}") {
-                        Box(Modifier.animateItem()) {
+                        Box(Modifier.animateItem().homeEntrance(reveal, step)) {
                             SectionBody(section, content, pref.resolvedStyle, filters, saved, nav, serverId, sheets, onSongMore = { songMenu.open(it) })
                         }
                     }

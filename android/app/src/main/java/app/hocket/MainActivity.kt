@@ -19,6 +19,7 @@ import app.hocket.core.Commands
 import app.hocket.diagnostics.DeveloperTriggers
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.nav.ShellEntrance
+import app.hocket.ui.nav.SplashHold
 import app.hocket.ui.theme.HocketTheme
 
 class MainActivity : ComponentActivity() {
@@ -51,10 +52,15 @@ class MainActivity : ComponentActivity() {
             // the system may drop the splash with its own plain fade instead of this exit, and the
             // mark's animation would be cut short.
             val minMs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) SPLASH_ICON_MS else 0L
+            // And while the first screen's content loads under it ([SplashHold]), up to
+            // SPLASH_CONTENT_MAX_MS: past that the screen shows its own loading state.
+            SplashHold.splashShown()
             splash.setKeepOnScreenCondition {
                 val shown = SystemClock.uptimeMillis() - splashStart
-                shown < SPLASH_MAX_MS && (!firstScreenReady || shown < minMs)
+                shown < SPLASH_MAX_MS && (!firstScreenReady || shown < minMs || (SplashHold.holding && shown < SPLASH_CONTENT_MAX_MS))
             }
+        } else {
+            SplashHold.splashGone()
         }
         // An entrance a previous instance hid the shell for but never got to play plays now, on a
         // fresh start; a recreation (even mid-entrance) just shows the shell.
@@ -97,6 +103,7 @@ class MainActivity : ComponentActivity() {
     private fun exitSplash(provider: SplashScreenViewProvider) {
         // Below API 31 the compat splash hands over an exit on every creation, a recreation too:
         // there it just goes, and the shell stays as it is.
+        SplashHold.splashGone()
         if (recreated) {
             provider.remove()
             return
@@ -157,6 +164,8 @@ class MainActivity : ComponentActivity() {
         var firstActivityOfProcess = true
         /** The longest the splash waits for the first screen. */
         const val SPLASH_MAX_MS = 8_000L
+        /** The longest the splash waits, from launch, for the first screen's content ([SplashHold]). */
+        const val SPLASH_CONTENT_MAX_MS = 2_000L
         /** The longest the exit waits for the mark to finish drawing in. */
         const val SPLASH_MAX_WAIT_FOR_ICON_MS = 1_000L
         /** The mark's draw-in: windowSplashScreenAnimationDuration in values-v31/splash.xml. */
