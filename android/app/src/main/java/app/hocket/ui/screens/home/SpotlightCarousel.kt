@@ -48,6 +48,7 @@ import app.hocket.R
 import app.hocket.core.ArtworkSizes
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.icons.HocketIcons
+import app.hocket.ui.theme.LocalDarkTheme
 
 /**
  * The Spotlight carousel: one full-bleed slide per pick, its artwork running up under the top bar
@@ -103,9 +104,11 @@ private fun SpotlightPage(slide: SpotlightSlide, page: Int, count: Int, onOpen: 
         // A wash at the top for the bar's lockup and buttons, and the page's own surface rising
         // under the text so it reads on any cover.
         // A pale cover stays a pale picture, but never lights the slide: the wash is the theme's surface.
+        // In the dark theme the middle keeps more of the wash, so a white cover reads as a dimmed picture, not a bright band.
+        val mid = if (LocalDarkTheme.current) 0.32f else 0.12f
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
-            0f to cs.surface.copy(alpha = 0.9f), 0.14f to cs.surface.copy(alpha = 0.62f), 0.3f to cs.surface.copy(alpha = 0.12f),
-            0.42f to cs.surface.copy(alpha = 0.12f), 0.62f to cs.surface.copy(alpha = 0.8f), 0.8f to cs.surface.copy(alpha = 0.95f), 1f to cs.surface,
+            0f to cs.surface.copy(alpha = 0.9f), 0.14f to cs.surface.copy(alpha = 0.62f), 0.3f to cs.surface.copy(alpha = mid),
+            0.42f to cs.surface.copy(alpha = mid), 0.62f to cs.surface.copy(alpha = 0.8f), 0.8f to cs.surface.copy(alpha = 0.95f), 1f to cs.surface,
         )))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
             // The words open the album, artist or playlist (not the whole slide: its top is under the bar's buttons).

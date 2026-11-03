@@ -45,6 +45,9 @@ test("spotlight", async () => {
       await page.evaluate(() => window.hocket.dispatch({ type: "pause" }));
       await expect(page.getByTestId("view-home")).toBeVisible();
       await expect(page.getByTestId("home-spotlight")).toBeVisible();
+      // Resume comes first; the carousel stays on the slide that was in view when it arrived, so go to it.
+      await expect(page.getByTestId("spotlight-slide-resume")).toHaveCount(1);
+      await page.locator(".spot-dot").first().click();
       await expect(page.getByTestId("spotlight-slide-resume")).toHaveClass(/active/);
       await settle(page);
       await page.screenshot({ path: join(out!, `desktop-${theme}-spotlight-1.png`) });

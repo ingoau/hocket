@@ -801,6 +801,20 @@ button.m3-switch { border: 0; padding: 0; background: none; }
    Each slide: its cover blurred across the slide and sharp at the right, under a wash of the
    theme's own background (tinted by the cover), so a pale cover never lights a slide in the dark
    theme. Text and buttons sit on the wash at the left. */
+/* The tokens global.css derives from the accent, derived again here: a custom property resolves
+   where it's declared, so without these Home's tonal surfaces and selections keep the old accent. */
+.page-home.spot-tinted {
+  --accent-soft: color-mix(in srgb, var(--accent-tint) 18%, transparent);
+  --accent-ring: var(--focus-ring);
+  --surface-tonal: color-mix(in srgb, var(--accent-tint) 5%, var(--bg-elev));
+  --surface-tonal-sunken: color-mix(in srgb, var(--accent-tint) 5%, var(--bg-sunken));
+  --selection: color-mix(in srgb, var(--accent-tint) 22%, transparent);
+  --state-selected: color-mix(in srgb, var(--accent-tint) 22%, var(--bg-elev));
+}
+:root[data-theme="dark"] .page-home.spot-tinted {
+  --selection: color-mix(in srgb, var(--accent-tint) 30%, transparent);
+  --state-selected: color-mix(in srgb, var(--accent-tint) 30%, var(--bg-elev));
+}
 .page-home.spot-tinted .home-main { background: linear-gradient(180deg, color-mix(in srgb, var(--home-tint) 22%, var(--bg)) 0, var(--bg) 640px); }
 .home-spotlight { position: relative; margin: 0 0 28px; border-radius: 32px; overflow: hidden; isolation: isolate; }
 .spot-track { display: flex; transition: transform 520ms var(--ease-emphasized, cubic-bezier(0.2, 0, 0, 1)); }
@@ -841,11 +855,12 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .btn.spot-play:hover { filter: brightness(1.08); box-shadow: var(--shadow-2); }
 .btn.icon.spot-shuffle { width: 52px; height: 52px; border-radius: 18px; background: color-mix(in srgb, var(--spot-accent, var(--accent)) 24%, var(--spot-surface)); color: var(--fg); }
 .btn.icon.spot-more { width: 44px; height: 44px; color: var(--fg); }
-.spot-nav { position: absolute; right: 20px; top: 20px; display: flex; align-items: center; gap: 6px; }
-.btn.icon.spot-arrow { width: 36px; height: 36px; color: var(--fg); background: color-mix(in srgb, var(--bg) 55%, transparent); }
+/* On a pill of the page's own background, so they read over any cover, pale ones included. */
+.spot-nav { position: absolute; right: 20px; top: 20px; display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px; background: color-mix(in srgb, var(--bg) 82%, transparent); box-shadow: var(--shadow-1); }
+.btn.icon.spot-arrow { width: 34px; height: 34px; color: var(--fg); }
 .spot-dots { display: flex; gap: 6px; padding: 0 6px; }
-.spot-dot { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 4px; background: color-mix(in srgb, var(--fg) 35%, transparent); cursor: pointer; transition: width var(--dur-short, 160ms) var(--ease-emphasized, ease), background-color var(--dur-short, 160ms); }
-.spot-dot.on { width: 22px; background: var(--accent); }
+.spot-dot { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 4px; background: color-mix(in srgb, var(--fg) 45%, transparent); cursor: pointer; transition: width var(--dur-short, 160ms) var(--ease-emphasized, ease), background-color var(--dur-short, 160ms); }
+.spot-dot.on { width: 22px; background: var(--accent-text); }
 .customise-row.pinned .grip { visibility: hidden; }
 /* In the dark theme a bright cover is kept a little down, so the slide reads as part of a dark page. */
 :root[data-theme="dark"] .spot-bg { opacity: 0.4; }

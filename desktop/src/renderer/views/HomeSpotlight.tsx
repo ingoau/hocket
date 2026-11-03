@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import type { ActionTarget, ListeningStats } from "@core/api";
 import { useApp } from "../store/app";
@@ -43,27 +43,55 @@ function useSlideAccents(slides: SpotlightSlide[]): Record<string, string | unde
  * …), each its cover across the slide fading into the page behind its reason, title and Play /
  * Shuffle / more. A slide's colours come from its cover but always in the app's light or dark: a
  * pale cover never turns a slide light in the dark theme. [onAccent] reports the slide in view's
- * accent, so the rest of Home can wear it; [onEmpty] says when there's nothing to show.
+ * accent, so the rest of Home can wear it; [onEmpty] says when there's nothing to show. With
+ * [dynamic] (colour from artwork) off, slides keep the app's accent.
+ *
+ * It loads on arriving at Home, when another album starts, and when the favourites or the albums
+ * to resume change; not per track. What's playing as it loads is left out, except from the slide
+ * in view: pressing Play on a slide keeps it there rather than pulling it out from under the pointer.
  */
-export function HomeSpotlight({ stats, statsReady, onAccent, onEmpty }: { stats?: ListeningStats; statsReady: boolean; onAccent: (accent: string | undefined) => void; onEmpty: (empty: boolean) => void }) {
+export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }: { stats?: ListeningStats; statsReady: boolean; dynamic: boolean; onAccent: (accent: string | undefined) => void; onEmpty: (empty: boolean) => void }) {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
-  const playing = useApp((s) => s.nowPlaying?.track);
   const resumes = useApp((s) => s.albumResumes);
+  const playingAlbum = useApp((s) => s.nowPlaying?.track.albumId);
   const resumeKey = resumes.map((r) => r.albumId).sort().join(",");
+  // What the picks are made from, not the stats object itself (a new one after every library sync).
+  const statsKey = stats ? [...stats.topAlbums.slice(0, 12).map((a) => a.id), "|", ...stats.topArtists.slice(0, 4).map((a) => a.id)].join(",") : "";
+  const statsRef = useRef(stats);
+  statsRef.current = stats;
   const theme = useResolvedTheme();
   const [slides, setSlides] = useState<SpotlightSlide[] | undefined>(undefined);
   const [index, setIndex] = useState(0);
+  const section = useRef<HTMLElement>(null);
+  const slidesRef = useRef(slides);
+  slidesRef.current = slides;
+  const shownKey = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!serverId || !statsReady) return;
+    if (!serverId) { setSlides([]); return; }
+    if (!statsReady) return;
     let live = true;
-    void loadSpotlight({ serverId, resumes, playing: { albumId: playing?.albumId, artistId: playing?.artistId }, stats, seed: spotlightSeed(), query: (q) => bridge().query(q) })
-      .then((s) => { if (live) setSlides(s); });
+    const st = useApp.getState();
+    const track = st.nowPlaying?.track;
+    const shown = slidesRef.current?.find((x) => slideKey(x) === shownKey.current);
+    const fromShown = !!track && !!shown && (shown.album?.id === track.albumId || (!shown.album && shown.artist?.id === track.artistId));
+    const playing = fromShown ? undefined : track;
+    void loadSpotlight({ serverId, resumes: st.albumResumes, playing: { albumId: playing?.albumId, artistId: playing?.artistId }, stats: statsRef.current, seed: spotlightSeed(), query: (q) => bridge().query(q) })
+      .then((s) => {
+        if (!live) return;
+        setSlides(s);
+        // Stay on the slide in view if it's still there.
+        const keep = shownKey.current ? s.findIndex((x) => slideKey(x) === shownKey.current) : -1;
+        setIndex(keep >= 0 ? keep : 0);
+      });
     return () => { live = false; };
-  }, [serverId, statsReady, stats, playing?.albumId, playing?.artistId, resumeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [serverId, statsReady, statsKey, resumeKey, playingAlbum]);
   const list = slides ?? [];
   const at = Math.min(index, Math.max(0, list.length - 1));
-  const accents = useSlideAccents(list);
+  shownKey.current = list[at] ? slideKey(list[at]) : undefined;
+  const allAccents = useSlideAccents(list);
+  const accents = dynamic ? allAccents : {};
+  const latestResume = new Map(resumes.map((r) => [r.albumId, r]));
   const current = list[at];
   const currentAccent = current ? accents[slideCover(current) ?? ""] : undefined;
   useEffect(() => onAccent(currentAccent), [currentAccent]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -72,8 +100,12 @@ export function HomeSpotlight({ stats, statsReady, onAccent, onEmpty }: { stats?
   const go = (i: number) => setIndex((i + list.length) % list.length);
   const onKey = (e: React.KeyboardEvent) => {
     if (e.target instanceof HTMLElement && e.target.closest("input, textarea")) return;
-    if (e.key === "ArrowRight") { e.preventDefault(); go(at + 1); }
-    else if (e.key === "ArrowLeft") { e.preventDefault(); go(at - 1); }
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    // Focus on a slide's control follows to the same control on the next slide (the old one is hidden).
+    const role = e.target instanceof HTMLElement && e.target.closest(".spot-slide") ? e.target.dataset.spot : undefined;
+    go(at + (e.key === "ArrowRight" ? 1 : -1));
+    if (role) requestAnimationFrame(() => section.current?.querySelector<HTMLElement>(`.spot-slide.active [data-spot="${role}"]`)?.focus());
   };
   const open = (s: SpotlightSlide) => {
     if (s.album) navigate({ view: "album", id: s.album.id });
@@ -81,10 +113,10 @@ export function HomeSpotlight({ stats, statsReady, onAccent, onEmpty }: { stats?
     else if (s.playlist) navigate({ view: "playlist", id: s.playlist.id });
   };
   return (
-    <section className="home-spotlight" aria-roledescription="carousel" aria-label={t("spotlight.label")} data-testid="home-spotlight" onKeyDown={onKey}>
+    <section ref={section} className="home-spotlight" aria-roledescription="carousel" aria-label={t("spotlight.label")} data-testid="home-spotlight" onKeyDown={onKey}>
       <div className="spot-track" style={{ transform: `translateX(${-at * 100}%)` }}>
         {list.map((s, i) => (
-          <Slide key={slideKey(s)} slide={s} active={i === at} position={t("spotlight.goTo", { n: i + 1, total: list.length })} accent={accents[slideCover(s) ?? ""]} theme={theme} serverId={serverId} onOpen={() => open(s)} />
+          <Slide key={slideKey(s)} slide={s.resume ? { ...s, resume: latestResume.get(s.resume.albumId) ?? s.resume } : s} active={i === at} position={t("spotlight.goTo", { n: i + 1, total: list.length })} accent={accents[slideCover(s) ?? ""]} theme={theme} serverId={serverId} onOpen={() => open(s)} />
         ))}
       </div>
       {list.length > 1 ? (
@@ -128,12 +160,12 @@ function Slide({ slide, active, position, accent, theme, serverId, onOpen }: { s
       <span className="spot-scrim" aria-hidden="true" />
       <div className="spot-content">
         <span className="spot-eyebrow">{eyebrow}</span>
-        <h2 className="spot-title"><button type="button" className="spot-open" tabIndex={tab} onClick={onOpen} title={title}>{title}</button></h2>
+        <h2 className="spot-title"><button type="button" className="spot-open" data-spot="open" tabIndex={tab} onClick={onOpen} title={title}>{title}</button></h2>
         {sub ? <p className="spot-sub">{sub}</p> : null}
         <div className="spot-actions">
-          <button type="button" className="btn spot-play" tabIndex={tab} onClick={() => playSlide(serverId, slide, false)} data-testid="spotlight-play"><Icon name="play" size={18} /> {slide.resume ? t("album.resume") : t("album.play")}</button>
-          <button type="button" className="btn icon spot-shuffle" tabIndex={tab} aria-label={`${t("album.shuffle")}: ${title}`} onClick={() => playSlide(serverId, slide, true)}><Icon name="shuffle" size={18} /></button>
-          {target ? <button type="button" className="btn icon spot-more" tabIndex={tab} aria-label={`${t("misc.more")}: ${title}`} onClick={(e) => void openContextMenu(e, target)}><Icon name="moreVert" size={18} /></button> : null}
+          <button type="button" className="btn spot-play" data-spot="play" tabIndex={tab} onClick={() => playSlide(serverId, slide, false)} data-testid="spotlight-play"><Icon name="play" size={18} /> {slide.resume ? t("album.resume") : t("album.play")}</button>
+          <button type="button" className="btn icon spot-shuffle" data-spot="shuffle" tabIndex={tab} aria-label={`${t("album.shuffle")}: ${title}`} onClick={() => playSlide(serverId, slide, true)}><Icon name="shuffle" size={18} /></button>
+          {target ? <button type="button" className="btn icon spot-more" data-spot="more" tabIndex={tab} aria-label={`${t("misc.more")}: ${title}`} onClick={(e) => void openContextMenu(e, target)}><Icon name="moreVert" size={18} /></button> : null}
         </div>
       </div>
     </div>

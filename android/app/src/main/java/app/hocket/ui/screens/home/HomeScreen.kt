@@ -140,28 +140,49 @@ fun HomeScreen(nav: NavHostController) {
     // A new song starting changes what "most played" and "lately" mean: re-read on track change.
     val playing = client.nowPlaying.collectAsStateWithLifecycle().value?.track
     val nowPlayingId = playing?.id
+    val resumePoints = client.albumResumes.collectAsStateWithLifecycle().value
     // Spotlight's Resume slide: re-read when an album gains or loses its resume point.
-    val resumeAlbums = client.albumResumes.collectAsStateWithLifecycle().value.map { it.albumId }.toSet()
+    val resumeAlbums = resumePoints.map { it.albumId }.toSet()
     val prefs = remember(settings[SettingKeys.HOME_SECTIONS]?.value) { HomeSections.parse(settings[SettingKeys.HOME_SECTIONS]?.value) }
     val shown = prefs.filter { it.on && it.section != null }
     val shownSet = shown.mapNotNull { it.section }.toSet()
     // Starts from the last feed, so coming back to Home (a pop from a page opened here) shows its
     // rows on the first frame — the artwork that flew out has somewhere to fly back to.
     var feed by rememberCachedState<Map<HomeSection, SectionContent>?>(listOf("home.feed", serverId)) { null }
-    LaunchedEffect(serverId, libraryGen, shownSet, nowPlayingId, resumeAlbums) {
+    val feedSections = shownSet - HomeSection.Spotlight
+    LaunchedEffect(serverId, libraryGen, feedSections, nowPlayingId) {
         if (libraryGen < 0) return@LaunchedEffect
-        feed = loadHomeFeed(client, serverId, shownSet, playing, client.albumResumes.value)
+        feed = loadHomeFeed(client, serverId, feedSections)
     }
-    // Spotlight comes first whatever the stored order (it's pinned), drawn without a header.
-    val slides = (feed?.get(HomeSection.Spotlight) as? SectionContent.Spotlight)?.slides.orEmpty().takeIf { HomeSection.Spotlight in shownSet }.orEmpty()
+    // Spotlight loads on its own: on arriving at Home, when another album starts, and when the
+    // library or the albums to resume change; not per track. What's playing as it loads is left
+    // out, except from the slide in view: Play on a slide keeps it under the user's thumb.
+    val spotlightOn = HomeSection.Spotlight in shownSet
+    var spotlight by rememberCachedState<List<SpotlightSlide>?>(listOf("home.spotlight", serverId)) { null }
+    val shownSlide = remember { mutableStateOf<SpotlightSlide?>(null) }
+    LaunchedEffect(serverId, libraryGen, spotlightOn, resumeAlbums, playing?.albumId) {
+        if (libraryGen < 0 || !spotlightOn) return@LaunchedEffect
+        val track = client.nowPlaying.value?.track
+        val inView = shownSlide.value
+        val fromInView = track != null && inView != null && (inView.album?.id == track.albumId || (inView.album == null && inView.artist?.id == track.artistId))
+        spotlight = loadSpotlight(client, serverId, client.albumResumes.value, track.takeUnless { fromInView }, favouriteStats(client), spotlightSeed())
+    }
+    // Spotlight comes first whatever the stored order (it's pinned), drawn without a header. A
+    // Resume slide shows the album's latest point (positions save without reloading).
+    val latestResume = resumePoints.associateBy { it.albumId }
+    val slides = spotlight.orEmpty().takeIf { spotlightOn }.orEmpty().map { s -> s.resume?.let { latestResume[it.albumId] }?.let { s.copy(resume = it) } ?: s }
     val pager = rememberPagerState { slides.size }
+    shownSlide.value = slides.getOrNull(pager.currentPage)
     val dark = LocalDarkTheme.current
     val slideSeeds = slides.map { key(it.key) { artworkSeed(it.coverArt).value } }
-    val slideSchemes = remember(slides, slideSeeds, dark) { slides.mapIndexed { i, s -> ArtworkColors.scheme(slideSeeds[i] ?: ArtworkColors.seedFor(s.coverArt), dark) } }
-    // The rest of Home takes the colours of the slide in view (as the app does from what's
-    // playing), unless colour from artwork is off.
+    // The slides, and the rest of Home, take the colours of the slide in view (as the app does from
+    // what's playing), unless colour from artwork is off.
     val dynamicColour = settings[SettingKeys.DISPLAY_DYNAMIC_COLOUR]?.value?.trim() != "false"
-    val pageScheme = slideSchemes.getOrNull(pager.currentPage)?.takeIf { dynamicColour } ?: MaterialTheme.colorScheme
+    val appScheme = MaterialTheme.colorScheme
+    val slideSchemes = remember(slides, slideSeeds, dark, dynamicColour, appScheme) {
+        slides.mapIndexed { i, s -> if (dynamicColour) ArtworkColors.scheme(slideSeeds[i] ?: ArtworkColors.seedFor(s.coverArt), dark) else appScheme }
+    }
+    val pageScheme = slideSchemes.getOrNull(pager.currentPage) ?: appScheme
     val heroFirst = slides.isNotEmpty()
     var customising by remember { mutableStateOf(false) }
     var sectionMenu by remember { mutableStateOf<SectionPref?>(null) }

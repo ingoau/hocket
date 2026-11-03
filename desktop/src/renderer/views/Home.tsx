@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
-import type { ActionTarget, Album, Artist, Filter, SavedQueue, TrackSummary } from "@core/api";
+import type { ActionTarget, Album, Artist, Filter, ListeningStats, SavedQueue, TrackSummary } from "@core/api";
 import { useApp, useJsonSetting, useSetting, type MenuItem } from "../store/app";
 import { SK } from "@shared/settings-keys";
 import { accentTokens } from "../lib/contrast";
@@ -68,7 +68,7 @@ export function Home() {
   const allEmpty = shown.length === 0 || shown.every((p) => empties[p.id] === true);
   // Spotlight is pinned first whatever the stored order, and drawn without a section header.
   const spotlightOn = shown.some((p) => p.id === "spotlight");
-  const spotStats = useListeningStats(spotlightOn);
+  const spotStats = useSpotlightStats(spotlightOn);
   const [spotAccent, setSpotAccent] = useState<string | undefined>(undefined);
   const dynamic = useSetting(SK.displayDynamicColour, true);
   const theme = useResolvedTheme();
@@ -110,7 +110,7 @@ export function Home() {
             </div>
           </div>
           <div className="view-body">
-            {spotlightOn ? <HomeSpotlight stats={spotStats} statsReady={spotStats !== undefined} onAccent={setSpotAccent} onEmpty={(e) => reportEmpty("spotlight", e)} /> : null}
+            {spotlightOn ? <HomeSpotlight stats={spotStats.stats} statsReady={spotStats.settled} dynamic={dynamic} onAccent={setSpotAccent} onEmpty={(e) => reportEmpty("spotlight", e)} /> : null}
             {shown.filter((p) => p.id !== "spotlight").map((p) => (
               <Section key={p.id} pref={p} onEmpty={(e) => reportEmpty(p.id, e)} menu={(title) => sectionMenu(p, title)} />
             ))}
@@ -294,6 +294,21 @@ function useListeningStats(enabled: boolean) {
   // A quiet month falls back to the year, so favourites are still there.
   const year = useQuery(() => (enabled && month.data && month.data.totalPlays === 0 ? { type: "stats", data: { period_days: 365 } } : null), "stats", [enabled, month.data?.totalPlays]);
   return month.data && month.data.totalPlays === 0 && year.data ? year.data : month.data;
+}
+
+/**
+ * The favourites' stats for Spotlight, as useListeningStats but not re-read per track (Spotlight
+ * doesn't reload on a track change), and settled even when a query fails: Spotlight then goes on
+ * without stats (Resume, Just added and the rest don't need them).
+ */
+function useSpotlightStats(enabled: boolean): { stats?: ListeningStats; settled: boolean } {
+  const month = useQuery(() => (enabled ? { type: "stats", data: { period_days: 30 } } : null), "stats", [enabled]);
+  const quiet = !!month.data && month.data.totalPlays === 0;
+  const year = useQuery(() => (enabled && quiet ? { type: "stats", data: { period_days: 365 } } : null), "stats", [enabled, quiet]);
+  const monthDone = !!month.data || !!month.error;
+  if (!monthDone) return { settled: false };
+  if (!quiet) return { stats: month.data, settled: true };
+  return year.data || year.error ? { stats: year.data ?? month.data, settled: true } : { settled: false };
 }
 
 /** Albums by id, in that order (recently played reads them one by one). */

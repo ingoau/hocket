@@ -3,7 +3,6 @@ package app.hocket.ui.screens.home
 import app.hocket.core.Queries
 import app.hocket.core.toSummary
 import app.hocket.core.api.Album
-import app.hocket.core.api.AlbumResumePoint
 import app.hocket.core.api.Artist
 import app.hocket.core.api.FilterField
 import app.hocket.core.api.FilterNode
@@ -27,7 +26,6 @@ sealed interface SectionContent {
     data class Artists(val items: List<Artist>) : SectionContent { override val isEmpty get() = items.isEmpty() }
     data class Tracks(val items: List<TrackSummary>, override val title: String? = null) : SectionContent { override val isEmpty get() = items.isEmpty() }
     data class Listening(val totalMs: Double, val plays: Int, val byWeekday: List<Int>) : SectionContent { override val isEmpty get() = plays == 0 }
-    data class Spotlight(val slides: List<SpotlightSlide>) : SectionContent { override val isEmpty get() = slides.isEmpty() }
     /** Filled from the client's flows (filters, saved queues), not a query. */
     data object FromFlow : SectionContent { override val isEmpty get() = false }
 }
@@ -45,7 +43,7 @@ private val REDISCOVER: FilterNode = FilterNode.All(listOf(
 ))
 
 /** Listening stats for favourites: the last month's, or the year's when the month has no plays. */
-private suspend fun favouriteStats(client: CoreClient): ListeningStats? {
+internal suspend fun favouriteStats(client: CoreClient): ListeningStats? {
     val month = (client.query(Queries.stats(30)) as? QueryResult.Stats)?.data
     if (month != null && month.totalPlays != 0u) return month
     return (client.query(Queries.stats(365)) as? QueryResult.Stats)?.data ?: month
@@ -59,20 +57,14 @@ suspend fun moreFromArtist(client: CoreClient): Artist? = favouriteStats(client)
  * read once and shared; a month with no plays falls back to the year, so a quiet month still has
  * favourites.
  */
-suspend fun loadHomeFeed(
-    client: CoreClient,
-    serverId: String,
-    shown: Set<HomeSection>,
-    playing: TrackSummary? = null,
-    resumes: List<AlbumResumePoint> = emptyList(),
-    seed: Int = spotlightSeed(),
-): Map<HomeSection, SectionContent> {
-    val needsStats = shown.any { it == HomeSection.Spotlight || it == HomeSection.FavouriteArtists || it == HomeSection.TopGenre || it == HomeSection.MoreFromArtist || it == HomeSection.OnRepeat }
+suspend fun loadHomeFeed(client: CoreClient, serverId: String, shown: Set<HomeSection>): Map<HomeSection, SectionContent> {
+    val needsStats = shown.any { it == HomeSection.FavouriteArtists || it == HomeSection.TopGenre || it == HomeSection.MoreFromArtist || it == HomeSection.OnRepeat }
     val stats = if (needsStats) favouriteStats(client) else null
     val out = LinkedHashMap<HomeSection, SectionContent>()
     for (section in shown) {
         val content: SectionContent? = when (section) {
-            HomeSection.Spotlight -> SectionContent.Spotlight(loadSpotlight(client, serverId, resumes, playing, stats, seed))
+            // Loaded on its own (HomeScreen), not with the feed.
+            HomeSection.Spotlight -> null
             HomeSection.Rediscover -> (client.query(Queries.tracks(serverId, Page(0u, SECTION_ITEMS.toUInt()), SortOrder.Rating, descending = true, filter = REDISCOVER)) as? QueryResult.Tracks)
                 ?.data?.items?.map { it.toSummary() }?.let { SectionContent.Tracks(it) }
             HomeSection.Filters, HomeSection.RecentQueues -> SectionContent.FromFlow
