@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.filters
 
+import app.hocket.ui.components.maxWidthListPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -84,29 +86,31 @@ fun FiltersScreen(nav: NavHostController) {
             EmptyState(stringResource(R.string.empty_filters_title), stringResource(R.string.empty_filters_body), Modifier.padding(top = padding.calculateTopPadding()), stringResource(R.string.filters_new)) { nav.navigate(Route.FilterBuilder()) }
             return@Scaffold
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
-            itemsIndexed(filters, key = { _, f -> f.id }) { i, f ->
-                val local = preview(f)
-                SegmentedListItem(
-                    onClick = { nav.navigate(Route.FilterBuilder(f.id)) },
-                    shapes = ListItemDefaults.segmentedShapes(i, filters.size), colors = segmentedListColors(),
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp).testTag("filters.row"),
-                    leadingContent = {
-                        Box(Modifier.size(44.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
-                            Icon(HocketIcons.Outlined.FilterAlt, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = maxWidthListPadding(maxWidth, padding.calculateTopPadding(), BottomContentInset)) {
+                itemsIndexed(filters, key = { _, f -> f.id }) { i, f ->
+                    val local = preview(f)
+                    SegmentedListItem(
+                        onClick = { nav.navigate(Route.FilterBuilder(f.id)) },
+                        shapes = ListItemDefaults.segmentedShapes(i, filters.size), colors = segmentedListColors(),
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp).testTag("filters.row"),
+                        leadingContent = {
+                            Box(Modifier.size(44.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
+                                Icon(HocketIcons.Outlined.FilterAlt, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                            }
+                        },
+                        supportingContent = { Text(describe(androidx.compose.ui.platform.LocalContext.current.resources, f), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                        trailingContent = {
+                            Row {
+                                IconButton(onClick = { server?.let { client.dispatch(Commands.playContext(Commands.filterContext(it.id, f))) } }) { Icon(HocketIcons.Filled.PlayArrow, stringResource(R.string.filter_play_named, f.name), tint = MaterialTheme.colorScheme.primary) }
+                                IconButton(onClick = { menu = f }, modifier = Modifier.testTag("filters.more")) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more_for, f.name)) }
+                            }
+                        },
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(f.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            if (local) Badge(stringResource(R.string.filter_this_device), container = MaterialTheme.colorScheme.surfaceContainerHigh)
                         }
-                    },
-                    supportingContent = { Text(describe(androidx.compose.ui.platform.LocalContext.current.resources, f), maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                    trailingContent = {
-                        Row {
-                            IconButton(onClick = { server?.let { client.dispatch(Commands.playContext(Commands.filterContext(it.id, f))) } }) { Icon(HocketIcons.Filled.PlayArrow, stringResource(R.string.filter_play_named, f.name), tint = MaterialTheme.colorScheme.primary) }
-                            IconButton(onClick = { menu = f }, modifier = Modifier.testTag("filters.more")) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more_for, f.name)) }
-                        }
-                    },
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(f.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                        if (local) Badge(stringResource(R.string.filter_this_device), container = MaterialTheme.colorScheme.surfaceContainerHigh)
                     }
                 }
             }

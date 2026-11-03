@@ -4,6 +4,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.semantics.selected
+import app.hocket.ui.components.ListPaneWidth
+import app.hocket.ui.components.TwoPaneMinWidth
+import app.hocket.ui.components.contentMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.Button
@@ -107,9 +115,43 @@ enum class SettingsCategory(val id: String, val route: Route) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(nav: NavHostController) {
+    // On a wide content area, the category on the right of the list; null until one is picked
+    // (Account shows meanwhile). Saved by id, so it survives rotation.
+    var picked by rememberSaveable { mutableStateOf<String?>(null) }
+    // Bumped by each search pick: the pane's screen starts afresh, so it takes the jump even when
+    // that category is already showing.
+    var jumps by rememberSaveable { mutableIntStateOf(0) }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val twoPane = maxWidth >= TwoPaneMinWidth
+        val shown = SettingsCategory.entries.firstOrNull { it.id == picked } ?: SettingsCategory.Account
+        fun open(category: SettingsCategory) { if (twoPane) picked = category.id else nav.navigate(category.route) }
+        // Narrowed with a category picked: carry on in it as its own screen.
+        LaunchedEffect(twoPane) {
+            val category = SettingsCategory.entries.firstOrNull { it.id == picked }
+            if (!twoPane && category != null) { picked = null; nav.navigate(category.route) }
+        }
+        Row(Modifier.fillMaxSize()) {
+            SettingsList(
+                nav, selected = shown.takeIf { twoPane }, onOpen = ::open,
+                onJump = { h -> SettingsJump.request(h.tag); if (twoPane) { jumps++; picked = h.category.id } else nav.navigate(h.category.route) },
+                modifier = if (twoPane) Modifier.width(ListPaneWidth).fillMaxHeight() else Modifier.fillMaxSize(),
+            )
+            if (twoPane) Box(Modifier.weight(1f).fillMaxHeight().testTag("settings.pane")) {
+                androidx.compose.runtime.key(shown, jumps) {
+                    CompositionLocalProvider(LocalSettingsPane provides true) { shown.Screen(nav) }
+                }
+            }
+        }
+    }
+}
+
+/** The category list: search over every setting, the account card, then the grouped categories. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsList(nav: NavHostController, selected: SettingsCategory?, onOpen: (SettingsCategory) -> Unit, onJump: (SettingsHit) -> Unit, modifier: Modifier) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.categories"),
+        modifier = modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.categories"),
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(stringResource(R.string.settings_title), style = brandTitleStyle(), modifier = Modifier.semantics { heading() }) },
@@ -118,31 +160,50 @@ fun SettingsScreen(nav: NavHostController) {
             )
         },
     ) { padding ->
-        Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset).padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            // Typing swaps the account card and categories for the matching settings; picking one
-            // opens its screen scrolled to it (SettingsJump). The query stays, so Back returns to the results.
-            var query by rememberSaveable { mutableStateOf("") }
-            val hits = rememberSettingsHits(query)
-            val open = { h: SettingsHit -> SettingsJump.request(h.tag); nav.navigate(h.category.route) }
-            SettingsSearchField(query, { query = it }, onSubmit = { hits.firstOrNull()?.let(open) })
-            if (query.isNotBlank()) {
-                SettingsSearchResults(hits, query, onPick = open)
-            } else {
-                AccountCard(onOpen = { nav.navigate(SettingsCategory.Account.route) }, onStats = { nav.navigate(Route.Stats) }, onDevices = { nav.navigate(Route.ConnectSettings) })
-                SettingsCategory.GROUPS.forEach { (titleRes, group) ->
-                    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-                        GroupLabel(stringResource(titleRes), color = MaterialTheme.colorScheme.primary)
-                        group.forEachIndexed { i, category ->
-                            CategoryRow(category, i, group.size, onClick = { nav.navigate(category.route) })
+        // The scroll spans the screen; its rows stop at ContentMaxWidth, centred.
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = padding.calculateTopPadding(), bottom = BottomContentInset)) {
+            Column(Modifier.contentMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                // Typing swaps the account card and categories for the matching settings; picking one
+                // opens its screen scrolled to it (SettingsJump). The query stays, so Back returns to the results.
+                var query by rememberSaveable { mutableStateOf("") }
+                val hits = rememberSettingsHits(query)
+                SettingsSearchField(query, { query = it }, onSubmit = { hits.firstOrNull()?.let(onJump) })
+                if (query.isNotBlank()) {
+                    SettingsSearchResults(hits, query, onPick = onJump)
+                } else {
+                    AccountCard(onOpen = { onOpen(SettingsCategory.Account) }, onStats = { nav.navigate(Route.Stats) }, onDevices = { onOpen(SettingsCategory.Connect) })
+                    SettingsCategory.GROUPS.forEach { (titleRes, group) ->
+                        Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                            GroupLabel(stringResource(titleRes), color = MaterialTheme.colorScheme.primary)
+                            group.forEachIndexed { i, category ->
+                                CategoryRow(category, i, group.size, selected = category == selected, onClick = { onOpen(category) })
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+/** The category's own screen, as its route shows it (and as the settings pane does). */
+@Composable
+private fun SettingsCategory.Screen(nav: NavHostController) = when (this) {
+    SettingsCategory.Account -> AccountSettingsScreen(nav)
+    SettingsCategory.Appearance -> AppearanceSettingsScreen(nav)
+    SettingsCategory.Playback -> PlaybackSettingsScreen(nav)
+    SettingsCategory.Audio -> AudioSettingsScreen(nav)
+    SettingsCategory.Streaming -> TranscodingSettingsScreen(nav)
+    SettingsCategory.Downloads -> DownloadsSettingsScreen(nav)
+    SettingsCategory.Lyrics -> LyricsSettingsScreen(nav)
+    SettingsCategory.Library -> LibrarySettingsScreen(nav)
+    SettingsCategory.Battery -> BatterySettingsScreen(nav)
+    SettingsCategory.Connect -> ConnectSettingsScreen(nav)
+    SettingsCategory.Pebble -> PebbleSettingsScreen(nav)
+    SettingsCategory.Customise -> CustomiseSettingsScreen(nav)
+    SettingsCategory.Backup -> BackupSettingsScreen(nav)
+    SettingsCategory.Advanced -> AdvancedSettingsScreen(nav)
+    SettingsCategory.About -> AboutScreen(nav)
 }
 
 /**
@@ -211,18 +272,19 @@ private fun AccountTile(label: String, icon: ImageVector, shape: Shape, onClick:
 }
 
 @Composable
-private fun CategoryRow(category: SettingsCategory, index: Int, count: Int, onClick: () -> Unit) {
+private fun CategoryRow(category: SettingsCategory, index: Int, count: Int, selected: Boolean, onClick: () -> Unit) {
     SegmentedListItem(
         onClick = onClick,
         shapes = ListItemDefaults.segmentedShapes(index, count),
-        colors = segmentedListColors(),
+        // The category the pane beside the list is showing.
+        colors = if (selected) segmentedListColors(MaterialTheme.colorScheme.secondaryContainer) else segmentedListColors(),
         leadingContent = {
             Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
                 Icon(category.icon(), null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
             }
         },
         trailingContent = { Icon(HocketIcons.Filled.ChevronRight, null) },
-        modifier = Modifier.testTag("settings.category.${category.id}"),
+        modifier = Modifier.testTag("settings.category.${category.id}").semantics { this.selected = selected },
     ) { Text(category.title()) }
 }
 
