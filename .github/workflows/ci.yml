@@ -143,6 +143,14 @@ jobs:
       - run: cargo install cargo-ndk typeshare-cli
       - run: scripts/gen-bindings.sh
       - run: scripts/build-android-core.sh debug x86_64
+      # Robolectric downloads its android-all runtime jars at test time, outside Gradle (so
+      # setup-gradle doesn't cache them), into ~/.m2. A Maven Central 404 there fails every
+      # Robolectric test class, so keep them cached between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ hashFiles('android/gradle/libs.versions.toml', 'android/**/robolectric.properties') }}
+          restore-keys: robolectric-
       - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
         working-directory: android
 
