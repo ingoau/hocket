@@ -13,12 +13,12 @@ android/
 
 Requirements: JDK 17+, Android SDK with platform 37 (AGP installs it when licences are accepted),
 NDK 27, Rust with the Android targets (`aarch64-linux-android`, `armv7-linux-androideabi`,
-`x86_64-linux-android`), `cargo-ndk`, `typeshare-cli`.
+`x86_64-linux-android`), `typeshare-cli`.
 
 ```
 scripts/gen-bindings.sh          # typeshare -> core/src/main/java/app/hocket/core/api/Generated.kt
                                  # uniffi-bindgen -> core/src/main/java/app/hocket/core/ffi/hocket_android.kt
-scripts/build-android-core.sh    # cargo-ndk -> core/src/main/jniLibs/<abi>/libhocket_android.so
+scripts/build-android-core.sh    # cargo build (all ABIs in one go) -> core/src/main/jniLibs/<abi>/libhocket_android.so
 cd android
 ./gradlew assembleDebug          # ANDROID_HOME=/path/to/sdk (or sdk.dir in local.properties)
 ./gradlew testDebugUnitTest      # JVM tests: JSON round-trips, client, lyrics cursor, fake core, Compose UI
