@@ -95,7 +95,7 @@ class SwipeActionsTest {
         compose.onNodeWithTag("row.b").performTouchInput { swipeRight() }
         compose.waitUntil(5_000) {
             val ids = core.client.queue.value.groupEntries.map { it.track.id }
-            ids.firstOrNull() == a.id && ids.lastOrNull() == b.id && ids.size > 1
+            ids.firstOrNull() == a.id && ids.lastOrNull() == b.id
         }
         // Queue section off: the same swipe plays later, at the end of the whole list.
         core.client.dispatch(Commands.setSetting(SettingKeys.QUEUE_SECTION, "false"))
