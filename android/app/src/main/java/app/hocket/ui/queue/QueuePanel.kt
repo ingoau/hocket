@@ -182,6 +182,9 @@ private fun Modifier.fadeOut(): Modifier = this
 private val FADE = 56.dp
 private val STRIP_TOP_PAD = 20.dp
 
+/** The widest a queue mode pill grows. */
+private val QUEUE_PILL_MAX_WIDTH = 200.dp
+
 /**
  * Shuffle, repeat (off / all / one) and autoplay as three equal tonal pills; with [labels], each
  * names itself beside its icon where all three names fit.
@@ -194,10 +197,11 @@ private fun QueueModeHeader(modifier: Modifier = Modifier, labels: Boolean = fal
     val style = MaterialTheme.typography.labelLarge
     val names = listOf(stringResource(R.string.action_shuffle), stringResource(R.string.action_label_repeat), stringResource(R.string.player_autoplay))
     androidx.compose.foundation.layout.BoxWithConstraints(modifier) {
-    val pill = (maxWidth - 16.dp) / 3
+    // Three across the width, but no longer than a pill reads well: wider, they sit centred.
+    val pill = ((maxWidth - 16.dp) / 3).coerceAtMost(QUEUE_PILL_MAX_WIDTH)
     val widest = with(LocalDensity.current) { names.maxOf { measurer.measure(it, style).size.width }.toDp() }
     val showLabels = labels && widest + 20.dp + 6.dp + 24.dp <= pill
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.width(pill * 3 + 16.dp).align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         ModeToggle(
             checked = queue.shuffle, onCheckedChange = { client.dispatch(Commands.setShuffle(it)) },
             icon = HocketIcons.Filled.Shuffle, label = stringResource(R.string.action_shuffle), tag = "queue.shuffle", modifier = Modifier.weight(1f), showLabel = showLabels,

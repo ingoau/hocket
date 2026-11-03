@@ -57,6 +57,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import app.hocket.ui.components.adaptiveColumns
+import app.hocket.ui.components.contentMaxWidth
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -321,15 +323,19 @@ private fun SectionBody(
         SectionStyle.Row -> LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(items, key = { it.key }) { HomeCell(it, actions, Modifier.width(if (it is HomeItem.ArtistItem) 124.dp else CellWidth)) }
         }
-        SectionStyle.Grid -> Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            items.take(6).chunked(2).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    row.forEach { HomeCell(it, actions, Modifier.weight(1f)) }
-                    if (row.size == 1) Spacer(Modifier.weight(1f))
+        SectionStyle.Grid -> androidx.compose.foundation.layout.BoxWithConstraints(Modifier.padding(horizontal = 16.dp)) {
+            // Three rows of two on a phone; a wider area fits more to a row, still three rows.
+            val columns = adaptiveColumns(maxWidth, GRID_CELL_MIN, 12.dp, max = GRID_MAX_COLUMNS)
+            Column(Modifier.testTag("home.grid"), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                items.take(columns * GRID_ROWS).chunked(columns).forEach { row ->
+                    Row(Modifier.testTag("home.grid.row"), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        row.forEach { HomeCell(it, actions, Modifier.weight(1f)) }
+                        repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
                 }
             }
         }
-        SectionStyle.List -> Column {
+        SectionStyle.List -> Column(Modifier.contentMaxWidth()) {
             items.take(8).forEach { item ->
                 if (item is HomeItem.TrackItem) TrackRow(item.track, onClick = { actions.open(item) }, onMore = { actions.menu(item) })
                 else HomeListRow(item, actions)
@@ -337,6 +343,11 @@ private fun SectionBody(
         }
     }
 }
+
+/** A Home grid's rows, its narrowest cell and its most columns (a cell's art stays a cover, not a poster). */
+private const val GRID_ROWS = 3
+private val GRID_CELL_MIN = 160.dp
+private const val GRID_MAX_COLUMNS = 6
 
 /** Something a Home section shows. */
 sealed interface HomeItem {

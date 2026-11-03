@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.library
 
+import app.hocket.ui.components.maxWidthListPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -60,23 +62,25 @@ fun SnoozedScreen(nav: NavHostController) {
         if (snoozes.isEmpty()) {
             EmptyState(stringResource(R.string.snooze_title), stringResource(R.string.snooze_empty), Modifier.padding(top = padding.calculateTopPadding()).fillMaxSize())
         } else {
-            LazyColumn(
-                contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = BottomContentInset),
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                items(snoozes, key = { it.trackId }) { item ->
-                    val until = item.until?.let { whenFormat.format(Date(it.toLong())) }
-                    val subtitle = if (until == null) stringResource(R.string.snooze_until_never) else stringResource(R.string.snooze_until, until)
-                    TrackRow(
-                        item.track.toSummary(),
-                        onClick = {
-                            val serverId = server?.id ?: return@TrackRow
-                            client.dispatch(Commands.playTracks(serverId, listOf(item.trackId), 0, item.track.title))
-                        },
-                        onMore = { songMenu.open(item.track.toSummary()) },
-                        subtitle = subtitle,
-                        modifier = Modifier.testTag("snoozed.row"),
-                    )
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    contentPadding = maxWidthListPadding(maxWidth, padding.calculateTopPadding(), BottomContentInset),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(snoozes, key = { it.trackId }) { item ->
+                        val until = item.until?.let { whenFormat.format(Date(it.toLong())) }
+                        val subtitle = if (until == null) stringResource(R.string.snooze_until_never) else stringResource(R.string.snooze_until, until)
+                        TrackRow(
+                            item.track.toSummary(),
+                            onClick = {
+                                val serverId = server?.id ?: return@TrackRow
+                                client.dispatch(Commands.playTracks(serverId, listOf(item.trackId), 0, item.track.title))
+                            },
+                            onMore = { songMenu.open(item.track.toSummary()) },
+                            subtitle = subtitle,
+                            modifier = Modifier.testTag("snoozed.row"),
+                        )
+                    }
                 }
             }
         }

@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.search
 
+import app.hocket.ui.components.maxWidthListPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ScrollToTopOnReselect
 import androidx.compose.foundation.clickable
@@ -182,9 +184,11 @@ fun SearchScreen(nav: NavHostController) {
         }
         val results = local
         if (results == null) {
-            LazyColumn(Modifier.fillMaxSize().testTag("search.recent"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = BottomContentInset)) {
-                if (query.isBlank() && recent.isNotEmpty()) recentSearches(recent, onPick = { query = it; recent = recentPrefs.remember(it) }, onForget = { recent = recentPrefs.forget(it) }, onClear = { recent = recentPrefs.clear() })
-                item(key = "hint") { SearchHint() }
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize().testTag("search.recent"), contentPadding = maxWidthListPadding(maxWidth, bottom = BottomContentInset, horizontal = 16.dp)) {
+                    if (query.isBlank() && recent.isNotEmpty()) recentSearches(recent, onPick = { query = it; recent = recentPrefs.remember(it) }, onForget = { recent = recentPrefs.forget(it) }, onClear = { recent = recentPrefs.clear() })
+                    item(key = "hint") { SearchHint() }
+                }
             }
             return
         }
@@ -218,81 +222,83 @@ fun SearchScreen(nav: NavHostController) {
         Box(Modifier.heightIn(min = with(density) { minHeightPx.toDp() }).onSizeChangedKeepMax { if (it > minHeightPx) minHeightPx = it }) {
             val listState = rememberLazyListState()
             ScrollToTopOnReselect(listState)
-            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = BottomContentInset)) {
-                if (kind != SearchKind.Lyrics && empty && server == null && !pendingRemote) item { EmptyState(stringResource(R.string.empty_search_none, query), stringResource(R.string.search_none_body)) }
-                if (show(SearchKind.Songs)) {
-                    val shown = if (kind == SearchKind.All) results.tracks.take(SONG_PREVIEW) else results.tracks
-                    val more = kind == SearchKind.All && results.tracks.size > SONG_PREVIEW
-                    val n = shown.size + if (more) 1 else 0
-                    item(key = "h.songs") { SearchSectionLabel(stringResource(R.string.search_songs)) }
-                    itemsIndexed(shown, key = { _, t -> "t" + t.id }) { i, t ->
-                        TrackRow(t, onClick = { rememberQuery(); client.dispatch(Commands.playTracks(serverId, results.tracks.map { it.id }, results.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) },
-                            nowPlaying = nowPlaying?.track?.id == t.id, segment = i to n, subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
-                            modifier = Modifier.segmentItem(i))
-                    }
-                    if (more) item(key = "songs.more") {
-                        Segment(n - 1, n, Modifier.segmentItem(1), onClick = { kind = SearchKind.Songs }) {
-                            Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 16.dp).testTag("search.songs.all"), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                Text(stringResource(R.string.search_see_all_songs), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                                Text(pluralStringResource(R.plurals.search_songs_count, results.tracks.size, results.tracks.size), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = maxWidthListPadding(maxWidth, bottom = BottomContentInset)) {
+                    if (kind != SearchKind.Lyrics && empty && server == null && !pendingRemote) item { EmptyState(stringResource(R.string.empty_search_none, query), stringResource(R.string.search_none_body)) }
+                    if (show(SearchKind.Songs)) {
+                        val shown = if (kind == SearchKind.All) results.tracks.take(SONG_PREVIEW) else results.tracks
+                        val more = kind == SearchKind.All && results.tracks.size > SONG_PREVIEW
+                        val n = shown.size + if (more) 1 else 0
+                        item(key = "h.songs") { SearchSectionLabel(stringResource(R.string.search_songs)) }
+                        itemsIndexed(shown, key = { _, t -> "t" + t.id }) { i, t ->
+                            TrackRow(t, onClick = { rememberQuery(); client.dispatch(Commands.playTracks(serverId, results.tracks.map { it.id }, results.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) },
+                                nowPlaying = nowPlaying?.track?.id == t.id, segment = i to n, subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
+                                modifier = Modifier.segmentItem(i))
+                        }
+                        if (more) item(key = "songs.more") {
+                            Segment(n - 1, n, Modifier.segmentItem(1), onClick = { kind = SearchKind.Songs }) {
+                                Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 16.dp).testTag("search.songs.all"), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                    Text(stringResource(R.string.search_see_all_songs), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                                    Text(pluralStringResource(R.plurals.search_songs_count, results.tracks.size, results.tracks.size), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         }
                     }
-                }
-                if (show(SearchKind.Lyrics)) {
-                    val hits = results.lyrics.orEmpty()
-                    val shown = if (kind == SearchKind.All) hits.take(SONG_PREVIEW) else hits
-                    val more = kind == SearchKind.All && hits.size > SONG_PREVIEW
-                    val n = shown.size + if (more) 1 else 0
-                    item(key = "h.lyrics") { SearchSectionLabel(stringResource(R.string.search_lyrics)) }
-                    itemsIndexed(shown, key = { _, h -> "ly" + h.track.id }) { i, h ->
-                        LyricHitRow(h, onClick = {
-                            rememberQuery()
-                            client.dispatch(Commands.playTracks(serverId, hits.map { it.track.id }, hits.indexOf(h), query, startPositionMs = h.startMs?.toLong() ?: 0))
-                        }, nowPlaying = nowPlaying?.track?.id == h.track.id, segment = i to n, modifier = Modifier.segmentItem(i))
-                    }
-                    if (more) item(key = "lyrics.more") {
-                        Segment(n - 1, n, Modifier.segmentItem(1), onClick = { kind = SearchKind.Lyrics }) {
-                            Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 16.dp).testTag("search.lyrics.all"), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                Text(stringResource(R.string.search_see_all_lyrics), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                                Text(pluralStringResource(R.plurals.search_lyrics_count, hits.size, hits.size), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (show(SearchKind.Lyrics)) {
+                        val hits = results.lyrics.orEmpty()
+                        val shown = if (kind == SearchKind.All) hits.take(SONG_PREVIEW) else hits
+                        val more = kind == SearchKind.All && hits.size > SONG_PREVIEW
+                        val n = shown.size + if (more) 1 else 0
+                        item(key = "h.lyrics") { SearchSectionLabel(stringResource(R.string.search_lyrics)) }
+                        itemsIndexed(shown, key = { _, h -> "ly" + h.track.id }) { i, h ->
+                            LyricHitRow(h, onClick = {
+                                rememberQuery()
+                                client.dispatch(Commands.playTracks(serverId, hits.map { it.track.id }, hits.indexOf(h), query, startPositionMs = h.startMs?.toLong() ?: 0))
+                            }, nowPlaying = nowPlaying?.track?.id == h.track.id, segment = i to n, modifier = Modifier.segmentItem(i))
+                        }
+                        if (more) item(key = "lyrics.more") {
+                            Segment(n - 1, n, Modifier.segmentItem(1), onClick = { kind = SearchKind.Lyrics }) {
+                                Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 16.dp).testTag("search.lyrics.all"), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                    Text(stringResource(R.string.search_see_all_lyrics), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                                    Text(pluralStringResource(R.plurals.search_lyrics_count, hits.size, hits.size), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         }
                     }
-                }
-                if (kind == SearchKind.Lyrics && results.lyrics.orEmpty().isEmpty()) item(key = "lyrics.empty") {
-                    EmptyState(stringResource(R.string.search_lyrics_none), stringResource(R.string.search_lyrics_scope))
-                }
-                if (show(SearchKind.Albums)) {
-                    item(key = "h.albums") { SearchSectionLabel(stringResource(R.string.search_albums), top = 16.dp) }
-                    item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) } }
-                }
-                if (show(SearchKind.Artists)) {
-                    item(key = "h.artists") { SearchSectionLabel(stringResource(R.string.search_artists), top = 16.dp) }
-                    itemsIndexed(results.artists, key = { _, ar -> "ar" + ar.id }) { i, ar -> ArtistRow(ar, onClick = { rememberQuery(); nav.navigate(Route.Artist(ar.id)) }, segment = i to results.artists.size, modifier = Modifier.segmentItem(i)) }
-                }
-                if (show(SearchKind.Playlists)) {
-                    item(key = "h.playlists") { SearchSectionLabel(stringResource(R.string.search_playlists), top = 16.dp) }
-                    itemsIndexed(results.playlists, key = { _, p -> "p" + p.id }) { i, p -> PlaylistRow(p, onClick = { rememberQuery(); nav.navigate(Route.Playlist(p.id)) }, segment = i to results.playlists.size, modifier = Modifier.segmentItem(i)) }
-                }
-                if (kind != SearchKind.Lyrics) item(key = "server") {
-                    HorizontalDivider(Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                    Row(Modifier.padding(horizontal = 16.dp).heightIn(min = 44.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Text(stringResource(R.string.search_from_server), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
-                        if (pendingRemote) LoadingIndicator(Modifier.size(28.dp))
+                    if (kind == SearchKind.Lyrics && results.lyrics.orEmpty().isEmpty()) item(key = "lyrics.empty") {
+                        EmptyState(stringResource(R.string.search_lyrics_none), stringResource(R.string.search_lyrics_scope))
                     }
-                    if (pendingRemote) Text(stringResource(R.string.search_server_pending), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
-                    else if (server != null && server.tracks.isEmpty() && server.albums.isEmpty() && server.artists.isEmpty()) Text(stringResource(R.string.search_server_none), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
-                }
-                if (kind != SearchKind.Lyrics) server?.let { r ->
-                    val tracks = if (kind == SearchKind.All || kind == SearchKind.Songs) r.tracks else emptyList()
-                    val artists = if (kind == SearchKind.All || kind == SearchKind.Artists) r.artists else emptyList()
-                    val n = tracks.size + artists.size
-                    itemsIndexed(tracks, key = { _, t -> "rt" + t.id }) { i, t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, r.tracks.map { it.id }, r.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) }, segment = i to n, modifier = Modifier.segmentItem(i)) }
-                    if (r.albums.isNotEmpty() && (kind == SearchKind.All || kind == SearchKind.Albums)) item(key = "ralbums") { AlbumStrip(r.albums, Modifier.animateItem().padding(vertical = 8.dp)) { a -> nav.navigate(Route.Album(a.id)) } }
-                    itemsIndexed(artists, key = { _, ar -> "rar" + ar.id }) { i, ar -> ArtistRow(ar, onClick = { nav.navigate(Route.Artist(ar.id)) }, segment = (tracks.size + i) to n, modifier = Modifier.segmentItem(tracks.size + i)) }
+                    if (show(SearchKind.Albums)) {
+                        item(key = "h.albums") { SearchSectionLabel(stringResource(R.string.search_albums), top = 16.dp) }
+                        item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) } }
+                    }
+                    if (show(SearchKind.Artists)) {
+                        item(key = "h.artists") { SearchSectionLabel(stringResource(R.string.search_artists), top = 16.dp) }
+                        itemsIndexed(results.artists, key = { _, ar -> "ar" + ar.id }) { i, ar -> ArtistRow(ar, onClick = { rememberQuery(); nav.navigate(Route.Artist(ar.id)) }, segment = i to results.artists.size, modifier = Modifier.segmentItem(i)) }
+                    }
+                    if (show(SearchKind.Playlists)) {
+                        item(key = "h.playlists") { SearchSectionLabel(stringResource(R.string.search_playlists), top = 16.dp) }
+                        itemsIndexed(results.playlists, key = { _, p -> "p" + p.id }) { i, p -> PlaylistRow(p, onClick = { rememberQuery(); nav.navigate(Route.Playlist(p.id)) }, segment = i to results.playlists.size, modifier = Modifier.segmentItem(i)) }
+                    }
+                    if (kind != SearchKind.Lyrics) item(key = "server") {
+                        HorizontalDivider(Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                        Row(Modifier.padding(horizontal = 16.dp).heightIn(min = 44.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Text(stringResource(R.string.search_from_server), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
+                            if (pendingRemote) LoadingIndicator(Modifier.size(28.dp))
+                        }
+                        if (pendingRemote) Text(stringResource(R.string.search_server_pending), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
+                        else if (server != null && server.tracks.isEmpty() && server.albums.isEmpty() && server.artists.isEmpty()) Text(stringResource(R.string.search_server_none), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
+                    }
+                    if (kind != SearchKind.Lyrics) server?.let { r ->
+                        val tracks = if (kind == SearchKind.All || kind == SearchKind.Songs) r.tracks else emptyList()
+                        val artists = if (kind == SearchKind.All || kind == SearchKind.Artists) r.artists else emptyList()
+                        val n = tracks.size + artists.size
+                        itemsIndexed(tracks, key = { _, t -> "rt" + t.id }) { i, t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, r.tracks.map { it.id }, r.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) }, segment = i to n, modifier = Modifier.segmentItem(i)) }
+                        if (r.albums.isNotEmpty() && (kind == SearchKind.All || kind == SearchKind.Albums)) item(key = "ralbums") { AlbumStrip(r.albums, Modifier.animateItem().padding(vertical = 8.dp)) { a -> nav.navigate(Route.Album(a.id)) } }
+                        itemsIndexed(artists, key = { _, ar -> "rar" + ar.id }) { i, ar -> ArtistRow(ar, onClick = { nav.navigate(Route.Artist(ar.id)) }, segment = (tracks.size + i) to n, modifier = Modifier.segmentItem(tracks.size + i)) }
+                    }
                 }
             }
         }

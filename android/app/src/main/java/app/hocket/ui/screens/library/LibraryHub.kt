@@ -84,6 +84,7 @@ import app.hocket.ui.components.ShimmerHost
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.AccountButton
 import app.hocket.ui.nav.BottomContentInset
+import app.hocket.ui.components.adaptiveColumns
 import app.hocket.ui.nav.Route
 import app.hocket.ui.nav.ScrollToTopOnReselect
 import kotlinx.coroutines.launch
@@ -149,15 +150,19 @@ fun LibraryScreen(nav: NavHostController) {
                             pins.isEmpty() -> Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().testTag("library.pins.empty")) {
                                 Text(stringResource(R.string.library_pin_empty), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
                             }
-                            else -> Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP), modifier = Modifier.testTag("library.pins")) {
-                                pins.chunked(2).forEachIndexed { r, row ->
-                                    Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
-                                        row.forEachIndexed { c, pin ->
-                                            PinCard(pin, Modifier.weight(1f), pinGroupEdges(r * 2 + c, pins.size).shape(outer = 20.dp),
-                                                onTap = { performPin(client, nav, serverId, pin) },
-                                                onMenu = { pinMenu = pin })
+                            else -> androidx.compose.foundation.layout.BoxWithConstraints {
+                                // Two to a row on a phone; a wider area fits as many as stay readable.
+                                val columns = adaptiveColumns(maxWidth, PIN_MIN_WIDTH, GROUP_GAP)
+                                Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP), modifier = Modifier.testTag("library.pins")) {
+                                    pins.chunked(columns).forEachIndexed { r, row ->
+                                        Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+                                            row.forEachIndexed { c, pin ->
+                                                PinCard(pin, Modifier.weight(1f), pinGroupEdges(r * columns + c, pins.size, columns).shape(outer = 20.dp),
+                                                    onTap = { performPin(client, nav, serverId, pin) },
+                                                    onMenu = { pinMenu = pin })
+                                            }
+                                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                                         }
-                                        if (row.size == 1) Spacer(Modifier.weight(1f))
                                     }
                                 }
                             }
@@ -336,6 +341,9 @@ internal fun pinGroupEdges(index: Int, count: Int, columns: Int = 2): GroupEdges
         end = col == columns - 1 || index == count - 1,
     )
 }
+
+/** The narrowest a pin card gets once a wide area holds more than two to a row. */
+internal val PIN_MIN_WIDTH = 220.dp
 
 /** The gap between tiles in a connected group. */
 internal val GROUP_GAP = 3.dp
