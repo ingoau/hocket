@@ -2679,6 +2679,13 @@ pub enum Query {
     ExportAudio {
         track_id: TrackId,
     },
+    /// The Song.link page for a track (`song.link/d/…`), or the Album.link page for an album
+    /// (`album.link/d/…`), found on Deezer: by the track's ISRC, else by artist and title.
+    /// Exactly one of `track_id` and `album_id`. The answer is `QueryResult::SongLink`.
+    SongLink {
+        track_id: Option<TrackId>,
+        album_id: Option<AlbumId>,
+    },
 }
 
 #[typeshare]
@@ -2867,6 +2874,8 @@ pub enum QueryResult {
     Share(Option<CreatedShare>),
     /// A track's original file, ready to hand to the platform share sheet.
     AudioFile(Option<ExportedAudio>),
+    /// A Song.link or Album.link URL. None when Deezer has no match, or offline.
+    SongLink(Option<String>),
     ReportUpload(Option<ReportUploadStatus>),
 }
 

@@ -9,6 +9,7 @@ import androidx.core.content.FileProvider
 import app.hocket.R
 import app.hocket.core.Queries
 import app.hocket.core.api.ActionTarget
+import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.client.CoreClient
 import androidx.compose.runtime.Composable
@@ -33,21 +34,17 @@ data class ShareChoices(val navidrome: Boolean, val songLink: Boolean, val file:
 
 /**
  * One song has every option. Several songs, an album and a playlist can make a link
- * (an album also Song.link). An artist is Song.link only: createShare has no artist id.
- * Open in Genius is a row of the song menu, not one of these.
+ * (an album also Song.link). An artist has none: createShare has no artist id and
+ * Song.link no artist pages. Open in Genius is a row of the song menu, not one of these.
  */
 fun shareChoices(kind: MenuKind, count: Int = 1): ShareChoices = when (kind) {
     MenuKind.Song -> ShareChoices(navidrome = true, songLink = count <= 1, file = count <= 1)
     MenuKind.Songs -> ShareChoices(navidrome = true, songLink = false, file = false)
     MenuKind.Album -> ShareChoices(navidrome = true, songLink = true, file = false)
-    MenuKind.Artist -> ShareChoices(navidrome = false, songLink = true, file = false)
+    MenuKind.Artist -> ShareChoices(navidrome = false, songLink = false, file = false)
     MenuKind.Playlist -> ShareChoices(navidrome = true, songLink = false, file = false)
     MenuKind.Other -> ShareChoices(navidrome = false, songLink = false, file = false)
 }
-
-/** Song.link's search page. `URLEncoder` writes spaces as `+`; Song.link wants `%20`. */
-fun songLinkSearch(query: String): String =
-    "https://song.link/s/" + URLEncoder.encode(query.trim(), Charsets.UTF_8.name()).replace("+", "%20")
 
 /** Genius search for `"title" "artist"`. Null when there is no title. */
 fun geniusSearch(title: String, artist: String?): String? {
@@ -58,11 +55,15 @@ fun geniusSearch(title: String, artist: String?): String? {
     return "https://genius.com/search?q=" + URLEncoder.encode(q, Charsets.UTF_8.name()).replace("+", "%20")
 }
 
-/** "Artist Title" / "Artist Album" / the artist's name. */
-fun songLinkQuery(subject: MenuSubject): String? = when (subject.kind) {
-    MenuKind.Song -> listOfNotNull(subject.artist, subject.title).joinToString(" ").ifBlank { null }
-    MenuKind.Album -> listOfNotNull(subject.artist, subject.album ?: subject.title).joinToString(" ").ifBlank { null }
-    MenuKind.Artist -> (subject.artist ?: subject.title).ifBlank { null }
+/**
+ * What the core's songLink query looks up: one song or one album. Song.link takes a
+ * platform id, not a search, so the core finds the item on Deezer first.
+ */
+fun songLinkQuery(subject: MenuSubject, target: ActionTarget): Query? = when (subject.kind) {
+    MenuKind.Song -> (subject.trackId ?: (target as? ActionTarget.Tracks)?.data?.ids?.singleOrNull())
+        ?.takeIf { it.isNotEmpty() }?.let { Queries.songLink(trackId = it) }
+    MenuKind.Album -> ((target as? ActionTarget.Albums)?.data?.ids?.singleOrNull() ?: subject.albumId)
+        ?.takeIf { it.isNotEmpty() }?.let { Queries.songLink(albumId = it) }
     else -> null
 }
 
@@ -79,8 +80,9 @@ object ShareActions {
                 if (url.isNullOrBlank()) toast(context, R.string.toast_share_failed) else sendText(context, url)
             }
             ShareChoice.SongLink -> {
-                val query = songLinkQuery(request.subject)
-                if (query == null) toast(context, R.string.toast_share_failed) else sendText(context, songLinkSearch(query))
+                val url = songLinkQuery(request.subject, request.target)
+                    ?.let { (client.query(it) as? QueryResult.SongLink)?.data }
+                if (url.isNullOrBlank()) toast(context, R.string.toast_share_failed) else sendText(context, url)
             }
             ShareChoice.Genius -> {
                 val url = geniusSearch(request.subject.title, request.subject.artist)

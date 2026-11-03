@@ -380,6 +380,62 @@ async fn filters_preview_export_and_materialise() {
     );
 }
 
+/// [`synced`], with this HTTP for external services (lyrics, Deezer) instead of the network.
+async fn synced_with_http(name: &str, server: FakeServer, http: Arc<dyn LyricsHttp>) -> TestCore {
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let dir = tempfile::tempdir().unwrap();
+    let config = CoreConfig {
+        data_dir: dir.path().join("d").to_string_lossy().into_owned(),
+        cache_dir: dir.path().join("c").to_string_lossy().into_owned(),
+        device_id: format!("dev-{name}"),
+        device_name: name.into(),
+        platform: Platform::Linux,
+        app_version: "test".into(),
+        audio: AudioMode::None,
+        coordinator_listen: None,
+    };
+    let (backend, scripted) = TestBackend::scripted(clock.clone());
+    let core = Core::new_for_test_with(
+        config,
+        clock.clone(),
+        TestOptions {
+            backend,
+            api: Some(Arc::new(server.clone())),
+            server_url: "https://music.example/".into(),
+            password: "pw".into(),
+            net: None,
+            lyrics_http: Some(http),
+            seed: 7,
+            reducer: None,
+        },
+    )
+    .unwrap();
+    let events = Arc::new(hocket_core::core::test_support::EventLog::default());
+    core.add_sink(events.clone());
+    core.dispatch(Command::Start).unwrap();
+    core.settle().await;
+    let t = TestCore {
+        core,
+        backend: scripted,
+        sources: Default::default(),
+        upstream: Default::default(),
+        clock,
+        server: server.clone(),
+        events,
+        device_id: format!("dev-{name}"),
+        server_id: "srv".into(),
+        dir,
+    };
+    t.wait_until(30_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+    })
+    .await;
+    t
+}
+
 struct FakeLyricsHttp(String);
 
 impl LyricsHttp for FakeLyricsHttp {
@@ -479,58 +535,8 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
             }],
         );
     }
-    let clock = SimTime::new(1_700_000_000_000.0);
-    let dir = tempfile::tempdir().unwrap();
-    let config = CoreConfig {
-        data_dir: dir.path().join("d").to_string_lossy().into_owned(),
-        cache_dir: dir.path().join("c").to_string_lossy().into_owned(),
-        device_id: "dev-lyrics".into(),
-        device_name: "Lyrics".into(),
-        platform: Platform::Linux,
-        app_version: "test".into(),
-        audio: AudioMode::None,
-        coordinator_listen: None,
-    };
-    let (backend, scripted) = TestBackend::scripted(clock.clone());
     let external = r#"{"plainLyrics":"From outside","syncedLyrics":"[00:01.00] From outside\n[00:03.00] Synced too"}"#;
-    let core = Core::new_for_test_with(
-        config,
-        clock.clone(),
-        TestOptions {
-            backend,
-            api: Some(Arc::new(server.clone())),
-            server_url: "https://music.example/".into(),
-            password: "pw".into(),
-            net: None,
-            lyrics_http: Some(Arc::new(FakeLyricsHttp(external.into()))),
-            seed: 7,
-            reducer: None,
-        },
-    )
-    .unwrap();
-    let events = Arc::new(hocket_core::core::test_support::EventLog::default());
-    core.add_sink(events.clone());
-    core.dispatch(Command::Start).unwrap();
-    core.settle().await;
-    let t = TestCore {
-        core,
-        backend: scripted,
-        sources: Default::default(),
-        upstream: Default::default(),
-        clock,
-        server: server.clone(),
-        events,
-        device_id: "dev-lyrics".into(),
-        server_id: "srv".into(),
-        dir,
-    };
-    t.wait_until(30_000.0, |t| {
-        t.events
-            .all()
-            .iter()
-            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
-    })
-    .await;
+    let t = synced_with_http("lyrics", server, Arc::new(FakeLyricsHttp(external.into()))).await;
 
     let l0 = lyrics_of(&t, "t0").await.expect("syllable lyrics");
     assert_eq!(l0.tier, LyricsTier::Syllable);
@@ -1200,4 +1206,87 @@ async fn artist_and_album_info_come_from_the_server_and_are_cached() {
         external(t.query(Query::AlbumInfo { id: "al1".into() }).await),
         None
     );
+}
+
+/// Deezer by URL: the answer for the first key the URL contains, else 404. Records each URL.
+struct FakeDeezer {
+    answers: Vec<(String, String)>,
+    asked: Arc<parking_lot::Mutex<Vec<String>>>,
+}
+
+impl LyricsHttp for FakeDeezer {
+    fn get(&self, url: &str) -> BoxFuture<'_, Result<String, LyricsError>> {
+        self.asked.lock().push(url.to_string());
+        let hit = self
+            .answers
+            .iter()
+            .find(|(k, _)| url.contains(k.as_str()))
+            .map(|(_, v)| v.clone());
+        Box::pin(async move {
+            hit.ok_or(LyricsError::Http {
+                status: 404,
+                body: String::new(),
+            })
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn song_link_finds_the_song_on_deezer_by_isrc_then_by_search() {
+    let server = seeded_server(4, 180.0);
+    server.state.lock().songs.get_mut("t0").unwrap().isrc = vec!["GBAYE9200070".into()];
+    let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let http = Arc::new(FakeDeezer {
+        answers: vec![
+            ("track/isrc:GBAYE9200070".into(), r#"{"id":111}"#.into()),
+            (
+                "/search?".into(),
+                r#"{"data":[{"id":222,"title":"Track 1","duration":180,"artist":{"name":"Artist ar0"}}]}"#.into(),
+            ),
+            (
+                "/search/album?".into(),
+                r#"{"data":[{"id":333,"title":"Album al0","artist":{"name":"Artist ar0"}}]}"#.into(),
+            ),
+        ],
+        asked: asked.clone(),
+    });
+    let t = synced_with_http("songlink", server, http).await;
+    let link = |track: Option<&str>, album: Option<&str>| {
+        let q = Query::SongLink {
+            track_id: track.map(Into::into),
+            album_id: album.map(Into::into),
+        };
+        let t = &t;
+        async move {
+            match t.query(q).await {
+                QueryResult::SongLink(url) => url,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    };
+
+    // The mirror keeps no ISRC: the core asks the server for the song, then Deezer by ISRC.
+    let before = t.server.calls_to("getSong");
+    assert_eq!(
+        link(Some("t0"), None).await.as_deref(),
+        Some("https://song.link/d/111")
+    );
+    assert_eq!(t.server.calls_to("getSong"), before + 1);
+    // No ISRC: search, and keep the result with this artist and title.
+    assert_eq!(
+        link(Some("t1"), None).await.as_deref(),
+        Some("https://song.link/d/222")
+    );
+    // Track 2 is not in the search answer.
+    assert_eq!(link(Some("t2"), None).await, None);
+    assert_eq!(
+        link(None, Some("al0")).await.as_deref(),
+        Some("https://album.link/d/333")
+    );
+    assert_eq!(link(Some("nope"), None).await, None);
+    assert_eq!(link(None, None).await, None);
+    assert!(asked
+        .lock()
+        .iter()
+        .all(|u| u.starts_with("https://api.deezer.com/")));
 }

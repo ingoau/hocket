@@ -1729,6 +1729,10 @@ class FakeCore(
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
         is Query.CreateShare -> QueryResult.Share(q.data.ids.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() }?.let { CreatedShare("https://navidrome.example/share/${it.joinToString("-")}") })
         is Query.ExportAudio -> QueryResult.AudioFile(null)
+        is Query.SongLink -> QueryResult.SongLink(
+            q.data.track_id?.takeIf { it.isNotEmpty() }?.let { "https://song.link/d/$it" }
+                ?: q.data.album_id?.takeIf { it.isNotEmpty() }?.let { "https://album.link/d/$it" },
+        )
     }
 
     /** As the native core: every playlist, in name order, with the indices holding any of [trackIds]. */
