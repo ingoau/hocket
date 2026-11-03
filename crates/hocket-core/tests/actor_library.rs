@@ -1269,19 +1269,19 @@ async fn song_link_finds_the_song_on_deezer_by_isrc_then_by_search() {
     let before = t.server.calls_to("getSong");
     assert_eq!(
         link(Some("t0"), None).await.as_deref(),
-        Some("https://song.link/d/111")
+        Some("https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F111")
     );
     assert_eq!(t.server.calls_to("getSong"), before + 1);
     // No ISRC: search, and keep the result with this artist and title.
     assert_eq!(
         link(Some("t1"), None).await.as_deref(),
-        Some("https://song.link/d/222")
+        Some("https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F222")
     );
     // Track 2 is not in the search answer.
     assert_eq!(link(Some("t2"), None).await, None);
     assert_eq!(
         link(None, Some("al0")).await.as_deref(),
-        Some("https://album.link/d/333")
+        Some("https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Falbum%2F333")
     );
     assert_eq!(link(Some("nope"), None).await, None);
     assert_eq!(link(None, None).await, None);

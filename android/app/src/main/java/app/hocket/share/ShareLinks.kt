@@ -34,8 +34,8 @@ data class ShareChoices(val navidrome: Boolean, val songLink: Boolean, val file:
 
 /**
  * One song has every option. Several songs, an album and a playlist can make a link
- * (an album also Song.link). An artist has none: createShare has no artist id and
- * Song.link no artist pages. Open in Genius is a row of the song menu, not one of these.
+ * (an album also Squigly). An artist has none: createShare has no artist id and
+ * Squigly gets no artist pages from us. Open in Genius is a row of the song menu, not one of these.
  */
 fun shareChoices(kind: MenuKind, count: Int = 1): ShareChoices = when (kind) {
     MenuKind.Song -> ShareChoices(navidrome = true, songLink = count <= 1, file = count <= 1)
@@ -56,8 +56,8 @@ fun geniusSearch(title: String, artist: String?): String? {
 }
 
 /**
- * What the core's songLink query looks up: one song or one album. Song.link takes a
- * platform id, not a search, so the core finds the item on Deezer first.
+ * What the core's songLink query looks up: one song or one album. Squigly takes another
+ * service's link, not a search, so the core finds the item on Deezer first.
  */
 fun songLinkQuery(subject: MenuSubject, target: ActionTarget): Query? = when (subject.kind) {
     MenuKind.Song -> (subject.trackId ?: (target as? ActionTarget.Tracks)?.data?.ids?.singleOrNull())
@@ -70,7 +70,7 @@ fun songLinkQuery(subject: MenuSubject, target: ActionTarget): Query? = when (su
 /** One share the menu asked for, kept by the host so the work outlives the sheet. */
 data class ShareRequest(val choice: ShareChoice, val subject: MenuSubject, val target: ActionTarget)
 
-/** Opens the system share sheet for a Navidrome link, a Song.link, or the audio file. */
+/** Opens the system share sheet for a Navidrome link, a Squigly link, or the audio file. */
 object ShareActions {
     suspend fun perform(context: Context, client: CoreClient, request: ShareRequest) {
         when (request.choice) {

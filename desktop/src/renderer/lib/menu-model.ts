@@ -1,7 +1,7 @@
 // The context menu's layout, from the registry's descriptors and the renderer's own items: a header
 // for an item target, the play actions as one icon-only strip, the six rate actions as an inline
 // Rating row, Love / Download / Pin as checkboxes (one row for each pair the registry offers), Add
-// to playlist as a submenu, Share as a second submenu (Navidrome, Song.link, the file), Open in Genius
+// to playlist as a submenu, Share as a second submenu (Navidrome, Squigly, the file), Open in Genius
 // for one song, then
 // everything else in the registry's order with the destructive item last. Pure: the menu component
 // draws and runs what this returns.

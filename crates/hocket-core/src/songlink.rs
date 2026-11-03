@@ -1,19 +1,22 @@
-//! Song.link URLs for a song or an album, by way of Deezer.
+//! Squigly links for a song or an album, by way of Deezer.
 //!
-//! Song.link has no search URL: `song.link/s/<x>` takes a Spotify track id. So the
-//! song is first found on Deezer, which needs no key: by ISRC when the server knows
-//! it, else by searching "artist title" and keeping only a result whose artist and
-//! title match. The answer is then `song.link/d/<deezer track id>` or
-//! `album.link/d/<deezer album id>`.
+//! Squigly makes its page from another service's link and has no search. So the song is
+//! first found on Deezer, which needs no key: by ISRC when the server knows it, else by
+//! searching "artist title" and keeping only a result whose artist and title match. The
+//! Deezer link then goes to Squigly's `POST /api/create`, which answers the page
+//! (`squigly.link/song/<artist>/<title>`). When that fails (it rate-limits anonymous
+//! callers), the answer is `squigly.link/?link=<deezer link>`, which makes the page when
+//! opened.
 //!
-//! Network goes through [`LyricsHttp`] (a plain GET), so tests use a fake.
+//! Network goes through [`LyricsHttp`], so tests use a fake.
 
 use serde::Deserialize;
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
-use crate::lyrics::LyricsHttp;
+use crate::lyrics::{LyricsError, LyricsHttp};
 
 const DEEZER: &str = "https://api.deezer.com";
+const SQUIGLY: &str = "https://squigly.link";
 
 /// What is known about a song, for finding it on Deezer.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -24,7 +27,7 @@ pub struct SongFacts {
     pub isrc: Vec<String>,
 }
 
-/// The Song.link page for a song: by ISRC, else by search. None when nothing matches.
+/// The Squigly page for a song: by ISRC, else by search. None when nothing matches.
 pub async fn song_url(http: &dyn LyricsHttp, song: &SongFacts) -> Option<String> {
     let isrcs = song
         .isrc
@@ -36,7 +39,9 @@ pub async fn song_url(http: &dyn LyricsHttp, song: &SongFacts) -> Option<String>
         match http.get(&url).await {
             Ok(body) => {
                 if let Some(id) = parse_isrc_track(&body) {
-                    return Some(format!("https://song.link/d/{id}"));
+                    return Some(
+                        squigly(http, &format!("https://www.deezer.com/track/{id}")).await,
+                    );
                 }
             }
             Err(e) => {
@@ -61,10 +66,11 @@ pub async fn song_url(http: &dyn LyricsHttp, song: &SongFacts) -> Option<String>
             return None;
         }
     };
-    pick_track(&body, artist, title, song.duration_ms).map(|id| format!("https://song.link/d/{id}"))
+    let id = pick_track(&body, artist, title, song.duration_ms)?;
+    Some(squigly(http, &format!("https://www.deezer.com/track/{id}")).await)
 }
 
-/// The Album.link page for an album, by search. None when nothing matches.
+/// The Squigly page for an album, by search. None when nothing matches.
 pub async fn album_url(http: &dyn LyricsHttp, name: &str, artist: Option<&str>) -> Option<String> {
     let artist = artist.map(str::trim).filter(|a| !a.is_empty())?;
     let name = name.trim();
@@ -79,7 +85,53 @@ pub async fn album_url(http: &dyn LyricsHttp, name: &str, artist: Option<&str>) 
             return None;
         }
     };
-    pick_album(&body, artist, name).map(|id| format!("https://album.link/d/{id}"))
+    let id = pick_album(&body, artist, name)?;
+    Some(squigly(http, &format!("https://www.deezer.com/album/{id}")).await)
+}
+
+/// The Squigly page for a Deezer link: made now if Squigly answers, else made when opened.
+async fn squigly(http: &dyn LyricsHttp, deezer: &str) -> String {
+    let body = serde_json::json!({ "url": deezer }).to_string();
+    let create = http.post_json(&format!("{SQUIGLY}/api/create"), body);
+    // Share waits on this, and the fallback works too: don't wait long.
+    match tokio::time::timeout(std::time::Duration::from_secs(4), create)
+        .await
+        .unwrap_or_else(|_| Err(LyricsError::Network("timed out".into())))
+    {
+        Ok(answer) => {
+            if let Some(url) = parse_created(&answer) {
+                return url;
+            }
+            tracing::debug!(target: "hocket_core", "squigly answered no link");
+        }
+        Err(e) => tracing::debug!(target: "hocket_core", error = %e, "squigly create failed"),
+    }
+    let mut url = url::Url::parse(SQUIGLY).expect("static url");
+    url.query_pairs_mut().append_pair("link", deezer);
+    url.into()
+}
+
+#[derive(Deserialize)]
+struct Created {
+    full_url: Option<String>,
+    pretty_url: Option<String>,
+    url: Option<String>,
+}
+
+/// The page in a `/api/create` answer: `full_url`, else a path on squigly.link. Only a
+/// squigly.link URL, so an odd answer can't put another site on the clipboard.
+fn parse_created(body: &str) -> Option<String> {
+    let c: Created = serde_json::from_str(body).ok()?;
+    let path = |p: Option<String>| p.filter(|p| p.starts_with('/') && !p.starts_with("//"));
+    let url = c
+        .full_url
+        .filter(|u| u.starts_with(&format!("{SQUIGLY}/")))
+        .or_else(|| {
+            path(c.pretty_url)
+                .or_else(|| path(c.url))
+                .map(|p| format!("{SQUIGLY}{p}"))
+        })?;
+    Some(url)
 }
 
 fn search_url(path: &str, q: &str) -> String {
@@ -250,7 +302,6 @@ fn fold(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lyrics::LyricsError;
     use futures::future::BoxFuture;
     use std::sync::Mutex;
 
@@ -289,6 +340,11 @@ mod tests {
                     }),
                 }
             })
+        }
+
+        fn post_json(&self, url: &str, body: String) -> BoxFuture<'_, Result<String, LyricsError>> {
+            self.asked.lock().unwrap().push(body);
+            self.get(url)
         }
     }
 
@@ -398,9 +454,10 @@ mod tests {
         };
         assert_eq!(
             song_url(&http, &song).await.as_deref(),
-            Some("https://song.link/d/138547415")
+            Some("https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F138547415")
         );
-        assert_eq!(http.asked.lock().unwrap().len(), 1);
+        // The ISRC lookup, then Squigly (its body and its URL), which fails: the fallback.
+        assert_eq!(http.asked.lock().unwrap().len(), 3);
 
         let http = FakeHttp::new(vec![
             ("track/isrc:", Ok(r#"{"error":{"code":800}}"#.into())),
@@ -414,10 +471,10 @@ mod tests {
         };
         assert_eq!(
             song_url(&http, &song).await.as_deref(),
-            Some("https://song.link/d/2553265")
+            Some("https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F2553265")
         );
         let asked = http.asked.lock().unwrap().clone();
-        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert_eq!(asked.len(), 4, "{asked:?}");
         assert_eq!(
             asked[1],
             "https://api.deezer.com/search?q=Beyonc%C3%A9+Halo&limit=25"
@@ -454,5 +511,74 @@ mod tests {
             let _ = base_title(&title);
             let _ = words(&artist);
         }
+    }
+
+    #[tokio::test]
+    async fn squigly_makes_the_page_from_the_deezer_link() {
+        let http = FakeHttp::new(vec![
+            ("track/isrc:GBAYE9200070", Ok(r#"{"id":138547415}"#.into())),
+            (
+                "squigly.link/api/create",
+                Ok(r#"{"slug":"g7QetE","pretty_url":"/song/radiohead/creep","full_url":"https://squigly.link/song/radiohead/creep"}"#.into()),
+            ),
+        ]);
+        let song = SongFacts {
+            title: "Creep".into(),
+            isrc: vec!["GBAYE9200070".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            song_url(&http, &song).await.as_deref(),
+            Some("https://squigly.link/song/radiohead/creep")
+        );
+        let asked = http.asked.lock().unwrap().clone();
+        assert!(
+            asked.contains(&r#"{"url":"https://www.deezer.com/track/138547415"}"#.to_string()),
+            "{asked:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_album_page_from_the_deezer_album_link() {
+        let http = FakeHttp::new(vec![
+            (
+                "/search/album?",
+                Ok(r#"{"data":[{"id":14879699,"title":"OK Computer","artist":{"name":"Radiohead"}}]}"#.into()),
+            ),
+            (
+                "squigly.link/api/create",
+                Ok(r#"{"url":"/aB12cD","pretty_url":"/album/radiohead/ok-computer"}"#.into()),
+            ),
+        ]);
+        assert_eq!(
+            album_url(&http, "OK Computer", Some("Radiohead"))
+                .await
+                .as_deref(),
+            Some("https://squigly.link/album/radiohead/ok-computer")
+        );
+        let asked = http.asked.lock().unwrap().clone();
+        assert!(
+            asked.contains(&r#"{"url":"https://www.deezer.com/album/14879699"}"#.to_string()),
+            "{asked:?}"
+        );
+    }
+
+    #[test]
+    fn a_created_answer_is_a_squigly_page_or_nothing() {
+        assert_eq!(
+            parse_created(r#"{"pretty_url":"/album/radiohead/ok-computer","url":"/x"}"#).as_deref(),
+            Some("https://squigly.link/album/radiohead/ok-computer")
+        );
+        assert_eq!(
+            parse_created(r#"{"url":"/g7QetE"}"#).as_deref(),
+            Some("https://squigly.link/g7QetE")
+        );
+        assert_eq!(
+            parse_created(r#"{"full_url":"https://evil.example/x"}"#),
+            None
+        );
+        assert_eq!(parse_created(r#"{"pretty_url":"//evil.example/x"}"#), None);
+        assert_eq!(parse_created(r#"{"error":"rate limited"}"#), None);
+        assert_eq!(parse_created("<html>"), None);
     }
 }

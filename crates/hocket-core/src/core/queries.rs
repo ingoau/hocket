@@ -338,7 +338,7 @@ impl Actor {
                 None => match crate::lyrics::ReqwestLyricsHttp::new(&app_version) {
                     Ok(h) => Arc::new(h),
                     Err(e) => {
-                        tracing::debug!(target: "hocket_core", error = %e, "song.link: no http client");
+                        tracing::debug!(target: "hocket_core", error = %e, "squigly: no http client");
                         let _ = reply.send(QueryResult::SongLink(None));
                         return;
                     }
@@ -350,7 +350,7 @@ impl Actor {
                     if let (Some(api), Some(id)) = (api, id) {
                         match api.song(&id).await {
                             Ok(child) => facts.isrc = child.isrc,
-                            Err(e) => tracing::debug!(target: "hocket_core", error = %e, "song.link: getSong failed"),
+                            Err(e) => tracing::debug!(target: "hocket_core", error = %e, "squigly: getSong failed"),
                         }
                     }
                     crate::songlink::song_url(http.as_ref(), &facts).await

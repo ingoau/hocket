@@ -1041,7 +1041,7 @@ const STRINGS = {
   "menu.addToPlaylist": "Add to playlist",
   "menu.share": "Share",
   "menu.shareNavidrome": "Navidrome",
-  "menu.shareSongLink": "Song.link",
+  "menu.shareSongLink": "Squigly",
   "menu.openGenius": "Open in Genius",
   "menu.shareFile": "File",
   "menu.shareFileDialog": "Share file",

@@ -1695,6 +1695,14 @@ impl crate::lyrics::LyricsHttp for SharedHttp {
     fn get(&self, url: &str) -> BoxFuture<'_, Result<String, crate::lyrics::LyricsError>> {
         self.0.get(url)
     }
+
+    fn post_json(
+        &self,
+        url: &str,
+        body: String,
+    ) -> BoxFuture<'_, Result<String, crate::lyrics::LyricsError>> {
+        self.0.post_json(url, body)
+    }
 }
 
 fn rate_label(rating: u32, n: usize) -> String {
