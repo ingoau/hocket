@@ -1,19 +1,22 @@
 // Home's sections (`home.sections`, synced): which show, in what order and how. The catalogue,
 // defaults and styles are the phone's too (android/.../screens/home/HomeSections.kt); a section
-// either device doesn't know stays in the stored list but isn't shown.
+// either device doesn't know stays in the stored list but isn't shown. A pinned section (Spotlight)
+// always comes first: it can be switched off but never moved.
 import { SK } from "@shared/settings-keys";
 
-export type SectionStyle = "row" | "grid" | "list" | "tile";
-export type HomeSectionId = "rediscover" | "filters" | "favouriteArtists" | "topGenre" | "newInLibrary" | "moreFromArtist" | "onRepeat" | "recentlyPlayed" | "recentQueues" | "stats";
+export type SectionStyle = "row" | "grid" | "list" | "tile" | "hero";
+export type HomeSectionId = "spotlight" | "rediscover" | "filters" | "favouriteArtists" | "topGenre" | "newInLibrary" | "moreFromArtist" | "onRepeat" | "recentlyPlayed" | "recentQueues" | "stats";
 
 export interface HomeSectionDef {
   id: HomeSectionId;
   styles: readonly SectionStyle[];
   defaultOn: boolean;
   defaultStyle: SectionStyle;
+  pinned?: boolean;
 }
 
 export const HOME_SECTIONS: readonly HomeSectionDef[] = [
+  { id: "spotlight", styles: ["hero"], defaultOn: true, defaultStyle: "hero", pinned: true },
   { id: "rediscover", styles: ["row", "list"], defaultOn: true, defaultStyle: "row" },
   { id: "filters", styles: ["row", "grid", "list"], defaultOn: true, defaultStyle: "row" },
   { id: "favouriteArtists", styles: ["row", "grid"], defaultOn: true, defaultStyle: "row" },
@@ -49,7 +52,8 @@ export function resolvedStyle(p: SectionPref): SectionStyle {
 /**
  * The stored list as Home and the editor use it: every stored entry in order (unknown ids kept so a
  * newer device's sections survive this one's edits), then any known section it doesn't mention yet
- * (added in a later release), off. An empty or unreadable value is the default.
+ * (added in a later release), off. A pinned section goes first, and one the list doesn't mention
+ * yet arrives on. An empty or unreadable value is the default.
  */
 export function parseSections(value: unknown): SectionPref[] {
   const stored: SectionPref[] = [];
@@ -62,8 +66,13 @@ export function parseSections(value: unknown): SectionPref[] {
     }
   }
   if (!stored.length) return DEFAULT_SECTIONS.map((s) => ({ ...s }));
-  const missing = HOME_SECTIONS.filter((d) => !stored.some((s) => s.id === d.id)).map((d) => ({ id: d.id, on: false, style: d.defaultStyle }));
-  return [...stored, ...missing];
+  const missing = HOME_SECTIONS.filter((d) => !stored.some((s) => s.id === d.id)).map((d) => ({ id: d.id, on: !!d.pinned && d.defaultOn, style: d.defaultStyle }));
+  const all = [...stored, ...missing];
+  return [...all.filter((p) => isPinned(p.id)), ...all.filter((p) => !isPinned(p.id))];
+}
+
+export function isPinned(id: string): boolean {
+  return !!sectionDef(id)?.pinned;
 }
 
 /** What to store: the default is [] so a later release's new defaults reach it. */
@@ -80,7 +89,7 @@ export function updateSection(prefs: readonly SectionPref[], id: string, patch: 
 export function moveShown(prefs: readonly SectionPref[], id: string, by: number): SectionPref[] {
   const shown = prefs.filter((p) => p.on && sectionDef(p.id));
   const other = shown[shown.findIndex((p) => p.id === id) + by];
-  if (!other) return [...prefs];
+  if (!other || isPinned(id) || isPinned(other.id)) return [...prefs];
   const list = prefs.filter((p) => p.id !== id);
   const moved = prefs.find((p) => p.id === id);
   if (!moved) return [...prefs];
@@ -99,7 +108,7 @@ export function moveKnown(prefs: readonly SectionPref[], id: string, by: number)
 
 /** [id] placed next to [targetId]: before it, or after it when [after]. */
 export function moveBefore(prefs: readonly SectionPref[], id: string, targetId: string, after = false): SectionPref[] {
-  if (id === targetId) return [...prefs];
+  if (id === targetId || isPinned(id) || isPinned(targetId)) return [...prefs];
   const moved = prefs.find((p) => p.id === id);
   if (!moved) return [...prefs];
   const list = prefs.filter((p) => p.id !== id);

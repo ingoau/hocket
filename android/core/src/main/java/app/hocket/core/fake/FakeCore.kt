@@ -791,6 +791,8 @@ class FakeCore(
                     emit(Event.Snapshot(EventSnapshotInner(snapshot())))
                 }
                 emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(shownSaved())))
+                // As the real core does with every snapshot (actor.rs).
+                emit(Event.AlbumResumesChanged(EventAlbumResumesChangedInner(albumResumes.values.sortedBy { it.albumId })))
                 emit(Event.PinsChanged(EventPinsChangedInner(pins.toList())))
                 emit(Event.StorageChanged(EventStorageChangedInner(storage)))
                 emit(Event.FiltersChanged(EventFiltersChangedInner(filters.toList())))

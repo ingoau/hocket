@@ -17,7 +17,8 @@ enum class SectionStyle(val id: String, @StringRes val label: Int) {
     Row("row", R.string.home_style_row),
     Grid("grid", R.string.home_style_grid),
     List("list", R.string.home_style_list),
-    Tile("tile", R.string.home_style_tile);
+    Tile("tile", R.string.home_style_tile),
+    Hero("hero", R.string.home_style_hero);
 
     companion object {
         fun of(id: String?): SectionStyle? = entries.firstOrNull { it.id == id }
@@ -27,7 +28,8 @@ enum class SectionStyle(val id: String, @StringRes val label: Int) {
 /**
  * The sections Home can show (`home.sections`, synced). The same ids, defaults and styles are the
  * desktop's (`desktop/src/renderer/lib/home-sections.ts`); a section either device doesn't know is
- * kept in the stored list but not shown.
+ * kept in the stored list but not shown. A [pinned] section always comes first: it can be switched
+ * off but never moved.
  */
 enum class HomeSection(
     val id: String,
@@ -36,7 +38,9 @@ enum class HomeSection(
     val styles: kotlin.collections.List<SectionStyle>,
     val defaultOn: Boolean,
     val defaultStyle: SectionStyle,
+    val pinned: Boolean = false,
 ) {
+    Spotlight("spotlight", R.string.home_section_spotlight, R.string.home_section_spotlight_desc, listOf(SectionStyle.Hero), true, SectionStyle.Hero, pinned = true),
     Rediscover("rediscover", R.string.home_section_rediscover, R.string.home_section_rediscover_desc, listOf(SectionStyle.Row, SectionStyle.List), true, SectionStyle.Row),
     Filters("filters", R.string.home_section_filters, R.string.home_section_filters_desc, listOf(SectionStyle.Row, SectionStyle.Grid, SectionStyle.List), true, SectionStyle.Row),
     FavouriteArtists("favouriteArtists", R.string.home_section_favourite_artists, R.string.home_section_favourite_artists_desc, listOf(SectionStyle.Row, SectionStyle.Grid), true, SectionStyle.Row),
@@ -66,7 +70,8 @@ object HomeSections {
     /**
      * The stored list as the editor and Home use it: every stored entry in order (unknown ids kept,
      * so a newer device's sections survive this one's edits), then any known section the list
-     * doesn't mention yet (added in a later release), off. An empty or unreadable value is the default.
+     * doesn't mention yet (added in a later release), off. A pinned section goes first, and one
+     * the list doesn't mention yet is on (it arrived switched on). An empty or unreadable value is the default.
      */
     fun parse(value: String?): kotlin.collections.List<SectionPref> {
         val stored = runCatching {
@@ -78,8 +83,10 @@ object HomeSections {
             }.distinctBy { it.id }
         }.getOrDefault(emptyList())
         if (stored.isEmpty()) return DEFAULT
-        val missing = HomeSection.entries.filter { s -> stored.none { it.id == s.id } }.map { SectionPref(it.id, false, it.defaultStyle.id) }
-        return stored + missing
+        val missing = HomeSection.entries.filter { s -> stored.none { it.id == s.id } }.map { SectionPref(it.id, it.pinned && it.defaultOn, it.defaultStyle.id) }
+        val all = stored + missing
+        val (pinned, rest) = all.partition { it.section?.pinned == true }
+        return pinned + rest
     }
 
     fun encode(prefs: kotlin.collections.List<SectionPref>): String = JsonArray(prefs.map { p ->
@@ -103,6 +110,7 @@ object HomeSections {
         val shown = prefs.filter { it.on && it.section != null }
         val i = shown.indexOfFirst { it.id == id }
         val other = shown.getOrNull(i + by) ?: return prefs
+        if (pinnedId(id) || pinnedId(other.id)) return prefs
         val list = prefs.toMutableList()
         val from = list.indexOfFirst { it.id == id }
         val moved = list.removeAt(from)
@@ -113,8 +121,11 @@ object HomeSections {
 
     fun move(prefs: kotlin.collections.List<SectionPref>, from: Int, to: Int): kotlin.collections.List<SectionPref> {
         if (from == to || from !in prefs.indices || to !in prefs.indices) return prefs
+        if (pinnedId(prefs[from].id) || pinnedId(prefs[to].id)) return prefs
         return prefs.toMutableList().apply { add(to, removeAt(from)) }
     }
+
+    private fun pinnedId(id: String) = HomeSection.of(id)?.pinned == true
 
     fun update(prefs: kotlin.collections.List<SectionPref>, id: String, change: (SectionPref) -> SectionPref) = prefs.map { if (it.id == id) change(it) else it }
 }

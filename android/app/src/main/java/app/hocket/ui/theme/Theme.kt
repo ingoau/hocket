@@ -83,7 +83,7 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
  * scheme switches at once.
  */
 @Composable
-private fun animatedScheme(target: ColorScheme, reducedMotion: Boolean): ColorScheme {
+internal fun animatedScheme(target: ColorScheme, reducedMotion: Boolean): ColorScheme {
     if (reducedMotion) return target
     @Composable fun Color.animated(): Color = animateColorAsState(this, ColorSpring, label = "scheme").value
     return target.copy(

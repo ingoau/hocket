@@ -93,11 +93,14 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
                                 Text(title, style = MaterialTheme.typography.bodyLarge, color = if (pref.on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(stringResource(section.description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
-                            IconButton(onClick = { moveKnown(pref.id, -1) }, enabled = i > 0) {
-                                Icon(HocketIcons.Filled.KeyboardArrowDown, stringResource(R.string.home_section_move_up_named, title), Modifier.rotate(180f))
-                            }
-                            IconButton(onClick = { moveKnown(pref.id, 1) }, enabled = i < known.lastIndex) {
-                                Icon(HocketIcons.Filled.KeyboardArrowDown, stringResource(R.string.home_section_move_down_named, title))
+                            // A pinned section (Spotlight) stays first: no arrows, and nothing moves above it.
+                            if (!section.pinned) {
+                                IconButton(onClick = { moveKnown(pref.id, -1) }, enabled = i > 0 && known[i - 1].section?.pinned != true) {
+                                    Icon(HocketIcons.Filled.KeyboardArrowDown, stringResource(R.string.home_section_move_up_named, title), Modifier.rotate(180f))
+                                }
+                                IconButton(onClick = { moveKnown(pref.id, 1) }, enabled = i < known.lastIndex) {
+                                    Icon(HocketIcons.Filled.KeyboardArrowDown, stringResource(R.string.home_section_move_down_named, title))
+                                }
                             }
                             Spacer(Modifier.width(4.dp))
                             val showLabel = stringResource(R.string.home_section_show_named, title)
@@ -137,7 +140,7 @@ fun SectionMenuSheet(pref: SectionPref, title: String, onDismiss: () -> Unit, on
         Column(Modifier.navigationBarsPadding()) {
             Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             Spacer(Modifier.height(8.dp))
-            Item(stringResource(R.string.home_section_move_up), enabled = i > 0, rotateIcon = true, icon = HocketIcons.Filled.KeyboardArrowDown) { HomeSections.save(client, HomeSections.moveShown(prefs, pref.id, -1)); onDismiss() }
+            Item(stringResource(R.string.home_section_move_up), enabled = i > 0 && shown[i - 1].section?.pinned != true, rotateIcon = true, icon = HocketIcons.Filled.KeyboardArrowDown) { HomeSections.save(client, HomeSections.moveShown(prefs, pref.id, -1)); onDismiss() }
             Item(stringResource(R.string.home_section_move_down), enabled = i in 0 until shown.lastIndex, icon = HocketIcons.Filled.KeyboardArrowDown) { HomeSections.save(client, HomeSections.moveShown(prefs, pref.id, 1)); onDismiss() }
             if (section.styles.size > 1) {
                 Text(stringResource(R.string.home_section_show_as), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 24.dp, top = 12.dp))
