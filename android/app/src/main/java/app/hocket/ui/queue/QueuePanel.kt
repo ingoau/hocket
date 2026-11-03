@@ -2,6 +2,7 @@ package app.hocket.ui.queue
 
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -392,16 +393,30 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     // playing", so opening it never pages in history nobody scrolled to).
     var positioned by remember { mutableStateOf(false) }
     val latest by rememberUpdatedState(queue)
+    // The first real row under the "more above" row, and its offset, when that row asked for a page:
+    // rows prepended above it must not push it down (the list would keep the "more" row as its
+    // anchor at the top, show it again and chain-load all of history).
+    var topAnchor by remember { mutableStateOf<Pair<Any, Int>?>(null) }
     LaunchedEffect(listState, client) {
         snapshotFlow { if (positioned) listState.layoutInfo.visibleItemsInfo.map { it.key } else emptyList() }.collect { keys ->
             val q = latest
             val pointer = q.currentIndex?.toInt() ?: q.historyCount.toInt()
             val before = pointer - q.windowStart.toInt()
             val after = q.windowEnd - pointer - 1
-            val top = "more:top" in keys
-            val bottom = "more:bottom" in keys
+            val top = MORE_TOP_KEY in keys
+            val bottom = MORE_BOTTOM_KEY in keys
+            if (top) topAnchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key != MORE_TOP_KEY }?.let { it.key to it.offset }
             if (top || bottom) client.extendQueue(before + if (top) QueueWindows.PAGE else 0, after + if (bottom) QueueWindows.PAGE else 0)
         }
+    }
+    LaunchedEffect(shown.windowStart) {
+        val (key, offset) = topAnchor ?: return@LaunchedEffect
+        topAnchor = null
+        if (drag != null) return@LaunchedEffect
+        val at = rows.indexOfFirst { it.key == key }
+        if (at <= 0) return@LaunchedEffect
+        listState.scrollToItem(at)
+        listState.scrollBy(-offset.toFloat())
     }
     // Follow the current track, but never fight the user: no auto-scroll while a finger is on the
     // list or for a while after they last scrolled it (Metrolist/Navic leave a browsed queue alone).
@@ -453,7 +468,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                     // section appearing or the current track moving on slides rather than snaps (#27).
                     // The "Next from" heading is a drop target: dragging past it moves a song in or
                     // out of the group.
-                    is QueueLine.Header -> ReorderableItem(reorderable, key = row.key, enabled = row.id == QueueLine.Header.Id.Later && sectionOn && currentKey != null) { _ ->
+                    is QueueLine.Header -> ReorderableItem(reorderable, key = row.key, enabled = row.id == QueueLine.Header.Id.Later && groupDrops(shown, sectionOn) && currentKey != null) { _ ->
                         when (row.id) {
                             QueueLine.Header.Id.History -> SectionTitle(stringResource(R.string.queue_section_history), tag = "queue.header.history",
                                 buttons = listOf(SectionButton(stringResource(R.string.queue_section_clear), stringResource(R.string.queue_clear_history), "queue.history.clear") {

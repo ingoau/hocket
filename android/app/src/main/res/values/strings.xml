@@ -389,7 +389,7 @@
     <string name="saved_unpin">Unpin</string>
     <string name="saved_tracks">%1$d tracks</string>
     <string name="saved_played">Played %1$s ago</string>
-    <string name="saved_cap">Keep up to %1$d recent queues</string>
+    <string name="saved_cap">Show up to %1$d recent queues</string>
 
     <!-- Undo history -->
     <string name="history_title">History</string>
@@ -692,7 +692,7 @@
     <string name="settings_lan_discovery">Find devices on this network</string>
     <string name="settings_device_name">This device: %1$s</string>
     <string name="settings_section_queue">Queue</string>
-    <string name="settings_saved_cap">Recent queues to keep</string>
+    <string name="settings_saved_cap">Recent queues to show</string>
     <string name="settings_saved_cap_zero">Only pinned</string>
     <string name="settings_autoplay">Autoplay when the queue ends</string>
     <string name="settings_resume_albums">Resume albums</string>

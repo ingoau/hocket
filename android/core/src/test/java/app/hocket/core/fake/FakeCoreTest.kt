@@ -200,11 +200,47 @@ class FakeCoreTest {
         core.dispatchAndWait(Commands.setSetting(SettingKeys.QUEUE_SECTION, "false"))
         assertFalse(ActionIds.ADD_TO_QUEUE in ids())
         assertTrue(ActionIds.PLAY_NEXT in ids() && ActionIds.PLAY_LATER in ids())
-        // Off, nothing is queued: the group is gone and Play next makes none.
-        assertEquals(0u, core.queue().groupCount)
+        // Off, a group already there stays, and Play next joins it at its head.
+        val group = core.queue().groupCount
+        assertTrue(group > 0u)
         core.dispatchAndWait(Commands.playNext(core.library.serverId, listOf(core.library.tracks[1].id)))
+        assertEquals(group + 1u, core.queue().groupCount)
+        assertEquals(core.library.tracks[1].id, core.queue().groupEntries.first().track.id)
+        // A drag inside it keeps the song in it (the sender's in_group decides).
+        val keys = core.queue().groupEntries.map { it.item.key }
+        core.dispatchAndWait(Commands.moveQueueItem(keys[0], keys[1], inGroup = true))
+        assertEquals(listOf(keys[1], keys[0]) + keys.drop(2), core.queue().groupEntries.map { it.item.key })
+        // With no group, Play next starts none.
+        core.dispatchAndWait(Command.ClearQueueGroup)
+        core.dispatchAndWait(Commands.playNext(core.library.serverId, listOf(core.library.tracks[2].id)))
         assertEquals(0u, core.queue().groupCount)
-        assertEquals(core.library.tracks[1].id, core.queue().restEntries.first().track.id)
+        assertEquals(core.library.tracks[2].id, core.queue().restEntries.first().track.id)
+    }
+
+    @Test
+    fun insertTracksGoesAfterAnEntryClampedToTheGroup() = runTest {
+        val core = core()
+        val server = core.library.serverId
+        val ids = core.library.tracks.map { it.id }
+        val q0 = core.queue()
+        val group = q0.groupEntries.map { it.item.key }
+        val rest = q0.restEntries.map { it.item.key }
+        // In the group after its first entry.
+        core.dispatchAndWait(Commands.insertTracks(server, listOf(ids[30], ids[31]), after = group[0], inGroup = true))
+        var q = core.queue()
+        assertEquals(listOf(ids[30], ids[31]), q.groupEntries.drop(1).take(2).map { it.track.id })
+        assertEquals(group.size + 2, q.groupCount.toInt())
+        assertTrue(q.groupEntries.drop(1).take(2).all { it.item.added == true })
+        // Out of the group but aimed inside it: just after the group.
+        core.dispatchAndWait(Commands.insertTracks(server, listOf(ids[32]), after = group[0], inGroup = false))
+        q = core.queue()
+        assertEquals(ids[32], q.restEntries.first().track.id)
+        assertEquals(group.size + 2, q.groupCount.toInt())
+        // An entry ahead moves (by key); in the group past its end lands at its end.
+        core.dispatchAndWait(Commands.insertTracks(server, emptyList(), after = rest[1], inGroup = true, keys = listOf(rest[2])))
+        q = core.queue()
+        assertEquals(rest[2], q.groupEntries.last().item.key)
+        assertEquals(1, q.entries.count { it.item.key == rest[2] })
     }
 
     @Test
@@ -225,6 +261,16 @@ class FakeCoreTest {
         assertEquals(many.take(351), merged.entries.map { it.track.id })
         assertEquals(null, QueueWindows.missing(merged, 250, 100))
         assertEquals(351 to 49, QueueWindows.missing(merged, 250, 149))
+        // Next: a new window, the list unchanged. The paged rows still line up and stay.
+        core.dispatchAndWait(Command.Next)
+        val next = core.queue()
+        val kept = QueueWindows.realign(next, merged)!!
+        assertEquals(0u, kept.windowStart)
+        assertEquals(251u, kept.currentIndex)
+        assertEquals(many.take(352), kept.entries.map { it.track.id })
+        // An edit that changes the list: they don't.
+        core.dispatchAndWait(Commands.playNext(core.library.serverId, listOf(many[0])))
+        assertNull(QueueWindows.realign(core.queue(), merged))
     }
 
     @Test

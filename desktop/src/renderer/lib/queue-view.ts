@@ -104,6 +104,19 @@ export function mergePages(base: QueueView, pages: readonly QueueView[]): QueueV
   return { ...base, entries, windowStart: sorted[0]!.windowStart };
 }
 
+/**
+ * Whether a wider window fetched for an earlier view can still stand in for `base` until
+ * its refetch: the same list size, history and current entry. Otherwise (a track change,
+ * a new context) it would show and target rows that have since moved behind the pointer.
+ */
+export function pagedFits(paged: QueueView, base: QueueView): boolean {
+  if (paged.total !== base.total || paged.historyCount !== base.historyCount || paged.currentIndex !== base.currentIndex) return false;
+  if (paged.current?.item.key !== base.current?.item.key) return false;
+  if (base.currentIndex === undefined) return true;
+  const at = paged.entries[base.currentIndex - paged.windowStart];
+  return !at || at.item.key === base.current?.item.key;
+}
+
 /** Find a loaded entry by key. */
 export function entryByKey(q: QueueView, key: string): QueueEntry | undefined {
   return q.entries.find((e) => e.item.key === key) ?? (q.current?.item.key === key ? q.current : undefined);

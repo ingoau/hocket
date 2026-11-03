@@ -5,11 +5,12 @@
 // show the queue (without writing the remembered view) so the drop can pick a
 // place; the player comes back when the drag ends.
 import { useEffect, type DragEvent as ReactDragEvent } from "react";
-import type { ActionTarget } from "@core/api";
+import type { ActionTarget, Command, QueueView } from "@core/api";
 import { SK } from "@shared/settings-keys";
 import { useApp } from "../store/app";
 import { settingValue } from "../store/reducer";
-import { queueSections, upcomingEntries } from "./queue-view";
+import { resolveTrackIds } from "../store/actions";
+import { pointerIndex, queueSections, upcomingEntries, windowEnd } from "./queue-view";
 
 export const LIBRARY_MIME = "application/x-hocket-library";
 
@@ -107,16 +108,28 @@ export interface QueueMove {
 
 /**
  * The upcoming rows as the panel sorts them: the group's keys, the "Next from" heading
- * (only with the Queue section on, else nothing can join a group), then the rest.
+ * (when `heading`: the Queue section is on or a group exists, else nothing can join one),
+ * then the rest.
  */
-export function sortableOrder(group: readonly string[], rest: readonly string[], section: boolean): string[] {
-  return section ? [...group, GROUP_END, ...rest] : [...group, ...rest];
+export function sortableOrder(group: readonly string[], rest: readonly string[], heading: boolean): string[] {
+  return heading ? [...group, GROUP_END, ...rest] : [...group, ...rest];
+}
+
+/**
+ * The panel's sortable order and the membership of a drop when it has no heading. There is
+ * a group to drop into with the Queue section on, and with it off while one still exists
+ * (a Connect peer's, or one from before it was turned off): then the "Next from" heading
+ * marks its end (if anything follows it), else everything upcoming is the group.
+ */
+export function queueDragLayout(group: readonly string[], rest: readonly string[], section: boolean, groupCount: number): { order: string[]; noHeading: boolean } {
+  const hasGroup = section || groupCount > 0;
+  return { order: sortableOrder(group, rest, hasGroup && rest.length > 0), noHeading: hasGroup && !rest.length };
 }
 
 /**
  * Where a drop before `order[index]` lands: the entry it follows, and whether it joins the
  * group. Without the heading in `order`, membership is `noHeading` (true when everything
- * upcoming is the group, false with the Queue section off).
+ * upcoming is the group, false when there is no group and the Queue section is off).
  */
 export function dropSlot(order: readonly string[], index: number, currentKey: string, skip: ReadonlySet<string> = new Set(), noHeading = false): { after: string; inGroup: boolean } {
   const head = order.indexOf(GROUP_END);
@@ -188,57 +201,69 @@ function queueSectionOn(): boolean {
   return settingValue(useApp.getState(), SK.queueSection, true);
 }
 
+/** Where a library drop lands: the entry it follows and whether it joins the group. */
+export interface DropSlot {
+  after: string;
+  inGroup: boolean;
+}
+
+/** How a library drop is done: a queue action that lands exactly there, else one InsertTracks. */
+export type LibraryDropPlan = { action: "playNext" | "addToQueue" | "playLater" } | { insert: { after: string; in_group: boolean } };
+
 /**
- * A library item dropped on the player or the queue. Without a place it is added to the
- * queue (Add to queue with the Queue section on, else Play next). With one (`after`, the
- * key it follows, and whether it joins the group) the closest command does it: Play next
- * for the top, Add to queue for the group's end; anywhere else it is Played next and then
- * moved into place.
+ * The command for a library drop on `queue`. Without a place (or nothing playing) it is
+ * added to the queue (Add to queue with the Queue section on, else Play next). With one,
+ * Play next, Add to queue or Play later when it lands exactly where that action puts
+ * songs; anywhere else InsertTracks after `slot.after`.
  */
-export function addToQueue(target: ActionTarget, slot?: { after: string; inGroup: boolean }): void {
+export function libraryDropPlan(queue: QueueView, section: boolean, slot?: DropSlot): LibraryDropPlan {
+  const currentKey = queue.current?.item.key;
+  if (!slot || !currentKey) return { action: section ? "addToQueue" : "playNext" };
+  // Play next lands right after the current song, in the group with the section on or
+  // when a group already exists (it joins at its head), else out of it.
+  if (slot.after === currentKey && slot.inGroup === (section || queue.groupCount > 0)) return { action: "playNext" };
+  const { group } = queueSections(queue);
+  const groupLoaded = group.length === queue.groupCount;
+  if (section && slot.inGroup && queue.groupCount > 0 && groupLoaded && slot.after === group[group.length - 1]!.item.key) return { action: "addToQueue" };
+  const upcoming = upcomingEntries(queue);
+  const last = upcoming[upcoming.length - 1]?.item.key ?? currentKey;
+  if (!slot.inGroup && windowEnd(queue) >= queue.total && slot.after === last) return { action: "playLater" };
+  return { insert: { after: slot.after, in_group: slot.inGroup } };
+}
+
+/**
+ * The entry to insert after on `queue` (the latest view, maybe newer than the drop's): if
+ * `after` has since gone behind the pointer (a track change), the top of the list instead,
+ * since InsertTracks refuses a history entry.
+ */
+export function insertAnchor(queue: QueueView, after: string): string {
+  const currentKey = queue.current?.item.key;
+  if (!currentKey || after === currentKey) return after;
+  const i = queue.entries.findIndex((e) => e.item.key === after);
+  if (i >= 0 && queue.windowStart + i < pointerIndex(queue)) return currentKey;
+  return after;
+}
+
+/** The InsertTracks command for `trackIds`, or nothing when there is nothing to insert or nowhere to put it. */
+export function insertTracksCommand(queue: QueueView, serverId: string, trackIds: readonly string[], at: { after: string; in_group: boolean }): Command | undefined {
+  if (!trackIds.length || !queue.current) return undefined;
+  return { type: "insertTracks", data: { server_id: serverId, track_ids: [...trackIds], after: insertAnchor(queue, at.after), in_group: at.in_group } };
+}
+
+/** A library item dropped on the player or the queue, at `slot` when it was dropped on a place. */
+export function addToQueue(target: ActionTarget, slot?: DropSlot): void {
   if (!isLibraryTarget(target)) return;
   const app = useApp.getState();
-  const section = queueSectionOn();
-  const queue = app.queue;
-  const currentKey = queue.current?.item.key;
-  if (!slot || !currentKey) {
-    app.runAction(section ? "addToQueue" : "playNext", target);
+  const plan = libraryDropPlan(app.queue, queueSectionOn(), slot);
+  if ("action" in plan) {
+    app.runAction(plan.action, target);
     return;
   }
-  const inGroup = section && slot.inGroup;
-  const { group } = queueSections(queue);
-  const groupEnd = group[group.length - 1]?.item.key ?? currentKey;
-  if (slot.after === currentKey && inGroup === section) {
-    app.runAction("playNext", target);
-    return;
-  }
-  if (inGroup && slot.after === groupEnd) {
-    app.runAction("addToQueue", target);
-    return;
-  }
-  const before = new Set(upcomingEntries(queue).map((e) => e.item.key));
-  app.runAction("playNext", target);
-  const queueBefore = queue;
-  const apply = (): boolean => {
-    const q = useApp.getState().queue;
-    // Only the first queue change after the drop is ours to place: if it added nothing
-    // (our Play next failed, or something else changed first), stop rather than later
-    // moving someone else's items.
-    if (q === queueBefore) return false;
-    const added = upcomingEntries(q).filter((e) => !before.has(e.item.key)).map((e) => e.item.key);
-    let prev = slot.after;
-    for (const key of added) {
-      useApp.getState().dispatch({ type: "moveQueueItem", data: { key, after: prev, in_group: inGroup } });
-      prev = key;
-    }
-    return true;
-  };
-  if (apply()) return;
-  const unsub = useApp.subscribe(() => {
-    if (apply()) unsub();
+  void resolveTrackIds(target).then((ids) => {
+    const s = useApp.getState();
+    const cmd = insertTracksCommand(s.queue, s.servers[0]?.id ?? "", ids, plan.insert);
+    if (cmd) s.dispatch(cmd);
   });
-  // The queue view arrives from the core asynchronously; a busy core can be slow.
-  window.setTimeout(unsub, 5_000);
 }
 
 function overSelector(x: number, y: number, selector: string): boolean {

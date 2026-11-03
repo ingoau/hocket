@@ -62,6 +62,25 @@ object QueueWindows {
     fun merge(base: QueueView, page: QueueView): QueueView {
         if (!sameShape(base, page) || page.entries.isEmpty()) return base
         if (base.entries.isEmpty()) return base.copy(entries = page.entries, windowStart = page.windowStart)
+        return splice(base, page)
+    }
+
+    /**
+     * [base] (a new window from the core) keeping [prev]'s rows beyond it when the list itself is
+     * unchanged and only the pointer moved: the same total, and every row both windows hold has
+     * the same key. Null otherwise.
+     */
+    fun realign(base: QueueView, prev: QueueView): QueueView? {
+        if (base.total != prev.total || base.entries.isEmpty() || prev.entries.isEmpty()) return null
+        val from = maxOf(base.windowStart.toInt(), prev.windowStart.toInt())
+        val to = minOf(base.windowEnd, prev.windowEnd)
+        if (from >= to) return null
+        for (i in from until to) if (base.entryAt(i)?.item?.key != prev.entryAt(i)?.item?.key) return null
+        return splice(base, prev)
+    }
+
+    /** [base] with [page]'s rows outside it added where the two windows touch or overlap. */
+    private fun splice(base: QueueView, page: QueueView): QueueView {
         val bs = base.windowStart.toInt()
         val be = base.windowEnd
         val ps = page.windowStart.toInt()

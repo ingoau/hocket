@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { QueueEntry, QueueView } from "@core/api";
 import { EMPTY_QUEUE } from "../store/reducer";
-import { mergePages, queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange } from "./queue-view";
+import { mergePages, pagedFits, queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange } from "./queue-view";
 
 const entry = (key: string, extra: Partial<QueueEntry["item"]> = {}, more: Partial<QueueEntry> = {}): QueueEntry => ({
   item: { key, trackId: `t-${key}`, source: { type: "context", data: { index: 0 } }, ...extra },
@@ -64,5 +64,27 @@ describe("paging", () => {
     expect(merged?.entries.map((e) => e.item.key)).toEqual(["h0", "h1", "c", "g0", "g1", "r0", "r1", "r2"]);
     expect(mergePages(base, [{ ...view(0, 8), total: 9 }])).toBeUndefined();
     expect(mergePages(base, [view(0, 2), view(4, 8)])).toBeUndefined();
+  });
+});
+
+describe("pagedFits", () => {
+  const wide = (): QueueView => view(0, 8);
+  const base = (): QueueView => view(2, 6);
+
+  it("keeps a wider window for the same list around the same current entry", () => {
+    expect(pagedFits(wide(), base())).toBe(true);
+  });
+
+  it("drops it after a track change, so drops don't target rows now in history", () => {
+    const next = base();
+    const advanced: QueueView = { ...next, historyCount: 3, currentIndex: 3, groupCount: 1, current: next.entries[1] };
+    expect(pagedFits(wide(), advanced)).toBe(false);
+  });
+
+  it("drops it after the context is replaced, even at the same size and position", () => {
+    const other = entry("x");
+    const replaced: QueueView = { ...base(), current: other, entries: [other, ...base().entries.slice(1)] };
+    expect(pagedFits(wide(), replaced)).toBe(false);
+    expect(pagedFits(wide(), { ...base(), total: 9 })).toBe(false);
   });
 });

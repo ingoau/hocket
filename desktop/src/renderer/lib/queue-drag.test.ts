@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { GROUP_END, applyMove, dropSlot, parseLibraryTarget, placeBlock, sortableOrder, stepMove, type QueueMove } from "./queue-drag";
+import type { QueueEntry, QueueView } from "@core/api";
+import { EMPTY_QUEUE } from "../store/reducer";
+import { GROUP_END, applyMove, dropSlot, insertAnchor, insertTracksCommand, libraryDropPlan, parseLibraryTarget, placeBlock, queueDragLayout, sortableOrder, stepMove, type QueueMove } from "./queue-drag";
 
 describe("parseLibraryTarget", () => {
   it("reads a tracks, albums, artists or playlists target", () => {
@@ -119,5 +121,84 @@ describe("stepMove", () => {
     expect(stepMove(order, "r1", 1, "cur")).toEqual([{ key: "r1", after: "r2", in_group: false }]);
     expect(stepMove(order, "g1", -1, "cur")).toEqual([]);
     expect(stepMove(order, "r2", 1, "cur")).toEqual([]);
+  });
+});
+
+const entry = (key: string, queued = false): QueueEntry => ({
+  item: { key, trackId: `t-${key}`, source: { type: "context", data: { index: 0 } }, queued },
+  track: { id: `t-${key}`, serverId: "s", title: key, durationMs: 1, rating: 0, loved: false, offline: "none" },
+});
+
+/** h0 | c | `group` queued rows | `rest` rows, the event's window holding `shown` rows after the current one. */
+function view(group: number, rest: number, shown = group + rest): QueueView {
+  const all = [entry("h0"), entry("c"), ...Array.from({ length: group }, (_, i) => entry(`g${i}`, true)), ...Array.from({ length: rest }, (_, i) => entry(`r${i}`))];
+  const entries = all.slice(0, 2 + shown);
+  return { ...EMPTY_QUEUE, entries, windowStart: 0, total: all.length, historyCount: 1, currentIndex: 1, groupCount: group, totalUpcoming: group + rest, current: all[1] };
+}
+
+describe("queueDragLayout", () => {
+  it("with the section off but a group still there, drags within it stay in the group", () => {
+    const { order, noHeading } = queueDragLayout(["g0", "g1", "g2"], ["r0", "r1"], false, 3);
+    expect(order).toEqual(["g0", "g1", "g2", END, "r0", "r1"]);
+    // g2 dragged to the top of the group, and Alt+Up on g1.
+    expect(placeBlock(order, ["g2", "g0", "g1", END, "r0", "r1"], "g2", ["g2"], "c", noHeading)).toEqual([{ key: "g2", after: "c", in_group: true }]);
+    expect(stepMove(order, "g1", -1, "c", noHeading)).toEqual([{ key: "g1", after: "c", in_group: true }]);
+    // Below the heading it leaves the group.
+    expect(stepMove(order, "g2", 1, "c", noHeading)).toEqual([{ key: "g2", after: "g1", in_group: false }]);
+  });
+
+  it("with the section off and a group that is everything upcoming, every drop is in it", () => {
+    const { order, noHeading } = queueDragLayout(["g0", "g1"], [], false, 2);
+    expect(order).toEqual(["g0", "g1"]);
+    expect(placeBlock(order, ["g1", "g0"], "g1", ["g1"], "c", noHeading)).toEqual([{ key: "g1", after: "c", in_group: true }]);
+  });
+
+  it("with the section off and no group, there is no heading and nothing joins one", () => {
+    const { order, noHeading } = queueDragLayout([], ["r0", "r1"], false, 0);
+    expect(order).toEqual(["r0", "r1"]);
+    expect(stepMove(order, "r1", -1, "c", noHeading)).toEqual([{ key: "r1", after: "c", in_group: false }]);
+  });
+});
+
+describe("libraryDropPlan", () => {
+  it("uses Play next, Add to queue or Play later only where they land exactly", () => {
+    const q = view(2, 3);
+    expect(libraryDropPlan(q, true)).toEqual({ action: "addToQueue" });
+    expect(libraryDropPlan(q, false)).toEqual({ action: "playNext" });
+    expect(libraryDropPlan(q, true, { after: "c", inGroup: true })).toEqual({ action: "playNext" });
+    expect(libraryDropPlan(q, true, { after: "g1", inGroup: true })).toEqual({ action: "addToQueue" });
+    expect(libraryDropPlan(q, true, { after: "r2", inGroup: false })).toEqual({ action: "playLater" });
+    // With the section off Play next joins an existing group, so the top out of it is not Play next.
+    expect(libraryDropPlan(q, false, { after: "c", inGroup: true })).toEqual({ action: "playNext" });
+    expect(libraryDropPlan(q, false, { after: "c", inGroup: false })).toEqual({ insert: { after: "c", in_group: false } });
+    expect(libraryDropPlan(view(0, 3), false, { after: "c", inGroup: false })).toEqual({ action: "playNext" });
+    expect(libraryDropPlan(view(0, 3), true, { after: "c", inGroup: false })).toEqual({ insert: { after: "c", in_group: false } });
+  });
+
+  it("drops anywhere else, past the event's window too, with one InsertTracks", () => {
+    // 150 upcoming rows, only 100 of them in the event's window.
+    const q = view(2, 148, 100);
+    expect(libraryDropPlan(q, true, { after: "r40", inGroup: false })).toEqual({ insert: { after: "r40", in_group: false } });
+    expect(libraryDropPlan(q, true, { after: "g0", inGroup: true })).toEqual({ insert: { after: "g0", in_group: true } });
+    // The end of the window is not the end of the list.
+    expect(libraryDropPlan(q, true, { after: "r97", inGroup: false })).toEqual({ insert: { after: "r97", in_group: false } });
+  });
+});
+
+describe("insertTracksCommand", () => {
+  it("inserts every resolved song at once at a mid-list slot", () => {
+    const ids = Array.from({ length: 150 }, (_, i) => `lib${i}`);
+    const cmd = insertTracksCommand(view(2, 148, 100), "s1", ids, { after: "r40", in_group: false });
+    expect(cmd).toEqual({ type: "insertTracks", data: { server_id: "s1", track_ids: ids, after: "r40", in_group: false } });
+  });
+
+  it("falls back to the top when the slot's entry has gone into history, and does nothing without songs", () => {
+    // The track changed after the drop: c and g0 are history now.
+    const moved: QueueView = { ...view(2, 3), historyCount: 3, currentIndex: 3, groupCount: 1, current: entry("g0", true) };
+    expect(insertAnchor(moved, "c")).toBe("g0");
+    expect(insertAnchor(moved, "r1")).toBe("r1");
+    expect(insertAnchor(moved, "unloaded")).toBe("unloaded");
+    expect(insertTracksCommand(moved, "s1", ["x"], { after: "h0", in_group: true })).toEqual({ type: "insertTracks", data: { server_id: "s1", track_ids: ["x"], after: "g0", in_group: true } });
+    expect(insertTracksCommand(moved, "s1", [], { after: "r1", in_group: false })).toBeUndefined();
   });
 });

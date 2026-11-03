@@ -114,4 +114,53 @@ class QueueRowsTest {
         assertNull(stepOrder(base, "g0", up = true))
         assertNull(stepOrder(base, "a0", up = false))
     }
+
+    @Test
+    fun draggingAboveTheHeadingStartsAGroupUnderTheFinger() {
+        val v = queueViewOf(current = entry("c"), rest = listOf(entry("r0"), entry("r1")), contextLabel = "Album")
+        val base = dragOrder(v, sectionOn = true)
+        assertEquals(listOf(LATER_HEADER_KEY, "r0", "r1"), base)
+        val up = listOf("r0", LATER_HEADER_KEY, "r1")
+        // The dragged row stays in the list (in a new group with its heading), so its drag goes on.
+        assertEquals(listOf("#Now", "c/Current", "#Group:1", "r0/Group", "#Later:Album", "r1/Later", "footer"), shape(queueLines(v, up, sectionOn = true)))
+        val start = dropMove(up, "r0", "c", base) as Command.MoveQueueItem
+        assertEquals("c", start.data.after)
+        assertEquals(true, start.data.in_group)
+        // Dragged back below: no group, no heading.
+        assertEquals(listOf("#Now", "c/Current", "#Later:Album", "r0/Later", "r1/Later", "footer"), shape(queueLines(v, base, sectionOn = true)))
+    }
+
+    @Test
+    fun theGroupCountDuringADragIsTheWholeGroupGiveOrTakeTheDraggedRow() {
+        // 5 in the group, 2 loaded.
+        val window = view.copy(entries = view.entries.subList(0, 5), groupCount = 5u, total = 10u, totalUpcoming = 7u)
+        val out = listOf("g1", LATER_HEADER_KEY, "g0", "r0", "r1", "a0")
+        assertEquals("#Group:1", shape(queueLines(view, out)).first { it.startsWith("#Group") })
+        assertEquals("#Group:5", shape(queueLines(window, dragOrder(window, true))).first { it.startsWith("#Group") })
+    }
+
+    @Test
+    fun aGroupPastTheLoadedRowsHasNoHeadingMidGroup() {
+        // The group runs on past the window: g0, g1 loaded of 5.
+        val window = view.copy(entries = view.entries.subList(0, 5), groupCount = 5u, total = 10u, totalUpcoming = 7u)
+        assertEquals(listOf("#History", "h0/History", "h1/History", "#Now", "c/Current", "#Group:5", "g0/Group", "g1/Group", "more-bottom"), shape(queueLines(window)))
+        val base = dragOrder(window, sectionOn = true)
+        assertEquals(listOf("g0", "g1", MORE_BOTTOM_KEY), base)
+        assertEquals(listOf("#History", "h0/History", "h1/History", "#Now", "c/Current", "#Group:5", "g0/Group", "g1/Group", "more-bottom"), shape(queueLines(window, base)))
+        // Reordering inside it keeps the songs in the group; nothing steps past its loaded end.
+        val swapped = dropMove(listOf("g1", "g0", MORE_BOTTOM_KEY), "g0", "c", base) as Command.MoveQueueItem
+        assertEquals("g1", swapped.data.after)
+        assertEquals(true, swapped.data.in_group)
+        assertNull(stepOrder(base, "g1", up = false))
+    }
+
+    @Test
+    fun aGroupLeftWithTheSectionOffIsShownAndDragsKeepItsSongsInIt() {
+        val base = dragOrder(view, sectionOn = false)
+        assertEquals(listOf("g0", "g1", LATER_HEADER_KEY, "r0", "r1", "a0"), base)
+        assertEquals("#Group:2", shape(queueLines(view, sectionOn = false)).first { it.startsWith("#Group") })
+        val swapped = dropMove(listOf("g1", "g0", LATER_HEADER_KEY, "r0", "r1", "a0"), "g0", "c", base) as Command.MoveQueueItem
+        assertEquals("g1", swapped.data.after)
+        assertEquals(true, swapped.data.in_group)
+    }
 }

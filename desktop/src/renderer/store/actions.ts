@@ -226,6 +226,20 @@ export async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
       }
       return out;
     }
+    case "artists": {
+      // As the core resolves an artist: its albums oldest first, each in track order.
+      const out: string[] = [];
+      const serverId = useApp.getState().servers[0]?.id ?? "";
+      for (const id of target.data.ids) {
+        const r = await b.query({ type: "albums", data: { server_id: serverId, artist_id: id, genre: undefined, sort: "year", descending: false, page: { offset: 0, limit: 10_000 } } });
+        if (r.type !== "albums") continue;
+        for (const a of r.data.items) {
+          const tr = await b.query({ type: "albumTracks", data: { id: a.id } });
+          if (tr.type === "trackList") out.push(...tr.data.map((x) => x.id));
+        }
+      }
+      return out;
+    }
     case "playlists": {
       const out: string[] = [];
       for (const id of target.data.ids) {

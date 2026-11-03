@@ -156,7 +156,6 @@ class FakeCore(
         fun def(key: String, value: String, scope: SettingScope) { settings[key] = Setting(key, value, scope, now()) }
         def(SettingKeys.QUEUE_SECTION, "true", SettingScope.AccountSynced)
         def(SettingKeys.QUEUE_SAVED_CAP, "10", SettingScope.AccountSynced)
-        def(SettingKeys.QUEUE_HISTORY_CAP, "200", SettingScope.AccountSynced)
         def(SettingKeys.TRANSCODING_PROFILES, "{\"default\":{\"format\":null,\"maxBitRate\":null,\"cannotDecode\":[]},\"cellular\":{\"format\":\"opus\",\"maxBitRate\":128,\"cannotDecode\":[]}}", SettingScope.DeviceLocal)
         def(SettingKeys.LYRICS_EXTERNAL_ENABLED, "false", SettingScope.AccountSynced)
         def(SettingKeys.LYRICS_EXTERNAL_PROVIDER, "\"lrclib\"", SettingScope.AccountSynced)
@@ -383,7 +382,7 @@ class FakeCore(
     )
 
     private fun sessionDocument() = SessionDocument(1u, "fake-session", "$serverId:ada", revision, now(), context, history.toList(), current,
-        upcoming.toList(), shuffle, repeat, autoplay, transport(), savedQueues.toList(), null)
+        upcoming.toList(), shuffle, repeat, autoplay, transport(), shownSaved(), null)
 
     private fun transport(): TransportState {
         val target = volumeTarget()
@@ -442,7 +441,16 @@ class FakeCore(
         return base + custom
     }
 
+    /** As the reducer after every op: history to [HISTORY_CAP], then the list to [MAX_QUEUE_LEN] (oldest history first, then the far end). */
+    private fun capQueue() {
+        val trimmed = (ptr - HISTORY_CAP).coerceAtLeast(0)
+        val excess = trimmed + minOf(list.size - trimmed - MAX_QUEUE_LEN, ptr - trimmed).coerceAtLeast(0)
+        if (excess > 0) { list.subList(0, excess).clear(); ptr -= excess }
+        while (list.size > MAX_QUEUE_LEN) list.removeAt(list.size - 1)
+    }
+
     private fun emitQueue() {
+        capQueue()
         topUpAutoplay()
         renumber()
         revision++
@@ -461,7 +469,12 @@ class FakeCore(
     private fun emitUndo() = emit(Event.UndoChanged(EventUndoChangedInner(undoState())))
     private fun emitJobs() = emit(Event.JobsChanged(EventJobsChangedInner(jobs.toList())))
     private fun emitProblems() = emit(Event.ProblemsChanged(EventProblemsChangedInner(problems.toList())))
-    private fun emitSaved() = emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(savedQueues.toList())))
+    private fun emitSaved() = emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(shownSaved())))
+    /** As the core: pinned queues and the [savedQueueCap] most recent unpinned ones (the document keeps up to [SAVED_KEPT]). */
+    private fun shownSaved(): List<SavedQueue> {
+        val recent = savedQueues.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt }.take(savedQueueCap.coerceAtLeast(0)).toSet()
+        return savedQueues.filter { it.pinned || it in recent }
+    }
     private fun emitPins() {
         emit(Event.PinsChanged(EventPinsChangedInner(pins.toList())))
         storage = storage.copy(downloadsBytes = pins.sumOf { it.bytes }, warnThresholdBytes = warnThreshold)
@@ -621,20 +634,28 @@ class FakeCore(
 
     private enum class Placement { Next, Group, Later }
 
+    /** [keys] ahead of the pointer taken out to move, the others (history, the current one) copied; then new entries for [trackIds]. */
+    private fun takeForQueueing(trackIds: List<TrackId>, keys: List<QueueKey>): List<QueueItem> {
+        val items = ArrayList<QueueItem>()
+        for (k in keys) {
+            val i = list.indexOfFirst { it.key == k }
+            if (i < 0) continue
+            if (current != null && i > ptr) items += list.removeAt(i) else items += QueueItem(newKey(), list[i].trackId, QueueSource.Inserted, false, added = true)
+        }
+        trackIds.forEach { items += QueueItem(newKey(), it, QueueSource.Inserted, false, added = true) }
+        return items
+    }
+
     /**
      * Play next / add to queue / play later: [keys] still ahead of the pointer move, the others
      * (history, the current one) are copied; [trackIds] are new entries.
      */
     private fun place(trackIds: List<TrackId>, keys: List<QueueKey>, placement: Placement) {
-        val items = ArrayList<QueueItem>()
-        for (k in keys) {
-            val i = list.indexOfFirst { it.key == k }
-            if (i < 0) continue
-            if (current != null && i > ptr) items += list.removeAt(i) else items += list[i].copy(key = newKey())
-        }
-        trackIds.forEach { items += QueueItem(newKey(), it, QueueSource.Inserted, false) }
-        // Off, nothing is ever queued: Play next inserts after the current song without a group.
-        val queued = placement != Placement.Later && queueSection
+        val items = takeForQueueing(trackIds, keys)
+        // Off, no new group is started: Play next inserts after the current song unqueued, but a
+        // group already there (a Connect peer's, or from before) stays attached and Play next joins it.
+        val hasGroup = groupCount > 0
+        val queued = when (placement) { Placement.Next -> queueSection || hasGroup; Placement.Group -> true; Placement.Later -> false }
         val placed = items.mapIndexed { n, it -> it.copy(added = true, queued = queued, ordinal = (list.size + n).toUInt()) }
         val wasEmpty = current == null
         val at = when {
@@ -661,7 +682,7 @@ class FakeCore(
         savedQueues.add(0, SavedQueue(newId("sq"), summaryCtx, ctx.label, history.toList(), current, upcoming.toList(), shuffle, repeat,
             positionNow().toUInt(), false, now(), now(), now(), contextTracks.size.toUInt(), currentTrack()?.coverArt))
         val unpinned = savedQueues.filter { !it.pinned }
-        if (unpinned.size > savedQueueCap) unpinned.sortedBy { it.lastInteractedAt }.take(unpinned.size - savedQueueCap).forEach { savedQueues.remove(it) }
+        if (unpinned.size > SAVED_KEPT) unpinned.sortedBy { it.lastInteractedAt }.take(unpinned.size - SAVED_KEPT).forEach { savedQueues.remove(it) }
         emitSaved()
     }
 
@@ -769,7 +790,7 @@ class FakeCore(
                 } else {
                     emit(Event.Snapshot(EventSnapshotInner(snapshot())))
                 }
-                emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(savedQueues.toList())))
+                emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(shownSaved())))
                 emit(Event.PinsChanged(EventPinsChangedInner(pins.toList())))
                 emit(Event.StorageChanged(EventStorageChangedInner(storage)))
                 emit(Event.FiltersChanged(EventFiltersChangedInner(filters.toList())))
@@ -883,6 +904,7 @@ class FakeCore(
                 emitQueue(); emitTransport()
             }
             is Command.MoveQueueItem -> { lastQueueMove = c.data; moveItem(c.data.key, c.data.after, c.data.in_group) }
+            is Command.InsertTracks -> insertItems(c.data.track_ids, c.data.keys.orEmpty(), c.data.after, c.data.in_group)
             Command.ClearQueue -> { val before = captureSession(); while (list.size > ptr + 1) list.removeAt(list.size - 1); pushUndo("Clear queue") { restoreSession(before) }; toast("Queue cleared", "Undo", Command.Undo); emitQueue() }
             Command.ClearQueueGroup -> clearGroup(stash = false)
             Command.StashQueueGroup -> clearGroup(stash = true)
@@ -924,7 +946,7 @@ class FakeCore(
                 createPlaylist(c.data.name, ids)
                 toast("Saved as playlist “${c.data.name}”")
             }
-            is Command.SetSavedQueueCap -> { savedQueueCap = c.data.cap.toInt(); setSetting(SettingKeys.QUEUE_SAVED_CAP, savedQueueCap.toString()) }
+            is Command.SetSavedQueueCap -> { savedQueueCap = c.data.cap.toInt(); setSetting(SettingKeys.QUEUE_SAVED_CAP, savedQueueCap.toString()); emitSaved() }
 
             is Command.StashAdd -> stashAdd(c.data.track_ids)
             is Command.StashRemove -> {
@@ -1210,20 +1232,42 @@ class FakeCore(
         emitQueue(); emitTransport()
     }
 
-    /** As the core's `MoveQueueItem`: [key] goes right after [after], in or out of the group by [inGroup]. */
+    /**
+     * As the core's `MoveQueueItem`: [key] goes right after [after], in or out of the group by
+     * [inGroup] (the sender decides, whatever this device's Queue section setting): an in-group drop
+     * clamps to the group's end, an out-of-group one to just after it.
+     */
     private fun moveItem(key: QueueKey, after: QueueKey, inGroup: Boolean) {
-        val from = list.indexOfFirst { it.key == key }
-        if (from < 0 || from <= ptr || key == after) return
-        val anchorBefore = list.indexOfFirst { it.key == after }
-        if (anchorBefore < 0 || anchorBefore < ptr) return
+        val i = list.indexOfFirst { it.key == key }
+        val a = list.indexOfFirst { it.key == after }
+        if (current == null || i < 0 || a < 0 || i <= ptr || a < ptr) return
         val before = captureSession()
-        val item = list.removeAt(from)
-        val anchor = list.indexOfFirst { it.key == after }
-        list.add(anchor + 1, item.copy(queued = inGroup && queueSection))
-        // The group is the run right after the current entry: anything queued past its end leaves it.
-        val end = ptr + 1 + groupCount
-        for (i in end until list.size) if (list[i].queued == true) list[i] = list[i].copy(queued = false)
+        val item = list.removeAt(i)
+        // Where `after` is now; dropping onto itself keeps its place.
+        val target = if (a == i) i else if (a > i) a else a + 1
+        list.add(clampToGroup(target, inGroup), item.copy(queued = inGroup))
         pushUndo("Reorder queue") { restoreSession(before) }
+        emitQueue()
+    }
+
+    /** An insertion index [target] kept on its side of the group's end. */
+    private fun clampToGroup(target: Int, inGroup: Boolean): Int {
+        val end = ptr + 1 + groupCount
+        return if (inGroup) minOf(target, end) else maxOf(target, end)
+    }
+
+    /** As the core's `InsertTracks`: the songs go directly after [after], placed like a [moveItem] drop. */
+    private fun insertItems(trackIds: List<TrackId>, keys: List<QueueKey>, after: QueueKey, inGroup: Boolean) {
+        val a = list.indexOfFirst { it.key == after }
+        if (current == null || a < ptr || (trackIds.isEmpty() && keys.isEmpty())) return
+        val before = captureSession()
+        // Where `after` ends up once the moved entries are out (if it moves itself, its old place).
+        val moving = keys.filter { k -> list.indexOfFirst { it.key == k } > ptr }.toSet()
+        val target = list.subList(0, a + 1).count { it.key !in moving }
+        val items = takeForQueueing(trackIds, keys)
+        if (items.isEmpty()) return
+        list.addAll(clampToGroup(target, inGroup), items.map { it.copy(queued = inGroup) })
+        pushUndo("Insert into queue") { restoreSession(before) }
         emitQueue()
     }
 
@@ -1403,8 +1447,7 @@ class FakeCore(
         if (key == SettingKeys.QUEUE_SAVED_CAP) value.toIntOrNull()?.let { savedQueueCap = it }
         if (key == SettingKeys.QUEUE_SECTION) {
             queueSection = value.trim() != "false"
-            // Off, nothing is ever queued: the group dissolves into the list.
-            if (!queueSection && list.any { it.queued == true }) { for (i in list.indices) if (list[i].queued == true) list[i] = list[i].copy(queued = false); emitQueue() }
+            // Off, no new group starts, but one already there stays (as the core).
         }
         if (key == SettingKeys.STORAGE_CACHE_MAX_BYTES) {
             // null (the default): the automatic budget; any size is the user's.
@@ -1680,7 +1723,7 @@ class FakeCore(
         is Query.Search -> search(q.data)
         Query.Queue -> QueryResult.Queue(queueView())
         is Query.QueueRange -> QueryResult.Queue(queueView(q.data.start.toInt(), q.data.count.toInt().coerceAtMost(2 * QUEUE_VIEW_SIDE + 1)))
-        Query.SavedQueues -> QueryResult.SavedQueues(savedQueues.toList())
+        Query.SavedQueues -> QueryResult.SavedQueues(shownSaved())
         Query.Stash -> QueryResult.StashItems(stashItems())
         Query.Snoozes -> QueryResult.SnoozeItems(snoozeItems())
         is Query.AlbumResume -> QueryResult.AlbumResumeState(albumResumes[q.data.id])
@@ -1797,6 +1840,11 @@ class FakeCore(
     companion object {
         /** Rows the queue view carries on each side of the pointer, as the core's `QUEUE_VIEW_BEFORE` / `_AFTER`. */
         const val QUEUE_VIEW_SIDE = 100
+        /** The core's protocol constants (`HISTORY_CAP`, `MAX_QUEUE_LEN`; "Limits" in docs/design.md). */
+        const val HISTORY_CAP = 5000
+        const val MAX_QUEUE_LEN = 10_000
+        /** Unpinned saved queues the session document keeps; `queue.savedCap` is how many are shown. */
+        const val SAVED_KEPT = 50
         /** The core's automatic stream-cache budget on a roomy volume: min(2 GiB, 10% of the space). */
         const val AUTO_CACHE_BUDGET = 2.0 * 1024 * 1024 * 1024
         const val BUILTIN_AVAILABLE_OFFLINE = "builtin:available-offline"

@@ -28,8 +28,8 @@ import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import { fmtTime } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/media";
-import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, sortableOrder, stepMove } from "../lib/queue-drag";
-import { queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange, windowEnd, mergePages, type QueueRowKind } from "../lib/queue-view";
+import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, queueDragLayout, stepMove } from "../lib/queue-drag";
+import { queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange, windowEnd, mergePages, pagedFits, type QueueRowKind } from "../lib/queue-view";
 import { EmptyState } from "./EmptyState";
 import { QueueHeader } from "./QueueSelector";
 
@@ -62,8 +62,11 @@ function usePagedQueue(base: QueueView): { queue: QueueView; loadBefore: () => v
       live = false;
     };
   }, [base, widened, want.start, want.end]);
-  // Until the first pages arrive (and between a change and its refetch) the last wider window stays up.
-  const queue = widened && paged ? paged : base;
+  // Until the first pages arrive the event's window is shown. Between a change and its
+  // refetch the last wider window stays up only while it still describes the same list
+  // around the same current entry; after a track change or a new context it would put
+  // history rows where upcoming ones are, so the event's window shows until then.
+  const queue = widened && paged && pagedFits(paged, base) ? paged : base;
   useEffect(() => {
     if (!base.total) setMore({ before: 0, after: 0 });
   }, [base.total]);
@@ -126,10 +129,9 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const reorderable = useMemo(() => (currentKey ? upcomingEntries(queue).map((e) => e.item.key) : []), [queue, currentKey]);
   const groupKeys = useMemo(() => sections.group.map((e) => e.item.key), [sections]);
   const restKeys = useMemo(() => sections.rest.map((e) => e.item.key), [sections]);
-  // The "Next from" heading is the group's border, so it sorts with the rows (when it is shown).
-  const order = useMemo(() => (currentKey ? sortableOrder(groupKeys, restKeys, section && restKeys.length > 0) : []), [groupKeys, restKeys, section, currentKey]);
-  // With the section on and nothing after the group, everything upcoming is the group.
-  const noHeadingInGroup = section && !restKeys.length;
+  // The "Next from" heading is the group's border, so it sorts with the rows (when it is
+  // shown: with the section on, or off while a group still exists).
+  const { order, noHeading: noHeadingInGroup } = useMemo(() => (currentKey ? queueDragLayout(groupKeys, restKeys, section, queue.groupCount) : { order: [], noHeading: false }), [groupKeys, restKeys, section, queue.groupCount, currentKey]);
 
   const publish = useCallback((sel: typeof selection) => {
     setSelection(sel, SCOPE, "queueItems");

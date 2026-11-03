@@ -6,6 +6,7 @@ import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueKey
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueView
+import app.hocket.core.groupEnd
 import app.hocket.core.groupEntries
 import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
@@ -19,6 +20,16 @@ import app.hocket.core.windowEnd
 
 /** LazyColumn key of the "Next from" heading, which is also the drop target dividing the group from the rest. */
 internal const val LATER_HEADER_KEY = "hdr:u"
+
+/**
+ * LazyColumn key of the "more rows below" row. When the group runs past the loaded rows it also
+ * ends the drag order in place of the heading: every loaded row there is in the group, and
+ * nothing can be moved past it.
+ */
+internal const val MORE_BOTTOM_KEY = "more:bottom"
+
+/** LazyColumn key of the "more rows above" row. */
+internal const val MORE_TOP_KEY = "more:top"
 
 internal sealed interface QueueLine {
     /** The list key (entries are keyed by queue key, headings by `hdr:<id>`). */
@@ -35,7 +46,7 @@ internal sealed interface QueueLine {
 
     /** More rows exist above or below what is loaded; showing it pages them in. */
     data class More(val top: Boolean) : QueueLine {
-        override val key: String get() = if (top) "more:top" else "more:bottom"
+        override val key: String get() = if (top) MORE_TOP_KEY else MORE_BOTTOM_KEY
     }
 
     data object Footer : QueueLine {
@@ -62,12 +73,32 @@ internal fun rowMarker(entry: QueueEntry, section: Section): RowMarker = when {
 internal fun laterLabel(view: QueueView): String? =
     view.contextLabel?.takeIf { it.isNotBlank() && view.restEntries.any { e -> e.item.source is QueueSource.Context } }
 
+/** The "Next in queue" group runs on past the loaded rows (its end, and the "Next from" heading, are not loaded yet). */
+internal val QueueView.groupCut: Boolean get() = groupCount.toInt() > 0 && groupEnd > windowEnd
+
 /**
- * The drag order: the group's keys, the "Next from" heading (only with the Queue section setting
- * on, when dropping above it joins the group), then the rest's keys.
+ * Dropping above the "Next from" heading joins the group: with the Queue section setting on, or
+ * when a group is already there (a Connect peer's, or from before the setting went off), which the
+ * core keeps and shows whatever the setting.
  */
-internal fun dragOrder(view: QueueView, sectionOn: Boolean): List<String> =
-    view.groupEntries.map { it.item.key } + (if (sectionOn) listOf(LATER_HEADER_KEY) else emptyList()) + view.restEntries.map { it.item.key }
+internal fun groupDrops(view: QueueView, sectionOn: Boolean): Boolean = sectionOn || view.groupCount.toInt() > 0
+
+/**
+ * The drag order: the group's keys, the "Next from" heading (when [groupDrops]: dropping above
+ * it joins the group), then the rest's keys. While the group runs past the loaded rows
+ * ([groupCut]) it is the group's keys and [MORE_BOTTOM_KEY]: everything loaded stays in the group.
+ */
+internal fun dragOrder(view: QueueView, sectionOn: Boolean): List<String> {
+    val group = view.groupEntries.map { it.item.key }
+    if (view.groupCut) return group + MORE_BOTTOM_KEY
+    return group + (if (groupDrops(view, sectionOn)) listOf(LATER_HEADER_KEY) else emptyList()) + view.restEntries.map { it.item.key }
+}
+
+/** Where the group ends in a drag [order]: the heading's index, or the cut group's end marker's; -1 for neither. */
+private fun groupSplit(order: List<String>): Int =
+    order.indexOf(LATER_HEADER_KEY).takeIf { it >= 0 } ?: order.indexOf(MORE_BOTTOM_KEY)
+
+private fun isMarker(key: String) = key == LATER_HEADER_KEY || key == MORE_BOTTOM_KEY
 
 /**
  * The move that puts [key] where it sits in [order]: after the entry before it (the current one
@@ -85,9 +116,9 @@ internal fun dropMove(order: List<String>, key: QueueKey, currentKey: QueueKey?,
 private fun placement(order: List<String>, key: QueueKey, currentKey: QueueKey): Pair<QueueKey, Boolean>? {
     val at = order.indexOf(key)
     if (at < 0) return null
-    val header = order.indexOf(LATER_HEADER_KEY)
+    val header = groupSplit(order)
     val inGroup = header >= 0 && at < header
-    val after = order.subList(0, at).lastOrNull { it != LATER_HEADER_KEY } ?: currentKey
+    val after = order.subList(0, at).lastOrNull { !isMarker(it) } ?: currentKey
     return after to inGroup
 }
 
@@ -95,7 +126,7 @@ private fun placement(order: List<String>, key: QueueKey, currentKey: QueueKey):
 internal fun stepOrder(order: List<String>, key: QueueKey, up: Boolean): List<String>? {
     val at = order.indexOf(key)
     val to = if (up) at - 1 else at + 1
-    if (at < 0 || to !in order.indices) return null
+    if (at < 0 || to !in order.indices || order[to] == MORE_BOTTOM_KEY) return null
     return order.toMutableList().apply { add(to, removeAt(at)) }
 }
 
@@ -113,19 +144,23 @@ internal fun queueLines(view: QueueView, drag: List<String>? = null, sectionOn: 
     var rest = view.restEntries
     if (drag != null) {
         val byKey = (group + rest).associateBy { it.item.key }
-        val header = drag.indexOf(LATER_HEADER_KEY)
+        val header = groupSplit(drag)
         val split = if (header >= 0) header else group.size.coerceAtMost(drag.size)
         group = drag.subList(0, split).mapNotNull { byKey[it] }
         rest = drag.subList((if (header >= 0) header + 1 else split), drag.size).mapNotNull { byKey[it] }
     }
-    // A drag never adds or drops the heading under the finger: the core's answer does that.
-    if (view.groupCount.toInt() > 0) {
-        add(QueueLine.Header(QueueLine.Header.Id.Group, count = if (drag != null) group.size else view.groupCount.toInt()))
+    // A row dragged above the "Next from" heading starts a group: it shows (with its heading)
+    // under the finger, so the dragged row keeps its place in the list. The count is the whole
+    // group's, give or take the dragged row.
+    if (view.groupCount.toInt() > 0 || (drag != null && group.isNotEmpty())) {
+        val count = view.groupCount.toInt() + if (drag != null) group.size - view.groupEntries.size else 0
+        add(QueueLine.Header(QueueLine.Header.Id.Group, count = count))
         group.forEach { add(QueueLine.Item(it, Section.Group)) }
     }
     val moreAfter = view.windowEnd < view.total.toInt()
-    // The heading is also where a drag leaves the group, so it stays while a drag is under way.
-    if (rest.isNotEmpty() || moreAfter || (drag != null && sectionOn && view.current != null)) {
+    // The heading is also where a drag leaves the group, so it stays while a drag is under way;
+    // while the group runs past the loaded rows it is not here yet (it would sit mid-group).
+    if (!view.groupCut && (rest.isNotEmpty() || moreAfter || (drag != null && groupDrops(view, sectionOn) && view.current != null))) {
         add(QueueLine.Header(QueueLine.Header.Id.Later, label = laterLabel(view)))
         rest.forEach { add(QueueLine.Item(it, Section.Later)) }
     }

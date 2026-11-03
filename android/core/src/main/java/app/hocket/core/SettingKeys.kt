@@ -8,8 +8,8 @@ package app.hocket.core
 object SettingKeys {
     /** Offer "Add to queue" and the "Next in queue" group (bool, on by default). */
     const val QUEUE_SECTION = "queue.section"
+    /** How many unpinned recent queues are shown (the session document keeps up to 50). */
     const val QUEUE_SAVED_CAP = "queue.savedCap"
-    const val QUEUE_HISTORY_CAP = "queue.historyCap"
     /** Offer to continue an album left unfinished. Off, Play always starts at the beginning. */
     const val PLAYBACK_RESUME_ALBUMS = "playback.resumeAlbums"
     const val AUTOPLAY_SETTINGS = "autoplay.settings"

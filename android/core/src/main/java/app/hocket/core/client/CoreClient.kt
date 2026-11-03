@@ -83,6 +83,8 @@ class CoreClient(
     val queue: StateFlow<QueueView> = _queue.asStateFlow()
     /** The core's own window, as last sent. */
     private var queueBase: QueueView = emptyQueue()
+    /** [queueBase] plus the pages fetched since it came (all current), where paging carries on from. */
+    private var queueFetched: QueueView = emptyQueue()
     /** Rows wanted behind and ahead of the pointer ([extendQueue]); the core's window covers [QUEUE_WINDOW_SIDE] each way. */
     private var queueWant = QUEUE_WINDOW_SIDE to QUEUE_WINDOW_SIDE
     private var queuePaging: kotlinx.coroutines.Job? = null
@@ -528,6 +530,7 @@ class CoreClient(
                 // The core re-emits these when the item is queued; patching now keeps the player
                 // and the queue in step with the rows that change below.
                 queueBase = LibraryPatches.queue(queueBase, items)
+                queueFetched = LibraryPatches.queue(queueFetched, items)
                 _queue.update { prev ->
                     val next = LibraryPatches.queue(prev, items)
                     if (next === prev) prev else next
@@ -603,14 +606,22 @@ class CoreClient(
     }
 
     /**
-     * A new window from the core. Rows paged in beyond it stay on screen while the list keeps its
-     * shape (they are refetched right away, as an edit may have moved them); otherwise they go.
+     * A new window from the core. Rows paged in beyond it stay on screen while they still fit: the
+     * list keeps its shape, or only the pointer moved (same total, the rows both hold line up).
+     * They are refetched right away, as an edit may have moved them. Otherwise the old rows stay
+     * until the refetched pages are published, so the list never shrinks to the core's window
+     * under the user's scroll position.
      */
     private fun setQueue(base: QueueView) {
         queueBase = base
+        queueFetched = base
         val prev = _queue.value
         val paged = QueueWindows.missing(base, queueWant.first, queueWant.second) != null
-        _queue.value = if (paged && prev !== base && QueueWindows.sameShape(prev, base)) QueueWindows.merge(base, prev) else base
+        _queue.value = when {
+            !paged || prev === base -> base
+            QueueWindows.sameShape(prev, base) -> QueueWindows.merge(base, prev)
+            else -> QueueWindows.realign(base, prev) ?: prev
+        }
         pageQueue()
     }
 
@@ -630,21 +641,24 @@ class CoreClient(
         queueWant = QUEUE_WINDOW_SIDE to QUEUE_WINDOW_SIDE
     }
 
+    /** Page in what [queueWant] still lacks, carrying on from the pages already fetched for this window. */
     private fun pageQueue() {
         val base = queueBase
         val (before, after) = queueWant
-        if (QueueWindows.missing(base, before, after) == null) { queuePaging?.cancel(); return }
         queuePaging?.cancel()
+        if (QueueWindows.missing(queueFetched, before, after) == null) return
         queuePaging = scope.launch {
-            var view = base
+            var view = queueFetched
             while (true) {
                 val (start, count) = QueueWindows.missing(view, before, after) ?: break
                 val page = (query(Commands.queueRange(start, count)) as? QueryResult.Queue)?.data ?: break
+                // A newer window from the core cancels this; it may already have replaced the base.
+                if (queueBase !== base) return@launch
                 val merged = QueueWindows.merge(view, page)
                 if (merged === view) break
                 view = merged
+                queueFetched = view
             }
-            // A newer window from the core cancels this before it gets here.
             _queue.value = view
         }
     }

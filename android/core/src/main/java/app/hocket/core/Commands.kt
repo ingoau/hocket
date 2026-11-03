@@ -45,6 +45,12 @@ object Commands {
     fun removeQueueItems(keys: List<QueueKey>) = Command.RemoveQueueItems(CommandRemoveQueueItemsInner(keys))
     /** Moves [key] to just after [after] (the current entry's key for the top of the upcoming list), in or out of the "Next in queue" group. */
     fun moveQueueItem(key: QueueKey, after: QueueKey, inGroup: Boolean) = Command.MoveQueueItem(CommandMoveQueueItemInner(key, after, inGroup))
+    /**
+     * Songs ([trackIds] new, [keys] queue entries moved or copied as for Play next) directly after
+     * the entry [after], in or out of the "Next in queue" group: placed like a drag drop.
+     */
+    fun insertTracks(serverId: ServerId, trackIds: List<TrackId>, after: QueueKey, inGroup: Boolean, keys: List<QueueKey> = emptyList()) =
+        Command.InsertTracks(CommandInsertTracksInner(serverId, trackIds, keys.ifEmpty { null }, after, inGroup))
     fun queueRange(start: Int, count: Int) = Query.QueueRange(QueryQueueRangeInner(start.coerceAtLeast(0).toUInt(), count.coerceIn(0, QUEUE_RANGE_MAX).toUInt()))
     fun setShuffle(enabled: Boolean) = Command.SetShuffle(CommandSetShuffleInner(enabled))
     fun setRepeat(mode: RepeatMode) = Command.SetRepeat(CommandSetRepeatInner(mode))
