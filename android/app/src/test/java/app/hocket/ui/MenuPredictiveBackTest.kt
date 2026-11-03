@@ -36,19 +36,7 @@ class MenuPredictiveBackTest {
 
     @Test
     fun backLeavesSubPagesBeforeClosingTheSheet() {
-        val core = TestCore(startPlaying = false)
-        val lib = core.fake.library
-        core.start()
-        compose.waitUntil(5_000) { core.client.started.value }
-        val title = lib.track(lib.playlistTracks.getValue("pl0").first())!!.title
-        compose.setThemedContent(core) {
-            CompositionLocalProvider(LocalDetailNavigator provides DetailNavigator({}, {}, {})) {
-                app.hocket.ui.screens.detail.PlaylistDetailScreen(androidx.navigation.compose.rememberNavController(), "pl0")
-            }
-        }
-        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("More options for $title").fetchSemanticsNodes().isNotEmpty() }
-        compose.onAllNodesWithContentDescription("More options for $title")[0].performSemanticsAction(SemanticsActions.OnClick)
-        settle()
+        openMenu()
         compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
         settle()
         assertTrue(has("songMenu.share.navidrome"))
@@ -74,6 +62,45 @@ class MenuPredictiveBackTest {
         assertEquals("back on the menu closes the sheet", false, has("songMenu.header"))
     }
 
+    @Test
+    fun quickBacksDuringTheSlide() {
+        val title = openMenu()
+        compose.mainClock.autoAdvance = false
+        // Back while Share is still sliding in: back to the menu, not the sheet closed.
+        compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+        compose.mainClock.advanceTimeBy(100)
+        compose.runOnUiThread { dispatcher().onBackPressed() }
+        settle()
+        assertTrue("back mid-slide keeps the sheet", has("songMenu.header"))
+        assertEquals(false, has("songMenu.share.navidrome"))
+        // Back let go, then a second back swipe while the menu is still sliding back: it closes the sheet.
+        compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+        settle()
+        gesture(1f, commit = true, settleAfter = false)
+        compose.mainClock.advanceTimeBy(80)
+        gesture(1f, commit = true)
+        assertEquals("a second back closes the sheet", false, has("songMenu.header"))
+        assertTrue(title.isNotEmpty())
+    }
+
+    /** The playlist with its first song's menu open; the song's title. */
+    private fun openMenu(): String {
+        val core = TestCore(startPlaying = false)
+        val lib = core.fake.library
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        val title = lib.track(lib.playlistTracks.getValue("pl0").first())!!.title
+        compose.setThemedContent(core) {
+            CompositionLocalProvider(LocalDetailNavigator provides DetailNavigator({}, {}, {})) {
+                app.hocket.ui.screens.detail.PlaylistDetailScreen(androidx.navigation.compose.rememberNavController(), "pl0")
+            }
+        }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("More options for $title").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithContentDescription("More options for $title")[0].performSemanticsAction(SemanticsActions.OnClick)
+        settle()
+        return title
+    }
+
     private fun settle() {
         compose.mainClock.advanceTimeBy(1_500)
         compose.waitForIdle()
@@ -88,7 +115,7 @@ class MenuPredictiveBackTest {
     }
 
     /** A back swipe from the left edge to [to], then let go ([commit]) or cancelled. */
-    private fun gesture(to: Float, commit: Boolean) {
+    private fun gesture(to: Float, commit: Boolean, settleAfter: Boolean = true) {
         val d = dispatcher()
         compose.runOnUiThread { d.dispatchOnBackStarted(BackEventCompat(0f, 1200f, 0f, BackEventCompat.EDGE_LEFT)) }
         for (i in 1..10) {
@@ -97,6 +124,6 @@ class MenuPredictiveBackTest {
             compose.mainClock.advanceTimeBy(16)
         }
         compose.runOnUiThread { if (commit) d.onBackPressed() else d.dispatchOnBackCancelled() }
-        settle()
+        if (settleAfter) settle() else compose.waitForIdle()
     }
 }

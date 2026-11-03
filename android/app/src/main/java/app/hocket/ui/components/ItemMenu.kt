@@ -349,7 +349,12 @@ fun MenuSheet(
     // Seekable, so a predictive back gesture can scrub the way back to the menu.
     val pages = remember { SeekableTransitionState(MenuPage.Main) }
     val pageTransition = rememberTransition(pages, label = "menuPage")
-    fun goTo(to: MenuPage) { scope.launch { pages.animateTo(to) } }
+    /**
+     * The page the menu is on as far as back is concerned: set as soon as it is asked for, while the
+     * transition may still be playing (whose own current state only moves when it finishes).
+     */
+    var page by remember { mutableStateOf(MenuPage.Main) }
+    fun goTo(to: MenuPage) { page = to; scope.launch { pages.animateTo(to) } }
     /** How far a predictive back gesture has pulled the sheet in, 0 to 1 (the sheet scales with it). */
     val backPull = remember { Animatable(0f) }
     val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
@@ -518,8 +523,10 @@ fun MenuSheet(
         // The gesture scrubs the first part of the slide back to the menu (the sub-page fading as the
         // menu comes in) and draws the sheet in a little; letting go plays the rest, cancelling slides
         // the sub-page back. A back key (no gesture) just goes.
-        PredictiveBackHandler(enabled = pages.currentState != MenuPage.Main) { events ->
-            val from = pages.currentState
+        // Back during a slide in already goes back; once back is let go the page is the menu, so a
+        // second back (even mid-slide) is the sheet's own and closes it.
+        PredictiveBackHandler(enabled = page != MenuPage.Main) { events ->
+            val from = page
             try {
                 events.collect { e ->
                     val p = PredictiveBackEasing.transform(e.progress)
@@ -527,10 +534,11 @@ fun MenuSheet(
                     pages.seekTo(p * BACK_PEEK, MenuPage.Main)
                 }
                 scope.launch { backPull.animateTo(0f, settleSpec) }
-                scope.launch { pages.animateTo(MenuPage.Main) }
+                goTo(MenuPage.Main)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 scope.launch { backPull.animateTo(0f, settleSpec) }
-                scope.launch { pages.animateTo(from) }
+                // Only if nothing else (a tap) has moved the page meanwhile.
+                if (page == from) scope.launch { pages.animateTo(from) }
                 throw e
             }
         }
