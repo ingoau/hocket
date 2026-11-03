@@ -53,6 +53,8 @@ import app.hocket.ui.player.artworkSeed
 import app.hocket.ui.theme.ArtworkColors
 import app.hocket.ui.theme.LocalDarkTheme
 import app.hocket.ui.theme.animatedScheme
+import app.hocket.ui.brand.Brand
+import app.hocket.ui.nav.PageColors
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -192,6 +194,13 @@ fun HomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val songMenu = rememberSongMenu()
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    // Over the cover (Spotlight first, the page not scrolled under the bar) the bar's lockup, icons
+    // and the status bar take the ink that reads on the top of the slide in view.
+    val overArt = heroFirst && scroll.state.overlappedFraction < 0.01f
+    // Until the cover's been read, the slide shows the page's own surface: the theme's ink.
+    val topLight = slides.getOrNull(pager.currentPage)?.coverArt?.let { c -> key(c) { artworkTopLight(c).value } } ?: !dark
+    val barInk = if (topLight) Brand.inkOnLight else Brand.inkOnDark
+    PageColors(pageScheme, statusLight = if (overArt) topLight else !dark)
     val hiddenLabel = stringResource(R.string.home_section_hidden, "%s")
     val undoLabel = stringResource(R.string.action_undo)
     fun hide(pref: SectionPref, title: String) {
@@ -210,8 +219,12 @@ fun HomeScreen(nav: NavHostController) {
         // The app's lockup as the title, at the Library header's size; the server is in the account sheet (#29).
         // Clear over Spotlight's artwork until the page scrolls under it.
         topBar = {
-            val barColors = if (heroFirst) TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer) else TopAppBarDefaults.topAppBarColors()
-            MediumFlexibleTopAppBar(title = { HeaderLockup() }, colors = barColors, actions = {
+            val barColors = when {
+                overArt -> TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer, actionIconContentColor = barInk, navigationIconContentColor = barInk, titleContentColor = barInk)
+                heroFirst -> TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer)
+                else -> TopAppBarDefaults.topAppBarColors()
+            }
+            MediumFlexibleTopAppBar(title = { if (overArt) HeaderLockup(ink = barInk) else HeaderLockup() }, colors = barColors, actions = {
                 IconButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise")) { Icon(HocketIcons.Filled.Tune, stringResource(R.string.home_customise)) }
                 JobsIndicator(onClick = { jobs = true })
                 AccountButton()

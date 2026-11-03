@@ -142,11 +142,10 @@ fun brandTitleStyle(): TextStyle = LocalTextStyle.current.merge(
  * where the pale voice would vanish, it's one colour, the word mark's ink. It reads as one heading.
  */
 @Composable
-fun HeaderLockup(modifier: Modifier = Modifier) {
+fun HeaderLockup(modifier: Modifier = Modifier, ink: Color = brandInk()) {
     val style = brandTitleStyle()
     val name = stringResource(R.string.app_name)
     val type = with(LocalDensity.current) { style.fontSize.toDp() }
-    val ink = brandInk()
     val dark = ink == Brand.inkOnDark
     Row(modifier.semantics(mergeDescendants = true) { contentDescription = name; heading() }, verticalAlignment = Alignment.CenterVertically) {
         VoicedMark(height = type * 0.8f, voices = if (dark) listOf(Brand.voice1, Brand.voice2) else listOf(ink, ink))

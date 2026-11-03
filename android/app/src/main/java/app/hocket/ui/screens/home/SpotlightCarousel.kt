@@ -32,7 +32,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -103,12 +105,16 @@ private fun SpotlightPage(slide: SpotlightSlide, page: Int, count: Int, onOpen: 
         Artwork(slide.coverArt, ArtworkSizes.HERO, null, Modifier.fillMaxSize(), RectangleShape)
         // A wash at the top for the bar's lockup and buttons, and the page's own surface rising
         // under the text so it reads on any cover.
-        // A pale cover stays a pale picture, but never lights the slide: the wash is the theme's surface.
-        // In the dark theme the middle keeps more of the wash, so a white cover reads as a dimmed picture, not a bright band.
-        val mid = if (LocalDarkTheme.current) 0.32f else 0.12f
+        // The cover shows whole up top, under the bar; the bar's lockup and icons take the ink that
+        // reads on it (artworkTopLight), over a faint shade of the opposite colour. Lower down the
+        // theme's own surface rises under the text, so a pale cover never lights the slide.
+        val topLight = artworkTopLight(slide.coverArt).value ?: !LocalDarkTheme.current
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
-            0f to cs.surface.copy(alpha = 0.9f), 0.14f to cs.surface.copy(alpha = 0.62f), 0.3f to cs.surface.copy(alpha = mid),
-            0.42f to cs.surface.copy(alpha = mid), 0.62f to cs.surface.copy(alpha = 0.8f), 0.8f to cs.surface.copy(alpha = 0.95f), 1f to cs.surface,
+            0f to (if (topLight) Color.White else Color.Black).copy(alpha = 0.22f), 0.2f to Color.Transparent,
+        )))
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+            0f to Color.Transparent, 0.42f to cs.surface.copy(alpha = if (LocalDarkTheme.current) 0.12f else 0f),
+            0.62f to cs.surface.copy(alpha = 0.8f), 0.8f to cs.surface.copy(alpha = 0.95f), 1f to cs.surface,
         )))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
             // The words open the album, artist or playlist (not the whole slide: its top is under the bar's buttons).
@@ -168,4 +174,47 @@ private fun subtitleOf(slide: SpotlightSlide): String {
         else -> null
     }
     return listOfNotNull(artist, a.year?.takeIf { it > 0u }?.toString(), third).joinToString(" · ")
+}
+
+/**
+ * Whether the top of [coverArt], the part a slide shows under the top bar (its top ~30%, middle
+ * 85%: a square cover cropped to the slide), is light: dark ink reads on it. Null while worked out.
+ */
+@Composable
+fun artworkTopLight(coverArt: String?): androidx.compose.runtime.State<Boolean?> {
+    val client = app.hocket.ui.LocalCoreClient.current
+    val state = androidx.compose.runtime.remember(coverArt) { androidx.compose.runtime.mutableStateOf(coverArt?.let { topLights.get(it) }) }
+    androidx.compose.runtime.LaunchedEffect(state) {
+        if (state.value != null || coverArt == null) return@LaunchedEffect
+        val path = client.artworkPath(coverArt, ArtworkSizes.LIST) ?: return@LaunchedEffect
+        val light = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { topLuminance(path) }?.let { it > 0.45f } ?: return@LaunchedEffect
+        topLights.put(coverArt, light)
+        state.value = light
+    }
+    return state
+}
+
+private val topLights = android.util.LruCache<String, Boolean>(64)
+
+/** The mean relative luminance of a cover's top strip, or null when it can't be read. */
+private fun topLuminance(path: String): Float? {
+    val bmp = android.graphics.BitmapFactory.decodeFile(path.removePrefix("file://")) ?: return null
+    try {
+        val w = bmp.width
+        val h = bmp.height
+        if (w == 0 || h == 0) return null
+        val x0 = (w * 0.075f).toInt()
+        val x1 = (w * 0.925f).toInt().coerceAtLeast(x0 + 1)
+        val y1 = (h * 0.3f).toInt().coerceAtLeast(1)
+        var sum = 0.0
+        var n = 0
+        val step = maxOf(1, w / 48)
+        for (y in 0 until y1 step step) for (x in x0 until x1 step step) {
+            sum += Color(bmp.getPixel(x, y)).luminance()
+            n++
+        }
+        return if (n == 0) null else (sum / n).toFloat()
+    } finally {
+        bmp.recycle()
+    }
 }
