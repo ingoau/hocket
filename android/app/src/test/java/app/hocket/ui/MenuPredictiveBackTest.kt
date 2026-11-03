@@ -23,7 +23,7 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * Back on the song menu's sub-pages: a predictive back gesture let go returns to the menu, one
  * cancelled stays on the sub-page, a back key returns too, and only back on the menu itself closes
- * the sheet.
+ * the sheet, and the sheet glides to each page's height rather than jumping.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")
@@ -81,6 +81,25 @@ class MenuPredictiveBackTest {
         gesture(1f, commit = true)
         assertEquals("a second back closes the sheet", false, has("songMenu.header"))
         assertTrue(title.isNotEmpty())
+    }
+
+    @Test
+    fun theSheetGlidesToEachPagesHeight() {
+        openMenu()
+        compose.mainClock.autoAdvance = false
+        fun top() = compose.onNodeWithTag("songMenu.header", useUnmergedTree = true).fetchSemanticsNode().boundsInWindow.top
+        fun midway(label: String, go: () -> Unit) {
+            val from = top()
+            go()
+            compose.mainClock.advanceTimeBy(150)
+            val mid = top()
+            settle()
+            val to = top()
+            assertTrue("$label: the page changes the sheet's height ($from to $to)", kotlin.math.abs(to - from) > 100f)
+            assertTrue("$label: halfway through, the sheet is between ($from, $mid, $to)", mid > minOf(from, to) + 20f && mid < maxOf(from, to) - 20f)
+        }
+        midway("into Share") { compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick) }
+        midway("back to the menu") { compose.runOnUiThread { dispatcher().onBackPressed() } }
     }
 
     /** The playlist with its first song's menu open; the song's title. */

@@ -546,10 +546,10 @@ fun MenuSheet(
             MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
-            // A sub-page slides in from the end, the menu slides back from the start. The new page's
-            // height is taken at once, so the sheet glides to it (its own settle) alongside the slide
-            // rather than after it. Going back cross-fades over longer, so a back gesture scrubbing
-            // its first part shows the sub-page giving way to the menu.
+            // A sub-page slides in from the end, the menu slides back from the start, and the height
+            // animates alongside the slide: the sheet follows its content's size, and snaps to it if
+            // that jumps, so the glide has to come from here. Going back cross-fades over longer, so a
+            // back gesture scrubbing its first part shows the sub-page giving way to the menu.
             pageTransition.AnimatedContent(
                 transitionSpec = {
                     val forward = targetState != MenuPage.Main
@@ -557,7 +557,7 @@ fun MenuSheet(
                     val fadeOutMs = if (forward) PAGE_MS / 3 else PAGE_MS / 2
                     (slideInHorizontally(spec) { w -> if (forward) w / 4 else -w / 4 } + fadeIn(tween(PAGE_MS / 2, delayMillis = PAGE_MS / 6)))
                         .togetherWith(slideOutHorizontally(spec) { w -> if (forward) -w / 4 else w / 4 } + fadeOut(tween(fadeOutMs)))
-                        .using(SizeTransform(clip = false) { _, _ -> androidx.compose.animation.core.snap() })
+                        .using(SizeTransform(clip = false) { _, _ -> tween(PAGE_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing) })
                 },
                 contentAlignment = Alignment.TopCenter,
             ) { shownPage ->
