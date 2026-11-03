@@ -270,8 +270,9 @@
 }
 .np[data-immersive="right"]:not([data-mode="art"]) .np-continuation[data-side="right"] { --np-solid: calc(100vh - 8vw); --np-clear: calc(100vh + 6vw); }
 /* A flat extension's fill starts under the artwork's last 4% (CRISP_FEATHER), for the crisp seam
-   with no view open. Beside a view the artwork itself dissolves from 70%, so that strip of colour
-   and grain is gone by 96vh: otherwise it shows through the fading artwork as a faint band (#131). */
+   with no view open. Beside a view the artwork itself dissolves from 70%, so the mask is clear by
+   96vh and hides that strip of colour and grain, which would otherwise show through the fading
+   artwork as a faint band (#131). The canvas is empty before it, so the 66vh start shows nothing. */
 .np[data-immersive="right"][data-flat]:not([data-mode="art"]) .np-continuation[data-side="right"] { --np-solid: 66vh; --np-clear: 96vh; }
 /* And a scrim comes in beside the artwork, so the view's white text holds 4.5:1 over what is left of a light continuation. */
 .np[data-layout="immersive"] .np-fade { display: block; opacity: 0; background: linear-gradient(to right, transparent calc(100vh - 8vw), rgba(0, 0, 0, 0.4) calc(100vh + 2vw)); transition: opacity 700ms var(--ease-emphasized); }
