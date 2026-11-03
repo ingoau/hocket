@@ -2,6 +2,8 @@
 //! network (artwork fetch, related tracks) are produced by a spawned task
 //! that owns the reply channel; the loop never waits.
 
+use std::sync::Arc;
+
 use tokio::sync::oneshot;
 
 use crate::actions::Surface;
@@ -256,6 +258,10 @@ impl Actor {
                 self.export_audio_query(track_id, reply);
                 return;
             }
+            Query::SongLink { track_id, album_id } => {
+                self.song_link_query(track_id, album_id, reply);
+                return;
+            }
         };
         let _ = reply.send(answer);
     }
@@ -287,6 +293,71 @@ impl Actor {
                 }
             };
             let _ = reply.send(QueryResult::Share(url.map(|url| CreatedShare { url })));
+        });
+    }
+
+    fn song_link_query(
+        &mut self,
+        track_id: Option<String>,
+        album_id: Option<String>,
+        reply: oneshot::Sender<QueryResult>,
+    ) {
+        enum Want {
+            Song(crate::songlink::SongFacts, Option<String>),
+            Album(String, Option<String>),
+        }
+        let want = if let Some(t) = track_id
+            .filter(|id| !id.is_empty())
+            .and_then(|id| self.db.track(&id).ok().flatten())
+        {
+            let facts = crate::songlink::SongFacts {
+                title: t.title.clone(),
+                artist: t.artist.clone().or(t.album_artist.clone()),
+                duration_ms: Some(t.duration_ms as u64).filter(|d| *d > 0),
+                isrc: vec![],
+            };
+            Some(Want::Song(facts, Some(t.id)))
+        } else if let Some(a) = album_id
+            .filter(|id| !id.is_empty())
+            .and_then(|id| self.db.album(&id).ok().flatten())
+        {
+            Some(Want::Album(a.name, a.artist))
+        } else {
+            None
+        };
+        let Some(want) = want.filter(|_| !self.is_offline()) else {
+            let _ = reply.send(QueryResult::SongLink(None));
+            return;
+        };
+        let api = self.api();
+        let http = self.lyrics_http.clone();
+        let app_version = self.cfg.app_version.clone();
+        self.spawn(async move {
+            let http: Arc<dyn crate::lyrics::LyricsHttp> = match http {
+                Some(h) => h,
+                None => match crate::lyrics::ReqwestLyricsHttp::new(&app_version) {
+                    Ok(h) => Arc::new(h),
+                    Err(e) => {
+                        tracing::debug!(target: "hocket_core", error = %e, "song.link: no http client");
+                        let _ = reply.send(QueryResult::SongLink(None));
+                        return;
+                    }
+                },
+            };
+            let url = match want {
+                Want::Song(mut facts, id) => {
+                    // The mirror keeps no ISRC: ask the server for this one song.
+                    if let (Some(api), Some(id)) = (api, id) {
+                        match api.song(&id).await {
+                            Ok(child) => facts.isrc = child.isrc,
+                            Err(e) => tracing::debug!(target: "hocket_core", error = %e, "song.link: getSong failed"),
+                        }
+                    }
+                    crate::songlink::song_url(http.as_ref(), &facts).await
+                }
+                Want::Album(name, artist) => crate::songlink::album_url(http.as_ref(), &name, artist.as_deref()).await,
+            };
+            let _ = reply.send(QueryResult::SongLink(url));
         });
     }
 

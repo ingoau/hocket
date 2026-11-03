@@ -2906,6 +2906,10 @@ export class FakeCore implements CoreHandle {
       }
       case "exportAudio":
         return { type: "audioFile", data: undefined };
+      case "songLink": {
+        const id = q.data.track_id || q.data.album_id;
+        return { type: "songLink", data: id ? `https://${q.data.track_id ? "song" : "album"}.link/d/${id}` : undefined };
+      }
       case "reportUpload":
         return { type: "reportUpload", data: this.reportUpload?.status };
       case "stash":

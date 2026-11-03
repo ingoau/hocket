@@ -208,10 +208,9 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
   return rows;
 }
 
-/** Share belongs on an item menu: a song, album or playlist, or one artist (Song.link). */
+/** Share belongs on an item menu: a song, album or playlist. An artist has nothing to share. */
 export function shareApplies(facts: MenuFacts | undefined): boolean {
   if (!facts || facts.count < 1) return false;
-  if (facts.kind === "artist") return facts.count === 1;
   return facts.kind === "song" || facts.kind === "album" || facts.kind === "playlist";
 }
 
