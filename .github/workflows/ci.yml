@@ -140,7 +140,7 @@ jobs:
           packages: platform-tools
       - run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "ndk;27.2.12479018"
       - uses: gradle/actions/setup-gradle@v4
-      - run: cargo install cargo-ndk typeshare-cli
+      - run: cargo install typeshare-cli
       - run: scripts/gen-bindings.sh
       - run: scripts/build-android-core.sh debug x86_64
       # Robolectric downloads its android-all runtime jars at test time, outside Gradle (so
@@ -207,7 +207,7 @@ jobs:
           packages: platform-tools
       - run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "ndk;27.2.12479018"
       - uses: gradle/actions/setup-gradle@v4
-      - run: cargo install cargo-ndk typeshare-cli
+      - run: cargo install typeshare-cli
       - run: scripts/gen-bindings.sh
       - run: scripts/build-android-core.sh release
       # Signed with the key the installed app already uses.
