@@ -85,8 +85,13 @@ class LargeScreenShellTest {
         val title = bounds("player.title")
         val play = bounds("player.playPause")
         assertTrue("artwork beside the controls: art $art, title $title", art.right <= title.left + 1f)
-        assertTrue("the transport is on screen without scrolling ($play)", play.bottom <= compose.activity.resources.displayMetrics.heightPixels)
+        val heightPx = compose.activity.resources.displayMetrics.heightPixels
+        assertTrue("the transport is on screen without scrolling ($play)", play.bottom <= heightPx)
+        assertTrue("so is the action row (${bounds("player.mode.queue")})", bounds("player.mode.queue").bottom <= heightPx)
+        assertTrue("and the whole artwork ($art)", art.bottom <= heightPx)
         assertFalse("no panel toggle on a phone", exists("player.fullScreen"))
+        // The skip swipe's next cover waits off the page, not over the controls beside the artwork.
+        if (exists("player.artwork.next")) assertTrue("next cover off screen (${bounds("player.artwork.next")})", bounds("player.artwork.next").left >= widthPx - 1f)
     }
 
     @Test

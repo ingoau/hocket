@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -60,27 +63,48 @@ internal fun PanelPageHost(page: PlayerMode?, onClose: () -> Unit) {
         exit = if (reduced) fadeOut(tween(0)) else fadeOut(tween(150)),
     ) {
         val shown = held ?: return@AnimatedVisibility
-        Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize().testTag("panelPage")) {
-            Column(Modifier.fillMaxSize().statusBarsPadding()) {
-                Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        stringResource(if (shown == PlayerMode.Queue) R.string.player_mode_queue else R.string.player_mode_lyrics),
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f).semantics { heading() },
-                    )
-                    IconButton(onClick = onClose, modifier = Modifier.testTag("panelPage.close")) {
-                        Icon(HocketIcons.Filled.Close, stringResource(R.string.panel_close))
-                    }
-                }
-                // Lines and rows stay a readable width on a wide screen, centred.
-                Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = BottomContentInset), contentAlignment = Alignment.TopCenter) {
-                    when (shown) {
-                        PlayerMode.Queue -> QueueList(Modifier.widthIn(max = 760.dp).fillMaxSize().testTag("panelPage.queue"), contentPadding = PaddingValues(horizontal = 8.dp))
-                        else -> LyricsPage(visible = page == PlayerMode.Lyrics, modifier = Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 8.dp).testTag("panelPage.lyrics"))
-                    }
+        // The lyrics bring their own backdrop (the artwork's colours, dark): the whole main screen, the
+        // heading over it in light text, the lines in a centred column under the heading.
+        if (shown == PlayerMode.Lyrics) {
+            Box(Modifier.fillMaxSize().testTag("panelPage")) {
+                LyricsPage(
+                    visible = page == PlayerMode.Lyrics,
+                    modifier = Modifier.fillMaxSize().testTag("panelPage.lyrics"),
+                    listModifier = Modifier.fillMaxWidth().wrapContentWidth().widthIn(max = 680.dp).padding(top = PanelHeaderHeight).clipToBounds(),
+                )
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) {
+                    PanelHeader(shown, onClose)
                 }
             }
+            return@AnimatedVisibility
+        }
+        Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize().testTag("panelPage")) {
+            Column(Modifier.fillMaxSize()) {
+                PanelHeader(shown, onClose)
+                // Rows stay a readable width on a wide screen, centred.
+                Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = BottomContentInset), contentAlignment = Alignment.TopCenter) {
+                    QueueList(Modifier.widthIn(max = 760.dp).fillMaxSize().testTag("panelPage.queue"), contentPadding = PaddingValues(horizontal = 8.dp))
+                }
+            }
+        }
+    }
+}
+
+/** The heading's room under the status bar (the lyrics' lines start below it). */
+private val PanelHeaderHeight = 72.dp
+
+/** The page's heading (Lyrics or Queue) and the button back to the page. */
+@Composable
+private fun PanelHeader(shown: PlayerMode, onClose: () -> Unit) {
+    Row(Modifier.fillMaxWidth().statusBarsPadding().padding(start = 24.dp, end = 12.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            stringResource(if (shown == PlayerMode.Queue) R.string.player_mode_queue else R.string.player_mode_lyrics),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f).semantics { heading() },
+        )
+        IconButton(onClick = onClose, modifier = Modifier.testTag("panelPage.close")) {
+            Icon(HocketIcons.Filled.Close, stringResource(R.string.panel_close))
         }
     }
 }

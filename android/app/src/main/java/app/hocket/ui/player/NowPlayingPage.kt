@@ -299,7 +299,8 @@ internal fun FullPlayer(
                         onPrevious = { client.dispatch(Command.Previous) },
                         onToggle = { client.dispatch(Command.TogglePlay) },
                         onNext = { client.dispatch(Command.Next) },
-                        height = if (pageWidth < 360.dp) 68.dp else TRANSPORT_HEIGHT,
+                        // (And beside the artwork on a short page: a phone on its side.)
+                        height = if (pageWidth < 360.dp || (wide && viewport < 480.dp)) 68.dp else TRANSPORT_HEIGHT,
                         modifier = Modifier.padding(horizontal = PAGE_PADDING),
                     )
                 },
@@ -356,6 +357,9 @@ internal fun FullPlayer(
     if (artists && track != null) ArtistsSheet(track, onDismiss = { artists = false }, onOpenAlbum = { artists = false; onOpenAlbum(it) }, onOpenArtist = { artists = false; onOpenArtist(it) })
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
 }
+
+/** The upright layout's column on a wide page (a tablet held upright): the artwork's largest size plus its margins and a little. */
+private val TALL_MAX_WIDTH = 600.dp
 
 /** The least width for the side-by-side layout (a landscape phone is about 700 dp and up). */
 private val WIDE_MIN_WIDTH = 560.dp
@@ -429,10 +433,17 @@ private fun PlayerLayoutTall(
     actions: @Composable () -> Unit,
 ) {
     Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
-        val w = constraints.maxWidth
+        val full = constraints.maxWidth
+        // On a wide page (a tablet held upright) the controls (and a card's area) keep to a centred
+        // column, so the seek bar and the buttons don't stretch edge to edge; an immersive artwork
+        // still takes the page's full width.
+        val w = minOf(full, TALL_MAX_WIDTH.roundToPx())
+        val x0 = (full - w) / 2
+        val areaW = if (hero.immersive) full else w
+        val areaX = if (hero.immersive) 0 else x0
         val loose = Constraints(maxWidth = w)
         fun measure(i: Int) = slots[i].map { it.measure(loose) }
-        val hp = measure(0)
+        val hp = slots[0].map { it.measure(Constraints(maxWidth = full)) }
         val tp = measure(2)
         val sp = measure(3)
         val xp = measure(4)
@@ -476,19 +487,19 @@ private fun PlayerLayoutTall(
         hero.artTop = (pad + extra / 2).toFloat()
         // An immersive artwork from the top of the area (under the status bar and the handle: the
         // room there is its top strip), raised only as far as it must be to end above the title.
-        hero.immersiveTop = minOf(0, areaH - w).toFloat()
-        val mp = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
+        hero.immersiveTop = minOf(0, areaH - areaW).toFloat()
+        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaH + fold)) }
         val titleTop = hh + areaH + fold
         val seekTop = hh + areaH + th + seekGap
         val transportTop = seekTop + sh + gapX + share
         val actionsTop = transportTop + xh + gapA + share
-        layout(w, maxOf(actionsTop + ah + share, view)) {
+        layout(full, maxOf(actionsTop + ah + share, view)) {
             hp.forEach { it.place(0, 0) }
-            mp.forEach { it.place(0, hh) }
-            tp.forEach { it.place(0, titleTop) }
-            sp.forEach { it.place(0, seekTop) }
-            xp.forEach { it.place(0, transportTop) }
-            ap.forEach { it.place(0, actionsTop) }
+            mp.forEach { it.place(areaX, hh) }
+            tp.forEach { it.place(x0, titleTop) }
+            sp.forEach { it.place(x0, seekTop) }
+            xp.forEach { it.place(x0, transportTop) }
+            ap.forEach { it.place(x0, actionsTop) }
         }
     }
 }
@@ -533,11 +544,12 @@ private fun PlayerLayoutWide(
         val xp = slots[4].map { it.measure(col) }
         val ap = slots[5].map { it.measure(col) }
         fun height(p: List<Placeable>) = p.maxOfOrNull { it.height } ?: 0
-        val gap = WIDE_GAP.roundToPx()
         val th = height(tp)
         val sh = height(sp)
         val xh = height(xp)
         val ah = height(ap)
+        // The gaps share what the column leaves on a short page (a phone on its side), down to 8 dp.
+        val gap = ((avail - th - sh - xh - ah) / 3).coerceIn(8.dp.roundToPx(), WIDE_GAP.roundToPx())
         val block = th + gap + sh + gap + xh + gap + ah
         val top = hh + ((avail - block) / 2).coerceAtLeast(0)
         val areaH = maxOf(avail, block)
@@ -1265,7 +1277,10 @@ internal fun pageSpan(hero: HeroGeometry, anyImmersive: Boolean): Float {
     val a = hero.area
     if (anyImmersive) return a.width.coerceAtLeast(1f)
     val card = hero.cardSlot()
-    return maxOf(card.width + hero.artInset, a.width - card.left, card.right).coerceAtLeast(1f)
+    // Past the page's own edge too: beside the controls (the landscape layout) the area ends long
+    // before the page does, and a neighbour a page away must still be off screen.
+    val page = hero.root?.takeIf { it.isAttached }?.size?.width?.toFloat() ?: 0f
+    return maxOf(card.width + hero.artInset, a.width - card.left, card.right, page - card.left).coerceAtLeast(1f)
 }
 
 /** A neighbour's cover and, when it is shown immersive, its layout. */
