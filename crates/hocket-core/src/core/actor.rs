@@ -17,7 +17,6 @@ use crate::autoplay::AutoplayEngine;
 use crate::cache::Caches;
 use crate::connect::discovery::Discovery;
 use crate::connect::engine::{Engine, Input, PersistedConnectState};
-use crate::connect::session_adapter::ReducerPolicy;
 use crate::connect::transport::PeerIds;
 use crate::connect::wire::WireMessage;
 use crate::connect::PeerId;
@@ -156,8 +155,7 @@ pub(crate) struct Actor {
     /// it): a batch that found nothing is not asked for again on every
     /// change, and one that lands after the queue moved on is dropped.
     pub autoplay_prefetched: Option<QueueKey>,
-    pub reducer_policy: Arc<ReducerPolicy>,
-    /// Stands in for [`crate::connect::session_adapter::TunableReducer`] when set (tests: a room running
+    /// Stands in for [`crate::connect::session_adapter::RealReducer`] when set (tests: a room running
     /// another build).
     pub reducer_override: Option<crate::connect::ReducerHandle>,
     pub entropy: Arc<dyn Entropy>,
@@ -383,11 +381,6 @@ impl Actor {
         if let Ok(Some(ids)) = db.saved_state_get::<Vec<TrackId>>("autoplay:exclusion") {
             autoplay.restore_exclusion(ids);
         }
-        let reducer_policy = ReducerPolicy::new(
-            settings.get_i64(keys::QUEUE_HISTORY_CAP).max(10) as usize,
-            crate::session::SavedQueuePolicy::default()
-                .with_cap(settings.get_i64(keys::QUEUE_SAVED_CAP).max(0) as u32),
-        );
 
         let (backend, backend_poll, external): (
             Arc<dyn PlaybackBackend>,
@@ -466,7 +459,6 @@ impl Actor {
             autoplay_wanted: false,
             autoplay_advance: false,
             autoplay_prefetched: None,
-            reducer_policy,
             reducer_override: deps.reducer.clone(),
             entropy,
             backend,
@@ -876,7 +868,7 @@ impl Actor {
             queues: snapshot
                 .session
                 .as_ref()
-                .map(|d| d.saved_queues.clone())
+                .map(|d| self.visible_of(&d.saved_queues))
                 .unwrap_or_default(),
         });
         self.emit_stash();

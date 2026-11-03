@@ -167,7 +167,7 @@ describe("shuffle", () => {
   it("shuffles only after the group and restores order (rotated from current) when off", () => {
     const q = ctx(20, 5);
     Q.queueItems(q, ["a", "b"], [], "group", true, fresh);
-    Q.settle(q, 5000);
+    Q.settle(q);
     Q.setShuffle(q, true, 1234);
     expect(tracks(q).slice(0, 8)).toEqual(["t0", "t1", "t2", "t3", "t4", "t5", "a", "b"]);
     const tail = tracks(q).slice(8);
@@ -176,7 +176,7 @@ describe("shuffle", () => {
     // Added while shuffled: lands after the previous entry's place.
     Q.queueItems(q, ["l"], [], "later", true, fresh);
     Q.setShuffle(q, false, 0);
-    Q.settle(q, 5000);
+    Q.settle(q);
     expect(tracks(q)).toEqual(["t0", "t1", "t2", "t3", "t4", "t5", "a", "b", ...Array.from({ length: 14 }, (_, i) => `t${i + 6}`), "l"]);
     expect(q.list.map((i) => i.ordinal)).toEqual(q.list.map((_, i) => i));
   });
@@ -190,6 +190,91 @@ describe("shuffle", () => {
     const after = tracks(q).slice(q.ptr + 1);
     const expected = ["t4", "t5", "t0", "t1", "t2"].filter((t) => after.includes(t));
     expect(after).toEqual(expected);
+  });
+});
+
+describe("shuffle keeps dormant queued entries in place", () => {
+  it("queued entries further down the tail keep their slots through shuffle and unshuffle", () => {
+    const q = ctx(12, 0);
+    // A group left behind further down (e.g. after going back past it).
+    q.list[5]!.queued = true;
+    q.list[6]!.queued = true;
+    Q.setShuffle(q, true, 4321);
+    expect(tracks(q)[5]).toBe("t5");
+    expect(tracks(q)[6]).toBe("t6");
+    expect(tracks(q)[0]).toBe("t0");
+    Q.setShuffle(q, false, 0);
+    expect(tracks(q)).toEqual(Array.from({ length: 12 }, (_, i) => `t${i}`));
+  });
+});
+
+describe("insert at a position", () => {
+  /** t0 (history), t1 current, group a b, then t2 t3. */
+  function withGroup(): Q.FlatQueue {
+    const q = ctx(4, 1);
+    Q.queueItems(q, ["a", "b"], [], "group", true, fresh);
+    Q.settle(q);
+    return q;
+  }
+  const group = (q: Q.FlatQueue) => q.list.slice(Q.afterCurrent(q), Q.groupEnd(q)).map((i) => i.trackId);
+
+  it("lands directly after the named entry, in or out of the group", () => {
+    let q = withGroup();
+    expect(Q.insertItems(q, ["n1", "n2"], [], keyOf(q, "a"), true, fresh)).toBe(true);
+    expect(tracks(q)).toEqual(["t0", "t1", "a", "n1", "n2", "b", "t2", "t3"]);
+    expect(group(q)).toEqual(["a", "n1", "n2", "b"]);
+    q = withGroup();
+    Q.insertItems(q, ["n"], [], keyOf(q, "t2"), false, fresh);
+    expect(tracks(q)).toEqual(["t0", "t1", "a", "b", "t2", "n", "t3"]);
+    expect(q.list[5]!.added && !q.list[5]!.queued).toBe(true);
+  });
+
+  it("clamps like a drag: in-group past the end lands at its end, out-of-group inside lands after it", () => {
+    let q = withGroup();
+    Q.insertItems(q, ["n"], [], keyOf(q, "t3"), true, fresh);
+    expect(group(q)).toEqual(["a", "b", "n"]);
+    q = withGroup();
+    Q.insertItems(q, ["n"], [], keyOf(q, "t1"), false, fresh);
+    expect(tracks(q)).toEqual(["t0", "t1", "a", "b", "n", "t2", "t3"]);
+    expect(group(q)).toEqual(["a", "b"]);
+  });
+
+  it("moves keys ahead of the pointer, copies history, and refuses history or unknown anchors", () => {
+    const q = withGroup();
+    const k3 = keyOf(q, "t3");
+    const k0 = keyOf(q, "t0");
+    Q.insertItems(q, [], [k3, k0], keyOf(q, "a"), true, fresh);
+    expect(tracks(q)).toEqual(["t0", "t1", "a", "t3", "t0", "b", "t2"]);
+    expect(keyOf(q, "t3")).toBe(k3);
+    expect(q.list[0]!.key).toBe(k0);
+    expect(Q.insertItems(q, ["n"], [], k0, false, fresh)).toBe(false);
+    expect(Q.insertItems(q, ["n"], [], "nope", false, fresh)).toBe(false);
+  });
+
+  it("takes any number of tracks at once", () => {
+    const q = withGroup();
+    const many = Array.from({ length: 300 }, (_, i) => `m${i}`);
+    Q.insertItems(q, many, [], keyOf(q, "t2"), false, fresh);
+    expect(q.list.length).toBe(6 + 300);
+    expect(tracks(q)[5]).toBe("m0");
+    expect(tracks(q)[305]).toBe("t3");
+  });
+});
+
+describe("limits", () => {
+  it("caps the list, history first, then the far end", () => {
+    const q = ctx(7000, 4000);
+    Q.queueItems(q, Array.from({ length: 4000 }, (_, i) => `x${i}`), [], "later", false, fresh);
+    Q.settle(q);
+    expect(q.list.length).toBe(Q.MAX_QUEUE_LEN);
+    expect(q.ptr).toBe(3000);
+    expect(tracks(q)[0]).toBe("t1000");
+    const r = ctx(7000, 0);
+    Q.queueItems(r, Array.from({ length: 4000 }, (_, i) => `x${i}`), [], "next", false, fresh);
+    Q.settle(r);
+    expect(r.list.length).toBe(Q.MAX_QUEUE_LEN);
+    expect(cur(r)).toBe("t0");
+    expect(tracks(r).at(-1)).toBe("t5999");
   });
 });
 

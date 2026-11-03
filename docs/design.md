@@ -87,7 +87,7 @@ The meaning of each action is fixed; the **Queue section** setting (on by defaul
 | Add to queue | End of the "Next in queue" group, `queued` | hidden | shown |
 | Play later | End of the whole list, not `queued` | shown | shown |
 
-With the setting off nothing is ever `queued` (Play next inserts after current, unflagged but `added`), so there is no group and the list is exactly the flat list.
+With the setting off no new group is ever started: Play next inserts after current, unflagged but `added`, so normally there is no group and the list is exactly the flat list. If a group already exists (started by a Connect peer that has the setting on, or before the setting was turned off), it is still shown, and Play next joins it at its head rather than splitting it from the current song, so the group stays contiguous with current. The flag is decided by the sending device and carried in the op, so every replica agrees.
 
 Play next / Add to queue on a song that is already ahead of the pointer **moves** it; on a song in history it inserts a copy, so history is never rewritten.
 
@@ -97,6 +97,7 @@ Play next / Add to queue on a song that is already ahead of the pointer **moves*
 - Entries inside it carry no per-row marker (the heading says it). `added` entries outside it show the queue icon.
 - Dragging decides membership by drop zone: dropping above the "Next from" heading puts the entry in the group, below takes it out. The move op carries the target position *and* an explicit `in_group` flag, so every replica applies the same result without re-deriving it from neighbours. Nothing can be dropped above Now playing.
 - Dragging every entry out removes the heading; the next Add to queue starts a new group right after the current song.
+- Dropping songs from the library onto a queue slot is one op, **insert tracks**: the songs (or queue entries, moved or copied as for Play next) go directly after a named entry, in or out of the group, placed exactly like a drag (`after` + `in_group`, clamped the same way). It takes any number of songs at once.
 
 ### Starting something new
 
@@ -110,7 +111,16 @@ Playing a new album, playlist, etc. **replaces the whole list** (group included)
 
 ### Limits
 
-History (entries behind the pointer) keeps up to ~5,000 entries, trimmed from the oldest end. The queue view is windowed in both directions around the pointer, so long histories cost the same as long upcoming lists; the UI pages in more rows on scroll.
+The whole session document travels as one Connect frame (joining, resyncing, undo's whole-document replace), so every list in it is bounded. These are **protocol constants**, not settings: every replica and the coordinator must trim at the same place or Previous at the boundary would diverge between devices.
+
+| Limit | Value |
+|---|---|
+| History (entries behind the pointer) | 5,000, trimmed from the oldest end |
+| Whole list (history + current + upcoming) | 10,000. Past it the oldest history goes first, then the far end of the list. A context longer than that (a huge playlist, "all songs") plays a 10,000-track window: up to 5,000 before the chosen track and the rest after it. Ops are cut to the same bound before they are sent. |
+| Saved queues | 50 unpinned in the document and a 512 KiB budget for all snapshots, pinned included (see Saved queues) |
+| Connect frame | 8 MiB. A document at every cap above, with real key and id lengths and every entry marked offline, is about 4 MiB (asserted by a test). |
+
+The queue view is windowed in both directions around the pointer, so long histories cost the same as long upcoming lists; the UI pages in more rows on scroll.
 
 ### Sync
 
@@ -126,14 +136,14 @@ Playing something new replaces the queue and the old one is kept. Snapshotting d
 | Rule | Behaviour |
 |---|---|
 | Auto-save | On context replacement. Skips trivial queues: single tracks, contexts never played from. |
-| Cap | 10 unpinned, configurable 0–50. Zero disables auto-save, leaving only pinned queues. |
+| Cap | The document keeps up to 50 unpinned (a protocol constant, so every replica evicts alike). The setting (default 10, 0–50) decides how many of the most recent are shown; zero shows only pinned queues. |
 | Eviction | Least recently interacted with, where interaction means played from or restored. |
 | Expiry | Unpinned entries drop after 30 days regardless of position. |
 | Dedupe | Keyed on context identity, so replaying an album bumps one entry rather than adding three. |
-| Pinned | Never evicted, never expire, don't count toward the cap. |
+| Pinned | Never expire and don't count toward the cap. Evicted only if the pinned queues alone exceed the byte budget (least recently used first), which keeps the document under the frame limit. |
 | Restore | Includes history and playback position, so you land mid-track with your back button intact. |
 | Sync | A last-write-wins set keyed on context identity; pin state rides along as another LWW field. |
-| Size | Most reference their context by ID. Ad-hoc contexts — a search result, an arbitrary selection — store the track list, so cap on total bytes with 10 as the count ceiling. |
+| Size | Most reference their context by ID. Ad-hoc contexts — a search result, an arbitrary selection — store the track list, so cap on total bytes (512 KiB, a protocol constant). A snapshot keeps the latest 200 history entries and at most 1,000 entries in all; past that it stores only the current entry and rebuilds the rest from the context on restore (shuffled again if it was shuffled). |
 
 Surfaced in the queue view's selector (the queue's name drops down the recent and pinned queues to restore) and in the side panel's Recent queues drill-in, with a save-as-playlist action writing through `updatePlaylist`.
 

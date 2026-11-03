@@ -26,8 +26,6 @@ import { AVAILABLE_OFFLINE_FILTER_ID, OFFLINE_NOTICE_CODES } from "@shared/const
 
 const ARTWORK_SIZES = [64, 300, 1000];
 const SEEK_STEP_MS = 10_000;
-/** The core's default `queue.historyCap`. */
-const HISTORY_CAP = 5000;
 /** The queue view's window: rows behind the pointer and past the current entry. */
 const VIEW_BEFORE = 100;
 const VIEW_AFTER = 100;
@@ -389,6 +387,9 @@ export class FakeCore implements CoreHandle {
       case "moveQueueItem":
         this.moveItem(cmd.data.key, cmd.data.after, cmd.data.in_group);
         return;
+      case "insertTracks":
+        this.insertAfter(cmd.data.track_ids, cmd.data.keys ?? [], cmd.data.after, cmd.data.in_group);
+        return;
       case "clearQueue":
         this.clearQueue();
         return;
@@ -403,8 +404,12 @@ export class FakeCore implements CoreHandle {
         const group = this.session.list.slice(Q.afterCurrent(this.session), Q.groupEnd(this.session));
         if (!group.length) return;
         this.stashAdd(group.map((i) => i.trackId));
+        // Only what is in the stash now leaves the queue; a song it could not take stays queued.
+        const stashed = new Set(this.stash.filter((e) => !e.removed).map((e) => e.trackId));
+        const keys = group.filter((i) => stashed.has(i.trackId)).map((i) => i.key);
+        if (!keys.length) return;
         this.withUndo("Stash next in queue", () => {
-          Q.clearGroup(this.session);
+          Q.removeKeys(this.session, keys);
         });
         return;
       }
@@ -1118,11 +1123,6 @@ export class FakeCore implements CoreHandle {
     return this.setting<boolean>("queue.section", true);
   }
 
-  private historyCap(): number {
-    const v = this.settingNumber("queue.historyCap");
-    return v > 0 ? Math.min(HISTORY_CAP, Math.max(10, v)) : HISTORY_CAP;
-  }
-
   private fresh(trackId: string, source: QueueSource, added: boolean): QueueItem {
     return { key: newKey(), trackId, source, unavailable: false, added, queued: false, ordinal: 0 };
   }
@@ -1207,6 +1207,18 @@ export class FakeCore implements CoreHandle {
     });
   }
 
+  /** Insert tracks (or queue entries by key) directly after `after`, in or out of the group: a library drop. */
+  private insertAfter(trackIds: string[], keys: string[], after: string, inGroup: boolean): void {
+    if (!this.lib) return;
+    const ids = trackIds.filter((id) => this.lib?.tracksById.has(id));
+    if (!ids.length && !keys.length) return;
+    const fresh = (t: string) => this.fresh(t, { type: "inserted" }, true);
+    if (!Q.insertItems(clone(this.session), ids, keys, after, inGroup, fresh)) return;
+    this.withUndo(`Add to queue (${ids.length + keys.length})`, () => {
+      Q.insertItems(this.session, ids, keys, after, inGroup, fresh);
+    });
+  }
+
   private moveItem(key: string, after: string, inGroup: boolean): void {
     if (!Q.moveItem(clone(this.session), key, after, inGroup)) return;
     this.withUndo("Reorder queue", () => {
@@ -1276,7 +1288,7 @@ export class FakeCore implements CoreHandle {
         step = Q.advance(s);
       }
     }
-    Q.settle(s, this.historyCap());
+    Q.settle(s);
     s.revision += 1;
     if (step.moved) this.loadCurrent(0, this.transport.position.isPlaying);
     else this.stop();
@@ -1585,6 +1597,7 @@ export class FakeCore implements CoreHandle {
       else if (cur) list.unshift(cur);
       ptr = Math.max(0, at);
     }
+    const rebuilt = list.length > 1 && q.history.length + q.upcoming.length === 0;
     this.session = {
       ...this.session,
       context: { ...q.context, tracks },
@@ -1594,6 +1607,11 @@ export class FakeCore implements CoreHandle {
       repeat: q.repeat,
       revision: this.session.revision + 1,
     };
+    // A rebuilt list comes back in context order: shuffle what follows the current entry, as the core does.
+    if (rebuilt && q.shuffle) {
+      Q.renumber(this.session);
+      Q.shuffleTail(this.session, newSeed());
+    }
     q.lastInteractedAt = Date.now();
     this.loadCurrent(q.positionMs, false);
     this.pushUndo(`Restore ${q.label}`, () => {
@@ -1631,7 +1649,7 @@ export class FakeCore implements CoreHandle {
     const before = this.captureSession();
     const selection = clone(this.selection);
     mutate();
-    Q.settle(this.session, this.historyCap());
+    Q.settle(this.session);
     this.session.revision += 1;
     const after = this.captureSession();
     this.pushUndo(label, () => {
@@ -2125,7 +2143,6 @@ export class FakeCore implements CoreHandle {
     const defaults: [string, unknown, Setting["scope"]][] = [
       ["queue.section", true, "accountSynced"],
       ["queue.savedCap", 10, "accountSynced"],
-      ["queue.historyCap", 5000, "accountSynced"],
       ["lyrics.external.enabled", false, "accountSynced"],
       ["lyrics.external.provider", "lrclib", "accountSynced"],
       ["lyrics.defaultOffsetMs", 0, "accountSynced"],

@@ -45,7 +45,6 @@ fn defaults_match_the_design() {
     assert!(s.get_bool(keys::DISPLAY_ANIMATED_BACKGROUND));
     assert_eq!(s.get_i64(keys::QUEUE_SAVED_CAP), 10);
     assert!(s.get_bool(keys::QUEUE_SECTION));
-    assert_eq!(s.get_i64(keys::QUEUE_HISTORY_CAP), 5000);
     assert_eq!(s.get_string(keys::CONNECT_COORDINATOR_URL), None);
     let ap: AutoplaySettings = s.get_typed(keys::AUTOPLAY_SETTINGS).unwrap();
     assert_eq!(ap, crate::autoplay::default_settings());
@@ -276,7 +275,7 @@ fn lww_merge_is_pure_and_scoped() {
             999.0,
         ), // registry says local → ignored
         setting(
-            keys::QUEUE_HISTORY_CAP,
+            keys::RATINGS_LOVE_BRIDGE_THRESHOLD,
             "99999",
             SettingScope::AccountSynced,
             999.0,

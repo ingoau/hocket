@@ -90,6 +90,56 @@ describe("FakeCore queue", () => {
     expect(await ids()).toContain("playNext");
   });
 
+  it("insertTracks drops library songs after a queue entry, any number at once", async () => {
+    const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
+    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(0, 5).map((x) => x.id), start_index: 0, label: "A", shuffle: false } });
+    let v = await view();
+    const after = v.entries[2]!.item.key;
+    const many = lib.tracks.slice(100, 250).map((x) => x.id);
+    core.dispatch({ type: "insertTracks", data: { server_id: sid(), track_ids: many, keys: [], after, in_group: false } });
+    v = await view();
+    expect(v.total).toBe(5 + 150);
+    expect(v.entries[3]!.item.trackId).toBe(many[0]);
+    expect(v.entries[3]!.item.added).toBe(true);
+    const range = expectResult(await core.query({ type: "queueRange", data: { start: 150, count: 5 } }), "queue");
+    expect(range.entries[0]!.item.trackId).toBe(many[147]);
+    expect(range.entries[3]!.item.trackId).toBe(lib.tracks[3]!.id);
+  });
+
+  it("stashing the group only removes songs the stash took", async () => {
+    const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
+    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(0, 3).map((x) => x.id), start_index: 0, label: "A", shuffle: false } });
+    core.dispatch({ type: "addToQueue", data: { server_id: sid(), track_ids: [lib.tracks[10]!.id], keys: [] } });
+    // An entry for a song the library (and so the stash) doesn't know.
+    const s = (core as unknown as { session: { list: { trackId: string; queued: boolean }[] } }).session;
+    s.list.splice(2, 0, { ...s.list[1]!, key: "ghost", trackId: "not-in-library", queued: true } as never);
+    core.dispatch({ type: "stashQueueGroup" });
+    const v = await view();
+    expect(v.groupCount).toBe(1);
+    expect(v.entries.find((e) => e.inGroup)?.item.trackId).toBe("not-in-library");
+  });
+
+  it("restoring a shuffled queue rebuilt from its context shuffles what follows", async () => {
+    const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
+    const ids = lib.tracks.slice(0, 40).map((x) => x.id);
+    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: ids, start_index: 0, label: "Big", shuffle: false } });
+    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(50, 55).map((x) => x.id), start_index: 0, label: "B", shuffle: false } });
+    const saved = (core as unknown as { savedQueues: { history: unknown[]; upcoming: unknown[]; shuffle: boolean }[] }).savedQueues;
+    const big = expectResult(await core.query({ type: "savedQueues" }), "savedQueues").find((q) => q.label === "Big")!;
+    // As stored for a queue too long to keep entries for.
+    const stored = saved.find((q) => (q as unknown as { id: string }).id === big.id)!;
+    stored.history = [];
+    stored.upcoming = [];
+    stored.shuffle = true;
+    core.dispatch({ type: "restoreSavedQueue", data: { id: big.id } });
+    const v = await view();
+    expect(v.total).toBe(40);
+    expect(v.shuffle).toBe(true);
+    const order = v.entries.slice(1).map((e) => e.item.trackId);
+    expect(order).not.toEqual(ids.slice(1));
+    expect([...order].sort()).toEqual(ids.slice(1).sort());
+  });
+
   it("replacing the context auto-saves the outgoing list", async () => {
     const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
     core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(0, 5).map((x) => x.id), start_index: 2, label: "A", shuffle: false } });

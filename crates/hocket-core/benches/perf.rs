@@ -19,7 +19,7 @@ use hocket_core::audio::dsp::eq::{preset, EqOptions, Equalizer};
 use hocket_core::lyrics::LyricsCursor;
 use hocket_core::session::{
     derive, derive_window, new_document, reduce, DeterministicEntropy, QueueOp, ReduceCtx,
-    SavedQueuePolicy, DEFAULT_HISTORY_CAP, QUEUE_VIEW_AFTER, QUEUE_VIEW_BEFORE,
+    QUEUE_VIEW_AFTER, QUEUE_VIEW_BEFORE,
 };
 
 fn criterion_config() -> Criterion {
@@ -35,8 +35,6 @@ fn playing_doc(n: usize) -> SessionDocument {
     let ctx = ReduceCtx {
         now: 1.0,
         position_ms: 0,
-        history_cap: DEFAULT_HISTORY_CAP,
-        saved: SavedQueuePolicy::default(),
         entropy: &e,
     };
     let context = QueueContext {

@@ -11,7 +11,7 @@ use crate::api::*;
 use crate::connect::engine::{
     DocChange, Engine, EngineConfig, Input, Output, PersistedConnectState,
 };
-use crate::connect::session_adapter::TunableReducer;
+use crate::connect::session_adapter::RealReducer;
 use crate::connect::wire::{scope_key, SessionOp, TransportCommand};
 use crate::core::actor::{Actor, AUTOPLAY_BATCH};
 use crate::core::state::SavedPosition;
@@ -115,7 +115,7 @@ impl Actor {
         let reducer = self
             .reducer_override
             .clone()
-            .unwrap_or_else(|| TunableReducer::shared(self.reducer_policy.clone()));
+            .unwrap_or_else(RealReducer::shared);
         let mut engine = Engine::new(cfg, self.clock.clone(), reducer, doc.clone(), sync_base);
         // The scrobble dedupe log survives restarts (review connect #16).
         engine.restore_known_scrobbled(known_scrobbled);
@@ -214,12 +214,9 @@ impl Actor {
         // Same reducer, same document: the effects are exactly what the
         // engine's apply will produce (keys differ, the document tells us those).
         let effects = crate::connect::session_adapter::to_queue_op(&op).and_then(|qop| {
-            let (history_cap, saved) = self.reducer_policy.get();
             let ctx = ReduceCtx {
                 now: engine.now_session_ms(),
                 position_ms: self.playback.position_now(self.now()),
-                history_cap,
-                saved,
                 entropy: self.entropy.as_ref(),
             };
             match reduce(&before, qop, &ctx) {
@@ -258,12 +255,9 @@ impl Actor {
             return false;
         };
         let before = engine.document().clone();
-        let (history_cap, saved) = self.reducer_policy.get();
         let ctx = ReduceCtx {
             now: engine.now_session_ms(),
             position_ms: self.playback.position_now(self.now()),
-            history_cap,
-            saved,
             entropy: self.entropy.as_ref(),
         };
         let (document, effects) = match reduce(&before, op, &ctx) {
@@ -327,6 +321,23 @@ impl Actor {
                 crate::core::Internal::RetryOfflineClear,
             ));
         }
+    }
+
+    /// The saved queues the UIs show: pinned ones and as many recent
+    /// unpinned ones as the `queue.savedCap` setting says (the document
+    /// keeps up to the protocol's [`saved::MAX_CAP`]).
+    pub(crate) fn visible_saved_queues(&self) -> Vec<SavedQueue> {
+        self.doc()
+            .map(|d| self.visible_of(&d.saved_queues))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn visible_of(&self, list: &[SavedQueue]) -> Vec<SavedQueue> {
+        let cap = self
+            .settings
+            .get_i64(crate::settings::keys::QUEUE_SAVED_CAP)
+            .clamp(0, i64::from(saved::MAX_CAP)) as u32;
+        saved::visible(list, cap)
     }
 
     /// A public queue command: undo snapshot around the op.
@@ -733,7 +744,7 @@ impl Actor {
         if !same_saved_set(&document.saved_queues, &self.last_saved_queues) {
             self.last_saved_queues = document.saved_queues.clone();
             self.emit(Event::SavedQueuesChanged {
-                queues: document.saved_queues.clone(),
+                queues: self.visible_of(&document.saved_queues),
             });
             let engine_has = self
                 .engine
@@ -1454,7 +1465,9 @@ impl Actor {
             has_resume_offer: has_resume,
             has_cleared_selection: self.undo.has_cleared_selection(),
             text_field_focused: false,
-            saved_queue_count: doc.map(|d| d.saved_queues.len() as u32).unwrap_or(0),
+            saved_queue_count: doc
+                .map(|d| self.visible_of(&d.saved_queues).len() as u32)
+                .unwrap_or(0),
             volume: {
                 let (_, v) = self.volume_control();
                 if v.muted {
@@ -1613,6 +1626,7 @@ fn command_kind(cmd: &Command) -> &'static str {
         Command::JumpToQueueItem { .. } => "jump",
         Command::RemoveQueueItems { .. } => "removeFromQueue",
         Command::MoveQueueItem { .. } => "moveQueueItem",
+        Command::InsertTracks { .. } => "insertTracks",
         Command::ClearQueue => "clearQueue",
         Command::ClearQueueGroup => "clearQueueGroup",
         Command::SetShuffle { .. } => "shuffle",
@@ -1644,6 +1658,9 @@ fn command_label(cmd: &Command) -> String {
         Command::JumpToQueueItem { .. } => "Jump to track".into(),
         Command::RemoveQueueItems { keys } => plural("Remove from queue", keys.len()),
         Command::MoveQueueItem { .. } => "Move track".into(),
+        Command::InsertTracks {
+            track_ids, keys, ..
+        } => plural("Add to queue", track_ids.len() + keys.len()),
         Command::ClearQueue => "Clear queue".into(),
         Command::ClearQueueGroup => "Clear next in queue".into(),
         Command::SetShuffle { enabled } => {

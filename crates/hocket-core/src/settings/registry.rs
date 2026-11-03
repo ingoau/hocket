@@ -53,7 +53,6 @@ pub mod keys {
     /// inserts after the current song without starting a group.
     pub const QUEUE_SECTION: &str = "queue.section";
     pub const QUEUE_SAVED_CAP: &str = "queue.savedCap";
-    pub const QUEUE_HISTORY_CAP: &str = "queue.historyCap";
     /// Offer to continue an album that was started from the album and left unfinished.
     pub const PLAYBACK_RESUME_ALBUMS: &str = "playback.resumeAlbums";
     pub const AUTOPLAY_SETTINGS: &str = "autoplay.settings";
@@ -461,12 +460,6 @@ pub static REGISTRY: &[SettingDef] = &[
         Synced,
         SettingKind::Int { min: 0, max: 50 },
         || json!(10),
-    ),
-    def(
-        QUEUE_HISTORY_CAP,
-        Synced,
-        SettingKind::Int { min: 10, max: 5000 },
-        || json!(5000),
     ),
     def(PLAYBACK_RESUME_ALBUMS, Synced, SettingKind::Bool, || {
         json!(true)

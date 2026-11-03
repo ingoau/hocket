@@ -93,6 +93,7 @@ impl Actor {
             | Command::JumpToQueueItem { .. }
             | Command::RemoveQueueItems { .. }
             | Command::MoveQueueItem { .. }
+            | Command::InsertTracks { .. }
             | Command::ClearQueue
             | Command::ClearQueueGroup
             | Command::SetShuffle { .. }

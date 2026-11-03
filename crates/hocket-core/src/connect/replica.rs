@@ -37,7 +37,7 @@ pub const SCROBBLE_LOG_CAP: usize = 500;
 /// Device leases not seen for this long are forgotten.
 pub const DEVICE_TTL_MS: f64 = 7.0 * 24.0 * 3_600_000.0;
 /// Cap on stored history (mirrors the session module's own cap).
-pub const HISTORY_CAP: usize = crate::session::DEFAULT_HISTORY_CAP;
+pub const HISTORY_CAP: usize = crate::session::HISTORY_CAP;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplicaError {

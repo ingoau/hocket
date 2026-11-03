@@ -81,6 +81,11 @@ export function jump(q: FlatQueue, key: string): boolean {
   return true;
 }
 
+/** Entries kept behind the pointer (the core's protocol constant `HISTORY_CAP`). */
+export const HISTORY_CAP = 5000;
+/** Most entries the whole list holds (the core's `MAX_QUEUE_LEN`). */
+export const MAX_QUEUE_LEN = 10_000;
+
 export function trimHistory(q: FlatQueue, cap: number): void {
   const c = Math.max(1, cap);
   if (q.ptr > c) {
@@ -90,14 +95,24 @@ export function trimHistory(q: FlatQueue, cap: number): void {
   }
 }
 
+/** Keep the list to `max` entries: the oldest history goes first, then the far end. */
+export function capLength(q: FlatQueue, max: number): void {
+  if (q.list.length <= max) return;
+  const excess = Math.min(q.list.length - max, q.ptr);
+  q.list.splice(0, excess);
+  q.ptr -= excess;
+  q.list.length = Math.min(q.list.length, max);
+}
+
 /** While shuffle is off, the list order is the unshuffled order. */
 export function renumber(q: FlatQueue): void {
   q.list.forEach((item, i) => (item.ordinal = i));
 }
 
-/** After every op, as the reducer: trim history, renumber with shuffle off. */
-export function settle(q: FlatQueue, historyCap: number): void {
-  trimHistory(q, historyCap);
+/** After every op, as the reducer: trim history, cap the list, renumber with shuffle off. */
+export function settle(q: FlatQueue): void {
+  trimHistory(q, HISTORY_CAP);
+  capLength(q, MAX_QUEUE_LEN);
   if (!q.shuffle) renumber(q);
 }
 
@@ -139,14 +154,7 @@ export function queueItems(
   queued: boolean,
   fresh: (trackId: string) => QueueItem,
 ): boolean {
-  const items: QueueItem[] = [];
-  for (const key of keys) {
-    const i = indexOfKey(q, key);
-    if (i < 0) continue;
-    if (i > q.ptr && hasCurrent(q)) items.push(q.list.splice(i, 1)[0]!);
-    else items.push(fresh(q.list[i]!.trackId));
-  }
-  for (const t of trackIds) items.push(fresh(t));
+  const items = takeForQueueing(q, trackIds, keys, fresh);
   if (!items.length) return false;
   const hasGroup = groupEnd(q) > afterCurrent(q);
   // A group already after the current entry stays attached to it.
@@ -160,6 +168,47 @@ export function queueItems(
   }
   // Queued onto a list with nothing current: the first of them is current now.
   if (!hasCurrent(q)) q.ptr = Math.min(at, q.ptr);
+  return true;
+}
+
+/** Entries named by key (ahead of the pointer taken out to move, elsewhere copied), then new ones for `trackIds`. */
+function takeForQueueing(q: FlatQueue, trackIds: string[], keys: string[], fresh: (trackId: string) => QueueItem): QueueItem[] {
+  const items: QueueItem[] = [];
+  for (const key of keys) {
+    const i = indexOfKey(q, key);
+    if (i < 0) continue;
+    if (i > q.ptr && hasCurrent(q)) items.push(q.list.splice(i, 1)[0]!);
+    else items.push(fresh(q.list[i]!.trackId));
+  }
+  for (const t of trackIds) items.push(fresh(t));
+  return items;
+}
+
+/**
+ * Insert tracks directly after `after` (the current entry or one ahead), in or out of the
+ * group, placed like a `moveItem` drop. `keys` move or copy as for Play next. False when
+ * `after` is unknown, in history, or nothing is current.
+ */
+export function insertItems(
+  q: FlatQueue,
+  trackIds: string[],
+  keys: string[],
+  after: string,
+  inGroup: boolean,
+  fresh: (trackId: string) => QueueItem,
+): boolean {
+  const a = indexOfKey(q, after);
+  if (a < 0 || !hasCurrent(q) || a < q.ptr) return false;
+  // Where `after` ends up once the moved entries are out (if it moves itself, its old place).
+  const moving = new Set(keys.filter((k) => indexOfKey(q, k) > q.ptr));
+  const target = q.list.slice(0, a + 1).filter((i) => !moving.has(i.key)).length;
+  const items = takeForQueueing(q, trackIds, keys, fresh);
+  if (!items.length) return true;
+  const end = groupEnd(q);
+  const at = inGroup ? Math.min(target, end) : Math.max(target, end);
+  for (const item of items) item.queued = inGroup;
+  q.list.splice(at, 0, ...items);
+  if (q.shuffle) ordinalsAfterPrevious(q, at, items.length);
   return true;
 }
 
@@ -222,26 +271,38 @@ export function shuffleInPlace<T>(items: T[], seed: number): void {
   new Rng(seed).shuffle(items);
 }
 
-/** Shuffle the entries after the group. */
-export function shuffleTail(q: FlatQueue, seed: number): void {
+/**
+ * Reorder the unqueued entries after the group among their own slots. Queued entries
+ * further down (a group left behind by going back, which re-forms on return) keep their
+ * places, so shuffling never changes what is in the group.
+ */
+function reorderTail(q: FlatQueue, f: (items: QueueItem[]) => void): void {
   const from = groupEnd(q);
   const tail = q.list.slice(from);
-  shuffleInPlace(tail, seed);
-  q.list.splice(from, tail.length, ...tail);
+  const movable = tail.filter((i) => !i.queued);
+  f(movable);
+  let m = 0;
+  const reordered = tail.map((i) => (i.queued ? i : movable[m++]!));
+  q.list.splice(from, tail.length, ...reordered);
+}
+
+/** Shuffle the entries after the group. */
+export function shuffleTail(q: FlatQueue, seed: number): void {
+  reorderTail(q, (items) => shuffleInPlace(items, seed));
   q.shuffle = true;
 }
 
 /** Put the entries after the group back in unshuffled order, continuing from the current entry's place in it. */
 export function unshuffleTail(q: FlatQueue): void {
-  const from = groupEnd(q);
   const pivot = currentItem(q)?.ordinal;
   const key = (i: QueueItem): [number, number] => [pivot !== undefined && (i.ordinal ?? 0) < pivot ? 1 : 0, i.ordinal ?? 0];
-  const tail = q.list.slice(from).sort((x, y) => {
-    const [a0, a1] = key(x);
-    const [b0, b1] = key(y);
-    return a0 - b0 || a1 - b1;
-  });
-  q.list.splice(from, tail.length, ...tail);
+  reorderTail(q, (items) =>
+    items.sort((x, y) => {
+      const [a0, a1] = key(x);
+      const [b0, b1] = key(y);
+      return a0 - b0 || a1 - b1;
+    }),
+  );
   q.shuffle = false;
 }
 

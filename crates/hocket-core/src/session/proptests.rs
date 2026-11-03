@@ -10,10 +10,7 @@ use std::collections::HashSet;
 use proptest::prelude::*;
 
 use super::document::{new_document, validate};
-use super::reducer::{
-    derive, reduce, AutoplayItem, Effect, Flat, QueueOp, ReduceCtx, DEFAULT_HISTORY_CAP,
-};
-use super::saved::SavedQueuePolicy;
+use super::reducer::{derive, reduce, AutoplayItem, Effect, Flat, QueueOp, ReduceCtx, HISTORY_CAP};
 use super::DeterministicEntropy;
 use crate::api::{
     AutoplayProvider, ContextKind, PlayContextArgs, QueueContext, QueueItem, RepeatMode,
@@ -24,8 +21,6 @@ fn ctx(e: &DeterministicEntropy) -> ReduceCtx<'_> {
     ReduceCtx {
         now: 1.0,
         position_ms: 0,
-        history_cap: DEFAULT_HISTORY_CAP,
-        saved: SavedQueuePolicy::default(),
         entropy: e,
     }
 }
@@ -248,7 +243,7 @@ fn check_invariants(doc: &SessionDocument) {
     if doc.current.is_none() {
         assert!(doc.upcoming.is_empty(), "nothing after the pointer");
     }
-    assert!(doc.history.len() <= DEFAULT_HISTORY_CAP);
+    assert!(doc.history.len() <= HISTORY_CAP);
     let f = Flat::of(doc);
     let mut seen = HashSet::new();
     for i in &f.list {

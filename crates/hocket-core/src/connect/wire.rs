@@ -377,6 +377,14 @@ pub enum SessionOp {
         track_ids: Vec<TrackId>,
         keys: Vec<QueueKey>,
     },
+    /// After `after`, in or out of the group (see `Command::InsertTracks`).
+    InsertTracks {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+        after: QueueKey,
+        in_group: bool,
+    },
     JumpToQueueItem {
         key: QueueKey,
     },
@@ -496,6 +504,19 @@ impl SessionOp {
                 track_ids: track_ids.clone(),
                 keys: keys.clone(),
             },
+            Command::InsertTracks {
+                server_id,
+                track_ids,
+                keys,
+                after,
+                in_group,
+            } => SessionOp::InsertTracks {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+                keys: keys.clone(),
+                after: after.clone(),
+                in_group: *in_group,
+            },
             Command::JumpToQueueItem { key } => SessionOp::JumpToQueueItem { key: key.clone() },
             Command::RemoveQueueItems { keys } => {
                 SessionOp::RemoveQueueItems { keys: keys.clone() }
@@ -535,6 +556,122 @@ impl SessionOp {
             },
             _ => return None,
         })
+    }
+
+    /// The op with its track lists cut to what the reducer would keep of
+    /// them (see `session::MAX_QUEUE_LEN`), so a huge selection or context
+    /// can't make a frame over the transport's limit. Lists that start
+    /// playback are windowed around the chosen track; queued lists keep
+    /// their first `MAX_QUEUE_LEN`. `doc` is the document the op applies to.
+    pub fn within_caps(self, doc: &SessionDocument) -> SessionOp {
+        use crate::session::{window_around, window_tracks, MAX_QUEUE_LEN};
+        let cut = |mut v: Vec<String>| {
+            v.truncate(MAX_QUEUE_LEN);
+            v
+        };
+        match self {
+            SessionOp::PlayContext { mut args } => {
+                let len = args.context.tracks.len();
+                let window = window_tracks(len, args.start_index.unwrap_or(0) as usize);
+                if window.len() < len {
+                    args.context.tracks.truncate(window.end);
+                    args.context.tracks.drain(..window.start);
+                    args.start_index = args
+                        .start_index
+                        .map(|s| (s as usize).saturating_sub(window.start) as u32);
+                }
+                SessionOp::PlayContext { args }
+            }
+            SessionOp::PlayTracks {
+                server_id,
+                mut track_ids,
+                start_index,
+                label,
+                shuffle,
+                save_outgoing,
+                start_position_ms,
+            } => {
+                let len = track_ids.len();
+                let window = window_tracks(len, start_index as usize);
+                let mut start_index = start_index;
+                if window.len() < len {
+                    track_ids.truncate(window.end);
+                    track_ids.drain(..window.start);
+                    start_index = (start_index as usize).saturating_sub(window.start) as u32;
+                }
+                SessionOp::PlayTracks {
+                    server_id,
+                    track_ids,
+                    start_index,
+                    label,
+                    shuffle,
+                    save_outgoing,
+                    start_position_ms,
+                }
+            }
+            SessionOp::PlayNext {
+                server_id,
+                track_ids,
+                keys,
+                queued,
+            } => SessionOp::PlayNext {
+                server_id,
+                track_ids: cut(track_ids),
+                keys: cut(keys),
+                queued,
+            },
+            SessionOp::AddToQueue {
+                server_id,
+                track_ids,
+                keys,
+            } => SessionOp::AddToQueue {
+                server_id,
+                track_ids: cut(track_ids),
+                keys: cut(keys),
+            },
+            SessionOp::PlayLater {
+                server_id,
+                track_ids,
+                keys,
+            } => SessionOp::PlayLater {
+                server_id,
+                track_ids: cut(track_ids),
+                keys: cut(keys),
+            },
+            SessionOp::InsertTracks {
+                server_id,
+                track_ids,
+                keys,
+                after,
+                in_group,
+            } => SessionOp::InsertTracks {
+                server_id,
+                track_ids: cut(track_ids),
+                keys: cut(keys),
+                after,
+                in_group,
+            },
+            SessionOp::SetContextTracks { mut tracks } => {
+                window_around(&mut tracks, doc.current.as_ref());
+                SessionOp::SetContextTracks { tracks }
+            }
+            SessionOp::RestoreSavedQueue {
+                id,
+                tracks: Some(mut tracks),
+            } => {
+                let current = doc
+                    .saved_queues
+                    .iter()
+                    .find(|q| q.id == id)
+                    .and_then(|q| q.current.as_ref());
+                window_around(&mut tracks, current);
+                SessionOp::RestoreSavedQueue {
+                    id,
+                    tracks: Some(tracks),
+                }
+            }
+            op => op,
+        }
     }
 
     /// True for ops that change what is playing (track change) rather than
@@ -607,6 +744,19 @@ impl SessionOp {
                 track_ids, keys, ..
             } => {
                 format!("playLater ({} tracks)", track_ids.len() + keys.len())
+            }
+            SessionOp::InsertTracks {
+                track_ids,
+                keys,
+                after,
+                in_group,
+                ..
+            } => {
+                let place = if *in_group { " in group" } else { "" };
+                format!(
+                    "insertTracks ({} tracks) after {after}{place}",
+                    track_ids.len() + keys.len()
+                )
             }
             other => serde_json::to_value(other)
                 .ok()
@@ -1555,6 +1705,98 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn insert_tracks_round_trips_from_the_command() {
+        let cmd = Command::InsertTracks {
+            server_id: "s".into(),
+            track_ids: vec!["t1".into(), "t2".into()],
+            keys: vec!["k".into()],
+            after: "a".into(),
+            in_group: true,
+        };
+        // The UI's JSON (variant camelCase, fields as declared), `keys` optional.
+        let ui = r#"{"type":"insertTracks","data":{"server_id":"s","track_ids":["t1","t2"],"after":"a","in_group":true}}"#;
+        let parsed: Command = serde_json::from_str(ui).unwrap();
+        assert!(matches!(
+            &parsed,
+            Command::InsertTracks { keys, in_group: true, .. } if keys.is_empty()
+        ));
+        let op = SessionOp::from_command(&cmd).unwrap();
+        assert_eq!(
+            op,
+            SessionOp::InsertTracks {
+                server_id: "s".into(),
+                track_ids: vec!["t1".into(), "t2".into()],
+                keys: vec!["k".into()],
+                after: "a".into(),
+                in_group: true,
+            }
+        );
+        let msg = WireMessage::new(Msg::Op {
+            base_revision: 1,
+            op: op.clone(),
+            device_id: "d".into(),
+            op_id: "o".into(),
+            epoch: None,
+            at: 1.0,
+            position_ms: 0,
+        });
+        let text = msg.encode().unwrap();
+        assert!(text.contains(r#""type":"insertTracks""#), "{text}");
+        assert!(text.contains(r#""in_group":true"#), "{text}");
+        assert_eq!(WireMessage::decode(&text).unwrap(), msg);
+        assert_eq!(op.summary(), "insertTracks (3 tracks) after a in group");
+    }
+
+    #[test]
+    fn op_track_lists_are_cut_to_the_queue_cap() {
+        use crate::session::{HISTORY_CAP, MAX_QUEUE_LEN};
+        let n = MAX_QUEUE_LEN + 5000;
+        let tracks: Vec<String> = (0..n).map(|i| format!("t{i}")).collect();
+        let d = doc();
+        let op = SessionOp::PlayTracks {
+            server_id: "s".into(),
+            track_ids: tracks.clone(),
+            start_index: 9000,
+            label: "All".into(),
+            shuffle: false,
+            save_outgoing: true,
+            start_position_ms: 0,
+        }
+        .within_caps(&d);
+        let SessionOp::PlayTracks {
+            track_ids,
+            start_index,
+            ..
+        } = op
+        else {
+            panic!()
+        };
+        assert_eq!(track_ids.len(), MAX_QUEUE_LEN);
+        assert_eq!(start_index as usize, HISTORY_CAP);
+        assert_eq!(track_ids[start_index as usize], "t9000");
+        let op = SessionOp::PlayLater {
+            server_id: "s".into(),
+            track_ids: tracks,
+            keys: vec![],
+        }
+        .within_caps(&d);
+        assert!(
+            matches!(op, SessionOp::PlayLater { track_ids, .. } if track_ids.len() == MAX_QUEUE_LEN)
+        );
+        // Short lists are untouched.
+        let small = SessionOp::PlayTracks {
+            server_id: "s".into(),
+            track_ids: vec!["a".into(), "b".into()],
+            start_index: 1,
+            label: "x".into(),
+            shuffle: true,
+            save_outgoing: true,
+            start_position_ms: 0,
+        };
+        assert_eq!(small.clone().within_caps(&d), small);
     }
 }
 

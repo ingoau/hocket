@@ -44,8 +44,13 @@
 //! added entries go back where they were added. While shuffle is off every
 //! ordinal is its list index.
 //!
-//! **Limits.** History keeps up to `history_cap` entries (default
-//! [`DEFAULT_HISTORY_CAP`]), trimmed from the oldest end after every op.
+//! **Limits.** History keeps up to [`HISTORY_CAP`] entries, trimmed from the
+//! oldest end after every op, and the whole list at most [`MAX_QUEUE_LEN`]
+//! (more history goes first, then the far end of the list). A context longer
+//! than that plays a [`MAX_QUEUE_LEN`] window of it ([`window_tracks`]). Both
+//! are protocol constants, never settings: every replica and the coordinator
+//! must trim at the same place, and together with the saved-queue budget they
+//! keep a document under the Connect frame limit.
 //!
 //! **Determinism.** Keys and shuffle seeds come only from the op's
 //! [`Entropy`], so every Connect replica and the coordinator reduce the same
@@ -67,8 +72,11 @@ use super::saved::{self, SavedQueuePolicy};
 use super::shuffle::shuffle_in_place;
 use super::Entropy;
 
-/// Default history cap: entries kept behind the pointer.
-pub const DEFAULT_HISTORY_CAP: usize = 5000;
+/// Entries kept behind the pointer. A protocol constant (see the module docs).
+pub const HISTORY_CAP: usize = 5000;
+/// Most entries the whole list (history, current and upcoming) holds. A
+/// protocol constant (see the module docs).
+pub const MAX_QUEUE_LEN: usize = 10_000;
 /// Rows of history the UI queue view carries by default (the window behind
 /// the pointer). The rest are counted in `history_count` and paged in with
 /// `Query::QueueRange`.
@@ -147,6 +155,17 @@ pub enum QueueOp {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
         keys: Vec<QueueKey>,
+    },
+    /// Directly after `after` (the current entry or one ahead of the
+    /// pointer), in or out of the group, placed like a
+    /// [`QueueOp::MoveQueueItem`] drop. `keys` move or copy as for
+    /// [`QueueOp::PlayNext`].
+    InsertTracks {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+        after: QueueKey,
+        in_group: bool,
     },
     JumpToQueueItem {
         key: QueueKey,
@@ -283,6 +302,19 @@ impl QueueOp {
                 track_ids: track_ids.clone(),
                 keys: keys.clone(),
             },
+            Command::InsertTracks {
+                server_id,
+                track_ids,
+                keys,
+                after,
+                in_group,
+            } => QueueOp::InsertTracks {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+                keys: keys.clone(),
+                after: after.clone(),
+                in_group: *in_group,
+            },
             Command::JumpToQueueItem { key } => QueueOp::JumpToQueueItem { key: key.clone() },
             Command::RemoveQueueItems { keys } => QueueOp::RemoveQueueItems { keys: keys.clone() },
             Command::MoveQueueItem {
@@ -379,12 +411,32 @@ pub enum ReduceError {
 
 /// Environment for one reduction. `position_ms` is the playback position of
 /// the current item as the actor knows it (used for snapshots).
+///
+/// Nothing here comes from settings: the limits (history, list length, saved
+/// queues) are protocol constants, so every replica reduces alike.
 pub struct ReduceCtx<'a> {
     pub now: EpochMs,
     pub position_ms: Ms,
-    pub history_cap: usize,
-    pub saved: SavedQueuePolicy,
     pub entropy: &'a dyn Entropy,
+}
+
+/// The saved-queue policy every replica applies to the document.
+fn saved_policy() -> SavedQueuePolicy {
+    SavedQueuePolicy::default()
+}
+
+/// The window of a track list longer than [`MAX_QUEUE_LEN`] that is played:
+/// up to [`HISTORY_CAP`] tracks before `anchor` and the rest after it. Returns
+/// `lo..hi`; the whole list when it fits.
+pub fn window_tracks(len: usize, anchor: usize) -> std::ops::Range<usize> {
+    if len <= MAX_QUEUE_LEN {
+        return 0..len;
+    }
+    let lo = anchor
+        .min(len)
+        .saturating_sub(HISTORY_CAP)
+        .min(len - MAX_QUEUE_LEN);
+    lo..lo + MAX_QUEUE_LEN
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +565,19 @@ impl Flat {
             self.list.drain(..excess);
             self.ptr -= excess;
         }
+    }
+
+    /// Keep the list to `max` entries: the oldest history goes first, then
+    /// the far end of the list.
+    fn cap_len(&mut self, max: usize) {
+        if self.list.len() <= max {
+            return;
+        }
+        let excess = (self.list.len() - max).min(self.ptr);
+        self.list.drain(..excess);
+        self.ptr -= excess;
+        // Still too long only when all history went (the pointer is at 0).
+        self.list.truncate(max);
     }
 
     /// While shuffle is off, the list order is the unshuffled order.
@@ -805,7 +870,8 @@ pub fn reduce(
     };
     r.repair_duplicate_keys();
     r.apply(op)?;
-    r.q.trim_history(ctx.history_cap.max(1));
+    r.q.trim_history(HISTORY_CAP);
+    r.q.cap_len(MAX_QUEUE_LEN);
     if !r.doc.shuffle {
         r.q.renumber();
     }
@@ -887,6 +953,13 @@ impl Reducer<'_, '_> {
                 track_ids,
                 keys,
             } => self.queue(server_id, track_ids, keys, QueuePlacement::Later, false),
+            QueueOp::InsertTracks {
+                server_id: _,
+                track_ids,
+                keys,
+                after,
+                in_group,
+            } => self.insert_after(track_ids, keys, &after, in_group),
             QueueOp::JumpToQueueItem { key } => self.jump(&key),
             QueueOp::RemoveQueueItems { keys } => self.remove(&keys),
             QueueOp::MoveQueueItem {
@@ -998,6 +1071,8 @@ impl Reducer<'_, '_> {
                 let Some(c) = self.doc.context.as_mut() else {
                     return Ok(());
                 };
+                let mut tracks = tracks;
+                window_around(&mut tracks, self.q.current());
                 c.tracks = tracks.clone();
                 // A list waiting for its tracks (a context started or restored
                 // without them) is built from them, around its current entry.
@@ -1010,7 +1085,7 @@ impl Reducer<'_, '_> {
                 let id = self.ctx.entropy.next_key();
                 if let Some(mut s) = self.snapshot(id) {
                     s.pinned = pinned;
-                    saved::upsert(&mut self.doc.saved_queues, s, &self.ctx.saved, self.ctx.now);
+                    saved::upsert(&mut self.doc.saved_queues, s, &saved_policy(), self.ctx.now);
                     // An explicit pin must win over a pre-existing unpinned entry.
                     if pinned {
                         if let Some(q) = self.doc.saved_queues.iter_mut().find(|q| {
@@ -1032,7 +1107,7 @@ impl Reducer<'_, '_> {
                     .ok_or(ReduceError::UnknownSavedQueue(id))?;
                 q.pinned = pinned;
                 q.updated_at = self.ctx.now;
-                saved::enforce(&mut self.doc.saved_queues, &self.ctx.saved, self.ctx.now);
+                saved::enforce(&mut self.doc.saved_queues, &saved_policy(), self.ctx.now);
                 Ok(())
             }
             QueueOp::DeleteSavedQueue { id } => {
@@ -1053,12 +1128,12 @@ impl Reducer<'_, '_> {
                     .ok_or(ReduceError::UnknownSavedQueue(id))?;
                 q.last_interacted_at = self.ctx.now;
                 q.updated_at = self.ctx.now;
-                saved::enforce(&mut self.doc.saved_queues, &self.ctx.saved, self.ctx.now);
+                saved::enforce(&mut self.doc.saved_queues, &saved_policy(), self.ctx.now);
                 Ok(())
             }
             QueueOp::MergeSavedQueues { remote } => {
                 self.doc.saved_queues = saved::merge_saved_queues(&self.doc.saved_queues, &remote);
-                saved::enforce(&mut self.doc.saved_queues, &self.ctx.saved, self.ctx.now);
+                saved::enforce(&mut self.doc.saved_queues, &saved_policy(), self.ctx.now);
                 Ok(())
             }
         }
@@ -1107,7 +1182,7 @@ impl Reducer<'_, '_> {
     fn snapshot_outgoing(&mut self) {
         let id = self.ctx.entropy.next_key();
         if let Some(s) = self.snapshot(id) {
-            saved::upsert(&mut self.doc.saved_queues, s, &self.ctx.saved, self.ctx.now);
+            saved::upsert(&mut self.doc.saved_queues, s, &saved_policy(), self.ctx.now);
         }
     }
 
@@ -1146,6 +1221,12 @@ impl Reducer<'_, '_> {
         if save_outgoing {
             self.snapshot_outgoing();
         }
+        let mut context = context;
+        let window = window_tracks(context.tracks.len(), start_index.unwrap_or(0) as usize);
+        if window.len() < context.tracks.len() {
+            context.tracks = context.tracks[window.clone()].to_vec();
+        }
+        let start_index = start_index.map(|s| (s as usize).saturating_sub(window.start) as u32);
         let n = context.tracks.len();
         let mut list = self.context_entries(&context.tracks);
         let start = start_index.map(|s| (s as usize).min(n.saturating_sub(1)));
@@ -1225,7 +1306,8 @@ impl Reducer<'_, '_> {
             q.updated_at = self.ctx.now;
         }
         let mut context = entry.context.clone();
-        if let Some(t) = tracks.clone() {
+        if let Some(mut t) = tracks {
+            window_around(&mut t, entry.current.as_ref());
             context.tracks = t;
         }
         let mut list = entry.history.clone();
@@ -1350,28 +1432,7 @@ impl Reducer<'_, '_> {
             self.play_context(context, Some(0), false, false, 0);
             return Ok(());
         }
-        // Entries named by key: ahead of the pointer they move, elsewhere
-        // they are copied (history is never rewritten).
-        let mut items: Vec<QueueItem> = vec![];
-        let mut found_any = false;
-        for key in &keys {
-            let Some(i) = self.q.index_of(key) else {
-                continue;
-            };
-            found_any = true;
-            if i > self.q.ptr && self.q.has_current() {
-                items.push(self.q.list.remove(i));
-            } else {
-                let track = self.q.list[i].track_id.clone();
-                items.push(self.fresh(track, QueueSource::Inserted, true));
-            }
-        }
-        if !keys.is_empty() && !found_any && track_ids.is_empty() {
-            return Err(ReduceError::UnknownKey(keys.join(",")));
-        }
-        for t in track_ids {
-            items.push(self.fresh(t, QueueSource::Inserted, true));
-        }
+        let mut items = self.take_for_queueing(track_ids, &keys)?;
         if items.is_empty() {
             return Ok(());
         }
@@ -1402,6 +1463,89 @@ impl Reducer<'_, '_> {
             // Queued onto a list whose current entry was removed: the first
             // of them is current now.
             self.q.ptr = at.min(self.q.ptr);
+        }
+        Ok(())
+    }
+
+    /// The entries a queueing op puts somewhere: those named by key (ahead
+    /// of the pointer they are taken out to move; elsewhere they are copied,
+    /// so history is never rewritten), then new ones for `track_ids`.
+    fn take_for_queueing(
+        &mut self,
+        track_ids: Vec<TrackId>,
+        keys: &[QueueKey],
+    ) -> Result<Vec<QueueItem>, ReduceError> {
+        let mut items: Vec<QueueItem> = vec![];
+        let mut found_any = false;
+        for key in keys {
+            let Some(i) = self.q.index_of(key) else {
+                continue;
+            };
+            found_any = true;
+            if i > self.q.ptr && self.q.has_current() {
+                items.push(self.q.list.remove(i));
+            } else {
+                let track = self.q.list[i].track_id.clone();
+                items.push(self.fresh(track, QueueSource::Inserted, true));
+            }
+        }
+        if !keys.is_empty() && !found_any && track_ids.is_empty() {
+            return Err(ReduceError::UnknownKey(keys.join(",")));
+        }
+        for t in track_ids {
+            items.push(self.fresh(t, QueueSource::Inserted, true));
+        }
+        Ok(items)
+    }
+
+    /// [`QueueOp::InsertTracks`]: the entries go directly after `after`,
+    /// clamped to the group like a move (an `in_group` drop past the group's
+    /// end lands at its end, an out-of-group one inside it just after it).
+    fn insert_after(
+        &mut self,
+        track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+        after: &str,
+        in_group: bool,
+    ) -> Result<(), ReduceError> {
+        let a = self
+            .q
+            .index_of(after)
+            .ok_or_else(|| ReduceError::UnknownKey(after.into()))?;
+        if !self.q.has_current() || a < self.q.ptr {
+            return Err(ReduceError::BadMove);
+        }
+        if track_ids.is_empty() && keys.is_empty() {
+            return Ok(());
+        }
+        // Where `after` ends up once the moved entries are out: just after
+        // the entries kept up to it (if `after` itself moves, its old place).
+        let moving: HashSet<&str> = keys
+            .iter()
+            .filter_map(|k| self.q.index_of(k).filter(|&i| i > self.q.ptr))
+            .map(|i| self.q.list[i].key.as_str())
+            .collect();
+        let target = self.q.list[..=a]
+            .iter()
+            .filter(|i| !moving.contains(i.key.as_str()))
+            .count();
+        let mut items = self.take_for_queueing(track_ids, &keys)?;
+        if items.is_empty() {
+            return Ok(());
+        }
+        let group_end = self.q.group_end();
+        let at = if in_group {
+            target.min(group_end)
+        } else {
+            target.max(group_end)
+        };
+        for item in items.iter_mut() {
+            item.queued = in_group;
+        }
+        let count = items.len();
+        self.q.list.splice(at..at, items);
+        if self.doc.shuffle {
+            self.q.ordinals_after_previous(at, count);
         }
         Ok(())
     }
@@ -1584,6 +1728,26 @@ impl Reducer<'_, '_> {
         }
         Ok(())
     }
+}
+
+/// Cut a track list longer than [`MAX_QUEUE_LEN`] to the window around
+/// `current`'s track (its context index when that still matches, else its
+/// first occurrence).
+pub fn window_around(tracks: &mut Vec<TrackId>, current: Option<&QueueItem>) {
+    if tracks.len() <= MAX_QUEUE_LEN {
+        return;
+    }
+    let anchor = current
+        .and_then(|cur| match cur.source {
+            QueueSource::Context { index } if tracks.get(index as usize) == Some(&cur.track_id) => {
+                Some(index as usize)
+            }
+            _ => tracks.iter().position(|t| *t == cur.track_id),
+        })
+        .unwrap_or(0);
+    let window = window_tracks(tracks.len(), anchor);
+    tracks.truncate(window.end);
+    tracks.drain(..window.start);
 }
 
 /// An ad-hoc context over a track list.

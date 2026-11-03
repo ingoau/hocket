@@ -11,8 +11,6 @@ fn ctx<'a>(e: &'a DeterministicEntropy, now: f64, position_ms: Ms) -> ReduceCtx<
     ReduceCtx {
         now,
         position_ms,
-        history_cap: DEFAULT_HISTORY_CAP,
-        saved: SavedQueuePolicy::default(),
         entropy: e,
     }
 }
@@ -565,6 +563,111 @@ fn dragging_decides_group_membership_by_the_op() {
 }
 
 #[test]
+fn insert_tracks_lands_after_the_named_entry_like_a_drop() {
+    let e = DeterministicEntropy::new(1);
+    let d = with_group(&e);
+    // history a0, current a1, group x y, then a2 a3
+    let cur_key = d.current.clone().unwrap().key;
+    let (kx, ky, k2, k3) = (
+        key_of(&d, "x"),
+        key_of(&d, "y"),
+        key_of(&d, "a2"),
+        key_of(&d, "a3"),
+    );
+    let ins = |doc: &SessionDocument,
+               tracks: &[&str],
+               keys: Vec<QueueKey>,
+               after: &QueueKey,
+               in_group: bool| {
+        doc_of(
+            QueueOp::InsertTracks {
+                server_id: "srv".into(),
+                track_ids: ids(tracks),
+                keys,
+                after: after.clone(),
+                in_group,
+            },
+            doc,
+            &e,
+        )
+    };
+    // Into the group, between x and y.
+    let m = ins(&d, &["n1", "n2"], vec![], &kx, true);
+    assert_eq!(upcoming(&m), ids(&["x", "n1", "n2", "y", "a2", "a3"]));
+    assert_eq!(group(&m), ids(&["x", "n1", "n2", "y"]));
+    assert!(m.upcoming[1].added && m.upcoming[1].queued);
+    // Out of the group, between a2 and a3.
+    let m = ins(&d, &["n"], vec![], &k2, false);
+    assert_eq!(upcoming(&m), ids(&["x", "y", "a2", "n", "a3"]));
+    assert_eq!(group(&m), ids(&["x", "y"]));
+    assert!(m.upcoming[3].added && !m.upcoming[3].queued);
+    // Top of the list, in the group.
+    let m = ins(&d, &["n"], vec![], &cur_key, true);
+    assert_eq!(group(&m), ids(&["n", "x", "y"]));
+    // An in-group drop past the group's end lands at its end.
+    let m = ins(&d, &["n"], vec![], &k3, true);
+    assert_eq!(upcoming(&m), ids(&["x", "y", "n", "a2", "a3"]));
+    assert_eq!(group(&m), ids(&["x", "y", "n"]));
+    // An out-of-group drop inside the group lands just after it.
+    let m = ins(&d, &["n"], vec![], &cur_key, false);
+    assert_eq!(upcoming(&m), ids(&["x", "y", "n", "a2", "a3"]));
+    assert_eq!(group(&m), ids(&["x", "y"]));
+    // Keys ahead of the pointer move (even past `after`), history is copied.
+    let k0 = key_of(&d, "a0");
+    let m = ins(&d, &[], vec![k3.clone(), k0.clone()], &kx, true);
+    assert_eq!(upcoming(&m), ids(&["x", "a3", "a0", "y", "a2"]));
+    assert_eq!(history(&m), ids(&["a0"]));
+    assert_eq!(key_of(&m, "a3"), k3);
+    assert_ne!(m.upcoming[2].key, k0);
+    // Moving `after` itself keeps its place.
+    let m = ins(&d, &["n"], vec![ky.clone()], &ky, false);
+    assert_eq!(upcoming(&m), ids(&["x", "y", "n", "a2", "a3"]));
+    assert_eq!(group(&m), ids(&["x"]));
+    // Many at once (no event window involved).
+    let many: Vec<String> = (0..300).map(|i| format!("m{i}")).collect();
+    let many: Vec<&str> = many.iter().map(|s| s.as_str()).collect();
+    let m = ins(&d, &many, vec![], &k2, false);
+    assert_eq!(m.upcoming.len(), 4 + 300);
+    assert_eq!(m.upcoming[3].track_id, "m0");
+    assert_eq!(m.upcoming[302].track_id, "m299");
+    assert_eq!(m.upcoming[303].track_id, "a3");
+    // Shuffle on: the new entries take the ordinals after their predecessor.
+    let s = doc_of(QueueOp::SetShuffle { enabled: true }, &d, &e);
+    let after = s.upcoming.iter().find(|i| !i.queued).unwrap().clone();
+    let m = ins(&s, &["n"], vec![], &after.key, false);
+    let n = Flat::of(&m)
+        .list
+        .into_iter()
+        .find(|i| i.track_id == "n")
+        .unwrap();
+    assert_eq!(n.ordinal, after.ordinal + 1);
+    // Nothing into history; unknown keys are refused.
+    let insert = |after: QueueKey| QueueOp::InsertTracks {
+        server_id: "srv".into(),
+        track_ids: ids(&["n"]),
+        keys: vec![],
+        after,
+        in_group: false,
+    };
+    assert_eq!(err(&d, &e, insert(k0)), ReduceError::BadMove);
+    assert!(matches!(
+        err(&d, &e, insert("nope".into())),
+        ReduceError::UnknownKey(_)
+    ));
+    // Nothing is current: nowhere to drop.
+    let none = doc_of(
+        QueueOp::RemoveQueueItems {
+            keys: vec![cur_key.clone(), kx, ky, k2, k3],
+        },
+        &d,
+        &e,
+    );
+    assert!(none.current.is_none());
+    let k0 = key_of(&none, "a0");
+    assert_eq!(err(&none, &e, insert(k0)), ReduceError::BadMove);
+}
+
+#[test]
 fn clear_group_removes_only_the_group() {
     let e = DeterministicEntropy::new(1);
     let d = with_group(&e);
@@ -792,24 +895,57 @@ fn saved_queue_management_ops() {
 
 #[test]
 fn history_is_trimmed_from_the_oldest_end() {
-    assert_eq!(DEFAULT_HISTORY_CAP, 5000);
+    assert_eq!(HISTORY_CAP, 5000);
     let e = DeterministicEntropy::new(1);
-    let mut d = play(&fresh(), &e, album("a", 20), Some(0), false);
-    let small = |e| ReduceCtx {
-        history_cap: 5,
-        ..ctx(e, 3.0, 0)
-    };
-    for _ in 0..8 {
-        d = reduce(&d, QueueOp::Next, &small(&e)).unwrap().0;
+    let n = HISTORY_CAP + 20;
+    let mut d = play(&fresh(), &e, album("a", n), Some(HISTORY_CAP as u32), false);
+    assert_eq!(d.history.len(), HISTORY_CAP);
+    assert_eq!(d.history[0].track_id, "a0");
+    for _ in 0..3 {
+        d = doc_of(QueueOp::Next, &d, &e);
     }
-    assert_eq!(cur(&d), "a8");
-    assert_eq!(history(&d), ids(&["a3", "a4", "a5", "a6", "a7"]));
+    assert_eq!(cur(&d), format!("a{}", HISTORY_CAP + 3));
+    assert_eq!(d.history.len(), HISTORY_CAP);
+    assert_eq!(d.history[0].track_id, "a3");
     // A jump far ahead trims too.
-    let k = key_of(&d, "a18");
-    d = reduce(&d, QueueOp::JumpToQueueItem { key: k }, &small(&e))
-        .unwrap()
-        .0;
-    assert_eq!(history(&d), ids(&["a13", "a14", "a15", "a16", "a17"]));
+    let k = key_of(&d, &format!("a{}", n - 2));
+    d = doc_of(QueueOp::JumpToQueueItem { key: k }, &d, &e);
+    assert_eq!(d.history.len(), HISTORY_CAP);
+    assert_eq!(d.history[0].track_id, "a18");
+}
+
+#[test]
+fn the_list_is_capped_history_first_then_the_far_end() {
+    let e = DeterministicEntropy::new(1);
+    // A context longer than the cap plays a window around the chosen track.
+    let n = MAX_QUEUE_LEN + 3000;
+    let d = play(&fresh(), &e, album("a", n), Some(8000), false);
+    assert_eq!(d.history.len() + 1 + d.upcoming.len(), MAX_QUEUE_LEN);
+    assert_eq!(d.history.len(), HISTORY_CAP);
+    assert_eq!(cur(&d), "a8000");
+    assert_eq!(d.context.as_ref().unwrap().tracks.len(), MAX_QUEUE_LEN);
+    assert_eq!(d.context.as_ref().unwrap().tracks[0], "a3000");
+    // Near the end the window ends with the list.
+    let d = play(&fresh(), &e, album("a", n), Some(n as u32 - 1), false);
+    assert_eq!(d.history.len(), HISTORY_CAP);
+    assert_eq!(cur(&d), format!("a{}", n - 1));
+    assert!(d.upcoming.is_empty());
+    // Queueing past the cap drops history first...
+    let d = play(&fresh(), &e, album("a", 7000), Some(4000), false);
+    let more: Vec<String> = (0..4000).map(|i| format!("x{i}")).collect();
+    let more: Vec<&str> = more.iter().map(|s| s.as_str()).collect();
+    let d = doc_of(play_later(&more, vec![]), &d, &e);
+    assert_eq!(d.history.len() + 1 + d.upcoming.len(), MAX_QUEUE_LEN);
+    assert_eq!(d.history.len(), 3000);
+    assert_eq!(d.history[0].track_id, "a1000");
+    assert_eq!(d.upcoming.last().unwrap().track_id, "x3999");
+    // ...then cuts the far end once there is none left.
+    let d = play(&fresh(), &e, album("a", 7000), Some(0), false);
+    let d = doc_of(play_next(&more, vec![], false), &d, &e);
+    assert_eq!(d.history.len() + 1 + d.upcoming.len(), MAX_QUEUE_LEN);
+    assert_eq!(cur(&d), "a0");
+    assert_eq!(d.upcoming[0].track_id, "x0");
+    assert_eq!(d.upcoming.last().unwrap().track_id, "a5999");
 }
 
 #[test]

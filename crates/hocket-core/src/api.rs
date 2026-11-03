@@ -2149,6 +2149,19 @@ pub enum Command {
         #[serde(default)]
         keys: Vec<QueueKey>,
     },
+    /// Put songs directly after `after` (the current entry's key for the top of the list), in
+    /// the "Next in queue" group or out of it: a library drop onto a queue slot. Placed like a
+    /// `MoveQueueItem` drop (nothing above the current entry or into history; an `inGroup` drop
+    /// past the group's end lands at its end, an out-of-group one inside it just after it).
+    /// `keys` as for `PlayNext`: one ahead of the pointer moves, one behind it is copied.
+    InsertTracks {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        #[serde(default)]
+        keys: Vec<QueueKey>,
+        after: QueueKey,
+        in_group: bool,
+    },
     /// Move the pointer to this entry. Nothing in the list changes: the entries jumped over
     /// end up behind the pointer.
     JumpToQueueItem {

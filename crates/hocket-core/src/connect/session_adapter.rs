@@ -17,8 +17,7 @@ use crate::api::{QueueKey, SessionDocument};
 use crate::connect::wire::{AutoplayOpItem, SessionOp};
 use crate::connect::{OpContext, ReduceFailure, SessionReducer};
 use crate::session::reducer::{reduce, AutoplayItem, QueueOp, ReduceCtx};
-use crate::session::saved::SavedQueuePolicy;
-use crate::session::{Entropy, DEFAULT_HISTORY_CAP};
+use crate::session::Entropy;
 
 /// Per-op entropy: keys `<opId>-<n>`, seeds from ChaCha seeded by the op.
 pub struct OpEntropy {
@@ -49,85 +48,11 @@ impl Entropy for OpEntropy {
     }
 }
 
-/// Reducer tunables the settings subsystem can change while the engine is
-/// running (`queue.historyCap`, `queue.savedCap`). Shared between the actor
-/// and the reducer the engine holds; every replica applies the same
-/// account-synced values, so determinism is preserved.
-#[derive(Debug)]
-pub struct ReducerPolicy {
-    inner: Mutex<(usize, SavedQueuePolicy)>,
-}
-
-impl Default for ReducerPolicy {
-    fn default() -> Self {
-        ReducerPolicy {
-            inner: Mutex::new((DEFAULT_HISTORY_CAP, SavedQueuePolicy::default())),
-        }
-    }
-}
-
-impl ReducerPolicy {
-    pub fn new(history_cap: usize, saved: SavedQueuePolicy) -> Arc<Self> {
-        Arc::new(ReducerPolicy {
-            inner: Mutex::new((history_cap, saved)),
-        })
-    }
-
-    pub fn get(&self) -> (usize, SavedQueuePolicy) {
-        self.inner.lock().clone()
-    }
-
-    pub fn set_history_cap(&self, cap: usize) {
-        self.inner.lock().0 = cap.max(1);
-    }
-
-    pub fn set_saved(&self, saved: SavedQueuePolicy) {
-        self.inner.lock().1 = saved;
-    }
-}
-
-/// [`RealReducer`] with a shared, adjustable [`ReducerPolicy`].
-#[derive(Debug, Clone)]
-pub struct TunableReducer {
-    policy: Arc<ReducerPolicy>,
-}
-
-impl TunableReducer {
-    pub fn new(policy: Arc<ReducerPolicy>) -> Self {
-        TunableReducer { policy }
-    }
-
-    pub fn shared(policy: Arc<ReducerPolicy>) -> Arc<dyn SessionReducer> {
-        Arc::new(TunableReducer { policy })
-    }
-}
-
-impl SessionReducer for TunableReducer {
-    fn apply(
-        &self,
-        doc: &SessionDocument,
-        op: &SessionOp,
-        ctx: &OpContext,
-    ) -> Result<SessionDocument, ReduceFailure> {
-        let (history_cap, saved) = self.policy.get();
-        RealReducer { history_cap, saved }.apply(doc, op, ctx)
-    }
-}
-
-/// The real reducer behind the seam.
-#[derive(Debug, Clone)]
+/// The real reducer behind the seam. It has no tunables: the queue's limits
+/// are protocol constants, so every replica and the coordinator reduce alike.
+#[derive(Debug, Clone, Default)]
 pub struct RealReducer {
-    pub history_cap: usize,
-    pub saved: SavedQueuePolicy,
-}
-
-impl Default for RealReducer {
-    fn default() -> Self {
-        RealReducer {
-            history_cap: DEFAULT_HISTORY_CAP,
-            saved: SavedQueuePolicy::default(),
-        }
-    }
+    _private: (),
 }
 
 impl RealReducer {
@@ -188,6 +113,19 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             keys: keys.clone(),
         },
         SessionOp::JumpToQueueItem { key } => QueueOp::JumpToQueueItem { key: key.clone() },
+        SessionOp::InsertTracks {
+            server_id,
+            track_ids,
+            keys,
+            after,
+            in_group,
+        } => QueueOp::InsertTracks {
+            server_id: server_id.clone(),
+            track_ids: track_ids.clone(),
+            keys: keys.clone(),
+            after: after.clone(),
+            in_group: *in_group,
+        },
         SessionOp::RemoveQueueItems { keys } => QueueOp::RemoveQueueItems { keys: keys.clone() },
         SessionOp::MoveQueueItem {
             key,
@@ -258,8 +196,6 @@ impl SessionReducer for RealReducer {
         let rctx = ReduceCtx {
             now: ctx.now,
             position_ms: ctx.position_ms,
-            history_cap: self.history_cap,
-            saved: self.saved.clone(),
             entropy: &entropy,
         };
         let (next, _effects) = reduce(doc, qop, &rctx).map_err(|e| ReduceFailure(e.to_string()))?;
@@ -417,6 +353,13 @@ mod tests {
                 server_id: "s".into(),
                 track_ids: vec![],
                 keys: vec![],
+            },
+            SessionOp::InsertTracks {
+                server_id: "s".into(),
+                track_ids: vec!["t".into()],
+                keys: vec![],
+                after: "c".into(),
+                in_group: false,
             },
             SessionOp::JumpToQueueItem { key: "k".into() },
             SessionOp::RemoveQueueItems { keys: vec![] },

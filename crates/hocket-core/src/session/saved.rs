@@ -14,12 +14,16 @@ use md5::{Digest, Md5};
 
 use crate::api::{ContextKind, EpochMs, Ms, QueueContext, SavedQueue, SessionDocument};
 
-/// Maximum configurable unpinned cap.
+/// Unpinned entries the document keeps. A protocol constant (every replica
+/// and the coordinator evict alike); the `queue.savedCap` setting only
+/// decides how many of them are shown ([`visible`]), up to this.
 pub const MAX_CAP: u32 = 50;
-/// Default unpinned cap.
+/// Default of the `queue.savedCap` setting.
 pub const DEFAULT_CAP: u32 = 10;
-/// Default total byte budget for all snapshots (pinned included in the sum,
-/// only unpinned are evicted to meet it).
+/// Total byte budget for all snapshots, pinned included. A protocol constant,
+/// part of what keeps a session document under the Connect frame limit:
+/// unpinned entries are evicted first (least recent first), and only if the
+/// pinned ones alone are over it does the least recent pinned one go too.
 pub const DEFAULT_BYTE_CAP: usize = 512 * 1024;
 /// Unpinned entries expire after this long without interaction.
 pub const DEFAULT_EXPIRY_MS: f64 = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;
@@ -35,7 +39,7 @@ pub struct SavedQueuePolicy {
 impl Default for SavedQueuePolicy {
     fn default() -> Self {
         SavedQueuePolicy {
-            cap: DEFAULT_CAP,
+            cap: MAX_CAP,
             byte_cap: DEFAULT_BYTE_CAP,
             expiry_ms: DEFAULT_EXPIRY_MS,
         }
@@ -232,14 +236,38 @@ pub fn enforce(list: &mut Vec<SavedQueue>, policy: &SavedQueuePolicy, now: Epoch
         i += 1;
         k
     });
-    // Byte cap: evict LRU unpinned until under budget (or none left to evict).
-    while total_bytes(list) > policy.byte_cap {
-        let Some(pos) = list.iter().rposition(|q| !q.pinned) else {
+    // Byte cap: evict LRU unpinned until under budget, then (pinned alone
+    // over it) LRU pinned: the budget is a hard bound on the document.
+    let mut sizes: Vec<usize> = list.iter().map(estimate_bytes).collect();
+    let mut total: usize = sizes.iter().sum();
+    while total > policy.byte_cap {
+        let Some(pos) = list
+            .iter()
+            .rposition(|q| !q.pinned)
+            .or_else(|| list.len().checked_sub(1))
+        else {
             break;
         };
         list.remove(pos);
+        total -= sizes.remove(pos);
     }
     *list != before
+}
+
+/// The saved queues a UI shows: every pinned one and the `cap` most recent
+/// unpinned ones (the `queue.savedCap` setting; zero shows only pinned).
+pub fn visible(list: &[SavedQueue], cap: u32) -> Vec<SavedQueue> {
+    let mut unpinned = 0u32;
+    list.iter()
+        .filter(|q| {
+            if q.pinned {
+                return true;
+            }
+            unpinned += 1;
+            unpinned <= cap
+        })
+        .cloned()
+        .collect()
 }
 
 fn sort_recent_first(list: &mut [SavedQueue]) {
@@ -545,6 +573,62 @@ mod tests {
         let ids: Vec<&str> = list.iter().map(|q| q.id.as_str()).collect();
         assert_eq!(ids, vec!["e3", "e0"]);
         assert!(total_bytes(&list) <= policy.byte_cap);
+    }
+
+    #[test]
+    fn byte_cap_is_hard_even_for_pinned() {
+        let big_tracks: Vec<String> = (0..500).map(|i| format!("track-{i:06}")).collect();
+        let big: Vec<&str> = big_tracks.iter().map(|s| s.as_str()).collect();
+        let one = estimate_bytes(&entry(
+            "x",
+            ContextKind::AdHoc { label: "s".into() },
+            &big,
+            0.0,
+        ));
+        let policy = SavedQueuePolicy {
+            byte_cap: one * 2 + one / 2,
+            ..SavedQueuePolicy::default()
+        };
+        let mut list = vec![];
+        for (i, first) in ["a", "b", "c"].into_iter().enumerate() {
+            let mut tracks = big.clone();
+            tracks[0] = first;
+            let mut e = entry(
+                &format!("p{i}"),
+                ContextKind::AdHoc { label: "s".into() },
+                &tracks,
+                i as f64,
+            );
+            e.pinned = true;
+            upsert(&mut list, e, &policy, i as f64);
+        }
+        // Pinned alone over the budget: the least recent pinned one goes.
+        let ids: Vec<&str> = list.iter().map(|q| q.id.as_str()).collect();
+        assert_eq!(ids, vec!["p2", "p1"]);
+        assert!(total_bytes(&list) <= policy.byte_cap);
+    }
+
+    #[test]
+    fn visible_shows_pinned_and_the_most_recent_unpinned() {
+        let policy = SavedQueuePolicy::default();
+        assert_eq!(policy.cap, MAX_CAP);
+        let mut list = vec![];
+        let mut p = entry("p", album("p"), &[], 1.0);
+        p.pinned = true;
+        upsert(&mut list, p, &policy, 1.0);
+        for i in 0..5 {
+            let at = 10.0 + i as f64;
+            upsert(
+                &mut list,
+                entry(&format!("u{i}"), album(&format!("a{i}")), &[], at),
+                &policy,
+                at,
+            );
+        }
+        let ids = |v: Vec<SavedQueue>| v.into_iter().map(|q| q.id).collect::<Vec<_>>();
+        assert_eq!(ids(visible(&list, 2)), vec!["u4", "u3", "p"]);
+        assert_eq!(ids(visible(&list, 0)), vec!["p"]);
+        assert_eq!(list.len(), 6, "the document keeps them all");
     }
 
     #[test]

@@ -19,8 +19,12 @@ use crate::connect::wire::{WireError, WireMessage};
 use crate::connect::PeerId;
 
 /// Largest frame (and message) accepted on any Connect socket. A session
-/// document is a few tens of KiB; anything near this is hostile.
-pub const MAX_FRAME_BYTES: usize = 1 << 20;
+/// document is usually a few tens of KiB, but one at every protocol cap (the
+/// list at `session::MAX_QUEUE_LEN` entries, history at
+/// `session::HISTORY_CAP`, saved queues at their byte budget, every entry
+/// marked offline) is about 4 MiB; this leaves twice that. Asserted by
+/// `a_document_at_every_cap_fits_a_frame`. Shared with the coordinator.
+pub const MAX_FRAME_BYTES: usize = 8 << 20;
 /// A socket that delivers nothing for this long is dead, whatever the
 /// engine or room think (they time out at 30 s; this is the backstop).
 pub const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -375,12 +379,174 @@ mod tests {
             r#"{{"protocolVersion":2,"msg":{{"type":"bye","data":{{"reason":"{}"}}}}}}"#,
             "x".repeat(MAX_FRAME_BYTES + 1024)
         );
-        raw.send(tokio_tungstenite::tungstenite::Message::text(big))
-            .await
-            .unwrap();
+        // Sent from a task: a frame this size outgrows the socket buffers, so
+        // the write can stall once the listener stops reading.
+        let sender = tokio::spawn(async move {
+            let _ = raw
+                .send(tokio_tungstenite::tungstenite::Message::text(big))
+                .await;
+            raw
+        });
         // the listener side never delivers it and the connection ends
         assert!(server_side.rx.recv().await.is_none());
+        sender.abort();
         listener.shutdown();
+    }
+
+    /// The largest session document the protocol's caps allow, with
+    /// realistic key and id lengths, fits a frame whichever message carries
+    /// it, with room to spare.
+    #[test]
+    fn a_document_at_every_cap_fits_a_frame() {
+        use crate::api::{
+            AutoplayProvider, ContextKind, PositionStamp, QueueContext, QueueItem, QueueSource,
+            SavedQueue, SortOrder, TransportLease,
+        };
+        use crate::connect::wire::SessionOp;
+        use crate::session::saved::{
+            self, SavedQueuePolicy, DEFAULT_BYTE_CAP, SNAPSHOT_HISTORY, SNAPSHOT_MAX_ENTRIES,
+        };
+        use crate::session::{HISTORY_CAP, MAX_QUEUE_LEN, OFFLINE_SKIPPED_FIELD};
+
+        // `<device uuid>-<op nonce>-<op counter>-<n>`, as `OpEntropy` makes them.
+        let device = "0f8e5a2b9c7d4e1fa3b6c8d0e2f4a6b8";
+        let key = |op: usize, n: usize| format!("{device}-18f3a7c2b1d-{op}-{n}");
+        // Navidrome ids are 22-character base62; md5 hex (older servers) is longer.
+        let track = |i: usize| format!("{i:032x}");
+        let item = |i: usize| QueueItem {
+            key: key(10_000 + i / 50, i % 50),
+            track_id: track(i),
+            source: match i % 4 {
+                0 | 1 => QueueSource::Context { index: i as u32 },
+                2 => QueueSource::Inserted,
+                _ => QueueSource::Autoplay {
+                    provider: AutoplayProvider::SonicSimilarity,
+                    reason: "Because you played Some Fairly Long Artist Name".into(),
+                    score: Some(0.123_456_789_012_345),
+                },
+            },
+            unavailable: true,
+            added: i % 4 == 2,
+            queued: false,
+            ordinal: i as u32,
+        };
+        let list: Vec<QueueItem> = (0..MAX_QUEUE_LEN).map(item).collect();
+        let context = |label: &str, tracks: Vec<String>| QueueContext {
+            server_id: "4b9a1c2d3e4f5a6b7c8d9e0f1a2b3c4d".into(),
+            kind: ContextKind::AdHoc {
+                label: label.into(),
+            },
+            label: label.into(),
+            sort: SortOrder::Default,
+            tracks,
+        };
+        let label = "A selection with a long name, the kind people give playlists".to_string();
+
+        // Saved queues filling their byte budget: the biggest snapshots a
+        // queue makes (history and upcoming at their caps, ad-hoc so the
+        // track list stays), as many as fit.
+        let mut queues: Vec<SavedQueue> = vec![];
+        for n in 0..50 {
+            let entries: Vec<QueueItem> = (0..SNAPSHOT_MAX_ENTRIES).map(item).collect();
+            let mut tracks: Vec<String> = (0..SNAPSHOT_MAX_ENTRIES).map(track).collect();
+            tracks[0] = format!("{n}");
+            queues.push(SavedQueue {
+                id: key(n, 0),
+                context: context(&label, tracks),
+                label: label.clone(),
+                history: entries[..SNAPSHOT_HISTORY].to_vec(),
+                current: Some(entries[SNAPSHOT_HISTORY].clone()),
+                upcoming: entries[SNAPSHOT_HISTORY + 1..].to_vec(),
+                shuffle: true,
+                repeat: Default::default(),
+                position_ms: 123_456,
+                pinned: n % 2 == 0,
+                created_at: 1_790_215_057_538.123,
+                last_interacted_at: 1_790_215_057_538.123 + n as f64,
+                updated_at: 1_790_215_057_538.123 + n as f64,
+                track_count: SNAPSHOT_MAX_ENTRIES as u32,
+                cover_art: Some("al-4b9a1c2d3e4f5a6b7c8d9e0f_6512bd43".into()),
+            });
+        }
+        saved::enforce(
+            &mut queues,
+            &SavedQueuePolicy::default(),
+            1_790_215_057_538.123 + 60.0,
+        );
+        let saved_bytes = saved::total_bytes(&queues);
+        assert!(saved_bytes <= DEFAULT_BYTE_CAP);
+        assert!(
+            saved_bytes > DEFAULT_BYTE_CAP / 2,
+            "budget filled: {saved_bytes}"
+        );
+
+        let mut doc = crate::session::new_document(
+            "4b9a1c2d3e4f5a6b7c8d9e0f1a2b3c4d:someone@example.com",
+            key(0, 0),
+            1_790_215_057_538.123,
+        );
+        doc.revision = u32::MAX;
+        doc.context = Some(context(&label, (0..MAX_QUEUE_LEN).map(track).collect()));
+        doc.history = list[..HISTORY_CAP].to_vec();
+        doc.current = Some(list[HISTORY_CAP].clone());
+        doc.upcoming = list[HISTORY_CAP + 1..].to_vec();
+        doc.shuffle = true;
+        doc.transport = crate::api::TransportState {
+            lease: TransportLease {
+                owner: Some(device.into()),
+                epoch: u32::MAX,
+                expires_at: 1_790_215_057_538.123,
+            },
+            position: PositionStamp {
+                position_ms: 123_456,
+                taken_at: 1_790_215_057_538.123,
+                rate: 1.0,
+                is_playing: true,
+            },
+            buffering: false,
+            played_ms: 123_456,
+            volume: 0.123_456_789,
+            muted: false,
+            volume_device: Some(device.into()),
+        };
+        doc.saved_queues = queues;
+        // Every entry marked unavailable while offline.
+        let offline: Vec<&str> = list.iter().map(|i| i.key.as_str()).collect();
+        doc.extra.insert(
+            OFFLINE_SKIPPED_FIELD.into(),
+            serde_json::to_string(&offline).unwrap(),
+        );
+
+        let frames = [
+            WireMessage::new(Msg::Document {
+                document: doc.clone(),
+            }),
+            WireMessage::new(Msg::Op {
+                base_revision: u32::MAX,
+                op: SessionOp::Replace {
+                    document: doc.clone(),
+                },
+                device_id: device.into(),
+                op_id: key(u32::MAX as usize, 0),
+                epoch: Some(u32::MAX),
+                at: 1_790_215_057_538.123,
+                position_ms: 123_456,
+            }),
+            WireMessage::new(Msg::OpReject {
+                op_id: key(u32::MAX as usize, 0),
+                current_revision: u32::MAX,
+                reason: crate::connect::wire::RejectReason::Stale,
+                document: doc,
+            }),
+        ];
+        for frame in frames {
+            // Counted as if the saved queues filled their budget exactly.
+            let bytes = frame.encode().unwrap().len() + (DEFAULT_BYTE_CAP - saved_bytes);
+            assert!(
+                bytes * 3 / 2 < MAX_FRAME_BYTES,
+                "{bytes} bytes leave too little room under {MAX_FRAME_BYTES}"
+            );
+        }
     }
 
     #[tokio::test]

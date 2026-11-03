@@ -56,14 +56,10 @@ impl Actor {
                 });
             }
             keys::QUEUE_SAVED_CAP => {
-                let cap = self.settings.get_i64(key).max(0) as u32;
-                let (_, mut saved) = self.reducer_policy.get();
-                saved = saved.with_cap(cap);
-                self.reducer_policy.set_saved(saved);
-            }
-            keys::QUEUE_HISTORY_CAP => {
-                self.reducer_policy
-                    .set_history_cap(self.settings.get_i64(key).max(10) as usize);
+                // Only how many unpinned queues are shown (the document keeps
+                // the protocol's own count): show the new number.
+                let queues = self.visible_saved_queues();
+                self.emit(Event::SavedQueuesChanged { queues });
             }
             keys::AUTOPLAY_SETTINGS => {
                 if let (Some(a), Some(s)) = (

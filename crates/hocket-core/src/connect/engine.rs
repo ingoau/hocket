@@ -3276,6 +3276,7 @@ impl Engine {
     }
 
     fn on_local_op(&mut self, op: SessionOp) {
+        let op = op.within_caps(&self.doc);
         let base = self.doc.revision;
         let op_id = self.next_op_id();
         let at = self.now_session_ms();
