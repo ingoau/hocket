@@ -19,21 +19,22 @@ import app.hocket.ui.a11y.LocalReducedMotion
 import kotlinx.coroutines.launch
 
 /**
- * A heart that answers being loved: when [loved] turns true the [content] pops (dips, then springs
- * past full size) and a thin ring in [color] spreads out and fades behind it. Unloving and the
- * first composition stay still, as does everything with reduced motion.
+ * A heart that answers being loved: each time [bursts] goes up (the caller counts its own taps that
+ * love, so a refresh that finds the item loved elsewhere stays still) the [content] pops (dips,
+ * then springs past full size) and a thin ring in [color] spreads out and fades behind it. Still
+ * with reduced motion.
  */
 @Composable
-fun LoveBurst(loved: Boolean, color: Color, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+fun LoveBurst(bursts: Int, color: Color, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     val reduced = LocalReducedMotion.current
     val pop = remember { Animatable(1f) }
     // 0 = no ring; runs to 1 as the ring spreads and fades.
     val ring = remember { Animatable(1f) }
-    val was = remember { booleanArrayOf(loved) }
-    LaunchedEffect(loved, reduced) {
-        val became = loved && !was[0]
-        was[0] = loved
-        if (!became || reduced) return@LaunchedEffect
+    val seen = remember { intArrayOf(bursts) }
+    LaunchedEffect(bursts, reduced) {
+        val burst = bursts > seen[0]
+        seen[0] = bursts
+        if (!burst || reduced) return@LaunchedEffect
         launch {
             pop.snapTo(LoveBurstMotion.POP_FROM)
             pop.animateTo(1f, LoveBurstMotion.Pop)

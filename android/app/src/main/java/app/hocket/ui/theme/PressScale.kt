@@ -18,6 +18,9 @@ import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.ObserverModifierNode
+import androidx.compose.ui.node.invalidatePlacement
+import androidx.compose.ui.node.observeReads
 import androidx.compose.ui.node.currentValueOf
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Constraints
@@ -42,22 +45,34 @@ object PressScale {
     val Release: AnimationSpec<Float> = spring(dampingRatio = 0.45f, stiffness = 420f)
 }
 
-/** Drives [scale] from [interactions]' presses until cancelled. */
-private suspend fun animatePresses(scale: Animatable<Float, *>, interactions: InteractionSource, pressed: Float) = coroutineScope {
-    var down: Job? = null
+/**
+ * Drives [value] from [interactions]' presses until cancelled: to [pressed] on [down] as the finger
+ * lands, back to [rest] on [release] when it lifts. Collects the interactions themselves (not
+ * "is pressed" state), so a quick tap in a scrolling list, whose press and release land in the
+ * same frame, still plays the whole dip.
+ */
+internal suspend fun animatePresses(
+    value: Animatable<Float, *>,
+    interactions: InteractionSource,
+    pressed: Float,
+    rest: Float = 1f,
+    down: AnimationSpec<Float> = PressScale.Down,
+    release: AnimationSpec<Float> = PressScale.Release,
+) = coroutineScope {
+    var downJob: Job? = null
     var up: Job? = null
     interactions.interactions.collect { interaction ->
         when (interaction) {
             is PressInteraction.Press -> {
                 // A new press overrides a pending spring-back (a fast double tap).
                 up?.cancel()
-                down = launch { scale.animateTo(pressed, PressScale.Down) }
+                downJob = launch { value.animateTo(pressed, down) }
             }
             is PressInteraction.Release, is PressInteraction.Cancel -> {
-                val pressing = down
+                val pressing = downJob
                 up = launch {
                     pressing?.join()
-                    scale.animateTo(1f, PressScale.Release)
+                    value.animateTo(rest, release)
                 }
             }
         }
@@ -98,13 +113,23 @@ private data class PressScaleElement(val interactions: InteractionSource, val pr
 private class PressScaleNode(
     private var interactions: InteractionSource,
     private var pressed: Float,
-) : Modifier.Node(), LayoutModifierNode, CompositionLocalConsumerModifierNode {
-    private val scale = Animatable(1f)
+) : Modifier.Node(), LayoutModifierNode, CompositionLocalConsumerModifierNode, ObserverModifierNode {
+    private var scale = Animatable(1f)
     private var job: Job? = null
 
     override val shouldAutoInvalidate get() = false
 
-    override fun onAttach() = start()
+    override fun onAttach() {
+        // A node reused after it was detached mid-press starts from rest, not its old dip.
+        if (scale.value != 1f) {
+            scale = Animatable(1f)
+            invalidatePlacement()
+        }
+        start()
+    }
+
+    /** Reduced motion turned on or off while attached. */
+    override fun onObservedReadsChanged() = start()
 
     override fun onDetach() {
         job = null
@@ -119,7 +144,8 @@ private class PressScaleNode(
 
     private fun start() {
         job?.cancel()
-        val reduced = currentValueOf(LocalReducedMotion)
+        var reduced = false
+        observeReads { reduced = currentValueOf(LocalReducedMotion) }
         job = coroutineScope.launch {
             scale.snapTo(1f)
             if (!reduced) animatePresses(scale, interactions, pressed)

@@ -1,6 +1,8 @@
 package app.hocket.ui.screens.library
 
 import app.hocket.ui.components.SyncRefreshBox
+import app.hocket.ui.components.rememberSyncRefresh
+import app.hocket.ui.components.syncRefresh
 import app.hocket.ui.theme.pressScale
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.drawOutline
@@ -125,8 +127,9 @@ fun LibraryScreen(nav: NavHostController) {
     val key = remember(serverId) { AlbumListKey(serverId, SortOrder.DateAdded, true) }
     val recent by client.albumPages.state(key).collectAsStateWithLifecycle()
     LaunchedEffect(key, recent.generation) { client.albumPages.ensure(key, 0) }
+    val refresh = rememberSyncRefresh()
     Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("library.screen"),
+        modifier = Modifier.syncRefresh(refresh).nestedScroll(scroll.nestedScrollConnection).testTag("library.screen"),
         topBar = {
             MediumFlexibleTopAppBar(
                 title = { Text(stringResource(R.string.nav_library), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
@@ -145,7 +148,7 @@ fun LibraryScreen(nav: NavHostController) {
         val grid = rememberLazyGridState()
         ScrollToTopOnReselect(grid)
         ShimmerHost {
-            SyncRefreshBox(topInset = padding.calculateTopPadding()) {
+            SyncRefreshBox(refresh, topInset = padding.calculateTopPadding()) {
                 LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(padding.calculateTopPadding(), BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.grid")) {
                     val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
                     item(key = "pinned", span = full, contentType = "pins") {

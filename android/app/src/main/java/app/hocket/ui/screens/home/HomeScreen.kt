@@ -1,6 +1,8 @@
 package app.hocket.ui.screens.home
 
 import app.hocket.ui.components.SyncRefreshBox
+import app.hocket.ui.components.rememberSyncRefresh
+import app.hocket.ui.components.syncRefresh
 import app.hocket.ui.theme.pressScale
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -249,8 +251,9 @@ fun HomeScreen(nav: NavHostController) {
     }
     MaterialExpressiveTheme(colorScheme = animatedScheme(pageScheme, LocalReducedMotion.current), motionScheme = MaterialTheme.motionScheme, typography = MaterialTheme.typography) {
     CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+    val refresh = rememberSyncRefresh()
     Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("home.screen"),
+        modifier = Modifier.syncRefresh(refresh).nestedScroll(scroll.nestedScrollConnection).testTag("home.screen"),
         // The app's mark as the title, level with the actions; the server is in the account sheet (#29).
         // Clear over Spotlight's artwork until the page scrolls under it.
         topBar = {
@@ -272,7 +275,7 @@ fun HomeScreen(nav: NavHostController) {
         val listState = rememberLazyListState()
         ScrollToTopOnReselect(listState)
         ShimmerHost {
-            SyncRefreshBox(topInset = padding.calculateTopPadding()) {
+            SyncRefreshBox(refresh, topInset = padding.calculateTopPadding()) {
                 LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = if (heroFirst) 0.dp else padding.calculateTopPadding(), bottom = BottomContentInset)) {
                     // Nothing yet: blank at first (most loads land before a skeleton would be worth showing).
                     if (reveal.phase == RevealPhase.Waiting) return@LazyColumn
