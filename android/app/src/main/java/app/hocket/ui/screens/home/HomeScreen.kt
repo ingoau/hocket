@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.home
 
+import app.hocket.ui.components.SyncRefreshBox
+import app.hocket.ui.theme.pressScale
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -270,73 +272,75 @@ fun HomeScreen(nav: NavHostController) {
         val listState = rememberLazyListState()
         ScrollToTopOnReselect(listState)
         ShimmerHost {
-            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = if (heroFirst) 0.dp else padding.calculateTopPadding(), bottom = BottomContentInset)) {
-                // Nothing yet: blank at first (most loads land before a skeleton would be worth showing).
-                if (reveal.phase == RevealPhase.Waiting) return@LazyColumn
-                if (loaded == null) {
-                    item(key = "sk.h1", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
-                    item(key = "sk.s1", contentType = "stripSkeleton") { AlbumStripSkeleton() }
-                    item(key = "sk.h2", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
-                    items(4, key = { "sk.r$it" }, contentType = { "rowSkeleton" }) { TrackRowSkeleton() }
-                    return@LazyColumn
-                }
-                var any = false
-                var order = 0
-                if (heroFirst) {
-                    any = true
-                    val step = order++
-                    item(key = "spotlight", contentType = "spotlight") {
-                        SpotlightCarousel(
-                            slides, pager, slideSchemes,
-                            onOpen = { s -> openSlide(nav, s) },
-                            onPlay = { s, shuffle -> playSlide(client, serverId, s, shuffle) },
-                            onMenu = { s -> s.album?.let { sheets.album = it } ?: s.artist?.let { sheets.artist = it } ?: s.playlist?.let { sheets.playlist = it } },
-                            modifier = Modifier.homeEntrance(reveal, step).onGloballyPositioned { spotlightLeft.floatValue = it.positionInWindow().x },
-                        )
+            SyncRefreshBox(topInset = padding.calculateTopPadding()) {
+                LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = if (heroFirst) 0.dp else padding.calculateTopPadding(), bottom = BottomContentInset)) {
+                    // Nothing yet: blank at first (most loads land before a skeleton would be worth showing).
+                    if (reveal.phase == RevealPhase.Waiting) return@LazyColumn
+                    if (loaded == null) {
+                        item(key = "sk.h1", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
+                        item(key = "sk.s1", contentType = "stripSkeleton") { AlbumStripSkeleton() }
+                        item(key = "sk.h2", contentType = "sectionSkeleton") { SectionHeaderSkeleton() }
+                        items(4, key = { "sk.r$it" }, contentType = { "rowSkeleton" }) { TrackRowSkeleton() }
+                        return@LazyColumn
                     }
-                }
-                shown.forEach { pref ->
-                    val section = pref.section ?: return@forEach
-                    if (section == HomeSection.Spotlight) return@forEach
-                    val content = loaded[section]
-                    if (content == null) {
-                        // Revealed at the cap before this one was read: hold its place until it is.
-                        if (feed == null) {
-                            any = true
-                            item(key = "sk.h.${pref.id}", contentType = "sectionSkeleton") { SectionHeaderSkeleton(Modifier.animateItem()) }
-                            item(key = "sk.s.${pref.id}", contentType = "stripSkeleton") { AlbumStripSkeleton(Modifier.animateItem()) }
-                        }
-                        return@forEach
-                    }
-                    val empty = when (section) {
-                        HomeSection.Filters -> filters.isEmpty()
-                        HomeSection.RecentQueues -> saved.isEmpty()
-                        else -> content.isEmpty
-                    }
-                    if (empty) return@forEach
-                    any = true
-                    val step = order++
-                    item(key = "h.${pref.id}", contentType = "sectionHeader") {
-                        val title = sectionTitle(section, content)
-                        HomeSectionHeader(title, Modifier.animateItem().homeEntrance(reveal, step).testTag("home.section.${pref.id}"), onMenu = { sectionMenu = pref })
-                    }
-                    item(key = "s.${pref.id}", contentType = "section.${pref.resolvedStyle.id}") {
-                        Box(Modifier.animateItem().homeEntrance(reveal, step)) {
-                            SectionBody(section, content, pref.resolvedStyle, filters, saved, nav, serverId, sheets, onSongMore = { songMenu.open(it) })
+                    var any = false
+                    var order = 0
+                    if (heroFirst) {
+                        any = true
+                        val step = order++
+                        item(key = "spotlight", contentType = "spotlight") {
+                            SpotlightCarousel(
+                                slides, pager, slideSchemes,
+                                onOpen = { s -> openSlide(nav, s) },
+                                onPlay = { s, shuffle -> playSlide(client, serverId, s, shuffle) },
+                                onMenu = { s -> s.album?.let { sheets.album = it } ?: s.artist?.let { sheets.artist = it } ?: s.playlist?.let { sheets.playlist = it } },
+                                modifier = Modifier.homeEntrance(reveal, step).onGloballyPositioned { spotlightLeft.floatValue = it.positionInWindow().x },
+                            )
                         }
                     }
-                }
-                if (!any) {
-                    item(key = "empty") {
-                        EmptyState(stringResource(R.string.home_empty_sections_title), stringResource(R.string.home_empty_sections_body), actionLabel = stringResource(R.string.home_customise)) { customising = true }
+                    shown.forEach { pref ->
+                        val section = pref.section ?: return@forEach
+                        if (section == HomeSection.Spotlight) return@forEach
+                        val content = loaded[section]
+                        if (content == null) {
+                            // Revealed at the cap before this one was read: hold its place until it is.
+                            if (feed == null) {
+                                any = true
+                                item(key = "sk.h.${pref.id}", contentType = "sectionSkeleton") { SectionHeaderSkeleton(Modifier.animateItem()) }
+                                item(key = "sk.s.${pref.id}", contentType = "stripSkeleton") { AlbumStripSkeleton(Modifier.animateItem()) }
+                            }
+                            return@forEach
+                        }
+                        val empty = when (section) {
+                            HomeSection.Filters -> filters.isEmpty()
+                            HomeSection.RecentQueues -> saved.isEmpty()
+                            else -> content.isEmpty
+                        }
+                        if (empty) return@forEach
+                        any = true
+                        val step = order++
+                        item(key = "h.${pref.id}", contentType = "sectionHeader") {
+                            val title = sectionTitle(section, content)
+                            HomeSectionHeader(title, Modifier.animateItem().homeEntrance(reveal, step).testTag("home.section.${pref.id}"), onMenu = { sectionMenu = pref })
+                        }
+                        item(key = "s.${pref.id}", contentType = "section.${pref.resolvedStyle.id}") {
+                            Box(Modifier.animateItem().homeEntrance(reveal, step)) {
+                                SectionBody(section, content, pref.resolvedStyle, filters, saved, nav, serverId, sheets, onSongMore = { songMenu.open(it) })
+                            }
+                        }
                     }
-                } else {
-                    item(key = "customise") {
-                        Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                            OutlinedButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise.footer")) {
-                                Icon(HocketIcons.Filled.Tune, null, Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(R.string.home_customise))
+                    if (!any) {
+                        item(key = "empty") {
+                            EmptyState(stringResource(R.string.home_empty_sections_title), stringResource(R.string.home_empty_sections_body), actionLabel = stringResource(R.string.home_customise)) { customising = true }
+                        }
+                    } else {
+                        item(key = "customise") {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                                OutlinedButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise.footer")) {
+                                    Icon(HocketIcons.Filled.Tune, null, Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(stringResource(R.string.home_customise))
+                                }
                             }
                         }
                     }
@@ -572,16 +576,17 @@ private fun HomeCell(item: HomeItem, actions: HomeItemActions, modifier: Modifie
     val round = item is HomeItem.ArtistItem
     val a11y = menuAction(item, actions)
     val share = rememberArtworkShareSource(shareKeyOf(item), coverOf(item))
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Column(
         modifier
-            .combinedClickable(onClick = { share.prepare(); actions.open(item) }, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actions.menu(item) })
+            .combinedClickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), onClick = { share.prepare(); actions.open(item) }, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actions.menu(item) })
             .semantics(mergeDescendants = true) { customActions = a11y }
             .testTag("home.item"),
         horizontalAlignment = if (round) Alignment.CenterHorizontally else Alignment.Start,
     ) {
         val icon = iconOf(item)
-        if (icon != null) IconArt(icon, shape, Modifier.fillMaxWidth().aspectRatio(1f), iconSize = 40.dp)
-        else Artwork(coverOf(item), ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier), shape)
+        if (icon != null) IconArt(icon, shape, Modifier.fillMaxWidth().aspectRatio(1f).pressScale(interaction), iconSize = 40.dp)
+        else Artwork(coverOf(item), ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier).pressScale(interaction), shape)
         Spacer(Modifier.height(8.dp))
         // One line each, so the subtitle sits right under the title and every cell's caption is as tall.
         val align = if (round) TextAlign.Center else TextAlign.Start

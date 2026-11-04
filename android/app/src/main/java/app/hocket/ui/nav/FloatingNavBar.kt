@@ -190,7 +190,7 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarCol
     val open = remember { androidx.compose.animation.core.Animatable(if (selected) 1f else 0f) }
     val bounce = remember { androidx.compose.animation.core.Animatable(if (selected) 1f else 0f) }
     val interactions = remember { MutableInteractionSource() }
-    val press = rememberPressScale(interactions, reduced)
+    val press = app.hocket.ui.theme.rememberPressScale(interactions, app.hocket.ui.theme.PressScale.CONTROL)
     // The icon pops (dips, then springs past full size) as its place becomes the selected one.
     val iconPop = remember { androidx.compose.animation.core.Animatable(1f) }
     val wasSelected = remember { arrayOf(selected) }
@@ -281,45 +281,9 @@ private fun FloatingNavItem(item: NavItem, selected: Boolean, colours: NavBarCol
     }
 }
 
-/**
- * A place's content scale while pressed: it eases down to [NavItemMotion.PRESSED] as the finger lands and
- * springs back past full size when it lifts. A quick tap still shows the whole dip: the release
- * waits for the press-down to finish first.
- */
-@Composable
-private fun rememberPressScale(interactions: MutableInteractionSource, reduced: Boolean): androidx.compose.runtime.State<Float> {
-    val scale = remember { androidx.compose.animation.core.Animatable(1f) }
-    androidx.compose.runtime.LaunchedEffect(interactions, reduced) {
-        if (reduced) { scale.snapTo(1f); return@LaunchedEffect }
-        var down: kotlinx.coroutines.Job? = null
-        var up: kotlinx.coroutines.Job? = null
-        interactions.interactions.collect { interaction ->
-            when (interaction) {
-                is androidx.compose.foundation.interaction.PressInteraction.Press -> {
-                    // A new press overrides a pending spring-back (a fast double tap).
-                    up?.cancel()
-                    down = launch { scale.animateTo(NavItemMotion.PRESSED, NavItemMotion.PressDown) }
-                }
-                is androidx.compose.foundation.interaction.PressInteraction.Release,
-                is androidx.compose.foundation.interaction.PressInteraction.Cancel -> {
-                    val pressing = down
-                    up = launch {
-                        pressing?.join()
-                        scale.animateTo(1f, NavItemMotion.Release)
-                    }
-                }
-            }
-        }
-    }
-    return scale.asState()
-}
-
-/** The floating bar's springs: a pressed place's dip and rebound, and the selected capsule's bounce. */
+/** The floating bar's springs: the selected capsule's bounce (the press dip is [app.hocket.ui.theme.PressScale]). */
 private object NavItemMotion {
-    const val PRESSED = 0.9f
     const val POP_FROM = 0.84f
-    val PressDown = androidx.compose.animation.core.tween<Float>(durationMillis = 90, easing = androidx.compose.animation.core.FastOutSlowInEasing)
-    val Release = spring<Float>(dampingRatio = 0.45f, stiffness = 420f)
     val Pop = spring<Float>(dampingRatio = 0.42f, stiffness = 380f)
     /** The place opening round its label: critically damped, so the bar never grows past its width. */
     val Grow = spring<Float>(dampingRatio = 1f, stiffness = 420f)

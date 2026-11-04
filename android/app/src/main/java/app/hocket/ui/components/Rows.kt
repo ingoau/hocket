@@ -3,6 +3,7 @@ package app.hocket.ui.components
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.combinedClickable
+import app.hocket.ui.theme.pressScale
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.ripple
@@ -353,7 +354,7 @@ fun AlbumCard(
                 ) {
                     Artwork(
                         album.coverArt, ArtworkSizes.GRID, null,
-                        Modifier.fillMaxSize().clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()),
+                        Modifier.pressScale(interaction).fillMaxSize().clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()),
                         RoundedCornerShape(GridArtCorner),
                     )
                 }
@@ -400,7 +401,7 @@ fun ArtistCard(
     SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
         Column(Modifier.padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box {
-                Artwork(artist.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier).clip(CircleShape).indication(interaction, ripple()), CircleShape)
+                Artwork(artist.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier).pressScale(interaction).clip(CircleShape).indication(interaction, ripple()), CircleShape)
                 if (selected) Box(Modifier.padding(8.dp)) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }

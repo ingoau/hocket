@@ -374,7 +374,7 @@ internal fun HeroMoreButton(onClick: () -> Unit, modifier: Modifier = Modifier) 
 @Composable
 internal fun DetailLoveButton(loved: Boolean, onToggle: (Boolean) -> Unit) {
     DetailBarButton(if (loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (loved) R.string.action_unlove else R.string.action_love),
-        onClick = { onToggle(!loved) }, modifier = Modifier.testTag("detail.love"), tint = if (loved && !LocalHeroBarOverArt.current) MaterialTheme.colorScheme.primary else null)
+        onClick = { onToggle(!loved) }, modifier = Modifier.testTag("detail.love"), tint = if (loved && !LocalHeroBarOverArt.current) MaterialTheme.colorScheme.primary else null, loved = loved)
 }
 
 /** Download in the bar; a check once the item is kept on the device. */
@@ -564,8 +564,11 @@ internal val LocalHeroBarColors = androidx.compose.runtime.staticCompositionLoca
 
 /** One of the page's actions in [DetailTopBar]: a bare icon like Back. */
 @Composable
-internal fun DetailBarButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, tint: Color? = null) {
+internal fun DetailBarButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, tint: Color? = null, loved: Boolean? = null) {
     FilledTonalIconButton(onClick = onClick, enabled = enabled, colors = LocalHeroBarColors.current ?: IconButtonDefaults.filledTonalIconButtonColors(), shapes = IconButtonDefaults.shapes(), modifier = modifier.size(48.dp)) {
-        if (tint != null) Icon(icon, label, tint = tint) else Icon(icon, label)
+        @Composable fun glyph() { if (tint != null) Icon(icon, label, tint = tint) else Icon(icon, label) }
+        // The love button bursts as it's loved (see [LoveBurst]).
+        if (loved != null) app.hocket.ui.components.LoveBurst(loved, tint ?: androidx.compose.material3.LocalContentColor.current, Modifier.fillMaxSize()) { glyph() }
+        else glyph()
     }
 }

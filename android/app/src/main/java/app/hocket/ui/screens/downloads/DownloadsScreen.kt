@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.ui.text.font.FontWeight
@@ -139,7 +138,7 @@ fun DownloadsScreen(nav: NavHostController) {
                                     Badge(stringResource(if (pin.transcoded) R.string.downloads_transcoded else R.string.downloads_original), container = MaterialTheme.colorScheme.surfaceContainerHigh)
                                 }
                                 if (pin.downloadedCount < pin.trackCount) {
-                                    LinearProgressIndicator(progress = { pin.downloadedCount.toFloat() / pin.trackCount.toFloat().coerceAtLeast(1f) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp))
+                                    LinearWavyProgressIndicator(progress = { pin.downloadedCount.toFloat() / pin.trackCount.toFloat().coerceAtLeast(1f) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp))
                                 }
                             }
                             IconButton(onClick = { removing = pin }, shapes = IconButtonDefaults.shapes()) { Icon(HocketIcons.Outlined.Delete, stringResource(R.string.action_remove_download)) }

@@ -1,5 +1,9 @@
 package app.hocket.ui.screens.library
 
+import app.hocket.ui.components.SyncRefreshBox
+import app.hocket.ui.theme.pressScale
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -141,49 +145,51 @@ fun LibraryScreen(nav: NavHostController) {
         val grid = rememberLazyGridState()
         ScrollToTopOnReselect(grid)
         ShimmerHost {
-            LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(padding.calculateTopPadding(), BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.grid")) {
-                val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
-                item(key = "pinned", span = full, contentType = "pins") {
-                    Box(Modifier.padding(horizontal = 6.dp)) {
-                        when {
-                            pins == null -> Spacer(Modifier.height(64.dp))
-                            pins.isEmpty() -> Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().testTag("library.pins.empty")) {
-                                Text(stringResource(R.string.library_pin_empty), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
-                            }
-                            else -> androidx.compose.foundation.layout.BoxWithConstraints {
-                                // Two to a row on a phone; a wider area fits as many as stay readable.
-                                val columns = adaptiveColumns(maxWidth, PIN_MIN_WIDTH, GROUP_GAP)
-                                Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP), modifier = Modifier.testTag("library.pins")) {
-                                    pins.chunked(columns).forEachIndexed { r, row ->
-                                        Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
-                                            row.forEachIndexed { c, pin ->
-                                                PinCard(pin, Modifier.weight(1f), pinGroupEdges(r * columns + c, pins.size, columns).shape(outer = 20.dp),
-                                                    onTap = { performPin(client, nav, serverId, pin) },
-                                                    onMenu = { pinMenu = pin })
+            SyncRefreshBox(topInset = padding.calculateTopPadding()) {
+                LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(padding.calculateTopPadding(), BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.grid")) {
+                    val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
+                    item(key = "pinned", span = full, contentType = "pins") {
+                        Box(Modifier.padding(horizontal = 6.dp)) {
+                            when {
+                                pins == null -> Spacer(Modifier.height(64.dp))
+                                pins.isEmpty() -> Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().testTag("library.pins.empty")) {
+                                    Text(stringResource(R.string.library_pin_empty), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+                                }
+                                else -> androidx.compose.foundation.layout.BoxWithConstraints {
+                                    // Two to a row on a phone; a wider area fits as many as stay readable.
+                                    val columns = adaptiveColumns(maxWidth, PIN_MIN_WIDTH, GROUP_GAP)
+                                    Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP), modifier = Modifier.testTag("library.pins")) {
+                                        pins.chunked(columns).forEachIndexed { r, row ->
+                                            Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+                                                row.forEachIndexed { c, pin ->
+                                                    PinCard(pin, Modifier.weight(1f), pinGroupEdges(r * columns + c, pins.size, columns).shape(outer = 20.dp),
+                                                        onTap = { performPin(client, nav, serverId, pin) },
+                                                        onMenu = { pinMenu = pin })
+                                                }
+                                                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                                             }
-                                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                item(key = "gap.browse", span = full, contentType = "gap") { Spacer(Modifier.height(16.dp)) }
-                // Browse and the links are one connected group: the links carry on under the tiles.
-                item(key = "browse", span = full, contentType = "browse") {
-                    Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) { BrowseTiles(nav); LibraryLinks(nav, joinedAbove = true); SnoozedLink(nav) }
-                }
-                item(key = "recent.h", span = full, contentType = "header") {
-                    Text(stringResource(R.string.library_recently_added), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 24.dp, bottom = 4.dp).semantics { heading() })
-                }
-                val count = if (recent.known) minOf(recent.total, RECENT_ALBUMS) else 6
-                items(count, key = { "recent.$it" }, contentType = { "album" }) { i ->
-                    val album = recent.item(i, client.albumPages.pageSize)
-                    if (recent.known) LaunchedEffect(i, recent.generation) { client.albumPages.ensure(key, i) }
-                    if (album == null) AlbumCardSkeleton()
-                    else AlbumCard(album, onClick = { nav.navigate(Route.Album(album.id)) }, modifier = Modifier.testTag("library.album"))
+                    item(key = "gap.browse", span = full, contentType = "gap") { Spacer(Modifier.height(16.dp)) }
+                    // Browse and the links are one connected group: the links carry on under the tiles.
+                    item(key = "browse", span = full, contentType = "browse") {
+                        Column(verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) { BrowseTiles(nav); LibraryLinks(nav, joinedAbove = true); SnoozedLink(nav) }
+                    }
+                    item(key = "recent.h", span = full, contentType = "header") {
+                        Text(stringResource(R.string.library_recently_added), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 24.dp, bottom = 4.dp).semantics { heading() })
+                    }
+                    val count = if (recent.known) minOf(recent.total, RECENT_ALBUMS) else 6
+                    items(count, key = { "recent.$it" }, contentType = { "album" }) { i ->
+                        val album = recent.item(i, client.albumPages.pageSize)
+                        if (recent.known) LaunchedEffect(i, recent.generation) { client.albumPages.ensure(key, i) }
+                        if (album == null) AlbumCardSkeleton()
+                        else AlbumCard(album, onClick = { nav.navigate(Route.Album(album.id)) }, modifier = Modifier.testTag("library.album"))
+                    }
                 }
             }
         }
@@ -270,26 +276,34 @@ private fun BrowseTiles(nav: NavHostController) {
         route: Route,
         tag: String,
         modifier: Modifier,
-        shape: androidx.compose.ui.graphics.Shape,
+        badge: androidx.graphics.shapes.RoundedPolygon,
         corners: Shape,
+        /** What the badge morphs towards while held (a round badge squares up instead). */
+        pressedBadge: androidx.graphics.shapes.RoundedPolygon = MaterialShapes.Circle,
         wide: Boolean = false,
         covers: List<Album> = emptyList(),
         share: List<Modifier> = emptyList(),
         onPrepare: () -> Unit = {},
         height: Dp = 96.dp,
     ) {
+        val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        // The badge softens towards a circle while the tile is held: touch feedback, so it springs.
+        val shape = app.hocket.ui.theme.rememberPressMorphShape(badge, interaction, pressedBadge)
         Surface(
             onClick = { onPrepare(); nav.navigate(route) { launchSingleTop = true } },
+            interactionSource = interaction,
             shape = corners,
             color = if (wide) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = if (wide) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
             // The first row's tiles share one height, so the row's 3dp gap is even under both.
-            modifier = modifier.height(height).testTag("library.browse.$tag"),
+            modifier = modifier.pressScale(interaction, TILE_PRESSED).height(height).testTag("library.browse.$tag"),
         ) {
           Box {
             if (covers.isNotEmpty()) AlbumFan(covers, share, Modifier.align(Alignment.CenterEnd).padding(end = 16.dp))
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                Box(Modifier.size(36.dp).background(if (wide) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.14f) else MaterialTheme.colorScheme.secondaryContainer, shape), contentAlignment = Alignment.Center) {
+                val badgeColour = if (wide) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.14f) else MaterialTheme.colorScheme.secondaryContainer
+                // Drawn rather than a background, so the outline is remade as the morph moves.
+                Box(Modifier.size(36.dp).drawBehind { drawOutline(shape.createOutline(size, layoutDirection, this), badgeColour) }, contentAlignment = Alignment.Center) {
                     Icon(icon, null, Modifier.size(20.dp), tint = if (wide) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer)
                 }
                 Spacer(Modifier.weight(1f))
@@ -304,17 +318,17 @@ private fun BrowseTiles(nav: NavHostController) {
         Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
             Tile(
                 stringResource(R.string.library_albums), HocketIcons.Filled.Album, Route.Albums, "albums", Modifier.weight(2f),
-                MaterialShapes.Cookie9Sided.toShape(), groupShape(top = true, bottom = false, start = true, end = false),
+                MaterialShapes.Cookie9Sided, groupShape(top = true, bottom = false, start = true, end = false),
                 wide = true, covers = recent, share = listOf(s0.modifier, s1.modifier, s2.modifier),
                 onPrepare = { session?.prepareAll(listOfNotNull(s0.entry, s1.entry, s2.entry)) },
                 height = 112.dp,
             )
-            Tile(stringResource(R.string.library_artists), HocketIcons.Filled.Person, Route.Artists, "artists", Modifier.weight(1f), MaterialShapes.Circle.toShape(), groupShape(top = true, bottom = false, start = false, end = true), height = 112.dp)
+            Tile(stringResource(R.string.library_artists), HocketIcons.Filled.Person, Route.Artists, "artists", Modifier.weight(1f), MaterialShapes.Circle, groupShape(top = true, bottom = false, start = false, end = true), pressedBadge = MaterialShapes.Cookie4Sided, height = 112.dp)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
-            Tile(stringResource(R.string.library_playlists), HocketIcons.Filled.QueueMusic, Route.Playlists, "playlists", Modifier.weight(1f), MaterialShapes.Cookie9Sided.toShape(), inner)
-            Tile(stringResource(R.string.library_songs), HocketIcons.Filled.MusicNote, Route.Songs, "songs", Modifier.weight(1f), MaterialShapes.Clover4Leaf.toShape(), inner)
-            Tile(stringResource(R.string.library_genres), HocketIcons.Filled.Category, Route.Genres, "genres", Modifier.weight(1f), MaterialShapes.Flower.toShape(), inner)
+            Tile(stringResource(R.string.library_playlists), HocketIcons.Filled.QueueMusic, Route.Playlists, "playlists", Modifier.weight(1f), MaterialShapes.Cookie9Sided, inner)
+            Tile(stringResource(R.string.library_songs), HocketIcons.Filled.MusicNote, Route.Songs, "songs", Modifier.weight(1f), MaterialShapes.Clover4Leaf, inner)
+            Tile(stringResource(R.string.library_genres), HocketIcons.Filled.Category, Route.Genres, "genres", Modifier.weight(1f), MaterialShapes.Flower, inner)
         }
     }
 }
@@ -347,6 +361,9 @@ internal val PIN_MIN_WIDTH = 220.dp
 
 /** The gap between tiles in a connected group. */
 internal val GROUP_GAP = 3.dp
+
+/** How far a Browse tile dips while pressed: less than a card, as the tiles sit 3 dp apart. */
+private const val TILE_PRESSED = 0.96f
 
 /**
  * A tile's shape in an M3 Expressive connected group: [outer] corners where the tile is on the

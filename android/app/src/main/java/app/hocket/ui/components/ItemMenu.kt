@@ -734,6 +734,7 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
+      LoveBurst(state == Tick.On, primary, Modifier.matchParentSize()) {
         when (state) {
             Tick.On -> Icon(HocketIcons.Filled.Favorite, null, tint = primary)
             Tick.Off -> Icon(HocketIcons.Filled.FavoriteBorder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -743,6 +744,7 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
                 Icon(HocketIcons.Filled.Favorite, null, tint = primary, modifier = Modifier.drawWithContent { clipRect(right = size.width / 2f) { this@drawWithContent.drawContent() } })
             }
         }
+      }
     }
 }
 

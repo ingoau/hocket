@@ -8,8 +8,9 @@ import androidx.compose.ui.unit.IntOffset
 
 /**
  * Motion conventions (see android/README.md): anything the finger drives settles with a spring, never
- * a tween. Surfaces that move content (the player sheet, swipe-backs) never overshoot; only small
- * press feedback is allowed to bounce.
+ * a tween. Surfaces that move content (the player sheet, swipe-backs, page pushes) never overshoot.
+ * Bounce answers a touch: press feedback ([PressScale]), a toggle's pop, a pressed badge's morph,
+ * the cover landing on a page just opened. Nothing that happens on its own bounces.
  */
 object Motion {
     /** The player sheet: critically damped, so a settle never overshoots its anchor; brisk, so it opens with a snap. */
