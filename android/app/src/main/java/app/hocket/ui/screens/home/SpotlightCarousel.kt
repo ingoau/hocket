@@ -45,7 +45,6 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.hocket.R
 import app.hocket.core.ArtworkSizes
 import app.hocket.ui.components.Artwork
@@ -103,9 +102,9 @@ private fun SpotlightPage(slide: SpotlightSlide, page: Int, count: Int, onOpen: 
     val a11y = stringResource(R.string.spotlight_a11y, eyebrow, slide.title, subtitle) + ". " + position
     Box(Modifier.fillMaxSize().background(cs.surface).testTag("home.spotlight.${slide.kind.name}")) {
         Artwork(slide.coverArt, ArtworkSizes.HERO, null, Modifier.fillMaxSize(), RectangleShape)
-        // A wash at the top for the bar's lockup and buttons, and the page's own surface rising
+        // A wash at the top for the bar's mark and buttons, and the page's own surface rising
         // under the text so it reads on any cover.
-        // The cover shows whole up top, under the bar; the bar's lockup and icons take the ink that
+        // The cover shows whole up top, under the bar; the bar's mark and icons take the ink that
         // reads on it (artworkTopLight), over a faint shade of the opposite colour. Lower down the
         // theme's own surface rises under the text, so a pale cover never lights the slide.
         val topLight = artworkTopLight(slide.coverArt).value ?: !LocalDarkTheme.current
@@ -120,16 +119,14 @@ private fun SpotlightPage(slide: SpotlightSlide, page: Int, count: Int, onOpen: 
             // The words open the album, artist or playlist (not the whole slide: its top is under the bar's buttons).
             Column(Modifier.fillMaxWidth().clickable { onOpen(slide) }.clearAndSetSemantics { contentDescription = a11y; role = Role.Button }.testTag("home.spotlight.open")) {
                 Text(
-                    eyebrow.uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
+                    eyebrow,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 1.2.sp,
-                    color = cs.onSurface,
+                    color = cs.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.background(cs.onSurface.copy(alpha = 0.12f), CircleShape).padding(horizontal = 14.dp, vertical = 6.dp),
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(slide.title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, color = cs.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
                 Text(subtitle, style = MaterialTheme.typography.bodyLarge, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
