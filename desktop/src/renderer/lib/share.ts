@@ -4,7 +4,7 @@
 import type { ActionTarget } from "@core/api";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
-import { showToast } from "./ui-toast";
+import { showToast, withBusyToast } from "./ui-toast";
 import type { MenuFacts } from "./menu-model";
 import { resolveTrackIds } from "../store/actions";
 
@@ -74,7 +74,7 @@ export async function copyNavidromeShare(target: ActionTarget, facts: MenuFacts)
     showToast(t("toast.shareFailed"));
     return;
   }
-  const r = await bridge().query({ type: "createShare", data: { ids } });
+  const r = await withBusyToast(t("toast.gettingLink"), () => bridge().query({ type: "createShare", data: { ids } }));
   copied(r.type === "share" ? r.data?.url : undefined);
 }
 
@@ -85,7 +85,7 @@ export async function copySongLink(target: ActionTarget, facts: MenuFacts): Prom
     copied(undefined);
     return;
   }
-  const r = await bridge().query({ type: "songLink", data: ids });
+  const r = await withBusyToast(t("toast.gettingLink"), () => bridge().query({ type: "songLink", data: ids }));
   copied(r.type === "songLink" ? r.data : undefined);
 }
 

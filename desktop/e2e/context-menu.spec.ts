@@ -2,8 +2,11 @@
 // from a playlist, ticking and unticking playlists, a playlist holding the song twice (×2, Remove
 // one), adding another copy, searching and creating a playlist from the search; and the menu for
 // several songs (mixed Love, counts, rating them all), each change with a toast and Undo.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, openPlace, test } from "./fixtures";
+import { completeSetup, expect, launchFake, openPlace, test } from "./fixtures";
 
 /** Opens a playlist from the Playlists page by name. */
 async function openPlaylist(page: Page, name: string): Promise<void> {
@@ -278,5 +281,26 @@ test.describe("context menu", () => {
     await page.keyboard.press("Escape");
     await expect(picker).toHaveCount(0);
     await expect(np).toBeFocused();
+  });
+
+  test("a slow share link shows a spinner toast until it is copied", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-share-"));
+    const { app, page } = await launchFake(userData, { HOCKET_FAKE_SHARE_DELAY_MS: "1500" });
+    try {
+      await completeSetup(page);
+      await openPlaylist(page, "Slow Sundays");
+      await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+      await page.getByTestId("context-menu").locator('[data-action="share"]').hover();
+      await page.getByTestId("share-submenu").getByRole("menuitem", { name: "Squigly" }).click();
+      const busy = page.getByTestId("toast").filter({ hasText: "Getting link…" });
+      await expect(busy.locator(".spin")).toBeVisible();
+      if (process.env.HOCKET_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HOCKET_SCREENSHOT_DIR, "desktop-share-busy.png") });
+      await expect(page.getByTestId("toast").filter({ hasText: "Link copied" })).toBeVisible();
+      await expect(busy).toHaveCount(0);
+      if (process.env.HOCKET_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HOCKET_SCREENSHOT_DIR, "desktop-share-copied.png") });
+    } finally {
+      await app.close();
+      rmSync(userData, { recursive: true, force: true });
+    }
   });
 });

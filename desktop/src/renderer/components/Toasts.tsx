@@ -3,7 +3,8 @@ import type { Command } from "@core/api";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { usePresenceList } from "../lib/presence";
-import { UI_UNDO, runUiUndo } from "../lib/ui-toast";
+import { type BusyToast, UI_UNDO, runUiUndo } from "../lib/ui-toast";
+import { Icon } from "./Icon";
 
 export function Toasts() {
   const toasts = useApp((s) => s.toasts);
@@ -22,6 +23,7 @@ export function Toasts() {
     <div className="toasts" role="status" aria-live="polite" data-testid="toasts" onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)} onFocus={() => setHeld(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHeld(false); }}>
       {entries.map(({ item: t, key, motion, exitProps }) => (
         <div key={key} {...exitProps} className={`toast ${motion}`} data-testid="toast">
+          {(t as BusyToast).busy ? <Icon name="spinner" size={18} className="spin" /> : null}
           <span>{t.message}</span>
           {t.actionLabel && t.actionCommand ? (
             <button

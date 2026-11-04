@@ -12,14 +12,43 @@ import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.client.CoreClient
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.MenuKind
 import app.hocket.ui.components.MenuSubject
 import app.hocket.ui.components.resolveTrackIds
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URLEncoder
@@ -153,14 +182,52 @@ object ShareActions {
     }
 }
 
-/** Runs [request] on a scope that outlives the menu sheet, then [onDone]. */
+/**
+ * Runs [request] on a scope that outlives the menu sheet, then [onDone]. A link or file the core has to
+ * fetch can take a moment, so after a beat a small dialog says so; dismissing it gives up on the share.
+ */
 @Composable
 fun ShareRequestEffect(request: ShareRequest?, onDone: () -> Unit) {
     val context = LocalContext.current
     val client = LocalCoreClient.current
+    var busy by remember(request) { mutableStateOf(false) }
     LaunchedEffect(request) {
         val req = request ?: return@LaunchedEffect
-        ShareActions.perform(context, client, req)
+        // Genius only opens a search page: nothing to wait for.
+        val beat = if (req.choice == ShareChoice.Genius) null else launch { delay(BUSY_DELAY_MS); busy = true }
+        try {
+            ShareActions.perform(context, client, req)
+        } finally {
+            beat?.cancel()
+            busy = false
+        }
         onDone()
+    }
+    if (busy && request != null) ShareBusyDialog(request.choice, onCancel = onDone)
+}
+
+/** Long enough that a cached link never flashes the dialog. */
+private const val BUSY_DELAY_MS = 300L
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ShareBusyDialog(choice: ShareChoice, onCancel: () -> Unit) {
+    val label = stringResource(if (choice == ShareChoice.File) R.string.share_busy_file else R.string.share_busy_link)
+    BasicAlertDialog(onDismissRequest = onCancel, modifier = Modifier.testTag("share.busy")) {
+        Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    LoadingIndicator(Modifier.size(40.dp))
+                    Text(label, style = MaterialTheme.typography.titleMedium)
+                }
+                TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.End).padding(top = 8.dp)) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        }
     }
 }
