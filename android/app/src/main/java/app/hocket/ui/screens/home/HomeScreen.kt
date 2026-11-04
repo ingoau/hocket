@@ -297,7 +297,7 @@ fun HomeScreen(nav: NavHostController) {
                                 onOpen = { s -> openSlide(nav, s) },
                                 onPlay = { s, shuffle -> playSlide(client, serverId, s, shuffle) },
                                 onMenu = { s -> s.album?.let { sheets.album = it } ?: s.artist?.let { sheets.artist = it } ?: s.playlist?.let { sheets.playlist = it } },
-                                modifier = Modifier.homeEntrance(reveal, step).onGloballyPositioned { spotlightLeft.floatValue = it.positionInWindow().x },
+                                modifier = Modifier.homeEntrance(reveal, step, hero = true).onGloballyPositioned { spotlightLeft.floatValue = it.positionInWindow().x },
                             )
                         }
                     }
@@ -332,13 +332,17 @@ fun HomeScreen(nav: NavHostController) {
                             }
                         }
                     }
+                    // After the sections in the entrance's top-down order.
+                    val lastStep = order
                     if (!any) {
                         item(key = "empty") {
-                            EmptyState(stringResource(R.string.home_empty_sections_title), stringResource(R.string.home_empty_sections_body), actionLabel = stringResource(R.string.home_customise)) { customising = true }
+                            Box(Modifier.homeEntrance(reveal, lastStep)) {
+                                EmptyState(stringResource(R.string.home_empty_sections_title), stringResource(R.string.home_empty_sections_body), actionLabel = stringResource(R.string.home_customise)) { customising = true }
+                            }
                         }
                     } else {
                         item(key = "customise") {
-                            Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                            Box(Modifier.homeEntrance(reveal, lastStep).fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
                                 OutlinedButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise.footer")) {
                                     Icon(HocketIcons.Filled.Tune, null, Modifier.size(18.dp))
                                     Spacer(Modifier.width(8.dp))

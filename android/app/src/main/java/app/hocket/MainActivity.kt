@@ -68,7 +68,8 @@ class MainActivity : ComponentActivity() {
         }
         // An entrance a previous instance hid the shell for but never got to play plays now, on a
         // fresh start; a recreation (even mid-entrance) just shows the shell.
-        if (recreated) ShellEntrance.finish() else ShellEntrance.play()
+        // A page staged for an entrance that never played (no splash after all) doesn't carry over.
+        if (recreated) ShellEntrance.finish() else ShellEntrance.restart()
         splash.setOnExitAnimationListener(::exitSplash)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
