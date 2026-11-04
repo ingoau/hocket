@@ -189,7 +189,7 @@ test.describe("keyboard only", () => {
     expect(await (await activeCell()).getAttribute("aria-label")).toBe("Play");
     // → moves along the strip; ↓ goes to Preview, then to the rating, landing on its current star.
     await page.keyboard.press("ArrowRight");
-    expect(await (await activeCell()).getAttribute("aria-label")).toBe("Shuffle");
+    expect(await (await activeCell()).getAttribute("aria-label")).toBe("Play next");
     await page.keyboard.press("ArrowDown");
     expect(await (await activeCell()).getAttribute("data-action")).toBe("preview");
     await page.keyboard.press("ArrowDown");

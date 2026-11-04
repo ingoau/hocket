@@ -230,8 +230,8 @@ private val CONTEXT_IDS = setOf(ActionIds.REMOVE_FROM_QUEUE, ActionIds.REMOVE_FR
 private val UNPERFORMABLE = ActionIds.UI_HANDLED - setOf(ActionIds.ADD_TO_PLAYLIST, ActionIds.RATE, ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST)
 
 /**
- * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play, Shuffle,
- * Play next, Add to queue (the registry leaves it out with the Queue section setting off), Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
+ * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play (the registry offers
+ * one song no Shuffle), Play next, Add to queue (the registry leaves it out with the Queue section setting off), Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
  * More: Pin to Library, Go to artist, Song info; then the destructive rows (Remove from Late night).
  * Album: the same without the stars, Go to artist in the short list and Album info under More.
  * Artist and playlist: no go-to rows. Several songs: no go-to, pin or info. Availability and
@@ -310,7 +310,7 @@ fun connectedShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 6.dp):
 
 /**
  * The compact menu for a song, an album, an artist, a playlist or several songs: a sheet that opens
- * short (header with the love toggle, the connected Play / Shuffle / Play next / Play later group,
+ * short (header with the love toggle, the connected Play / Shuffle / queue actions group,
  * the star row for songs, a short connected list ending in "More"), and grows to the rest when More,
  * the handle or an upward drag asks; "Show less" shrinks it again. Toggles (love, rating, download,
  * pin) apply in place; every other row closes the sheet with its hide animation, its action or
