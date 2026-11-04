@@ -567,24 +567,33 @@ h3 { font-size: var(--fs-lg); }
 /* Between the two-row layout (900px) and room for everything, the song's side gives way first:
    the stars, then add to playlist and More (both stay in its context menu and the side panel),
    sooner while another device's name takes room on the right; then the volume slider and that
-   name shorten. The song's block never shrinks below its art and some of its title. */
-@container player (min-width: 901px) and (max-width: 1360px) {
-  .player:has(.connect-pill.remote) .now .stars { display: none; }
-}
-@container player (min-width: 901px) and (max-width: 1280px) {
-  .player:has(.connect-pill.remote) .now-actions { display: none; }
-}
-@container player (min-width: 901px) and (max-width: 1180px) {
-  .player .now .stars { display: none; }
-  .player .connect-pill .connect-name { max-width: 120px; }
-}
-@container player (min-width: 901px) and (max-width: 1060px) {
-  .player .now-actions { display: none; }
-  .player .volume .m3-slider { flex: 0 0 72px; min-width: 72px; }
-}
-@container player (min-width: 901px) and (max-width: 1000px) {
-  .player:has(.connect-pill.remote) .volume .m3-slider { display: none; }
-  .player .connect-pill .connect-name { max-width: 88px; }
+   name shorten. The song's block never shrinks below its art and some of its title.
+   The one-row layout is chosen by the window's width (the media query) and these steps by the
+   bar's content box, which is narrower (its padding): gated on the same media query, not on a
+   container min-width, so no window width just over 900px gets the one row with nothing given
+   way (report R-20261104-6ykh: the bar ran off the window and the title kept one letter). */
+@media (min-width: 901px) {
+  @container player (max-width: 1360px) {
+    .player:has(.connect-pill.remote) .now .stars { display: none; }
+  }
+  @container player (max-width: 1280px) {
+    .player:has(.connect-pill.remote) .now-actions { display: none; }
+  }
+  @container player (max-width: 1180px) {
+    .player .now .stars { display: none; }
+    .player .connect-pill .connect-name { max-width: 120px; }
+  }
+  @container player (max-width: 1060px) {
+    .player .now-actions { display: none; }
+    .player .volume .m3-slider { flex: 0 0 72px; min-width: 72px; }
+  }
+  @container player (max-width: 1000px) {
+    .player:has(.connect-pill.remote) .volume .m3-slider { display: none; }
+    .player .connect-pill .connect-name { max-width: 88px; }
+  }
+  @container player (max-width: 920px) {
+    .player .connect-pill .connect-name { max-width: 64px; }
+  }
 }
 
 
