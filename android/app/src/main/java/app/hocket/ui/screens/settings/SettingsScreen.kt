@@ -74,7 +74,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.components.formatAgo
+import app.hocket.ui.components.formatAgoPhrase
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.ui.nav.Route
@@ -252,7 +252,7 @@ private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -
                     contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight)) {
                     Icon(HocketIcons.Filled.Sync, null, Modifier.size(ButtonDefaults.MediumIconSize))
                     Spacer(Modifier.width(ButtonDefaults.MediumIconSpacing))
-                    val last = s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced)
+                    val last = s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgoPhrase(it)) } ?: stringResource(R.string.settings_never_synced)
                     Text(if (syncing) stringResource(R.string.settings_syncing) else stringResource(R.string.settings_last_sync_now, last), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }

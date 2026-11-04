@@ -58,7 +58,7 @@ import app.hocket.core.api.QueryResult
 import app.hocket.playback.CoreHost
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ConfirmDialog
-import app.hocket.ui.components.formatAgo
+import app.hocket.ui.components.formatAgoPhrase
 import app.hocket.ui.components.formatBytes
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.Route
@@ -88,7 +88,7 @@ fun AccountSettingsScreen(nav: NavHostController) {
     SubScreen(nav, stringResource(R.string.settings_category_account)) {
         // The server login is kept on this device only (the keystore); the sync switch has its registry scope.
         server?.let { s ->
-            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = "server.info")
+            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgoPhrase(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = "server.info")
             SettingRow(stringResource(R.string.settings_sync_now), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = false)) }, tag = "server.syncNow")
             SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) }, tag = "server.fullSync")
         }
