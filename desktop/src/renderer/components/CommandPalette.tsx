@@ -33,6 +33,8 @@ export function CommandPalette() {
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
   const navigate = useApp((s) => s.navigate);
+  // A dialog a result's menu opened (delete, rename, …) may have changed the results: search again once it closes.
+  const dialogOpen = useApp((s) => !!s.dialog);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | undefined>(undefined);
   const [actions, setActions] = useState<ActionDescriptor[]>([]);
@@ -65,7 +67,7 @@ export function CommandPalette() {
       void bridge().query({ type: "search", data: { server_id: serverId, query, limit: 8, include_server: false, request_id: id } }).then((r) => mine === seq.current && r.type === "search" && setResults(r.data));
     }, 60);
     return () => clearTimeout(h);
-  }, [open, query, serverId]);
+  }, [open, query, serverId, dialogOpen]);
 
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];

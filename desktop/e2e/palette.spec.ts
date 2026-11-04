@@ -49,7 +49,14 @@ test.describe("command palette", () => {
     const track = palette.locator('[data-testid="palette-item"]', { has: page.locator(".art") }).first();
     await track.click({ button: "right" });
     const goTo = menu.getByRole("menuitem", { name: /^Go to (album|artist)$/ }).first();
+    const where = await goTo.textContent();
     await goTo.click();
+    await expect(palette).toHaveCount(0);
+    // Going where the view already is closes the palette too.
+    await page.keyboard.press("Control+k");
+    await input.fill("s");
+    await palette.locator('[data-testid="palette-item"]', { has: page.locator(".art") }).first().click({ button: "right" });
+    await menu.getByRole("menuitem", { name: where ?? "", exact: true }).click();
     await expect(palette).toHaveCount(0);
   });
 });
