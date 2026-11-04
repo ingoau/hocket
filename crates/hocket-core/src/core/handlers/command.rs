@@ -82,7 +82,9 @@ impl Actor {
             Command::ResumeAlbum { album_id } => self.resume_album(album_id),
             Command::ClearAlbumResume { album_id } => self.clear_album_resume(&album_id, true),
 
-            c @ (Command::Snooze { .. } | Command::Unsnooze { .. }) => self.snooze_command(c),
+            c @ (Command::Snooze { .. }
+            | Command::SnoozeUntil { .. }
+            | Command::Unsnooze { .. }) => self.snooze_command(c),
 
             // -- queue --
             Command::PlayContext { args } => self.play_context(args),

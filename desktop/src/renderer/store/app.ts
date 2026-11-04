@@ -73,6 +73,8 @@ export type DialogState =
   | { kind: "prompt"; title: string; label: string; initial?: string; confirmLabel?: string; onConfirm: (value: string) => void }
   | { kind: "confirm"; title: string; message: string; confirmLabel?: string; destructive?: boolean; onConfirm: () => void }
   | { kind: "sleepTimer" }
+  /** Snooze songs until a chosen date and time (the Snooze submenu's Custom row). */
+  | { kind: "snoozeUntil"; trackIds: string[] }
   | { kind: "connect" }
   | { kind: "trackInfo"; trackId: string }
   | { kind: "albumInfo"; albumId: string }

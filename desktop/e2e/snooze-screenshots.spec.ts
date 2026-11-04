@@ -49,3 +49,34 @@ test("snooze screens", async ({ hocket }) => {
   await expect(page.getByTestId("snoozed-row")).toBeVisible();
   await shot(page, "desktop-snoozed-list.png");
 });
+
+test("snooze until a custom date and time", async ({ hocket }) => {
+  test.setTimeout(120_000);
+  const { page } = hocket;
+  await completeSetup(page);
+  await openPlace(page, "playlists");
+  await page.getByTestId("playlists-grid").getByTestId("grid-tile").first().dblclick();
+  await expect(page.getByTestId("view-playlist")).toBeVisible();
+  const rows = page.getByTestId("track-row");
+  await expect(rows.first()).toBeVisible();
+
+  await rows.nth(0).click({ position: onTitle, button: "right" });
+  const menu = page.getByTestId("context-menu");
+  await menu.locator('[data-action="snooze"]').click();
+  await page.getByTestId("snooze-submenu").locator('[data-action="custom"]').click();
+  const dialog = page.getByTestId("dialog-snoozeUntil");
+  await expect(dialog).toBeVisible();
+  const input = page.getByTestId("snooze-until-input");
+  await shot(page, "desktop-snooze-custom.png");
+
+  // A time already past can't be chosen.
+  await input.fill("2020-01-01T09:00");
+  await expect(page.getByTestId("snooze-until-ok")).toBeDisabled();
+
+  const year = new Date().getFullYear() + 1;
+  await input.fill(`${year}-03-04T09:30`);
+  await page.getByTestId("snooze-until-ok").click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByTestId("toast").filter({ hasText: "Snoozed" })).toBeVisible();
+  await expect(rows.nth(0)).toHaveClass(/snoozed/);
+});

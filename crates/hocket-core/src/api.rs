@@ -2261,6 +2261,11 @@ pub enum Command {
         track_ids: Vec<TrackId>,
         duration: SnoozeFor,
     },
+    /// Snooze songs until a chosen moment (the menu's Custom row). Goes through global undo.
+    SnoozeUntil {
+        track_ids: Vec<TrackId>,
+        until: EpochMs,
+    },
     /// Bring snoozed songs back. Goes through global undo.
     Unsnooze {
         track_ids: Vec<TrackId>,
