@@ -170,9 +170,9 @@ private fun SyncRow(server: ServerInfo, job: Job?, progress: SyncProgress?) {
         active?.state == JobState.Paused -> stringResource(R.string.sync_paused)
         active != null && live != null -> stringResource(R.string.sync_phase, live.phase)
         active != null -> stringResource(R.string.sync_waiting)
-        unsuccessful?.state == JobState.Failed -> stringResource(R.string.sync_failed_when, agoText(unsuccessful.updatedAt))
-        unsuccessful != null -> stringResource(R.string.sync_cancelled_when, agoText(unsuccessful.updatedAt))
-        last != null -> stringResource(R.string.sync_synced_when, agoText(last))
+        unsuccessful?.state == JobState.Failed -> stringResource(R.string.sync_failed_when, formatAgoPhrase(unsuccessful.updatedAt))
+        unsuccessful != null -> stringResource(R.string.sync_cancelled_when, formatAgoPhrase(unsuccessful.updatedAt))
+        last != null -> stringResource(R.string.sync_synced_when, formatAgoPhrase(last))
         else -> stringResource(R.string.sync_not_synced)
     }
     val tracks = server.lastSyncTracks?.toInt()
@@ -211,7 +211,3 @@ private fun SyncRow(server: ServerInfo, job: Job?, progress: SyncProgress?) {
     }
 }
 
-/** "just now" / "5m ago" (formatAgo alone would give "now ago"). */
-@Composable
-private fun agoText(epochMs: Double): String =
-    if (System.currentTimeMillis() - epochMs < 60_000) stringResource(R.string.sync_just_now) else stringResource(R.string.sync_ago, formatAgo(epochMs))

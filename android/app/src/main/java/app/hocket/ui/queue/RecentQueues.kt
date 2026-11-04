@@ -67,7 +67,7 @@ import app.hocket.core.api.SavedQueue
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.SectionHeader
-import app.hocket.ui.components.formatAgo
+import app.hocket.ui.components.formatAgoPhrase
 
 /**
  * Queues: the playing queue on a filled primary card (its name, size and place, rename and create
@@ -180,7 +180,7 @@ private fun SavedQueueRow(sq: SavedQueue, index: Int, count: Int, onRename: () -
             colors = segmentedListColors(),
             modifier = Modifier.testTag("savedQueue.${sq.id}"),
             supportingContent = {
-                Text(stringResource(R.string.saved_tracks, sq.trackCount.toInt()) + stringResource(R.string.dot_separator) + stringResource(R.string.saved_played, formatAgo(sq.lastInteractedAt)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(stringResource(R.string.saved_tracks, sq.trackCount.toInt()) + stringResource(R.string.dot_separator) + stringResource(R.string.saved_played, formatAgoPhrase(sq.lastInteractedAt)), maxLines = 1, overflow = TextOverflow.Ellipsis)
             },
             trailingContent = {
                 Row {

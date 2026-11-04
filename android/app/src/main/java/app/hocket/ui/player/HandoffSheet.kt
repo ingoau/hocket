@@ -65,7 +65,7 @@ import app.hocket.core.api.Command
 import app.hocket.core.api.Platform
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.LabelledSlider
-import app.hocket.ui.components.formatAgo
+import app.hocket.ui.components.formatAgoPhrase
 import app.hocket.ui.icons.HocketIcons
 
 /** Opens Connect & devices settings; provided by the app's root, where navigation lives. */
@@ -148,7 +148,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                         trailing = when {
                             d.playing -> null
                             !d.ready -> ({ LoadingIndicator(Modifier.size(32.dp)) })
-                            else -> ({ Text(stringResource(R.string.handoff_last_seen, formatAgo(d.lastSeen)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) })
+                            else -> ({ Text(stringResource(R.string.handoff_last_seen, formatAgoPhrase(d.lastSeen)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) })
                         })
                 }
             }

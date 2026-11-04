@@ -42,3 +42,8 @@ fun formatAgo(epochMs: Double, nowMs: Double = System.currentTimeMillis().toDoub
         else -> stringResource(R.string.time_days, (delta / 86_400).toInt())
     }
 }
+
+/** Relative age as a phrase: "just now", "5m ago". For sentences like "Last sync just now". */
+@Composable
+fun formatAgoPhrase(epochMs: Double, nowMs: Double = System.currentTimeMillis().toDouble()): String =
+    if (nowMs - epochMs < 60_000) stringResource(R.string.sync_just_now) else stringResource(R.string.sync_ago, formatAgo(epochMs, nowMs))

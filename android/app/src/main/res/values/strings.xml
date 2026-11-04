@@ -325,7 +325,7 @@
     <string name="handoff_ready">Ready</string>
     <string name="handoff_preparing">Preparing…</string>
     <string name="handoff_playing">Playing</string>
-    <string name="handoff_last_seen">Seen %1$s ago</string>
+    <string name="handoff_last_seen">Seen %1$s</string>
     <string name="handoff_hint">Long-press the Connect button to take over playback here.</string>
     <string name="connection_local">Not connected</string>
     <string name="connection_lan">On this network · %1$d devices</string>
@@ -388,7 +388,7 @@
     <string name="saved_pin">Pin</string>
     <string name="saved_unpin">Unpin</string>
     <string name="saved_tracks">%1$d tracks</string>
-    <string name="saved_played">Played %1$s ago</string>
+    <string name="saved_played">Played %1$s</string>
     <string name="saved_cap">Show up to %1$d recent queues</string>
 
     <!-- Undo history -->
@@ -700,7 +700,7 @@
     <string name="settings_section_library">Library</string>
     <string name="settings_sync_now">Sync library now</string>
     <string name="settings_full_sync">Full reconcile</string>
-    <string name="settings_last_sync">Last sync %1$s ago</string>
+    <string name="settings_last_sync">Last sync %1$s</string>
     <string name="settings_never_synced">Never synced</string>
     <string name="settings_section_storage">Storage</string>
     <string name="settings_section_battery">Battery</string>
