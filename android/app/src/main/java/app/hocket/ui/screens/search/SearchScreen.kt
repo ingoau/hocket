@@ -124,7 +124,7 @@ fun SearchScreen(nav: NavHostController) {
         if (!focusedOnce) { focusedOnce = true; runCatching { focus.requestFocus() } }
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().testTag("search.screen").statusBarsPadding()) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             OutlinedTextField(
                 value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text(stringResource(R.string.search_hint)) },

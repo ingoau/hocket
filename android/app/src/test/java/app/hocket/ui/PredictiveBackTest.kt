@@ -3,6 +3,8 @@ package app.hocket.ui
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -78,5 +80,35 @@ class PredictiveBackTest {
         assertTrue("same direction as a left-edge swipe: toward the trailing edge: $page", page.left > full.left + 1f)
         back { it.onBackPressed() }
         compose.waitUntil(5_000) { exists("settings.categories") && !exists("settings.screen") }
+    }
+
+    /**
+     * R-20261104-9x79: Search is a plain Column with no Scaffold behind it, so going back from it to
+     * Home drew Home (dimmed by the covered-page scrim) straight through the search page. The page
+     * must stay opaque: a blank spot on it looks the same mid-gesture as at rest.
+     */
+    @Test
+    fun theSearchPageStaysOpaqueOverHomeDuringTheGesture() {
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { exists("home.screen") && exists("navBar.search") }
+        compose.onNodeWithTag("navBar.search").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { exists("search.screen") && !exists("home.screen") }
+        compose.waitForIdle()
+        val full = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        // A blank spot on the search page, below its empty state and above the bottom bar.
+        val dx = full.width * 0.15f
+        val y = (full.top + full.height * 0.6f).toInt()
+        val rest = compose.onRoot().captureToImage().asAndroidBitmap().getPixel((full.left + dx).toInt(), y)
+
+        back { it.dispatchOnBackStarted(event(0f)) }
+        back { it.dispatchOnBackProgressed(event(0.3f)) }
+        assertTrue("home is revealed behind search", exists("home.screen"))
+        val page = compose.onNodeWithTag("search.screen").fetchSemanticsNode().boundsInRoot
+        assertTrue("the search page has moved: $page", page.left > full.left + 1f)
+        val mid = compose.onRoot().captureToImage().asAndroidBitmap().getPixel((page.left + dx).toInt(), y)
+        assertEquals("the same spot on the search page, mid-gesture (rest #%08x, mid #%08x)".format(rest, mid), rest, mid)
+        back { it.dispatchOnBackCancelled() }
     }
 }
