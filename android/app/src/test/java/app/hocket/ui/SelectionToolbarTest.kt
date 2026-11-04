@@ -124,8 +124,8 @@ class SelectionToolbarTest {
             }
         }
         core.start()
-        compose.waitUntil(5_000) { core.client.started.value && core.client.queue.value.upcoming.isNotEmpty() }
-        compose.runOnIdle { core.client.toggleSelected(SelectionKind.QueueItems, core.client.queue.value.upcoming.first().item.key) }
+        compose.waitUntil(5_000) { core.client.started.value && core.client.queue.value.entries.isNotEmpty() }
+        compose.runOnIdle { core.client.toggleSelected(SelectionKind.QueueItems, core.client.queue.value.entries.last().item.key) }
         compose.waitUntil(5_000) { present("selection.toolbar") }
         compose.mainClock.advanceTimeBy(1_000)
         compose.waitForIdle()
