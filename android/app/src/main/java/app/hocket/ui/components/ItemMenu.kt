@@ -369,6 +369,8 @@ fun MenuSheet(
     /** The share being fetched (a link, the file): the sheet shows it loading, then hides as the share sheet opens. */
     var sharing by remember { mutableStateOf<ShareChoice?>(null) }
     fun share(choice: ShareChoice) {
+        // Once: the Share page stays tappable while it slides away.
+        if (sharing != null) return
         sharing = choice
         goTo(MenuPage.Sharing)
         // On the sheet's scope: closing the sheet (a drag, the scrim) gives up on the share.
@@ -583,7 +585,7 @@ fun MenuSheet(
                 contentAlignment = Alignment.TopCenter,
             ) { shownPage ->
             when (shownPage) {
-            MenuPage.Share -> SharePage(shareOptions, tag) { choice -> if (choice == null) goTo(MenuPage.Main) else share(choice) }
+            MenuPage.Share -> SharePage(shareOptions, tag) { choice -> if (sharing != null) Unit else if (choice == null) goTo(MenuPage.Main) else share(choice) }
             MenuPage.Sharing -> SharingPage(sharing, tag)
             MenuPage.Snooze -> SnoozePage(tag) { duration ->
                 if (duration == null) goTo(MenuPage.Main)
