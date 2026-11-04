@@ -45,7 +45,7 @@ fun SnoozedScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val snoozes by client.snoozes.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
-    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val scroll = TopAppBarDefaults.pinnedScrollBehavior()
     val songMenu = rememberSongMenu()
     val whenFormat = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
     Scaffold(

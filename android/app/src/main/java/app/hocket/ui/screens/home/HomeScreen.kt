@@ -9,6 +9,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Size
+import app.hocket.ui.nav.easedScrim
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -213,7 +217,7 @@ fun HomeScreen(nav: NavHostController) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val songMenu = rememberSongMenu()
-    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val scroll = TopAppBarDefaults.pinnedScrollBehavior()
     // Over the cover (Spotlight first, the page not scrolled under the bar) the bar's mark, icons
     // and the status bar take the ink that reads on the top of the slide in view.
     val overArt = heroFirst && scroll.state.overlappedFraction < 0.01f
@@ -255,18 +259,30 @@ fun HomeScreen(nav: NavHostController) {
     Scaffold(
         modifier = Modifier.syncRefresh(refresh).nestedScroll(scroll.nestedScrollConnection).testTag("home.screen"),
         // The app's mark as the title, level with the actions; the server is in the account sheet (#29).
-        // Clear over Spotlight's artwork until the page scrolls under it.
+        // Clear over Spotlight's artwork. Once the page scrolls under it, a scrim in the page's surface
+        // colour fades in behind it, solid at the top and easing out below the bar, not a solid block.
         topBar = {
-            val barColors = when {
-                overArt -> TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer, actionIconContentColor = barInk, navigationIconContentColor = barInk, titleContentColor = barInk)
-                heroFirst -> TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer)
-                else -> TopAppBarDefaults.topAppBarColors()
+            val clear = Color.Transparent
+            val barColors = if (overArt) {
+                TopAppBarDefaults.topAppBarColors(containerColor = clear, scrolledContainerColor = clear, actionIconContentColor = barInk, navigationIconContentColor = barInk, titleContentColor = barInk)
+            } else {
+                TopAppBarDefaults.topAppBarColors(containerColor = clear, scrolledContainerColor = clear)
             }
+            val scrolled = scroll.state.overlappedFraction > 0.01f
+            val scrimAlpha by animateFloatAsState(if (scrolled) 1f else 0f, MaterialTheme.motionScheme.defaultEffectsSpec(), label = "homeBarScrim")
+            val scrimColor = MaterialTheme.colorScheme.surface
+            Box(Modifier.drawWithCache {
+                // Solid over the whole bar (status bar included), then easing out below its bottom edge.
+                val reach = size.height + HomeBarScrimFade.toPx()
+                val scrim = easedScrim(scrimColor, solid = size.height / reach, fromTop = true)
+                onDrawBehind { if (scrimAlpha > 0f) drawRect(scrim, size = Size(size.width, reach), alpha = scrimAlpha) }
+            }.testTag("home.barScrim")) {
             TopAppBar(title = { if (overArt) HeaderMark(wipe = markWipe) else HeaderMark() }, colors = barColors, actions = {
                 IconButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise")) { Icon(HocketIcons.Filled.Tune, stringResource(R.string.home_customise)) }
                 JobsIndicator(onClick = { jobs = true })
                 AccountButton()
             }, scrollBehavior = scroll)
+            }
         },
         snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset)) },
     ) { padding ->
@@ -648,3 +664,6 @@ private fun ListeningTile(content: SectionContent.Listening, onOpen: () -> Unit)
         }
     }
 }
+
+/** How far below Home's top bar its scrim fades out. */
+private val HomeBarScrimFade = 40.dp

@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
@@ -76,6 +77,15 @@ class HomeLibraryScreenshotTest {
         awaitTag("miniPlayer")
         settle()
         shot(dir, "$prefix-01-home")
+        // Scrolled: the top bar stays, over its gradient scrim.
+        step {
+            compose.onNodeWithTag("home.screen").performTouchInput { swipeUp(startY = centerY + 400f, endY = top + 200f) }
+            settle()
+            shot(dir, "$prefix-01b-home-scrolled")
+            compose.onNodeWithTag("home.screen").performTouchInput { swipeDown(startY = top + 400f, endY = bottom - 300f) }
+            compose.onNodeWithTag("home.screen").performTouchInput { swipeDown(startY = top + 400f, endY = bottom - 300f) }
+            settle()
+        }
 
         step {
             awaitTag("home.section.rediscover")

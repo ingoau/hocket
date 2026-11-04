@@ -116,7 +116,7 @@ fun LibraryScreen(nav: NavHostController) {
     var jobs by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val scroll = TopAppBarDefaults.pinnedScrollBehavior()
     val unpinnedLabel = stringResource(R.string.library_unpinned, "%s")
     val undoLabel = stringResource(R.string.action_undo)
     fun unpinned(entry: PinEntry, at: Int, title: String) {
