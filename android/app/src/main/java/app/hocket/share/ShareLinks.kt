@@ -1,8 +1,11 @@
 package app.hocket.share
 
+import android.app.SearchManager
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -42,6 +45,17 @@ fun shareChoices(kind: MenuKind, count: Int = 1): ShareChoices = when (kind) {
     MenuKind.Artist -> ShareChoices(navidrome = false, songLink = false, file = false)
     MenuKind.Playlist -> ShareChoices(navidrome = true, songLink = false, file = false)
     MenuKind.Other -> ShareChoices(navidrome = false, songLink = false, file = false)
+}
+
+/** The Genius app's package: Open in Genius searches in it when it's installed. */
+const val GENIUS_PACKAGE = "com.genius.android"
+
+/** What the Genius app searches for: `title artist`, unquoted, as you'd type it. Null with no title. */
+fun geniusAppQuery(title: String, artist: String?): String? {
+    val song = title.trim()
+    if (song.isEmpty()) return null
+    val who = artist?.trim().orEmpty()
+    return if (who.isEmpty()) song else "$song $who"
 }
 
 /** Genius search for `"title" "artist"`. Null when there is no title. */
@@ -99,16 +113,47 @@ object ShareActions {
         else -> emptyList()
     }
 
-    /** Genius's search for this song; nothing to fetch first. */
+    /**
+     * Genius's search for this song; nothing to fetch first. The Genius app, when installed, gets
+     * it as a search (its main activity takes ACTION_SEARCH). Otherwise the website, in the
+     * browser: the app claims genius.com links but has no page for a search URL.
+     */
     fun openGenius(context: Context, subject: MenuSubject) {
+        val query = geniusAppQuery(subject.title, subject.artist)
         val url = geniusSearch(subject.title, subject.artist)
-        if (url == null) toast(context, R.string.toast_share_failed) else openUrl(context, url)
+        if (query == null || url == null) {
+            toast(context, R.string.toast_share_failed)
+            return
+        }
+        val search = Intent(Intent.ACTION_SEARCH).setPackage(GENIUS_PACKAGE).putExtra(SearchManager.QUERY, query)
+        if (context !is android.app.Activity) search.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val app = context.packageManager.resolveActivity(search, PackageManager.MATCH_DEFAULT_ONLY) != null
+        try {
+            if (app) context.startActivity(search) else openInBrowser(context, url)
+        } catch (_: ActivityNotFoundException) {
+            openInBrowser(context, url)
+        }
     }
 
-    private fun openUrl(context: Context, url: String) {
-        val view = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+    /**
+     * [url] in the default browser, past any app that claims its domain. With no default (the
+     * probe resolves to the chooser, package "android"), the first browser installed.
+     */
+    private fun openInBrowser(context: Context, url: String) {
+        val view = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
         if (context !is android.app.Activity) view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(view)
+        // A bare https URL matches no app's links, so what handles it is the browser.
+        val probe = Intent(Intent.ACTION_VIEW, Uri.parse("https://")).addCategory(Intent.CATEGORY_BROWSABLE)
+        val pm = context.packageManager
+        val browser = pm.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo?.packageName?.takeIf { it != "android" }
+            ?: pm.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY)
+                .firstNotNullOfOrNull { it.activityInfo?.packageName?.takeIf { p -> p != "android" } }
+        try {
+            context.startActivity(if (browser != null) Intent(view).setPackage(browser) else view)
+        } catch (_: ActivityNotFoundException) {
+            if (browser != null) context.startActivity(view) else toast(context, R.string.toast_share_failed)
+        }
     }
 
     private fun sendText(context: Context, text: String) {

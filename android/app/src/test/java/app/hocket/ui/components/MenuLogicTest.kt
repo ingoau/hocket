@@ -17,6 +17,7 @@ import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.PlaylistEntryRef
 import app.hocket.core.api.PlaylistMembership
+import app.hocket.share.geniusAppQuery
 import app.hocket.share.geniusSearch
 import app.hocket.share.shareChoices
 import app.hocket.share.songLinkQuery
@@ -115,6 +116,9 @@ class MenuLogicTest {
         assertNull(songLinkQuery(MenuSubject(MenuKind.Artist, "Boards of Canada", artistId = "ar1"), ActionTarget.None))
         assertEquals("https://genius.com/search?q=%22Roygbiv%22%20%22Boards%20of%20Canada%22", geniusSearch("Roygbiv", "Boards of Canada"))
         assertNull(geniusSearch("  ", "Boards of Canada"))
+        assertEquals("Roygbiv Boards of Canada", geniusAppQuery(" Roygbiv ", "Boards of Canada"))
+        assertEquals("Roygbiv", geniusAppQuery("Roygbiv", " "))
+        assertNull(geniusAppQuery("", "Boards of Canada"))
     }
 
     @Test
