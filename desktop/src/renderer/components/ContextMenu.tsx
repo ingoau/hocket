@@ -199,7 +199,9 @@ export function ContextMenu() {
     const current = document.activeElement;
     const focusLost = !current || current === document.body || !!current.closest?.("[role=menu], [data-context-layer]");
     // A dialog the action opened takes the trigger over (lib/focus handOnFocus) and restores it itself.
-    if (useApp.getState().dialog || useApp.getState().paletteOpen) return;
+    // The palette the menu was opened from (a search result) is not one: focus goes back into it.
+    const fromPalette = !!el?.closest?.('[data-testid="palette"]');
+    if (useApp.getState().dialog || (useApp.getState().paletteOpen && !fromPalette)) return;
     handOnFocus(null);
     if (el && el.isConnected && focusLost) el.focus({ preventScroll: true });
   }, [live]);
