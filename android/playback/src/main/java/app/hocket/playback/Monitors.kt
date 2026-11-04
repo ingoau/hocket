@@ -94,17 +94,11 @@ class NetworkMonitor(
 }
 
 /**
- * Mirrors the OS power-save mode into [Command.SetBatterySaver] while the "engage automatically on
- * battery" setting is on. The core owns the mode itself; this only feeds the trigger.
+ * Mirrors the system's power saver into [Command.SetPowerSave]. The core owns battery saver: it
+ * engages `battery.autoLevel` from this while `battery.autoEngage` is on.
  */
 class BatterySaverMonitor(private val context: Context, private val dispatch: (Command) -> Unit) {
     private val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-    @Volatile
-    var automatic: Boolean = true
-        set(value) {
-            field = value
-            publish()
-        }
     private var last: Boolean? = null
 
     private val receiver = object : BroadcastReceiver() {
@@ -121,10 +115,10 @@ class BatterySaverMonitor(private val context: Context, private val dispatch: (C
     }
 
     private fun publish() {
-        val enabled = automatic && pm.isPowerSaveMode
+        val enabled = pm.isPowerSaveMode
         if (enabled != last) {
             last = enabled
-            dispatch(Commands.setBatterySaver(enabled))
+            dispatch(Commands.setPowerSave(enabled))
         }
     }
 }

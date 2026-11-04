@@ -911,7 +911,17 @@
   "event.batterySaverChanged": {
     "type": "batterySaverChanged",
     "data": {
-      "enabled": true
+      "saver": {
+        "level": "medium",
+        "automatic": true,
+        "features": [
+          "stillBackground",
+          "stillSeekWave",
+          "lighterLyrics",
+          "refreshCap",
+          "slowSync"
+        ]
+      }
     }
   },
   "event.libraryChanged": {

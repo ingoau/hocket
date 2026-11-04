@@ -1,5 +1,7 @@
 package app.hocket.ui.lyrics
 
+import app.hocket.core.has
+import app.hocket.core.engaged
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
@@ -128,7 +130,9 @@ import app.hocket.ui.icons.HocketIcons
 fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolean = false, listModifier: Modifier = Modifier, backdrop: Boolean = !embedded) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
-    val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
+    val saver by client.batterySaver.collectAsStateWithLifecycle()
+    val batterySaver = saver.has(app.hocket.core.api.SaverFeature.LighterLyrics)
+    val stillBackground = saver.has(app.hocket.core.api.SaverFeature.StillBackground)
     val reducedMotion = LocalReducedMotion.current
     val settings by client.settings.collectAsStateWithLifecycle()
     val animatedSetting = settings[SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false"
@@ -166,7 +170,7 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
     Box(modifier.fillMaxSize().semantics { contentDescription = pageLabel; isTraversalGroup = true }.testTag("lyrics.page")) {
         // Inside the full player (embedded) the player's own artwork gradient shows through (and the
         // side panel's lyrics page draws its own, wider than the page).
-        if (backdrop) LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !batterySaver, visible = visible, modifier = Modifier.fillMaxSize())
+        if (backdrop) LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !stillBackground, visible = visible, modifier = Modifier.fillMaxSize())
         if (trackId == null) { EmptyState(stringResource(R.string.empty_queue_title), stringResource(R.string.empty_queue_body)); return@Box }
         if (current.loaded && lyrics == null) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {

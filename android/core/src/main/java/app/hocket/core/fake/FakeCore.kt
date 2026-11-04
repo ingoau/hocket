@@ -1,6 +1,7 @@
 package app.hocket.core.fake
 
 import app.hocket.core.Commands
+import app.hocket.core.Saver
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.ActionIds
@@ -106,7 +107,8 @@ class FakeCore(
     private var audio = AudioSettings(ReplayGainMode.Auto, 0.0, false, EqSettings(false, 0.0, defaultBands(), null), true, null, false)
     private var sleepTimer: SleepTimer? = null
     private var network: NetworkState? = null
-    private var batterySaver = false
+    private var powerSave = false
+    private var batterySaver = Saver.OFF
     private var started = false
     private var syncProgress: SyncProgress? = null
     private var connection = ConnectionState(ConnectionTier.Lan, true, null, 0.0, 12.0, 2u, null)
@@ -166,8 +168,9 @@ class FakeCore(
         def(SettingKeys.BATTERY_AUTO_ENGAGE, "true", SettingScope.DeviceLocal)
         def(SettingKeys.MEDIA_EXTERNAL_CONTROL, "false", SettingScope.DeviceLocal)
         def(SettingKeys.BATTERY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
-        def(SettingKeys.BATTERY_SMALL_ARTWORK, "true", SettingScope.DeviceLocal)
-        def(SettingKeys.BATTERY_PAUSE_PREFETCH, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_LEVEL, "\"off\"", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_AUTO_LEVEL, "\"medium\"", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_CUSTOM, Saver.customValue(Saver.preset(SaverLevel.Medium)), SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_ANIMATED_BACKGROUND, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_THEME, "\"system\"", SettingScope.DeviceLocal)
@@ -825,7 +828,7 @@ class FakeCore(
                 }
             }
             is Command.SetVisibility -> Unit
-            is Command.SetBatterySaver -> if (batterySaver != c.data.enabled) { batterySaver = c.data.enabled; emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(batterySaver))) }
+            is Command.SetPowerSave -> if (powerSave != c.data.enabled) { powerSave = c.data.enabled; refreshBatterySaver() }
 
             is Command.AddServer -> addServer(c.data)
             is Command.RemoveServer -> { servers.clear(); jobs.removeAll { it.kind == JobKind.LibrarySync }; emitJobs(); emit(Event.ServersChanged(EventServersChangedInner(emptyList()))) }
@@ -1441,6 +1444,20 @@ class FakeCore(
     }
 
     /** Like the core: unknown keys are refused (an Error event), known ones keep their registry scope. */
+    /** As the core: the level in force from the power-save state and the `battery.*` settings. */
+    private fun refreshBatterySaver() {
+        val saver = Saver.resolve(
+            Saver.parseLevel(settings[SettingKeys.BATTERY_LEVEL]?.value) ?: SaverLevel.Off,
+            Saver.parseLevel(settings[SettingKeys.BATTERY_AUTO_LEVEL]?.value) ?: SaverLevel.Medium,
+            settings[SettingKeys.BATTERY_AUTO_ENGAGE]?.value?.trim() != "false",
+            powerSave,
+            Saver.parseCustom(settings[SettingKeys.BATTERY_CUSTOM]?.value),
+        )
+        if (saver == batterySaver) return
+        batterySaver = saver
+        emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(saver)))
+    }
+
     private fun setSetting(key: String, value: String) {
         val existing = settings[key]
         if (existing == null) {
@@ -1449,6 +1466,7 @@ class FakeCore(
         }
         settings[key] = Setting(key, value, existing.scope, now())
         emit(Event.SettingChanged(EventSettingChangedInner(settings[key]!!)))
+        if (key.startsWith("battery.")) refreshBatterySaver()
         if (key == SettingKeys.QUEUE_SAVED_CAP) value.toIntOrNull()?.let { savedQueueCap = it }
         if (key == SettingKeys.QUEUE_SECTION) {
             queueSection = value.trim() != "false"

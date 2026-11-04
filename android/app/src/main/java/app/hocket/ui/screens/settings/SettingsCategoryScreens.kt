@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.settings
 
+import app.hocket.core.has
+import app.hocket.core.engaged
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -361,7 +363,7 @@ fun BatterySettingsScreen(nav: NavHostController) {
     val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
     val autoSaver = setting(SettingKeys.BATTERY_AUTO_ENGAGE)
     SubScreen(nav, stringResource(R.string.settings_section_battery)) {
-        SwitchRow(stringResource(R.string.settings_battery_saver), batterySaver, { client.dispatch(Commands.setBatterySaver(it)) }, stringResource(R.string.settings_battery_body), tag = "battery.saver")
+        SwitchRow(stringResource(R.string.settings_battery_saver), batterySaver.engaged, { client.dispatch(Commands.setSetting(app.hocket.core.SettingKeys.BATTERY_LEVEL, app.hocket.core.Saver.levelValue(if (it) app.hocket.core.api.SaverLevel.Medium else app.hocket.core.api.SaverLevel.Off))) }, stringResource(R.string.settings_battery_body), tag = "battery.saver")
         SwitchRow(stringResource(R.string.settings_battery_auto), autoSaver.bool ?: true, { autoSaver.setBool(it) }, scope = autoSaver.scope, tag = "battery.autoEngage")
     }
 }

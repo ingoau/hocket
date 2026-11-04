@@ -1,5 +1,7 @@
 package app.hocket.ui.components
 
+import app.hocket.core.has
+import app.hocket.core.engaged
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -64,7 +66,7 @@ fun Artwork(
     client: CoreClient = LocalCoreClient.current,
 ) {
     val batterySaver by client.batterySaver.collectAsStateWithLifecycleCompat()
-    val requested = if (batterySaver) smallerSize(size) else size
+    val requested = if (batterySaver.has(app.hocket.core.api.SaverFeature.SmallArtwork)) smallerSize(size) else size
     val cacheKey = coverArt?.let { ArtworkPathCache.key(it, requested) }
     // Unresolved (null: still asking the core) and resolved-to-nothing both show the id-seeded
     // gradient, so a shared-element remount never flashes an empty white card.

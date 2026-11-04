@@ -1,6 +1,10 @@
 package app.hocket.core.client
 
 import app.hocket.core.Commands
+import app.hocket.core.Saver
+import app.hocket.core.SettingKeys
+import app.hocket.core.engaged
+import app.hocket.core.has
 import app.hocket.core.api.*
 import app.hocket.core.fake.FakeCore
 import kotlinx.coroutines.Dispatchers
@@ -136,18 +140,25 @@ class CoreClientTest {
         runCurrent()
         client.requestSnapshot()
         runCurrent()
-        assertFalse(client.batterySaver.value)
-        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(true)))
-        assertTrue(client.batterySaver.value)
-        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(false)))
-        assertFalse(client.batterySaver.value)
-        // Through the core: each change is announced on its own.
-        client.dispatch(Commands.setBatterySaver(true))
+        assertFalse(client.batterySaver.value.engaged)
+        val max = Saver.resolve(SaverLevel.Max, SaverLevel.Medium, true, false, emptyList())
+        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(max)))
+        assertTrue(client.batterySaver.value.has(SaverFeature.SimpleLyrics))
+        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(Saver.OFF)))
+        assertFalse(client.batterySaver.value.engaged)
+        // Through the core: the system's power saver engages the automatic level (medium).
+        client.dispatch(Commands.setPowerSave(true))
         runCurrent()
-        assertTrue(client.batterySaver.value)
-        client.dispatch(Commands.setBatterySaver(false))
+        assertEquals(SaverLevel.Medium, client.batterySaver.value.level)
+        assertTrue(client.batterySaver.value.automatic)
+        // A stronger level chosen here holds over it.
+        client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(SaverLevel.Max)))
         runCurrent()
-        assertFalse(client.batterySaver.value)
+        assertEquals(SaverLevel.Max, client.batterySaver.value.level)
+        client.dispatch(Commands.setPowerSave(false))
+        client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(SaverLevel.Off)))
+        runCurrent()
+        assertFalse(client.batterySaver.value.engaged)
     }
 
     @Test

@@ -127,8 +127,9 @@ class CoreClient(
     val sleepTimer: StateFlow<SleepTimer?> = _sleepTimer.asStateFlow()
     private val _network = MutableStateFlow<NetworkState?>(null)
     val network: StateFlow<NetworkState?> = _network.asStateFlow()
-    private val _batterySaver = MutableStateFlow(false)
-    val batterySaver: StateFlow<Boolean> = _batterySaver.asStateFlow()
+    private val _batterySaver = MutableStateFlow(app.hocket.core.Saver.OFF)
+    /** Battery saver as engaged now; test a feature with [app.hocket.core.has]. */
+    val batterySaver: StateFlow<BatterySaver> = _batterySaver.asStateFlow()
     private val _syncProgress = MutableStateFlow<SyncProgress?>(null)
     val syncProgress: StateFlow<SyncProgress?> = _syncProgress.asStateFlow()
     private val _savedQueues = MutableStateFlow<List<SavedQueue>>(emptyList())
@@ -575,7 +576,7 @@ class CoreClient(
             is Event.ConnectionChanged -> _connection.value = event.data.state
             // The core announces every SetNetworkState change (and replays it on attach).
             is Event.NetworkChanged -> _network.value = event.data.network
-            is Event.BatterySaverChanged -> _batterySaver.value = event.data.enabled
+            is Event.BatterySaverChanged -> _batterySaver.value = event.data.saver
             is Event.DevicesChanged -> _devices.value = event.data.devices
             is Event.HandoffPickerChanged -> _handoff.value = HandoffPicker(event.data.open, event.data.targets)
             is Event.ResumeOfferChanged -> _resumeOffer.value = event.data.offer

@@ -158,7 +158,6 @@ class PlaybackService : MediaLibraryService() {
             is Event.Started -> applySnapshot(event.data.snapshot)
             is Event.Snapshot -> applySnapshot(event.data.snapshot)
             is Event.SettingChanged -> when (event.data.setting.key) {
-                SettingKeys.BATTERY_AUTO_ENGAGE -> battery.automatic = event.data.setting.value.trim() != "false"
                 SettingKeys.MEDIA_EXTERNAL_CONTROL -> bridge.setExternalControl(event.data.setting.value.trim() == "true")
             }
             else -> Unit
@@ -173,7 +172,6 @@ class PlaybackService : MediaLibraryService() {
         ConnectRoutes.onDevices(snapshot.devices)
         ConnectRoutes.onTransport(snapshot.transport)
         applySession(snapshot.mediaSession)
-        battery.automatic = snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
         bridge.setExternalControl(snapshot.settings.firstOrNull { it.key == SettingKeys.MEDIA_EXTERNAL_CONTROL }?.value?.trim() == "true")
     }
 
