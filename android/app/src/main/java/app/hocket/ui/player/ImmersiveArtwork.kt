@@ -3,6 +3,8 @@ package app.hocket.ui.player
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PointF
+import android.graphics.RuntimeShader
+import android.os.Build
 import android.media.FaceDetector
 import android.util.LruCache
 import androidx.compose.foundation.background
@@ -31,6 +33,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -212,15 +215,75 @@ internal fun soften(colors: List<Color>, radius: Int): List<Color> = colors.indi
     Color(span.map { it.red }.average().toFloat(), span.map { it.green }.average().toFloat(), span.map { it.blue }.average().toFloat())
 }
 
-/** Keeps the content only between [stops] (fractions of [unit] px from the top, with alphas). */
-private fun Modifier.verticalMask(unit: () -> Float, vararg stops: Pair<Float, Float>): Modifier = this
+/**
+ * Keeps the content only between [stops] (fractions of [unit] px from the top, with alphas), their
+ * edges wavy across the width ([WavyMask], at [phase]) rather than one straight line.
+ */
+private fun Modifier.verticalMask(unit: () -> Float, phase: Float, vararg stops: Pair<Float, Float>): Modifier = this
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-    .drawWithContent {
-        drawContent()
-        val u = unit().coerceAtLeast(1f)
-        val brush = Brush.verticalGradient(*stops.map { (y, a) -> (y * u / size.height).coerceIn(0f, 1f) to Color.Black.copy(alpha = a) }.toTypedArray(), startY = 0f, endY = size.height)
-        drawRect(brush, blendMode = BlendMode.DstIn)
+    .drawWithCache {
+        val mask = WavyMask()
+        onDrawWithContent {
+            drawContent()
+            val u = unit().coerceAtLeast(1f)
+            drawRect(mask.brush(size.width, u * WAVE, phase, stops.map { (y, a) -> y * u to a }), blendMode = BlendMode.DstIn)
+        }
     }
+
+/** How far a [WavyMask]'s edges dip, as a share of the artwork's side. */
+private const val WAVE = 0.07f
+
+/** A phase for [WavyMask] from the cover's [ArtworkEdge.baseColor]: each cover its own wave, the same every time. */
+private fun ArtworkEdge.wavePhase(): Float = ((baseColor.toLong() * 2654435761L).mod(10007L)) / 10007f * 60f
+
+/**
+ * A vertical alpha ramp through up to four stops (y in px, alpha), each column's ramp moved down
+ * by between 0 and `amp` px along a smooth wave across the width: a fade that runs on further in
+ * some places than others instead of ending along a ruler line. Moved down only, so nothing fades
+ * earlier than it did (whatever lies under the fade still covers it). With `pin` it goes the other
+ * way, inside the stops: the first stays put and the rest move up, by as much as `amp` at the last,
+ * so a fade that has to be done by an edge (the artwork's own, over its blurred copy) ends early
+ * in places. Needs Android 13; before it a straight gradient.
+ */
+private class WavyMask {
+    private val shader = if (Build.VERSION.SDK_INT >= 33) RuntimeShader(WAVY_MASK_SHADER) else null
+
+    fun brush(width: Float, amp: Float, phase: Float, stops: List<Pair<Float, Float>>, pin: Boolean = false): Brush {
+        val s = (stops + List((4 - stops.size).coerceAtLeast(0)) { stops.last() }).take(4)
+        val y0 = s.first().first
+        val y1 = s.last().first.coerceAtLeast(y0 + 1f)
+        if (Build.VERSION.SDK_INT < 33 || shader == null || amp <= 0f) {
+            return Brush.verticalGradient(*s.map { (y, a) -> ((y - y0) / (y1 - y0)).coerceIn(0f, 1f) to Color.Black.copy(alpha = a) }.toTypedArray(), startY = y0, endY = y1)
+        }
+        shader.setFloatUniform("ys", s[0].first, s[1].first, s[2].first, s[3].first)
+        shader.setFloatUniform("alphas", s[0].second, s[1].second, s[2].second, s[3].second)
+        shader.setFloatUniform("amp", amp)
+        shader.setFloatUniform("period", (width / 2.4f).coerceAtLeast(1f))
+        shader.setFloatUniform("phase", phase)
+        shader.setFloatUniform("pin", if (pin) 1f else 0f)
+        return ShaderBrush(shader)
+    }
+}
+
+private const val WAVY_MASK_SHADER = """
+uniform float4 ys;
+uniform float4 alphas;
+uniform float amp;
+uniform float period;
+uniform float phase;
+uniform float pin;
+half4 main(float2 p) {
+    float x = p.x / period + phase;
+    float w = 0.5 + 0.5 * (0.55 * sin(x) + 0.3 * sin(2.17 * x + 1.3) + 0.15 * sin(4.61 * x + 4.1));
+    float inside = clamp((p.y - ys.x) / max(ys.w - ys.x, 0.001), 0.0, 1.0);
+    float y = p.y + amp * w * mix(-1.0, inside, pin);
+    float a = alphas.x;
+    a = mix(a, alphas.y, clamp((y - ys.x) / max(ys.y - ys.x, 0.001), 0.0, 1.0));
+    a = mix(a, alphas.z, clamp((y - ys.y) / max(ys.z - ys.y, 0.001), 0.0, 1.0));
+    a = mix(a, alphas.w, clamp((y - ys.z) / max(ys.w - ys.z, 0.001), 0.0, 1.0));
+    return half4(0.0, 0.0, 0.0, half(a));
+}
+"""
 
 /**
  * One colour carried on: the artwork already ends in it, so no fade and no blur at the seam. The
@@ -304,10 +367,10 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
      * (fractions of the side from this box's top, with alphas).
      */
     @Composable
-    fun Reflected(blur: Dp, vararg stops: Pair<Float, Float>) = Box(
+    fun Reflected(blur: Dp, phase: Float, vararg stops: Pair<Float, Float>) = Box(
         Modifier
             .fillMaxSize()
-            .verticalMask(side, *stops)
+            .verticalMask(side, phase, *stops)
             .clipToBounds()
             .layout { m, c ->
                 val s = side().roundToInt().coerceAtLeast(1)
@@ -335,11 +398,12 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
         if (flat || edge.light) Box(Modifier.fillMaxSize().background(base))
         if (flat) Box(Modifier.fillMaxSize().background(grainBrush(edge.metrics.grain)))
         val f = FEATHER
+        val wave = edge.wavePhase()
         when {
             edge.style == ArtworkStyle.Mirror -> {
-                Reflected(far, 0f to 1f, f + 0.5f to 1f, f + 0.9f to 0f)
+                Reflected(far, wave + 11f, 0f to 1f, f + 0.5f to 1f, f + 0.9f to 0f)
                 // Only a thin band at the seam stays this sharp: the title sits right under the artwork.
-                Reflected(near, 0f to 1f, f + 0.03f to 1f, f + 0.1f to 0f)
+                Reflected(near, wave, 0f to 1f, f + 0.03f to 1f, f + 0.1f to 0f)
             }
             !flat -> {
                 // The edge's colours from the seam down, softening sideways with distance.
@@ -349,12 +413,12 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
                     layout(c.maxWidth, c.maxHeight) { p.place(0, top) }
                 }
                 Box(below) {
-                    Box(Modifier.fillMaxSize().verticalMask(side, 0f to 1f, 0.5f to 1f, 0.9f to 0f).background(Brush.horizontalGradient(soften(colors, 6))))
-                    Box(Modifier.fillMaxSize().verticalMask(side, 0f to 1f, 0.15f to 1f, 0.45f to 0f).background(Brush.horizontalGradient(soften(colors, 2))))
+                    Box(Modifier.fillMaxSize().verticalMask(side, wave + 3.1f, 0f to 1f, 0.5f to 1f, 0.9f to 0f).background(Brush.horizontalGradient(soften(colors, 6))))
+                    Box(Modifier.fillMaxSize().verticalMask(side, wave + 7.3f, 0f to 1f, 0.15f to 1f, 0.45f to 0f).background(Brush.horizontalGradient(soften(colors, 2))))
                 }
                 // Under the artwork's fading edge and just past the seam: the artwork blurred, then
                 // its short reflection, bridging into the colours.
-                Reflected(near, 0f to 1f, f to 1f, f + 0.1f to 0f)
+                Reflected(near, wave, 0f to 1f, f to 1f, f + 0.1f to 0f)
             }
         }
         // The scrim the controls need, already at full strength where they start (right at the
@@ -396,38 +460,46 @@ internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, e
     if (!bottom && !fadeTop) return this
     return this
         .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-        .drawWithContent {
-            drawContent()
-            val f = fraction().coerceIn(0f, 1f)
-            if (bottom && f > 0f) {
-                val from = size.height * (1f - bottomFeather)
-                drawRect(
-                    Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - f), startY = from, endY = size.height),
-                    topLeft = androidx.compose.ui.geometry.Offset(0f, from),
-                    size = size.copy(height = size.height - from),
-                    blendMode = BlendMode.DstIn,
-                )
-            }
-            // With [evenFlat], a flat edge's own short fade too, as much as [crispFraction]: the
-            // same edge the landed artwork has, while the continuation is still there.
-            val c = crispFraction().coerceIn(0f, 1f)
-            if (bottom && evenFlat && edge?.isFlat() == true && c > 0f) {
-                val from = size.height * (1f - CRISP_FEATHER)
-                drawRect(
-                    Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - c), startY = from, endY = size.height),
-                    topLeft = androidx.compose.ui.geometry.Offset(0f, from),
-                    size = size.copy(height = size.height - from),
-                    blendMode = BlendMode.DstIn,
-                )
-            }
-            val t = topFraction().coerceIn(0f, 1f)
-            if (fadeTop && t > 0f) {
-                val to = size.height * topFeather
-                drawRect(
-                    Brush.verticalGradient(0f to Color.Black.copy(alpha = 1f - t), 1f to Color.Black, startY = 0f, endY = to),
-                    size = size.copy(height = to),
-                    blendMode = BlendMode.DstIn,
-                )
+        .drawWithCache {
+            val mask = WavyMask()
+            // Onto a blurred copy the fade's end is wavy, like the continuation's bands; onto a
+            // flat colour it stays straight.
+            val wavy = edge != null && !edge.isFlat()
+            val phase = edge?.wavePhase()?.plus(5f) ?: 0f
+            onDrawWithContent {
+                drawContent()
+                val f = fraction().coerceIn(0f, 1f)
+                if (bottom && f > 0f) {
+                    val from = size.height * (1f - bottomFeather)
+                    val amp = if (wavy) size.width * bottomFeather * 0.6f else 0f
+                    drawRect(
+                        mask.brush(size.width, amp, phase, listOf(from to 1f, size.height to 1f - f), pin = true),
+                        topLeft = androidx.compose.ui.geometry.Offset(0f, from),
+                        size = size.copy(height = size.height - from),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                // With [evenFlat], a flat edge's own short fade too, as much as [crispFraction]: the
+                // same edge the landed artwork has, while the continuation is still there.
+                val c = crispFraction().coerceIn(0f, 1f)
+                if (bottom && evenFlat && edge?.isFlat() == true && c > 0f) {
+                    val from = size.height * (1f - CRISP_FEATHER)
+                    drawRect(
+                        Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - c), startY = from, endY = size.height),
+                        topLeft = androidx.compose.ui.geometry.Offset(0f, from),
+                        size = size.copy(height = size.height - from),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                val t = topFraction().coerceIn(0f, 1f)
+                if (fadeTop && t > 0f) {
+                    val to = size.height * topFeather
+                    drawRect(
+                        Brush.verticalGradient(0f to Color.Black.copy(alpha = 1f - t), 1f to Color.Black, startY = 0f, endY = to),
+                        size = size.copy(height = to),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
             }
         }
 }
