@@ -219,14 +219,14 @@ internal fun soften(colors: List<Color>, radius: Int): List<Color> = colors.indi
  * Keeps the content only between [stops] (fractions of [unit] px from the top, with alphas), their
  * edges wavy across the width ([WavyMask], at [phase]) rather than one straight line.
  */
-private fun Modifier.verticalMask(unit: () -> Float, phase: Float, vararg stops: Pair<Float, Float>): Modifier = this
+private fun Modifier.verticalMask(unit: () -> Float, phase: Float, vararg stops: Pair<Float, Float>, waveAmp: Float = WAVE): Modifier = this
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
     .drawWithCache {
         val mask = WavyMask()
         onDrawWithContent {
             drawContent()
             val u = unit().coerceAtLeast(1f)
-            drawRect(mask.brush(size.width, u * WAVE, phase, stops.map { (y, a) -> y * u to a }), blendMode = BlendMode.DstIn)
+            drawRect(mask.brush(size.width, u * waveAmp, phase, stops.map { (y, a) -> y * u to a }), blendMode = BlendMode.DstIn)
         }
     }
 
@@ -241,27 +241,29 @@ private fun ArtworkEdge.wavePhase(): Float = ((baseColor.toLong() * 2654435761L)
  * by between 0 and `amp` px along a smooth wave across the width: a fade that runs on further in
  * some places than others instead of ending along a ruler line. Moved down only, so nothing fades
  * earlier than it did (whatever lies under the fade still covers it). With `pin` it goes the other
- * way, inside the stops: the first stays put and the rest move up, by as much as `amp` at the last,
- * so a fade that has to be done by an edge (the artwork's own, over its blurred copy) ends early
- * in places. Needs Android 13; before it a straight gradient.
+ * way, inside the stops: the first stays put and the rest move up, more the further down (the
+ * last by up to about `amp × span / (span + amp)`), so a fade that has to be done by an edge (the
+ * artwork's own, over its blurred copy) ends early in places. Needs Android 13; before it a straight gradient.
  */
 private class WavyMask {
-    private val shader = if (Build.VERSION.SDK_INT >= 33) RuntimeShader(WAVY_MASK_SHADER) else null
+    /** Compiled on first use: not at all where a mask stays straight. */
+    private val shader by lazy(LazyThreadSafetyMode.NONE) { if (Build.VERSION.SDK_INT >= 33) RuntimeShader(WAVY_MASK_SHADER) else null }
 
     fun brush(width: Float, amp: Float, phase: Float, stops: List<Pair<Float, Float>>, pin: Boolean = false): Brush {
         val s = (stops + List((4 - stops.size).coerceAtLeast(0)) { stops.last() }).take(4)
         val y0 = s.first().first
         val y1 = s.last().first.coerceAtLeast(y0 + 1f)
-        if (Build.VERSION.SDK_INT < 33 || shader == null || amp <= 0f) {
+        val rs = if (amp > 0f) shader else null
+        if (Build.VERSION.SDK_INT < 33 || rs == null) {
             return Brush.verticalGradient(*s.map { (y, a) -> ((y - y0) / (y1 - y0)).coerceIn(0f, 1f) to Color.Black.copy(alpha = a) }.toTypedArray(), startY = y0, endY = y1)
         }
-        shader.setFloatUniform("ys", s[0].first, s[1].first, s[2].first, s[3].first)
-        shader.setFloatUniform("alphas", s[0].second, s[1].second, s[2].second, s[3].second)
-        shader.setFloatUniform("amp", amp)
-        shader.setFloatUniform("period", (width / 2.4f).coerceAtLeast(1f))
-        shader.setFloatUniform("phase", phase)
-        shader.setFloatUniform("pin", if (pin) 1f else 0f)
-        return ShaderBrush(shader)
+        rs.setFloatUniform("ys", s[0].first, s[1].first, s[2].first, s[3].first)
+        rs.setFloatUniform("alphas", s[0].second, s[1].second, s[2].second, s[3].second)
+        rs.setFloatUniform("amp", amp)
+        rs.setFloatUniform("period", (width / 2.4f).coerceAtLeast(1f))
+        rs.setFloatUniform("phase", phase)
+        rs.setFloatUniform("pin", if (pin) 1f else 0f)
+        return ShaderBrush(rs)
     }
 }
 
@@ -367,10 +369,10 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
      * (fractions of the side from this box's top, with alphas).
      */
     @Composable
-    fun Reflected(blur: Dp, phase: Float, vararg stops: Pair<Float, Float>) = Box(
+    fun Reflected(blur: Dp, phase: Float, vararg stops: Pair<Float, Float>, waveAmp: Float = WAVE) = Box(
         Modifier
             .fillMaxSize()
-            .verticalMask(side, phase, *stops)
+            .verticalMask(side, phase, *stops, waveAmp = waveAmp)
             .clipToBounds()
             .layout { m, c ->
                 val s = side().roundToInt().coerceAtLeast(1)
@@ -403,7 +405,7 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
             edge.style == ArtworkStyle.Mirror -> {
                 Reflected(far, wave + 11f, 0f to 1f, f + 0.5f to 1f, f + 0.9f to 0f)
                 // Only a thin band at the seam stays this sharp: the title sits right under the artwork.
-                Reflected(near, wave, 0f to 1f, f + 0.03f to 1f, f + 0.1f to 0f)
+                Reflected(near, wave, 0f to 1f, f + 0.03f to 1f, f + 0.1f to 0f, waveAmp = WAVE * 0.4f)
             }
             !flat -> {
                 // The edge's colours from the seam down, softening sideways with distance.
