@@ -284,6 +284,22 @@ fn version_one_orders_gain_the_library() {
 }
 
 #[test]
+fn one_song_is_not_offered_shuffle() {
+    let r = ActionRegistry::new(Platform::Linux);
+    let s = state();
+    let offered = |t: &ActionTarget| {
+        r.actions_for(Surface::ContextMenu, t, &s)
+            .iter()
+            .any(|d| d.id == "playShuffled")
+    };
+    assert!(!offered(&tracks(&["a"])));
+    assert!(offered(&tracks(&["a", "b"])));
+    assert!(offered(&ActionTarget::Albums {
+        ids: vec!["x".into()]
+    }));
+}
+
+#[test]
 fn surfaces_filter_and_order() {
     let mut r = ActionRegistry::new(Platform::Linux);
     let s = state();
