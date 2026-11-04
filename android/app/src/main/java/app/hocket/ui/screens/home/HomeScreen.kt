@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.key
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialExpressiveTheme
@@ -79,7 +80,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -217,10 +217,13 @@ fun HomeScreen(nav: NavHostController) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val songMenu = rememberSongMenu()
-    val scroll = TopAppBarDefaults.pinnedScrollBehavior()
+    // Read from the list itself (not a scroll behaviour's nested-scroll offset), so a programmatic
+    // scroll back to the top (reselecting Home) clears it too. The bar never moves.
+    val listState = rememberLazyListState()
+    val scrolled by remember(listState) { derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 } }
     // Over the cover (Spotlight first, the page not scrolled under the bar) the bar's mark, icons
     // and the status bar take the ink that reads on the top of the slide in view.
-    val overArt = heroFirst && scroll.state.overlappedFraction < 0.01f
+    val overArt = heroFirst && !scrolled
     val topLight = slideInks.getOrNull(pager.currentPage)?.let { it == Brand.inkOnLight } ?: !dark
     val barInk = slideInks.getOrNull(pager.currentPage) ?: Brand.inkOnDark
     // The mark takes each slide's ink where that slide is behind it: split at the edge between the
@@ -257,7 +260,7 @@ fun HomeScreen(nav: NavHostController) {
     CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
     val refresh = rememberSyncRefresh()
     Scaffold(
-        modifier = Modifier.syncRefresh(refresh).nestedScroll(scroll.nestedScrollConnection).testTag("home.screen"),
+        modifier = Modifier.syncRefresh(refresh).testTag("home.screen"),
         // The app's mark as the title, level with the actions; the server is in the account sheet (#29).
         // Clear over Spotlight's artwork. Once the page scrolls under it, a scrim in the page's surface
         // colour fades in behind it, solid at the top and easing out below the bar, not a solid block.
@@ -268,7 +271,6 @@ fun HomeScreen(nav: NavHostController) {
             } else {
                 TopAppBarDefaults.topAppBarColors(containerColor = clear, scrolledContainerColor = clear)
             }
-            val scrolled = scroll.state.overlappedFraction > 0.01f
             val scrimAlpha by animateFloatAsState(if (scrolled) 1f else 0f, MaterialTheme.motionScheme.defaultEffectsSpec(), label = "homeBarScrim")
             val scrimColor = MaterialTheme.colorScheme.surface
             Box(Modifier.drawWithCache {
@@ -281,18 +283,17 @@ fun HomeScreen(nav: NavHostController) {
                 IconButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise")) { Icon(HocketIcons.Filled.Tune, stringResource(R.string.home_customise)) }
                 JobsIndicator(onClick = { jobs = true })
                 AccountButton()
-            }, scrollBehavior = scroll)
+            })
             }
         },
         snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = app.hocket.ui.nav.BottomOverlayInset)) },
     ) { padding ->
         // Nothing until the reveal says so, even a feed that's in (the skeleton's minimum, the entrance).
         val loaded = if (reveal.phase == RevealPhase.Shown) feed ?: partial else null
-        val listState = rememberLazyListState()
         ScrollToTopOnReselect(listState)
         ShimmerHost {
             SyncRefreshBox(refresh, topInset = padding.calculateTopPadding()) {
-                LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = if (heroFirst) 0.dp else padding.calculateTopPadding(), bottom = BottomContentInset)) {
+                LazyColumn(Modifier.fillMaxSize().testTag("home.list"), state = listState, contentPadding = PaddingValues(top = if (heroFirst) 0.dp else padding.calculateTopPadding(), bottom = BottomContentInset)) {
                     // Nothing yet: blank at first (most loads land before a skeleton would be worth showing).
                     if (reveal.phase == RevealPhase.Waiting) return@LazyColumn
                     if (loaded == null) {

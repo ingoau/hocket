@@ -14,9 +14,9 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
@@ -82,8 +82,8 @@ class HomeLibraryScreenshotTest {
             compose.onNodeWithTag("home.screen").performTouchInput { swipeUp(startY = centerY + 400f, endY = top + 200f) }
             settle()
             shot(dir, "$prefix-01b-home-scrolled")
-            compose.onNodeWithTag("home.screen").performTouchInput { swipeDown(startY = top + 400f, endY = bottom - 300f) }
-            compose.onNodeWithTag("home.screen").performTouchInput { swipeDown(startY = top + 400f, endY = bottom - 300f) }
+            // Back to the top without a swipe, which would overshoot into pull-to-refresh.
+            compose.onNodeWithTag("home.list").performScrollToIndex(0)
             settle()
         }
 
