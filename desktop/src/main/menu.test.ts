@@ -16,10 +16,10 @@ describe("macOS app menu", () => {
   // R-20261104-9ay9: Cmd+A did nothing in text fields because macOS only
   // performs editing keys that an Edit menu item claims.
   it("gives text fields every standard editing key", () => {
-    expect(roles("Edit")).toEqual(expect.arrayContaining(["undo", "redo", "cut", "copy", "paste", "selectAll"]));
+    expect(roles("Edit")).toEqual(expect.arrayContaining(["undo", "redo", "cut", "copy", "paste", "delete", "selectAll"]));
   });
 
-  it("binds no custom accelerator that would shadow a renderer shortcut", () => {
+  it("adds no accelerators beyond Settings and Quit", () => {
     const accels = appMenuTemplate(noop)
       .flatMap((m) => (m.submenu ?? []) as MenuItemConstructorOptions[])
       .flatMap((i) => (i.accelerator ? [String(i.accelerator)] : []));
