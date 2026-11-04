@@ -979,7 +979,9 @@ class FakeCore(
                 if (back.isNotEmpty()) emitStash()
             }
             is Command.Snooze -> applySnooze(c.data.track_ids, untilFor(c.data.duration), false)
-            is Command.SnoozeUntil -> applySnooze(c.data.track_ids, c.data.until, false)
+            is Command.SnoozeUntil ->
+                if (c.data.until <= now()) toast("Pick a time in the future to snooze until")
+                else applySnooze(c.data.track_ids, c.data.until, false)
             is Command.Unsnooze -> applySnooze(c.data.track_ids, null, true)
 
             Command.Undo -> undo()
