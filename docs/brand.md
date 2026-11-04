@@ -27,6 +27,7 @@ Where it lives (the geometry is the same in each, and changes go to all of them)
 - `desktop/scripts/gen-app-icons.mjs` — renders `icon.icon`'s note layers, the Windows `.ico` and the Linux PNGs; the output is committed.
 - `desktop/src/main/brand.ts` — rasterised at runtime for the tray and the dev-build dock icon.
 - `android/app/src/main/res/drawable/ic_launcher_foreground.xml` — the adaptive icon's foreground and monochrome layer.
+- `android/app/src/main/res/drawable/splash_icon_animated.xml` — the Android splash screen (API 31+): the same mark drawn in note by note as it swells to size. It copies the foreground's geometry.
 - `desktop/src/renderer/components/BrandMark.tsx` and `android/app/src/main/java/app/hocket/ui/brand/Wordmark.kt` — the bare wave, cropped to x 10–90, y 28.4–71.6, for the lockups.
 
 
@@ -78,7 +79,7 @@ The app's name as a page header, inside the app: the bare wave (no tile), then t
 
 Where it's used:
 
-- **Android Home** — the top bar's title (`HeaderLockup` in `android/app/src/main/java/app/hocket/ui/brand/Wordmark.kt`, used by `ui/screens/home/HomeScreen.kt`), at the collapsing bar's title size.
+- **Android Home** — the wave alone, no word mark (`HeaderMark` in `android/app/src/main/java/app/hocket/ui/brand/Wordmark.kt`, used by `ui/screens/home/HomeScreen.kt`), 22 dp tall in the single-row top bar, level with its actions; named *Hocket*. Over Spotlight it takes each slide's ink where that slide is behind it, split at the edge between slides, so a swipe wipes across it. The exception to "one-colour wave only beside the word mark": on a light cover it's in `#1B1730`.
 - **Desktop Home** — the page header (`h1.brand-lockup` in `desktop/src/renderer/views/Home.tsx`, the wave from `components/BrandMark.tsx`, styles in `styles/m3-pages.css`), at the Library title's size.
 - **Desktop first-run setup** — the hero (`.setup .brand` in `desktop/src/renderer/views/Setup.tsx` and `m3-pages.css`), the same lockup at hero size, above the setup heading.
 - **Android lyrics share card** — the footer (`Lockup` in `Wordmark.kt`) sets the bare wave and `hocket` in `#ECE9FF` alone, one colour, on the card's dark ground.

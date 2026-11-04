@@ -55,10 +55,20 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0006_artist_sort_index",
         include_str!("migrations/0006_artist_sort_index.sql"),
     ),
+    (
+        7,
+        "0007_album_release_types",
+        include_str!("migrations/0007_album_release_types.sql"),
+    ),
+    (
+        8,
+        "0008_lyrics_search",
+        include_str!("migrations/0008_lyrics_search.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -71,6 +81,7 @@ pub const MIRROR_TABLES: &[&str] = &[
     "capabilities",
     "image_cache",
     "lyrics_cache",
+    "lyrics_search",
     "metadata_cache",
     "cache_entries",
 ];
@@ -153,6 +164,20 @@ impl std::fmt::Debug for Db {
     }
 }
 
+/// Bring the lyric search index in line with the cache in one transaction. The
+/// index only serves search, so a failure is logged and the core still starts;
+/// the next open tries again.
+fn sync_lyrics_index_on_open(conn: &mut Connection) {
+    let result = conn.transaction().map_err(DbError::from).and_then(|tx| {
+        queries::sync_lyrics_index(&tx)?;
+        tx.commit()?;
+        Ok(())
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "could not update the lyrics search index");
+    }
+}
+
 impl Db {
     /// Open (creating if needed) the database at `path`, applying migrations.
     /// `backup_dir` receives a copy of the file before a migration when the
@@ -161,7 +186,7 @@ impl Db {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open_with_flags(
+        let mut conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
@@ -169,14 +194,16 @@ impl Db {
         )?;
         configure(&conn)?;
         let report = migrate(&conn, Some(path), Some(backup_dir))?;
+        sync_lyrics_index_on_open(&mut conn);
         Ok(Self::wrap(conn, Some(path.to_path_buf()), report))
     }
 
     /// An in-memory database (tests).
     pub fn open_in_memory() -> DbResult<Db> {
-        let conn = Connection::open_in_memory()?;
+        let mut conn = Connection::open_in_memory()?;
         configure(&conn)?;
         let report = migrate(&conn, None, None)?;
+        sync_lyrics_index_on_open(&mut conn);
         Ok(Self::wrap(conn, None, report))
     }
 
@@ -486,6 +513,7 @@ mod tests {
             assert!(tables.contains(&t.to_string()), "missing {t}");
         }
         assert!(tables.contains(&"tracks_fts".to_string()));
+        assert!(tables.contains(&"lyrics_search_fts".to_string()));
     }
 
     #[test]
@@ -554,6 +582,7 @@ mod tests {
                 c.execute_batch(
                     "DROP INDEX idx_play_history_play;
                      ALTER TABLE tracks DROP COLUMN artists;
+                     ALTER TABLE albums DROP COLUMN release_types;
                      DELETE FROM schema_version WHERE version >= 4;
                      INSERT INTO tracks(id, server_id, title, local_play_count) VALUES ('t', 's', 'T', 3), ('u', 's', 'U', 1);
                      INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES
@@ -615,6 +644,7 @@ mod tests {
             db.with_conn(|c| {
                 c.execute_batch(
                     "ALTER TABLE tracks DROP COLUMN artists;
+                     ALTER TABLE albums DROP COLUMN release_types;
                      DELETE FROM schema_version WHERE version >= 5;
                      INSERT INTO tracks(id, server_id, title, artist_id, artist) VALUES ('t', 's', 'T', 'ar1', 'A feat. B');
                      INSERT INTO saved_state VALUES ('sync:s', '{\"gen\":3,\"phase\":\"done\",\"lastFullAt\":1790000000000.0,\"readyTables\":[\"tracks\"]}', 0);

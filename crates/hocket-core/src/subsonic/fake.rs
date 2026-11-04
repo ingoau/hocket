@@ -692,6 +692,19 @@ impl SubsonicApi for FakeServer {
         })
     }
 
+    fn create_share(&self, ids: &[String]) -> ApiFuture<'_, String> {
+        let ids = ids.to_vec();
+        Box::pin(async move {
+            self.gate("createShare")?;
+            if ids.is_empty() {
+                return Err(SubsonicError::Protocol("createShare needs an id".into()));
+            }
+            let mut st = self.state.lock();
+            st.next_id += 1;
+            Ok(format!("https://navidrome.example/share/{}", st.next_id))
+        })
+    }
+
     fn search3(&self, query: &str, page: Search3Page) -> ApiFuture<'_, SearchResult3> {
         let query = query.to_lowercase();
         Box::pin(async move {
@@ -770,6 +783,18 @@ impl SubsonicApi for FakeServer {
                 .take(count as usize)
                 .cloned()
                 .collect())
+        })
+    }
+
+    fn album_info2(&self, id: &str) -> ApiFuture<'_, AlbumInfo> {
+        let id = id.to_string();
+        Box::pin(async move {
+            self.gate("getAlbumInfo2")?;
+            let st = self.state.lock();
+            Ok(AlbumInfo {
+                notes: st.albums.get(&id).map(|a| format!("About {}", a.name)),
+                ..Default::default()
+            })
         })
     }
 

@@ -2,8 +2,11 @@
 // from a playlist, ticking and unticking playlists, a playlist holding the song twice (×2, Remove
 // one), adding another copy, searching and creating a playlist from the search; and the menu for
 // several songs (mixed Love, counts, rating them all), each change with a toast and Undo.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, openPlace, test } from "./fixtures";
+import { completeSetup, expect, launchFake, openPlace, test } from "./fixtures";
 
 /** Opens a playlist from the Playlists page by name. */
 async function openPlaylist(page: Page, name: string): Promise<void> {
@@ -25,13 +28,27 @@ test.describe("context menu", () => {
     const menu = page.getByTestId("context-menu");
     await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
     await expect(menu).toBeVisible();
-    // The play strip: icon-only, named by tooltip and label.
-    for (const name of ["Play", "Shuffle", "Play next", "Play later"]) {
+    // The play strip: icon-only, named by tooltip and label. One song gets no Shuffle.
+    await expect(menu.getByRole("menuitem", { name: "Shuffle", exact: true })).toHaveCount(0);
+    for (const name of ["Play", "Play next", "Play later"]) {
       await expect(menu.getByRole("menuitem", { name, exact: true })).toHaveAttribute("title", name);
     }
     await expect(menu.getByRole("group", { name: "Rating" }).getByRole("menuitemradio")).toHaveCount(5);
     await expect(menu.getByRole("menuitemcheckbox", { name: /Love/ })).toHaveAttribute("aria-checked", "false");
     await expect(menu.locator('[data-action="removeFromPlaylist"]')).toHaveText(/^Remove from Slow SundaysDel$/);
+
+    await expect(menu.getByRole("menuitem", { name: "Open in Genius" })).toBeVisible();
+    // Share opens beside the menu: Navidrome, Squigly and the file.
+    await menu.locator('[data-action="share"]').hover();
+    const share = page.getByTestId("share-submenu");
+    await expect(share.getByRole("menuitem", { name: "Navidrome" })).toBeVisible();
+    await expect(share.getByRole("menuitem", { name: "Squigly" })).toBeVisible();
+    await expect(share.getByRole("menuitem", { name: "File" })).toBeVisible();
+    await expect(share.getByRole("menuitem", { name: "Open in Genius" })).toHaveCount(0);
+    await share.getByRole("menuitem", { name: "Navidrome" }).click();
+    await expect(page.getByTestId("toast").filter({ hasText: "Link copied" })).toBeVisible();
+    await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+    await expect(menu).toBeVisible();
 
     // Hovering Add to playlist opens the submenu, its search focused.
     await menu.locator('[data-action="addToPlaylist"]').hover();
@@ -173,6 +190,37 @@ test.describe("context menu", () => {
     await page.keyboard.press("Escape");
   });
 
+  test("hold right, drag onto an item and release to run it", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await openPlaylist(page, "Slow Sundays");
+    const menu = page.getByTestId("context-menu");
+    const box = (await page.getByTestId("track-row").first().boundingBox())!;
+    const at = { x: box.x + onTitle.x, y: box.y + onTitle.y };
+    // Pressed and released in place: the menu stays open for a click.
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down({ button: "right" });
+    await expect(menu).toBeVisible();
+    await page.mouse.up({ button: "right" });
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    // Held and dragged onto Love: releasing there loves the song and closes the menu.
+    await page.mouse.down({ button: "right" });
+    await expect(menu).toBeVisible();
+    const love = menu.getByRole("menuitemcheckbox", { name: /Love/ });
+    await expect(love).toHaveAttribute("aria-checked", "false");
+    // (Once its entrance has played: it opens scaled.)
+    await page.waitForTimeout(400);
+    const l = (await love.boundingBox())!;
+    await page.mouse.move(l.x + l.width / 2, l.y + l.height / 2, { steps: 5 });
+    await page.mouse.up({ button: "right" });
+    await expect(menu).toHaveCount(0);
+    await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+    await expect(love).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+  });
+
   test("an album's menu has Album info; the app's own menus keep their icons", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
@@ -234,5 +282,26 @@ test.describe("context menu", () => {
     await page.keyboard.press("Escape");
     await expect(picker).toHaveCount(0);
     await expect(np).toBeFocused();
+  });
+
+  test("a slow share link shows a spinner toast until it is copied", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-share-"));
+    const { app, page } = await launchFake(userData, { HOCKET_FAKE_SHARE_DELAY_MS: "1500" });
+    try {
+      await completeSetup(page);
+      await openPlaylist(page, "Slow Sundays");
+      await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+      await page.getByTestId("context-menu").locator('[data-action="share"]').hover();
+      await page.getByTestId("share-submenu").getByRole("menuitem", { name: "Squigly" }).click();
+      const busy = page.getByTestId("toast").filter({ hasText: "Getting link…" });
+      await expect(busy.locator(".spin")).toBeVisible();
+      if (process.env.HOCKET_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HOCKET_SCREENSHOT_DIR, "desktop-share-busy.png") });
+      await expect(page.getByTestId("toast").filter({ hasText: "Link copied" })).toBeVisible();
+      await expect(busy).toHaveCount(0);
+      if (process.env.HOCKET_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HOCKET_SCREENSHOT_DIR, "desktop-share-copied.png") });
+    } finally {
+      await app.close();
+      rmSync(userData, { recursive: true, force: true });
+    }
   });
 });

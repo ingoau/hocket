@@ -10,9 +10,9 @@ pub struct SettingText {
 }
 
 pub const TEXTS: &[SettingText] = &[
-    t("queue.mode", "Queue mode", "How Play Next behaves: a separate Playing Next list (Apple) or spliced into the context after the current track (YouTube)."),
-    t("queue.savedCap", "Saved queues to keep", "How many unpinned recent queues are kept. Zero keeps only pinned queues."),
-    t("queue.historyCap", "Playback history length", "How many played items stay reachable with Previous."),
+    t("queue.section", "Queue section", "Show the \"Next in queue\" group and the Add to queue action. Off, Play next puts songs straight after the current one."),
+    t("queue.savedCap", "Saved queues to keep", "How many unpinned recent queues are shown. Zero shows only pinned queues."),
+    t("playback.resumeAlbums", "Resume albums", "Offer to continue an album you started from the album and didn't finish, at the track and moment you left it. Off, Play always starts at the beginning. Turning it back on brings back albums left in the last 30 days."),
     t("autoplay.settings", "Autoplay", "Provider order, seed window, sonic similarity threshold, exclusion window and optional saved filter."),
     t("autoplay.contextOverrides", "Autoplay per-context order", "Provider order overrides for album and artist contexts."),
     t("audio.settings", "Audio", "ReplayGain, equaliser, normalisation, gapless playback, output device and exclusive mode for this device."),
@@ -34,6 +34,8 @@ pub const TEXTS: &[SettingText] = &[
     t("display.accent", "Accent colour", "Accent colour as a hex value, or empty for the default."),
     t("display.dynamicColour", "Dynamic colour", "Derive the accent from the current artwork."),
     t("display.playerRating", "Rating in the player", "Show the star rating under the song in the player. Off leaves it in the song's menu and details."),
+    t("display.albumTrackArtists", "Artists on album tracks", "Name the artist on every track of an album. Off names it only where it isn't the album's artist."),
+    t("display.floatingNavBar", "Floating navigation bar", "Show the navigation bar as a compact pill floating over the page. Off uses the standard bar along the bottom of the screen."),
     t("display.immersiveArtwork", "Immersive artwork", "Run the artwork edge to edge, carried on below it by a reflection or by its own colours, except close-up photos of people and busy covers, which sit as a card on their own colours."),
     t("display.queuePanelSplit", "Queue / lyrics split", "Position of the divider between the queue and lyrics panels."),
     t("actions.order.contextMenu", "Context menu items", "Which actions appear in context menus, and in what order."),
@@ -62,6 +64,7 @@ pub const TEXTS: &[SettingText] = &[
     t("swipe.queue.endToStart", "Queue: swipe left", "What swiping a queue item towards the start of the line does (left in left-to-right languages)."),
     t("swipe.list.startToEnd", "Song lists: swipe right", "What swiping a song in an album, playlist, search results or the library does, towards the end of the line."),
     t("swipe.list.endToStart", "Song lists: swipe left", "What swiping a song in an album, playlist, search results or the library does, towards the start of the line."),
+    t("swipe.playerUp", "Player: swipe up", "What swiping up on the player's artwork opens: the queue, the lyrics, the devices to play on or the song's menu."),
     t("shortcuts", "Keyboard shortcuts", "Custom key bindings for this device."),
     t("developer.mode", "Developer mode", "Keep detailed logs, and open developer diagnostics when you shake the phone or press Ctrl+Shift+D."),
     t("sync.enabled", "Sync settings between devices", "Send account-level settings through the coordinator and accept them from other devices."),

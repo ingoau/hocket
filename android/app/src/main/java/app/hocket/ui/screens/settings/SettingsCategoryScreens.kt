@@ -55,11 +55,10 @@ import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueryResult
-import app.hocket.core.api.QueueMode
 import app.hocket.playback.CoreHost
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ConfirmDialog
-import app.hocket.ui.components.formatAgo
+import app.hocket.ui.components.formatAgoPhrase
 import app.hocket.ui.components.formatBytes
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.Route
@@ -89,7 +88,7 @@ fun AccountSettingsScreen(nav: NavHostController) {
     SubScreen(nav, stringResource(R.string.settings_category_account)) {
         // The server login is kept on this device only (the keystore); the sync switch has its registry scope.
         server?.let { s ->
-            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = "server.info")
+            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgoPhrase(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = "server.info")
             SettingRow(stringResource(R.string.settings_sync_now), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = false)) }, tag = "server.syncNow")
             SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) }, tag = "server.fullSync")
         }
@@ -133,6 +132,10 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
         ChoiceRow(immersiveOptions, isSelected = { (immersive.string ?: "automatic") == it }, onSelect = { immersive.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
         val playerRating = setting(SettingKeys.DISPLAY_PLAYER_RATING)
         SwitchRow(stringResource(R.string.settings_player_rating), playerRating.bool ?: true, { playerRating.setBool(it) }, stringResource(R.string.settings_player_rating_body), playerRating.scope, tag = "display.playerRating")
+        val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR)
+        SwitchRow(stringResource(R.string.settings_floating_nav_bar), floatingBar.bool ?: true, { floatingBar.setBool(it) }, stringResource(R.string.settings_floating_nav_bar_body), floatingBar.scope, tag = "display.floatingNavBar")
+        val albumArtists = setting(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS)
+        SwitchRow(stringResource(R.string.settings_album_track_artists), albumArtists.bool ?: false, { albumArtists.setBool(it) }, stringResource(R.string.settings_album_track_artists_body), albumArtists.scope, tag = "display.albumTrackArtists")
     }
 }
 
@@ -175,7 +178,7 @@ private fun AccentChoices(dynamicLabel: String, swatches: List<Pair<String, Stri
 }
 
 /**
- * Playback & queue: queue mode, how many recent queues to keep, autoplay, sleep-timer defaults, and
+ * Playback & queue: the Queue section, how many recent queues to keep, autoplay, sleep-timer defaults, and
  * whether other apps (media browsers, Android Auto) may browse and control playback.
  */
 @Composable
@@ -183,16 +186,13 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val queue by client.queue.collectAsStateWithLifecycle()
     val savedCap = setting(SettingKeys.QUEUE_SAVED_CAP)
-    val mode = setting(SettingKeys.QUEUE_MODE)
+    val section = setting(SettingKeys.QUEUE_SECTION)
     val sleepMinutes = setting(SettingKeys.SLEEP_DEFAULT_MINUTES)
     val sleepEnd = setting(SettingKeys.SLEEP_STOP_AT_END_OF_TRACK)
     val externalControl = setting(SettingKeys.MEDIA_EXTERNAL_CONTROL)
     SubScreen(nav, stringResource(R.string.settings_category_playback)) {
-        val current = queue.mode
-        val appleLabel = stringResource(R.string.queue_mode_apple)
-        val youTubeLabel = stringResource(R.string.queue_mode_youtube)
-        SettingRow(stringResource(R.string.queue_mode), scope = mode.scope, tag = "queue.mode")
-        ChoiceRow(listOf(QueueMode.Apple to appleLabel, QueueMode.YouTube to youTubeLabel), isSelected = { current == it }, onSelect = { client.dispatch(Commands.setQueueMode(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+        SwitchRow(stringResource(R.string.settings_queue_section), section.bool ?: true, { section.setBool(it) },
+            subtitle = stringResource(R.string.settings_queue_section_desc), scope = section.scope, tag = "queue.section")
         val cap = savedCap.int ?: 10
         var dragging by remember(cap) { mutableFloatStateOf(cap.toFloat()) }
         val shown = dragging.roundToInt()
@@ -207,6 +207,9 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
             modifier = Modifier.padding(horizontal = 16.dp).testTag("queue.savedCap.slider"),
         )
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")
+        val resumeAlbums = setting(SettingKeys.PLAYBACK_RESUME_ALBUMS)
+        SwitchRow(stringResource(R.string.settings_resume_albums), resumeAlbums.bool ?: true, { resumeAlbums.setBool(it) },
+            subtitle = stringResource(R.string.settings_resume_albums_body), scope = resumeAlbums.scope, tag = "playback.resumeAlbums")
         val minutes = sleepMinutes.int ?: 30
         SettingRow(stringResource(R.string.settings_sleep_default), stringResource(R.string.sleep_minutes, minutes), sleepMinutes.scope, tag = "sleep.defaultMinutes")
         val minuteResources = androidx.compose.ui.platform.LocalResources.current
@@ -240,7 +243,7 @@ private fun HomeScreenSection() {
             runCatching { widgets.requestPinAppWidget(android.content.ComponentName(context, app.hocket.playback.NowPlayingWidget::class.java), null, null) }
         }, tag = "widget.add")
     }
-    SettingsSection(stringResource(R.string.settings_shortcuts))
+    SettingsSection(stringResource(R.string.settings_shortcuts), tag = "home.shortcuts")
     Text(stringResource(R.string.settings_shortcuts_summary, AppShortcuts.MAX), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
     AppShortcut.entries.forEach { shortcut ->
         val on = shortcut in current

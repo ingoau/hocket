@@ -7,9 +7,13 @@
 // focus moves into the menu with the first item active, ↑↓ move between rows and ←→ along the strip
 // and the stars, Home/End jump, Enter/Space run, → (or Enter) opens the submenu, a letter jumps to
 // the next item starting with it, a shortcut shown in the menu runs on the menu's item, Escape/Tab
-// close and focus returns to whatever opened it.
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ActionTarget } from "@core/api";
+// close and focus returns to whatever opened it. The mouse's back button leaves the submenu, else
+// closes the menu. A submenu slides out from the menu's edge on the side it opens, and back in when
+// it closes; the pointer can cross other rows on its way to it without losing it.
+// Pointer: like a native menu, the right button can be held, dragged onto an item and released to
+// run it; released where it was pressed, the menu stays open for a click.
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
+import type { ActionTarget, PreviewState } from "@core/api";
 import { chordFromEvent, formatChord, parseChord } from "../store/shortcuts";
 import { useKeymap } from "../store/keyboard";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -20,16 +24,31 @@ import { executeAction, type ActionContext } from "../store/actions";
 import { Icon } from "./Icon";
 import { Artwork } from "./Artwork";
 import { PlaylistSubmenu } from "./PlaylistSubmenu";
+import { MOUSE_BACK } from "./MenuFlyout";
+import { SnoozeSubmenu } from "./SnoozeSubmenu";
+import { ShareSubmenu } from "./ShareSubmenu";
 import { handOnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
 import { fetchMenuFacts } from "../lib/menu-facts";
 import { toastUndoable } from "../lib/ui-toast";
 import { ratingText } from "../lib/a11y";
 import { buildMenu, loveToast, nextRating, rateToast, removeToast, starLabel, type MenuHeader, type MenuRow } from "../lib/menu-model";
+import { openGenius } from "../lib/share";
+import { bridge } from "../core/bridge";
+import { previewPosition, seekFraction } from "../lib/preview-seek";
 
 /** Where focus goes back to when the menu closes. */
 let returnFocus: HTMLElement | null = null;
 let openedByKeyboard = false;
+
+/** Where the right button went down, while it's held. */
+let rightHeld: { x: number; y: number } | null = null;
+/** The menu opened under a held right button: releasing it on an item (after a drag) runs that item. */
+let pressedAt: { x: number; y: number } | null = null;
+/** How far the pointer must move from the press before a release picks an item. */
+const DRAG_SLOP = 8;
+/** How long the pointer can cross other rows on its way to an open submenu before it switches. */
+const SUB_SWITCH_MS = 220;
 
 /** Pin to Library and Unpin from Library: only the one that applies is shown (the other is disabled). */
 const LIBRARY_PIN_IDS = new Set(["pinToLibrary", "unpinFromLibrary"]);
@@ -48,6 +67,8 @@ export async function openContextMenu(e: { clientX: number; clientY: number; pre
   const [all, facts] = await Promise.all([none ? [] : fetchActions("contextMenu", target), none ? undefined : fetchMenuFacts(target, context)]);
   const actions = all.filter((a) => !(LIBRARY_PIN_IDS.has(a.id) && !a.enabled));
   if (!actions.length && !items?.length) return;
+  // Still held once the actions are in (Linux and macOS open on the press; Windows on the release).
+  pressedAt = keyboard ? null : rightHeld;
   useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, target, actions, items, context, keyboard, facts });
 }
 
@@ -93,8 +114,8 @@ interface Cell {
   line: number;
   label: string;
   enabled: boolean;
-  /** Opens the Add to playlist submenu instead of running. */
-  submenu?: boolean;
+  /** Opens this submenu (Add to playlist, Share) instead of running. */
+  submenu?: string;
   /** A star: its rating. */
   star?: number;
   /** Where ↑↓ land on this line (the current rating's star). */
@@ -104,6 +125,7 @@ interface Cell {
 
 export function ContextMenu() {
   const live = useApp((s) => s.contextMenu);
+  const preview = useApp((s) => s.preview);
   const close = useApp((s) => s.closeContextMenu);
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -116,10 +138,32 @@ export function ContextMenu() {
   const [active, setActive] = useState(-1);
   /** The active cell was reached by keyboard (it gets a ring), not the pointer. */
   const [keys, setKeys] = useState(false);
-  /** The Add to playlist submenu, with where it opens from. */
-  const [sub, setSub] = useState<{ left: number; right: number; top: number } | null>(null);
+  /** The open submenu (Add to playlist or Share), with where it opens from. */
+  const [sub, setSub] = useState<{ id: string; left: number; right: number; top: number; n: number } | null>(null);
+  /** Counts opens, so each one mounts its submenu afresh (and takes focus) even mid-exit. */
+  const opens = useRef(0);
   const subOpen = useRef(false);
   subOpen.current = !!sub;
+  // The submenu slides out on its own when it closes back to the menu (and with the menu when that
+  // closes); a hover onto another submenu's row swaps it at once.
+  // Once the menu is gone, so is the submenu, at once: nothing of it is left to show at the next open.
+  const subPresence = usePresence<typeof sub, HTMLDivElement>(sub, undefined, { instant: !menu });
+  const shownSub = subPresence.value;
+  /** A submenu switch the pointer asked for, held a moment in case it is only crossing to the submenu. */
+  const pendingSub = useRef<{ timer: number; cell: number } | undefined>(undefined);
+  const cancelPendingSub = () => {
+    if (pendingSub.current) clearTimeout(pendingSub.current.timer);
+    pendingSub.current = undefined;
+  };
+  useEffect(() => cancelPendingSub, []);
+  // A switch the pointer asked for never lands on a closing menu; the submenu itself goes when the
+  // menu's exit ends (it leaves with it until then).
+  useEffect(() => {
+    if (!live) cancelPendingSub();
+  }, [live]);
+  useEffect(() => {
+    if (!menu) setSub(null);
+  }, [menu]);
   const model = useMemo(() => (menu ? buildMenu(menu.actions, menu.items ?? [], menu.facts, { inPlaylist: !!menu.context?.playlistId }) : []), [menu]);
 
   useLayoutEffect(() => {
@@ -130,16 +174,24 @@ export function ContextMenu() {
     const y = Math.min(live.y, window.innerHeight - r.height - 6);
     setPos({ x: Math.max(4, x), y: Math.max(4, y) });
     setSub(null);
+    cancelPendingSub();
     setKeys(!!live.keyboard);
     // Keyboard-opened menus start on the first enabled item, like native menus.
     setActive(live.keyboard ? firstEnabled(ref.current) : -1);
     ref.current.focus();
   }, [live]);
 
+  // Closing the menu (or opening a different one) ends the preview.
+  useEffect(() => {
+    if (!live) return;
+    return () => { bridge().dispatch({ type: "previewStop" }); };
+  }, [live]);
+
   // Focus goes back to the trigger when the menu closes (unless an action moved it on purpose).
   const wasOpen = useRef(false);
   useEffect(() => {
     if (live) { wasOpen.current = true; return; }
+    pressedAt = null;
     if (!wasOpen.current) return;
     wasOpen.current = false;
     const el = returnFocus;
@@ -151,6 +203,32 @@ export function ContextMenu() {
     handOnFocus(null);
     if (el && el.isConnected && focusLost) el.focus({ preventScroll: true });
   }, [live]);
+
+  // Hold right, drag, release: the item under the release runs, by the same click a left click sends.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (e.button === 2) rightHeld = { x: e.clientX, y: e.clientY }; };
+    const onUp = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      const from = pressedAt;
+      rightHeld = pressedAt = null;
+      if (!from || !useApp.getState().contextMenu) return;
+      if (Math.hypot(e.clientX - from.x, e.clientY - from.y) <= DRAG_SLOP) return;
+      // Not the row the menu opened under (clamped to the window's edge, it can open over the
+      // pointer): a wobble while releasing an ordinary right-click mustn't run it.
+      const item = menuItemAt(e.target);
+      if (item && item !== menuItemAt(document.elementFromPoint(from.x, from.y))) item.click();
+    };
+    // A release outside the window never arrives: start over.
+    const onBlur = () => { rightHeld = pressedAt = null; };
+    window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("mouseup", onUp, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("mouseup", onUp, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   useEffect(() => {
     if (!live) return;
@@ -174,6 +252,16 @@ export function ContextMenu() {
 
   if (!menu) return null;
   const facts = menu.facts;
+  const subMotion = motion === "closing" || subPresence.closing ? "closing" : "fade-in";
+  const trackId = menu.target.type === "tracks" && menu.target.data.ids.length === 1
+    ? menu.target.data.ids[0]
+    : facts?.trackIds?.length === 1 ? facts.trackIds[0] : undefined;
+  const mine = preview && trackId && preview.trackId === trackId ? preview : undefined;
+  const previewCommand = () => {
+    if (!trackId) return;
+    if (!mine) bridge().dispatch({ type: "previewStart", data: { track_id: trackId } });
+    else bridge().dispatch({ type: "previewToggle" });
+  };
 
   /** Close, then run: a dialog the run opens takes the trigger over for focus. */
   const finish = (then?: () => void) => {
@@ -188,14 +276,16 @@ export function ContextMenu() {
     if (message) toastUndoable(message, go);
     else go();
   });
-  const openSub = (cell: number) => {
+  const openSub = (cell: number, id: string) => {
+    cancelPendingSub();
     const row = document.getElementById(`cm-item-${cell}`);
     if (!ref.current || !row) return;
     const box = ref.current.getBoundingClientRect();
     setActive(cell);
-    setSub({ left: box.left, right: box.right, top: row.getBoundingClientRect().top });
+    setSub({ id, left: box.left, right: box.right, top: row.getBoundingClientRect().top, n: ++opens.current });
   };
   const closeSub = () => {
+    cancelPendingSub();
     if (!sub) return;
     setSub(null);
     ref.current?.focus({ preventScroll: true });
@@ -236,15 +326,23 @@ export function ContextMenu() {
         line++;
         break;
       case "submenu":
-        push({ label: r.label, enabled: r.enabled, submenu: true, run: () => undefined });
+        push({ label: r.label, enabled: r.enabled, submenu: r.id, run: () => undefined });
+        line++;
+        break;
+      case "genius":
+        push({ label: r.label, enabled: r.enabled, run: () => finish(() => { if (facts) void openGenius(facts); }) });
         line++;
         break;
       case "action":
-        push({ label: r.label, enabled: r.action.enabled, run: () => perform(r.action.id) });
+        push({ label: r.label, enabled: r.action.enabled, run: () => (r.action.id === "preview" ? previewCommand() : perform(r.action.id)) });
         if (r.action.enabled) {
-          commands.set(r.action.id, () => perform(r.action.id));
+          // A chord for Preview must not close the menu first: the close
+          // stops the preview, and the start would then run with nothing
+          // left to stop it.
+          const run = r.action.id === "preview" ? previewCommand : () => perform(r.action.id);
+          commands.set(r.action.id, run);
           const alias = CHORD_OF[r.action.id];
-          if (alias) commands.set(alias, () => perform(r.action.id));
+          if (alias) commands.set(alias, run);
         }
         line++;
         break;
@@ -267,7 +365,7 @@ export function ContextMenu() {
   const activate = (i: number) => {
     const c = cells[i];
     if (!c?.enabled) return;
-    if (c.submenu) openSub(i);
+    if (c.submenu) openSub(i, c.submenu);
     else c.run();
   };
   const enabledIdx = cells.map((c, i) => (c.enabled ? i : -1)).filter((i) => i >= 0);
@@ -329,12 +427,28 @@ export function ContextMenu() {
     }
   };
 
-  /** Pointer over a cell: it becomes the active one, and the submenu closes unless it's its row. */
+  /**
+   * Pointer over a cell: it becomes the active one, and the submenu closes (or switches to the
+   * cell's own) unless it's its row. That waits a moment, so a diagonal path to the submenu that
+   * crosses the rows below its row doesn't lose it; reaching the submenu (or coming back to its
+   * row) calls it off.
+   */
   const hover = (i: number) => (e: React.MouseEvent) => {
     if (!e.movementX && !e.movementY) return;
     setKeys(false);
     if (active !== i) setActive(i);
-    if (sub && !cells[i]?.submenu) closeSub();
+    const id = cells[i]?.submenu;
+    if (!sub) return;
+    if (id === sub.id) { cancelPendingSub(); return; }
+    // The cell the pointer is on when the wait ends decides: a newer cell starts it over.
+    if (pendingSub.current?.cell === i) return;
+    cancelPendingSub();
+    const timer = window.setTimeout(() => {
+      pendingSub.current = undefined;
+      if (id) openSub(i, id);
+      else closeSub();
+    }, SUB_SWITCH_MS);
+    pendingSub.current = { timer, cell: i };
   };
   const cellProps = (i: number) => ({
     id: `cm-item-${i}`,
@@ -407,11 +521,11 @@ export function ContextMenu() {
           <div
             key={r.id}
             {...cellProps(first)}
-            onMouseMove={(e) => { hover(first)(e); if (!sub && r.enabled && (e.movementX || e.movementY)) openSub(first); }}
+            onMouseMove={(e) => { hover(first)(e); if (r.enabled && (e.movementX || e.movementY) && !sub) openSub(first, r.id); }}
             role="menuitem"
             aria-haspopup="menu"
-            aria-expanded={!!sub}
-            className={`mi cm-subrow ${r.enabled ? "" : "disabled"} ${active === first || sub ? "active" : ""}`}
+            aria-expanded={sub?.id === r.id}
+            className={`mi cm-subrow ${r.enabled ? "" : "disabled"} ${active === first || sub?.id === r.id ? "active" : ""}`}
             data-action={r.id}
           >
             {lead}
@@ -419,7 +533,17 @@ export function ContextMenu() {
             <Icon name="chevronRight" size={14} className="cm-chev" />
           </div>
         );
+      case "genius":
+        return (
+          <div key="genius" {...cellProps(first)} role="menuitem" className={`mi ${r.enabled ? "" : "disabled"} ${active === first ? "active" : ""}`} data-action="genius">
+            {lead}
+            <span className="grow truncate">{r.label}</span>
+          </div>
+        );
       case "action": {
+        if (r.action.id === "preview") {
+          return <PreviewRow key="preview" index={first} label={r.label} enabled={r.action.enabled} active={active === first} sample={mine} onStart={previewCommand} cellProps={cellProps(first)} />;
+        }
         const destructive = r.destructive;
         return (
           <div key={`a-${r.action.id}`} {...cellProps(first)} role="menuitem" className={`mi ${r.action.enabled ? "" : "disabled"} ${destructive ? "destructive" : ""} ${active === first ? "active" : ""}`} data-action={r.action.id}>
@@ -464,16 +588,115 @@ export function ContextMenu() {
         tabIndex={-1}
         style={{ left: pos.x, top: pos.y }}
         onKeyDown={onKey}
+        onMouseUp={(e) => {
+          // The mouse's back button: back out of the submenu, else close the menu.
+          if (e.button !== MOUSE_BACK) return;
+          e.preventDefault();
+          if (sub) closeSub();
+          else close();
+        }}
         data-context-layer=""
         data-testid="context-menu"
       >
         {facts?.header ? <Header header={facts.header} /> : null}
         {model.map(renderRow)}
       </div>
-      {sub && facts?.trackIds?.length ? (
-        <PlaylistSubmenu trackIds={facts.trackIds} anchor={sub} closing={motion === "closing"} motion={motion} onBack={closeSub} onClose={finish} />
-      ) : null}
+      {/* Reaching the submenu keeps it: a switch the pointer's path asked for on the way is called off. */}
+      <div style={{ display: "contents" }} onMouseMove={cancelPendingSub}>
+        {shownSub?.id === "addToPlaylist" && facts?.trackIds?.length ? (
+          <PlaylistSubmenu key={`addToPlaylist-${shownSub.n}`} trackIds={facts.trackIds} anchor={shownSub} closing={subMotion === "closing"} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        ) : null}
+        {shownSub?.id === "snooze" && facts?.trackIds?.length ? (
+          <SnoozeSubmenu key={`snooze-${shownSub.n}`} trackIds={facts.trackIds} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        ) : null}
+        {shownSub?.id === "share" && facts ? (
+          <ShareSubmenu key={`share-${shownSub.n}`} facts={facts} target={menu.target} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        ) : null}
+      </div>
     </Fragment>
+  );
+}
+
+/** Preview row: a progress bar behind the label, tap to pause, drag to seek. Does not close the menu. */
+function PreviewRow({ index, label, enabled, active, sample, onStart, cellProps }: {
+  index: number;
+  label: string;
+  enabled: boolean;
+  active: boolean;
+  sample: PreviewState | undefined;
+  onStart: () => void;
+  cellProps: HTMLAttributes<HTMLDivElement>;
+}) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!sample?.playing) return;
+    const id = window.setInterval(() => setTick((n) => n + 1), 80);
+    return () => window.clearInterval(id);
+  }, [sample?.playing, sample?.trackId, sample?.takenAt]);
+  const position = sample ? previewPosition(sample, Date.now()) : 0;
+  const fraction = sample && sample.durationMs > 0 ? Math.min(1, position / sample.durationMs) : 0;
+  const seek = (clientX: number, row: HTMLElement) => {
+    if (!sample || sample.durationMs <= 0) return;
+    const rect = row.getBoundingClientRect();
+    const at = Math.round(seekFraction(clientX - rect.left, rect.width, 12) * sample.durationMs);
+    bridge().dispatch({ type: "previewSeek", data: { position_ms: at } });
+  };
+  return (
+    <div
+      {...cellProps}
+      id={`cm-item-${index}`}
+      role="menuitem"
+      aria-label={sample ? (sample.playing ? `${label}, playing` : `${label}, paused`) : label}
+      className={`mi cm-preview ${enabled ? "" : "disabled"} ${active ? "active" : ""}`}
+      data-action="preview"
+      onClick={(e) => {
+        e.preventDefault();
+        // A real mouse click (detail >= 1) is handled on pointerup. A
+        // right-drag release, a screen reader, and the keyboard send a click
+        // with detail 0, the same gesture every other row runs.
+        if (e.detail > 0 || !enabled) return;
+        if (sample) bridge().dispatch({ type: "previewToggle" });
+        else onStart();
+      }}
+      onPointerDown={(e) => {
+        if (e.button !== 0 || !enabled) return;
+        const row = e.currentTarget;
+        if (!sample) {
+          onStart();
+          return;
+        }
+        const startX = e.clientX;
+        const startY = e.clientY;
+        let dragged = false;
+        const move = (ev: PointerEvent) => {
+          const dx = ev.clientX - startX;
+          const dy = ev.clientY - startY;
+          if (!dragged) {
+            if (Math.hypot(dx, dy) < 5) return;
+            if (Math.abs(dy) > Math.abs(dx)) {
+              cleanup();
+              return;
+            }
+            dragged = true;
+          }
+          seek(ev.clientX, row);
+        };
+        const up = () => {
+          cleanup();
+          if (!dragged) bridge().dispatch({ type: "previewToggle" });
+        };
+        const cleanup = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      }}
+    >
+      {sample ? <span className="cm-preview-bar" style={{ width: `${fraction * 100}%` }} /> : null}
+      <span className="cm-lead cm-icon" aria-hidden="true"><Icon name={sample?.playing ? "pause" : "headphones"} size={15} /></span>
+      <span className="grow truncate">{label}</span>
+    </div>
   );
 }
 
@@ -492,6 +715,11 @@ function Header({ header }: { header: MenuHeader }) {
       </div>
     </div>
   );
+}
+
+/** The menu row (of the menu or its submenu) an element is in. */
+function menuItemAt(el: EventTarget | null): HTMLElement | null {
+  return el instanceof Element ? el.closest<HTMLElement>("[data-context-layer] [role^='menuitem']") : null;
 }
 
 /** The first enabled cell of a freshly drawn menu (its cells carry ids in order). */

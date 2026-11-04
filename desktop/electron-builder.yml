@@ -40,6 +40,8 @@ linux:
       Name: Hocket
       StartupWMClass: hocket
   executableName: hocket
+  # The .deb needs a maintainer; without this electron-builder wants an author email in package.json.
+  maintainer: "Ingo Wolf <me@ingo.au>"
   artifactName: "${productName}-${version}-${arch}.${ext}"
   mimeTypes: [x-scheme-handler/hocket]
 deb:

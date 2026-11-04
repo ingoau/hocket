@@ -187,6 +187,7 @@ pub fn derive_media_session_state(
             track_id: Some(t.id.clone()),
             loved: t.loved,
             rating: t.rating.min(5),
+            stashed: false,
         }
     });
     let duration = metadata.as_ref().map(|m| m.duration_ms);
@@ -256,6 +257,8 @@ fn dedup_in_order(list: Vec<MediaSessionAction>) -> Vec<MediaSessionAction> {
 /// - `Repeat` with `value` `0`/`1`/`2` sets Off/All/One, without cycles
 ///   Off → All → One → Off.
 /// - `Love` toggles the current track's loved flag.
+/// - `Stash` adds the current track to the stash. The actor turns it into a
+///   removal when the track is already stashed (it knows the entry ids).
 /// - Returns `None` when the action needs a current track and there is
 ///   none, or `Seek`/`Rate` arrive without a value.
 pub fn command_for(
@@ -315,6 +318,12 @@ pub fn command_for(
                 rating: v.round().clamp(0.0, 5.0) as u32,
             })
         }
+        MediaSessionAction::Stash => {
+            let id = track_id()?;
+            Some(Command::StashAdd {
+                track_ids: vec![id],
+            })
+        }
     }
 }
 
@@ -336,6 +345,9 @@ mod tests {
                     track_id: "t1".into(),
                     source: QueueSource::Inserted,
                     unavailable: false,
+                    added: false,
+                    queued: false,
+                    ordinal: 0,
                 },
                 track: TrackSummary {
                     id: "t1".into(),
@@ -347,6 +359,8 @@ mod tests {
                     rating: 7,
                     ..Default::default()
                 },
+                in_group: false,
+                autoplay: false,
             });
         }
         q
@@ -557,7 +571,14 @@ mod tests {
             })
         );
         assert_eq!(command_for(MediaSessionAction::Rate, None, &st), None);
+        assert_eq!(
+            command_for(MediaSessionAction::Stash, None, &st),
+            Some(Command::StashAdd {
+                track_ids: vec!["t1".into()]
+            })
+        );
         let empty = MediaSessionState::default();
+        assert_eq!(command_for(MediaSessionAction::Stash, None, &empty), None);
         assert_eq!(command_for(MediaSessionAction::Love, None, &empty), None);
         assert_eq!(
             command_for(MediaSessionAction::Rate, Some(3.0), &empty),

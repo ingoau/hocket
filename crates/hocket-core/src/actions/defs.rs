@@ -5,9 +5,11 @@
 
 use crate::api::{ActionTarget, Command, MediaSessionAction, RepeatMode, SleepTimer};
 
+use crate::session::QueuePlacement;
+
 use super::{
-    ids_of, pin_targets, play_commands, queue_commands, rating_targets, single_id, Resolver,
-    StateView, Surface, SEEK_STEP_MS,
+    ids_of, pin_targets, play_commands, queue_commands, rating_targets, single_id, track_ids_of,
+    Resolver, StateView, Surface, SEEK_STEP_MS,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +87,9 @@ pub struct ActionDef {
     /// No core command: the platform layer performs it by id (navigation,
     /// panels, pickers, clipboard).
     pub ui_handled: bool,
+    /// Whether the action is offered at all (surfaces and the palette leave
+    /// it out, rather than showing it disabled). `None`: always offered.
+    pub visible: Option<EnabledFn>,
     pub enabled: EnabledFn,
     pub commands: CommandsFn,
 }
@@ -190,11 +195,116 @@ fn play_shuffled(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Comma
 }
 
 fn play_next(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
-    queue_commands(t, s, r, true)
+    queue_commands(t, s, r, QueuePlacement::Next)
+}
+
+fn add_to_queue(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    queue_commands(t, s, r, QueuePlacement::Group)
 }
 
 fn play_later(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
-    queue_commands(t, s, r, false)
+    queue_commands(t, s, r, QueuePlacement::Later)
+}
+
+/// "Add to queue" exists only with the Queue section setting on.
+fn can_add_to_queue(t: &ActionTarget, s: &StateView) -> bool {
+    s.queue_section && has_selection(t, s)
+}
+
+/// Shuffling one song is just playing it, so a single song isn't offered Shuffle.
+fn not_one_song(t: &ActionTarget, _: &StateView) -> bool {
+    !matches!(t, ActionTarget::Tracks { ids } if ids.len() == 1)
+}
+
+fn queue_section_on(_: &ActionTarget, s: &StateView) -> bool {
+    s.queue_section
+}
+
+fn has_queue_group(_: &ActionTarget, s: &StateView) -> bool {
+    s.queue_group_count > 0
+}
+
+/// The group's songs go to the stash and leave the queue (the actor keeps any the stash had no
+/// room for).
+fn stash_queue_group(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    vec![Command::StashQueueGroup]
+}
+
+fn one_track(t: &ActionTarget, _: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } => ids.len() == 1,
+        ActionTarget::QueueItems { keys } => keys.len() == 1,
+        _ => false,
+    }
+}
+
+fn preview_start(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let mut ids = super::track_ids_of(t, s, r);
+    if ids.len() != 1 {
+        return vec![];
+    }
+    vec![Command::PreviewStart {
+        track_id: ids.remove(0),
+    }]
+}
+
+fn stash(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let track_ids = track_ids_of(t, s, r);
+    if track_ids.is_empty() {
+        return vec![];
+    }
+    vec![Command::StashAdd { track_ids }]
+}
+
+fn clear_stash(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    vec![Command::StashClear]
+}
+
+fn snoozed(id: &str, s: &StateView) -> bool {
+    s.snoozed_tracks.iter().any(|t| t == id)
+}
+
+/// Snooze is on when any selected song isn't snoozed. A queue row's track isn't known here, so the
+/// menu decides; the action stays available.
+fn snooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } if !ids.is_empty() => ids.iter().any(|id| !snoozed(id, s)),
+        ActionTarget::QueueItems { keys } if !keys.is_empty() => true,
+        ActionTarget::None => s
+            .current_track_id
+            .as_ref()
+            .is_some_and(|id| !snoozed(id, s)),
+        _ => false,
+    }
+}
+
+fn unsnooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
+    match t {
+        ActionTarget::Tracks { ids } if !ids.is_empty() => ids.iter().any(|id| snoozed(id, s)),
+        ActionTarget::QueueItems { keys } if !keys.is_empty() => true,
+        ActionTarget::None => s.current_track_id.as_ref().is_some_and(|id| snoozed(id, s)),
+        _ => false,
+    }
+}
+
+fn snooze(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let track_ids = track_ids_of(t, s, r);
+    if track_ids.is_empty() {
+        return vec![];
+    }
+    // The song menu offers every duration itself. A swipe or the palette uses a week.
+    vec![Command::Snooze {
+        track_ids,
+        duration: crate::api::SnoozeFor::Week,
+    }]
+}
+
+fn unsnooze(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    let track_ids = track_ids_of(t, s, r);
+    if track_ids.is_empty() {
+        return vec![];
+    }
+    vec![Command::Unsnooze { track_ids }]
 }
 
 macro_rules! rate_fn {
@@ -424,7 +534,7 @@ cmd_fn!(cmd_stop, Command::Stop);
 cmd_fn!(cmd_next, Command::Next);
 cmd_fn!(cmd_previous, Command::Previous);
 cmd_fn!(cmd_clear_queue, Command::ClearQueue);
-cmd_fn!(cmd_clear_insertions, Command::ClearInsertions);
+cmd_fn!(cmd_clear_queue_group, Command::ClearQueueGroup);
 cmd_fn!(cmd_undo, Command::Undo);
 cmd_fn!(cmd_redo, Command::Redo);
 cmd_fn!(cmd_restore_selection, Command::RestoreSelection);
@@ -560,6 +670,7 @@ impl ActionDef {
             default_shortcut: None,
             media_session: None,
             ui_handled: false,
+            visible: None,
             enabled,
             commands,
         }
@@ -596,7 +707,8 @@ static ALL: &[ActionDef] = &[
         PLAYABLE,
         has_items,
         play_shuffled,
-        undoable = true
+        undoable = true,
+        visible = Some(not_one_song)
     ),
     action!(
         "togglePlay",
@@ -705,6 +817,17 @@ static ALL: &[ActionDef] = &[
         undoable = true
     ),
     action!(
+        "addToQueue",
+        "Add to queue",
+        "queue_music",
+        Queue,
+        QUEUEABLE,
+        can_add_to_queue,
+        add_to_queue,
+        undoable = true,
+        visible = Some(queue_section_on)
+    ),
+    action!(
         "playLater",
         "Play later",
         "playlist_add",
@@ -712,6 +835,82 @@ static ALL: &[ActionDef] = &[
         QUEUEABLE,
         has_selection,
         play_later,
+        undoable = true
+    ),
+    action!(
+        "preview",
+        "Preview",
+        "headphones",
+        Playback,
+        &[TargetKind::Tracks, TargetKind::QueueItems],
+        one_track,
+        preview_start
+    ),
+    // -- stash --
+    action!(
+        "stash",
+        "Stash",
+        "stash",
+        Queue,
+        &[
+            TargetKind::Global,
+            TargetKind::Tracks,
+            TargetKind::Albums,
+            TargetKind::Artists,
+            TargetKind::Playlists,
+            TargetKind::QueueItems
+        ],
+        has_items,
+        stash,
+        default_shortcut = Some("Mod+S"),
+        media_session = Some(MediaSessionAction::Stash)
+    ),
+    action!(
+        "openStash",
+        "Open stash",
+        "stash",
+        View,
+        GLOBAL,
+        not_in_text_field,
+        none,
+        default_shortcut = Some("Mod+Shift+S"),
+        ui_handled = true
+    ),
+    action!(
+        "clearStash",
+        "Clear stash",
+        "clear_all",
+        Queue,
+        GLOBAL,
+        always,
+        clear_stash
+    ),
+    action!(
+        "snooze",
+        "Snooze",
+        "bedtime",
+        Queue,
+        &[
+            TargetKind::Tracks,
+            TargetKind::QueueItems,
+            TargetKind::Global
+        ],
+        snooze_enabled,
+        snooze,
+        undoable = true
+    ),
+    action!(
+        "unsnooze",
+        "Unsnooze",
+        "bedtime",
+        Queue,
+        &[
+            TargetKind::Tracks,
+            TargetKind::QueueItems,
+            TargetKind::Global
+        ],
+        unsnooze_enabled,
+        unsnooze,
         undoable = true
     ),
     action!(
@@ -788,13 +987,23 @@ static ALL: &[ActionDef] = &[
         undoable = true
     ),
     action!(
-        "clearInsertions",
-        "Clear playing next",
+        "clearQueueGroup",
+        "Clear next in queue",
         "playlist_remove",
         Queue,
         GLOBAL,
-        has_session,
-        cmd_clear_insertions,
+        has_queue_group,
+        cmd_clear_queue_group,
+        undoable = true
+    ),
+    action!(
+        "stashQueueGroup",
+        "Stash next in queue",
+        "stash",
+        Queue,
+        GLOBAL,
+        has_queue_group,
+        stash_queue_group,
         undoable = true
     ),
     action!(
@@ -1346,8 +1555,11 @@ const CONTEXT_MENU: &[&str] = &[
     "play",
     "playShuffled",
     "playNext",
+    "addToQueue",
     "playLater",
+    "preview",
     "addToPlaylist",
+    "stash",
     "love",
     "unlove",
     "rate5",
@@ -1360,6 +1572,8 @@ const CONTEXT_MENU: &[&str] = &[
     "unpin",
     "goToAlbum",
     "goToArtist",
+    "snooze",
+    "unsnooze",
     "pinToLibrary",
     "unpinFromLibrary",
     "removeFromQueue",
@@ -1391,6 +1605,7 @@ const NOW_PLAYING: &[&str] = &[
     "repeat",
     "autoplay",
     "addToPlaylist",
+    "stash",
     "goToAlbum",
     "goToArtist",
     "download",
@@ -1410,6 +1625,12 @@ pub fn default_order(surface: Surface) -> Vec<&'static str> {
         Surface::Sidebar => SIDEBAR.to_vec(),
         Surface::MediaSession => MEDIA_SESSION.to_vec(),
         Surface::NowPlaying => NOW_PLAYING.to_vec(),
-        Surface::Palette => ALL.iter().map(|d| d.id).collect(),
+        // Preview only exists inside an open song menu. The palette lists
+        // every other action; offering it here would play with nothing to stop it.
+        Surface::Palette => ALL
+            .iter()
+            .map(|d| d.id)
+            .filter(|id| *id != "preview")
+            .collect(),
     }
 }

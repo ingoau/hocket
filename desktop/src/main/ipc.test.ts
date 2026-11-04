@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Command, Query, QueryResult } from "@core/api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Command, Event, Query, QueryResult } from "@core/api";
 import { IPC } from "@shared/bridge-types";
 
 type Listener = (e: { sender: { id: number } }, ...args: unknown[]) => unknown;
@@ -28,6 +28,7 @@ vi.mock("electron", () => ({
   ShareMenu: class {
     popup() {}
   },
+  app: { getPath: () => "/tmp/hocket" },
 }));
 vi.mock("node:fs/promises", () => fsMock);
 
@@ -46,15 +47,18 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
   const store = { secret: "secret", passwordFor: vi.fn(function (this: { secret: string }, _url: string, _username: string): string | undefined { return this.secret; }) };
   const passwordFor = store.passwordFor;
   const devlog = {
-    bundle: vi.fn(({ coreDiagnostics }: { coreDiagnostics: string }) => {
+    bundle: vi.fn(({ coreDiagnostics, otherDevices }: { coreDiagnostics: string; otherDevices?: string }) => {
       const log = Array.from({ length: 450 }, (_, i) => `line ${i}`).join("\n") + "\n";
       const head = `Hocket diagnostics\n${coreDiagnostics}\n`;
-      return { fileName: "hocket-diagnostics-20261020-030405.txt", text: head + log, head, log, logLines: 450, logBytes: log.length, windowMs: 3_600_000, generatedAt: 1 };
+      return { fileName: "hocket-diagnostics-20261020-030405.txt", text: head + log + (otherDevices ?? ""), head, log, logLines: 450, logBytes: log.length, windowMs: 3_600_000, generatedAt: 1 };
     }),
+    append: vi.fn(),
   };
+  const eventListeners: ((e: Event) => void)[] = [];
+  const emit = (e: Event) => eventListeners.forEach((l) => l(e));
   const artwork = { register: vi.fn(async (p: string) => (p.startsWith("/cache/") ? "a".repeat(32) : undefined)), resolve: vi.fn() };
   installIpc({
-    core: { kind: "fake", dispatch, query, onEvent: () => () => undefined, shutdown: async () => undefined },
+    core: { kind: "fake", dispatch, query, onEvent: (l) => { eventListeners.push(l); return () => undefined; }, shutdown: async () => undefined },
     windows: { all: () => [{ webContents: { id: 1 } }], mini: undefined, main: undefined, stateOf: () => ({}), broadcastState: vi.fn(), openMini: vi.fn(), closeMini: vi.fn(), showMain: vi.fn() } as never,
     artwork: artwork as never,
     meta: () => ({}) as never,
@@ -65,12 +69,16 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
     credentials: store,
     devlog: devlog as never,
     diagnosticsDir: "/data/logs/diagnostics",
+    reportStagingDir: "/data/report-staging",
     diagnosticsExtra: () => ({ core: "fake core" }),
   });
-  return { dispatch, query, onCommand, artwork, passwordFor };
+  return { dispatch, query, onCommand, artwork, passwordFor, emit };
 }
 
 describe("ipc", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   beforeEach(() => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -228,6 +236,82 @@ describe("ipc", () => {
     expect(path).toBe("/data/logs/diagnostics/hocket-diagnostics-20261020-030405.txt");
     expect(shellMock.showItemInFolder).toHaveBeenCalledWith(path);
     expect(fsMock.rm.mock.calls.map((c) => c[0])).toEqual(["/data/logs/diagnostics/hocket-diagnostics-20261010-000000.txt", "/data/logs/diagnostics/hocket-diagnostics-20261011-000000.txt"]);
+  });
+
+  it("diagnostics: other devices are asked for only when the page says so, once per collection", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let n = 0;
+    const { query } = setup({
+      query: async (q) => ({ type: "text", data: q.type === "roomDiagnostics" ? `Other devices: phone says hi ${++n}` : "core says hi" }) as QueryResult,
+    });
+    const roomQueries = () => query.mock.calls.filter((c) => (c[0] as { type: string }).type === "roomDiagnostics").length;
+    await handlers.get(IPC.diagnosticsCopy)!(ours);
+    expect(roomQueries()).toBe(0);
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.not.stringContaining("phone says hi"));
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: "yes" });
+    expect(roomQueries()).toBe(0);
+    await expect(handlers.get(IPC.diagnosticsCollect)!(stranger)).rejects.toThrow("rejected");
+    // Two collects at once share one query; the copies after reuse its answer.
+    await Promise.all([handlers.get(IPC.diagnosticsCollect)!(ours), handlers.get(IPC.diagnosticsCollect)!(ours)]);
+    expect(roomQueries()).toBe(1);
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    expect(roomQueries()).toBe(1);
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi 1"));
+    // Asking again at once reuses it (the room would turn the request away); later, it asks again.
+    await handlers.get(IPC.diagnosticsCollect)!(ours);
+    expect(roomQueries()).toBe(1);
+    vi.setSystemTime(Date.now() + 16_000);
+    await handlers.get(IPC.diagnosticsCollect)!(ours);
+    expect(roomQueries()).toBe(2);
+    // Refresh asks at once.
+    await handlers.get(IPC.diagnosticsCollect)!(ours, { force: true });
+    expect(roomQueries()).toBe(3);
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi 3"));
+  });
+
+  it("diagnostics: only the room's answers are reused; collect() says the newest status", async () => {
+    let n = 0;
+    let connected = false;
+    const ctx = setup({
+      query: async (q) => {
+        if (q.type !== "roomDiagnostics") return { type: "text", data: "core says hi" } as QueryResult;
+        n++;
+        const status = { requestId: `r${n}`, done: true, elapsedMs: 0, roomAnswered: connected, coordinatorLog: false, devices: [] };
+        ctx.emit({ type: "roomDiagnosticsChanged", data: { status } } as Event);
+        return { type: "text", data: connected ? "Other devices: phone says hi" : "Other devices: not collected (Connect is not running).\n" } as QueryResult;
+      },
+    });
+    expect(await handlers.get(IPC.diagnosticsCollect)!(ours)).toMatchObject({ requestId: "r1", roomAnswered: false });
+    connected = true;
+    // Asked again at once: "not collected" isn't kept.
+    expect(await handlers.get(IPC.diagnosticsCollect)!(ours)).toMatchObject({ requestId: "r2", roomAnswered: true });
+    // Reused: no new query, the same status.
+    expect(await handlers.get(IPC.diagnosticsCollect)!(ours)).toMatchObject({ requestId: "r2" });
+    expect(n).toBe(2);
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi"));
+  });
+
+  it("diagnostics: a bundle with the other devices and no collection yet runs one", async () => {
+    const { query } = setup({
+      query: async (q) => ({ type: "text", data: q.type === "roomDiagnostics" ? "Other devices: phone says hi" : "core says hi" }) as QueryResult,
+    });
+    await handlers.get(IPC.diagnosticsCopy)!(ours, { allDevices: true });
+    expect(query).toHaveBeenCalledWith({ type: "roomDiagnostics" });
+    expect(clipboardMock.writeText).toHaveBeenLastCalledWith(expect.stringContaining("phone says hi"));
+  });
+
+  it("diagnostics: another device's request is answered with this device's bundle", async () => {
+    const { dispatch, emit } = setup({ query: async () => ({ type: "text", data: "core says hi" }) as QueryResult });
+    emit({ type: "diagnosticsRequested", data: { request_id: "r1", from_device: "Pixel" } });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
+    const cmd = dispatch.mock.calls[0]![0] as Extract<Command, { type: "answerDiagnosticsRequest" }>;
+    expect(cmd.type).toBe("answerDiagnosticsRequest");
+    expect(cmd.data.request_id).toBe("r1");
+    expect(cmd.data.text).toContain("core says hi");
+    expect(cmd.data.text).toContain("line 449");
   });
 
   it("diagnostics: a core that fails to answer still yields a bundle", async () => {

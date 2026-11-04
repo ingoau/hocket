@@ -4,17 +4,18 @@
 // dropped), and the renderer never names a filesystem path: files are read
 // and written inside the dialog handlers, and the one core command that
 // writes a file (ExportNsp) may only target a path a save dialog just chose.
-import { BrowserWindow, clipboard, dialog, ipcMain, shell, ShareMenu } from "electron";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import type { ArtworkLayout, Command, Query, QueryResult } from "@core/api";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, ShareMenu } from "electron";
+import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import type { AppMeta, AppPrefs, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
 import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
 import type { DevLog, DiagnosticsBundle } from "./devlog";
+import { installReportIpc } from "./report";
 import type { Windows } from "./windows";
 
 export interface IpcDeps {
@@ -32,6 +33,8 @@ export interface IpcDeps {
   devlog: DevLog;
   /** Where "show in folder" and the share sheet write bundles (`<userData>/logs/diagnostics`). */
   diagnosticsDir: string;
+  /** Where Save to Coordinator stages its screenshots (`<userData>/report-staging`). */
+  reportStagingDir: string;
   /** Host facts for the bundle's header (core kind, media session, windows…). */
   diagnosticsExtra: () => Record<string, string>;
   /** The core's immersive-artwork classifier (JSON in and out), when the native core has it. */
@@ -46,6 +49,10 @@ function isSide(v: unknown): v is number {
 const MAX_TEXT_FILE = 16 * 1024 * 1024;
 /** Lines of log the page previews. */
 const PREVIEW_LINES = 400;
+/** How the core (and this file) start the text of a collection that asked nobody. */
+const NOT_COLLECTED = "Other devices: not collected";
+/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
+export const REUSE_COLLECTION_MS = 15_000;
 /** Bundles kept in the diagnostics folder; older ones are removed when a new one is written. */
 const KEEP_BUNDLES = 5;
 
@@ -117,6 +124,8 @@ export function installIpc(deps: IpcDeps): void {
 
   ipcMain.handle(IPC.query, async (e, query: unknown): Promise<QueryResult> => {
     if (!isOurs(windows, e.sender) || !isEnvelope(query)) throw new Error("rejected");
+    // The file's path stays in main (shareAudio). A page must not ask for it.
+    if (query.type === "exportAudio") throw new Error("rejected");
     const result = await core.query(query as Query);
     if (query.type === "artwork" && result.type === "path") {
       // Never hand a path to the page: it gets a token the protocol resolves.
@@ -124,6 +133,36 @@ export function installIpc(deps: IpcDeps): void {
       return { type: "path", data: token };
     }
     return result;
+  });
+
+  ipcMain.handle(IPC.shareAudio, async (e, trackId: unknown): Promise<"shared" | "saved" | "cancelled" | "failed"> => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || !isOurs(windows, e.sender) || typeof trackId !== "string" || trackId.length === 0 || trackId.length > 512) return "failed";
+    try {
+      const result = await core.query({ type: "exportAudio", data: { track_id: trackId } });
+      if (result.type !== "audioFile" || !result.data?.path) return "failed";
+      const path = await realpath(result.data.path);
+      const roots = [app.getPath("userData"), app.getPath("sessionData")];
+      if (process.env.HOCKET_CACHE_DIR) roots.push(process.env.HOCKET_CACHE_DIR);
+      if (!(await pathWithin(roots, path))) return "failed";
+      if (process.platform === "darwin") {
+        const named = join(dirname(path), shareDisplayName(result.data.fileName));
+        if (named !== path) await copyFile(path, named);
+        const shared = await realpath(named);
+        if (!(await pathWithin(roots, shared))) return "failed";
+        new ShareMenu({ filePaths: [shared] }).popup({ window: win });
+        return "shared";
+      }
+      const saved = await dialog.showSaveDialog(win, { title: t("menu.shareFileDialog"), defaultPath: result.data.fileName });
+      if (saved.canceled || !saved.filePath) return "cancelled";
+      const again = await realpath(path);
+      if (!(await pathWithin(roots, again))) return "failed";
+      await copyFile(again, saved.filePath);
+      return "saved";
+    } catch (err) {
+      console.error("[ipc] shareAudio failed", err);
+      return "failed";
+    }
   });
 
   ipcMain.handle(IPC.artworkLayout, (e, rgba: unknown, width: unknown, height: unknown, request: unknown): ArtworkLayout | undefined => {
@@ -290,10 +329,54 @@ export function installIpc(deps: IpcDeps): void {
   installDiagnosticsIpc(deps);
 }
 
-/** The developer diagnostics page: every call builds a fresh bundle; files are only written where main decides. */
+/** `{ allDevices: true }` from the page; anything else is this device only. */
+function allDevices(options: unknown): boolean {
+  return typeof options === "object" && options !== null && (options as DiagnosticsOptions).allDevices === true;
+}
+
+/**
+ * The developer diagnostics page: every call builds a fresh bundle; files are only written where main
+ * decides. The other devices' bundles are collected once, when the page asks (as it opens), and kept
+ * for the bundles it saves, copies or shares after. Also answers the other devices of the Connect
+ * room, which ask the core for this device's bundle (the core only passes their requests on while
+ * developer mode is on here).
+ */
 function installDiagnosticsIpc(deps: IpcDeps): void {
   const { core, windows, devlog } = deps;
-  const build = async (): Promise<DiagnosticsBundle> => {
+  /**
+   * The newest collection from the other devices (and when it finished), and the one running. The
+   * core reports progress as events; this is the only place that asks, so the newest event is
+   * always this collection's.
+   */
+  let others: { text: string; at: number } | undefined;
+  let collecting: Promise<string> | undefined;
+  /** The newest collection's status (for a page that opens after its events went by). */
+  let lastStatus: RoomDiagnosticsStatus | undefined;
+  core.onEvent((event) => {
+    if (event.type === "roomDiagnosticsChanged") lastStatus = event.data.status;
+  });
+  /**
+   * The room turns away a second request within 10 s (the core then answers with the collection
+   * before), so unless `force`d (Refresh) a collection that recent is reused. Only the room's
+   * answers count: "not collected" (developer mode off, Connect not running, a failed query) is
+   * asked again next time.
+   */
+  const collectOthers = (force = false): Promise<string> => {
+    if (!force && !collecting && others && Date.now() - others.at < REUSE_COLLECTION_MS) return Promise.resolve(others.text);
+    collecting ??= core
+      .query({ type: "roomDiagnostics" })
+      .then(
+        (r) => (r.type === "text" ? r.data : `(unexpected answer: ${r.type})`),
+        (err: unknown) => `${NOT_COLLECTED} (${String(err)})`,
+      )
+      .then((text) => {
+        others = { text, at: text.startsWith(NOT_COLLECTED) ? 0 : Date.now() };
+        collecting = undefined;
+        return text;
+      });
+    return collecting;
+  };
+  const build = async (withOtherDevices = false): Promise<DiagnosticsBundle> => {
     let coreDiagnostics: string;
     try {
       const r = await core.query({ type: "diagnostics" });
@@ -307,8 +390,18 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     } catch (err) {
       extra = { host: `(unavailable: ${String(err)})` };
     }
-    return devlog.bundle({ coreDiagnostics, extra });
+    // What the page collected (waiting for it if it is still running); a first collection otherwise.
+    const otherDevices = withOtherDevices ? await (collecting ?? (others !== undefined ? Promise.resolve(others.text) : collectOthers())) : undefined;
+    return devlog.bundle({ coreDiagnostics, extra, otherDevices });
   };
+  core.onEvent((event) => {
+    if (event.type !== "diagnosticsRequested") return;
+    const { request_id, from_device } = event.data;
+    devlog.append("info", "diagnostics", `${from_device} asked for this device's diagnostics`);
+    void build()
+      .then((b) => core.dispatch({ type: "answerDiagnosticsRequest", data: { request_id, text: b.text } }))
+      .catch((err: unknown) => devlog.append("warn", "diagnostics", `couldn't build the bundle for ${from_device}: ${String(err)}`));
+  });
   const writeToFolder = async (bundle: DiagnosticsBundle): Promise<string> => {
     await mkdir(deps.diagnosticsDir, { recursive: true });
     const path = join(deps.diagnosticsDir, bundle.fileName);
@@ -317,6 +410,8 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     await Promise.all(old.map((f) => rm(join(deps.diagnosticsDir, f), { force: true })));
     return path;
   };
+
+  installReportIpc({ core, stagingDir: deps.reportStagingDir, isOurs: (sender) => isOurs(windows, sender), build });
 
   ipcMain.handle(IPC.diagnosticsSummary, async (e): Promise<DiagnosticsSummary> => {
     if (!isOurs(windows, e.sender)) throw new Error("rejected");
@@ -335,35 +430,62 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     };
   });
 
-  ipcMain.handle(IPC.diagnosticsSave, async (e) => {
+  ipcMain.handle(IPC.diagnosticsCollect, async (e, options: unknown) => {
+    if (!isOurs(windows, e.sender)) throw new Error("rejected");
+    await collectOthers(isObject(options) && options.force === true);
+    return lastStatus;
+  });
+
+  ipcMain.handle(IPC.diagnosticsSave, async (e, options: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || !isOurs(windows, e.sender)) throw new Error("rejected");
-    const bundle = await build();
+    const bundle = await build(allDevices(options));
     const r = await dialog.showSaveDialog(win, { title: t("developer.saveTitle"), defaultPath: bundle.fileName, filters: [{ name: t("developer.fileFilter"), extensions: ["txt"] }] });
     if (r.canceled || !r.filePath) return undefined;
     await writeFile(r.filePath, bundle.text, "utf8");
     return r.filePath;
   });
 
-  ipcMain.handle(IPC.diagnosticsCopy, async (e) => {
+  ipcMain.handle(IPC.diagnosticsCopy, async (e, options: unknown) => {
     if (!isOurs(windows, e.sender)) throw new Error("rejected");
-    clipboard.writeText((await build()).text);
+    clipboard.writeText((await build(allDevices(options))).text);
   });
 
-  ipcMain.handle(IPC.diagnosticsReveal, async (e) => {
+  ipcMain.handle(IPC.diagnosticsReveal, async (e, options: unknown) => {
     if (!isOurs(windows, e.sender)) throw new Error("rejected");
-    const path = await writeToFolder(await build());
+    const path = await writeToFolder(await build(allDevices(options)));
     shell.showItemInFolder(path);
     return path;
   });
 
-  ipcMain.handle(IPC.diagnosticsShare, async (e) => {
+  ipcMain.handle(IPC.diagnosticsShare, async (e, options: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || !isOurs(windows, e.sender) || process.platform !== "darwin") return false;
-    const path = await writeToFolder(await build());
+    const path = await writeToFolder(await build(allDevices(options)));
     new ShareMenu({ filePaths: [path] }).popup({ window: win });
     return true;
   });
+}
+
+/** One path segment for the macOS share sheet, which shows the file's own name. */
+function shareDisplayName(name: string): string {
+  const base = name.split(/[/\\]/).pop()?.replaceAll("\0", "").replace(/^\.+/, "").trim() ?? "";
+  return base || "track";
+}
+
+/** True when [file] is [root] or a file inside it. Both are resolved, so a symlink can't step out. */
+async function pathWithin(roots: string[], file: string): Promise<boolean> {
+  for (const root of roots) {
+    let base: string;
+    try {
+      base = await realpath(root);
+    } catch {
+      continue;
+    }
+    const rel = relative(base, file);
+    if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return true;
+  }
+  return false;
 }
 
 function applyWindowControl(windows: Windows, win: BrowserWindow, control: unknown): void {

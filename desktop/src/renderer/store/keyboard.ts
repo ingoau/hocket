@@ -3,6 +3,7 @@
 // handle navigation first (they stopPropagation); media keys never arrive here.
 import { useEffect, useMemo } from "react";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
+import type { ActionTarget } from "@core/api";
 import { useApp } from "./app";
 import { Keymap, chordFromEvent, isTextInput } from "./shortcuts";
 import { executeAction } from "./actions";
@@ -105,10 +106,14 @@ export function useGlobalKeyboard(enabled = true): void {
       if (id === "redoAlt") { app.dispatch({ type: "redo" }); return; }
       if (id === "undo") { app.dispatch({ type: "undo" }); return; }
       if (id === "redo") { app.dispatch({ type: "redo" }); return; }
-      if (/^rate[0-5]$/.test(id)) {
-        // Rate the current selection if any; the list handles it when focused.
-        if (app.selectionScope && !app.selection.all && app.selection.ids.size) {
-          app.runAction(id, { type: "tracks", data: { ids: [...app.selection.ids] } });
+      if (/^rate[0-5]$/.test(id) || id === "stash") {
+        // Rate (or stash) the current selection if any, as what it is (songs, albums, queue rows);
+        // the list handles ratings when focused. A select-all is left to the list's own menu.
+        const kind = app.selectionKind;
+        const ids = [...app.selection.ids];
+        if (app.selectionScope && (app.selection.all || ids.length)) {
+          if (app.selection.all || !kind) return;
+          app.runAction(id, kind === "queueItems" ? { type: "queueItems", data: { keys: ids } } : ({ type: kind, data: { ids } } as ActionTarget));
         } else if (app.nowPlaying) {
           app.runAction(id, { type: "tracks", data: { ids: [app.nowPlaying.track.id] } });
         }

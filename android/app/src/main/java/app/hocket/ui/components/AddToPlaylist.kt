@@ -444,7 +444,7 @@ private fun RemoveCopiesDialog(name: String, copies: Int, onRemoveAll: () -> Uni
 
 /** "New playlist" with nothing typed in the search: ask for its name. */
 @Composable
-private fun NewPlaylistDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun NewPlaylistDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -466,7 +466,7 @@ suspend fun resolveTrackIds(client: CoreClient, target: ActionTarget): List<Stri
     is ActionTarget.Playlists -> target.data.ids.flatMap { id -> (client.query(Queries.playlistTracks(id, app.hocket.core.api.Page(0u, 5000u))) as? QueryResult.Tracks)?.data?.items?.map { it.id } ?: emptyList() }
     is ActionTarget.QueueItems -> {
         val q = client.queue.value
-        val all = q.history + listOfNotNull(q.current) + q.playingNext + q.upcoming
+        val all = q.entries + listOfNotNull(q.current)
         target.data.keys.mapNotNull { k -> all.firstOrNull { it.item.key == k }?.track?.id }
     }
     else -> emptyList()

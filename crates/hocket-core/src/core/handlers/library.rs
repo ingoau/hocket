@@ -59,12 +59,12 @@ impl Actor {
         }
     }
 
-    /// Whether any of [ids] is the current item, history, an insertion, or in the playing context.
+    /// Whether any of [ids] is in the queue list or the playing context.
     fn queue_contains_any(&self, ids: &[String]) -> bool {
         self.doc().is_some_and(|d| {
             d.current
                 .iter()
-                .chain(d.insertions.iter())
+                .chain(d.upcoming.iter())
                 .chain(d.history.iter())
                 .any(|i| ids.contains(&i.track_id))
                 || d.context
@@ -1033,6 +1033,15 @@ impl Actor {
 
     pub(crate) fn unpin(&mut self, target: PinTarget) {
         let Some(sid) = self.server_id() else { return };
+        // A paused job would otherwise outlive its pin and keep holding its
+        // tracks from a later pin of the same target.
+        for job in self
+            .downloads
+            .unfinished_jobs(&sid, &target)
+            .unwrap_or_default()
+        {
+            let _ = self.jobs.cancel(&job);
+        }
         if let Err(e) = self.downloads.unpin(&sid, &target) {
             self.toast(format!("Couldn't remove download: {e}"), None);
             return;
@@ -1398,12 +1407,7 @@ impl Actor {
         self.lyrics_for = current.clone();
         let Some(id) = current else { return };
         self.fetch_lyrics(id, false);
-        if let Some(next) = queue
-            .playing_next
-            .iter()
-            .chain(queue.upcoming.iter())
-            .find(|e| !e.item.unavailable)
-        {
+        if let Some(next) = queue.upcoming().find(|e| !e.item.unavailable) {
             let next_id = next.track.id.clone();
             self.prefetch_lyrics(next_id);
         }
@@ -1552,6 +1556,16 @@ impl Actor {
             });
         local.request_id = request_id.clone();
         local.from_server = false;
+        // The index stores each line's own timestamp. A positive offset shows
+        // lyrics later, so the audio position of that line is later by the same amount.
+        for hit in &mut local.lyrics {
+            if let Some(ms) = hit.start_ms {
+                hit.start_ms = Some(crate::lyrics::search::seek_position(
+                    ms,
+                    self.lyrics_offset(&hit.track.id),
+                ));
+            }
+        }
         self.emit(Event::SearchResults {
             results: local.clone(),
         });
@@ -1588,6 +1602,7 @@ impl Actor {
                         artists: r.artist.iter().map(|a| artist_from_id3(&sid, a)).collect(),
                         playlists: vec![],
                         from_server: true,
+                        lyrics: vec![],
                     };
                     let _ = username;
                     let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { results }));
@@ -1674,6 +1689,14 @@ struct SharedHttp(Arc<dyn crate::lyrics::LyricsHttp>);
 impl crate::lyrics::LyricsHttp for SharedHttp {
     fn get(&self, url: &str) -> BoxFuture<'_, Result<String, crate::lyrics::LyricsError>> {
         self.0.get(url)
+    }
+
+    fn post_json(
+        &self,
+        url: &str,
+        body: String,
+    ) -> BoxFuture<'_, Result<String, crate::lyrics::LyricsError>> {
+        self.0.post_json(url, body)
     }
 }
 

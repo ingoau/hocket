@@ -2,20 +2,11 @@ package app.hocket.ui.player
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.material3.MaterialShapes
-import androidx.compose.material3.toPath
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.GraphicsLayerScope
-import androidx.compose.ui.graphics.Matrix
-import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.LayoutDirection
-import androidx.graphics.shapes.Morph
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -28,7 +19,6 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -95,33 +85,9 @@ import app.hocket.ui.a11y.Spoken
 import app.hocket.ui.components.formatClock
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.theme.Motion
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
-
-/**
- * A Navic-style press bounce: the control dips while held, then pops slightly past rest on release
- * and springs back. Drawn with a graphics layer (no relayout); off with reduced motion.
- */
-@Composable
-fun rememberPressScale(interactionSource: InteractionSource): State<Float> {
-    val reduced = LocalReducedMotion.current
-    val scale = remember { Animatable(1f) }
-    LaunchedEffect(interactionSource, reduced) {
-        if (reduced) { scale.snapTo(1f); return@LaunchedEffect }
-        interactionSource.interactions.collectLatest { i ->
-            when (i) {
-                is PressInteraction.Press -> scale.animateTo(0.94f, Motion.quick)
-                is PressInteraction.Release, is PressInteraction.Cancel -> {
-                    scale.animateTo(1.04f, tween(100, easing = FastOutSlowInEasing))
-                    scale.animateTo(1f, Motion.pressRelease)
-                }
-            }
-        }
-    }
-    return scale.asState()
-}
 
 /**
  * A filled transport button drawn in one graphics layer: its shape (from [shapeFor], given the

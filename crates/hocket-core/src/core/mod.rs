@@ -219,6 +219,11 @@ pub enum Internal {
         generation: u64,
         outcome: handlers::prefetch::PrefetchOutcome,
     },
+    /// The report upload's background task moved on.
+    ReportUpload(handlers::reports::UploadMsg),
+    /// Test hook: hold this report grant as if the coordinator had sent it.
+    #[cfg(any(feature = "sim", test))]
+    ReportGrant(crate::reports::HeldGrant),
     /// A spawned short task finished (bookkeeping for `settle`).
     TaskDone,
     /// Test barrier: answered once every message before it was handled, with
@@ -323,6 +328,8 @@ pub(crate) struct Deps {
     pub manual_tick: bool,
     /// How the in-process stream reader reaches the server (`None` = reqwest).
     pub stream_upstream: Option<Arc<dyn stream_reader::StreamUpstream>>,
+    /// The session reducer Connect applies ops with (`None` = this build's).
+    pub reducer: Option<crate::connect::ReducerHandle>,
 }
 
 impl Deps {
@@ -337,6 +344,7 @@ impl Deps {
             seed: None,
             manual_tick: false,
             stream_upstream: None,
+            reducer: None,
         }
     }
 }

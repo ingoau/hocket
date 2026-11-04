@@ -18,7 +18,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Toasts } from "./components/Toasts";
 import { Dialogs } from "./components/Dialogs";
 import { Router } from "./views/Router";
-import { Setup } from "./views/Setup";
+import { Setup, useSetupSummary } from "./views/Setup";
 import { executeAction } from "./store/actions";
 import { nowPlayingAnnouncement } from "./lib/a11y";
 import { NARROW, useMediaQuery } from "./lib/media";
@@ -29,6 +29,7 @@ import { useTheme } from "./lib/theme";
 import { handOnFocus } from "./lib/focus";
 import { loadAmll } from "./lib/amll";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ReportUploadBar } from "./components/ReportUploadBar";
 
 // One retry: React.lazy keeps a failed import for good, which would leave fullscreen broken.
 const loadFullscreen = () => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer }));
@@ -38,6 +39,7 @@ export function App() {
   const ready = useApp((s) => s.ready);
   // The core probes before installing: ServersChanged only arrives once a server is real.
   const hasServer = useApp((s) => s.servers.length > 0);
+  const setupSummary = useSetupSummary();
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);
   const panels = useApp((s) => s.panels);
@@ -62,7 +64,7 @@ export function App() {
   useQueueDropReveal();
 
   if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
-  if (!hasServer) return <Setup />;
+  if (!hasServer || setupSummary) return <Setup />;
   const skip = (e: React.MouseEvent) => {
     e.preventDefault();
     document.getElementById("main")?.focus();
@@ -73,6 +75,7 @@ export function App() {
         <a href="#main" className="skip-link" onClick={skip} data-testid="skip-link">{t("a11y.skipToContent")}</a>
         {coreKind === "fake" ? <div className="dev-banner" data-testid="dev-banner">{t("app.devBanner")}</div> : null}
         <OfflineBanner offline={network?.kind === "offline"} />
+        <ReportUploadBar />
         <TopBar />
       </header>
         <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">

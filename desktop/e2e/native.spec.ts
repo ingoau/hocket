@@ -54,6 +54,7 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("setup-username").fill("alice");
       await page.getByTestId("setup-password").fill("secret");
       await page.getByTestId("setup-connect").click();
+      await page.getByTestId("setup-continue").click({ timeout: 30_000 });
       await expect(page.getByTestId("app")).toBeVisible({ timeout: 30_000 });
       await expect(page.getByTestId("dev-banner")).toHaveCount(0);
       expect(server.callsTo("ping").length).toBeGreaterThan(0);
@@ -74,8 +75,8 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("toggle-queue").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await expect(page.getByTestId("queue-row-current")).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByTestId("queue-row-upcoming")).toHaveCount(5);
-      await expect(page.getByTestId("queue-timeline")).toContainText("Continue playing");
+      await expect(page.getByTestId("queue-row-rest")).toHaveCount(5);
+      await expect(page.getByTestId("queue-timeline")).toContainText("Next from");
       const firstTitle = await page.getByTestId("queue-row-current").locator(".t1").textContent();
 
       // Position extrapolates from TransportChanged stamps while playing.

@@ -5,6 +5,12 @@ import app.hocket.ui.nav.ScrollToTopOnReselect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import app.hocket.ui.components.ListPaneWidth
+import app.hocket.ui.components.TwoPaneMinWidth
+import app.hocket.ui.components.maxWidthListPadding
+import app.hocket.ui.components.adaptiveColumns
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
@@ -41,6 +47,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import androidx.annotation.StringRes
@@ -48,6 +55,7 @@ import androidx.compose.foundation.layout.Arrangement
 import app.hocket.ui.nav.AccountButton
 import app.hocket.ui.nav.NavItem
 import app.hocket.ui.nav.icon
+import app.hocket.ui.nav.route
 import app.hocket.ui.nav.label
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
@@ -186,11 +194,11 @@ private fun <T> LazyGridScope.gridGroups(
 private fun <T> LazyListScope.listGroups(groups: ListGroups<T>, allTitle: Int, control: SortControl, key: (T) -> String, row: @Composable (T, List<T>) -> Unit) {
     if (groups.pinned.isNotEmpty()) {
         item(key = "pinned.h", contentType = "header") { ListHeader(stringResource(R.string.library_group_pinned), Modifier.testTag("library.group.pinned")) }
-        items(groups.pinned, key = { "pinned." + key(it) }) { row(it, groups.pinned) }
+        items(groups.pinned, key = { "pinned." + key(it) }) { Box(Modifier.animateItem()) { row(it, groups.pinned) } }
     }
     if (groups.recent.isNotEmpty()) {
         item(key = "recent.h", contentType = "header") { ListHeader(stringResource(R.string.library_group_recent), Modifier.testTag("library.group.recent")) }
-        items(groups.recent, key = { "recent." + key(it) }) { row(it, groups.recent) }
+        items(groups.recent, key = { "recent." + key(it) }) { Box(Modifier.animateItem()) { row(it, groups.recent) } }
     }
     item(key = "all.h", contentType = "header") {
         ListHeader(stringResource(allTitle), Modifier.testTag("library.group.all")) { SortChip(control.sort, control.options, control.onSort) }
@@ -291,10 +299,12 @@ internal fun PlaylistsTab(serverId: String, control: SortControl, open: (DetailT
     KeepTopForGroups(groups, { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 }) { listState.requestScrollToItem(0) }
     @Composable fun Item(p: Playlist, modifier: Modifier) = PlaylistRow(p, onClick = { open(DetailTarget.Playlist(p.id)) }, modifier = modifier, selected = selecting && selection.contains(p.id),
         selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Playlists, p.id) })
-    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.playlists")) {
-        listGroups(groups, R.string.library_all_playlists, control, { it.id }) { p, _ -> Item(p, Modifier) }
-        if (sorted == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton() }
-        else items(sorted, key = { it.id }, contentType = { "playlist" }) { p -> Item(p, Modifier.animateItem().testTag("library.playlist")) }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        LazyColumn(state = listState, contentPadding = maxWidthListPadding(maxWidth, topPadding, BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.playlists")) {
+            listGroups(groups, R.string.library_all_playlists, control, { it.id }) { p, _ -> Item(p, Modifier) }
+            if (sorted == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton() }
+            else items(sorted, key = { it.id }, contentType = { "playlist" }) { p -> Item(p, Modifier.animateItem().testTag("library.playlist")) }
+        }
     }
 }
 
@@ -353,41 +363,43 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
     KeepTopForGroups(groups, { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 }) { listState.requestScrollToItem(0) }
     val recentLabel = stringResource(R.string.library_group_recent)
     val pinnedLabel = stringResource(R.string.library_group_pinned)
-    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.songs")) {
-        if (control != null) listGroups(groups, R.string.library_all_songs, control, { it.id }) { track, group ->
-            // A pinned or recent song plays its group from there.
-            TrackRow(track, onClick = {
-                client.dispatch(Commands.playTracks(serverId, group.map { it.id }, group.indexOf(track).coerceAtLeast(0), if (group === groups.pinned) pinnedLabel else recentLabel))
-            }, onMore = { songMenu.open(track) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
-                onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
-        }
-        if (onOfflineOnlyChange != null) item(key = "chips") {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                FilterChip(
-                    selected = offlineOnly, onClick = { onOfflineOnlyChange(!offlineOnly) },
-                    label = { Text(stringResource(R.string.available_offline)) },
-                    leadingIcon = { Icon(if (offlineOnly) HocketIcons.Filled.Check else HocketIcons.Outlined.OfflineBolt, null, Modifier.size(FilterChipDefaults.IconSize)) },
-                    modifier = Modifier.testTag("library.availableOffline"),
-                )
-            }
-        }
-        if (empty) item(key = "empty") {
-            if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body))
-            else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body))
-        }
-        val count = if (state.known) state.total else SKELETON_COUNT
-        items(count, contentType = { i -> if (state.item(i, client.trackPages.pageSize) == null) "skeleton" else "track" }) { i ->
-            val track = state.item(i, client.trackPages.pageSize)
-            if (state.known) SideEffect { client.trackPages.ensure(key, i) }
-            if (track != null) {
-                TrackRow(track.toSummary(), onClick = {
-                    // Play the sorted list as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
-                    val loaded = state.pages.toSortedMap().values.flatten()
-                    val ctx = Commands.adHocContext(serverId, listLabel, loaded.map { it.id }, effectiveSort)
-                    client.dispatch(Commands.playContext(ctx, startIndex = loaded.indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
-                }, onMore = { songMenu.open(track.toSummary()) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        LazyColumn(state = listState, contentPadding = maxWidthListPadding(maxWidth, topPadding, BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.songs")) {
+            if (control != null) listGroups(groups, R.string.library_all_songs, control, { it.id }) { track, group ->
+                // A pinned or recent song plays its group from there.
+                TrackRow(track, onClick = {
+                    client.dispatch(Commands.playTracks(serverId, group.map { it.id }, group.indexOf(track).coerceAtLeast(0), if (group === groups.pinned) pinnedLabel else recentLabel))
+                }, onMore = { songMenu.open(track) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
                     onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
-            } else TrackRowSkeleton()
+            }
+            if (onOfflineOnlyChange != null) item(key = "chips") {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    FilterChip(
+                        selected = offlineOnly, onClick = { onOfflineOnlyChange(!offlineOnly) },
+                        label = { Text(stringResource(R.string.available_offline)) },
+                        leadingIcon = { Icon(if (offlineOnly) HocketIcons.Filled.Check else HocketIcons.Outlined.OfflineBolt, null, Modifier.size(FilterChipDefaults.IconSize)) },
+                        modifier = Modifier.testTag("library.availableOffline"),
+                    )
+                }
+            }
+            if (empty) item(key = "empty") {
+                if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body))
+                else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body))
+            }
+            val count = if (state.known) state.total else SKELETON_COUNT
+            items(count, contentType = { i -> if (state.item(i, client.trackPages.pageSize) == null) "skeleton" else "track" }) { i ->
+                val track = state.item(i, client.trackPages.pageSize)
+                if (state.known) SideEffect { client.trackPages.ensure(key, i) }
+                if (track != null) {
+                    TrackRow(track.toSummary(), onClick = {
+                        // Play the sorted list as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
+                        val loaded = state.pages.toSortedMap().values.flatten()
+                        val ctx = Commands.adHocContext(serverId, listLabel, loaded.map { it.id }, effectiveSort)
+                        client.dispatch(Commands.playContext(ctx, startIndex = loaded.indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
+                    }, onMore = { songMenu.open(track.toSummary()) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
+                        onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
+                } else TrackRowSkeleton()
+            }
         }
     }
 }
@@ -421,10 +433,12 @@ internal fun GenresTab(serverId: String, control: SortControl, open: (DetailTarg
     val listState = rememberLazyListState()
     ScrollToTopOnReselect(listState)
     KeepTopForGroups(groups, { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 }) { listState.requestScrollToItem(0) }
-    LazyColumn(state = listState, contentPadding = PaddingValues(top = topPadding, bottom = BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.genres")) {
-        listGroups(groups, R.string.library_all_genres, control, { it.name }) { g, _ -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }) }
-        if (sorted == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton(showArtwork = false) }
-        else items(sorted, key = { it.name }, contentType = { "genre" }) { g -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }, modifier = Modifier.animateItem().testTag("library.genre")) }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        LazyColumn(state = listState, contentPadding = maxWidthListPadding(maxWidth, topPadding, BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.genres")) {
+            listGroups(groups, R.string.library_all_genres, control, { it.name }) { g, _ -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }) }
+            if (sorted == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton(showArtwork = false) }
+            else items(sorted, key = { it.name }, contentType = { "genre" }) { g -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }, modifier = Modifier.animateItem().testTag("library.genre")) }
+        }
     }
 }
 
@@ -450,7 +464,11 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val (sort, setSort) = rememberListSort(list)
     val control = SortControl(sort, list.sortKeys, setSort)
-    fun open(target: DetailTarget) = when (target) {
+    val sharedArtwork = app.hocket.ui.nav.LocalSharedArtwork.current
+    // What the detail pane shows beside the list on a wide content area; saved as text, so it
+    // survives rotation.
+    var paneTarget by rememberSaveable(stateSaver = DetailTargetSaver) { mutableStateOf<DetailTarget?>(null) }
+    fun push(target: DetailTarget) = when (target) {
         is DetailTarget.Album -> nav.navigate(Route.Album(target.id))
         is DetailTarget.Artist -> nav.navigate(Route.Artist(target.id))
         is DetailTarget.Playlist -> nav.navigate(Route.Playlist(target.id))
@@ -459,35 +477,90 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
     // A bottom-bar place of its own is top level; opened from the Library, it has a way back.
     val barItems = app.hocket.ui.nav.LocalShellNavigator.current?.items.orEmpty()
     val fromLibrary = barItems.none { it.name == list.name }
-    Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("libraryList.${list.name.lowercase()}"),
-        topBar = {
-            MediumFlexibleTopAppBar(
-                title = { Text(stringResource(list.title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
-                navigationIcon = { if (fromLibrary) IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
-                actions = { AccountButton() },
-                scrollBehavior = scroll,
-            )
-        },
-    ) { padding ->
-        val top = padding.calculateTopPadding()
-        Box(Modifier.fillMaxSize()) {
-            ShimmerHost {
-                when (list) {
-                    LibraryList.Albums -> AlbumsTab(serverId, control, ::open, top)
-                    LibraryList.Artists -> ArtistsTab(serverId, control, ::open, top)
-                    LibraryList.Playlists -> PlaylistsTab(serverId, control, ::open, top)
-                    LibraryList.Songs -> {
-                        var offlineOnly by rememberSaveable { mutableStateOf(false) }
-                        SongsTab(serverId, sort.order, sort.coreDescending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top, control = control)
+    // Songs play where they are tapped: that list has nothing to show beside it.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val twoPane = list != LibraryList.Songs && maxWidth >= TwoPaneMinWidth
+        fun open(target: DetailTarget) {
+            if (!twoPane) { push(target); return }
+            // No page is pushed, so the flight the card prepared is spent here, not on the next push.
+            sharedArtwork?.prepareAll(emptyList())
+            // Songs picked on the page in the pane belong to that page: another pick drops them, as
+            // leaving the page does on a phone.
+            if (target != paneTarget && client.selection.value.active && client.selectionKind.value == SelectionKind.Tracks) client.clearSelection()
+            paneTarget = target
+        }
+        // Narrowed (a rotation, the side panel opening) with something in the pane: carry on with it
+        // as its own page rather than drop it. Back stays the list's: the pane isn't a page of its own.
+        // (Only while this is the page showing: composed underneath, as the page under a back
+        // gesture is, it waits.)
+        val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(twoPane, lifecycle) {
+            lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+                val target = paneTarget
+                if (!twoPane && target != null) { paneTarget = null; push(target) }
+            }
+        }
+        Row(Modifier.fillMaxSize()) {
+            Scaffold(
+                modifier = (if (twoPane) Modifier.width(ListPaneWidth).fillMaxHeight() else Modifier.fillMaxSize()).nestedScroll(scroll.nestedScrollConnection).testTag("libraryList.${list.name.lowercase()}"),
+                topBar = {
+                    MediumFlexibleTopAppBar(
+                        title = { Text(stringResource(list.title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
+                        navigationIcon = { if (fromLibrary) IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                        actions = { AccountButton() },
+                        scrollBehavior = scroll,
+                    )
+                },
+            ) { padding ->
+                val top = padding.calculateTopPadding()
+                Box(Modifier.fillMaxSize()) {
+                    ShimmerHost {
+                        when (list) {
+                            LibraryList.Albums -> AlbumsTab(serverId, control, ::open, top)
+                            LibraryList.Artists -> ArtistsTab(serverId, control, ::open, top)
+                            LibraryList.Playlists -> PlaylistsTab(serverId, control, ::open, top)
+                            LibraryList.Songs -> {
+                                var offlineOnly by rememberSaveable { mutableStateOf(false) }
+                                SongsTab(serverId, sort.order, sort.coreDescending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top, control = control)
+                            }
+                            LibraryList.Genres -> GenresTab(serverId, control, ::open, top)
+                        }
                     }
-                    LibraryList.Genres -> GenresTab(serverId, control, ::open, top)
+                    // Beside the pane this toolbar is for the list's own picks; the pane's page has its own for songs.
+                    SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset),
+                        kinds = if (twoPane) setOf(SelectionKind.Albums, SelectionKind.Artists, SelectionKind.Playlists) else null)
                 }
             }
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset))
+            if (twoPane) app.hocket.ui.screens.detail.DetailPane(nav, paneTarget, Modifier.weight(1f).fillMaxHeight())
         }
     }
 }
+
+/** The narrowest a library link gets before the four go back to a 2×2 block. */
+private val LINK_MIN_WIDTH = 180.dp
+
+/** A [DetailTarget] as text ("album:<id>"), for rememberSaveable. */
+internal val DetailTargetSaver = androidx.compose.runtime.saveable.Saver<DetailTarget?, String>(
+    save = { t ->
+        when (t) {
+            null -> null
+            is DetailTarget.Album -> "album:" + t.id
+            is DetailTarget.Artist -> "artist:" + t.id
+            is DetailTarget.Playlist -> "playlist:" + t.id
+            is DetailTarget.Genre -> "genre:" + t.name
+        }
+    },
+    restore = { v ->
+        val (kind, value) = v.substringBefore(':') to v.substringAfter(':')
+        when (kind) {
+            "album" -> DetailTarget.Album(value)
+            "artist" -> DetailTarget.Artist(value)
+            "playlist" -> DetailTarget.Playlist(value)
+            "genre" -> DetailTarget.Genre(value)
+            else -> null
+        }
+    },
+)
 
 /**
  * Links from the Library to the places its lists don't cover: recent queues, downloads, filters,
@@ -499,28 +572,34 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
 @Composable
 internal fun LibraryLinks(nav: NavHostController, joinedAbove: Boolean = false) {
     val links = listOf(
-        Triple(NavItem.RecentQueues, Route.SavedQueues, MaterialShapes.Cookie6Sided),
-        Triple(NavItem.Downloads, Route.Downloads, MaterialShapes.Pill),
-        Triple(NavItem.Filters, Route.Filters, MaterialShapes.Clover4Leaf),
-        Triple(NavItem.Stats, Route.Stats, MaterialShapes.Sunny),
+        NavItem.RecentQueues to MaterialShapes.Cookie6Sided,
+        NavItem.Downloads to MaterialShapes.Pill,
+        NavItem.Filters to MaterialShapes.Clover4Leaf,
+        NavItem.Stats to MaterialShapes.Sunny,
     )
-    Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp).testTag("library.links"), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
-        links.chunked(2).forEachIndexed { r, row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
-                row.forEachIndexed { c, (item, route, iconShape) ->
-                    val shape = groupShape(top = r == 0 && !joinedAbove, bottom = r == 1, start = c == 0, end = c == 1)
-                    Surface(
-                        onClick = { nav.navigate(route) { launchSingleTop = true } },
-                        shape = shape,
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        modifier = Modifier.weight(1f).heightIn(min = 64.dp).testTag("library.link.${item.id}"),
-                    ) {
-                        Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.tertiaryContainer, iconShape.toShape()), contentAlignment = Alignment.Center) {
-                                Icon(item.icon(false), null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
+    val openQueues = app.hocket.ui.player.LocalOpenQueues.current
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) {
+        // A 2×2 block on a phone; one row of four once that fits (never three and one).
+        val columns = if (adaptiveColumns(maxWidth, LINK_MIN_WIDTH, GROUP_GAP) >= links.size) links.size else 2
+        val rows = (links.size + columns - 1) / columns
+        Column(Modifier.fillMaxWidth().testTag("library.links"), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+            links.chunked(columns).forEachIndexed { r, row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+                    row.forEachIndexed { c, (item, iconShape) ->
+                        val shape = groupShape(top = r == 0 && !joinedAbove, bottom = r == rows - 1, start = c == 0, end = c == columns - 1)
+                        Surface(
+                            onClick = { item.route()?.let { nav.navigate(it) { launchSingleTop = true } } ?: openQueues?.invoke() },
+                            shape = shape,
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier.weight(1f).heightIn(min = 64.dp).testTag("library.link.${item.id}"),
+                        ) {
+                            Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.tertiaryContainer, iconShape.toShape()), contentAlignment = Alignment.Center) {
+                                    Icon(item.icon(false), null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Text(item.label(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
-                            Spacer(Modifier.width(12.dp))
-                            Text(item.label(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }

@@ -127,10 +127,10 @@ impl Host {
                     }
                 }
             }
-            Output::Disconnect { peer } => {
-                if self.conn.as_ref().map(|c| c.peer == peer).unwrap_or(false) {
-                    self.conn = None;
-                }
+            Output::Disconnect { peer }
+                if self.conn.as_ref().map(|c| c.peer == peer).unwrap_or(false) =>
+            {
+                self.conn = None;
             }
             _ => {}
         }
@@ -240,6 +240,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             label: "Selection".into(),
             shuffle: false,
             save_outgoing: false,
+            start_position_ms: 0,
         },
     })
     .await;

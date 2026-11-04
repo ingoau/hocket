@@ -5,38 +5,74 @@ import { useQuery } from "../store/queries";
 import { Artwork } from "../components/Artwork";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
-import { Select } from "../components/controls";
+
+const PERIODS = [7, 30, 365] as const;
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAYS_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const hourSpan = (h: number) => `${String(h).padStart(2, "0")}:00–${String((h + 1) % 24).padStart(2, "0")}:00`;
+
+/** A bar chart in a card: the title and a readout naming the bar under the pointer (or the peak); each bar on its own track, the peak on the accent. */
+function Chart({ title, values, labels, readout, peak, a11y, testId }: { title: string; values: number[]; labels: string[]; readout: (i: number) => string; peak: (i: number) => string; a11y: string; testId: string }) {
+  const [hover, setHover] = useState(-1);
+  const max = Math.max(1, ...values);
+  const top = values.indexOf(Math.max(...values));
+  return (
+    <section className="stat-card stat-chart" aria-label={title}>
+      <div className="stat-card-head">
+        <h2>{title}</h2>
+        <span className="stat-readout" aria-hidden="true" data-testid={`${testId}-readout`}>{hover >= 0 ? readout(hover) : peak(top)}</span>
+      </div>
+      <div className="bars" role="img" aria-label={a11y} onMouseLeave={() => setHover(-1)} data-testid={testId}>
+        {values.map((v, i) => <div key={i} className={`${i === top ? "peak" : ""} ${i === hover ? "hover" : ""}`} onMouseEnter={() => setHover(i)}><span style={{ height: `${v ? Math.max(6, (v / max) * 100) : 0}%` }} /></div>)}
+      </div>
+      <div className="bar-labels" aria-hidden="true">{labels.map((l, i) => <span key={i}>{l}</span>)}</div>
+    </section>
+  );
+}
 
 export function Stats() {
   const [days, setDays] = useState(30);
   const navigate = useApp((s) => s.navigate);
   const { data, loading } = useQuery(() => ({ type: "stats", data: { period_days: days } }), "stats", [days]);
-  const maxHour = Math.max(1, ...(data?.playsByHour ?? [0]));
-  const maxDay = Math.max(1, ...(data?.playsByWeekday ?? [0]));
+  // Rounded to the minute first, so 2 h 59 m 40 s reads 3 h 0 min, never 2 h 60 min.
+  const totalMinutes = Math.round((data?.totalMs ?? 0) / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
   return (
     <div className="view page-stats" data-testid="view-stats">
       <div className="view-header">
-        <h1 className="brand-type">{t("stats.title")}</h1>
+        <h1 className="brand-type">{t("stats.heading")}</h1>
         <div className="actions">
-          <Select value={days} aria-label={t("stats.title")} onChange={(e) => setDays(Number(e.target.value))}>{[7, 30, 90, 365].map((d) => <option key={d} value={d}>{t("stats.period", { days: d })}</option>)}</Select>
+          <div className="button-group stat-periods" role="group" aria-label={t("stats.periodLabel")}>
+            {PERIODS.map((d) => <button key={d} type="button" className={`seg ${days === d ? "on" : ""}`} aria-pressed={days === d} onClick={() => setDays(d)} data-testid={`stats-period-${d}`}>{days === d ? <Icon name="check" size={18} /> : null}{d === 365 ? t("stats.year") : t("stats.days", { days: d })}</button>)}
+          </div>
         </div>
       </div>
       <div className="view-body">
         {!loading && !data?.totalPlays ? <EmptyState message={t("stats.empty")} icon="stats" /> : null}
         {data?.totalPlays ? (
-          <div className="stack stats-stack">
-            <div className="stat-heroes">
-              <div className="stat-hero"><Icon name="headphones" size={24} className="stat-icon" /><div className="stat-label">{t("stats.plays", { count: "" })}</div><div className="stat-figure">{data.totalPlays}</div></div>
-              <div className="stat-hero"><Icon name="schedule" size={24} className="stat-icon" /><div className="stat-label">{t("stats.time", { hours: "" })}</div><div className="stat-figure">{(data.totalMs / 3_600_000).toFixed(1)}<span className="stat-unit"> h</span></div></div>
+          <div className="stats-stack">
+            <div className="stat-top">
+              <div className="stat-heroes">
+                <div className="stat-hero"><div className="stat-figure">{data.totalPlays}</div><div className="stat-label">{t("stats.playsLabel")}</div></div>
+                <div className="stat-hero"><div className="stat-figure">{hours}<span className="stat-unit">{t("stats.unitHours")}</span> {minutes}<span className="stat-unit">{t("stats.unitMinutes")}</span></div><div className="stat-label">{t("stats.timeListened")}</div></div>
+              </div>
+              <Chart title={t("stats.byHour")} values={data.playsByHour} labels={data.playsByHour.map((_, i) => (i % 6 === 0 || i === 23 ? String(i) : ""))} readout={(i) => t("stats.readout", { what: hourSpan(i), count: data.playsByHour[i] ?? 0 })} peak={(i) => t("stats.peakHour", { what: hourSpan(i) })} a11y={data.playsByHour.map((v, i) => `${i}:00 ${v}`).join(", ")} testId="stats-hours" />
+              <Chart title={t("stats.byWeekday")} values={data.playsByWeekday} labels={DAYS} readout={(i) => t("stats.readout", { what: DAYS_LONG[i] ?? "", count: data.playsByWeekday[i] ?? 0 })} peak={(i) => t("stats.peakDay", { what: DAYS_LONG[i] ?? "" })} a11y={data.playsByWeekday.map((v, i) => `${DAYS[i]} ${v}`).join(", ")} testId="stats-days" />
             </div>
-            <div className="stat-grid">
-              <div className="card"><h2 className="card-title">{t("stats.byHour")}</h2><div className="bars" role="img" aria-label={data.playsByHour.map((v, i) => `${i}:00 ${v}`).join(", ")}>{data.playsByHour.map((v, i) => <div key={i} style={{ height: `${(v / maxHour) * 100}%` }} title={`${i}:00 · ${v}`} />)}</div><div className="bar-labels" aria-hidden="true">{data.playsByHour.map((_, i) => <span key={i}>{i % 6 === 0 ? i : ""}</span>)}</div></div>
-              <div className="card"><h2 className="card-title">{t("stats.byWeekday")}</h2><div className="bars" role="img" aria-label={data.playsByWeekday.map((v, i) => `${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i]} ${v}`).join(", ")}>{data.playsByWeekday.map((v, i) => <div key={i} style={{ height: `${(v / maxDay) * 100}%` }} title={`${v}`} />)}</div><div className="bar-labels" aria-hidden="true">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <span key={d}>{d}</span>)}</div></div>
-            </div>
-            <div className="stat-grid">
-              <div className="card"><h2 className="card-title">{t("stats.topTracks")}</h2><ol className="plain-list">{data.topTracks.map((tr, i) => <li key={tr.id} className="qrow"><span className="rank">{i + 1}</span><Artwork id={tr.coverArt} size={64} className="art" /><div className="text"><div className="t1">{tr.title}</div><div className="t2">{tr.artist}</div></div></li>)}</ol></div>
-              <div className="card"><h2 className="card-title">{t("stats.topAlbums")}</h2><ol className="plain-list">{data.topAlbums.map((a, i) => <li key={a.id}><button type="button" className="qrow" onClick={() => navigate({ view: "album", id: a.id })}><span className="rank">{i + 1}</span><Artwork id={a.coverArt} size={64} className="art" /><div className="text"><div className="t1">{a.name}</div><div className="t2">{a.artist}</div></div></button></li>)}</ol></div>
-              <div className="card"><h2 className="card-title">{t("stats.topArtists")}</h2><ol className="plain-list">{data.topArtists.map((a, i) => <li key={a.id}><button type="button" className="qrow" onClick={() => navigate({ view: "artist", id: a.id })}><span className="rank">{i + 1}</span><Artwork id={a.coverArt} size={64} className="art" round /><div className="text"><div className="t1">{a.name}</div></div></button></li>)}</ol></div>
+            <div className="stat-tops">
+              <section aria-labelledby="stats-top-tracks">
+                <h2 className="stat-tops-title" id="stats-top-tracks">{t("stats.topTracks")}</h2>
+                <ol className="plain-list stat-rows">{data.topTracks.map((tr, i) => <li key={tr.id} className="stat-row"><span className="rank">{i + 1}</span><Artwork id={tr.coverArt} size={96} className="art" /><div className="text"><div className="t1 truncate">{tr.title}</div><div className="t2 truncate">{[tr.artist, tr.album].filter(Boolean).join(" · ")}</div></div></li>)}</ol>
+              </section>
+              <section aria-labelledby="stats-top-albums">
+                <h2 className="stat-tops-title" id="stats-top-albums">{t("stats.topAlbums")}</h2>
+                <ol className="plain-list stat-albums">{data.topAlbums.map((a, i) => <li key={a.id}><button type="button" className="stat-album" onClick={() => navigate({ view: "album", id: a.id })}><Artwork id={a.coverArt} size={300} className="art" /><span className="t1 truncate">{i + 1}. {a.name}</span><span className="t2 truncate">{a.artist}</span></button></li>)}</ol>
+              </section>
+              <section aria-labelledby="stats-top-artists">
+                <h2 className="stat-tops-title" id="stats-top-artists">{t("stats.topArtists")}</h2>
+                <ol className="plain-list stat-rows">{data.topArtists.map((a, i) => <li key={a.id}><button type="button" className="stat-row" onClick={() => navigate({ view: "artist", id: a.id })}><span className="rank">{i + 1}</span><Artwork id={a.coverArt} size={96} className="art round" round /><div className="text"><div className="t1 truncate">{a.name}</div><div className="t2 truncate">{t(a.albumCount === 1 ? "release.count.album.one" : "release.count.album.other", { count: a.albumCount })}</div></div></button></li>)}</ol>
+              </section>
             </div>
           </div>
         ) : null}

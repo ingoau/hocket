@@ -6,8 +6,11 @@ export const SK = {
   homeSections: "home.sections",
   /** What's pinned to the Library (the sidebar), [{kind, id, tap}] in order. Synced. */
   libraryPins: "library.pins",
-  queueMode: "queue.mode",
+  /** Show the "Next in queue" group and Add to queue. Synced; default true. */
+  queueSection: "queue.section",
   queueSavedCap: "queue.savedCap",
+  /** Continue an album left unfinished. Synced. Off, Play always starts at the beginning. */
+  resumeAlbums: "playback.resumeAlbums",
   lyricsExternalEnabled: "lyrics.external.enabled",
   ratingsLoveBridgeEnabled: "ratings.loveBridge.enabled",
   ratingsLoveBridgeThreshold: "ratings.loveBridge.threshold",
@@ -22,6 +25,7 @@ export const SK = {
   displayImmersiveArtwork: "display.immersiveArtwork",
   /** Whether the player shows the star rating (bar, sidebar, fullscreen). Synced. */
   displayPlayerRating: "display.playerRating",
+  displayAlbumTrackArtists: "display.albumTrackArtists",
   /** Developer mode: detailed logging, and the shortcut that opens developer diagnostics. Device-local. */
   developerMode: "developer.mode",
   syncEnabled: "sync.enabled",

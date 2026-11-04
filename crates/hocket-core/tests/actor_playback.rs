@@ -19,6 +19,7 @@ fn album_args(server_id: &str, album: &str) -> PlayContextArgs {
         start_index: Some(0),
         shuffle: false,
         save_outgoing: true,
+        start_position_ms: None,
     }
 }
 
@@ -35,6 +36,43 @@ async fn synced_core(name: &str) -> TestCore {
     t
 }
 
+/// The skip swipe's PreviousTrack goes back however far into the track it
+/// is (Previous would restart it), and from a context's later track with no
+/// history too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previous_track_never_restarts() {
+    let t = synced_core("a").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::Next).await;
+    t.run_for(5_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+    t.run(Command::PreviousTrack).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+
+    // Started from the third track: nothing in history, the album before it.
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            start_index: Some(2),
+            ..album_args(&sid, "al0")
+        },
+    })
+    .await;
+    t.run_for(5_000.0).await;
+    assert!(
+        t.queue().await.history_count == 2,
+        "the songs before it are behind the pointer"
+    );
+    t.run(Command::PreviousTrack).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn play_album_then_next_previous_and_undo() {
     let t = synced_core("a").await;
@@ -48,7 +86,7 @@ async fn play_album_then_next_previous_and_undo() {
     let q = t.queue().await;
     assert_eq!(q.context_label.as_deref(), Some("Album al0"));
     assert_eq!(q.current.as_ref().unwrap().track.id, "t0");
-    assert_eq!(q.upcoming.len(), 3);
+    assert_eq!(q.total_upcoming as usize, 3);
     assert!(t.backend.is_playing(), "the owner drives audio");
     let snap = t.snapshot().await;
     assert!(snap.transport.position.is_playing);
@@ -81,8 +119,8 @@ async fn play_album_then_next_previous_and_undo() {
     t.run_for(500.0).await;
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t0");
-    assert_eq!(q.upcoming.len(), 3);
-    assert!(q.history.is_empty());
+    assert_eq!(q.total_upcoming as usize, 3);
+    assert!(q.history_count == 0);
 
     // Previous after 3 s restarts the track instead.
     t.run(Command::Next).await;
@@ -151,8 +189,14 @@ async fn playing_something_new_saves_the_outgoing_queue_and_restore_lands_mid_tr
     t.run_for(500.0).await;
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t1");
-    assert_eq!(q.history.len(), 1, "history travels with the snapshot");
-    assert_eq!(q.upcoming.len(), 2, "context re-resolved on restore");
+    assert_eq!(
+        q.history_count as usize, 1,
+        "history travels with the snapshot"
+    );
+    assert_eq!(
+        q.total_upcoming as usize, 2,
+        "context re-resolved on restore"
+    );
     let pos = t.backend.current().unwrap().1;
     assert!(pos >= 40_000, "landed mid-track at {pos}");
     // Restoring bumps the entry (dedupe on identity) and al1 was saved.
@@ -193,6 +237,7 @@ async fn a_play_scrobbles_exactly_once_and_lands_in_history() {
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     // 200 s track: threshold is 100 s. Now playing goes out at start.
@@ -253,6 +298,7 @@ async fn seeking_does_not_count_as_listening() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(10_000.0).await;
@@ -279,6 +325,7 @@ async fn unplayable_items_are_skipped_with_a_notice() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -294,8 +341,7 @@ async fn unplayable_items_are_skipped_with_a_notice() {
         "skipped to the next playable item"
     );
     assert!(q
-        .history
-        .iter()
+        .history()
         .any(|e| e.item.track_id == "t1" && e.item.unavailable));
     assert!(t
         .events
@@ -331,6 +377,7 @@ async fn sleep_timer_stops_at_end_of_track() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::SetSleepTimer {
@@ -361,6 +408,7 @@ async fn a_play_with_scrobbling_off_is_recorded_but_not_marked_scrobbled() {
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(110_000.0).await;
@@ -401,6 +449,7 @@ async fn auto_advance_follows_the_backend(name: &str, transition_only: bool) {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -459,6 +508,40 @@ async fn gapless_auto_advance_without_ended_moves_the_session() {
     auto_advance_follows_the_backend("h", true).await;
 }
 
+/// A lyric hit starts the song at the matched line in the same command, so the
+/// load is already there and nothing seeks the track that was playing before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn play_tracks_loads_at_the_given_position() {
+    let t = synced_core("pos").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        server_id: sid,
+        track_ids: vec!["t0".into()],
+        start_index: 0,
+        label: "Lyric".into(),
+        shuffle: false,
+        start_position_ms: 12_000,
+    })
+    .await;
+    assert!(
+        t.backend.log().iter().any(|c| matches!(
+            c,
+            ScriptedCall::Load {
+                position_ms: 12_000,
+                ..
+            }
+        )),
+        "the new song loads at the lyric"
+    );
+    assert!(
+        !t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::Seek { .. })),
+        "no separate seek that could land on the previous song"
+    );
+}
+
 /// A transient focus loss (a call, a navigation prompt) must not pause the
 /// platform player: it resumes by itself when focus returns and reports
 /// `Playing`. A pause the user asks for meanwhile does reach it.
@@ -472,6 +555,7 @@ async fn transient_focus_loss_resumes_when_focus_returns() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -521,6 +605,7 @@ async fn lease_renewals_during_a_call_do_not_resume_playback() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -563,6 +648,7 @@ async fn a_stream_error_during_a_call_retries_quietly() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -610,6 +696,7 @@ async fn a_permanent_focus_loss_during_a_call_pauses_for_good() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -649,6 +736,7 @@ async fn an_adopted_item_the_backend_never_starts_is_loaded_explicitly() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -709,16 +797,10 @@ async fn play_next_on_an_upcoming_item_moves_it() {
     })
     .await;
     t.run_for(500.0).await;
-    let ids = |q: &QueueView| {
-        q.playing_next
-            .iter()
-            .chain(q.upcoming.iter())
-            .map(|e| e.track.id.clone())
-            .collect::<Vec<_>>()
-    };
+    let ids = |q: &QueueView| q.upcoming().map(|e| e.track.id.clone()).collect::<Vec<_>>();
     let q = t.queue().await;
     assert_eq!(ids(&q), ["t1", "t2", "t3"]);
-    let last = q.upcoming.last().unwrap().clone();
+    let last = q.upcoming().last().unwrap().clone();
     t.run(Command::RunAction {
         action_id: "playNext".into(),
         target: ActionTarget::QueueItems {
@@ -753,21 +835,15 @@ async fn play_next_on_several_upcoming_items_moves_each_of_them() {
     })
     .await;
     t.run_for(500.0).await;
-    let ids = |q: &QueueView| {
-        q.playing_next
-            .iter()
-            .chain(q.upcoming.iter())
-            .map(|e| e.track.id.clone())
-            .collect::<Vec<_>>()
-    };
+    let ids = |q: &QueueView| q.upcoming().map(|e| e.track.id.clone()).collect::<Vec<_>>();
     let q = t.queue().await;
     assert_eq!(ids(&q), ["t1", "t2", "t3"]);
     t.run(Command::RunAction {
         action_id: "playNext".into(),
         target: ActionTarget::QueueItems {
             keys: vec![
-                q.upcoming[2].item.key.clone(),
-                q.upcoming[0].item.key.clone(),
+                q.upcoming().nth(2).unwrap().item.key.clone(),
+                q.upcoming().next().unwrap().item.key.clone(),
             ],
         },
     })
@@ -862,7 +938,7 @@ async fn removing_the_next_song_replaces_the_gapless_preload() {
     .await;
     t.run_for(500.0).await;
     let q = t.queue().await;
-    let next = q.upcoming[0].clone();
+    let next = q.upcoming().next().unwrap().clone();
     assert_eq!(next.track.id, "t1");
     t.backend.clear_log();
 
@@ -872,8 +948,8 @@ async fn removing_the_next_song_replaces_the_gapless_preload() {
     .await;
     t.run_for(500.0).await;
     let q = t.queue().await;
-    assert_eq!(q.upcoming[0].track.id, "t2");
-    let replacement = q.upcoming[0].item.key.clone();
+    assert_eq!(q.upcoming().next().unwrap().track.id, "t2");
+    let replacement = q.upcoming().next().unwrap().item.key.clone();
     assert_ne!(replacement, next.item.key, "another song, another key");
     assert!(
         t.backend
@@ -945,8 +1021,8 @@ async fn autoplay_is_fetched_and_preloaded_before_the_queue_ends() {
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t3", "still playing");
     let pick = q
-        .playing_next
-        .first()
+        .upcoming()
+        .next()
         .cloned()
         .expect("autoplay joined the queue ahead of the end");
     assert!(matches!(pick.item.source, QueueSource::Autoplay { .. }));
@@ -995,13 +1071,12 @@ async fn autoplay_fetched_ahead_does_not_jump_a_new_queue() {
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t4");
     assert!(
-        !q.playing_next
-            .iter()
+        !q.upcoming()
             .any(|e| matches!(e.item.source, QueueSource::Autoplay { .. })),
         "the stale batch stayed out: {:?}",
-        q.playing_next
+        q.entries
     );
-    assert_eq!(q.upcoming.len(), 3);
+    assert_eq!(q.total_upcoming as usize, 3);
 }
 
 /// Autoplay asked for when the queue ran out does not skip a song the user
@@ -1027,6 +1102,7 @@ async fn autoplay_at_the_end_does_not_skip_a_song_started_meanwhile() {
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     });
     t.run_for(2000.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t5"));

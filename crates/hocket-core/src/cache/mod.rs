@@ -106,12 +106,31 @@ fn source_name(s: LyricsSource) -> &'static str {
     }
 }
 
+fn store_lyrics_in(
+    conn: &rusqlite::Connection,
+    server_id: &str,
+    track_id: &str,
+    source: LyricsSource,
+    json: &str,
+    now: f64,
+) -> DbResult<()> {
+    conn.execute(
+        "INSERT INTO lyrics_cache(server_id, track_id, source, json, fetched_at, last_used_at, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+         ON CONFLICT(server_id, track_id, source) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at, last_used_at = excluded.last_used_at, bytes = excluded.bytes",
+        params![server_id, track_id, source_name(source), json, now, json.len() as i64],
+    )?;
+    Ok(())
+}
+
 struct Inner {
     db: Db,
     clock: Arc<dyn Clock>,
     cache_dir: PathBuf,
     image_budget: RwLock<f64>,
     lyrics_max: RwLock<usize>,
+    /// Images the server answered 404 for (server, id, size), this session:
+    /// a shell asking again after a failed fetch never re-asks the server.
+    image_missing: parking_lot::Mutex<std::collections::HashSet<(String, String, u32)>>,
 }
 
 #[derive(Clone)]
@@ -128,6 +147,7 @@ impl Caches {
                 cache_dir: cache_dir.to_path_buf(),
                 image_budget: RwLock::new(DEFAULT_IMAGE_BUDGET),
                 lyrics_max: RwLock::new(DEFAULT_LYRICS_MAX_ENTRIES),
+                image_missing: Default::default(),
             }),
         }
     }
@@ -215,11 +235,18 @@ impl Caches {
         if let Some(p) = self.artwork_cached(server_id, image_id, size)? {
             return Ok(Some(p));
         }
+        let missing = (server_id.to_string(), image_id.to_string(), size);
+        if self.inner.image_missing.lock().contains(&missing) {
+            return Ok(None);
+        }
         let dest = self.image_path(server_id, image_id, size);
         let url = api.cover_art_url(image_id, Some(size));
         let out = match api.download_to_file(url, &dest).await {
             Ok(o) => o,
-            Err(SubsonicError::NotFound(_)) => return Ok(None),
+            Err(SubsonicError::NotFound(_)) => {
+                self.inner.image_missing.lock().insert(missing);
+                return Ok(None);
+            }
             Err(e) => return Err(e.into()),
         };
         let now = self.now();
@@ -369,7 +396,19 @@ impl Caches {
         lyrics: &Lyrics,
     ) -> Result<(), CacheError> {
         let json = serde_json::to_string(lyrics)?;
-        self.lyrics_store(server_id, track_id, lyrics.source, &json)?;
+        // One transaction, so a failed index write cannot leave the old text
+        // searchable next to the new copy.
+        let now = self.now();
+        self.inner.db.with_tx(|tx| {
+            store_lyrics_in(tx, server_id, track_id, lyrics.source, &json, now)?;
+            crate::db::queries::index_lyrics_in(
+                tx,
+                server_id,
+                track_id,
+                source_name(lyrics.source),
+                lyrics,
+            )
+        })?;
         self.inner.db.set_track_has_lyrics(track_id, true)?;
         self.enforce_lyrics_budget()?;
         Ok(())
@@ -393,14 +432,9 @@ impl Caches {
         json: &str,
     ) -> DbResult<()> {
         let now = self.now();
-        self.inner.db.with_conn(|c| {
-            c.execute(
-                "INSERT INTO lyrics_cache(server_id, track_id, source, json, fetched_at, last_used_at, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
-                 ON CONFLICT(server_id, track_id, source) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at, last_used_at = excluded.last_used_at, bytes = excluded.bytes",
-                params![server_id, track_id, source_name(source), json, now, json.len() as i64],
-            )?;
-            Ok(())
-        })
+        self.inner
+            .db
+            .with_conn(|c| store_lyrics_in(c, server_id, track_id, source, json, now))
     }
 
     pub fn lyrics_invalidate(&self, server_id: &str, track_id: &str) -> DbResult<usize> {
@@ -629,6 +663,33 @@ mod tests {
         assert_eq!(snap_size(65), 160);
         assert_eq!(snap_size(300), 320);
         assert_eq!(snap_size(5000), 1280);
+    }
+
+    #[tokio::test]
+    async fn artwork_remembers_a_404_but_asks_again_after_a_failure() {
+        let (_dir, _db, caches, _clock, server) = fixture();
+        server.set_media("al-1", vec![1u8; 300]);
+        server.fail_next(SubsonicError::Network("drop".into()), 1);
+        assert!(caches.artwork_path(&server, "al-1", 640).await.is_err());
+        let got = caches.artwork_path(&server, "al-1", 640).await.unwrap();
+        assert!(got.is_some(), "a failed fetch is not remembered");
+        server.fail_next(SubsonicError::NotFound("al-2".into()), 1);
+        assert!(caches
+            .artwork_path(&server, "al-2", 640)
+            .await
+            .unwrap()
+            .is_none());
+        let before = server.calls_to("download");
+        assert!(caches
+            .artwork_path(&server, "al-2", 640)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            server.calls_to("download"),
+            before,
+            "a 404 is not asked again"
+        );
     }
 
     #[tokio::test]

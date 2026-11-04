@@ -156,6 +156,12 @@ pub fn album_from_id3(server_id: &str, a: &AlbumId3) -> api::Album {
         music_brainz_id: a.music_brainz_id.clone().filter(|s| !s.is_empty()),
         replay_gain: replay_gain(&a.replay_gain),
         offline: OfflineState::None,
+        release_types: a
+            .release_types
+            .iter()
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty())
+            .collect(),
     }
 }
 

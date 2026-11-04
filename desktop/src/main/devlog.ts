@@ -144,8 +144,11 @@ export class DevLog {
     });
   }
 
-  /** The report: environment, the core's diagnostics, then the log of the last `windowMs`. */
-  bundle(parts: { coreDiagnostics: string; extra?: Record<string, string>; windowMs?: number }): DiagnosticsBundle {
+  /**
+   * The report: environment, the core's diagnostics, the log of the last `windowMs`, then (when
+   * collected) the Connect room's and the other devices' bundles.
+   */
+  bundle(parts: { coreDiagnostics: string; extra?: Record<string, string>; windowMs?: number; otherDevices?: string }): DiagnosticsBundle {
     const windowMs = parts.windowMs ?? LOG_WINDOW_MS;
     const generatedAt = this.now();
     const log = this.recent(windowMs);
@@ -180,6 +183,7 @@ export class DevLog {
       "-------------------",
       log.trimEnd() || "(empty)",
       "",
+      ...(parts.otherDevices ? ["", parts.otherDevices.trimEnd(), ""] : []),
     ].join("\n");
     return { fileName: `hocket-diagnostics-${fileStamp(generatedAt)}.txt`, text, head, log, logLines, logBytes: Buffer.byteLength(log), windowMs, generatedAt };
   }

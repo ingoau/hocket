@@ -32,6 +32,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -95,7 +98,8 @@ fun swipeActionIds(surface: SwipeSurface): Pair<String, String> {
 /**
  * The [SwipeAction] a swipe setting's [id] means for one song row, or null (none, or nothing to do:
  * "download" on a row that is already downloaded). Everything runs through the core's action
- * registry on [target]; "love" runs love or unlove by the row's state, "addToPlaylist" (handled by
+ * registry on [target]; "love" runs love or unlove by the row's state, "addToQueue" runs play later
+ * while the queue section is off, "addToPlaylist" (handled by
  * the platform) calls [onAddToPlaylist] to open the picker.
  */
 @Composable
@@ -107,11 +111,23 @@ fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAd
         ActionIds.REMOVE_FROM_QUEUE -> SwipeAction(id, actionLabel(id), HocketIcons.Filled.Delete, scheme.errorContainer, scheme.onErrorContainer, dismisses = true, run(id))
         ActionIds.PLAY_NEXT -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.PlaylistPlay, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
         ActionIds.PLAY_LATER -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, run(id))
+        // Without the queue section there is no queue to add to: the song goes to the end, as play later.
+        ActionIds.ADD_TO_QUEUE -> if (!queueSectionOn()) trackSwipeAction(ActionIds.PLAY_LATER, track, target, onAddToPlaylist)
+            else SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
         ActionIds.LOVE -> {
             val action = if (track.loved) ActionIds.UNLOVE else ActionIds.LOVE
             SwipeAction(action, actionLabel(action), if (track.loved) HocketIcons.Filled.FavoriteBorder else HocketIcons.Filled.Favorite, scheme.tertiaryContainer, scheme.onTertiaryContainer, dismisses = false, run(action))
         }
         ActionIds.ADD_TO_PLAYLIST -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.PlaylistAdd, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, onAddToPlaylist)
+        ActionIds.STASH -> SwipeAction(id, actionLabel(id), HocketIcons.Filled.Inventory2, scheme.tertiaryContainer, scheme.onTertiaryContainer, dismisses = false, run(id))
+        ActionIds.PREVIEW -> {
+            val menu = LocalSongMenu.current
+            SwipeAction(id, actionLabel(id), HocketIcons.Filled.Headphones, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false) {
+                // The preview stops when that menu closes. Don't start one
+                // there is no menu to show it in.
+                if (menu?.open(track, target) == true) client.dispatch(Commands.previewStart(track.id))
+            }
+        }
         ActionIds.DOWNLOAD -> if (track.offline == OfflineState.Downloaded) null
             else SwipeAction(id, actionLabel(id), HocketIcons.Filled.Download, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
         else -> null
@@ -137,6 +153,8 @@ fun SwipeActionBox(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     swipeSurface: Color = Color.Unspecified,
+    /** The outline [swipeSurface] is drawn in (a segment's rounded corners). */
+    swipeShape: Shape = RectangleShape,
     content: @Composable () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -197,7 +215,7 @@ fun SwipeActionBox(
         Box(
             Modifier
                 .graphicsLayer { translationX = if (rtl) -offset else offset }
-                .drawBehind { if (offset != 0f && swipeSurface.isSpecified) drawRect(swipeSurface) },
+                .drawBehind { if (offset != 0f && swipeSurface.isSpecified) drawOutline(swipeShape.createOutline(size, layoutDirection, this), swipeSurface) },
         ) { content() }
     }
 }

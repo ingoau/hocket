@@ -11,6 +11,13 @@ impl Actor {
         if tracing::enabled!(target: "hocket_core", tracing::Level::TRACE) {
             tracing::trace!(target: "hocket_core", kind = %cmd.kind(), "command");
         }
+        // A transport command takes the output back, but does not restart
+        // main playback first: the command itself is what the user asked
+        // for. Restoring and then toggling would pause a track the user
+        // had just heard as paused.
+        if super::preview::command_ends_preview(&cmd) {
+            self.stop_preview(false);
+        }
         match cmd {
             // -- lifecycle --
             Command::Start => self.start(),
@@ -49,6 +56,7 @@ impl Actor {
             Command::Stop => self.transport_command(TransportCommand::Stop),
             Command::Next => self.queue_command(Command::Next),
             Command::Previous => self.previous(),
+            Command::PreviousTrack => self.queue_command(Command::PreviousTrack),
             Command::SeekTo { position_ms } => {
                 self.transport_command(TransportCommand::SeekTo { position_ms })
             }
@@ -58,23 +66,45 @@ impl Actor {
             Command::SetVolume { volume } => self.volume_command(Some(volume), false),
             Command::SetMuted { muted } => self.volume_command(None, muted),
 
+            // -- preview --
+            Command::PreviewStart { track_id } => self.preview_start(track_id),
+            Command::PreviewToggle => self.preview_toggle(),
+            Command::PreviewSeek { position_ms } => self.preview_seek(position_ms),
+            Command::PreviewStop => self.stop_preview(true),
+
+            // -- stash --
+            c @ (Command::StashAdd { .. }
+            | Command::StashRemove { .. }
+            | Command::StashMove { .. }
+            | Command::StashClear
+            | Command::StashRestore { .. }) => self.stash_command(c),
+            Command::StashQueueGroup => self.stash_queue_group(),
+            Command::ResumeAlbum { album_id } => self.resume_album(album_id),
+            Command::ClearAlbumResume { album_id } => self.clear_album_resume(&album_id, true),
+
+            c @ (Command::Snooze { .. }
+            | Command::SnoozeUntil { .. }
+            | Command::Unsnooze { .. }) => self.snooze_command(c),
+
             // -- queue --
             Command::PlayContext { args } => self.play_context(args),
             c @ (Command::PlayTracks { .. }
             | Command::PlayNext { .. }
+            | Command::AddToQueue { .. }
             | Command::PlayLater { .. }
             | Command::JumpToQueueItem { .. }
             | Command::RemoveQueueItems { .. }
             | Command::MoveQueueItem { .. }
+            | Command::InsertTracks { .. }
             | Command::ClearQueue
-            | Command::ClearInsertions
+            | Command::ClearQueueGroup
             | Command::SetShuffle { .. }
             | Command::SetRepeat { .. }
             | Command::SetAutoplay { .. }
-            | Command::SetQueueMode { .. }
             | Command::SkipUnavailable { .. }
             | Command::PinSavedQueue { .. }
-            | Command::DeleteSavedQueue { .. }) => self.queue_command(c),
+            | Command::DeleteSavedQueue { .. }
+            | Command::RenameQueue { .. }) => self.queue_command(c),
 
             // -- saved queues --
             Command::RestoreSavedQueue { id } => self.restore_saved_queue(id),
@@ -230,6 +260,16 @@ impl Actor {
                 document,
                 include_device_local,
             } => self.import_config(&document, include_device_local),
+            Command::AnswerDiagnosticsRequest { request_id, text } => {
+                self.answer_diagnostics_request(request_id, text)
+            }
+            Command::StartReportUpload {
+                note,
+                bundle,
+                attachments,
+            } => self.start_report_upload(note, bundle, attachments),
+            Command::RetryReportUpload => self.retry_report_upload(),
+            Command::DismissReportUpload => self.dismiss_report_upload(),
 
             // -- audio --
             Command::SetAudioSettings { settings } => self.set_audio_settings(settings),

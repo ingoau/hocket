@@ -7,10 +7,15 @@ import app.hocket.core.api.*
  * `core.dispatch(Commands.playNext(serverId, ids))` rather than nesting `*Inner` payloads.
  */
 object Commands {
+    /** The most rows one `Query.QueueRange` returns. */
+    const val QUEUE_RANGE_MAX = 201
+
     fun seekTo(positionMs: Long) = Command.SeekTo(CommandSeekToInner(positionMs.coerceAtLeast(0).toUInt()))
     fun seekBy(deltaMs: Int) = Command.SeekBy(CommandSeekByInner(deltaMs))
     fun setVolume(volume: Double) = Command.SetVolume(CommandSetVolumeInner(volume))
     fun setMuted(muted: Boolean) = Command.SetMuted(CommandSetMutedInner(muted))
+    fun previewStart(trackId: TrackId) = Command.PreviewStart(CommandPreviewStartInner(trackId))
+    fun previewSeek(positionMs: Long) = Command.PreviewSeek(CommandPreviewSeekInner(positionMs.coerceAtLeast(0).toUInt()))
     fun setNetworkState(state: NetworkState) = Command.SetNetworkState(CommandSetNetworkStateInner(state))
     fun setVisibility(visible: Boolean, focused: Boolean) = Command.SetVisibility(CommandSetVisibilityInner(visible, focused))
     fun setBatterySaver(enabled: Boolean) = Command.SetBatterySaver(CommandSetBatterySaverInner(enabled))
@@ -22,24 +27,44 @@ object Commands {
     fun setTranscodingProfile(networkId: String?, profile: TranscodingProfile) =
         Command.SetTranscodingProfile(CommandSetTranscodingProfileInner(networkId, profile))
 
+    fun snooze(trackIds: List<TrackId>, duration: app.hocket.core.api.SnoozeFor) =
+        Command.Snooze(CommandSnoozeInner(trackIds, duration))
+
+    fun snoozeUntil(trackIds: List<TrackId>, until: Double) =
+        Command.SnoozeUntil(CommandSnoozeUntilInner(trackIds, until))
+
+    fun unsnooze(trackIds: List<TrackId>) = Command.Unsnooze(CommandUnsnoozeInner(trackIds))
+
     fun playContext(context: QueueContext, startIndex: Int? = null, shuffle: Boolean = false, saveOutgoing: Boolean = true) =
         Command.PlayContext(CommandPlayContextInner(PlayContextArgs(context, startIndex?.toUInt(), shuffle, saveOutgoing)))
-    fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false) =
-        Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, startIndex.toUInt(), label, shuffle))
+    fun resumeAlbum(albumId: AlbumId) = Command.ResumeAlbum(CommandResumeAlbumInner(albumId))
+    fun clearAlbumResume(albumId: AlbumId) = Command.ClearAlbumResume(CommandClearAlbumResumeInner(albumId))
+    fun playTracks(serverId: ServerId, trackIds: List<TrackId>, startIndex: Int, label: String, shuffle: Boolean = false, startPositionMs: Long = 0) =
+        Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, startIndex.toUInt(), label, shuffle, startPositionMs.coerceAtLeast(0).toUInt()))
     fun playNext(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayNext(CommandPlayNextInner(serverId, trackIds))
+    fun addToQueue(serverId: ServerId, trackIds: List<TrackId>) = Command.AddToQueue(CommandAddToQueueInner(serverId, trackIds))
     fun playLater(serverId: ServerId, trackIds: List<TrackId>) = Command.PlayLater(CommandPlayLaterInner(serverId, trackIds))
     fun jumpToQueueItem(key: QueueKey) = Command.JumpToQueueItem(CommandJumpToQueueItemInner(key))
     fun removeQueueItems(keys: List<QueueKey>) = Command.RemoveQueueItems(CommandRemoveQueueItemsInner(keys))
-    fun moveQueueItem(key: QueueKey, toIndex: Int) = Command.MoveQueueItem(CommandMoveQueueItemInner(key, toIndex.toUInt()))
+    /** Moves [key] to just after [after] (the current entry's key for the top of the upcoming list), in or out of the "Next in queue" group. */
+    fun moveQueueItem(key: QueueKey, after: QueueKey, inGroup: Boolean) = Command.MoveQueueItem(CommandMoveQueueItemInner(key, after, inGroup))
+    /**
+     * Songs ([trackIds] new, [keys] queue entries moved or copied as for Play next) directly after
+     * the entry [after], in or out of the "Next in queue" group: placed like a drag drop.
+     */
+    fun insertTracks(serverId: ServerId, trackIds: List<TrackId>, after: QueueKey, inGroup: Boolean, keys: List<QueueKey> = emptyList()) =
+        Command.InsertTracks(CommandInsertTracksInner(serverId, trackIds, keys.ifEmpty { null }, after, inGroup))
+    fun queueRange(start: Int, count: Int) = Query.QueueRange(QueryQueueRangeInner(start.coerceAtLeast(0).toUInt(), count.coerceIn(0, QUEUE_RANGE_MAX).toUInt()))
     fun setShuffle(enabled: Boolean) = Command.SetShuffle(CommandSetShuffleInner(enabled))
     fun setRepeat(mode: RepeatMode) = Command.SetRepeat(CommandSetRepeatInner(mode))
     fun setAutoplay(enabled: Boolean) = Command.SetAutoplay(CommandSetAutoplayInner(enabled))
-    fun setQueueMode(mode: QueueMode) = Command.SetQueueMode(CommandSetQueueModeInner(mode))
     fun skipUnavailable(key: QueueKey) = Command.SkipUnavailable(CommandSkipUnavailableInner(key))
 
     fun restoreSavedQueue(id: String) = Command.RestoreSavedQueue(CommandRestoreSavedQueueInner(id))
     fun pinSavedQueue(id: String, pinned: Boolean) = Command.PinSavedQueue(CommandPinSavedQueueInner(id, pinned))
     fun deleteSavedQueue(id: String) = Command.DeleteSavedQueue(CommandDeleteSavedQueueInner(id))
+    /** Renames a saved queue, or the playing one when [savedQueueId] is null; a blank label is ignored. */
+    fun renameQueue(savedQueueId: String?, label: String) = Command.RenameQueue(CommandRenameQueueInner(savedQueueId, label))
     fun saveQueueAsPlaylist(savedQueueId: String?, name: String) =
         Command.SaveQueueAsPlaylist(CommandSaveQueueAsPlaylistInner(savedQueueId, name))
     fun setSavedQueueCap(cap: Int) = Command.SetSavedQueueCap(CommandSetSavedQueueCapInner(cap.toUInt()))
@@ -145,17 +170,23 @@ object Queries {
         Query.Tracks(QueryTracksInner(serverId, filter, sort, descending, page))
     fun trackCount(serverId: ServerId, filter: FilterNode? = null) = Query.TrackCount(QueryTrackCountInner(serverId, filter))
     fun track(id: TrackId) = Query.Track(QueryTrackInner(id))
+    /** The server's artist and album info (Last.fm notes, links, similar artists), cached by the core. */
+    fun artistInfo(id: ArtistId) = Query.ArtistInfo(QueryArtistInfoInner(id))
+    fun albumInfo(id: AlbumId) = Query.AlbumInfo(QueryAlbumInfoInner(id))
     fun tracksByIds(ids: List<TrackId>) = Query.TracksByIds(QueryTracksByIdsInner(ids))
     fun albums(serverId: ServerId, page: Page, sort: SortOrder = SortOrder.Default, descending: Boolean = false, artistId: ArtistId? = null, genre: String? = null) =
         Query.Albums(QueryAlbumsInner(serverId, artistId, genre, sort, descending, page))
     fun albumCount(serverId: ServerId, artistId: ArtistId? = null, genre: String? = null) =
         Query.AlbumCount(QueryAlbumCountInner(serverId, artistId, genre))
     fun album(id: AlbumId) = Query.Album(QueryAlbumInner(id))
+    fun albumResume(id: AlbumId) = Query.AlbumResume(QueryAlbumResumeInner(id))
     fun albumTracks(id: AlbumId) = Query.AlbumTracks(QueryAlbumTracksInner(id))
     /** Artists by name unless [sort] says album or song count, plays, date added or random. */
     fun artists(serverId: ServerId, page: Page, sort: SortOrder = SortOrder.Default, descending: Boolean = false) =
         Query.Artists(QueryArtistsInner(serverId, page, sort, descending))
     fun artist(id: ArtistId) = Query.Artist(QueryArtistInner(id))
+    /** Others' albums the artist is credited on a track of ("Featured on"), newest first. */
+    fun artistAppearsOn(id: ArtistId) = Query.ArtistAppearsOn(QueryArtistAppearsOnInner(id))
     fun artistTopSongs(id: ArtistId, count: Int) = Query.ArtistTopSongs(QueryArtistTopSongsInner(id, count.toUInt()))
     fun genres(serverId: ServerId) = Query.Genres(QueryGenresInner(serverId))
     fun playlists(serverId: ServerId) = Query.Playlists(QueryPlaylistsInner(serverId))
@@ -175,6 +206,10 @@ object Queries {
     fun artwork(id: String, size: Int) = Query.Artwork(QueryArtworkInner(id, size.toUInt()))
     fun mediaSource(trackId: TrackId) = Query.MediaSource(QueryMediaSourceInner(trackId))
     fun configDocument(includeSecrets: Boolean) = Query.ConfigDocument(QueryConfigDocumentInner(includeSecrets))
+    fun createShare(ids: List<String>) = Query.CreateShare(QueryCreateShareInner(ids))
+    fun exportAudio(trackId: TrackId) = Query.ExportAudio(QueryExportAudioInner(trackId))
+    /** A Squigly URL for a track or an album, made from its Deezer link by the core. */
+    fun songLink(trackId: TrackId? = null, albumId: AlbumId? = null) = Query.SongLink(QuerySongLinkInner(trackId, albumId))
 }
 
 /** The fixed artwork sizes the core caches. Never request anything else. */
@@ -183,6 +218,8 @@ object ArtworkSizes {
     const val LIST = 160
     const val GRID = 320
     const val FULL = 640
+    /** A detail page's full-bleed header: asked big, shown full-bleed only when it came back at least the header's size (never upscaled). */
+    const val HERO = 1200
 }
 
 /** A [Track] shrunk to what lists and the queue need. */

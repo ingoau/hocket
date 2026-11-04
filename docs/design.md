@@ -40,7 +40,7 @@ Deterministic simulation. The core exposes a harness with a virtual clock and an
 - JSON over WebSocket, Rust types as schema authority, TypeScript generated from them. Being able to read the protocol in a log is worth more than the bytes saved.
 - Session documents carry a schema version; the handshake negotiates a minimum common protocol and refuses below a hard floor. **Older devices must round-trip unknown fields untouched**, or a stale device silently strips new state every time it writes.
 - Forward-only numbered migrations locally. The mirror is a cache, so a failed migration can drop and re-sync; downloads, outbox, saved queues and settings are not rebuildable and get real migrations plus a backup.
-- No network telemetry. Local crash logs with a copy-diagnostics action.
+- No network telemetry. Local crash logs with a copy-diagnostics action. *(Since: with developer mode on, a bundle can also collect the Connect room's state and the other devices' bundles over Connect. Each device answers only while its own developer mode is on. The hosted coordinator adds its version, and its whole process log only for the accounts its operator names with `--diagnostics-user`. Nothing goes anywhere but the user's own devices. Those accounts can also save a report — a note, the bundle, screenshots and a screen recording — on that coordinator from the diagnostics page; see `docs/reports.md`.)*
 - Strings externalised from the first commit.
 
 
@@ -62,24 +62,70 @@ Deterministic simulation. The core exposes a harness with a virtual clock and an
 
 
 ## Queue model  
-*Status: decided*
+*Status: decided (redesigned 2026-11)*
 
-The queue is derived, never a stored flat list. Four pieces: a context with its order, a cursor, a shuffle permutation, and an insertion list. Apple Music behaviour and YouTube Music behaviour are two reducers over identical state.
+The queue is **one flat list with a pointer**. There are no queue modes. Next and Previous move the pointer one place along the list; tapping a song N rows away moves it N places. Navigation never adds, removes or reorders anything — only edits do (adding, dragging, removing, shuffle, starting something new). So pressing Next X times then Previous X times always lands back on the same song, and after tapping a song X rows down, Previous X times returns to where you were. The only exceptions are the ends of the list and the "Previous restarts the song after 3 s" rule (a restart is not a step; the step itself still mirrors Next exactly).
 
-> Figure: Shuffle is a permutation over the context, so turning it off restores the original order and your place in it.
+Everything behind the pointer is history; nothing is consumed. Playing a song you queued does not remove it — it stays where it is and Previous reaches it again.
 
+### Items
 
-### Nothing is consumed
+Each list entry carries a stable key (all ops name entries by key, never by index, so trimming and concurrent edits don't misdirect), the track, and two flags:
 
-Advancing does not destroy a queued item. The session holds a materialised history of what actually played, with the cursor at the boundary. Next pops from the future and appends to history; previous pops from history and pushes back to the front of the future, preserving what kind of item it was. Next and previous stay inverses, so one stray tap loses nothing.
+- **`added`** — the user put it there (Play next, Add to queue, Play later). Never changes. Drives a small queue icon in the UI when the entry is outside the "Next in queue" group.
+- **`queued`** — the entry is in the "Next in queue" group. The group is the contiguous run of `queued` entries directly after the current song. Because group membership is just a flag that rides with the entry, Next/Previous keep it consistent: play A (queued), press Previous, and A is back at the head of the group.
 
-> Figure: In the consume-on-advance model used by some players, tracks 2 and 3 would both be gone by this point, unreachable in either direction.
+Autoplay entries are appended at the end, flagged as autoplay and not `added`.
 
-- Played queued items don't replay. Persisting in the timeline means reachable by pressing back, not played again.
-- History caps around 200 items; past that, previous falls back to context order. History travels inside saved-queue snapshots.
-- Previous walks real history rather than running the shuffle permutation backwards, so reshuffling mid-session doesn't scramble where you've been.
-- Repeat-all loops the context only. Repeat-one repeats whatever is playing regardless of where it came from.
-- The queue view is one scrollable timeline: history above, current, upcoming below. The model should be visible rather than inferred.
+### Actions
+
+The meaning of each action is fixed; the **Queue section** setting (on by default) only decides which appear.
+
+| Action | Effect | Setting off | Setting on |
+|---|---|---|---|
+| Play next | Directly after the current song (ahead of the group), `queued` | shown | shown |
+| Add to queue | End of the "Next in queue" group, `queued` | hidden | shown |
+| Play later | End of the whole list, not `queued` | shown | shown |
+
+With the setting off no new group is ever started: Play next inserts after current, unflagged but `added`, so normally there is no group and the list is exactly the flat list. If a group already exists (started by a Connect peer that has the setting on, or before the setting was turned off), it is still shown, and Play next joins it at its head rather than splitting it from the current song, so the group stays contiguous with current. The flag is decided by the sending device and carried in the op, so every replica agrees.
+
+Play next / Add to queue on a song that is already ahead of the pointer **moves** it; on a song in history it inserts a copy, so history is never rewritten.
+
+### The "Next in queue" group
+
+- Shown as its own section with a count, a **Stash** button and a **Clear** button.
+- Entries inside it carry no per-row marker (the heading says it). `added` entries outside it show the queue icon.
+- Dragging decides membership by drop zone: dropping above the "Next from" heading puts the entry in the group, below takes it out. The move op carries the target position *and* an explicit `in_group` flag, so every replica applies the same result without re-deriving it from neighbours. Nothing can be dropped above Now playing.
+- Dragging every entry out removes the heading; the next Add to queue starts a new group right after the current song.
+- Dropping songs from the library onto a queue slot is one op, **insert tracks**: the songs (or queue entries, moved or copied as for Play next) go directly after a named entry, in or out of the group, placed exactly like a drag (`after` + `in_group`, clamped the same way). It takes any number of songs at once.
+
+### Starting something new
+
+Playing a new album, playlist, etc. **replaces the whole list** (group included). The outgoing list is auto-saved as a saved queue (see below), so it can be restored.
+
+### Shuffle and repeat
+
+- Shuffle reorders only the entries after the "Next in queue" group; the group and history stay put. Turning shuffle off restores the original order, with added entries back where they were added (each entry remembers its unshuffled position).
+- Repeat all wraps Next from the last entry to the first, and Previous from the first to the last. It loops the whole list, so added songs replay.
+- Repeat one repeats only on natural track end; Next/Previous still step.
+
+### Limits
+
+The whole session document travels as one Connect frame (joining, resyncing, undo's whole-document replace), so every list in it is bounded. These are **protocol constants**, not settings: every replica and the coordinator must trim at the same place or Previous at the boundary would diverge between devices.
+
+| Limit | Value |
+|---|---|
+| History (entries behind the pointer) | 5,000, trimmed from the oldest end |
+| Whole list (history + current + upcoming) | 10,000. Past it the oldest history goes first, then the far end of the list. A context longer than that (a huge playlist, "all songs") plays a 10,000-track window: up to 5,000 before the chosen track and the rest after it. Ops are cut to the same bound before they are sent. |
+| Saved queues | 50 unpinned in the document and a 512 KiB budget for all snapshots, pinned included (see Saved queues) |
+| Connect frame | 8 MiB. A document at every cap above, with real key and id lengths and every entry marked offline, is about 4 MiB (asserted by a test). |
+
+The queue view is windowed in both directions around the pointer, so long histories cost the same as long upcoming lists; the UI pages in more rows on scroll.
+
+### Sync
+
+The reducer is shared by every Connect replica and the coordinator, so it stays deterministic and keyed. The wire protocol version is bumped; a peer on the old queue model can't join a session on the new one. No migration of old session documents — they are dropped.
+
 
 
 ## Saved queues  
@@ -90,14 +136,14 @@ Playing something new replaces the queue and the old one is kept. Snapshotting d
 | Rule | Behaviour |
 |---|---|
 | Auto-save | On context replacement. Skips trivial queues: single tracks, contexts never played from. |
-| Cap | 10 unpinned, configurable 0–50. Zero disables auto-save, leaving only pinned queues. |
+| Cap | The document keeps up to 50 unpinned (a protocol constant, so every replica evicts alike). The setting (default 10, 0–50) decides how many of the most recent are shown; zero shows only pinned queues. |
 | Eviction | Least recently interacted with, where interaction means played from or restored. |
 | Expiry | Unpinned entries drop after 30 days regardless of position. |
 | Dedupe | Keyed on context identity, so replaying an album bumps one entry rather than adding three. |
-| Pinned | Never evicted, never expire, don't count toward the cap. |
+| Pinned | Never expire and don't count toward the cap. Evicted only if the pinned queues alone exceed the byte budget (least recently used first), which keeps the document under the frame limit. |
 | Restore | Includes history and playback position, so you land mid-track with your back button intact. |
 | Sync | A last-write-wins set keyed on context identity; pin state rides along as another LWW field. |
-| Size | Most reference their context by ID. Ad-hoc contexts — a search result, an arbitrary selection — store the track list, so cap on total bytes with 10 as the count ceiling. |
+| Size | Most reference their context by ID. Ad-hoc contexts — a search result, an arbitrary selection — store the track list, so cap on total bytes (512 KiB, a protocol constant). A snapshot keeps the latest 200 history entries and at most 1,000 entries in all; past that it stores only the current entry and rebuilds the rest from the context on restore (shuffled again if it was shuffled). |
 
 Surfaced in the queue view's selector (the queue's name drops down the recent and pinned queues to restore) and in the side panel's Recent queues drill-in, with a save-as-playlist action writing through `updatePlaylist`.
 
@@ -401,14 +447,15 @@ Apple Music's full-bleed artwork, without its animated covers (which we don't ha
 | Style | What it draws | When |
 |---|---|---|
 | Mirror | The artwork flipped past its edge, blurring more with distance, fading into the moving background. | Nothing near the edge looks wrong flipped: no close-up face, no text, logo or sticker in the zone a reflection shows, not so busy the controls drown. |
-| Extend | The colours along the edge carried on, softening sideways with distance. An edge already in one colour carries it on with a crisp edge, no fade: a white cover stays white all the way down, with dark controls. | The edge is plain: its very last row is one colour (a border, a band, a backdrop), or most of the strip is (text on a plain background); or each column holds its colour (a horizon, a gradient). Crisp only when the row or 95% of the strip is one colour; a plain but textured edge (dark ground, grain) fades in like any other. |
+| Extend | The colours along the edge carried on, softening sideways with distance. An edge already in one colour carries it on with a crisp edge, no fade: a white cover stays white all the way down, with dark controls. | The edge is plain: its very last row is one colour and the rows just above it are too (a band, a backdrop; a thin border under busy art is not), or most of the strip is (text on a plain background); or each column holds its colour (a horizon, a gradient). Crisp only when the row or 95% of the strip is one colour and the cover is smooth there (a fine grain, measured on the ~256 px cover the apps send rather than the 128 px resample, rules it out); a plain but textured edge (dark ground, grain, a ceiling tile) fades in like any other. |
 | Card | The artwork as a rounded card on its own blurred, moving colours. | Everything else: close-up portraits, busy covers, text across the bottom, non-square art. |
 
 - **The decision is the core's** (`hocket_core::artwork`), a pure function of the cover's pixels and the faces the platform found: both platforms decide the same, and it is tested once. Everything is measured on the cover resampled to 128 px in OKLab. Text and logos are small shapes standing out from the median of their surroundings (a median keeps edges, so the boundary of a large shape never counts) on a plain background (foliage and crowds are texture, not text), at two scales so bold titles count too.
 - **Faces**: platform-side, only close-ups (at least a tenth of the width; a figure seen whole reflects like one standing by water). One rules a mirror out when it reaches into the zone a reflection shows sharply (the outer 12%, as for text): a portrait whose face ends clear of the edge mirrors its neck and shoulders, the face itself blurred past reading. Any face, wherever it is, rules out extending column by column (it would smear skin and clothes down the screen). Android's box, worked out from the eyes, ends between the mouth and the chin: a chin tip alone at the seam doesn't read as a face upside down, the mouth and nose do. YuNet's box takes in the chin, so it rules out a little more. Android uses the framework's `FaceDetector`, no dependency; the desktop has none yet. On a 504-cover library a frontal-only detector found faces on 72 covers where YuNet found 170: a better detector is the main thing left.
 - **Four edges at once**: the bottom for portrait screens and narrow windows (and the desktop side panel's overview), the top for the room above the artwork on a phone (under the status bar and the player's handle; the art at the bottom of that strip, carried on upwards), the right and the left for wide windows (the artwork at the window's full height; the desktop floats its controls over the artwork's bottom). The left edge is decided like the right on the cover mirrored left to right, so a cover plain on one side only carries on that side. Wide, the desktop centres the artwork when both sides carry on, keeps it on the left when only the right does, and shows a card otherwise; a view always puts it on the left. Between the shapes, a card. Android reads `bottom` and `top`; the desktop reads `bottom`, `right` and `left`, plus `topLight` (the strip under its header). (`left` and `top` are newer: a layout from before them decodes to a card there, and a reader that doesn't know them ignores the keys.)
 - **The side panel's overview** (desktop): with a bottom edge that carries on, the artwork runs edge to edge at the top of the pane (the pane's own corners clip it, no inset or shadow) and an extension fills the whole overview in its colour (its columns carrying on where it has them), down to the end of the scroll and never fading back, and every card is glass in the edge's tone over it (light with dark text over a light extension, dark with light text over a dark one), title, links and accents included. A reflection runs on behind the title and fades, behind the first card under it (Lyrics, or Up next without lyrics; from the title's bottom to that card's bottom, along a long smoothstep; that card near-opaque in the end colour so its text reads the same throughout), into its end colour: the cover's bottom strip averaged, toned (keeping its hue) so the text over it reaches 4.5:1; that colour then fills the rest of the overview like an extension's. Near the artwork, where its own detail still shows through a reflection or an extension's bridge, the canvas adds whatever scrim the text there needs, measured on what was drawn. The panel's scrollbars are hidden (wheel, trackpad and keys still scroll). It scrolls with the overview, switches with the scene on track change and redraws when the panel's width changes. The drill-ins are unchanged; a card cover keeps the rounded card.
-- **The seam never cuts over**: the artwork's last stretch (18% on Android, 30% on the desktop, with a vignette there so the fade curves in towards the corners) fades onto a blurred copy of itself, and the continuation starts from that same blur, as one image. Except a crisp extension, where the artwork already ends in the colour carried on.
+- **Detail pages** (Android): an album's page shows its cover as the full player would (the same classifier, asked with the same setting, so a cover the player keeps as a card is a card here too): a mirror or an extension from the very top of the screen, under the status bar and the bar's icons with a shade over its top, the title centred under it. A mirror and a crisp extension meet the page as in the player; any other extension doesn't fade at all, its last rows stretched down from the edge into its colours, so the join is seamless. The whole page then carries on in the edge's colour under its scrim (light with dark text over a light one), every card, button and accent in a scheme built around it, and the bottom bar and its scrim follow it too, crossfading with the pages as they push and pop (a predictive back gesture included). A playlist (often a mosaic of its albums), a card cover, an artist's photo (a circle), a genre (its first album only stands in) or Never show a centred tile over the title instead, the page tinted from the cover's seed. Under the title: the artist, then the genre and year; then Play, Shuffle and the page's menu; then the album's notes (three lines, More for the rest). No heading over the songs; how many and how long go at the foot. An album's rating is in its menu, as a song's is. Covers are upscaled when the server has nothing bigger.
+- **The seam never cuts over**: the artwork's last stretch (18% on Android, 30% on the desktop, with a vignette there so the fade curves in towards the corners) fades onto a blurred copy of itself, and the continuation starts from that same blur, as one image. Except a crisp extension, where the artwork already ends in the colour carried on: only its last 4% fades, onto that colour, so a cover a level or a grain off it shows no line; and the colour carries the cover's grain (the core's measure, at least a faint dither), top and bottom, so a texture the classifier missed in the thumbnail doesn't stop dead at the seam.
 - **Contrast**: the controls follow the app's theme, unless what sits behind them (the continuation, not the whole cover) is almost all dark or light (80%), when they follow it. Centred, one tone serves both sides: theirs where they agree, the theme's where they do not, with the scrim that tone needs over the side that disagreed. The core sizes the scrim over the continuation for 4.5:1, and from the controls down the player fades partway (60%) to black under light controls, white under dark ones.
 - **Rendering is a still**: drawn once per cover and window size (the desktop's canvas, Compose layers on Android); only the background beneath moves. Mirror's progressive blur needs Android 12; before it the reflection only fades.
 - **Changing track, collapsing**: the desktop switches the artwork, its layout and the continuation together once the new cover is decoded and classified (the next track's ahead of time), crossfading the whole scene, so a new cover never sits beside the last one's continuation. On Android the artwork flying back to the mini player carries its fade out as it goes, its corners rounding to the thumbnail's.
@@ -440,6 +487,10 @@ Server setup is the entire first screen, nothing else. Every other empty state n
 ### Android v1
 
 Media notification only. Lockscreen comes free with MediaSession. Now-playing screen with queue and lyrics reachable by swipe or tab rather than a side panel — the split panel and fullscreen player are desktop shapes. Widget, quick settings tile, Auto and Wear come later; they're shallow but they multiply the surface area of every playback state bug not yet found. *(Since: Auto, Wear and media browsers through the library session; system playback resumption; a now-playing widget naming the Connect device that plays; launcher shortcuts; Assistant's play-from-search; the audio-effect session broadcast for equalizer apps.)*
+
+### Android on large screens
+
+Phones (under 600 dp wide) keep the stacked, centred bar and mini player. Wider, the floating pill sits at the bottom start and the mini player at the end, on one row (as long as a mini player of 320 dp fits beside the widest pill); with the floating bar off, a standing rail takes the start edge (its menu shows the labels) and the mini player still sits at the end. Landscape pages lay the full player out in two columns, artwork beside the controls, so a phone on its side never scrolls; an upright tablet keeps the one column, its controls in a centred column. Landscape windows of 960 dp and wider open the player as a side panel grown out of the mini player rather than over the page — the desktop's split panel, the one exception to the line above: the page stays usable beside it, its Lyrics and Queue take over the main screen (lyrics in a readable column, the queue at full size), and its own button goes full screen and back. A panel left open is remembered across restarts; a rotation to portrait folds it back to the mini player rather than turning it into the full-screen player. The panel's tall shape takes an immersive artwork even on a landscape screen.
 
 
 ## Licence  

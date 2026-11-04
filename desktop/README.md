@@ -157,8 +157,8 @@ Descriptor icons are Material Symbols names; `components/Icon.tsx` maps them to 
 
 Settings keys are the registry's (`crates/hocket-core/src/settings/registry.rs`), listed in
 `src/shared/settings-keys.ts`: `display.theme`, `display.accent`, `display.dynamicColour`,
-`display.animatedBackground`, `display.lyricsFps`, `display.playerRating`, `battery.autoEngage`,
-`battery.lyricsFps`, `lyrics.external.enabled`, `ratings.loveBridge.{enabled,threshold}`,
+`display.animatedBackground`, `display.lyricsFps`, `display.playerRating`, `display.albumTrackArtists`,
+`battery.autoEngage`, `battery.lyricsFps`, `lyrics.external.enabled`, `ratings.loveBridge.{enabled,threshold}`,
 `storage.warnThresholdBytes`, `queue.{mode,savedCap}`, `sync.enabled`, `connect.*`,
 `actions.order.*`, `shortcuts`. Close-to-tray is not a registry key; it is a device-local
 preference in main's state file, exposed as `window.hocket.prefs`.

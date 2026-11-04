@@ -35,10 +35,8 @@ async fn started(name: &str) -> TestCore {
 /// `(track, marked)` for every stored item, in queue order.
 async fn marks(t: &TestCore) -> Vec<(String, bool)> {
     let q = t.queue().await;
-    q.history
+    q.entries
         .iter()
-        .chain(q.current.iter())
-        .chain(q.playing_next.iter())
         .map(|e| (e.track.id.clone(), e.item.unavailable))
         .collect()
 }
@@ -52,10 +50,8 @@ fn marked(m: &[(String, bool)]) -> Vec<&str> {
 
 async fn key_of(t: &TestCore, id: &str) -> QueueKey {
     let q = t.queue().await;
-    q.history
+    q.entries
         .iter()
-        .chain(q.current.iter())
-        .chain(q.playing_next.iter())
         .find(|e| e.track.id == id)
         .map(|e| e.item.key.clone())
         .unwrap_or_else(|| panic!("{id} not in the queue"))
@@ -70,11 +66,13 @@ async fn queue(t: &TestCore, first: &str, later: &[&str]) {
         start_index: 0,
         label: "Mixed".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::PlayLater {
         server_id: t.server_id.clone(),
         track_ids: later.iter().map(|s| s.to_string()).collect(),
+        keys: vec![],
     })
     .await;
     t.run_for(1000.0).await;
@@ -181,6 +179,7 @@ async fn a_load_failure_stays_marked_across_an_offline_spell() {
     t.run(Command::PlayLater {
         server_id: t.server_id.clone(),
         track_ids: vec!["t3".into()],
+        keys: vec![],
     })
     .await;
     t.run(Command::Next).await;
@@ -216,6 +215,7 @@ async fn the_clear_reaches_a_peer() {
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 3_000.0).await;
@@ -249,6 +249,7 @@ async fn a_repeating_queue_with_nothing_offline_stops_with_a_coded_notice() {
         start_index: 0,
         label: "Loop".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(2000.0).await;
@@ -297,6 +298,7 @@ async fn a_clear_refused_as_stale_is_run_again() {
             start_index: 0,
             label: "Sel".into(),
             shuffle: false,
+            start_position_ms: 0,
         })
         .await;
         TestCore::run_all_for(&[&a, &b], 3_000.0).await;
@@ -307,6 +309,7 @@ async fn a_clear_refused_as_stale_is_run_again() {
         peer.dispatch(Command::PlayLater {
             server_id: peer.server_id.clone(),
             track_ids: vec!["t4".into()],
+            keys: vec![],
         });
         off.dispatch(network(NetworkKind::Wifi));
         // Well inside a lease heartbeat (which would also clear them, later).

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Hocket desktop: a Navidrome client with multi-device playback.",
   "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@10.34.7",
   "private": true,
   "main": "out/main/index.cjs",
   "author": "Hocket contributors",

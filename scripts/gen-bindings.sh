@@ -27,6 +27,10 @@ typeshare "$API" --lang=kotlin --java-package=app.hocket.core.api --module-name=
 # the sealed class; qualify the payload type.
 sed -i 's/data class List(val data: List</data class List(val data: kotlin.collections.List</' \
   "$ROOT/android/core/src/main/java/app/hocket/core/api/Generated.kt"
+# Likewise `QueryResult::ExternalInfo` carries the top-level `ExternalInfo` struct, which the
+# variant's own name shadows inside the sealed class; qualify it.
+sed -i 's/data class ExternalInfo(val data: ExternalInfo?): QueryResult()/data class ExternalInfo(val data: app.hocket.core.api.ExternalInfo?): QueryResult()/' \
+  "$ROOT/android/core/src/main/java/app/hocket/core/api/Generated.kt"
 
 # UniFFI Kotlin glue (from the compiled host cdylib; proc-macro metadata lives in the binary).
 cargo build -p hocket-android --features bindgen --quiet

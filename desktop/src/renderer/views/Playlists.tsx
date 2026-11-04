@@ -21,7 +21,7 @@ export function Playlists() {
   const { data } = useQuery(() => ({ type: "playlists", data: { server_id: serverId } }), "playlists", [serverId]);
   const sorted = useMemo(() => sortPlaylists(data ?? [], order.sort, order.descending), [data, order]);
   const items: GridItem[] = sorted.map((p) => ({ id: p.id, title: p.name, subtitle: playlistLine(p), coverArt: p.coverArt, badge: p.offline === "downloaded" ? "download" : undefined }));
-  const play = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id } }, label, sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
+  const play = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const sorter = <SortMenu list="playlists" value={order} onChange={(v) => { setOrder(v); saveListSort("playlists", v); }} testId="playlists-sort" />;
   return (
     <div className="view" data-testid="view-playlists">

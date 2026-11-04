@@ -49,9 +49,12 @@ pub struct SettingDef {
 
 /// Well-known keys. Keep in step with [`REGISTRY`] and [`super::strings`].
 pub mod keys {
-    pub const QUEUE_MODE: &str = "queue.mode";
+    /// Offer "Add to queue" and the "Next in queue" group; off, Play Next
+    /// inserts after the current song without starting a group.
+    pub const QUEUE_SECTION: &str = "queue.section";
     pub const QUEUE_SAVED_CAP: &str = "queue.savedCap";
-    pub const QUEUE_HISTORY_CAP: &str = "queue.historyCap";
+    /// Offer to continue an album that was started from the album and left unfinished.
+    pub const PLAYBACK_RESUME_ALBUMS: &str = "playback.resumeAlbums";
     pub const AUTOPLAY_SETTINGS: &str = "autoplay.settings";
     pub const AUTOPLAY_CONTEXT_OVERRIDES: &str = "autoplay.contextOverrides";
     pub const AUDIO_SETTINGS: &str = "audio.settings";
@@ -82,6 +85,12 @@ pub mod keys {
     /// The star rating in the player (the full player and the desktop's bar): shown, or left to
     /// the song menu and the song's details. Synced: a preference, not a device's.
     pub const DISPLAY_PLAYER_RATING: &str = "display.playerRating";
+    /// An album's tracks name their artist on every row; off names it only where it is not the
+    /// album's artist. Synced: a preference, not a device's.
+    pub const DISPLAY_ALBUM_TRACK_ARTISTS: &str = "display.albumTrackArtists";
+    /// The phone's navigation bar: a compact pill floating over the content (on), or the standard
+    /// full-width bar along the bottom edge (off). Local: a phone's own look.
+    pub const DISPLAY_FLOATING_NAV_BAR: &str = "display.floatingNavBar";
     pub const ACTIONS_ORDER_CONTEXT_MENU: &str = "actions.order.contextMenu";
     pub const ACTIONS_ORDER_SIDEBAR: &str = "actions.order.sidebar";
     pub const ACTIONS_ORDER_MEDIA_SESSION: &str = "actions.order.mediaSession";
@@ -99,6 +108,8 @@ pub mod keys {
     pub const SWIPE_QUEUE_END_TO_START: &str = "swipe.queue.endToStart";
     pub const SWIPE_LIST_START_TO_END: &str = "swipe.list.startToEnd";
     pub const SWIPE_LIST_END_TO_START: &str = "swipe.list.endToStart";
+    /// What swiping up on the phone's full player opens: [`SWIPE_PLAYER_UP_ACTIONS`].
+    pub const SWIPE_PLAYER_UP: &str = "swipe.playerUp";
     pub const SHORTCUTS: &str = "shortcuts";
     /// The Pebble watchapp (`docs/pebble.md`). Device-local: the watch belongs to this phone.
     pub const PEBBLE_TOUCH_NAVIGATION: &str = "pebble.touchNavigation";
@@ -350,6 +361,9 @@ pub const SWIPE_QUEUE_ACTIONS: &[&str] = &[
     "love",
     "addToPlaylist",
     "download",
+    "snooze",
+    "unsnooze",
+    "preview",
 ];
 
 /// What a touch gesture on the Pebble's Now Playing opens.
@@ -373,11 +387,13 @@ pub const PEBBLE_MENU_ITEMS: &[&str] = &[
     "downloads",
     "search",
     "lyrics",
+    "stash",
 ];
 
-/// Rows of the Pebble's actions menu.
+/// Rows of the Pebble's actions menu. Stash is on by default (see the watch's
+/// `DEFAULT_ACTIONS`); lyrics stays off until chosen.
 pub const PEBBLE_ACTION_ITEMS: &[&str] = &[
-    "rating", "love", "shuffle", "repeat", "goAlbum", "goArtist", "playOn", "lyrics",
+    "rating", "love", "stash", "shuffle", "repeat", "goAlbum", "goArtist", "playOn", "lyrics",
 ];
 
 /// Sections of the Pebble's library browser.
@@ -418,35 +434,38 @@ fn pebble_library_valid(v: &Value) -> Result<(), String> {
 
 /// What a swipe on a song row in any other list can do (album, playlist,
 /// search results, library songs): an action registry id, or `none`.
+/// `addToQueue` runs as `playLater` while the queue section is off.
 pub const SWIPE_LIST_ACTIONS: &[&str] = &[
     "none",
     "playNext",
+    "addToQueue",
     "playLater",
     "love",
     "addToPlaylist",
     "download",
+    "stash",
+    "snooze",
+    "unsnooze",
+    "preview",
 ];
+
+/// What swiping up on the phone's full player (on its artwork) opens: the
+/// queue or the lyrics in its place, or the device picker ("Play on") or the
+/// song's menu as a sheet that follows the finger.
+pub const SWIPE_PLAYER_UP_ACTIONS: &[&str] = &["queue", "lyrics", "connect", "menu"];
 
 /// Every setting. Order is the settings screen's order.
 pub static REGISTRY: &[SettingDef] = &[
-    def(
-        QUEUE_MODE,
-        Synced,
-        SettingKind::Enum(&["apple", "youTube"]),
-        || json!("apple"),
-    ),
+    def(QUEUE_SECTION, Synced, SettingKind::Bool, || json!(true)),
     def(
         QUEUE_SAVED_CAP,
         Synced,
         SettingKind::Int { min: 0, max: 50 },
         || json!(10),
     ),
-    def(
-        QUEUE_HISTORY_CAP,
-        Synced,
-        SettingKind::Int { min: 10, max: 1000 },
-        || json!(200),
-    ),
+    def(PLAYBACK_RESUME_ALBUMS, Synced, SettingKind::Bool, || {
+        json!(true)
+    }),
     json_def(AUTOPLAY_SETTINGS, Synced, autoplay_default, autoplay_valid),
     json_def(
         AUTOPLAY_CONTEXT_OVERRIDES,
@@ -557,6 +576,15 @@ pub static REGISTRY: &[SettingDef] = &[
     def(DISPLAY_PLAYER_RATING, Synced, SettingKind::Bool, || {
         json!(true)
     }),
+    def(
+        DISPLAY_ALBUM_TRACK_ARTISTS,
+        Synced,
+        SettingKind::Bool,
+        || json!(false),
+    ),
+    def(DISPLAY_FLOATING_NAV_BAR, Local, SettingKind::Bool, || {
+        json!(true)
+    }),
     json_def(
         ACTIONS_ORDER_CONTEXT_MENU,
         Synced,
@@ -603,6 +631,12 @@ pub static REGISTRY: &[SettingDef] = &[
         Synced,
         SettingKind::Enum(SWIPE_LIST_ACTIONS),
         || json!("playLater"),
+    ),
+    def(
+        SWIPE_PLAYER_UP,
+        Synced,
+        SettingKind::Enum(SWIPE_PLAYER_UP_ACTIONS),
+        || json!("queue"),
     ),
     json_def(SHORTCUTS, Local, || json!({}), shortcuts_valid),
     def(PEBBLE_TOUCH_NAVIGATION, Local, SettingKind::Bool, || {

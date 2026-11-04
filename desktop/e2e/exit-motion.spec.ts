@@ -89,13 +89,6 @@ test.describe("exit animations", () => {
     await page.getByTestId("jobs-button").click();
     await expectExiting(popover);
 
-    // The queue selector's drop-down (the side panel shows the queue after playFirstAlbum).
-    await page.getByTestId("queue-selector").click();
-    const selector = page.getByTestId("queue-selector-menu");
-    await expect(selector).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expectExiting(selector);
-
     // The fullscreen player: fades out, focus already back in the shell.
     await page.getByTestId("content").click();
     await page.keyboard.press("f");
@@ -105,6 +98,15 @@ test.describe("exit animations", () => {
     await expect.poll(() => exitState(fs)).toEqual({ closing: true, inert: true, animating: true });
     expect(await page.evaluate(() => !document.activeElement?.closest('[data-testid="fullscreen-player"]'))).toBe(true);
     await expect(fs).toHaveCount(0);
+
+    // The fullscreen player's queue selector drop-down.
+    await page.keyboard.press("f");
+    await expect(fs).toBeVisible();
+    await fs.getByTestId("queue-selector").click();
+    const selector = page.getByTestId("queue-selector-menu");
+    await expect(selector).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expectExiting(selector);
   });
 
   test("under reduced motion a closed surface goes at once", async ({ hocket }) => {

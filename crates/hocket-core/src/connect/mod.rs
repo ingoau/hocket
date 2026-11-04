@@ -97,6 +97,7 @@
 
 pub mod auth;
 pub mod clock;
+pub mod diagnostics;
 pub mod discovery;
 pub mod election;
 pub mod engine;
@@ -233,7 +234,7 @@ pub fn same_session_state(a: &SessionDocument, b: &SessionDocument) -> bool {
 
 /// Nothing worth keeping: no context and nothing current or queued.
 pub fn doc_is_trivial(doc: &SessionDocument) -> bool {
-    doc.context.is_none() && doc.current.is_none() && doc.insertions.is_empty()
+    doc.context.is_none() && doc.current.is_none() && doc.upcoming.is_empty()
 }
 
 /// The last state a device confirmed with a remote room, persisted next to

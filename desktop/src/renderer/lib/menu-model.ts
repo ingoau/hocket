@@ -1,8 +1,10 @@
 // The context menu's layout, from the registry's descriptors and the renderer's own items: a header
 // for an item target, the play actions as one icon-only strip, the six rate actions as an inline
 // Rating row, Love / Download / Pin as checkboxes (one row for each pair the registry offers), Add
-// to playlist as a submenu, then everything else in the registry's order with the destructive item
-// last. Pure: the menu component draws and runs what this returns.
+// to playlist as a submenu, Share as a second submenu (Navidrome, Squigly, the file), Open in Genius
+// for one song, then
+// everything else in the registry's order with the destructive item last. Pure: the menu component
+// draws and runs what this returns.
 import type { ActionDescriptor } from "@core/api";
 import { t } from "@shared/strings";
 import type { MenuItem } from "../store/app";
@@ -25,6 +27,10 @@ export interface MenuFacts {
   header?: MenuHeader;
   /** The songs the target stands for: what the add to playlist submenu adds. */
   trackIds?: string[];
+  /** How many of those songs are snoozed. */
+  snoozed?: number;
+  /** When the one song's snooze ends. Null means it doesn't; absent means it isn't snoozed. */
+  snoozeUntil?: number | null;
 }
 
 export interface MenuHeader {
@@ -48,17 +54,20 @@ export type MenuRow =
   | { kind: "rating"; value: number; mixed: boolean; count: number; enabled: boolean }
   | { kind: "check"; id: "love" | "download" | "pin"; label: string; checked: Check; note?: string; runId: string; ids: string[]; enabled: boolean }
   | { kind: "submenu"; id: string; label: string; enabled: boolean }
+  | { kind: "genius"; label: string; enabled: boolean }
   | { kind: "action"; action: ActionDescriptor; label: string; destructive: boolean }
   | { kind: "item"; item: MenuItem }
   | { kind: "choices"; heading: MenuItem; items: MenuItem[] }
   | { kind: "sep" };
 
-/** The play group, in strip order: Play leads and is the filled one. */
-export const STRIP_IDS = ["play", "playShuffled", "playNext", "playLater"] as const;
+/** The play group, in strip order: Play leads and is the filled one. Add to queue is only there
+ * when the core offers it (the Queue section setting on). */
+export const STRIP_IDS = ["play", "playShuffled", "playNext", "addToQueue", "playLater"] as const;
 const STRIP: Record<string, { label: Parameters<typeof t>[0]; icon: string }> = {
   play: { label: "menu.play", icon: "play" },
   playShuffled: { label: "menu.shuffle", icon: "shuffle" },
   playNext: { label: "menu.playNext", icon: "playNext" },
+  addToQueue: { label: "menu.addToQueue", icon: "queue" },
   playLater: { label: "menu.playLater", icon: "playLater" },
 };
 export const RATE_IDS = ["rate0", "rate1", "rate2", "rate3", "rate4", "rate5"] as const;
@@ -114,6 +123,12 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
     return [{ id, label: t(s.label), icon: s.icon, enabled: a.enabled }];
   });
   if (cells.length) top.push({ kind: "strip", cells });
+  const preview = byId.get("preview");
+  if (preview) {
+    used.add("preview");
+    const oneSong = (facts?.count ?? 1) <= 1 && facts?.kind !== "album" && facts?.kind !== "artist" && facts?.kind !== "playlist";
+    if (oneSong) top.push({ kind: "action", action: preview, label: labelFor(preview, facts), destructive: false });
+  }
 
   const rates = RATE_IDS.filter((id) => byId.has(id));
   if (rates.length) {
@@ -149,6 +164,13 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
   }
   check("pin", undefined, (on) => t(on === true ? "menu.pinned" : "menu.pin"));
 
+  if (shareApplies(facts)) top.push({ kind: "submenu", id: "share", label: t("menu.share"), enabled: true });
+  const snooze = byId.get("snooze");
+  const unsnooze = byId.get("unsnooze");
+  if (snooze) used.add("snooze");
+  if (unsnooze) used.add("unsnooze");
+  if (geniusApplies(facts)) top.push({ kind: "genius", label: t("menu.openGenius"), enabled: true });
+
   // Song info / Album info is the app's own (the core's registry has no details action): after the
   // navigation rows, for one song or one album.
   const infoKind = facts?.count === 1 && (facts.kind === "song" || facts.kind === "album");
@@ -166,6 +188,17 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
 
   if (top.length && rows.length) rows.push({ kind: "sep" });
   rows.push(...top);
+  // Snooze sits with the lower part of the menu (under More on the phone). A snoozed song offers
+  // Unsnooze, and when the snooze ends, instead of the duration submenu.
+  const snoozedN = facts?.snoozed ?? 0;
+  const songish = facts?.kind === "song";
+  const snoozeRows: MenuRow[] = [];
+  if (songish && unsnooze && snoozedN > 0) snoozeRows.push({ kind: "action", action: unsnooze, label: labelFor(unsnooze, facts), destructive: false });
+  if (songish && snooze && snoozedN < count) snoozeRows.push({ kind: "submenu", id: "snooze", label: t("action.snooze"), enabled: snooze.enabled });
+  if (snoozeRows.length) {
+    if (rows.length) rows.push({ kind: "sep" });
+    rows.push(...snoozeRows);
+  }
   let category: string | undefined = top.length ? "top" : rows.length ? "items" : undefined;
   for (const a of plain) {
     if (category !== undefined && category !== a.category) rows.push({ kind: "sep" });
@@ -177,9 +210,23 @@ export function buildMenu(registry: readonly ActionDescriptor[], items: readonly
   return rows;
 }
 
+/** Share belongs on an item menu: a song, album or playlist. An artist has nothing to share. */
+export function shareApplies(facts: MenuFacts | undefined): boolean {
+  if (!facts || facts.count < 1) return false;
+  return facts.kind === "song" || facts.kind === "album" || facts.kind === "playlist";
+}
+
+/** Open in Genius searches one song by its title and artist. */
+export function geniusApplies(facts: MenuFacts | undefined): boolean {
+  return facts?.kind === "song" && facts.count === 1;
+}
+
 /** A row's words: the registry's, except where the menu design names it for its target. */
 export function labelFor(a: ActionDescriptor, facts: MenuFacts | undefined): string {
   const count = facts?.count ?? 1;
+  if (a.id === "unsnooze" && facts?.count === 1) {
+    return facts.snoozeUntil == null ? `${a.label} · ${t("snooze.untilNever")}` : `${a.label} · ${t("snooze.until", { when: new Date(facts.snoozeUntil).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) })}`;
+  }
   if (a.id === "ui.info" && facts?.kind === "song") return t("menu.songInfo");
   if (a.id === "ui.info" && facts?.kind === "album") return t("menu.albumInfo");
   if (a.id === "removeFromPlaylist" && facts?.playlistName) return count > 1 ? t("menu.removeSomeFrom", { n: count, playlist: facts.playlistName }) : t("menu.removeFrom", { playlist: facts.playlistName });

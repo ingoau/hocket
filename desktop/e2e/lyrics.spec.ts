@@ -47,8 +47,15 @@ test.describe("lyrics", () => {
     expect(sweeping.filter((w) => w.animations > 0).length).toBeGreaterThan(4);
     const [ti, tle] = await syllables.evaluateAll((els) => els.slice(-2).map((el) => el.getBoundingClientRect()));
     expect(Math.abs(tle!.left - ti!.right)).toBeLessThan(4);
-    // The background vocal is an AMLL background sub-line, not a main line.
-    const lineKinds = await host.evaluate((root) => {
+    // The background vocal is an AMLL background sub-line, not a main line. AMLL only builds the
+    // lines within its height plus a 300 px overscan, and at the medium size the last line sits
+    // just inside that (how far depends on the fonts and on where the playhead has scrolled to), so
+    // the count is taken at the small size, where every line of this document is in reach.
+    await page.getByTestId("lyrics-options").click();
+    await page.getByTestId("lyrics-size-small").click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("amll-host")).toHaveAttribute("data-size", "small");
+    const kinds = () => host.evaluate((root) => {
       const out: { bg: boolean; text: string }[] = [];
       for (const el of Array.from(root.querySelectorAll("[class]"))) {
         const classes = Array.from(el.classList);
@@ -57,11 +64,12 @@ test.describe("lyrics", () => {
       }
       return out;
     });
+    // 16 main lines (+ AMLL's own bottom spacer line), once the resized lines have settled.
+    await expect.poll(async () => (await kinds()).filter((l) => !l.bg && l.text).length).toBe(16);
+    const lineKinds = await kinds();
     expect(lineKinds.filter((l) => l.bg && l.text === "(Yeah, yeah)").length).toBe(2);
     expect(lineKinds.filter((l) => !l.bg && l.text === "(Yeah, yeah)").length).toBe(0);
     expect(lineKinds.filter((l) => l.bg).length).toBe(4);
-    // 16 main lines (+ AMLL's own bottom spacer line).
-    expect(lineKinds.filter((l) => !l.bg && l.text).length).toBe(16);
     // The one cue-less line is present as a main line (line tier for that line only; see lyrics-map.test.ts for its timing).
     expect(lineKinds.filter((l) => !l.bg && l.text === "We've seen it several times").length).toBe(1);
   });

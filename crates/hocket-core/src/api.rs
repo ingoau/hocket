@@ -261,6 +261,64 @@ pub struct Album {
     pub music_brainz_id: Option<String>,
     pub replay_gain: Option<ReplayGain>,
     pub offline: OfflineState,
+    /// OpenSubsonic release types, lowercased (`album`, `ep`, `single`, `live`...); empty when
+    /// the server doesn't send them. [`Album::release_kind`] reduces them to one shelf.
+    #[serde(default)]
+    pub release_types: Vec<String>,
+}
+
+/// An artist's or album's details from outside the library, through the server.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalInfo {
+    /// Biography or album notes as plain text (the server's HTML stripped, the trailing
+    /// "Read more on Last.fm" link dropped; `last_fm_url` carries it).
+    pub text: Option<String>,
+    pub music_brainz_id: Option<String>,
+    pub last_fm_url: Option<String>,
+    /// The largest image the server offered.
+    pub image_url: Option<String>,
+    /// Artists only: similar artists that are in the library.
+    #[serde(default)]
+    pub similar_artists: Vec<Artist>,
+}
+
+impl ExternalInfo {
+    pub fn is_empty(&self) -> bool {
+        self.text.is_none()
+            && self.music_brainz_id.is_none()
+            && self.last_fm_url.is_none()
+            && self.image_url.is_none()
+            && self.similar_artists.is_empty()
+    }
+}
+
+/// Which shelf of an artist's discography an album sits on.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReleaseKind {
+    Album,
+    Ep,
+    Single,
+    Compilation,
+}
+
+impl Album {
+    /// Compilations first (the flag is set for every server), then the release types; an album
+    /// with no types is an album.
+    pub fn release_kind(&self) -> ReleaseKind {
+        if self.is_compilation || self.release_types.iter().any(|t| t == "compilation") {
+            ReleaseKind::Compilation
+        } else if self.release_types.iter().any(|t| t == "ep") {
+            ReleaseKind::Ep
+        } else if self.release_types.iter().any(|t| t == "single") {
+            ReleaseKind::Single
+        } else {
+            ReleaseKind::Album
+        }
+    }
 }
 
 #[typeshare]
@@ -458,8 +516,8 @@ pub enum SortOrder {
     SongCount,
 }
 
-/// What is being played. The visible queue is derived from this plus the cursor,
-/// the shuffle permutation and the insertion list — never stored flat.
+/// What is being played: the identity and label of what started the queue. The queue itself is
+/// the session document's flat entry list; `tracks` is the list it was started from.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -468,21 +526,21 @@ pub struct QueueContext {
     pub kind: ContextKind,
     pub label: String,
     pub sort: SortOrder,
-    /// Resolved track order. Present in the live document; snapshots omit it
-    /// for ID-referenced contexts and re-resolve on restore.
+    /// Resolved track order the queue was started from. Present in the live document; a
+    /// snapshot too large to store whole omits it (and its entries) for ID-referenced contexts
+    /// and re-resolves on restore.
     #[serde(default)]
     pub tracks: Vec<TrackId>,
 }
 
-/// Where a queue item came from. Persists so previous/next stay inverses and
-/// the UI can show "from playlist" vs "queued" vs "autoplay".
+/// Where a queue entry came from: the context, a user action, or autoplay.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum QueueSource {
-    /// Index into the context's *unshuffled* track list.
+    /// Index into the context's track list when the queue was started.
     Context { index: u32 },
-    /// Play next / play later.
+    /// Play next / add to queue / play later.
     Inserted,
     Autoplay {
         provider: AutoplayProvider,
@@ -495,23 +553,24 @@ pub enum QueueSource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueItem {
+    /// Stable for the entry's life: every op names entries by key, never by index.
     pub key: QueueKey,
     pub track_id: TrackId,
     pub source: QueueSource,
     /// Marked when a device could not play it; skipped, never scrobbled.
     #[serde(default)]
     pub unavailable: bool,
-}
-
-#[typeshare]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum QueueMode {
-    /// Insertions live in a separate "Playing Next" list ahead of the context.
-    #[default]
-    Apple,
-    /// Insertions splice into the context order after the cursor.
-    YouTube,
+    /// The user put it in the queue (play next, add to queue, play later). Never changes.
+    #[serde(default)]
+    pub added: bool,
+    /// In the "Next in queue" group, which is the contiguous run of `queued` entries directly
+    /// after the current one. The flag rides with the entry through Next and Previous.
+    #[serde(default)]
+    pub queued: bool,
+    /// Place in the unshuffled order: turning shuffle off sorts the entries after the group by
+    /// it. Equal to the list index while shuffle is off.
+    #[serde(default)]
+    pub ordinal: u32,
 }
 
 #[typeshare]
@@ -520,30 +579,11 @@ pub enum QueueMode {
 pub enum RepeatMode {
     #[default]
     Off,
-    /// Loops the context only.
+    /// Loops the whole list: Next on the last entry wraps to the first, Previous on the first
+    /// to the last.
     All,
     /// Repeats whatever is playing, regardless of where it came from.
     One,
-}
-
-#[typeshare]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ShuffleState {
-    /// The permutation is derived deterministically from the seed over the
-    /// context length, so it costs 4 bytes to store and sync.
-    pub seed: u32,
-    /// Unshuffled context index pinned to permuted position 0: the item that
-    /// was current when shuffle was enabled, so it keeps its place.
-    #[serde(default)]
-    pub anchor: Option<u32>,
-    /// Explicit permutation (a bijection over `0..tracks.len()`). Only present
-    /// after a structural edit while shuffled (remove, move, YouTube-mode
-    /// splice), where a seed alone can no longer express the order without
-    /// rescrambling what the user already saw. Takes precedence over `seed`
-    /// when present and valid; cleared by a reshuffle.
-    #[serde(default)]
-    pub order: Option<Vec<u32>>,
 }
 
 /// Last known transport sample. Receivers extrapolate; it is never sent on a timer.
@@ -608,11 +648,13 @@ pub struct SavedQueue {
     pub id: String,
     pub context: QueueContext,
     pub label: String,
-    pub cursor: u32,
-    pub current: Option<QueueItem>,
+    /// The list as it was left: the entries behind the pointer (the most recent few hundred),
+    /// the current one and the ones after it. All three are empty for an ID-referenced
+    /// context too long to store, which restores from its re-resolved track list.
     pub history: Vec<QueueItem>,
-    pub insertions: Vec<QueueItem>,
-    pub shuffle: Option<ShuffleState>,
+    pub current: Option<QueueItem>,
+    pub upcoming: Vec<QueueItem>,
+    pub shuffle: bool,
     pub repeat: RepeatMode,
     pub position_ms: Ms,
     pub pinned: bool,
@@ -623,6 +665,129 @@ pub struct SavedQueue {
     pub updated_at: EpochMs,
     pub track_count: u32,
     pub cover_art: Option<String>,
+}
+
+/// Where an album was left off. One per album in the account's last-write-wins set
+/// (see `crate::album_resume`). A removal is a tombstone (`removed`) so finishing the album
+/// or starting over reaches every device.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumResumeEntry {
+    pub album_id: AlbumId,
+    pub track_id: TrackId,
+    /// Index into the album's track list when this was saved.
+    pub track_index: u32,
+    pub position_ms: Ms,
+    pub duration_ms: Ms,
+    /// LWW clock of the track and position.
+    pub updated_at: EpochMs,
+    #[serde(default)]
+    pub removed: bool,
+    /// LWW clock of `removed`, separate from `updatedAt`.
+    #[serde(default)]
+    pub removed_at: EpochMs,
+}
+
+/// An album's resume point, as the album page shows it. Absent once cleared or expired.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumResumePoint {
+    pub album_id: AlbumId,
+    pub track_id: TrackId,
+    pub track_index: u32,
+    pub position_ms: Ms,
+    pub duration_ms: Ms,
+    pub updated_at: EpochMs,
+}
+
+/// One stashed song: a record in the stash's last-write-wins set (see `crate::stash`). Removed
+/// entries stay as tombstones for a while so a removal reaches every device before the entry could
+/// come back from one that missed it.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    /// Unique per stash action (device + time + track), not per track: two devices stashing the
+    /// same song at once both keep their entry, and the list shows the first.
+    pub entry_id: String,
+    pub track_id: TrackId,
+    pub server_id: ServerId,
+    /// Position: entries sort by this, then by `entryId`. Moving one gives it a key between its
+    /// new neighbours, so a move never rewrites the others.
+    pub sort_key: f64,
+    pub added_at: EpochMs,
+    /// LWW clock of the entry's position (and what was stashed).
+    pub updated_at: EpochMs,
+    #[serde(default)]
+    pub removed: bool,
+    /// LWW clock of `removed`, separate from `updatedAt`, so a move made on one device never
+    /// undoes a removal made on another (and the other way round).
+    #[serde(default)]
+    pub removed_at: EpochMs,
+    #[serde(default)]
+    pub origin_device: DeviceId,
+    /// What the song looked like when it was stashed, shown while the library mirror lacks it.
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub album: Option<String>,
+    #[serde(default)]
+    pub cover_art: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Ms,
+}
+
+/// A song in the stash, in order, with its resolved track.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StashItem {
+    pub entry_id: String,
+    pub added_at: EpochMs,
+    pub track: Track,
+}
+
+/// How long a snooze lasts, measured from when it is set.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SnoozeFor {
+    Day,
+    ThreeDays,
+    Week,
+    Month,
+    /// Until the listener unsnoozes it.
+    Indefinite,
+}
+
+/// One snoozed song in the account's last-write-wins set (see `crate::snooze`).
+/// `until` is when it ends; `None` means it doesn't. A removal is a tombstone.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Snooze {
+    pub track_id: TrackId,
+    /// When the snooze ends. Absent when it lasts until unsnoozed.
+    pub until: Option<EpochMs>,
+    /// LWW clock.
+    pub updated_at: EpochMs,
+    #[serde(default)]
+    pub removed: bool,
+}
+
+/// A snoozed song as the UI lists it, with the track it hides.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SnoozeItem {
+    pub track_id: TrackId,
+    /// When it ends. Absent when the snooze doesn't end.
+    pub until: Option<EpochMs>,
+    pub track: Track,
 }
 
 /// The unit of state. Small, serialisable, synced, snapshotted, undone.
@@ -638,15 +803,18 @@ pub struct SessionDocument {
     pub revision: u32,
     pub updated_at: EpochMs,
     pub context: Option<QueueContext>,
-    pub mode: QueueMode,
-    /// Index into the *permuted* context order of the current context item.
-    pub cursor: u32,
-    pub current: Option<QueueItem>,
-    /// Already played, still reachable. Capped (~200).
+    /// The queue is one flat list with a pointer, stored as the three runs the pointer splits
+    /// it into: `history ++ [current] ++ upcoming`. Entries behind the pointer, oldest first.
+    /// Capped (~5000), trimmed from the oldest end.
     pub history: Vec<QueueItem>,
-    /// Play next / play later, in order.
-    pub insertions: Vec<QueueItem>,
-    pub shuffle: Option<ShuffleState>,
+    /// The entry under the pointer. `None` only when the list is empty or the current entry
+    /// was removed with nothing after it (then `upcoming` is empty too).
+    pub current: Option<QueueItem>,
+    /// Entries after the pointer, in play order: the "Next in queue" group first (the
+    /// `queued` run), then the rest.
+    pub upcoming: Vec<QueueItem>,
+    /// The entries after the group are in shuffled order.
+    pub shuffle: bool,
     pub repeat: RepeatMode,
     pub autoplay: bool,
     pub transport: TransportState,
@@ -664,32 +832,85 @@ pub struct SessionDocument {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueEntry {
+    /// Key, track, source and the `added` / `queued` / `unavailable` flags.
     pub item: QueueItem,
     pub track: TrackSummary,
+    /// Inside the "Next in queue" group (shown under its heading, without a per-row marker).
+    #[serde(default)]
+    pub in_group: bool,
+    /// Appended by autoplay.
+    #[serde(default)]
+    pub autoplay: bool,
 }
 
+/// The queue as the UI renders it: a window onto the flat list around the pointer.
+///
+/// List indices: `0..historyCount` are history (oldest first), `currentIndex` (== historyCount)
+/// is the current entry, the next `groupCount` are the "Next in queue" group, the rest follow.
+/// `entries` holds the rows `windowStart..windowStart + entries.len()`; page in more with
+/// `Query::QueueRange`.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueView {
     pub context_label: Option<String>,
-    pub history: Vec<QueueEntry>,
+    /// The rows of the window, in list order.
+    pub entries: Vec<QueueEntry>,
+    /// List index of `entries[0]`.
+    pub window_start: u32,
+    /// Entries in the whole list (exact, whatever the window).
+    pub total: u32,
+    /// Entries behind the pointer (exact).
+    pub history_count: u32,
+    /// List index of the current entry; `None` when nothing is current.
+    pub current_index: Option<u32>,
+    /// Entries in the "Next in queue" group, directly after the current one.
+    pub group_count: u32,
+    /// Entries after the current one (group included; exact).
+    pub total_upcoming: u32,
+    /// The current entry, also in `entries` when the window covers it.
     pub current: Option<QueueEntry>,
-    /// From the insertion list.
-    pub playing_next: Vec<QueueEntry>,
-    /// Continuing from the context, in permuted order.
-    pub upcoming: Vec<QueueEntry>,
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub autoplay: bool,
-    pub mode: QueueMode,
-    pub total_upcoming: u32,
-    /// What plays after the last entry when the queue would wrap (Repeat
-    /// All with nothing in `playing_next` or `upcoming`): the first entry of
-    /// the context in play order, which with shuffle on only the core knows.
-    /// `None` when the queue does not wrap.
+    /// What Next plays from the last entry under Repeat All: the first playable entry. `None`
+    /// when the queue does not wrap here.
     #[serde(default)]
     pub wrap_next: Option<QueueEntry>,
+    /// What going back a track ([`Command::PreviousTrack`], Previous short of its restart)
+    /// makes current: the nearest playable entry behind the pointer, or under Repeat All the
+    /// last one. `None` when there is nothing before (going back restarts the track).
+    #[serde(default)]
+    pub previous: Option<QueueEntry>,
+}
+
+impl QueueView {
+    /// The window's entries after the current one, in play order.
+    pub fn upcoming(&self) -> impl Iterator<Item = &QueueEntry> {
+        let first = self.current_index.map(|c| c + 1).unwrap_or(self.total);
+        let start = self.window_start;
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(move |(i, _)| start + *i as u32 >= first)
+            .map(|(_, e)| e)
+    }
+
+    /// The window's entries behind the pointer, oldest first.
+    pub fn history(&self) -> impl Iterator<Item = &QueueEntry> {
+        let end = self.history_count;
+        let start = self.window_start;
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(move |(i, _)| start + (*i as u32) < end)
+            .map(|(_, e)| e)
+    }
+
+    /// The window's "Next in queue" group.
+    pub fn group(&self) -> impl Iterator<Item = &QueueEntry> {
+        self.entries.iter().filter(|e| e.in_group)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -918,6 +1139,11 @@ pub struct ArtworkMetrics {
     pub marks: u32,
     /// Mean colour change between neighbouring pixels in the lower 40%.
     pub busy: f64,
+    /// Fine texture near the edge: the mean luma step between neighbouring pixels, in sRGB levels
+    /// (0..255) on the ~256 px cover the apps send. The apps draw this much grain over a flat
+    /// continuation so the texture carries on rather than stopping at the seam.
+    #[serde(default)]
+    pub grain: f64,
     pub faces: u32,
     /// Share of what sits behind the controls (the continuation) that is very dark / very light
     /// (one of them near 1: the controls follow it, not the theme).
@@ -1321,6 +1547,19 @@ pub enum BackendCommand {
     SetGapless {
         enabled: bool,
     },
+    /// Load a song into the preview player (a second output). The main item
+    /// stays loaded. `position_ms` is where the preview starts.
+    PreviewLoad {
+        source: MediaSource,
+        position_ms: Ms,
+    },
+    PreviewPlay,
+    PreviewPause,
+    PreviewSeek {
+        position_ms: Ms,
+    },
+    /// Unload the preview player. The main item is untouched.
+    PreviewStop,
 }
 
 /// What an external backend reports back.
@@ -1380,6 +1619,38 @@ pub enum BackendReport {
         volume: f64,
         muted: bool,
     },
+    /// The preview player knows the song's duration.
+    PreviewReady {
+        duration_ms: Option<Ms>,
+    },
+    /// Where the preview is. `playing` is false while it is paused.
+    PreviewProgress {
+        position_ms: Ms,
+        playing: bool,
+    },
+    /// The preview played to the end.
+    PreviewEnded,
+    /// The preview player could not load or play the song.
+    PreviewFailed,
+    /// The preview player lost the output (another app took audio focus).
+    /// The main session must not be resumed into that.
+    PreviewInterrupted,
+}
+
+/// A song preview playing beside the queue. Positions are samples: a UI
+/// extrapolates from [`taken_at`] while [`playing`] is set. Nothing here is
+/// the transport, the queue or a scrobble.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewState {
+    pub track_id: TrackId,
+    pub title: String,
+    pub duration_ms: Ms,
+    pub position_ms: Ms,
+    pub playing: bool,
+    /// Wall-clock milliseconds when `position_ms` was sampled.
+    pub taken_at: EpochMs,
 }
 
 // ---------------------------------------------------------------------------
@@ -1400,6 +1671,8 @@ pub enum MediaSessionAction {
     Repeat,
     Love,
     Rate,
+    /// Toggle the playing track in the stash: add it, or take it out if it's there. Off by default.
+    Stash,
 }
 
 #[typeshare]
@@ -1415,6 +1688,10 @@ pub struct MediaSessionMetadata {
     pub track_id: Option<TrackId>,
     pub loved: bool,
     pub rating: u32,
+    /// The playing track is already in the stash. The notification shows a
+    /// filled icon, and tapping it again takes the song out.
+    #[serde(default)]
+    pub stashed: bool,
 }
 
 #[typeshare]
@@ -1649,12 +1926,18 @@ pub struct StorageSummary {
 #[serde(rename_all = "camelCase")]
 pub struct PlayContextArgs {
     pub context: QueueContext,
-    /// Index into the unshuffled track list to start from.
+    /// Index into the unshuffled track list to start from. Absent means the start of the list,
+    /// which is not a song the listener picked (a snoozed song there is left out).
+    #[serde(default)]
     pub start_index: Option<u32>,
     pub shuffle: bool,
     /// Keep the outgoing queue as a saved queue (default true).
     #[serde(default = "default_true")]
     pub save_outgoing: bool,
+    /// Where in the starting track to begin. Album resume sets it; absent means the start.
+    /// Older builds ignore it, so a coordinator from before this field drops it on the way through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_position_ms: Option<Ms>,
 }
 
 fn default_true() -> bool {
@@ -1789,6 +2072,10 @@ pub enum Command {
     Stop,
     Next,
     Previous,
+    /// Back a track, never restarting this one however far in it is (the
+    /// skip swipe): Previous without its restart, the queue deciding (it
+    /// restarts the track only when there is nothing before it).
+    PreviousTrack,
     SeekTo {
         position_ms: Ms,
     },
@@ -1806,6 +2093,23 @@ pub enum Command {
         muted: bool,
     },
 
+    // -- preview ----------------------------------------------------------
+    /// Play a song beside the queue, starting about 30% in. Pauses playback
+    /// on this device and restores it afterwards; a Connect peer is left
+    /// playing. Never written to the queue, play history, scrobbles or the
+    /// resume position.
+    PreviewStart {
+        track_id: TrackId,
+    },
+    /// Pause or resume the preview that is already open.
+    PreviewToggle,
+    /// Seek the preview. The position is clamped to the song.
+    PreviewSeek {
+        position_ms: Ms,
+    },
+    /// Stop the preview and, on this device, resume what was playing.
+    PreviewStop,
+
     // -- queue ------------------------------------------------------------
     PlayContext {
         args: PlayContextArgs,
@@ -1817,29 +2121,69 @@ pub enum Command {
         start_index: u32,
         label: String,
         shuffle: bool,
+        /// Audio position to start the chosen track at. Part of the same
+        /// command so a following seek cannot land on the previous song.
+        #[serde(default)]
+        start_position_ms: Ms,
     },
+    /// Directly after the current entry (ahead of the group), in the group when the Queue
+    /// section setting is on. `keys` names queue entries to put there instead of new copies:
+    /// one ahead of the pointer moves, one behind it (or the current one) is copied.
     PlayNext {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        #[serde(default)]
+        keys: Vec<QueueKey>,
     },
+    /// At the end of the "Next in queue" group. `keys` as for `PlayNext`.
+    AddToQueue {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        #[serde(default)]
+        keys: Vec<QueueKey>,
+    },
+    /// At the end of the whole list, outside the group. `keys` as for `PlayNext`.
     PlayLater {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        #[serde(default)]
+        keys: Vec<QueueKey>,
     },
+    /// Put songs directly after `after` (the current entry's key for the top of the list), in
+    /// the "Next in queue" group or out of it: a library drop onto a queue slot. Placed like a
+    /// `MoveQueueItem` drop (nothing above the current entry or into history; an `inGroup` drop
+    /// past the group's end lands at its end, an out-of-group one inside it just after it).
+    /// `keys` as for `PlayNext`: one ahead of the pointer moves, one behind it is copied.
+    InsertTracks {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        #[serde(default)]
+        keys: Vec<QueueKey>,
+        after: QueueKey,
+        in_group: bool,
+    },
+    /// Move the pointer to this entry. Nothing in the list changes: the entries jumped over
+    /// end up behind the pointer.
     JumpToQueueItem {
         key: QueueKey,
     },
     RemoveQueueItems {
         keys: Vec<QueueKey>,
     },
-    /// `to_index` is within the combined playing-next + upcoming list.
+    /// Drag an entry ahead of the pointer to directly after `after` (the current entry's key
+    /// for the top of the list), in the group or out of it. Nothing moves above the current
+    /// entry or into history. An `inGroup` drop past the group's end lands at its end; an
+    /// out-of-group drop inside the group lands just after it.
     MoveQueueItem {
         key: QueueKey,
-        to_index: u32,
+        after: QueueKey,
+        in_group: bool,
     },
     ClearQueue,
-    /// Clears playing-next only.
-    ClearInsertions,
+    /// Remove the "Next in queue" group's entries.
+    ClearQueueGroup,
+    /// Send the "Next in queue" group's songs to the stash and remove them from the queue.
+    StashQueueGroup,
     SetShuffle {
         enabled: bool,
     },
@@ -1848,9 +2192,6 @@ pub enum Command {
     },
     SetAutoplay {
         enabled: bool,
-    },
-    SetQueueMode {
-        mode: QueueMode,
     },
     /// Mark the current item unplayable on this device and move on.
     SkipUnavailable {
@@ -1868,12 +2209,66 @@ pub enum Command {
     DeleteSavedQueue {
         id: String,
     },
+    /// Rename a queue. `saved_queue_id: None` renames the queue that is
+    /// playing (its context label); otherwise the saved queue with that ID.
+    /// A blank label is ignored.
+    RenameQueue {
+        saved_queue_id: Option<String>,
+        label: String,
+    },
     SaveQueueAsPlaylist {
         saved_queue_id: Option<String>,
         name: String,
     },
     SetSavedQueueCap {
         cap: u32,
+    },
+
+    // -- stash ------------------------------------------------------------
+    /// Stash songs (added at the end). Songs already in the stash are skipped.
+    StashAdd {
+        track_ids: Vec<TrackId>,
+    },
+    /// Take entries out of the stash. Toasts with an Undo.
+    StashRemove {
+        entry_ids: Vec<String>,
+    },
+    /// Move an entry to `toIndex` in the stash as listed.
+    StashMove {
+        entry_id: String,
+        to_index: u32,
+    },
+    /// Empty the stash. Toasts with an Undo.
+    StashClear,
+    /// Continue an album at its saved track and position. Falls back to the start when
+    /// there is nothing to resume (or the feature is off).
+    ResumeAlbum {
+        album_id: AlbumId,
+    },
+    /// Forget an album's resume point (Start over).
+    ClearAlbumResume {
+        album_id: AlbumId,
+    },
+    /// Put removed entries back where they were (the Undo of remove and clear).
+    StashRestore {
+        entry_ids: Vec<String>,
+    },
+
+    // -- snooze -----------------------------------------------------------
+    /// Leave songs out of shuffle, playlists, artist play and autoplay for `duration`.
+    /// Goes through global undo.
+    Snooze {
+        track_ids: Vec<TrackId>,
+        duration: SnoozeFor,
+    },
+    /// Snooze songs until a chosen moment (the menu's Custom row). Goes through global undo.
+    SnoozeUntil {
+        track_ids: Vec<TrackId>,
+        until: EpochMs,
+    },
+    /// Bring snoozed songs back. Goes through global undo.
+    Unsnooze {
+        track_ids: Vec<TrackId>,
     },
 
     // -- undo -------------------------------------------------------------
@@ -2047,6 +2442,30 @@ pub enum Command {
     ExportConfig {
         include_secrets: bool,
     },
+    /// The platform's diagnostics bundle, answering
+    /// [`Event::DiagnosticsRequested`]. Sent to the device that asked.
+    AnswerDiagnosticsRequest {
+        request_id: String,
+        text: String,
+    },
+    /// Save a report on the hosted coordinator: the user's `note`, the
+    /// platform's diagnostics `bundle` (what Save to file would write) and
+    /// `attachments`. Needs the leave the coordinator sent with the latest
+    /// room diagnostics ([`RoomDiagnosticsStatus::report_upload`]). Runs in
+    /// the background, resuming across restarts; progress goes out as
+    /// [`Event::ReportUploadChanged`]. One at a time: ignored (with a
+    /// warning in the log) while another is uploading, so platforms hide the
+    /// action then. See `docs/reports.md`.
+    StartReportUpload {
+        note: String,
+        bundle: String,
+        attachments: Vec<ReportAttachment>,
+    },
+    /// Try the failed report upload again, from where it stopped.
+    RetryReportUpload,
+    /// Forget the report upload (cancelling it if it is still running) and
+    /// delete what the core staged for it.
+    DismissReportUpload,
     /// Import a config document (`ExportConfig` output). Account-synced
     /// settings it changes are broadcast to the other devices like a local
     /// edit. Device-local settings (audio output, transcoding, storage,
@@ -2202,12 +2621,29 @@ pub enum Query {
         #[serde(default)]
         descending: bool,
     },
+    /// `ArtistDetail`. An artist with no albums of their own (a guest on others' tracks) has no
+    /// row from the server; they are answered from the tracks that credit them.
     Artist {
+        id: ArtistId,
+    },
+    /// `Albums`: the albums the artist is on (credited on a track) without being the album's
+    /// artist, the page's "Featured on". Newest first, all of them.
+    ArtistAppearsOn {
         id: ArtistId,
     },
     ArtistTopSongs {
         id: ArtistId,
         count: u32,
+    },
+    /// What the server knows about an artist from outside the library (Navidrome asks Last.fm
+    /// and the like): biography, links, similar artists. `ExternalInfo(None)` when there is
+    /// nothing, e.g. the server has no Last.fm key. Cached for a week.
+    ArtistInfo {
+        id: ArtistId,
+    },
+    /// As [`Query::ArtistInfo`] for an album (`getAlbumInfo2`): its notes and links.
+    AlbumInfo {
+        id: AlbumId,
     },
     Genres {
         server_id: ServerId,
@@ -2237,7 +2673,21 @@ pub enum Query {
         request_id: String,
     },
     Queue,
+    /// Rows `start..start + count` of the queue list (clamped), with the same totals as the
+    /// `Queue` view: how the UI pages in more history or more upcoming entries on scroll.
+    QueueRange {
+        start: u32,
+        count: u32,
+    },
     SavedQueues,
+    /// The stash, in order.
+    Stash,
+    /// Songs snoozed right now, soonest ending first.
+    Snoozes,
+    /// Where this album would resume, if it has a point and the feature is on.
+    AlbumResume {
+        id: AlbumId,
+    },
     Lyrics {
         track_id: TrackId,
     },
@@ -2286,9 +2736,33 @@ pub enum Query {
     },
     /// Diagnostics bundle (crash logs, versions) as text for copy-to-clipboard.
     Diagnostics,
+    /// The diagnostics of the Connect room and every other device in it, as
+    /// text for the end of this device's bundle. Waits for the answers (up to
+    /// 45 s). Only while developer mode is on here; each other device answers
+    /// only while its own is on. The room turns away a request within 10 s of
+    /// the last: then the previous collection answers again.
+    RoomDiagnostics,
+    /// Where the report upload stands: `QueryResult::ReportUpload`.
+    ReportUpload,
     /// Export a config document.
     ConfigDocument {
         include_secrets: bool,
+    },
+    /// `createShare` for these song, album or playlist ids. The answer is the public URL.
+    CreateShare {
+        ids: Vec<String>,
+    },
+    /// The original audio file for a track, on disk, so the platform can hand it to the share sheet.
+    /// A completed download is reused; otherwise the original is fetched into the cache.
+    ExportAudio {
+        track_id: TrackId,
+    },
+    /// The Squigly page (`squigly.link/…`) for a track or an album, made from its Deezer link:
+    /// found by the track's ISRC, else by artist and title.
+    /// Exactly one of `track_id` and `album_id`. The answer is `QueryResult::SongLink`.
+    SongLink {
+        track_id: Option<TrackId>,
+        album_id: Option<AlbumId>,
     },
 }
 
@@ -2319,6 +2793,25 @@ pub struct ArtistPage {
     pub total: u32,
 }
 
+/// One cached-lyrics hit: the song, the line (or adjacent lines) that contain
+/// the phrase, and where in that text the phrase sits.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricHit {
+    pub track: TrackSummary,
+    /// Original lyric text. A phrase that crosses a line break is the lines
+    /// joined with a newline.
+    pub line: String,
+    /// Character offset of the phrase in [`Self::line`].
+    pub match_start: u32,
+    /// Character offset just past the phrase.
+    pub match_end: u32,
+    /// Audio position of the first matched line when those lyrics are synced,
+    /// already including the user's lyrics offset. Absent for an unsynced line.
+    pub start_ms: Option<Ms>,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -2331,6 +2824,9 @@ pub struct SearchResults {
     pub playlists: Vec<Playlist>,
     /// False for the local batch, true for the server batch appended below the divider.
     pub from_server: bool,
+    /// Phrases found in lyrics already cached on this device. Empty for a server batch.
+    #[serde(default)]
+    pub lyrics: Vec<LyricHit>,
 }
 
 #[typeshare]
@@ -2359,6 +2855,24 @@ pub struct FilterPreview {
     pub count: u32,
     pub capability: FilterCapability,
     pub sample: Vec<TrackSummary>,
+}
+
+/// A public Navidrome share (`createShare`).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedShare {
+    pub url: String,
+}
+
+/// A track file written for the platform to share. `path` stays in the main process on desktop.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedAudio {
+    pub path: String,
+    pub file_name: String,
+    pub content_type: String,
 }
 
 /// Everything a UI needs on attach.
@@ -2399,6 +2913,7 @@ pub enum QueryResult {
     AlbumDetail(Option<Album>),
     Artists(ArtistPage),
     ArtistDetail(Option<Artist>),
+    ExternalInfo(Option<ExternalInfo>),
     Genres(Vec<Genre>),
     Playlists(Vec<Playlist>),
     PlaylistDetail(Option<Playlist>),
@@ -2406,6 +2921,10 @@ pub enum QueryResult {
     Search(SearchResults),
     Queue(QueueView),
     SavedQueues(Vec<SavedQueue>),
+    StashItems(Vec<StashItem>),
+    SnoozeItems(Vec<SnoozeItem>),
+    /// `AlbumResumePoint`: the album's resume point, or none.
+    AlbumResumeState(Option<AlbumResumePoint>),
     LyricsResult(Option<Lyrics>),
     Related(Vec<RelatedTrack>),
     Stats(ListeningStats),
@@ -2429,6 +2948,13 @@ pub enum QueryResult {
     Path(Option<String>),
     Source(Option<MediaSource>),
     Text(String),
+    /// A Navidrome public share URL (`createShare`). None when the server refused or there is no session.
+    Share(Option<CreatedShare>),
+    /// A track's original file, ready to hand to the platform share sheet.
+    AudioFile(Option<ExportedAudio>),
+    /// A Squigly URL. None when Deezer has no match, or offline.
+    SongLink(Option<String>),
+    ReportUpload(Option<ReportUploadStatus>),
 }
 
 // ---------------------------------------------------------------------------
@@ -2481,6 +3007,157 @@ pub enum PlayerNoticeCode {
     CouldNotPlayStopped,
     /// Autoplay was asked for more and found nothing to add.
     AutoplayFoundNothing,
+}
+
+/// Where one source of a [`RoomDiagnosticsStatus`] stands.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagnosticsSourceState {
+    /// Asked, nothing arrived yet.
+    Waiting,
+    /// Some of its parts arrived.
+    Receiving,
+    /// Its whole bundle arrived.
+    Received,
+    /// It said no (`reason`: why, in its words).
+    Declined,
+    /// The collection ended with only some of its parts.
+    Incomplete,
+    /// The collection ended without a word from it.
+    NoAnswer,
+}
+
+/// One source of a room diagnostics collection: another device, or the coordinator.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsSourceStatus {
+    pub id: String,
+    pub name: String,
+    pub state: DiagnosticsSourceState,
+    pub parts_received: u32,
+    /// Parts it said it sends (0 until the first arrives).
+    pub parts: u32,
+    /// Text received so far.
+    pub bytes: u32,
+    /// Why it declined.
+    pub reason: Option<String>,
+}
+
+/// Why a `Query::RoomDiagnostics` collected nothing.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RoomDiagnosticsUnavailable {
+    /// Developer mode is off on this device.
+    DeveloperModeOff,
+    /// Connect is not running.
+    NotConnected,
+}
+
+/// How a `Query::RoomDiagnostics` collection is going ([`Event::RoomDiagnosticsChanged`]).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomDiagnosticsStatus {
+    pub request_id: String,
+    /// The query has answered: nothing more arrives for this request.
+    pub done: bool,
+    pub elapsed_ms: f64,
+    /// Set when nothing was asked (and `done`).
+    pub unavailable: Option<RoomDiagnosticsUnavailable>,
+    /// The room answered (and named the devices it asked).
+    pub room_answered: bool,
+    /// The room answered but asked nobody, in its words (asked again within
+    /// 10 s of the last request: nobody else answers then, the coordinator
+    /// included). Only seen with no earlier collection to fall back on: with
+    /// one, the query answers with that one (text and status) instead.
+    pub room_declined: Option<String>,
+    /// The hosted coordinator's answer. It answers ahead of the room, so once
+    /// `room_answered` is set and this is still unset, the room has no
+    /// coordinator (a device hosts it) or one too old to answer.
+    pub coordinator: Option<DiagnosticsSourceStatus>,
+    /// The coordinator sent its process log, not only its version (it does
+    /// for the accounts its operator named with `--diagnostics-user`).
+    pub coordinator_log: bool,
+    /// The other devices the room asked, in its order.
+    pub devices: Vec<DiagnosticsSourceStatus>,
+    /// The coordinator lets this account save reports there, and its leave
+    /// is still good: offer [`Command::StartReportUpload`]. Only ever set by
+    /// a coordinator that answered this collection.
+    #[serde(default)]
+    pub report_upload: bool,
+}
+
+/// A file going up with a report ([`Command::StartReportUpload`]).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportAttachment {
+    /// A file the core can read, as it is sent (platforms resize screenshots
+    /// and strip their metadata first; recordings go as they are).
+    pub path: String,
+    pub kind: ReportAttachmentKind,
+    /// The platform made this copy for the upload: the core deletes it once
+    /// the upload is done or dismissed.
+    #[serde(default)]
+    pub delete_after: bool,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportAttachmentKind {
+    /// A JPEG or PNG image. At most 5 per report.
+    Screenshot,
+    /// A screen recording (MP4, WebM, MOV, MKV). At most 1 per report.
+    Recording,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportUploadState {
+    Uploading,
+    Done,
+    Failed,
+}
+
+/// Why a report upload failed.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportUploadError {
+    /// No leave from the coordinator (or it ran out, or the coordinator
+    /// refused it): open diagnostics again while connected to it.
+    NotAllowed,
+    /// An attachment could not be read (or there are too many).
+    Unreadable,
+    /// Over what the coordinator takes (per file, per report or in total).
+    TooLarge,
+    /// The coordinator could not be reached, or the connection broke.
+    Network,
+    /// The coordinator answered with an error.
+    Server,
+}
+
+/// Where the report upload stands ([`Event::ReportUploadChanged`],
+/// `Query::ReportUpload`).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportUploadStatus {
+    pub state: ReportUploadState,
+    pub sent_bytes: f64,
+    pub total_bytes: f64,
+    /// The coordinator's id for it (`R-20261101-7k3f`), once it made one.
+    pub report_id: Option<String>,
+    pub error: Option<ReportUploadError>,
+    /// More about `error`, in English, for logs and developers.
+    pub error_detail: Option<String>,
+    /// Epoch ms the user sent it.
+    pub started_at: f64,
 }
 
 #[typeshare]
@@ -2556,12 +3233,28 @@ pub enum Event {
     TransportChanged {
         transport: TransportState,
     },
+    /// The song preview opened, moved, paused or closed (`None`).
+    PreviewChanged {
+        preview: Option<PreviewState>,
+    },
     /// The item now playing (or `None` when stopped), with a resolved track.
     NowPlayingChanged {
         entry: Option<QueueEntry>,
     },
     SavedQueuesChanged {
         queues: Vec<SavedQueue>,
+    },
+    /// The stash changed (here or on another device): the whole list, in order.
+    StashChanged {
+        items: Vec<StashItem>,
+    },
+    /// Snoozes changed (here or on another device): the songs still snoozed.
+    SnoozesChanged {
+        items: Vec<SnoozeItem>,
+    },
+    /// Albums that currently offer resume. Empty when the feature is off.
+    AlbumResumesChanged {
+        points: Vec<AlbumResumePoint>,
     },
     UndoChanged {
         state: UndoState,
@@ -2655,6 +3348,25 @@ pub enum Event {
     },
     ConfigExported {
         document: String,
+    },
+    /// Another device in the Connect room asks for this device's diagnostics
+    /// (developer mode is on here). Build the bundle the diagnostics page
+    /// would save and answer with [`Command::AnswerDiagnosticsRequest`];
+    /// without an answer within 10 s the core sends its own diagnostics and
+    /// log instead.
+    DiagnosticsRequested {
+        request_id: String,
+        from_device: String,
+    },
+    /// Progress of a `Query::RoomDiagnostics`: when it starts, as answers
+    /// arrive, and once more (`done`) when the query answers.
+    RoomDiagnosticsChanged {
+        status: RoomDiagnosticsStatus,
+    },
+    /// The report upload moved on: started, progressed (at most about four
+    /// times a second), finished, failed, or was dismissed (`None`).
+    ReportUploadChanged {
+        status: Option<ReportUploadStatus>,
     },
 
     /// Drive an external backend (Android). Not emitted in native mode.

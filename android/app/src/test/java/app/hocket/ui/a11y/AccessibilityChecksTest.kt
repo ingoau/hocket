@@ -249,6 +249,9 @@ class AccessibilityChecksTest {
         val core = TestCore(startWithServer = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { displayed("setup.start") }
+        check("server setup, welcome")
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { displayed("setup.url") }
         check("server setup")
     }

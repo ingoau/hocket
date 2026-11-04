@@ -13,12 +13,12 @@ android/
 
 Requirements: JDK 17+, Android SDK with platform 37 (AGP installs it when licences are accepted),
 NDK 27, Rust with the Android targets (`aarch64-linux-android`, `armv7-linux-androideabi`,
-`x86_64-linux-android`), `cargo-ndk`, `typeshare-cli`.
+`x86_64-linux-android`), `typeshare-cli`.
 
 ```
 scripts/gen-bindings.sh          # typeshare -> core/src/main/java/app/hocket/core/api/Generated.kt
                                  # uniffi-bindgen -> core/src/main/java/app/hocket/core/ffi/hocket_android.kt
-scripts/build-android-core.sh    # cargo-ndk -> core/src/main/jniLibs/<abi>/libhocket_android.so
+scripts/build-android-core.sh    # cargo build (all ABIs in one go) -> core/src/main/jniLibs/<abi>/libhocket_android.so
 cd android
 ./gradlew assembleDebug          # ANDROID_HOME=/path/to/sdk (or sdk.dir in local.properties)
 ./gradlew testDebugUnitTest      # JVM tests: JSON round-trips, client, lyrics cursor, fake core, Compose UI
@@ -280,6 +280,13 @@ Symbols name in the script, list it under its group, and re-run; the output is c
 
 - Anything the finger drives settles with a spring (`ui/theme/Motion.kt`): low-bouncy for the
   sheet and swipes, medium-bouncy for snaps, no-bounce for values that must not overshoot.
+- Bounce answers a touch. Pressed controls, cards and tiles dip and spring back past full size
+  (`Modifier.pressScale`, `ui/theme/PressScale.kt`), a held Library tile's badge morphs towards a
+  circle (`ui/theme/MorphShape.kt`), loving pops the heart with a ring (`LoveBurst`), and an
+  opened page's cover lands a touch past its slot. What happens without a touch (page pushes and
+  pops, track changes, lists loading) stays calm, and so do surfaces that move content.
+- Pull down on Home or the Library to sync the library now (`SyncRefreshBox`), with the expressive
+  loading indicator.
 - Now-playing sheet: `AnchoredDraggable` with a velocity-aware fling, scrim, corners morphing from
   pill to square, the artwork scaling from the 48 dp thumbnail to the hero; predictive back drags
   it down with the gesture.
@@ -289,7 +296,8 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   corners round while it moves. Pops reverse it. Predictive back scrubs that same pop, always
   toward the trailing edge, whatever edge the swipe started at. Bar switches stay a short
   fade-through. Album, artist and playlist covers fly from the list into the detail header
-  and back again on pop (`ui/nav/SharedArtwork.kt`, after Navic). The Library's Albums tile
+  (landing on a soft spring) and back again on pop on the page's own curve
+  (`ui/nav/SharedArtwork.kt`, after Navic). The Library's Albums tile
   fans the same Recent covers as the albums page and those three fly into that row. Reduced
   motion makes it a crossfade. Holding the
   bottom bar does nothing special: it is edited from Settings > Customise or the account sheet.

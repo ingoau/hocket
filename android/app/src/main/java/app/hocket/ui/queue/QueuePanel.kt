@@ -2,6 +2,7 @@ package app.hocket.ui.queue
 
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -76,9 +77,11 @@ import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueKey
 import app.hocket.core.api.QueueView
-import app.hocket.core.SwipeOptions
+import app.hocket.core.api.QueryResult
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.RepeatMode
+import app.hocket.core.QueueWindows
+import app.hocket.core.windowEnd
 import app.hocket.core.client.SelectionKind
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.Artwork
@@ -86,7 +89,12 @@ import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.ListArtCorner
 import app.hocket.ui.components.OfflineBadge
 import app.hocket.ui.components.PlaylistPicker
+import app.hocket.ui.components.LocalAppSnackbar
+import app.hocket.ui.components.SnackbarRedirect
+import app.hocket.ui.components.SwipeAction
 import app.hocket.ui.components.SwipeActionBox
+import app.hocket.ui.components.formatClock
+import app.hocket.ui.components.queueSectionOn
 import app.hocket.ui.components.SwipeSurface
 import app.hocket.ui.components.swipeActionIds
 import app.hocket.ui.components.trackSwipeAction
@@ -98,6 +106,14 @@ import app.hocket.ui.components.trackRowActions
 import app.hocket.core.ActionIds
 import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
@@ -110,13 +126,13 @@ private const val DROP_SETTLE_MS = 2_000L
 private const val NOW_KEY = "hdr:c"
 private const val FOOTER_KEY = "footer"
 
-/** Kept for existing callers: the queue list with its mode header. */
+/** Kept for existing callers: the queue list with its toggles. */
 @Composable
 fun QueuePanel(modifier: Modifier = Modifier) = QueueList(modifier)
 
 /**
- * The player's queue, Apple Music style: shuffle / repeat / autoplay toggles with ONE list of
- * history (scrolled away above), now playing, "Playing next" and "Continue playing". Everything is
+ * The player's queue: shuffle / repeat / autoplay toggles with ONE list of history (scrolled away
+ * above), now playing, the "Next in queue" group and "Next from <context>". Everything is
  * drawn on a transparent background so the player's artwork gradient shows through; colours come
  * from [LocalContentColor] and the (artwork-derived) [MaterialTheme]. [contentPadding] pads the list
  * only (e.g. room for controls drawn over its bottom edge).
@@ -130,8 +146,9 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
     if (controlsAtBottom) {
         val strip = QUEUE_CONTROLS_STRIP
         // The list ends a little above the toggles (where it used to be masked away): rows never
-        // sit behind them, so none takes their taps or accessibility focus.
-        val under = strip - STRIP_TOP_PAD + 6.dp
+        // sit behind them, so none takes their taps or accessibility focus. The toggles take a
+        // 48 dp touch target, taller than they draw, so the gap clears that.
+        val under = strip - STRIP_TOP_PAD + 14.dp
         Box(modifier) {
             QueueTimeline(
                 Modifier.fillMaxSize().padding(bottom = under).then(listModifier).fadeOut().testTag("queue.timeline"),
@@ -140,7 +157,7 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
                     top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 44.dp - under,
                 ),
             )
-            QueueModeHeader(
+            QueueToggles(
                 Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -152,7 +169,7 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
         return
     }
     Column(modifier) {
-        QueueModeHeader(
+        QueueToggles(
             Modifier.fillMaxWidth()
                 .padding(start = 16.dp + contentPadding.calculateStartPadding(dir), end = 16.dp + contentPadding.calculateEndPadding(dir), top = 4.dp, bottom = 8.dp),
         )
@@ -182,22 +199,26 @@ private fun Modifier.fadeOut(): Modifier = this
 private val FADE = 56.dp
 private val STRIP_TOP_PAD = 20.dp
 
+/** The widest a queue toggle pill grows. */
+private val QUEUE_PILL_MAX_WIDTH = 200.dp
+
 /**
  * Shuffle, repeat (off / all / one) and autoplay as three equal tonal pills; with [labels], each
  * names itself beside its icon where all three names fit.
  */
 @Composable
-private fun QueueModeHeader(modifier: Modifier = Modifier, labels: Boolean = false) {
+private fun QueueToggles(modifier: Modifier = Modifier, labels: Boolean = false) {
     val client = LocalCoreClient.current
     val queue by client.queue.collectAsStateWithLifecycle()
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
     val style = MaterialTheme.typography.labelLarge
     val names = listOf(stringResource(R.string.action_shuffle), stringResource(R.string.action_label_repeat), stringResource(R.string.player_autoplay))
     androidx.compose.foundation.layout.BoxWithConstraints(modifier) {
-    val pill = (maxWidth - 16.dp) / 3
+    // Three across the width, but no longer than a pill reads well: wider, they sit centred.
+    val pill = ((maxWidth - 16.dp) / 3).coerceAtMost(QUEUE_PILL_MAX_WIDTH)
     val widest = with(LocalDensity.current) { names.maxOf { measurer.measure(it, style).size.width }.toDp() }
     val showLabels = labels && widest + 20.dp + 6.dp + 24.dp <= pill
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.width(pill * 3 + 16.dp).align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         ModeToggle(
             checked = queue.shuffle, onCheckedChange = { client.dispatch(Commands.setShuffle(it)) },
             icon = HocketIcons.Filled.Shuffle, label = stringResource(R.string.action_shuffle), tag = "queue.shuffle", modifier = Modifier.weight(1f), showLabel = showLabels,
@@ -243,67 +264,59 @@ private fun ModeToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, ico
     }
 }
 
-private sealed interface Line {
-    data class Header(val id: String, val title: String, val subtitle: String? = null, val clear: Clear? = null) : Line
-    data class Item(val entry: QueueEntry, val section: Section) : Line
-    data object Footer : Line
-    enum class Section { History, Current, Next, Upcoming, Autoplay }
-    enum class Clear { History, Next }
+/**
+ * A drag in progress (or just dropped): the drag order ([dragOrder]: the group, the "Next from"
+ * heading, the rest) as the finger has put it, over the queue as it was when the drag started.
+ * The list reorders this local copy while the finger is down and the core gets ONE move when it
+ * lifts; [dropped] keeps the new order on screen until the core's queue arrives.
+ */
+private data class QueueDrag(val base: QueueView, val key: QueueKey, val start: List<String>, val order: List<String>, val dropped: Boolean = false)
+
+/**
+ * Runs [run] (a queue edit the core records for undo) and offers to undo it in a snackbar saying
+ * [text]: the Undo button takes back that history entry, once the core has recorded it.
+ */
+@Composable
+private fun rememberUndoable(): (String, () -> Unit) -> Unit {
+    val client = LocalCoreClient.current
+    val snackbar = LocalAppSnackbar.current
+    val undoLabel = stringResource(R.string.action_undo)
+    return remember(client, snackbar, undoLabel) {
+        { text, run ->
+            val before = client.undo.value.history.mapTo(HashSet()) { it.id }
+            run()
+            snackbar?.launch {
+                val after = withTimeoutOrNull(2_000) { client.undo.first { u -> u.history.any { it.id !in before } } }
+                val entry = after?.history?.firstOrNull { it.id !in before }?.id
+                val host = SnackbarRedirect.host ?: snackbar.host
+                val result = host.showSnackbar(text, actionLabel = entry?.let { undoLabel }, duration = SnackbarDuration.Short)
+                if (result == SnackbarResult.ActionPerformed && entry != null) client.dispatch(Commands.undoEntry(entry))
+            }
+        }
+    }
+}
+
+/** Every history entry's key, paged in from the core (the view only carries a window of it). */
+private suspend fun allHistoryKeys(client: app.hocket.core.client.CoreClient, view: QueueView): List<QueueKey> {
+    val count = view.historyCount.toInt()
+    val keys = ArrayList<QueueKey>(count)
+    var start = 0
+    while (start < count) {
+        val page = (client.query(Commands.queueRange(start, minOf(Commands.QUEUE_RANGE_MAX, count - start))) as? QueryResult.Queue)?.data ?: break
+        if (page.entries.isEmpty()) break
+        page.entries.take(count - start).forEach { keys += it.item.key }
+        start += page.entries.size
+    }
+    return keys
 }
 
 /**
- * A drag in progress (or just dropped): the movable keys (playing next + upcoming) in the order the
- * finger has put them, over the queue as it was when the drag started. Older cores re-keyed an
- * item that moved (a context item's key was its `ctx-<index>`), so sending a move per slot lost the
- * dragged item after the first one; keys are stable now (#97), and one move still keeps the queue
- * from reshuffling under the finger. The list reorders this local copy while the finger is down and the core gets ONE move when it lifts;
- * [dropped] keeps the new order on screen until the core's queue arrives.
- */
-private data class QueueDrag(val base: QueueView, val key: QueueKey, val order: List<QueueKey>, val dropped: Boolean = false)
-
-/** Playing next + upcoming keys: the combined index `MoveQueueItem` takes. */
-private fun QueueView.movableKeys(): List<QueueKey> = playingNext.map { it.item.key } + upcoming.map { it.item.key }
-
-private data class TimelineLabels(val history: String, val now: String, val next: String, val continuing: String, val from: String?, val autoplay: String)
-
-/**
- * The timeline's rows for [queue]; with a [drag], its items in the drag's order. The dragged item
- * takes the section the core will give it: playing next when it is among the insertions (the core
- * then makes it one), else among the context / autoplay items.
- */
-private fun timelineRows(queue: QueueView, drag: QueueDrag?, labels: TimelineLabels): List<Line> = buildList {
-    if (queue.history.isNotEmpty()) {
-        add(Line.Header("h", labels.history, clear = Line.Clear.History))
-        queue.history.forEach { add(Line.Item(it, Line.Section.History)) }
-    }
-    queue.current?.let { add(Line.Header("c", labels.now)); add(Line.Item(it, Line.Section.Current)) }
-    var next = queue.playingNext
-    var rest = queue.upcoming
-    if (drag != null) {
-        val entries = (queue.playingNext + queue.upcoming).associateBy { it.item.key }
-        val ordered = drag.order.mapNotNull { entries[it] }
-        val otherInsertions = queue.playingNext.count { it.item.key != drag.key }
-        val at = drag.order.indexOf(drag.key)
-        val nextCount = otherInsertions + if (at in 0 until otherInsertions) 1 else 0
-        next = ordered.take(nextCount)
-        rest = ordered.drop(nextCount)
-    }
-    if (next.isNotEmpty()) {
-        add(Line.Header("n", labels.next, clear = Line.Clear.Next))
-        next.forEach { add(Line.Item(it, Line.Section.Next)) }
-    }
-    val (auto, ctx) = rest.partition { it.item.source is QueueSource.Autoplay }
-    if (ctx.isNotEmpty()) { add(Line.Header("u", labels.continuing, labels.from)); ctx.forEach { add(Line.Item(it, Line.Section.Upcoming)) } }
-    if (auto.isNotEmpty()) { add(Line.Header("a", labels.autoplay)); auto.forEach { add(Line.Item(it, Line.Section.Autoplay)) } }
-    if (isNotEmpty()) add(Line.Footer)
-}
-
-/**
- * The one scrollable list: history above (oldest first), the current item, then "Playing next"
- * (insertions) and "Continue playing · From <context>" (the permuted context), then autoplay with
- * its "why". It opens at "Now playing" so history is only revealed by scrolling up. Drag handles
- * reorder (haptics; one move per drag), swipes run the queue's swipe actions (remove by default,
- * undo toast from the core), tap jumps (history: play again).
+ * The one scrollable list: history above (oldest first), the current item, the "Next in queue"
+ * group (Stash and Clear on its heading), then "Next from <context>" (or "Later"). It opens at
+ * "Now playing" so history is only revealed by scrolling up, and pages in more rows at either end
+ * as they come into view. Drag handles reorder (one move per drag; dropping above the "Next from"
+ * heading puts the song in the group, below takes it out), swipes run the queue's swipe actions
+ * (remove by default, with Undo), tap jumps (history too: the pointer moves back).
  */
 @Composable
 private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
@@ -312,23 +325,23 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     val selection by client.selection.collectAsStateWithLifecycle()
     val kind by client.selectionKind.collectAsStateWithLifecycle()
     val selecting = selection.active && kind == SelectionKind.QueueItems
+    val sectionOn = queueSectionOn()
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     val songMenu = app.hocket.ui.components.rememberSongMenu()
+    val undoable = rememberUndoable()
     var ratingFor by remember { mutableStateOf<QueueEntry?>(null) }
     var pickerFor by remember { mutableStateOf<QueueEntry?>(null) }
-    val labels = TimelineLabels(
-        history = stringResource(R.string.queue_section_history),
-        now = stringResource(R.string.queue_now),
-        next = stringResource(R.string.queue_playing_next),
-        continuing = stringResource(R.string.queue_section_continue),
-        from = queue.contextLabel?.let { stringResource(R.string.queue_section_from, it) },
-        autoplay = stringResource(R.string.queue_autoplay_section),
-    )
     val removeLabel = stringResource(R.string.action_remove_from_queue)
+    val removedText = stringResource(R.string.queue_removed)
+    val clearedText = stringResource(R.string.queue_group_cleared)
+    val stashedText = stringResource(R.string.queue_group_stashed)
     val moveUpLabel = stringResource(R.string.a11y_move_up)
     val moveDownLabel = stringResource(R.string.a11y_move_down)
     val (swipeStart, swipeEnd) = swipeActionIds(SwipeSurface.Queue)
+    // The paged-in rows are the client's; let them go when the queue closes.
+    DisposableEffect(client) { onDispose { client.resetQueueWindow() } }
     var drag by remember { mutableStateOf<QueueDrag?>(null) }
     // A dropped drag gives way to the core's queue as soon as that changes, or after a while if
     // nothing changes (the core refused the move).
@@ -340,14 +353,20 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     }
     // While a drag is under way the list shows the queue as it was when the drag started.
     val shown = drag?.base ?: queue
-    val rows: List<Line> = remember(shown, drag, labels) { timelineRows(shown, drag, labels) }
+    val rows: List<QueueLine> = remember(shown, drag, sectionOn) { queueLines(shown, drag?.order, sectionOn) }
     if (queue.current == null && rows.isEmpty()) {
         EmptyState(stringResource(R.string.empty_queue_title), stringResource(R.string.empty_queue_body), modifier)
         return
     }
     val listState = rememberLazyListState()
-    // Combined index into playing-next + upcoming, which is what MoveQueueItem takes.
-    val movable = remember(queue) { queue.movableKeys() }
+    val currentKey = queue.current?.item?.key
+    val order = remember(queue, sectionOn) { dragOrder(queue, sectionOn) }
+    fun remove(key: QueueKey) = undoable(removedText) { client.dispatch(Commands.removeQueueItems(listOf(key))) }
+    fun move(key: QueueKey, up: Boolean): Boolean {
+        val moved = stepOrder(order, key, up) ?: return false
+        dropMove(moved, key, currentKey, order)?.let(client::dispatch)
+        return true
+    }
     val reorderable = rememberReorderableLazyListState(listState) { from, to ->
         val d = drag?.takeIf { !it.dropped } ?: return@rememberReorderableLazyListState
         val fromIndex = d.order.indexOf(from.key)
@@ -357,16 +376,46 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
         haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
     }
     fun startDrag(key: QueueKey) {
-        drag = QueueDrag(queue, key, queue.movableKeys())
+        val start = dragOrder(queue, sectionOn)
+        drag = QueueDrag(queue, key, start, start)
         haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
     }
     fun drop() {
         val d = drag?.takeIf { !it.dropped } ?: return
         haptics.performHapticFeedback(HapticFeedbackType.GestureEnd)
-        val to = d.order.indexOf(d.key)
-        if (to < 0 || to == d.base.movableKeys().indexOf(d.key)) { drag = null; return }
+        val command = dropMove(d.order, d.key, d.base.current?.item?.key, d.start)
+        if (command == null) { drag = null; return }
         drag = d.copy(dropped = true)
-        client.dispatch(Commands.moveQueueItem(d.key, to))
+        client.dispatch(command)
+    }
+    // Page in more rows as either loaded end comes into view (once the list has opened at "Now
+    // playing", so opening it never pages in history nobody scrolled to).
+    var positioned by remember { mutableStateOf(false) }
+    val latest by rememberUpdatedState(queue)
+    // The first real row under the "more above" row, and its offset, when that row asked for a page:
+    // rows prepended above it must not push it down (the list would keep the "more" row as its
+    // anchor at the top, show it again and chain-load all of history).
+    var topAnchor by remember { mutableStateOf<Pair<Any, Int>?>(null) }
+    LaunchedEffect(listState, client) {
+        snapshotFlow { if (positioned) listState.layoutInfo.visibleItemsInfo.map { it.key } else emptyList() }.collect { keys ->
+            val q = latest
+            val pointer = q.currentIndex?.toInt() ?: q.historyCount.toInt()
+            val before = pointer - q.windowStart.toInt()
+            val after = q.windowEnd - pointer - 1
+            val top = MORE_TOP_KEY in keys
+            val bottom = MORE_BOTTOM_KEY in keys
+            if (top) topAnchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key != MORE_TOP_KEY }?.let { it.key to it.offset }
+            if (top || bottom) client.extendQueue(before + if (top) QueueWindows.PAGE else 0, after + if (bottom) QueueWindows.PAGE else 0)
+        }
+    }
+    LaunchedEffect(shown.windowStart) {
+        val (key, offset) = topAnchor ?: return@LaunchedEffect
+        topAnchor = null
+        if (drag != null) return@LaunchedEffect
+        val at = rows.indexOfFirst { it.key == key }
+        if (at <= 0) return@LaunchedEffect
+        listState.scrollToItem(at)
+        listState.scrollBy(-offset.toFloat())
     }
     // Follow the current track, but never fight the user: no auto-scroll while a finger is on the
     // list or for a while after they last scrolled it (Metrolist/Navic leave a browsed queue alone).
@@ -382,7 +431,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     }
     // Room below the last row so "Now playing" can reach the top even when little follows it
     // (otherwise the list clamps and history shows): the viewport minus what follows the header.
-    val hasHistory = queue.history.isNotEmpty()
+    val hasHistory = queue.historyCount.toInt() > 0
     var tailPx by remember { mutableIntStateOf(0) }
     LaunchedEffect(listState, hasHistory) {
         if (!hasHistory) { tailPx = 0; return@LaunchedEffect }
@@ -394,10 +443,9 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
             tailPx = if (footer == null) 0 else (viewport - (footer.offset + footer.size - now.offset)).coerceAtLeast(0)
         }
     }
-    var positioned by remember { mutableStateOf(false) }
     LaunchedEffect(queue.current?.item?.key) {
         // "Now playing" at the top; history stays above, reached by scrolling up.
-        val target = rows.indexOfFirst { it is Line.Header && it.id == "c" }
+        val target = rows.indexOfFirst { it.key == NOW_KEY }
         if (target < 0) return@LaunchedEffect
         fun leaveAlone() = userDragging || listState.isScrollInProgress || SystemClock.uptimeMillis() - lastUserScroll < USER_SCROLL_GRACE_MS
         when {
@@ -413,64 +461,91 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     }
     Box(modifier) {
         LazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize().testTag("queue.list")) {
-            items(rows, key = { r -> when (r) { is Line.Header -> "hdr:" + r.id; is Line.Item -> r.entry.item.key; Line.Footer -> FOOTER_KEY } }) { row ->
+            items(rows, key = { it.key }) { row ->
                 when (row) {
                     // Headers and the footer move with the rows (ReorderableItem animates those), so a
                     // section appearing or the current track moving on slides rather than snaps (#27).
-                    is Line.Header -> Box(Modifier.animateItem()) {
-                        SectionTitle(row.title, row.subtitle, clear = row.clear?.let { c ->
-                            when (c) {
-                                Line.Clear.History -> stringResource(R.string.queue_clear_history) to { client.dispatch(Commands.removeQueueItems(queue.history.map { it.item.key })) }
-                                Line.Clear.Next -> stringResource(R.string.queue_clear_insertions) to { client.dispatch(Command.ClearInsertions) }
-                            }
-                        })
+                    // The "Next from" heading is a drop target: dragging past it moves a song in or
+                    // out of the group.
+                    is QueueLine.Header -> ReorderableItem(reorderable, key = row.key, enabled = row.id == QueueLine.Header.Id.Later && groupDrops(shown, sectionOn) && currentKey != null) { _ ->
+                        when (row.id) {
+                            QueueLine.Header.Id.History -> SectionTitle(stringResource(R.string.queue_section_history), tag = "queue.header.history",
+                                buttons = listOf(SectionButton(stringResource(R.string.queue_section_clear), stringResource(R.string.queue_clear_history), "queue.history.clear") {
+                                    val q = queue
+                                    scope.launch { allHistoryKeys(client, q).takeIf { it.isNotEmpty() }?.let { client.dispatch(Commands.removeQueueItems(it)) } }
+                                }))
+                            QueueLine.Header.Id.Now -> SectionTitle(stringResource(R.string.queue_now), tag = "queue.header.now")
+                            QueueLine.Header.Id.Group -> SectionTitle(stringResource(R.string.queue_section_group, row.count), tag = "queue.header.group",
+                                buttons = listOf(
+                                    SectionButton(stringResource(R.string.queue_group_stash), stringResource(R.string.queue_group_stash_a11y), "queue.group.stash") {
+                                        undoable(stashedText) { client.dispatch(Command.StashQueueGroup) }
+                                    },
+                                    SectionButton(stringResource(R.string.queue_section_clear), stringResource(R.string.queue_group_clear_a11y), "queue.group.clear") {
+                                        undoable(clearedText) { client.dispatch(Command.ClearQueueGroup) }
+                                    },
+                                ))
+                            QueueLine.Header.Id.Later -> SectionTitle(
+                                row.label?.let { stringResource(R.string.queue_section_next_from, it) } ?: stringResource(R.string.queue_section_later),
+                                tag = "queue.header.later",
+                            )
+                        }
                     }
-                    Line.Footer -> Column(Modifier.animateItem().fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-                        if (queue.totalUpcoming.toInt() > queue.upcoming.size) Text(stringResource(R.string.queue_more_upcoming, queue.totalUpcoming.toInt() - queue.upcoming.size), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    is QueueLine.More -> Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.Center) {
+                        androidx.compose.material3.LoadingIndicator(Modifier.size(32.dp))
+                    }
+                    QueueLine.Footer -> Column(Modifier.animateItem().fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                         TextButton(onClick = { client.dispatch(Command.ClearQueue) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(stringResource(R.string.queue_clear)) }
                         Spacer(Modifier.height(24.dp))
                     }
-                    is Line.Item -> {
+                    is QueueLine.Item -> {
                         val entry = row.entry
-                        val draggable = row.section == Line.Section.Next || row.section == Line.Section.Upcoming || row.section == Line.Section.Autoplay
-                        val removable = row.section != Line.Section.Current
-                        val target = Commands.queueItems(listOf(entry.item.key))
-                        // The current item is never swiped away (it is removed by skipping it).
-                        fun swipeAction(id: String) = if (!removable && id == ActionIds.REMOVE_FROM_QUEUE) SwipeOptions.NONE else id
-                        ReorderableItem(reorderable, key = entry.item.key, enabled = draggable) { _ ->
+                        val key = entry.item.key
+                        val draggable = row.section == Section.Group || row.section == Section.Later
+                        val removable = row.section != Section.Current
+                        val target = Commands.queueItems(listOf(key))
+                        // The current item is never swiped away (it is removed by skipping it), and a
+                        // removal offers Undo.
+                        @Composable
+                        fun swipe(id: String) = when {
+                            id == ActionIds.REMOVE_FROM_QUEUE && !removable -> null
+                            id == ActionIds.REMOVE_FROM_QUEUE -> trackSwipeAction(id, entry.track, target, onAddToPlaylist = {})?.let { a ->
+                                SwipeAction(a.id, a.label, a.icon, a.container, a.content, a.dismisses) { remove(key) }
+                            }
+                            else -> trackSwipeAction(id, entry.track, target, onAddToPlaylist = { pickerFor = entry })
+                        }
+                        ReorderableItem(reorderable, key = key, enabled = draggable) { _ ->
                             SwipeActionBox(
-                                startToEnd = trackSwipeAction(swipeAction(swipeStart), entry.track, target, onAddToPlaylist = { pickerFor = entry }),
-                                endToStart = trackSwipeAction(swipeAction(swipeEnd), entry.track, target, onAddToPlaylist = { pickerFor = entry }),
+                                startToEnd = swipe(swipeStart),
+                                endToStart = swipe(swipeEnd),
                                 enabled = !selecting && drag == null,
                                 // Transparent at rest (the player's backdrop shows through); an opaque
                                 // surface only while swiped, to cover the action's background.
                                 swipeSurface = MaterialTheme.colorScheme.surfaceContainerHighest,
                             ) {
                                 // Accessible alternatives to the swipe (remove) and the drag handle (move).
-                                val index = movable.indexOf(entry.item.key)
                                 val extra = buildList {
-                                    if (removable) add(CustomAccessibilityAction(removeLabel) { client.dispatch(Commands.removeQueueItems(listOf(entry.item.key))); true })
-                                    if (draggable && index > 0) add(CustomAccessibilityAction(moveUpLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index - 1)); true })
-                                    if (draggable && index >= 0 && index < movable.lastIndex) add(CustomAccessibilityAction(moveDownLabel) { client.dispatch(Commands.moveQueueItem(entry.item.key, index + 1)); true })
+                                    if (removable) add(CustomAccessibilityAction(removeLabel) { remove(key); true })
+                                    if (draggable && stepOrder(order, key, up = true) != null) add(CustomAccessibilityAction(moveUpLabel) { move(key, up = true) })
+                                    if (draggable && stepOrder(order, key, up = false) != null) add(CustomAccessibilityAction(moveDownLabel) { move(key, up = false) })
                                 }
                                 QueueRow(
                                     entry = entry,
                                     section = row.section,
-                                    selected = selecting && selection.contains(entry.item.key),
+                                    selected = selecting && selection.contains(key),
                                     selecting = selecting,
                                     extraActions = extra,
                                     // The playing row plays on (resumes when paused): a jump to the
                                     // current item restarts it, and this row sits right above the
                                     // ones being dragged and tapped while editing the queue.
-                                    onClick = { client.dispatch(if (row.section == Line.Section.Current) Command.Play else Commands.jumpToQueueItem(entry.item.key)) },
-                                    onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, entry.item.key) },
-                                    onMore = { songMenu.open(entry.track, Commands.queueItems(listOf(entry.item.key))) },
+                                    onClick = { client.dispatch(if (row.section == Section.Current) Command.Play else Commands.jumpToQueueItem(key)) },
+                                    onToggleSelect = { client.toggleSelected(SelectionKind.QueueItems, key) },
+                                    onMore = { songMenu.open(entry.track, Commands.queueItems(listOf(key))) },
                                     onRate = { ratingFor = entry },
-                                    modifier = Modifier.testTag("queue.row." + entry.item.key),
+                                    modifier = Modifier.testTag("queue.row.$key"),
                                     handle = if (draggable) ({
                                         Box(
-                                            Modifier.size(48.dp).testTag("queue.handle." + entry.item.key).draggableHandle(
-                                                onDragStarted = { startDrag(entry.item.key) },
+                                            Modifier.size(48.dp).testTag("queue.handle.$key").draggableHandle(
+                                                onDragStarted = { startDrag(key) },
                                                 onDragStopped = { drop() },
                                             ),
                                             contentAlignment = Alignment.Center,
@@ -492,31 +567,35 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
     }
 }
 
-/** A section title in the reference's style: semibold title, optional subtitle, "Clear" on the right. */
+/** A text button on a section heading: [label] on screen, [spoken] for TalkBack. */
+private class SectionButton(val label: String, val spoken: String, val tag: String, val onClick: () -> Unit)
+
+/** A section title in the reference's style: semibold title, its buttons ("Stash", "Clear") on the right. */
 @Composable
-private fun SectionTitle(title: String, subtitle: String?, clear: Pair<String, () -> Unit>?) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun SectionTitle(title: String, tag: String, buttons: List<SectionButton> = emptyList()) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 4.dp).testTag(tag), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-            subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        clear?.let { (spoken, onClear) ->
-            TextButton(onClick = onClear, modifier = Modifier.semantics { contentDescription = spoken }) {
-                Text(stringResource(R.string.queue_section_clear), color = MaterialTheme.colorScheme.primary)
+        buttons.forEach { b ->
+            TextButton(onClick = b.onClick, modifier = Modifier.testTag(b.tag).semantics { contentDescription = b.spoken }) {
+                Text(b.label, color = MaterialTheme.colorScheme.primary)
             }
         }
     }
 }
 
 /**
- * One queue row: 48 dp artwork, title and artist, and a drag handle for reorderable items; no
- * opaque container. It speaks like a track row (label, "playing" / offline state, row menu as
- * actions) with the queue's remove / move actions added. Long press starts multi-select.
+ * One queue row: 48 dp artwork, title and artist, the row's marker (the queue icon for a song you
+ * added, outside the "Next in queue" group; autoplay's icon for one autoplay picked) and a drag
+ * handle for reorderable items; no opaque container. It speaks like a track row (label, "playing"
+ * / offline state, row menu as actions) with the queue's remove / move actions added. Long press
+ * starts multi-select.
  */
 @Composable
 private fun QueueRow(
     entry: QueueEntry,
-    section: Line.Section,
+    section: Section,
     selected: Boolean,
     selecting: Boolean,
     extraActions: List<CustomAccessibilityAction>,
@@ -529,16 +608,23 @@ private fun QueueRow(
 ) {
     val track = entry.track
     val haptics = LocalHapticFeedback.current
-    val current = section == Line.Section.Current
+    val current = section == Section.Current
+    val marker = rowMarker(entry, section)
     val actions = trackRowActions(track, Commands.queueItems(listOf(entry.item.key)), onRate = onRate, onMore = onMore, extra = extraActions)
-    val state = listOfNotNull(if (current) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline)).joinToString(", ").ifEmpty { null }
+    val markerText = when (marker) {
+        RowMarker.Added -> stringResource(R.string.queue_row_added)
+        RowMarker.Autoplay -> stringResource(R.string.queue_row_autoplay)
+        RowMarker.None -> null
+    }
+    val state = listOfNotNull(if (current) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline), markerText).joinToString(", ").ifEmpty { null }
     val label = trackLabel(track)
     val selectLabel = stringResource(R.string.a11y_select)
     val deselectLabel = stringResource(R.string.a11y_deselect)
     val playLabel = stringResource(R.string.action_play)
     val content = LocalContentColor.current
     val wash by animateColorAsState(if (selected) content.copy(alpha = 0.14f) else Color.Transparent, label = "queueRowSelected")
-    val dim = if (section == Line.Section.History) 0.7f else 1f
+    val snoozed = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackId == track.id }
+    val dim = (if (section == Section.History) 0.7f else 1f) * (if (snoozed) 0.45f else 1f)
     Column(
         modifier
             .fillMaxWidth()
@@ -578,6 +664,15 @@ private fun QueueRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant.let { it.copy(alpha = it.alpha * dim) })
                 }
             }
+            // The marker sits before the duration, muted: it says where the song came from.
+            val muted = MaterialTheme.colorScheme.onSurfaceVariant.let { it.copy(alpha = it.alpha * 0.7f * dim) }
+            when (marker) {
+                RowMarker.Added -> Icon(HocketIcons.AutoMirrored.Filled.QueueMusic, null, Modifier.padding(start = 8.dp).size(16.dp).testTag("queue.added.${entry.item.key}"), tint = muted)
+                RowMarker.Autoplay -> Icon(HocketIcons.Filled.AllInclusive, null, Modifier.padding(start = 8.dp).size(16.dp).testTag("queue.autoplay.${entry.item.key}"), tint = muted)
+                RowMarker.None -> Unit
+            }
+            Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, maxLines = 1, color = muted,
+                modifier = Modifier.padding(start = 6.dp).clearAndSetSemantics { })
             handle?.invoke()
         }
         if (entry.item.unavailable == true) Text(stringResource(R.string.queue_unavailable), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 78.dp, bottom = 6.dp))

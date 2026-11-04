@@ -11,12 +11,12 @@ use std::sync::OnceLock;
 
 use serde_json::{Map, Value};
 
-use crate::api::{self, EpochMs, QueueSource, SessionDocument, SessionId, TransportState};
-use crate::session::saved::is_id_referenced;
-use crate::session::shuffle::is_bijection;
+use crate::api::{EpochMs, SessionDocument, SessionId, TransportState};
 
-/// Schema version of the session document this build writes.
-pub const SESSION_SCHEMA_VERSION: u32 = api::API_SCHEMA_VERSION;
+/// Schema version of the session document this build writes. 2: the flat
+/// queue list (`history` / `current` / `upcoming`, no modes, cursor or
+/// shuffle permutation).
+pub const SESSION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum DocumentError {
@@ -30,8 +30,9 @@ pub enum DocumentError {
     Invalid(String),
 }
 
-/// Oldest schema this build can still read.
-pub const SESSION_SCHEMA_MIN: u32 = 1;
+/// Oldest schema this build can still read. Older documents are not
+/// migrated: loading one fails and the caller starts a fresh session.
+pub const SESSION_SCHEMA_MIN: u32 = 2;
 
 /// A fresh, empty document for a scope (`serverId:username`).
 pub fn new_document(
@@ -46,12 +47,10 @@ pub fn new_document(
         revision: 0,
         updated_at: now,
         context: None,
-        mode: Default::default(),
-        cursor: 0,
-        current: None,
         history: vec![],
-        insertions: vec![],
-        shuffle: None,
+        current: None,
+        upcoming: vec![],
+        shuffle: false,
         repeat: Default::default(),
         autoplay: false,
         transport: TransportState::default(),
@@ -158,11 +157,9 @@ pub fn same_state(a: &SessionDocument, b: &SessionDocument) -> bool {
         revision: _,
         updated_at: _,
         context,
-        mode,
-        cursor,
-        current,
         history,
-        insertions,
+        current,
+        upcoming,
         shuffle,
         repeat,
         autoplay,
@@ -173,14 +170,12 @@ pub fn same_state(a: &SessionDocument, b: &SessionDocument) -> bool {
     *schema_version == b.schema_version
         && *session_id == b.session_id
         && *scope == b.scope
-        && *mode == b.mode
-        && *cursor == b.cursor
         && *repeat == b.repeat
         && *autoplay == b.autoplay
         && *current == b.current
         && *shuffle == b.shuffle
         && *transport == b.transport
-        && *insertions == b.insertions
+        && *upcoming == b.upcoming
         && *history == b.history
         && *saved_queues == b.saved_queues
         && *extra == b.extra
@@ -191,77 +186,17 @@ pub fn same_state(a: &SessionDocument, b: &SessionDocument) -> bool {
 /// or a corrupted store; the reducer still never panics on it, but the actor
 /// should refuse to adopt it.
 pub fn validate(doc: &SessionDocument) -> Result<(), DocumentError> {
-    let n = doc.context.as_ref().map(|c| c.tracks.len()).unwrap_or(0);
-    // An ID-referenced context restored from a snapshot has no tracks until
-    // the actor resolves them; its cursor and indices are checked afterwards.
-    let unresolved = doc
-        .context
-        .as_ref()
-        .map(|c| c.tracks.is_empty() && is_id_referenced(&c.kind))
-        .unwrap_or(false);
-    if unresolved {
-        return validate_rest(doc);
+    if doc.current.is_none() && !doc.upcoming.is_empty() {
+        return Err(DocumentError::Invalid(
+            "entries after the pointer with nothing current".into(),
+        ));
     }
-    if doc.context.is_none() {
-        if doc.cursor != 0 {
-            return Err(DocumentError::Invalid("cursor without context".into()));
-        }
-        if matches!(
-            doc.current.as_ref().map(|c| &c.source),
-            Some(QueueSource::Context { .. })
-        ) {
-            return Err(DocumentError::Invalid(
-                "context-sourced current without context".into(),
-            ));
-        }
-    } else if doc.cursor as usize > n {
-        // The cursor is the boundary before the next context item, so it may
-        // sit just past the last one.
-        return Err(DocumentError::Invalid(format!(
-            "cursor {} out of range for {} tracks",
-            doc.cursor, n
-        )));
-    }
-    for item in doc
-        .history
-        .iter()
-        .chain(doc.current.iter())
-        .chain(doc.insertions.iter())
-    {
-        if let QueueSource::Context { index } = item.source {
-            if index as usize >= n {
-                return Err(DocumentError::Invalid(format!(
-                    "context index {index} out of range for {n} tracks"
-                )));
-            }
-        }
-    }
-    if let Some(s) = &doc.shuffle {
-        if let Some(order) = &s.order {
-            if order.len() != n || !is_bijection(order) {
-                return Err(DocumentError::Invalid(
-                    "shuffle order is not a bijection over the context".into(),
-                ));
-            }
-        }
-        if let Some(a) = s.anchor {
-            if a as usize >= n {
-                return Err(DocumentError::Invalid("shuffle anchor out of range".into()));
-            }
-        }
-    }
-    validate_rest(doc)
-}
-
-/// The checks that hold even for an unresolved context: unique keys, unique
-/// saved-queue ids.
-fn validate_rest(doc: &SessionDocument) -> Result<(), DocumentError> {
     let mut keys = HashSet::new();
     for item in doc
         .history
         .iter()
         .chain(doc.current.iter())
-        .chain(doc.insertions.iter())
+        .chain(doc.upcoming.iter())
     {
         if !keys.insert(item.key.as_str()) {
             return Err(DocumentError::Invalid(format!(
@@ -285,7 +220,7 @@ fn validate_rest(doc: &SessionDocument) -> Result<(), DocumentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{ContextKind, QueueContext, QueueItem, ShuffleState, SortOrder};
+    use crate::api::{ContextKind, QueueContext, QueueItem, QueueSource, SortOrder};
 
     fn doc_with_context(n: usize) -> SessionDocument {
         let mut d = new_document("s:u", "sess".into(), 1.0);
@@ -301,6 +236,9 @@ mod tests {
             track_id: "t0".into(),
             source: QueueSource::Context { index: 0 },
             unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: 0,
         });
         d
     }
@@ -325,11 +263,11 @@ mod tests {
         assert_eq!(doc.extra["crossfadeMs"], "1500");
 
         // Modify something we do understand.
-        doc.cursor = 2;
+        doc.shuffle = true;
         bump_revision(&mut doc, 99.0);
         let out = save(&doc).unwrap();
         let back: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(back["cursor"], 2);
+        assert_eq!(back["shuffle"], true);
         assert_eq!(back["revision"], 1);
         assert_eq!(back["crossfadeMs"], 1500);
         assert_eq!(
@@ -348,9 +286,9 @@ mod tests {
     #[test]
     fn known_keys_win_over_extra() {
         let mut doc = doc_with_context(1);
-        doc.extra.insert("cursor".into(), "42".into());
+        doc.extra.insert("shuffle".into(), "42".into());
         let v = save_value(&doc).unwrap();
-        assert_eq!(v["cursor"], 0);
+        assert_eq!(v["shuffle"], false);
     }
 
     #[test]
@@ -367,36 +305,40 @@ mod tests {
         assert!(matches!(load("{"), Err(DocumentError::Json(_))));
         let mut v = serde_json::to_value(doc_with_context(1)).unwrap();
         v["schemaVersion"] = Value::from(0);
-        assert!(matches!(load_value(v), Err(DocumentError::TooOld(0, 1))));
+        assert!(matches!(load_value(v), Err(DocumentError::TooOld(0, 2))));
+    }
+
+    #[test]
+    fn old_queue_model_documents_do_not_load() {
+        // Schema 1: the Apple/YouTube model with a cursor and insertion list.
+        let old = serde_json::json!({
+            "schemaVersion": 1, "sessionId": "s", "scope": "a:b", "revision": 3,
+            "updatedAt": 1.0, "context": null, "mode": "apple", "cursor": 0,
+            "current": null, "history": [], "insertions": [], "shuffle": null,
+            "repeat": "off", "autoplay": false,
+            "transport": serde_json::to_value(TransportState::default()).unwrap(),
+            "savedQueues": []
+        });
+        assert!(load(&old.to_string()).is_err());
+        // Even when it claims the new version, the shape doesn't parse.
+        let mut claimed = old.clone();
+        claimed["schemaVersion"] = Value::from(SESSION_SCHEMA_VERSION);
+        assert!(load(&claimed.to_string()).is_err());
     }
 
     #[test]
     fn validation() {
         assert!(validate(&doc_with_context(3)).is_ok());
         let mut d = doc_with_context(3);
-        d.cursor = 3;
-        assert!(validate(&d).is_ok(), "cursor may sit just past the end");
-        d.cursor = 4;
-        assert!(validate(&d).is_err());
-        let mut d = doc_with_context(3);
         d.history.push(d.current.clone().unwrap());
         assert!(validate(&d).unwrap_err().to_string().contains("duplicate"));
         let mut d = doc_with_context(3);
-        d.shuffle = Some(ShuffleState {
-            seed: 1,
-            anchor: Some(5),
-            order: None,
-        });
-        assert!(validate(&d).is_err());
-        d.shuffle = Some(ShuffleState {
-            seed: 1,
-            anchor: None,
-            order: Some(vec![0, 0, 1]),
-        });
-        assert!(validate(&d).is_err());
-        let mut d = new_document("a", "b".into(), 0.0);
-        d.cursor = 1;
-        assert!(validate(&d).is_err());
+        let mut next = d.current.clone().unwrap();
+        next.key = "k1".into();
+        d.upcoming.push(next);
+        assert!(validate(&d).is_ok());
+        d.current = None;
+        assert!(validate(&d).is_err(), "upcoming with nothing current");
     }
 
     #[test]
@@ -405,7 +347,7 @@ mod tests {
         let mut b = a.clone();
         bump_revision(&mut b, 5.0);
         assert!(same_state(&a, &b));
-        b.cursor = 1;
+        b.shuffle = true;
         assert!(!same_state(&a, &b));
         let mut c = a.clone();
         c.extra.insert("contextKeys".into(), "{}".into());

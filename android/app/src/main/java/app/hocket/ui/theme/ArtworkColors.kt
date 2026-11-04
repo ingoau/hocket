@@ -5,6 +5,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
@@ -45,6 +46,32 @@ object ArtworkColors {
     }
 
     fun scheme(seed: Color, dark: Boolean): ColorScheme = accessible(tonalScheme(seed, dark), dark)
+
+    /**
+     * A scheme for a page painted in [page] (a detail page carrying its artwork's colour on): the
+     * [seed]'s accents, the page itself as background and surface, containers as a little more of
+     * the page's text colour over it (dark pages) or of white and black (light ones), so cards and
+     * rows read as lifted from the page in either. [light]: dark text on the page.
+     */
+    fun pageScheme(seed: Color?, page: Color, light: Boolean): ColorScheme {
+        val s = tonalScheme(seed ?: page, dark = !light)
+        fun over(c: Color, a: Float) = c.copy(alpha = a).compositeOver(page)
+        val on = if (light) Color(0xFF1C1B1F) else Color(0xFFF5F2F7)
+        val tinted = if (light) s.copy(
+            surfaceContainerLowest = over(Color.White, 0.6f), surfaceContainerLow = over(Color.White, 0.35f),
+            surfaceContainer = over(Color.Black, 0.04f), surfaceContainerHigh = over(Color.Black, 0.07f), surfaceContainerHighest = over(Color.Black, 0.10f),
+            surfaceBright = over(Color.White, 0.7f), surfaceDim = over(Color.Black, 0.08f),
+        ) else s.copy(
+            surfaceContainerLowest = over(Color.Black, 0.2f), surfaceContainerLow = over(Color.White, 0.04f),
+            surfaceContainer = over(Color.White, 0.07f), surfaceContainerHigh = over(Color.White, 0.10f), surfaceContainerHighest = over(Color.White, 0.14f),
+            surfaceBright = over(Color.White, 0.18f), surfaceDim = over(Color.Black, 0.2f),
+        )
+        return accessible(tinted.copy(
+            background = page, surface = page, surfaceTint = s.primary,
+            onBackground = on, onSurface = on, onSurfaceVariant = on.copy(alpha = 0.74f).compositeOver(page),
+            surfaceVariant = over(on, 0.12f), outline = over(on, 0.5f), outlineVariant = over(on, 0.18f),
+        ), dark = !light)
+    }
 
     /**
      * Moves foreground roles (never surfaces) until each meets its contrast target against every

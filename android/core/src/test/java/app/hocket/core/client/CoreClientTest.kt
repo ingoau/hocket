@@ -5,6 +5,7 @@ import app.hocket.core.api.*
 import app.hocket.core.fake.FakeCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -17,6 +18,61 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class CoreClientTest {
     private var clock = 5_000_000.0
+
+    @Test
+    fun roomDiagnosticsAreCollectedOnceAndReusedBriefly() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.requestSnapshot()
+        client.dispatch(Commands.setSetting(app.hocket.core.SettingKeys.DEVELOPER_MODE, "true"))
+        runCurrent()
+        val first = client.collectRoomDiagnostics()
+        assertTrue(first!!.contains("Laptop"))
+        val id = client.roomDiagnostics.value!!.requestId
+        assertTrue(client.roomDiagnostics.value!!.done)
+        // Within the room's limit: reused, nothing asked.
+        clock += 5_000
+        assertEquals(first, client.collectRoomDiagnostics())
+        assertEquals(id, client.roomDiagnostics.value!!.requestId)
+        // Forced (Refresh), or later: asked again.
+        assertNotNull(client.collectRoomDiagnostics(force = true))
+        val forced = client.roomDiagnostics.value!!.requestId
+        assertTrue(forced != id)
+        clock += REUSE_ROOM_COLLECTION_MS
+        client.collectRoomDiagnostics()
+        assertTrue(client.roomDiagnostics.value!!.requestId != forced)
+    }
+
+    @Test
+    fun reportUploadFollowsTheCoresEvents() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.requestSnapshot()
+        runCurrent()
+        assertEquals(null, client.reportUpload.value)
+        val seen = mutableListOf<ReportUploadState>()
+        backgroundScope.launch { core.events.collect { e -> if (e is Event.ReportUploadChanged) e.data.status?.state?.let { if (seen.lastOrNull() != it) seen += it } } }
+        runCurrent()
+        client.startReportUpload("Queue jumped", "bundle text", listOf(ReportAttachment("/tmp/x.jpg", ReportAttachmentKind.Screenshot, deleteAfter = true)))
+        runCurrent()
+        val done = client.reportUpload.value!!
+        assertEquals(ReportUploadState.Done, done.state)
+        assertEquals(FakeCore.FAKE_REPORT_ID, done.reportId)
+        assertEquals(done.totalBytes, done.sentBytes, 0.0)
+        assertEquals(listOf(ReportUploadState.Uploading, ReportUploadState.Done), seen)
+        // A snapshot asks the core where it stands, and agrees.
+        client.requestSnapshot()
+        runCurrent()
+        assertEquals(ReportUploadState.Done, client.reportUpload.value?.state)
+        client.dismissReportUpload()
+        runCurrent()
+        assertEquals(null, client.reportUpload.value)
+        // An event wins over a startup answer that was already on its way.
+        client.onEvent(Event.ReportUploadChanged(EventReportUploadChangedInner(ReportUploadStatus(ReportUploadState.Failed, 10.0, 20.0, null, ReportUploadError.Network, "reset", 1.0))))
+        assertEquals(ReportUploadError.Network, client.reportUpload.value?.error)
+    }
 
     @Test
     fun snapshotPopulatesStateFlows() = runTest {
@@ -46,7 +102,7 @@ class CoreClientTest {
         client.dispatch(Command.Next)
         runCurrent()
         assertTrue(client.nowPlaying.value!!.track.id != before)
-        assertTrue(client.undo.value.canUndo || client.queue.value.history.isNotEmpty())
+        assertTrue(client.undo.value.canUndo || client.queue.value.historyCount > 0u)
         client.dispatch(Command.Pause)
         runCurrent()
         assertFalse(client.isPlaying.value)

@@ -3,6 +3,7 @@ package app.hocket.ui.components
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.combinedClickable
+import app.hocket.ui.theme.pressScale
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.ripple
@@ -35,7 +36,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
@@ -55,6 +58,7 @@ import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.SwipeOptions
 import app.hocket.core.api.ActionTarget
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalDetailNavigator
 import app.hocket.ui.nav.ArtworkShare
@@ -93,19 +97,25 @@ fun SelectableRow(
     interactionSource: MutableInteractionSource? = null,
     /** False when a child draws the press indication from [interactionSource]. */
     rowIndication: Boolean = true,
+    /** A segment of a group ([segmentedShape]) instead of a flat row on the screen. */
+    shape: androidx.compose.ui.graphics.Shape = androidx.compose.ui.graphics.RectangleShape,
+    /** The row's colour when not selected (the screen's surface for a flat row). */
+    color: Color = MaterialTheme.colorScheme.surface,
     content: @Composable () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
     val container by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, label = "rowSelected",
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else color, label = "rowSelected",
     )
     val selectLabel = stringResource(R.string.a11y_select)
     val deselectLabel = stringResource(R.string.a11y_deselect)
     val openLabel = clickLabel ?: stringResource(R.string.a11y_open)
     Surface(
         color = container,
+        shape = shape,
         modifier = modifier
             .fillMaxWidth()
+            .clip(shape)
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = if (rowIndication) ripple() else null,
@@ -146,7 +156,8 @@ fun offlineStateText(state: OfflineState): String? = when (state) {
 }
 
 /**
- * The row menu as accessibility actions: play next, add to queue, go to album / artist (when a
+ * The row menu as accessibility actions: play next, add to queue (with the Queue section setting
+ * on, as the registry offers it), play later, go to album / artist (when a
  * [LocalDetailNavigator] is present), download or remove the download, rate (a dialog), and the full
  * menu. [target] is what the row menu acts on (queue rows pass their queue item).
  */
@@ -156,16 +167,19 @@ fun trackRowActions(track: TrackSummary, target: ActionTarget, onRate: () -> Uni
     val nav = LocalDetailNavigator.current
     val playNext = stringResource(R.string.action_play_next)
     val addToQueue = stringResource(R.string.a11y_add_to_queue)
+    val playLater = stringResource(R.string.queue_play_later)
+    val section = queueSectionOn()
     val goAlbum = stringResource(R.string.action_go_to_album)
     val goArtist = stringResource(R.string.action_go_to_artist)
     val download = stringResource(R.string.action_download)
     val removeDownload = stringResource(R.string.action_remove_download)
     val rate = stringResource(R.string.action_rate)
     val more = stringResource(R.string.action_more)
-    return remember(track, target, nav, onMore, extra, playNext) {
+    return remember(track, target, nav, onMore, extra, playNext, section) {
         buildList {
             add(CustomAccessibilityAction(playNext) { client.dispatch(Commands.runAction(ActionIds.PLAY_NEXT, target)); true })
-            add(CustomAccessibilityAction(addToQueue) { client.dispatch(Commands.runAction(ActionIds.PLAY_LATER, target)); true })
+            if (section) add(CustomAccessibilityAction(addToQueue) { client.dispatch(Commands.runAction(ActionIds.ADD_TO_QUEUE, target)); true })
+            add(CustomAccessibilityAction(playLater) { client.dispatch(Commands.runAction(ActionIds.PLAY_LATER, target)); true })
             addAll(extra)
             if (nav != null) {
                 track.albumId?.let { id -> add(CustomAccessibilityAction(goAlbum) { nav.openAlbum(id); true }) }
@@ -198,15 +212,31 @@ fun TrackRow(
     extraActions: List<CustomAccessibilityAction> = emptyList(),
     /** Whose swipe settings the row follows; rows with a menu swipe like song lists, read-only rows not at all. */
     swipe: SwipeSurface? = if (onMore != null) SwipeSurface.List else null,
+    /** This row's place in a segmented group (index to count); null for a flat row. */
+    segment: Pair<Int, Int>? = null,
+    /** The trailing time; off where the subtitle already carries it. */
+    showDuration: Boolean = true,
+    /** Under the title instead of the artist (an album's name and length on an artist's top songs). */
+    subtitle: String? = null,
+    /** False for a one-line row (an album's tracks, whose artist is the page's). */
+    showSubtitle: Boolean = true,
+    /** The playing bars before the title; off where [leading] marks the playing row itself. */
+    nowPlayingMark: Boolean = true,
+    /** A rank drawn over the artwork (an artist's top songs). */
+    rank: Int? = null,
 ) {
     val artist = track.artist ?: stringResource(R.string.unknown_artist)
     val label = trackLabel(track)
     var rating by remember { mutableStateOf(false) }
     var playlistPicker by remember { mutableStateOf(false) }
     val target = actionTarget ?: Commands.tracks(listOf(track.id))
+    val faded = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackId == track.id }
     // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
     val (startId, endId) = if (swipe != null) swipeActionIds(swipe) else SwipeOptions.NONE to SwipeOptions.NONE
+    val shape = segment?.let { (i, n) -> segmentedShape(i, n) } ?: androidx.compose.ui.graphics.RectangleShape
+    // The playing row of a group is lifted to the secondary container, as the boards show it.
+    val color = when { segment == null -> MaterialTheme.colorScheme.surface; nowPlaying -> MaterialTheme.colorScheme.secondaryContainer; else -> segmentColor() }
     // The row (and the caller's modifier) stays the one merged accessibility item; only its content
     // slides under the swipe.
     SelectableRow(
@@ -217,19 +247,26 @@ fun TrackRow(
             .joinToString(", ").ifEmpty { null },
         actions = actions,
         clickLabel = stringResource(R.string.action_play),
+        shape = shape,
+        color = color,
     ) {
         SwipeActionBox(
             startToEnd = trackSwipeAction(startId, track, target, onAddToPlaylist = { playlistPicker = true }),
             endToStart = trackSwipeAction(endId, track, target, onAddToPlaylist = { playlistPicker = true }),
             // Not while selecting: rows toggle then, and a stray swipe must not act on one of them.
             enabled = swipe != null && !selectionActive,
-            swipeSurface = MaterialTheme.colorScheme.surface,
+            // The sliding content carries the row's own colour and shape, so the action's background
+            // never shows through it.
+            swipeSurface = color,
+            swipeShape = shape,
         ) {
-            Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.alpha(if (faded) 0.45f else 1f).heightIn(min = if (showSubtitle) 64.dp else 56.dp).padding(start = if (segment == null) 16.dp else 8.dp, end = if (segment == null) 16.dp else 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke()
                 if (showArtwork) {
                     Box(Modifier.size(48.dp)) {
-                        Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(ListArtCorner))
+                        Artwork(track.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(if (segment != null) 12.dp else ListArtCorner))
+                        if (rank != null && !selected) Text(rank.toString(), style = MaterialTheme.typography.titleMedium.copy(shadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.45f), blurRadius = 6f)),
+                            fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.align(Alignment.Center))
                         if (selected) Box(Modifier.size(48.dp).clip(RoundedCornerShape(ListArtCorner)), contentAlignment = Alignment.Center) {
                             Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                         }
@@ -238,23 +275,25 @@ fun TrackRow(
                 }
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (nowPlaying) {
+                        if (nowPlaying && nowPlayingMark) {
                             Icon(HocketIcons.Filled.GraphicEq, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                         }
                         Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            fontWeight = if (nowPlaying && segment != null) FontWeight.SemiBold else null,
                             color = if (nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (showSubtitle) Row(verticalAlignment = Alignment.CenterVertically) {
                         OfflineBadge(track.offline, describe = false)
-                        Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(subtitle ?: artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
+                if (!showSubtitle) OfflineBadge(track.offline, describe = false)
                 if (track.loved) {
-                    Icon(HocketIcons.Filled.Favorite, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                    Icon(HocketIcons.Filled.Favorite, null, tint = if (segment != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
                 }
-                Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                if (showDuration) Text(formatClock(track.durationMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 trailing?.invoke()
                 if (onMore != null) {
                     IconButton(onClick = onMore) { Icon(HocketIcons.Filled.MoreVert, stringResource(R.string.action_more_for, track.title)) }
@@ -315,7 +354,7 @@ fun AlbumCard(
                 ) {
                     Artwork(
                         album.coverArt, ArtworkSizes.GRID, null,
-                        Modifier.fillMaxSize().clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()),
+                        Modifier.pressScale(interaction).fillMaxSize().clip(RoundedCornerShape(GridArtCorner)).indication(interaction, ripple()),
                         RoundedCornerShape(GridArtCorner),
                     )
                 }
@@ -362,7 +401,7 @@ fun ArtistCard(
     SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier, interactionSource = interaction, rowIndication = false) {
         Column(Modifier.padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box {
-                Artwork(artist.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier).clip(CircleShape).indication(interaction, ripple()), CircleShape)
+                Artwork(artist.coverArt, ArtworkSizes.GRID, null, Modifier.fillMaxWidth().aspectRatio(1f).then(share.modifier).pressScale(interaction).clip(CircleShape).indication(interaction, ripple()), CircleShape)
                 if (selected) Box(Modifier.padding(8.dp)) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(HocketIcons.Filled.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary) }
                 }
@@ -376,11 +415,12 @@ fun ArtistCard(
 }
 
 @Composable
-fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}) {
+fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}, segment: Pair<Int, Int>? = null) {
     val label = stringResource(R.string.row_artist_a11y, artist.name, artist.albumCount.toInt())
     val share = rememberArtworkShareSource(ArtworkShare.artist(artist.id), artist.coverArt)
-    SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier) {
-        Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier,
+        shape = segment?.let { (i, n) -> segmentedShape(i, n) } ?: androidx.compose.ui.graphics.RectangleShape, color = if (segment != null) segmentColor() else MaterialTheme.colorScheme.surface) {
+        Row(Modifier.heightIn(min = 64.dp).padding(start = if (segment != null) 8.dp else 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Artwork(artist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp).then(share.modifier), CircleShape)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
@@ -388,19 +428,21 @@ fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier
                 Text(stringResource(R.string.library_count_albums, artist.albumCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (selected) Icon(HocketIcons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
+            else if (segment != null) Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
-fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}) {
+fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Modifier, selected: Boolean = false, selectionActive: Boolean = false, onToggleSelect: () -> Unit = {}, segment: Pair<Int, Int>? = null) {
     val label = listOfNotNull(
         stringResource(R.string.row_playlist_a11y, playlist.name, playlist.songCount.toInt()),
         if (playlist.isSmart) stringResource(R.string.badge_smart) else null,
     ).joinToString(", ")
     val share = rememberArtworkShareSource(ArtworkShare.playlist(playlist.id), playlist.coverArt)
-    SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier, state = offlineStateText(playlist.offline)) {
-        Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    SelectableRow(selected, selectionActive, { share.prepare(); onClick() }, onToggleSelect, label, modifier, state = offlineStateText(playlist.offline),
+        shape = segment?.let { (i, n) -> segmentedShape(i, n) } ?: androidx.compose.ui.graphics.RectangleShape, color = if (segment != null) segmentColor() else MaterialTheme.colorScheme.surface) {
+        Row(Modifier.heightIn(min = 64.dp).padding(start = if (segment != null) 8.dp else 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Artwork(playlist.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp).then(share.modifier), RoundedCornerShape(ListArtCorner))
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
@@ -412,6 +454,7 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Mo
                 }
             }
             if (selected) Icon(HocketIcons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
+            else if (segment != null) Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -443,3 +486,7 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, action: (@Compos
         action?.invoke()
     }
 }
+
+/** The Queue section setting (`queue.section`, on by default): "Add to queue" and the "Next in queue" group are offered. */
+@Composable
+fun queueSectionOn(): Boolean = app.hocket.ui.screens.settings.setting(app.hocket.core.SettingKeys.QUEUE_SECTION).bool ?: true

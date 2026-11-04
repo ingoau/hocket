@@ -82,6 +82,8 @@ export async function completeSetup(page: Page): Promise<void> {
   await page.getByTestId("setup-username").fill("alice");
   await page.getByTestId("setup-password").fill("secret");
   await page.getByTestId("setup-connect").click();
+  // The summary of what was found, while the first sync runs; Continue goes in.
+  await page.getByTestId("setup-continue").click({ timeout: 15_000 });
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }
 

@@ -1,6 +1,24 @@
 package app.hocket.ui.components
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.SeekableTransitionState
+import androidx.compose.animation.core.rememberTransition
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -9,6 +27,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,13 +44,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -40,6 +61,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.hocket.core.api.SnoozeFor
+import java.text.DateFormat
+import java.util.Date
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -92,10 +117,15 @@ import app.hocket.R
 import app.hocket.core.ActionIds
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
+import app.hocket.core.api.Command
 import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.QueryResult
+import app.hocket.share.ShareActions
+import app.hocket.share.ShareChoice
+import app.hocket.share.ShareRequest
+import app.hocket.share.shareChoices
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.launch
@@ -139,6 +169,9 @@ sealed interface MenuEntry {
     /** A registry action shown as itself (its label, or the context's "Remove from Late night"). */
     data class Action(val action: ActionDescriptor) : MenuEntry { override val key get() = action.id }
 
+    /** Preview: stays open and becomes a small player while the song plays. */
+    data class Preview(val action: ActionDescriptor) : MenuEntry { override val key get() = action.id }
+
     /** Download / Downloaded: runs `download`, or `unpin` once downloaded. */
     data class Download(val download: ActionDescriptor?, val remove: ActionDescriptor?) : MenuEntry { override val key get() = "download" }
 
@@ -156,6 +189,12 @@ sealed interface MenuEntry {
 
     /** A row the context adds (the player's sleep timer, a playlist's remove). */
     data class Extra(val extra: SongMenuExtra) : MenuEntry { override val key get() = extra.testTag ?: extra.label }
+
+    /** Share: drills into Navidrome, Squigly and (one song) the file. */
+    data object Share : MenuEntry { override val key get() = "share" }
+
+    /** Open in Genius: a search for this one song, on the menu itself. */
+    data object Genius : MenuEntry { override val key get() = "genius" }
 }
 
 /** Love and Unlove, for the header's toggle (it runs the one matching the item's state). */
@@ -179,7 +218,7 @@ data class MenuLayout(
 }
 
 /** The play group, in its fixed order. */
-private val PLAY_IDS = listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER)
+private val PLAY_IDS = listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.ADD_TO_QUEUE, ActionIds.PLAY_LATER)
 
 /** The registry's rate entries: the star row (or the Rate row) replaces them. */
 private val RATE_IDS = (0..5).map { ActionIds.rate(it) }.toSet() + ActionIds.RATE
@@ -191,8 +230,8 @@ private val CONTEXT_IDS = setOf(ActionIds.REMOVE_FROM_QUEUE, ActionIds.REMOVE_FR
 private val UNPERFORMABLE = ActionIds.UI_HANDLED - setOf(ActionIds.ADD_TO_PLAYLIST, ActionIds.RATE, ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST)
 
 /**
- * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play, Shuffle,
- * Play next, Play later; the star row; Add to playlist, Download, Go to album, the context's extras;
+ * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play (the registry offers
+ * one song no Shuffle), Play next, Add to queue (the registry leaves it out with the Queue section setting off), Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
  * More: Pin to Library, Go to artist, Song info; then the destructive rows (Remove from Late night).
  * Album: the same without the stars, Go to artist in the short list and Album info under More.
  * Artist and playlist: no go-to rows. Several songs: no go-to, pin or info. Availability and
@@ -206,38 +245,53 @@ fun menuLayout(
     canGoToAlbum: Boolean = false,
     canGoToArtist: Boolean = false,
     hasInfo: Boolean = false,
+    count: Int = 1,
+    /** Whether this one song is snoozed. Null for a selection: the registry's enabled state decides. */
+    snoozed: Boolean? = null,
 ): MenuLayout {
     val byId = actions.associateBy { it.id }
     val replaced = extras.mapNotNull { it.replaces }.toSet()
     val used = mutableSetOf<String>()
     fun take(id: String): ActionDescriptor? { used += id; return byId[id] }
     val play = PLAY_IDS.mapNotNull(::take)
+    val preview = take(ActionIds.PREVIEW)?.takeIf { it.enabled && count <= 1 && (kind == MenuKind.Song || kind == MenuKind.Songs) }?.let { MenuEntry.Preview(it) }
     val love = LoveToggle(take(ActionIds.LOVE), take(ActionIds.UNLOVE)).takeIf { it.love != null || it.unlove != null }
     val rateable = actions.any { it.id in RATE_IDS }
     used += RATE_IDS
-    // One song always has its stars (as the player does); several, where the registry rates them.
-    val stars = kind == MenuKind.Song || (rateable && kind == MenuKind.Songs)
+    // One song always has its stars (as the player does); several songs and an album, where the
+    // registry rates them (an album's page has no stars of its own).
+    val stars = kind == MenuKind.Song || (rateable && (kind == MenuKind.Songs || kind == MenuKind.Album))
     val addTo = take(ActionIds.ADD_TO_PLAYLIST)?.let { MenuEntry.Action(it) }
+    val stash = take(ActionIds.STASH)?.let { MenuEntry.Action(it) }
     val download = MenuEntry.Download(take(ActionIds.DOWNLOAD), take(ActionIds.UNPIN)).takeIf { it.download != null || it.remove != null }
     val pin = MenuEntry.LibraryPin(take(ActionIds.PIN_TO_LIBRARY), take(ActionIds.UNPIN_FROM_LIBRARY)).takeIf { it.pin != null || it.unpin != null }
     val goAlbum = take(ActionIds.GO_TO_ALBUM)?.takeIf { canGoToAlbum }?.let { MenuEntry.GoTo(it) }
     val goArtist = take(ActionIds.GO_TO_ARTIST)?.takeIf { canGoToArtist }?.let { MenuEntry.GoTo(it) }
+    val snoozeAction = take(ActionIds.SNOOZE)
+    val unsnoozeAction = take(ActionIds.UNSNOOZE)
     val info = MenuEntry.Info.takeIf { hasInfo }
+    val share = MenuEntry.Share.takeIf { shareChoices(kind, count).any }
+    val genius = MenuEntry.Genius.takeIf { kind == MenuKind.Song && count <= 1 }
     val context = CONTEXT_IDS.mapNotNull { id -> take(id)?.takeIf { it.enabled && id !in replaced } }
     val (destructiveExtras, otherExtras) = extras.partition { it.destructive }
     val rest = actions.filter { it.id !in used && it.id !in UNPERFORMABLE }
     val (restDestructive, restOther) = rest.partition { it.destructive }
     var primary = when (kind) {
-        MenuKind.Song -> listOfNotNull(addTo, download, goAlbum)
-        MenuKind.Album -> listOfNotNull(addTo, download, goArtist)
-        else -> listOfNotNull(addTo, download)
+        MenuKind.Song -> listOfNotNull(preview, addTo, stash, download, share, genius, goAlbum)
+        MenuKind.Album -> listOfNotNull(addTo, stash, download, share, goArtist)
+        else -> listOfNotNull(preview, addTo, stash, download, share)
     } + otherExtras.map { MenuEntry.Extra(it) }
+    val snoozeRows = when (snoozed) {
+        true -> listOfNotNull(unsnoozeAction)
+        false -> listOfNotNull(snoozeAction)
+        null -> listOfNotNull(unsnoozeAction, snoozeAction)
+    }.map { MenuEntry.Action(it) }
     var more = when (kind) {
         MenuKind.Song -> listOfNotNull(pin, goArtist, info)
         MenuKind.Album -> listOfNotNull(pin, info)
         MenuKind.Songs -> emptyList()
         else -> listOfNotNull(pin, goArtist, info)
-    } + listOfNotNull(MenuEntry.Rate.takeIf { rateable && !stars }) + restOther.map { MenuEntry.Action(it) }
+    } + snoozeRows + listOfNotNull(MenuEntry.Rate.takeIf { rateable && !stars }) + restOther.map { MenuEntry.Action(it) }
     if (primary.isEmpty()) { primary = more; more = emptyList() }
     val destructive = context.map { MenuEntry.Action(it) } + restDestructive.map { MenuEntry.Action(it) } + destructiveExtras.map { MenuEntry.Extra(it) }
     return MenuLayout(love, play, stars, primary, more, destructive)
@@ -256,7 +310,7 @@ fun connectedShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 6.dp):
 
 /**
  * The compact menu for a song, an album, an artist, a playlist or several songs: a sheet that opens
- * short (header with the love toggle, the connected Play / Shuffle / Play next / Play later group,
+ * short (header with the love toggle, the connected Play / Shuffle / queue actions group,
  * the star row for songs, a short connected list ending in "More"), and grows to the rest when More,
  * the handle or an upward drag asks; "Show less" shrinks it again. Toggles (love, rating, download,
  * pin) apply in place; every other row closes the sheet with its hide animation, its action or
@@ -278,24 +332,62 @@ fun MenuSheet(
     onRan: () -> Unit = {},
     extraTop: (@Composable () -> Unit)? = null,
     tag: String = "songMenu",
+    pull: SheetPull? = null,
 ) {
     val client = LocalCoreClient.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val context = LocalContext.current
+    // Every menu that hosts this sheet (the song menu, a one-song selection, an item menu)
+    // stops the preview when the sheet leaves, however it was closed.
+    DisposableEffect(Unit) {
+        onDispose { client.dispatch(Command.PreviewStop) }
+    }
+    val snoozeItems by client.snoozes.collectAsStateWithLifecycle()
+    val snoozed = subject.trackId?.let { id -> snoozeItems.any { it.trackId == id } }
+    val snoozeUntil = subject.trackId?.let { id -> snoozeItems.firstOrNull { it.trackId == id }?.until }
+    val sheetState = rememberPulledSheetState(pull)
     val scope = rememberCoroutineScope()
     /** Hides the sheet, then runs [after] (which may open what follows) and reports it gone. */
     fun hideThen(after: () -> Unit = {}) {
         scope.launch { sheetState.hide() }.invokeOnCompletion { after(); onDismiss() }
     }
-    val layout = remember(actions, subject.kind, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null) {
-        menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null)
+    val layout = remember(actions, subject.kind, subject.count, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null, snoozed) {
+        menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null, count = subject.count, snoozed = snoozed)
     }
     var expanded by rememberSaveable { mutableStateOf(false) }
+    // The sub-page in view (Share, Snooze), or the menu itself. Back (the header's arrow, the
+    // system's back or its gesture) returns to the menu rather than closing the sheet.
+    // Seekable, so a predictive back gesture can scrub the way back to the menu.
+    val pages = remember { SeekableTransitionState(MenuPage.Main) }
+    val pageTransition = rememberTransition(pages, label = "menuPage")
+    /**
+     * The page the menu is on as far as back is concerned: set as soon as it is asked for, while the
+     * transition may still be playing (whose own current state only moves when it finishes).
+     */
+    var page by remember { mutableStateOf(MenuPage.Main) }
+    fun goTo(to: MenuPage) { page = to; scope.launch { pages.animateTo(to) } }
+    /** How far a predictive back gesture has pulled the sheet in, 0 to 1 (the sheet scales with it). */
+    val backPull = remember { Animatable(0f) }
+    val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
+    /** The share being fetched (a link, the file): the sheet shows it loading, then hides as the share sheet opens. */
+    var sharing by remember { mutableStateOf<ShareChoice?>(null) }
+    fun share(choice: ShareChoice) {
+        // Once: the Share page stays tappable while it slides away.
+        if (sharing != null) return
+        sharing = choice
+        goTo(MenuPage.Sharing)
+        // On the sheet's scope: closing the sheet (a drag, the scrim) gives up on the share.
+        scope.launch {
+            ShareActions.perform(context, client, ShareRequest(choice, subject, target))
+            hideThen()
+        }
+    }
     var loved by remember { mutableStateOf(subject.loved) }
     var rating by remember { mutableStateOf(subject.rating) }
     var downloaded by remember { mutableStateOf(subject.downloaded) }
     val pinEntry = (layout.more + layout.primary).filterIsInstance<MenuEntry.LibraryPin>().firstOrNull()
     var pinned by remember { mutableStateOf(pinEntry?.unpin?.enabled == true) }
     var rateDialog by remember { mutableStateOf(false) }
+    var snoozeCustom by remember { mutableStateOf(false) }
     val size by produceState<Double?>(initialValue = null, subject.trackId) {
         value = subject.trackId?.let { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data?.sizeBytes }
     }
@@ -370,19 +462,28 @@ fun MenuSheet(
     @Composable
     fun EntryRow(entry: MenuEntry, shape: Shape) {
         when (entry) {
+            is MenuEntry.Preview -> PreviewMenuRow(entry.action, subject.trackId, target, shape, "$tag.action.${entry.action.id}")
             is MenuEntry.Action -> {
                 val a = entry.action
                 val label = when (a.id) {
                     ActionIds.REMOVE_FROM_PLAYLIST -> subject.context?.let { ctx -> if (subject.count > 1) stringResource(R.string.menu_remove_n_from, subject.count, ctx) else stringResource(R.string.menu_remove_from, ctx) } ?: a.label
                     ActionIds.REMOVE_FROM_QUEUE -> if (subject.count > 1) stringResource(R.string.menu_remove_n_from, subject.count, stringResource(R.string.menu_queue)) else stringResource(R.string.action_remove_from_queue)
                     ActionIds.ADD_TO_PLAYLIST -> stringResource(R.string.action_add_to_playlist)
+                    ActionIds.STASH -> stringResource(R.string.action_stash)
+                    ActionIds.SNOOZE -> stringResource(R.string.action_snooze)
+                    ActionIds.UNSNOOZE -> stringResource(R.string.action_unsnooze)
                     else -> a.label
                 }
+                val untilText = if (a.id == ActionIds.UNSNOOZE && subject.count <= 1) snoozeEnds(snoozeUntil) else null
                 val icon = if (a.id == ActionIds.ADD_TO_PLAYLIST) HocketIcons.AutoMirrored.Filled.PlaylistAdd else actionIcon(a.icon)
-                MenuRow(AnnotatedString(label), icon, shape, enabled = a.enabled, destructive = a.destructive, tag = "$tag.action.${a.id}",
-                    trailing = if (a.id == ActionIds.ADD_TO_PLAYLIST) { { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) } } else null,
+                MenuRow(AnnotatedString(label), icon, shape, supporting = untilText, enabled = a.enabled, destructive = a.destructive, tag = "$tag.action.${a.id}",
+                    trailing = if (a.id == ActionIds.ADD_TO_PLAYLIST || a.id == ActionIds.SNOOZE) { { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) } } else null,
                 ) {
-                    if (a.id == ActionIds.ADD_TO_PLAYLIST) hideThen(onAddToPlaylist) else runAndClose(a)
+                    when (a.id) {
+                        ActionIds.ADD_TO_PLAYLIST -> hideThen(onAddToPlaylist)
+                        ActionIds.SNOOZE -> goTo(MenuPage.Snooze)
+                        else -> runAndClose(a)
+                    }
                 }
             }
             is MenuEntry.Download -> {
@@ -423,6 +524,10 @@ fun MenuSheet(
             }
             MenuEntry.Info -> MenuRow(AnnotatedString(stringResource(if (subject.kind == MenuKind.Album) R.string.menu_album_info else R.string.menu_song_info)), HocketIcons.Filled.Info, shape, tag = "$tag.info") { hideThen { onInfo?.invoke() } }
             MenuEntry.Rate -> MenuRow(AnnotatedString(stringResource(R.string.action_rate)), HocketIcons.Filled.Star, shape, tag = "$tag.rate") { rateDialog = true }
+            MenuEntry.Share -> MenuRow(AnnotatedString(stringResource(R.string.action_share)), HocketIcons.Filled.Share, shape, tag = "$tag.share",
+                trailing = { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            ) { goTo(MenuPage.Share) }
+            MenuEntry.Genius -> MenuRow(AnnotatedString(stringResource(R.string.menu_open_genius)), HocketIcons.Filled.Lyrics, shape, tag = "$tag.genius") { hideThen { ShareActions.openGenius(context, subject) } }
             is MenuEntry.Extra -> {
                 val e = entry.extra
                 MenuRow(AnnotatedString(e.label), e.icon, shape, supporting = e.supporting, destructive = e.destructive, highlighted = e.highlighted, tag = e.testTag) { hideThen(e.onClick) }
@@ -433,13 +538,66 @@ fun MenuSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        scrimColor = pulledScrim(pull),
         dragHandle = { MenuHandle(expanded, canExpand) { expanded = !expanded } },
-        modifier = Modifier.testTag(tag),
+        modifier = Modifier.pulled(pull).backPulled { backPull.value }.testTag(tag),
     ) {
+        // Inside the sheet: its window has its own back dispatcher, and this callback, added after
+        // the sheet's own, takes back first while a sub-page shows.
+        // The gesture scrubs the first part of the slide back to the menu (the sub-page fading as the
+        // menu comes in, the height heading its way) and draws the sheet in a little; letting go plays
+        // the rest, cancelling slides the sub-page back. A back key (no gesture) just goes.
+        // Back during a slide in already goes back; once back is let go the page is the menu, so a
+        // second back (even mid-slide) is the sheet's own and closes it.
+        PredictiveBackHandler(enabled = page == MenuPage.Share || page == MenuPage.Snooze) { events ->
+            val from = page
+            try {
+                events.collect { e ->
+                    val p = PredictiveBackEasing.transform(e.progress)
+                    backPull.snapTo(p)
+                    pages.seekTo(p * BACK_PEEK, MenuPage.Main)
+                }
+                scope.launch { backPull.animateTo(0f, settleSpec) }
+                goTo(MenuPage.Main)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                scope.launch { backPull.animateTo(0f, settleSpec) }
+                // Only if nothing else (a tap) has moved the page meanwhile.
+                if (page == from) scope.launch { pages.animateTo(from) }
+                throw e
+            }
+        }
+        // While a share loads, back does nothing: neither the menu nor closing the sheet.
+        BackHandler(enabled = page == MenuPage.Sharing) {}
         Column(Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
             MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
+            // A sub-page slides in from the end, the menu slides back from the start, and the height
+            // animates alongside the slide: the sheet follows its content's size, and snaps to it if
+            // that jumps, so the glide has to come from here. Going back cross-fades over longer, so a
+            // back gesture scrubbing its first part shows the sub-page giving way to the menu.
+            pageTransition.AnimatedContent(
+                transitionSpec = {
+                    val forward = targetState != MenuPage.Main
+                    val spec = tween<androidx.compose.ui.unit.IntOffset>(PAGE_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                    val fadeOutMs = if (forward) PAGE_MS / 3 else PAGE_MS / 2
+                    (slideInHorizontally(spec) { w -> if (forward) w / 4 else -w / 4 } + fadeIn(tween(PAGE_MS / 2, delayMillis = PAGE_MS / 6)))
+                        .togetherWith(slideOutHorizontally(spec) { w -> if (forward) -w / 4 else w / 4 } + fadeOut(tween(fadeOutMs)))
+                        .using(SizeTransform(clip = false) { _, _ -> tween(PAGE_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing) })
+                },
+                contentAlignment = Alignment.TopCenter,
+            ) { shownPage ->
+            when (shownPage) {
+            MenuPage.Share -> SharePage(shareOptions, tag) { choice -> if (sharing != null) Unit else if (choice == null) goTo(MenuPage.Main) else share(choice) }
+            MenuPage.Sharing -> SharingPage(sharing, tag)
+            MenuPage.Snooze -> SnoozePage(tag, onCustom = { snoozeCustom = true }) { duration ->
+                if (duration == null) goTo(MenuPage.Main)
+                else hideThen {
+                    val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
+                    if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
+                }
+            }
+            MenuPage.Main -> Column {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
             if (layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { runAndClose(it) }
             if (layout.rating) {
@@ -483,12 +641,49 @@ fun MenuSheet(
                     }
                 }
             }
+            }
+            }
+            }
+        }
+    }
+    if (snoozeCustom) {
+        SnoozeUntilPicker(tag, onDismiss = { snoozeCustom = false }) { until ->
+            snoozeCustom = false
+            hideThen {
+                val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
+                if (ids.isNotEmpty()) client.dispatch(Commands.snoozeUntil(ids, until.toDouble()))
+            }
         }
     }
     if (rateDialog) {
         RatingDialog(current = 0, onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rateDialog = false; hideThen(onRan) }, onDismiss = { rateDialog = false }, offerClear = true)
     }
 }
+
+/** What the sheet shows under its header: the menu, or one of its sub-pages. */
+private enum class MenuPage { Main, Share, Snooze, Sharing }
+
+/** Material's predictive back easing: the gesture's progress as the sheet follows it. */
+private val PredictiveBackEasing = CubicBezierEasing(0.1f, 0.1f, 0f, 1f)
+
+/**
+ * Draws the sheet in from its bottom edge as a predictive back gesture pulls ([pull], 0 to 1), as
+ * Material's sheets do: 48dp narrower and 24dp shorter at the full pull.
+ */
+private fun Modifier.backPulled(pull: () -> Float): Modifier = graphicsLayer {
+    val p = pull()
+    if (p > 0f && size.width > 0f && size.height > 0f) {
+        scaleX = 1f - p * 48.dp.toPx() / size.width
+        scaleY = 1f - p * 24.dp.toPx() / size.height
+        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)
+    }
+}
+
+/** How much of the way back to the menu a full predictive back gesture scrubs before it is let go. */
+private const val BACK_PEEK = 0.5f
+
+/** How long a sub-page takes to slide in or out. */
+private const val PAGE_MS = 300
 
 /** Past this speed (px/s) a released drag finishes the way it was going. */
 private const val FLICK_VELOCITY = 1200f
@@ -560,6 +755,8 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
         Tick.Off -> null
     }
     val primary = MaterialTheme.colorScheme.primary
+    // Taps that love (not unlove) burst the heart.
+    var bursts by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     Box(
         Modifier
             .size(48.dp)
@@ -569,12 +766,13 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
                 state = when (state) { Tick.On -> ToggleableState.On; Tick.Off -> ToggleableState.Off; Tick.Mixed -> ToggleableState.Indeterminate },
                 enabled = enabled,
                 role = Role.Checkbox,
-                onClick = onToggle,
+                onClick = { if (state != Tick.On) bursts++; onToggle() },
             )
             .semantics { contentDescription = label; spoken?.let { stateDescription = it } }
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
+      LoveBurst(bursts, primary, Modifier.matchParentSize()) {
         when (state) {
             Tick.On -> Icon(HocketIcons.Filled.Favorite, null, tint = primary)
             Tick.Off -> Icon(HocketIcons.Filled.FavoriteBorder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -584,37 +782,67 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
                 Icon(HocketIcons.Filled.Favorite, null, tint = primary, modifier = Modifier.drawWithContent { clipRect(right = size.width / 2f) { this@drawWithContent.drawContent() } })
             }
         }
+      }
     }
 }
 
-/** Play / Shuffle / Play next / Play later as one connected group, Play filled and wider. */
+/**
+ * Play and Shuffle on top (Shuffle isn't offered for one song), then Play next / Add to queue (when offered) /
+ * Play later below, as one connected group: rounded outer corners, tight inner ones, Play filled and wider.
+ */
 @Composable
 private fun PlayGroup(play: List<ActionDescriptor>, tag: String, onRun: (ActionDescriptor) -> Unit) {
     val groupLabel = stringResource(R.string.menu_play_group)
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { isTraversalGroup = true; contentDescription = groupLabel }, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-        play.forEachIndexed { i, a ->
-            val lead = if (i == 0) 22.dp else 8.dp
-            val trail = if (i == play.lastIndex) 22.dp else 8.dp
-            val main = a.id == ActionIds.PLAY
-            val (label, icon) = when (a.id) {
-                ActionIds.PLAY -> stringResource(R.string.action_play) to HocketIcons.Filled.PlayArrow
-                ActionIds.PLAY_SHUFFLED -> stringResource(R.string.action_shuffle) to HocketIcons.Filled.Shuffle
-                ActionIds.PLAY_NEXT -> stringResource(R.string.action_play_next) to HocketIcons.Filled.PlaylistPlay
-                else -> stringResource(R.string.action_play_later) to HocketIcons.Filled.QueueMusic
-            }
-            Surface(
-                onClick = { onRun(a) },
-                enabled = a.enabled,
-                shape = RoundedCornerShape(topStart = lead, bottomStart = lead, topEnd = trail, bottomEnd = trail),
-                color = if (main) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = if (main) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.weight(if (main) 1.35f else 1f).heightIn(min = 76.dp).testTag("$tag.action.${a.id}"),
-            ) {
-                Column(Modifier.padding(horizontal = 4.dp, vertical = 10.dp).alpha(if (a.enabled) 1f else 0.38f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)) {
-                    Icon(icon, null, Modifier.size(if (main) 26.dp else 22.dp))
-                    Text(label, style = if (main) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp),
-                        fontWeight = if (main) FontWeight.SemiBold else FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    val rows = play.partition { it.id == ActionIds.PLAY || it.id == ActionIds.PLAY_SHUFFLED }.toList().filter { it.isNotEmpty() }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { isTraversalGroup = true; contentDescription = groupLabel }, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        rows.forEachIndexed { r, row ->
+            val top = r == 0
+            val bottom = r == rows.lastIndex
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                row.forEachIndexed { i, a ->
+                    fun corner(outer: Boolean) = if (outer) 24.dp else 8.dp
+                    val shape = RoundedCornerShape(
+                        topStart = corner(top && i == 0), topEnd = corner(top && i == row.lastIndex),
+                        bottomStart = corner(bottom && i == 0), bottomEnd = corner(bottom && i == row.lastIndex),
+                    )
+                    PlayGroupButton(a, shape, tag, Modifier.weight(if (a.id == ActionIds.PLAY) 1.6f else 1f), onRun)
                 }
+            }
+        }
+    }
+}
+
+/** One button of [PlayGroup]: Play and Shuffle put the icon beside the label, the queue actions above it. */
+@Composable
+private fun PlayGroupButton(a: ActionDescriptor, shape: Shape, tag: String, modifier: Modifier, onRun: (ActionDescriptor) -> Unit) {
+    val main = a.id == ActionIds.PLAY
+    val start = main || a.id == ActionIds.PLAY_SHUFFLED
+    val (label, icon) = when (a.id) {
+        ActionIds.PLAY -> stringResource(R.string.action_play) to HocketIcons.Filled.PlayArrow
+        ActionIds.PLAY_SHUFFLED -> stringResource(R.string.action_shuffle) to HocketIcons.Filled.Shuffle
+        ActionIds.PLAY_NEXT -> stringResource(R.string.action_play_next) to HocketIcons.Filled.PlaylistPlay
+        ActionIds.ADD_TO_QUEUE -> stringResource(R.string.action_label_add_to_queue) to HocketIcons.Filled.QueueMusic
+        else -> stringResource(R.string.action_play_later) to HocketIcons.Filled.PlaylistAdd
+    }
+    Surface(
+        onClick = { onRun(a) },
+        enabled = a.enabled,
+        shape = shape,
+        color = if (main) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = if (main) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = modifier.fillMaxHeight().heightIn(min = if (start) 60.dp else 64.dp).testTag("$tag.action.${a.id}"),
+    ) {
+        val content = Modifier.alpha(if (a.enabled) 1f else 0.38f)
+        if (start) {
+            Row(content.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, Modifier.size(if (main) 26.dp else 22.dp))
+                Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = if (main) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        } else {
+            Column(content.padding(horizontal = 6.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically)) {
+                Icon(icon, null, Modifier.size(22.dp))
+                // One line at normal font sizes; a large font size wraps rather than cutting the label off.
+                Text(label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp), fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -638,6 +866,100 @@ private fun RatingRow(rating: Int?, onRate: (Int) -> Unit) {
             }
         }
         RatingStars(rating ?: 0, onRate = onRate, starSize = 28.dp, spacing = 14.dp, stateOverride = if (rating == null) mixed else null)
+    }
+}
+
+/**
+ * The songs Snooze's page snoozes: a selection's tracks, a queue selection's rows looked up in
+ * [queue] (the rows on screen are in it), else the one song the menu is for.
+ */
+internal fun snoozeTrackIds(target: app.hocket.core.api.ActionTarget, trackId: String?, queue: app.hocket.core.api.QueueView): List<String> = when (target) {
+    is app.hocket.core.api.ActionTarget.Tracks -> target.data.ids
+    is app.hocket.core.api.ActionTarget.QueueItems -> {
+        val entries = queue.entries + listOfNotNull(queue.current)
+        val byKey = entries.associate { it.item.key to it.item.trackId }
+        target.data.keys.mapNotNull { byKey[it] }.distinct().ifEmpty { listOfNotNull(trackId) }
+    }
+    else -> listOfNotNull(trackId)
+}
+
+/** When a snooze ends, for the Unsnooze row. */
+@Composable
+private fun snoozeEnds(until: Double?): String = if (until == null) {
+    stringResource(R.string.snooze_until_never)
+} else {
+    stringResource(R.string.snooze_until, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(until.toLong())))
+}
+
+/** A share on its way: the loading indicator and what it is getting, with no way back. Tag: `[tag].sharing`. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SharingPage(choice: ShareChoice?, tag: String) {
+    val label = stringResource(if (choice == ShareChoice.File) R.string.share_busy_file else R.string.share_busy_link)
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 24.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }.testTag("$tag.sharing"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        LoadingIndicator(Modifier.size(56.dp))
+        Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+/** Snooze's page: its title with back, then each duration and Custom. Null from [onChoose] is back. */
+@Composable
+private fun SnoozePage(tag: String, onCustom: () -> Unit, onChoose: (SnoozeFor?) -> Unit) {
+    val rows = listOf(
+        SnoozeFor.Day to R.string.snooze_day,
+        SnoozeFor.ThreeDays to R.string.snooze_three_days,
+        SnoozeFor.Week to R.string.snooze_week,
+        SnoozeFor.Month to R.string.snooze_month,
+        SnoozeFor.Indefinite to R.string.snooze_indefinite,
+    )
+    SubPage(stringResource(R.string.action_snooze), "$tag.snooze", onBack = { onChoose(null) }) {
+        rows.forEachIndexed { i, (duration, label) ->
+            MenuRow(AnnotatedString(stringResource(label)), HocketIcons.Filled.Bedtime, connectedShape(i, rows.size + 1), tag = "$tag.snooze.${duration.string}") { onChoose(duration) }
+        }
+        MenuRow(AnnotatedString(stringResource(R.string.snooze_custom)), HocketIcons.Filled.CalendarToday, connectedShape(rows.size, rows.size + 1), tag = "$tag.snooze.custom", onClick = onCustom)
+    }
+}
+
+/** Share's page: its title with back, then the links and (one song) the file. Null from [onChoose] is back. */
+@Composable
+private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onChoose: (ShareChoice?) -> Unit) {
+    val rows = listOfNotNull(
+        ShareChoice.Navidrome.takeIf { choices.navidrome },
+        ShareChoice.SongLink.takeIf { choices.songLink },
+        ShareChoice.File.takeIf { choices.file },
+    )
+    SubPage(stringResource(R.string.action_share), "$tag.share", onBack = { onChoose(null) }) {
+        rows.forEachIndexed { i, choice ->
+            val (label, icon, id) = when (choice) {
+                ShareChoice.Navidrome -> Triple(R.string.menu_share_navidrome, HocketIcons.Filled.Share, "navidrome")
+                ShareChoice.SongLink -> Triple(R.string.menu_share_song_link, HocketIcons.Filled.MusicNote, "songLink")
+                ShareChoice.File -> Triple(R.string.menu_share_file, HocketIcons.Filled.Download, "file")
+                ShareChoice.Genius -> error("Open in Genius is a row of the menu")
+            }
+            MenuRow(AnnotatedString(stringResource(label)), icon, connectedShape(i, rows.size), tag = "$tag.share.$id") { onChoose(choice) }
+        }
+    }
+}
+
+/**
+ * A sub-page of the menu (Share, Snooze): a back arrow and the row's name as its title, then its
+ * own connected list. Tags: `[tag].back`, `[tag].title`.
+ */
+@Composable
+private fun SubPage(title: String, tag: String, onBack: () -> Unit, rows: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp).testTag("$tag.back")) {
+                Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+            }
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 8.dp).semantics { heading() }.testTag("$tag.title"))
+        }
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) { rows() }
     }
 }
 

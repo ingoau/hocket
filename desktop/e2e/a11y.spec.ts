@@ -17,7 +17,7 @@ async function populate(page: Page): Promise<void> {
   await playShowcase(page);
   const sid = await serverId(page);
   await page.evaluate((s) => window.hocket.dispatch({ type: "playNext", data: { server_id: s, track_ids: ["tr-2", "tr-3"] } }), sid);
-  await expect(page.getByTestId("queue-row-next").first()).toBeVisible();
+  await expect(page.getByTestId("queue-row-group").first()).toBeVisible();
   await showSideView(page, "lyrics");
   // The first syllable line is active from 1.5 s.
   await expect(page.locator('[data-testid="lyrics-sr-list"] li[aria-current="true"]')).toHaveCount(1, { timeout: 10_000 });
@@ -73,7 +73,7 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("view-album")).toBeVisible();
       await expect(page.getByTestId("track-row").first()).toBeVisible();
       await expectNoViolations(page, `${theme} album detail`);
-      await page.getByTestId("track-row").first().locator("a").first().click();
+      await page.getByTestId("album-artist").click();
       await expect(page.getByTestId("view-artist")).toBeVisible();
       await page.waitForTimeout(250);
       await expectNoViolations(page, `${theme} artist detail`);
@@ -97,7 +97,7 @@ test.describe("axe: no violations anywhere", () => {
       await expect(page.getByTestId("view-search")).toBeVisible();
       await page.waitForTimeout(300);
       await expectNoViolations(page, `${theme} search results`);
-      // Every view of the side panel: the overview, the queue and its selector, Recent queues, About.
+      // Every view of the side panel: the overview, the queue, the Queues page, About.
       const panel = page.getByTestId("right-panel");
       await page.getByTestId("sidebar-back").click();
       await expect(panel).toHaveAttribute("data-view", "overview");
@@ -107,11 +107,8 @@ test.describe("axe: no violations anywhere", () => {
       await expect(panel.getByTestId("queue-row-current")).toBeVisible();
       await expectNoViolations(page, `${theme} side panel queue`);
       await panel.getByTestId("queue-selector").click();
-      await expect(page.getByTestId("queue-selector-menu")).toBeVisible();
-      await expectNoViolations(page, `${theme} queue selector`);
-      await page.getByTestId("queue-selector-all").click();
-      await expect(page.getByTestId("saved-queues").or(page.getByTestId("saved-queues-empty"))).toBeVisible();
-      await expectNoViolations(page, `${theme} recent queues`);
+      await expect(panel.getByTestId("saved-queues")).toBeVisible();
+      await expectNoViolations(page, `${theme} queues page`);
       await page.getByTestId("sidebar-back").click();
       await page.getByTestId("sidebar-back").click();
       await page.getByTestId("sidebar-about-card-link").click();
@@ -251,7 +248,7 @@ test.describe("axe: no violations anywhere", () => {
       await page.getByTestId("track-row").first().click({ button: "right" });
       await page.locator('[data-testid="context-menu"] [data-action="ui.info"]').click();
       await expect(page.getByTestId("dialog-trackInfo")).toBeVisible();
-      await expect(page.getByTestId("dialog-trackInfo").locator("dl")).toBeVisible();
+      await expect(page.getByTestId("dialog-trackInfo").locator("dl").first()).toBeVisible();
       await expectNoViolations(page, `${theme} track info dialog`);
       await page.keyboard.press("Escape");
       // A toast with an Undo action (only queue-replacing actions get one).

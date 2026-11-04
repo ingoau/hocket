@@ -779,6 +779,7 @@ impl World {
                     label: "selection".into(),
                     shuffle: false,
                     save_outgoing: true,
+                    start_position_ms: 0,
                 };
                 self.devices[i].handle(Input::LocalOp { op });
             }
@@ -792,6 +793,8 @@ impl World {
                 op: SessionOp::PlayNext {
                     server_id: "srv".into(),
                     track_ids: tracks,
+                    keys: vec![],
+                    queued: true,
                 },
             }),
             Action::Shuffle { enabled, .. } => self.devices[i].handle(Input::LocalOp {
@@ -1164,6 +1167,25 @@ impl World {
                     ));
                 }
             }
+        }
+        // 5b. the stash: every awake device lists the same songs in the same order.
+        let stashes: BTreeSet<Vec<TrackId>> = self
+            .honest()
+            .filter(|&i| !self.devices[i].asleep)
+            .map(|i| self.devices[i].stash_tracks())
+            .collect();
+        if stashes.len() > 1 {
+            self.violations
+                .push(format!("[{now:.0}] stashes diverged: {stashes:?}"));
+        }
+        let snoozes: BTreeSet<Vec<TrackId>> = self
+            .honest()
+            .filter(|&i| !self.devices[i].asleep)
+            .map(|i| self.devices[i].snoozed_tracks())
+            .collect();
+        if snoozes.len() > 1 {
+            self.violations
+                .push(format!("[{now:.0}] snoozes diverged: {snoozes:?}"));
         }
         // 3. scrobbles: every reached pair exactly once
         let mut reached: BTreeSet<(String, i64)> = BTreeSet::new();

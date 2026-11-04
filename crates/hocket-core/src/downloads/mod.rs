@@ -569,7 +569,12 @@ impl Downloads {
         Ok(())
     }
 
-    /// Job spec fetching whatever the pin still needs.
+    /// Job spec fetching whatever the pin still needs. Tracks still pending in
+    /// an unfinished download job for this pin are left to it, so re-planning
+    /// while a job runs (a sync reconciling a playlist pin, a second tap on
+    /// download) doesn't start a duplicate job for the same tracks. Other
+    /// pins' jobs don't count: they stop once their own pin goes, and
+    /// `claim` already keeps two jobs from fetching one track at once.
     pub fn plan(
         &self,
         server_id: &str,
@@ -578,7 +583,14 @@ impl Downloads {
     ) -> Result<Option<JobSpec>, DownloadError> {
         let missing: Vec<String> = self.inner.db.with_conn(|c| {
             let mut st = c.prepare_cached(
-                "SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state IN ('wanted','failed') ORDER BY rowid",
+                "SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state IN ('wanted','failed')
+                 AND track_id NOT IN (
+                     SELECT ji.item FROM job_items ji JOIN jobs j ON j.id = ji.job_id
+                     WHERE j.kind = 'download' AND j.state IN ('queued','running','paused') AND ji.state = 'pending'
+                       AND json_extract(j.payload, '$.serverId') = ?1
+                       AND json_extract(j.payload, '$.target.type') = ?2
+                       AND json_extract(j.payload, '$.target.data.id') = ?3)
+                 ORDER BY rowid",
             )?;
             let rows = st.query_map(params![server_id, kind_name(target), target_id(target)], |r| r.get::<_, String>(0))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -603,6 +615,20 @@ impl Downloads {
                 .payload(payload)
                 .items(missing),
         ))
+    }
+
+    /// Unfinished download jobs fetching for this pin.
+    pub fn unfinished_jobs(&self, server_id: &str, target: &PinTarget) -> DbResult<Vec<String>> {
+        self.inner.db.with_conn(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT id FROM jobs WHERE kind = 'download' AND state IN ('queued','running','paused')
+                 AND json_extract(payload, '$.serverId') = ?1
+                 AND json_extract(payload, '$.target.type') = ?2
+                 AND json_extract(payload, '$.target.data.id') = ?3",
+            )?;
+            let rows = st.query_map(params![server_id, kind_name(target), target_id(target)], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 
     /// A pinned playlist changed: add new members, drop removed ones (deleting
@@ -1930,6 +1956,36 @@ mod tests {
             .unwrap()
             .is_none());
         // album pins are fixed: changing album contents doesn't matter (no reconcile API for them)
+    }
+
+    #[tokio::test]
+    async fn replanning_leaves_pending_tracks_to_the_unfinished_job() {
+        let f = fixture();
+        let pl = PinTarget::Playlist { id: "pl".into() };
+        let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
+        let first = q
+            .submit(f.dl.pin("srv", &pl, false).unwrap().unwrap())
+            .unwrap();
+        // A sync finishing mid-download reconciles the pin: only the new track.
+        f.db.set_playlist_tracks("srv", "pl", &["t0".into(), "t4".into(), "t5".into()])
+            .unwrap();
+        let spec = f.dl.reconcile_playlist("srv", "pl").unwrap().unwrap();
+        assert_eq!(spec.items, vec!["t5"]);
+        q.submit(spec).unwrap();
+        assert!(f.dl.reconcile_playlist("srv", "pl").unwrap().is_none());
+        assert!(f.dl.pin("srv", &pl, false).unwrap().is_none(), "re-pin");
+        // Another pin's job doesn't hold them: it stops if its own pin goes.
+        let t4 = PinTarget::Track { id: "t4".into() };
+        assert_eq!(
+            f.dl.pin("srv", &t4, false).unwrap().unwrap().items,
+            vec!["t4"]
+        );
+        assert!(f.dl.unfinished_jobs("srv", &t4).unwrap().is_empty());
+        assert_eq!(f.dl.unfinished_jobs("srv", &pl).unwrap().len(), 2);
+        // Cancelling hands the tracks back.
+        q.cancel(&first).unwrap();
+        let spec = f.dl.plan("srv", &pl, false).unwrap().unwrap();
+        assert_eq!(spec.items, vec!["t0", "t4"]);
     }
 
     #[tokio::test]

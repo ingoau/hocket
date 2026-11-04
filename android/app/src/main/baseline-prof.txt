@@ -1,0 +1,9 @@
+# Startup baseline profile (compiled ahead of time on install via profileinstaller). The libraries
+# ship their own (Compose, Media3, coroutines); this covers the app's code, the core client and the
+# event JSON decoding the first snapshot goes through, which otherwise run interpreted on a cold start.
+HSPLapp/hocket/**;->**(**)**
+Lapp/hocket/**;
+HSPLkotlinx/serialization/**;->**(**)**
+Lkotlinx/serialization/**;
+HSPLcom/sun/jna/**;->**(**)**
+Lcom/sun/jna/**;

@@ -40,6 +40,8 @@ export class Windows {
       webSecurity: true,
       spellcheck: false,
       backgroundThrottling: true,
+      // macOS rubber-band overscroll; ignored on other platforms.
+      scrollBounce: true,
     };
   }
 

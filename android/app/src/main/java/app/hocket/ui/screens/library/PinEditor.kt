@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import app.hocket.ui.components.adaptiveColumns
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -205,29 +206,33 @@ fun PinEditor(pins: List<ResolvedPin>, onClose: () -> Unit) {
                         edit(LibraryPins.movedPast(now, moving, other, later = to.index > from.index))
                         haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
                     }
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        state = grid,
-                        // Room at the end for the count (or the snackbar) over the grid's bottom.
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 72.dp),
-                        horizontalArrangement = Arrangement.spacedBy(GROUP_GAP),
-                        verticalArrangement = Arrangement.spacedBy(GROUP_GAP),
-                        modifier = Modifier.weight(1f).fillMaxWidth().testTag("library.pins.editor.grid"),
-                    ) {
-                        itemsIndexed(shown, key = { _, pin -> pinKey(pin.entry) }, contentType = { _, _ -> "pin" }) { i, pin ->
-                            ReorderableItem(reorderable, key = pinKey(pin.entry)) { dragging ->
-                                val moveEarlier = stringResource(R.string.library_pin_move_earlier)
-                                val moveLater = stringResource(R.string.library_pin_move_later)
-                                val actions = buildList {
-                                    if (i > 0) add(CustomAccessibilityAction(moveEarlier) { move(pin.entry, -1); true })
-                                    if (i < shown.lastIndex) add(CustomAccessibilityAction(moveLater) { move(pin.entry, 1); true })
+                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                        // As many columns as the hub's own pins show at this width.
+                        val columns = adaptiveColumns(maxWidth - 32.dp, PIN_MIN_WIDTH, GROUP_GAP)
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(columns),
+                            state = grid,
+                            // Room at the end for the count (or the snackbar) over the grid's bottom.
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 72.dp),
+                            horizontalArrangement = Arrangement.spacedBy(GROUP_GAP),
+                            verticalArrangement = Arrangement.spacedBy(GROUP_GAP),
+                            modifier = Modifier.fillMaxSize().testTag("library.pins.editor.grid"),
+                        ) {
+                            itemsIndexed(shown, key = { _, pin -> pinKey(pin.entry) }, contentType = { _, _ -> "pin" }) { i, pin ->
+                                ReorderableItem(reorderable, key = pinKey(pin.entry)) { dragging ->
+                                    val moveEarlier = stringResource(R.string.library_pin_move_earlier)
+                                    val moveLater = stringResource(R.string.library_pin_move_later)
+                                    val actions = buildList {
+                                        if (i > 0) add(CustomAccessibilityAction(moveEarlier) { move(pin.entry, -1); true })
+                                        if (i < shown.lastIndex) add(CustomAccessibilityAction(moveLater) { move(pin.entry, 1); true })
+                                    }
+                                    PinEditTile(
+                                        pin, details[pin.entry.kind to pin.entry.id], pinGroupEdges(i, shown.size, columns), dragging, actions,
+                                        onCycle = { edit(LibraryPins.withTap(draftNow(), pin.entry, pin.entry.pinTap.next)) },
+                                        onUnpin = { unpin(pin) },
+                                        onDropped = { announcePosition(pin.entry) },
+                                    )
                                 }
-                                PinEditTile(
-                                    pin, details[pin.entry.kind to pin.entry.id], pinGroupEdges(i, shown.size), dragging, actions,
-                                    onCycle = { edit(LibraryPins.withTap(draftNow(), pin.entry, pin.entry.pinTap.next)) },
-                                    onUnpin = { unpin(pin) },
-                                    onDropped = { announcePosition(pin.entry) },
-                                )
                             }
                         }
                     }

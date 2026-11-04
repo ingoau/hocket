@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
-import type { ActionTarget, Album, Artist, Filter, SavedQueue, TrackSummary } from "@core/api";
-import { useApp, useJsonSetting, type MenuItem } from "../store/app";
+import type { ActionTarget, Album, Artist, Filter, ListeningStats, SavedQueue, TrackSummary } from "@core/api";
+import { useApp, useJsonSetting, useSetting, type MenuItem } from "../store/app";
+import { SK } from "@shared/settings-keys";
+import { accentTokens } from "../lib/contrast";
+import { HomeSpotlight, useResolvedTheme } from "./HomeSpotlight";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
 import { EmptyState } from "../components/EmptyState";
@@ -14,7 +17,7 @@ import { filterName } from "../lib/filters";
 import { showToast } from "../lib/ui-toast";
 import { filterMenuItems, playFilter } from "../lib/pin-menus";
 import { libraryDragProps } from "../lib/queue-drag";
-import { HOME_SECTIONS_KEY, moveBefore, moveKnown, moveShown, parseSections, resolvedStyle, sectionDef, sectionsValue, updateSection, type HomeSectionId, type SectionPref, type SectionStyle } from "../lib/home-sections";
+import { HOME_SECTIONS_KEY, isPinned, moveBefore, moveKnown, moveShown, parseSections, resolvedStyle, sectionDef, sectionsValue, updateSection, type HomeSectionId, type SectionPref, type SectionStyle } from "../lib/home-sections";
 
 /** How many items a section loads. */
 const SECTION_ITEMS = 12;
@@ -63,11 +66,24 @@ export function Home() {
   const [empties, setEmpties] = useState<Record<string, boolean>>({});
   const reportEmpty = (id: string, empty: boolean) => setEmpties((m) => (m[id] === empty ? m : { ...m, [id]: empty }));
   const allEmpty = shown.length === 0 || shown.every((p) => empties[p.id] === true);
+  // Spotlight is pinned first whatever the stored order, and drawn without a section header.
+  const spotlightOn = shown.some((p) => p.id === "spotlight");
+  const spotStats = useSpotlightStats(spotlightOn);
+  const [spotAccent, setSpotAccent] = useState<string | undefined>(undefined);
+  const dynamic = useSetting(SK.displayDynamicColour, true);
+  const theme = useResolvedTheme();
+  // The rest of Home wears the colours of the slide in view, as the app does those of what's
+  // playing (unless colour from artwork is off), contrast-checked for the app's theme.
+  const pageVars = useMemo(() => {
+    if (!dynamic || !spotlightOn || !spotAccent || empties.spotlight) return undefined;
+    const tk = accentTokens(spotAccent, theme);
+    return { "--accent": tk.accent, "--accent-fg": tk.accentFg, "--accent-text": tk.accentText, "--accent-tint": tk.accentTint, "--focus-ring": tk.focusRing, "--home-tint": tk.accentTint } as React.CSSProperties;
+  }, [dynamic, spotlightOn, spotAccent, theme, empties.spotlight]);
   const sectionMenu = (p: SectionPref, title: string): MenuItem[] => {
     const def = sectionDef(p.id);
     const i = shown.findIndex((s) => s.id === p.id);
     const items: MenuItem[] = [
-      { id: "moveUp", label: t("home.moveUp"), icon: "arrowUp", enabled: i > 0, run: () => save(moveShown(prefs, p.id, -1)) },
+      { id: "moveUp", label: t("home.moveUp"), icon: "arrowUp", enabled: i > 0 && !isPinned(shown[i - 1]?.id ?? ""), run: () => save(moveShown(prefs, p.id, -1)) },
       { id: "moveDown", label: t("home.moveDown"), icon: "arrowDown", enabled: i >= 0 && i < shown.length - 1, run: () => save(moveShown(prefs, p.id, 1)) },
     ];
     if (def && def.styles.length > 1) {
@@ -83,7 +99,7 @@ export function Home() {
     return items;
   };
   return (
-    <div className={`view page-home ${customising ? "customising" : ""}`} data-testid="view-home">
+    <div className={`view page-home ${customising ? "customising" : ""} ${pageVars ? "spot-tinted" : ""}`} style={pageVars} data-testid="view-home">
       <div className="home-layout">
         <div className="home-main">
           <div className="view-header">
@@ -94,7 +110,8 @@ export function Home() {
             </div>
           </div>
           <div className="view-body">
-            {shown.map((p) => (
+            {spotlightOn ? <HomeSpotlight stats={spotStats.stats} statsReady={spotStats.settled} dynamic={dynamic} onAccent={setSpotAccent} onEmpty={(e) => reportEmpty("spotlight", e)} /> : null}
+            {shown.filter((p) => p.id !== "spotlight").map((p) => (
               <Section key={p.id} pref={p} onEmpty={(e) => reportEmpty(p.id, e)} menu={(title) => sectionMenu(p, title)} />
             ))}
             {allEmpty ? <EmptyState message={t("home.emptySections")} icon="home" action={<button type="button" className="btn" onClick={() => setCustomising(true)}>{t("home.customiseHome")}</button>} /> : (
@@ -244,6 +261,9 @@ function useSectionData(id: HomeSectionId): SectionData {
   });
 
   switch (id) {
+    case "spotlight":
+      // Drawn by HomeSpotlight, never as a section.
+      return { ready: true, items: [] };
     case "rediscover":
       return { ready: !!rediscover.data, items: trackItems((rediscover.data?.items ?? []).map(toSummary), t("home.section.rediscover")) };
     case "filters":
@@ -276,6 +296,21 @@ function useListeningStats(enabled: boolean) {
   return month.data && month.data.totalPlays === 0 && year.data ? year.data : month.data;
 }
 
+/**
+ * The favourites' stats for Spotlight, as useListeningStats but not re-read per track (Spotlight
+ * doesn't reload on a track change), and settled even when a query fails: Spotlight then goes on
+ * without stats (Resume, Just added and the rest don't need them).
+ */
+function useSpotlightStats(enabled: boolean): { stats?: ListeningStats; settled: boolean } {
+  const month = useQuery(() => (enabled ? { type: "stats", data: { period_days: 30 } } : null), "stats", [enabled]);
+  const quiet = !!month.data && month.data.totalPlays === 0;
+  const year = useQuery(() => (enabled && quiet ? { type: "stats", data: { period_days: 365 } } : null), "stats", [enabled, quiet]);
+  const monthDone = !!month.data || !!month.error;
+  if (!monthDone) return { settled: false };
+  if (!quiet) return { stats: month.data, settled: true };
+  return year.data || year.error ? { stats: year.data ?? month.data, settled: true } : { settled: false };
+}
+
 /** Albums by id, in that order (recently played reads them one by one). */
 function useAlbumsByIds(ids: string[]): { ready: boolean; albums: Album[] } {
   const key = ids.join(",");
@@ -296,7 +331,7 @@ function toSummary(tr: { id: string; serverId: string; title: string; artist?: s
 }
 
 function playContext(serverId: string, kind: { type: "album" | "artist" | "playlist"; data: { id: string } }, label: string, shuffle = false): void {
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: kind as never, label, sort: "default", tracks: [] }, startIndex: 0, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: kind as never, label, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
 /** The Customise Home panel: every section in order, a switch, drag (or the arrows) to move, how it's shown. */
@@ -329,12 +364,15 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
           const title = titleOf(def.id);
           const desc = t(`home.section.${def.id}.desc` as never);
           const style = resolvedStyle(p);
-          const target = over?.id === p.id && dragId && dragId !== p.id ? (over.after ? "drop-after" : "drop-target") : "";
+          // A pinned section (Spotlight) stays first: not draggable, no arrows, nothing moves above it.
+          const pinned = isPinned(p.id);
+          const upBlocked = i === 0 || isPinned(known[i - 1]?.id ?? "");
+          const target = !pinned && over?.id === p.id && dragId && dragId !== p.id ? (over.after ? "drop-after" : "drop-target") : "";
           return (
             <li
               key={p.id}
-              className={`customise-row ${p.on ? "on" : ""} ${dragId === p.id ? "dragging" : ""} ${target}`}
-              draggable
+              className={`customise-row ${p.on ? "on" : ""} ${pinned ? "pinned" : ""} ${dragId === p.id ? "dragging" : ""} ${target}`}
+              draggable={!pinned}
               onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.id); setDragId(p.id); }}
               onDragOver={(e) => {
                 e.preventDefault();
@@ -348,10 +386,12 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
               data-testid={`customise-${p.id}`}
             >
               <div className="customise-line">
-                <span className="grip" aria-hidden="true"><Icon name="dragHandle" size={16} /></span>
+                <span className="grip" aria-hidden="true">{pinned ? null : <Icon name="dragHandle" size={16} />}</span>
                 <span className="grow customise-text"><span className="t1" title={title}>{title}</span><span className="t2" title={desc}>{desc}</span></span>
-                <button type="button" className="btn icon sm" aria-label={t("home.moveUpNamed", { title })} aria-disabled={i === 0} onClick={() => { if (i > 0) save(moveKnown(prefs, p.id, -1)); }}><Icon name="chevronUp" size={16} /></button>
-                <button type="button" className="btn icon sm" aria-label={t("home.moveDownNamed", { title })} aria-disabled={i === known.length - 1} onClick={() => { if (i < known.length - 1) save(moveKnown(prefs, p.id, 1)); }}><Icon name="chevronDown" size={16} /></button>
+                {pinned ? null : <>
+                  <button type="button" className="btn icon sm" aria-label={t("home.moveUpNamed", { title })} aria-disabled={upBlocked} onClick={() => { if (!upBlocked) save(moveKnown(prefs, p.id, -1)); }}><Icon name="chevronUp" size={16} /></button>
+                  <button type="button" className="btn icon sm" aria-label={t("home.moveDownNamed", { title })} aria-disabled={i === known.length - 1} onClick={() => { if (i < known.length - 1) save(moveKnown(prefs, p.id, 1)); }}><Icon name="chevronDown" size={16} /></button>
+                </>}
                 <button type="button" role="switch" aria-checked={p.on} aria-label={t("home.showNamed", { title })} className={`m3-switch ${p.on ? "on" : ""}`} onClick={() => save(updateSection(prefs, p.id, { on: !p.on }))} data-testid={`customise-switch-${p.id}`}><span className="m3-switch-track" /><span className="m3-switch-handle" /></button>
               </div>
               {p.on && def.styles.length > 1 ? <StyleGroup styles={def.styles} value={style} label={t("home.showAsNamed", { title })} onChange={(st) => save(updateSection(prefs, p.id, { style: st }))} /> : null}

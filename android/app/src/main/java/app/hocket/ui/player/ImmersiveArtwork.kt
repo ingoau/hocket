@@ -3,6 +3,8 @@ package app.hocket.ui.player
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PointF
+import android.graphics.RuntimeShader
+import android.os.Build
 import android.media.FaceDetector
 import android.util.LruCache
 import androidx.compose.foundation.background
@@ -14,7 +16,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.hocket.ui.components.ARTWORK_RETRIES
+import app.hocket.ui.components.ARTWORK_RETRY_MS
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.remember
 import app.hocket.ui.components.ArtworkPathCache
 import androidx.compose.ui.Alignment
@@ -24,9 +33,15 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
@@ -51,6 +66,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.max
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import app.hocket.core.api.ImmersiveArtwork as Preference
 
@@ -171,32 +187,111 @@ object ImmersiveArtwork {
 fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boolean): State<ImmersiveArtwork.Resolved?> {
     val client = LocalCoreClient.current
     val state = remember(coverArt, preference, dark) { mutableStateOf(ImmersiveArtwork.cached(coverArt, preference, dark)) }
-    LaunchedEffect(state) {
-        if (state.value != null || coverArt == null) return@LaunchedEffect
+    // A cover the core could not fetch (a network drop) is asked for again, as [Artwork] does: a
+    // card meanwhile, the immersive layout once the file comes.
+    val network by client.network.collectAsStateWithLifecycle()
+    // Known from the first frame when worked out already (a file in hand, whatever its layout).
+    var fetched by remember(state) { mutableStateOf(state.value != null) }
+    var attempt by remember(state, network) { mutableIntStateOf(0) }
+    LaunchedEffect(state, attempt, network) {
+        if (fetched || coverArt == null) return@LaunchedEffect
         val path = client.artworkPath(coverArt, ArtworkSizes.GRID)
         if (path != null) ArtworkPathCache.put(ArtworkPathCache.key(coverArt, ArtworkSizes.GRID), path)
         state.value = ImmersiveArtwork.Resolved(path?.let { ImmersiveArtwork.analyse(it, preference, dark) })
+        if (path != null) { fetched = true; return@LaunchedEffect }
+        if (attempt < ARTWORK_RETRIES) {
+            delay(ARTWORK_RETRY_MS shl attempt)
+            attempt++
+        }
     }
     return state
 }
 
-private fun argb(c: UInt): Color = Color(c.toInt() or 0xFF000000.toInt())
+internal fun argb(c: UInt): Color = Color(c.toInt() or 0xFF000000.toInt())
 
 /** [colors] averaged over a window of `2 × radius + 1`: the same edge, blurred sideways. */
-private fun soften(colors: List<Color>, radius: Int): List<Color> = colors.indices.map { i ->
+internal fun soften(colors: List<Color>, radius: Int): List<Color> = colors.indices.map { i ->
     val span = colors.subList(maxOf(0, i - radius), minOf(colors.size, i + radius + 1))
     Color(span.map { it.red }.average().toFloat(), span.map { it.green }.average().toFloat(), span.map { it.blue }.average().toFloat())
 }
 
-/** Keeps the content only between [stops] (fractions of [unit] px from the top, with alphas). */
-private fun Modifier.verticalMask(unit: () -> Float, vararg stops: Pair<Float, Float>): Modifier = this
+/**
+ * Keeps the content only between [stops] (fractions of [unit] px from the top, with alphas), their
+ * edges wavy across the width ([WavyMask], at [phase]) rather than one straight line.
+ */
+private fun Modifier.verticalMask(unit: () -> Float, phase: Float, vararg stops: Pair<Float, Float>, waveAmp: Float = WAVE): Modifier = this
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-    .drawWithContent {
-        drawContent()
-        val u = unit().coerceAtLeast(1f)
-        val brush = Brush.verticalGradient(*stops.map { (y, a) -> (y * u / size.height).coerceIn(0f, 1f) to Color.Black.copy(alpha = a) }.toTypedArray(), startY = 0f, endY = size.height)
-        drawRect(brush, blendMode = BlendMode.DstIn)
+    .drawWithCache {
+        val mask = WavyMask()
+        onDrawWithContent {
+            drawContent()
+            val u = unit().coerceAtLeast(1f)
+            drawRect(mask.brush(size.width, u * waveAmp, phase, stops.map { (y, a) -> y * u to a }), blendMode = BlendMode.DstIn)
+        }
     }
+
+/** How far a [WavyMask]'s edges dip, as a share of the artwork's side. */
+private const val WAVE = 0.12f
+
+/** A phase for [WavyMask] from the cover's [ArtworkEdge.baseColor]: each cover its own wave, the same every time. */
+private fun ArtworkEdge.wavePhase(): Float = ((baseColor.toLong() * 2654435761L).mod(10007L)) / 10007f * 60f
+
+/**
+ * A vertical alpha ramp through up to four stops (y in px, alpha), each column's ramp moved down
+ * by between 0 and `amp` px along a smooth wave across the width: a fade that runs on further in
+ * some places than others instead of ending along a ruler line. Moved down only, so nothing fades
+ * earlier than it did (whatever lies under the fade still covers it). With `pin` it goes the other
+ * way, inside the stops: the first stays put and the rest close up towards it, the last by up to
+ * `amp` (keep it under the span), so a fade that has to be done by an edge (the artwork's own,
+ * over its blurred copy) ends early in places. Each segment eases in and out. Needs Android 13; before it a straight gradient.
+ */
+private class WavyMask {
+    /** Compiled on first use: not at all where a mask stays straight. */
+    private val shader by lazy(LazyThreadSafetyMode.NONE) { if (Build.VERSION.SDK_INT >= 33) RuntimeShader(WAVY_MASK_SHADER) else null }
+
+    fun brush(width: Float, amp: Float, phase: Float, stops: List<Pair<Float, Float>>, pin: Boolean = false): Brush {
+        val s = (stops + List((4 - stops.size).coerceAtLeast(0)) { stops.last() }).take(4)
+        val y0 = s.first().first
+        val y1 = s.last().first.coerceAtLeast(y0 + 1f)
+        val rs = if (amp > 0f) shader else null
+        if (Build.VERSION.SDK_INT < 33 || rs == null) {
+            return Brush.verticalGradient(*s.map { (y, a) -> ((y - y0) / (y1 - y0)).coerceIn(0f, 1f) to Color.Black.copy(alpha = a) }.toTypedArray(), startY = y0, endY = y1)
+        }
+        rs.setFloatUniform("ys", s[0].first, s[1].first, s[2].first, s[3].first)
+        rs.setFloatUniform("alphas", s[0].second, s[1].second, s[2].second, s[3].second)
+        rs.setFloatUniform("amp", amp)
+        rs.setFloatUniform("period", (width / 3f).coerceAtLeast(1f))
+        rs.setFloatUniform("phase", phase)
+        rs.setFloatUniform("pin", if (pin) 1f else 0f)
+        return ShaderBrush(rs)
+    }
+}
+
+private const val WAVY_MASK_SHADER = """
+uniform float4 ys;
+uniform float4 alphas;
+uniform float amp;
+uniform float period;
+uniform float phase;
+uniform float pin;
+half4 main(float2 p) {
+    float x = p.x / period + phase;
+    // Uneven: four sines at unrelated frequencies, so no bump repeats the last.
+    float w = 0.5 + 0.5 * (0.45 * sin(x) + 0.27 * sin(1.93 * x + 1.3) + 0.18 * sin(3.71 * x + 4.1) + 0.1 * sin(7.3 * x + 2.2));
+    float span = max(ys.w - ys.x, 0.001);
+    float y = p.y - amp * w;
+    if (pin > 0.5) {
+        // The stops squeezed towards the first: the last ends up amp × w higher.
+        y = p.y <= ys.x ? p.y : ys.x + (p.y - ys.x) * span / max(span - amp * w, 0.001);
+    }
+    // Eased segments: a fade with no visible start or end of its own.
+    float a = alphas.x;
+    a = mix(a, alphas.y, smoothstep(0.0, 1.0, clamp((y - ys.x) / max(ys.y - ys.x, 0.001), 0.0, 1.0)));
+    a = mix(a, alphas.z, smoothstep(0.0, 1.0, clamp((y - ys.y) / max(ys.z - ys.y, 0.001), 0.0, 1.0)));
+    a = mix(a, alphas.w, smoothstep(0.0, 1.0, clamp((y - ys.z) / max(ys.w - ys.z, 0.001), 0.0, 1.0)));
+    return half4(0.0, 0.0, 0.0, half(a));
+}
+"""
 
 /**
  * One colour carried on: the artwork already ends in it, so no fade and no blur at the seam. The
@@ -207,6 +302,35 @@ internal fun ArtworkEdge.isFlat(): Boolean = style == ArtworkStyle.Extend && rea
 
 /** The share of the artwork that fades into the continuation. */
 internal const val FEATHER = 0.18f
+/** The share of the artwork that fades into a flat extension (onto its colour, not a blurred copy). */
+internal const val CRISP_FEATHER = 0.04f
+
+/** Grain tiles by amplitude (sRGB levels), kept: the same few serve every cover. */
+private val grainTiles = HashMap<Float, ImageBitmap>()
+
+/**
+ * Grain about [grain] levels (the core's `ArtworkMetrics.grain`, at least a faint one, which also
+ * dithers the flat colour), as a repeating brush: each pixel lightens or darkens a little, from a
+ * fixed seed so a cover always draws the same.
+ */
+internal fun grainBrush(grain: Double?): Brush {
+    val amp = (((grain ?: 0.0) * 2).coerceIn(1.5, 6.0) * 2).roundToInt() / 2f
+    val tile = synchronized(grainTiles) {
+        grainTiles.getOrPut(amp) {
+            val t = 128
+            var seed = 0x2545f491
+            val px = IntArray(t * t) {
+                seed = seed * 1664525 + 1013904223
+                // Triangular noise in [-1, 1]: grain-like, rarely at full amplitude.
+                val n = ((seed and 0xffff) + (seed ushr 16)) / 65535f - 1f
+                val a = (abs(n) * amp * 255f / 128f).roundToInt().coerceIn(0, 255)
+                (a shl 24) or (if (n > 0) 0xFFFFFF else 0)
+            }
+            Bitmap.createBitmap(px, t, t, Bitmap.Config.ARGB_8888).asImageBitmap()
+        }
+    }
+    return ShaderBrush(ImageShader(tile, TileMode.Repeated, TileMode.Repeated))
+}
 /** Blur at the seam and far from it, as shares of the artwork's side. */
 private const val BLUR_NEAR = 0.025f
 private const val BLUR_FAR = 0.1f
@@ -220,8 +344,9 @@ private const val BLUR_FAR = 0.1f
  * - [ArtworkStyle.Mirror]: the reflection, blurring further with distance;
  * - [ArtworkStyle.Extend]: a short blurred reflection bridging into the colours along the edge,
  *   softening sideways with distance;
- * - a flat extension ([isFlat]): none of that, the artwork already ends in that colour, so it stays
- *   crisp to its edge and the colour simply carries on.
+ * - a flat extension ([isFlat]): none of that, the artwork already ends in that colour, so only its
+ *   last [CRISP_FEATHER] fades, onto that colour, which carries on with the cover's grain over it
+ *   (so a texture does not stop dead at the seam).
  *
  * Blurs clamp at their edges (the same edge row on both sides of the seam) and need Android 12;
  * before it the copies are sharp and only fade. Everything fades into the moving backdrop, except
@@ -240,8 +365,8 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
     val sidePx = hero.immersiveSlot().width
     val near = with(density) { (sidePx * BLUR_NEAR).toDp() }
     val far = with(density) { (sidePx * BLUR_FAR).toDp() }
-    /** Where the seam (the artwork's bottom edge) is in this box: [FEATHER] of the side below its top. */
-    val seam = { if (flat) 0f else side() * FEATHER }
+    /** Where the seam (the artwork's bottom edge) is in this box: its feather below its top. */
+    val seam = { side() * if (flat) CRISP_FEATHER else FEATHER }
 
     /**
      * The artwork with its reflection below it, blurred by [blur] as one image, its seam on ours:
@@ -250,10 +375,10 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
      * (fractions of the side from this box's top, with alphas).
      */
     @Composable
-    fun Reflected(blur: Dp, vararg stops: Pair<Float, Float>) = Box(
+    fun Reflected(blur: Dp, phase: Float, vararg stops: Pair<Float, Float>, waveAmp: Float = WAVE) = Box(
         Modifier
             .fillMaxSize()
-            .verticalMask(side, *stops)
+            .verticalMask(side, phase, *stops, waveAmp = waveAmp)
             .clipToBounds()
             .layout { m, c ->
                 val s = side().roundToInt().coerceAtLeast(1)
@@ -272,19 +397,21 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
             .layout { measurable, constraints ->
                 // Laid out for an immersive artwork's square, whatever the current one's style.
                 val slot = hero.immersiveSlot()
-                val top = (slot.bottom - if (flat) 0f else slot.width * FEATHER).roundToInt().coerceIn(0, constraints.maxHeight)
+                val top = (slot.bottom - slot.width * if (flat) CRISP_FEATHER else FEATHER).roundToInt().coerceIn(0, constraints.maxHeight)
                 val h = (constraints.maxHeight - top).coerceAtLeast(0)
                 val placeable = measurable.measure(Constraints.fixed(constraints.maxWidth, h))
                 layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(0, top) }
             },
     ) {
         if (flat || edge.light) Box(Modifier.fillMaxSize().background(base))
+        if (flat) Box(Modifier.fillMaxSize().background(grainBrush(edge.metrics.grain)))
         val f = FEATHER
+        val wave = edge.wavePhase()
         when {
             edge.style == ArtworkStyle.Mirror -> {
-                Reflected(far, 0f to 1f, f + 0.5f to 1f, f + 0.9f to 0f)
+                Reflected(far, wave + 11f, 0f to 1f, f + 0.5f to 1f, f + 0.9f to 0f)
                 // Only a thin band at the seam stays this sharp: the title sits right under the artwork.
-                Reflected(near, 0f to 1f, f + 0.03f to 1f, f + 0.1f to 0f)
+                Reflected(near, wave, 0f to 1f, f + 0.03f to 1f, f + 0.1f to 0f, waveAmp = WAVE * 0.4f)
             }
             !flat -> {
                 // The edge's colours from the seam down, softening sideways with distance.
@@ -294,12 +421,12 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
                     layout(c.maxWidth, c.maxHeight) { p.place(0, top) }
                 }
                 Box(below) {
-                    Box(Modifier.fillMaxSize().verticalMask(side, 0f to 1f, 0.5f to 1f, 0.9f to 0f).background(Brush.horizontalGradient(soften(colors, 6))))
-                    Box(Modifier.fillMaxSize().verticalMask(side, 0f to 1f, 0.15f to 1f, 0.45f to 0f).background(Brush.horizontalGradient(soften(colors, 2))))
+                    Box(Modifier.fillMaxSize().verticalMask(side, wave + 3.1f, 0f to 1f, 0.5f to 1f, 0.9f to 0f).background(Brush.horizontalGradient(soften(colors, 6))))
+                    Box(Modifier.fillMaxSize().verticalMask(side, wave + 7.3f, 0f to 1f, 0.15f to 1f, 0.45f to 0f).background(Brush.horizontalGradient(soften(colors, 2))))
                 }
                 // Under the artwork's fading edge and just past the seam: the artwork blurred, then
                 // its short reflection, bridging into the colours.
-                Reflected(near, 0f to 1f, f to 1f, f + 0.1f to 0f)
+                Reflected(near, wave, 0f to 1f, f to 1f, f + 0.1f to 0f)
             }
         }
         // The scrim the controls need, already at full strength where they start (right at the
@@ -309,7 +436,7 @@ internal fun ImmersiveContinuation(coverArt: String?, edge: ArtworkEdge, hero: H
             val scrim = (if (edge.light) Color.White else Color.Black).copy(alpha = edge.scrim.toFloat())
             Box(Modifier.fillMaxSize().drawBehind {
                 val s = side()
-                val (from, to) = if (flat) 0f to s * 0.12f else 0f to seam()
+                val (from, to) = if (flat) seam() to seam() + s * 0.12f else 0f to seam()
                 drawRect(Brush.verticalGradient(0f to scrim.copy(alpha = 0f), 1f to scrim, startY = from, endY = to.coerceAtLeast(from + 1f)))
             })
         }
@@ -328,37 +455,59 @@ private const val BOTTOM_FADE = 0.6f
 /**
  * The immersive artwork's own last [FEATHER] fading out onto the continuation's blurred copy, as
  * much as [fraction] (1 in artwork mode, 0 as a thumbnail), and, where its [top] strip is not a
- * flat colour, its first [FEATHER] fading in from that strip's blurred copy as much as [topFraction]. Not for a flat extension, which stays
- * crisp to its edge, unless [evenFlat] (the artwork in flight, whose flat continuation fades out
- * under it: its edge fades with it rather than standing as a hard line).
+ * flat colour, its first [FEATHER] fading in from that strip's blurred copy as much as [topFraction]. A flat
+ * extension (either end) fades over only [CRISP_FEATHER], onto its colour, unless [evenFlat] (the artwork
+ * in flight, whose flat continuation fades out under it: its edge fades as wide as any other).
  */
-internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, evenFlat: Boolean = false, top: ArtworkEdge? = null, topFraction: () -> Float = fraction): Modifier {
-    val bottom = edge != null && (!edge.isFlat() || evenFlat)
-    // The top fades onto [ImmersiveTopStrip]'s blurred copy, unless that is a crisp flat colour.
-    val fadeTop = edge != null && top != null && !top.isFlat()
+internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, evenFlat: Boolean = false, top: ArtworkEdge? = null, topFraction: () -> Float = fraction, crispFraction: () -> Float = { 0f }): Modifier {
+    val bottom = edge != null
+    val bottomFeather = if (edge?.isFlat() == true && !evenFlat) CRISP_FEATHER else FEATHER
+    // The top fades onto [ImmersiveTopStrip]'s blurred copy (or its flat colour, over less).
+    val fadeTop = edge != null && top != null
+    val topFeather = if (top?.isFlat() == true) CRISP_FEATHER else FEATHER
     if (!bottom && !fadeTop) return this
     return this
         .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-        .drawWithContent {
-            drawContent()
-            val f = fraction().coerceIn(0f, 1f)
-            if (bottom && f > 0f) {
-                val from = size.height * (1f - FEATHER)
-                drawRect(
-                    Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - f), startY = from, endY = size.height),
-                    topLeft = androidx.compose.ui.geometry.Offset(0f, from),
-                    size = size.copy(height = size.height - from),
-                    blendMode = BlendMode.DstIn,
-                )
-            }
-            val t = topFraction().coerceIn(0f, 1f)
-            if (fadeTop && t > 0f) {
-                val to = size.height * FEATHER
-                drawRect(
-                    Brush.verticalGradient(0f to Color.Black.copy(alpha = 1f - t), 1f to Color.Black, startY = 0f, endY = to),
-                    size = size.copy(height = to),
-                    blendMode = BlendMode.DstIn,
-                )
+        .drawWithCache {
+            val mask = WavyMask()
+            // Onto a blurred copy the fade's end is wavy, like the continuation's bands; onto a
+            // flat colour it stays straight.
+            val wavy = edge != null && !edge.isFlat()
+            val phase = edge?.wavePhase()?.plus(5f) ?: 0f
+            onDrawWithContent {
+                drawContent()
+                val f = fraction().coerceIn(0f, 1f)
+                if (bottom && f > 0f) {
+                    val from = size.height * (1f - bottomFeather)
+                    val amp = if (wavy) size.width * bottomFeather * 0.5f else 0f
+                    drawRect(
+                        mask.brush(size.width, amp, phase, listOf(from to 1f, size.height to 1f - f), pin = true),
+                        topLeft = androidx.compose.ui.geometry.Offset(0f, from),
+                        size = size.copy(height = size.height - from),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                // With [evenFlat], a flat edge's own short fade too, as much as [crispFraction]: the
+                // same edge the landed artwork has, while the continuation is still there.
+                val c = crispFraction().coerceIn(0f, 1f)
+                if (bottom && evenFlat && edge?.isFlat() == true && c > 0f) {
+                    val from = size.height * (1f - CRISP_FEATHER)
+                    drawRect(
+                        Brush.verticalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - c), startY = from, endY = size.height),
+                        topLeft = androidx.compose.ui.geometry.Offset(0f, from),
+                        size = size.copy(height = size.height - from),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                val t = topFraction().coerceIn(0f, 1f)
+                if (fadeTop && t > 0f) {
+                    val to = size.height * topFeather
+                    drawRect(
+                        Brush.verticalGradient(0f to Color.Black.copy(alpha = 1f - t), 1f to Color.Black, startY = 0f, endY = to),
+                        size = size.copy(height = to),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
             }
         }
 }
@@ -378,8 +527,9 @@ internal fun immersiveHeaderColor(layout: ArtworkLayout): Color = if (stripLight
 /**
  * The room above an immersive artwork (under the status bar and the player's handle,
  * [HeroGeometry.immersiveSlot]'s top down to the page's), filled from the artwork's top edge
- * ([ArtworkLayout.top]): a flat edge (a white cover, say) carries on upwards in its colour with a
- * crisp edge, so the cover just looks taller; any other fades the artwork's top ([immersiveFade])
+ * ([ArtworkLayout.top]): a flat edge (a white cover, say) carries on upwards in its colour, the
+ * artwork's first [CRISP_FEATHER] fading onto it and the cover's grain over it, so the cover just
+ * looks taller; any other fades the artwork's top ([immersiveFade])
  * onto a blurred copy of itself that carries on upwards as calm, blurred colour (never a sharp
  * mirror). Drawn in the continuation's layer, so it moves with the artwork in flight and in a swipe.
  */
@@ -392,7 +542,7 @@ internal fun ImmersiveTopStrip(coverArt: String?, layout: ArtworkLayout, hero: H
     val far = with(density) { (hero.immersiveSlot().width * BLUR_FAR).toDp() }
     /** The artwork's top in this box, and how far under it its fading top runs. */
     val artTop = { hero.immersiveSlot().top }
-    val under = { if (flat) 0f else hero.immersiveSlot().width * FEATHER }
+    val under = { hero.immersiveSlot().width * if (flat) CRISP_FEATHER else FEATHER }
     Box(
         modifier
             .clearAndSetSemantics { }
@@ -424,6 +574,7 @@ internal fun ImmersiveTopStrip(coverArt: String?, layout: ArtworkLayout, hero: H
                     RectangleShape,
                 )
             }
+            Box(Modifier.fillMaxSize().background(grainBrush(edge.metrics.grain)))
             return@Box
         }
         // Calm colour: the edge's colours, softened sideways.

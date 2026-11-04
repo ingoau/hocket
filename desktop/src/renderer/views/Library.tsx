@@ -25,7 +25,7 @@ export function Library() {
   const month = useQuery(() => ({ type: "stats", data: { period_days: 30 } }), "stats", []);
   const year = useQuery(() => (month.data && !month.data.topAlbums.length ? { type: "stats", data: { period_days: 365 } } : null), "stats", [month.data?.topAlbums.length]);
   const topCovers = ((month.data?.topAlbums.length ? month.data : year.data)?.topAlbums ?? []).map((a) => a.coverArt).filter((c): c is string => !!c).slice(0, 3);
-  const playAlbum = (a: Album) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: true } } });
+  const playAlbum = (a: Album) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const tile = (view: ViewName, label: string, icon: string, cls: string, testId: string, param?: string, covers: string[] = []) => (
     <button type="button" className={`lib-tile ${cls}`} onClick={() => navigate({ view, param })} data-testid={testId}>
       {covers.length ? (
@@ -61,6 +61,7 @@ export function Library() {
           {link("cached", t("downloads.tab.offline"), () => navigate({ view: "downloads", param: "offline" }), "library-offline", "pill")}
           {link("download", t("nav.downloads"), () => navigate({ view: "downloads" }), "library-downloads", "circle")}
           {link("stats", t("library.statistics"), () => navigate({ view: "stats" }), "library-stats", "squircle")}
+          {link("sleep", t("snooze.title"), () => navigate({ view: "snoozed" }), "library-snoozed", "pill")}
         </nav>
         <div className="lib-recent-head">
           <h2 className="section-heading">{t("library.recentlyAdded")}</h2>

@@ -4,6 +4,7 @@ import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.Queries
+import app.hocket.core.QueueWindows
 import app.hocket.core.api.*
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -14,6 +15,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -40,6 +43,9 @@ data class HandoffPicker(val open: Boolean = false, val targets: List<DeviceInfo
 
 /** What kind of ids a selection holds, so toolbar actions can be queried for the right target. */
 enum class SelectionKind { Tracks, Albums, Artists, Playlists, QueueItems }
+
+/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
+const val REUSE_ROOM_COLLECTION_MS = 15_000.0
 
 /**
  * The app-side view of the core: forwards commands and queries, folds the event stream into
@@ -70,9 +76,23 @@ class CoreClient(
     private val _session = MutableStateFlow<SessionDocument?>(null)
     val session: StateFlow<SessionDocument?> = _session.asStateFlow()
     private val _queue = MutableStateFlow(emptyQueue())
+    /**
+     * The queue view: the core's window around the pointer, extended with the rows the queue
+     * screen paged in ([extendQueue]) with `Query.QueueRange`.
+     */
     val queue: StateFlow<QueueView> = _queue.asStateFlow()
+    /** The core's own window, as last sent. */
+    private var queueBase: QueueView = emptyQueue()
+    /** [queueBase] plus the pages fetched since it came (all current), where paging carries on from. */
+    private var queueFetched: QueueView = emptyQueue()
+    /** Rows wanted behind and ahead of the pointer ([extendQueue]); the core's window covers [QUEUE_WINDOW_SIDE] each way. */
+    private var queueWant = QUEUE_WINDOW_SIDE to QUEUE_WINDOW_SIDE
+    private var queuePaging: kotlinx.coroutines.Job? = null
     private val _transport = MutableStateFlow(emptyTransport())
     val transport: StateFlow<TransportState> = _transport.asStateFlow()
+    private val _preview = MutableStateFlow<PreviewState?>(null)
+    /** The song preview, or null when nothing is being previewed. */
+    val preview: StateFlow<PreviewState?> = _preview.asStateFlow()
     /**
      * Latest stamp, including ~1 Hz ticks that do not republish [transport]. Written off the main
      * thread for those ticks (see [collector]); a flow so a paused [position] can wait on it.
@@ -113,6 +133,18 @@ class CoreClient(
     val syncProgress: StateFlow<SyncProgress?> = _syncProgress.asStateFlow()
     private val _savedQueues = MutableStateFlow<List<SavedQueue>>(emptyList())
     val savedQueues: StateFlow<List<SavedQueue>> = _savedQueues.asStateFlow()
+    private val _stash = MutableStateFlow<List<StashItem>>(emptyList())
+    /** The song stash, in order (#150). */
+    val stash: StateFlow<List<StashItem>> = _stash.asStateFlow()
+    private val _snoozes = MutableStateFlow<List<SnoozeItem>>(emptyList())
+    /** Songs snoozed right now, soonest ending first (#157). */
+    val snoozes: StateFlow<List<SnoozeItem>> = _snoozes.asStateFlow()
+    private val _albumResumeRevision = MutableStateFlow(0)
+    /** Bumped when album resume points change, so an open album page refetches. */
+    val albumResumeRevision: StateFlow<Int> = _albumResumeRevision.asStateFlow()
+    private val _albumResumes = MutableStateFlow<List<AlbumResumePoint>>(emptyList())
+    /** Every album with a resume point (empty while resume is off), as the core last announced. */
+    val albumResumes: StateFlow<List<AlbumResumePoint>> = _albumResumes.asStateFlow()
     private val _pins = MutableStateFlow<List<Pin>>(emptyList())
     val pins: StateFlow<List<Pin>> = _pins.asStateFlow()
     private val _storage = MutableStateFlow(StorageSummary(0.0, 0.0, 0.0))
@@ -164,6 +196,27 @@ class CoreClient(
     private val _exports = MutableSharedFlow<Event>(extraBufferCapacity = 4)
     /** `NspExported` and `ConfigExported`, for the share sheet. */
     val exports: SharedFlow<Event> = _exports.asSharedFlow()
+    private val _diagnosticsRequests = MutableSharedFlow<EventDiagnosticsRequestedInner>(extraBufferCapacity = 4)
+    /** Another device in the Connect room asks for this one's diagnostics (developer mode is on here). */
+    val diagnosticsRequests: SharedFlow<EventDiagnosticsRequestedInner> = _diagnosticsRequests.asSharedFlow()
+    private val _roomDiagnostics = MutableStateFlow<RoomDiagnosticsStatus?>(null)
+    /**
+     * The newest room diagnostics collection, as it goes. [collectRoomDiagnostics] runs one at a
+     * time, so this is always the one it is running (or ran last).
+     */
+    val roomDiagnostics: StateFlow<RoomDiagnosticsStatus?> = _roomDiagnostics.asStateFlow()
+    private val _reportUpload = MutableStateFlow<ReportUploadStatus?>(null)
+    /**
+     * Where the "Save to Coordinator" report upload stands (`null`: none), from
+     * `ReportUploadChanged` and a `Query.ReportUpload` when the core starts (an upload interrupted by
+     * quitting resumes then). Drives the app-wide upload bar and the upload's foreground service.
+     */
+    val reportUpload: StateFlow<ReportUploadStatus?> = _reportUpload.asStateFlow()
+    /** Bumped by every `ReportUploadChanged`, so a slower startup query never overwrites a newer event. */
+    @Volatile private var reportUploadEvents = 0
+    private var roomCollection: Deferred<String?>? = null
+    /** The newest finished collection's text, and when it finished. */
+    private var lastRoomCollection: Pair<String, Double>? = null
     private val _actionsChanged = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val actionsChanged: SharedFlow<String> = _actionsChanged.asSharedFlow()
 
@@ -337,6 +390,68 @@ class CoreClient(
 
     fun dispatch(command: Command) = core.dispatch(command)
 
+    /** Saves a report on the coordinator (`docs/reports.md`); progress arrives on [reportUpload]. */
+    fun startReportUpload(note: String, bundle: String, attachments: List<ReportAttachment>) =
+        dispatch(Command.StartReportUpload(CommandStartReportUploadInner(note, bundle, attachments)))
+
+    /** Tries the failed report upload again, from where it stopped. */
+    fun retryReportUpload() = dispatch(Command.RetryReportUpload)
+
+    /** Forgets the report upload, cancelling it if it is still running. */
+    fun dismissReportUpload() = dispatch(Command.DismissReportUpload)
+
+    private var stashEvents = 0
+    private var snoozeEvents = 0
+
+    /** The snapshot carries no stash: ask, unless an event answers first. */
+    private fun refreshStash() {
+        val seen = stashEvents
+        scope.launch {
+            val result = query(Query.Stash) as? QueryResult.StashItems ?: return@launch
+            if (stashEvents == seen) _stash.value = result.data
+        }
+    }
+
+    /** The snapshot carries no snoozes: ask, unless an event answers first. */
+    private fun refreshSnoozes() {
+        val seen = snoozeEvents
+        scope.launch {
+            val result = query(Query.Snoozes) as? QueryResult.SnoozeItems ?: return@launch
+            if (snoozeEvents == seen) _snoozes.value = result.data
+        }
+    }
+
+    /** Asks where the report upload stands (core start, snapshots), unless an event answers first. */
+    private fun refreshReportUpload() {
+        val seen = reportUploadEvents
+        scope.launch {
+            val result = query(Query.ReportUpload) as? QueryResult.ReportUpload ?: return@launch
+            if (reportUploadEvents == seen) _reportUpload.value = result.data
+        }
+    }
+
+    /**
+     * `Query.RoomDiagnostics`, one at a time: a call while one runs joins it. It runs in the
+     * client's scope, so a caller that stops waiting (a page that closes) leaves it to finish for
+     * the next one rather than starting a second collection alongside. The room turns away a
+     * second request within 10 s (the core then answers with the collection before), so unless
+     * [force]d (Refresh) a collection that recent is reused. Only the room's answers count: "not
+     * collected" (developer mode off, Connect not running) is asked again next time.
+     */
+    suspend fun collectRoomDiagnostics(force: Boolean = false): String? {
+        val running = synchronized(this) {
+            roomCollection?.takeIf { it.isActive }?.let { return@synchronized it }
+            val last = lastRoomCollection
+            if (!force && last != null && now() - last.second < REUSE_ROOM_COLLECTION_MS) return last.first
+            scope.async {
+                val text = (query(Query.RoomDiagnostics) as? QueryResult.Text)?.data
+                if (text != null && !text.startsWith("Other devices: not collected")) synchronized(this@CoreClient) { lastRoomCollection = text to now() }
+                text
+            }.also { roomCollection = it }
+        }
+        return running.await()
+    }
+
     /**
      * Async request/response, failing soft: `null` when the core cannot answer (it has shut down or
      * been freed while a screen was still composing, the release build's dead core, a query the core
@@ -374,7 +489,7 @@ class CoreClient(
     fun applySnapshot(s: Snapshot) {
         _servers.value = s.servers
         _session.value = s.session
-        _queue.value = s.queue
+        setQueue(s.queue)
         clockTransport = s.transport
         _transport.value = s.transport
         _nowPlaying.value = s.queue.current
@@ -398,8 +513,8 @@ class CoreClient(
     fun onEvent(event: Event) {
         when (event) {
             // `Started` once per core; `Snapshot` on every RequestSnapshot (UI attach, service reconnect).
-            is Event.Started -> applySnapshot(event.data.snapshot)
-            is Event.Snapshot -> applySnapshot(event.data.snapshot)
+            is Event.Started -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
+            is Event.Snapshot -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
             is Event.ServersChanged -> _servers.value = event.data.servers
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {
@@ -417,6 +532,8 @@ class CoreClient(
                 val items = event.data.items
                 // The core re-emits these when the item is queued; patching now keeps the player
                 // and the queue in step with the rows that change below.
+                queueBase = LibraryPatches.queue(queueBase, items)
+                queueFetched = LibraryPatches.queue(queueFetched, items)
                 _queue.update { prev ->
                     val next = LibraryPatches.queue(prev, items)
                     if (next === prev) prev else next
@@ -435,7 +552,7 @@ class CoreClient(
                 _savedQueues.value = event.data.document.savedQueues
             }
             is Event.QueueChanged -> {
-                _queue.value = event.data.queue
+                setQueue(event.data.queue)
                 _nowPlaying.value = event.data.queue.current
             }
             is Event.TransportChanged -> {
@@ -444,8 +561,12 @@ class CoreClient(
                 clockTransport = next
                 if (!prev.isPositionTick(next)) _transport.value = next
             }
+            is Event.PreviewChanged -> _preview.value = event.data.preview
             is Event.NowPlayingChanged -> _nowPlaying.value = event.data.entry
             is Event.SavedQueuesChanged -> _savedQueues.value = event.data.queues
+            is Event.StashChanged -> { stashEvents++; _stash.value = event.data.items }
+            is Event.SnoozesChanged -> { snoozeEvents++; _snoozes.value = event.data.items }
+            is Event.AlbumResumesChanged -> { _albumResumes.value = event.data.points; _albumResumeRevision.value++ }
             is Event.UndoChanged -> _undo.value = event.data.state
             is Event.Toast -> _toasts.tryEmit(event.data.toast)
             is Event.PlayerNotice -> _playerNotice.value = event.data.takeIf { it.message != null || it.code != null }
@@ -475,12 +596,73 @@ class CoreClient(
             is Event.ShortcutsChanged -> Unit // desktop only
             is Event.ActionsChanged -> _actionsChanged.tryEmit(event.data.surface)
             is Event.NspExported, is Event.ConfigExported -> _exports.tryEmit(event)
+            is Event.DiagnosticsRequested -> _diagnosticsRequests.tryEmit(event.data)
+            is Event.RoomDiagnosticsChanged -> _roomDiagnostics.value = event.data.status
+            is Event.ReportUploadChanged -> { reportUploadEvents++; _reportUpload.value = event.data.status }
             // Who owns transport after a handoff, and voice search waiting for playback, follow this
             // (not only snapshots). The core sends it on real changes, never on position reports.
             is Event.MediaSession -> _mediaSession.value = event.data.state
             is Event.Backend -> Unit // consumed by the playback service
             is Event.Error -> _errors.tryEmit(event.data)
             is Event.Log -> Unit
+        }
+    }
+
+    /**
+     * A new window from the core. Rows paged in beyond it stay on screen while they still fit: the
+     * list keeps its shape, or only the pointer moved (same total, the rows both hold line up).
+     * They are refetched right away, as an edit may have moved them. Otherwise the old rows stay
+     * until the refetched pages are published, so the list never shrinks to the core's window
+     * under the user's scroll position.
+     */
+    private fun setQueue(base: QueueView) {
+        queueBase = base
+        queueFetched = base
+        val prev = _queue.value
+        val paged = QueueWindows.missing(base, queueWant.first, queueWant.second) != null
+        _queue.value = when {
+            !paged || prev === base -> base
+            QueueWindows.sameShape(prev, base) -> QueueWindows.merge(base, prev)
+            else -> QueueWindows.realign(base, prev) ?: prev
+        }
+        pageQueue()
+    }
+
+    /**
+     * Have [queue] reach at least [before] rows behind the pointer and [after] ahead of it, paging
+     * them in from the core; the queue screen calls this as it scrolls near either loaded end.
+     */
+    fun extendQueue(before: Int, after: Int) {
+        val (b, a) = queueWant
+        if (before <= b && after <= a) return
+        queueWant = maxOf(b, before) to maxOf(a, after)
+        pageQueue()
+    }
+
+    /** Back to the core's window alone (the queue screen closed). */
+    fun resetQueueWindow() {
+        queueWant = QUEUE_WINDOW_SIDE to QUEUE_WINDOW_SIDE
+    }
+
+    /** Page in what [queueWant] still lacks, carrying on from the pages already fetched for this window. */
+    private fun pageQueue() {
+        val base = queueBase
+        val (before, after) = queueWant
+        queuePaging?.cancel()
+        if (QueueWindows.missing(queueFetched, before, after) == null) return
+        queuePaging = scope.launch {
+            var view = queueFetched
+            while (true) {
+                val (start, count) = QueueWindows.missing(view, before, after) ?: break
+                val page = (query(Commands.queueRange(start, count)) as? QueryResult.Queue)?.data ?: break
+                // A newer window from the core cancels this; it may already have replaced the base.
+                if (queueBase !== base) return@launch
+                val merged = QueueWindows.merge(view, page)
+                if (merged === view) break
+                view = merged
+                queueFetched = view
+            }
+            _queue.value = view
         }
     }
 
@@ -491,7 +673,9 @@ class CoreClient(
 
     companion object {
         private const val TAG = "CoreClient"
-        fun emptyQueue() = QueueView(null, emptyList(), null, emptyList(), emptyList(), false, RepeatMode.Off, false, QueueMode.Apple, 0u)
+        /** Rows the core's queue window carries on each side of the pointer. */
+        const val QUEUE_WINDOW_SIDE = 100
+        fun emptyQueue() = QueueView(null, emptyList(), 0u, 0u, 0u, null, 0u, 0u, null, false, RepeatMode.Off, false)
         fun emptyTransport() = TransportState(TransportLease(null, 0u, 0.0), PositionStamp(0u, 0.0, 1.0, false), false, 0u, 1.0)
         fun emptyConnection() = ConnectionState(ConnectionTier.Local, false, null, 0.0, null, 0u, null)
         fun emptyUndo() = UndoState(false, null, false, null, emptyList())

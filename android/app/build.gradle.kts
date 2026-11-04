@@ -14,13 +14,30 @@ android {
         applicationId = "app.hocket"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI's release job passes -PversionCode/-PversionName (the run number), so each push to main
+        // is an upgrade over the last.
+        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 1
+        versionName = providers.gradleProperty("versionName").orNull ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Release signing comes from the environment (CI's release job); without it, release builds
+    // come out unsigned as before.
+    val releaseKeystore = System.getenv("HOCKET_KEYSTORE")?.let(::file)
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("HOCKET_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("HOCKET_KEY_ALIAS")
+                keyPassword = System.getenv("HOCKET_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
+            if (releaseKeystore != null) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -78,6 +95,7 @@ dependencies {
     implementation(project(":playback"))
 
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -94,7 +112,6 @@ dependencies {
     implementation(libs.compose.runtime)
     implementation(libs.compose.animation)
     implementation(libs.compose.material3)
-    implementation(libs.compose.material3.window.size)
     implementation(libs.coil.compose)
     implementation(libs.reorderable)
     implementation(libs.kotlinx.coroutines.android)

@@ -28,9 +28,10 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs, LibraryItemState, Ms,
-    PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey, QueueMode, RepeatMode,
-    SavedQueue, ServerId, SessionDocument, SessionId, Setting, TrackId, TransportLease, UndoEntry,
+    AlbumResumeEntry, AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
+    LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey,
+    RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, Snooze, StashEntry,
+    TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -38,10 +39,12 @@ use crate::api::{
 /// History: 1 = initial; 2 = LAN rooms authenticate with
 /// [`Msg::Challenge`]/[`Msg::Proof`] and a `Hello` on the LAN never carries a
 /// credential. Version 1 peers are refused (they would hand a credential to
-/// any LAN host).
-pub const PROTOCOL: u32 = 2;
+/// any LAN host); 3 = the flat queue model (one list with a pointer, no
+/// queue modes, keyed moves, the "Next in queue" group). Version 2 peers
+/// reduce ops differently and can't share a session with this one.
+pub const PROTOCOL: u32 = 3;
 /// Hard floor. The handshake refuses anything older.
-pub const PROTOCOL_MIN: u32 = 2;
+pub const PROTOCOL_MIN: u32 = 3;
 
 /// Extra fields preserved verbatim. Typeshare never sees it.
 pub type Extra = HashMap<String, Value>;
@@ -208,6 +211,18 @@ pub struct ReplicaState {
     /// LWW set keyed on setting key (account-synced keys only).
     #[serde(default)]
     pub settings: Vec<Setting>,
+    /// The account's song stash: LWW set keyed on entry id, tombstones included
+    /// (`crate::stash`).
+    #[serde(default)]
+    pub stash: Vec<StashEntry>,
+    /// The account's snoozes: LWW set keyed on track id, tombstones included
+    /// (`crate::snooze`).
+    #[serde(default)]
+    pub snoozes: Vec<Snooze>,
+    /// Where albums were left off: LWW set keyed on album id, tombstones included
+    /// (`crate::album_resume`).
+    #[serde(default)]
+    pub album_resumes: Vec<AlbumResumeEntry>,
     /// Per-device last seen.
     #[serde(default)]
     pub devices: Vec<DeviceLease>,
@@ -340,14 +355,35 @@ pub enum SessionOp {
         label: String,
         shuffle: bool,
         save_outgoing: bool,
+        /// Where the chosen track starts. Absent on older peers, who start at 0.
+        #[serde(default)]
+        start_position_ms: Ms,
     },
+    /// `queued`: into the "Next in queue" group (the sender's Queue section
+    /// setting), decided by the sender so every replica agrees.
     PlayNext {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+        queued: bool,
+    },
+    AddToQueue {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
     },
     PlayLater {
         server_id: ServerId,
         track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+    },
+    /// After `after`, in or out of the group (see `Command::InsertTracks`).
+    InsertTracks {
+        server_id: ServerId,
+        track_ids: Vec<TrackId>,
+        keys: Vec<QueueKey>,
+        after: QueueKey,
+        in_group: bool,
     },
     JumpToQueueItem {
         key: QueueKey,
@@ -357,10 +393,11 @@ pub enum SessionOp {
     },
     MoveQueueItem {
         key: QueueKey,
-        to_index: u32,
+        after: QueueKey,
+        in_group: bool,
     },
     ClearQueue,
-    ClearInsertions,
+    ClearQueueGroup,
     SetShuffle {
         enabled: bool,
     },
@@ -370,9 +407,6 @@ pub enum SessionOp {
     },
     SetAutoplay {
         enabled: bool,
-    },
-    SetQueueMode {
-        mode: QueueMode,
     },
     Next,
     Previous,
@@ -401,6 +435,10 @@ pub enum SessionOp {
     DeleteSavedQueue {
         id: String,
     },
+    RenameQueue {
+        id: Option<String>,
+        label: String,
+    },
     TouchSavedQueue {
         id: String,
     },
@@ -428,6 +466,7 @@ impl SessionOp {
                 start_index,
                 label,
                 shuffle,
+                start_position_ms,
             } => SessionOp::PlayTracks {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
@@ -435,37 +474,69 @@ impl SessionOp {
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
+                start_position_ms: *start_position_ms,
             },
             Command::PlayNext {
                 server_id,
                 track_ids,
+                keys,
             } => SessionOp::PlayNext {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
+                keys: keys.clone(),
+                queued: true,
+            },
+            Command::AddToQueue {
+                server_id,
+                track_ids,
+                keys,
+            } => SessionOp::AddToQueue {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+                keys: keys.clone(),
             },
             Command::PlayLater {
                 server_id,
                 track_ids,
+                keys,
             } => SessionOp::PlayLater {
                 server_id: server_id.clone(),
                 track_ids: track_ids.clone(),
+                keys: keys.clone(),
+            },
+            Command::InsertTracks {
+                server_id,
+                track_ids,
+                keys,
+                after,
+                in_group,
+            } => SessionOp::InsertTracks {
+                server_id: server_id.clone(),
+                track_ids: track_ids.clone(),
+                keys: keys.clone(),
+                after: after.clone(),
+                in_group: *in_group,
             },
             Command::JumpToQueueItem { key } => SessionOp::JumpToQueueItem { key: key.clone() },
             Command::RemoveQueueItems { keys } => {
                 SessionOp::RemoveQueueItems { keys: keys.clone() }
             }
-            Command::MoveQueueItem { key, to_index } => SessionOp::MoveQueueItem {
+            Command::MoveQueueItem {
+                key,
+                after,
+                in_group,
+            } => SessionOp::MoveQueueItem {
                 key: key.clone(),
-                to_index: *to_index,
+                after: after.clone(),
+                in_group: *in_group,
             },
             Command::ClearQueue => SessionOp::ClearQueue,
-            Command::ClearInsertions => SessionOp::ClearInsertions,
+            Command::ClearQueueGroup => SessionOp::ClearQueueGroup,
             Command::SetShuffle { enabled } => SessionOp::SetShuffle { enabled: *enabled },
             Command::SetRepeat { mode } => SessionOp::SetRepeat { mode: *mode },
             Command::SetAutoplay { enabled } => SessionOp::SetAutoplay { enabled: *enabled },
-            Command::SetQueueMode { mode } => SessionOp::SetQueueMode { mode: *mode },
             Command::Next => SessionOp::Next,
-            Command::Previous => SessionOp::Previous,
+            Command::Previous | Command::PreviousTrack => SessionOp::Previous,
             Command::SkipUnavailable { key } => SessionOp::SkipUnavailable { key: key.clone() },
             Command::RestoreSavedQueue { id } => SessionOp::RestoreSavedQueue {
                 id: id.clone(),
@@ -476,8 +547,131 @@ impl SessionOp {
                 pinned: *pinned,
             },
             Command::DeleteSavedQueue { id } => SessionOp::DeleteSavedQueue { id: id.clone() },
+            Command::RenameQueue {
+                saved_queue_id,
+                label,
+            } => SessionOp::RenameQueue {
+                id: saved_queue_id.clone(),
+                label: label.clone(),
+            },
             _ => return None,
         })
+    }
+
+    /// The op with its track lists cut to what the reducer would keep of
+    /// them (see `session::MAX_QUEUE_LEN`), so a huge selection or context
+    /// can't make a frame over the transport's limit. Lists that start
+    /// playback are windowed around the chosen track; queued lists keep
+    /// their first `MAX_QUEUE_LEN`. `doc` is the document the op applies to.
+    pub fn within_caps(self, doc: &SessionDocument) -> SessionOp {
+        use crate::session::{window_around, window_tracks, MAX_QUEUE_LEN};
+        let cut = |mut v: Vec<String>| {
+            v.truncate(MAX_QUEUE_LEN);
+            v
+        };
+        match self {
+            SessionOp::PlayContext { mut args } => {
+                let len = args.context.tracks.len();
+                let window = window_tracks(len, args.start_index.unwrap_or(0) as usize);
+                if window.len() < len {
+                    args.context.tracks.truncate(window.end);
+                    args.context.tracks.drain(..window.start);
+                    args.start_index = args
+                        .start_index
+                        .map(|s| (s as usize).saturating_sub(window.start) as u32);
+                }
+                SessionOp::PlayContext { args }
+            }
+            SessionOp::PlayTracks {
+                server_id,
+                mut track_ids,
+                start_index,
+                label,
+                shuffle,
+                save_outgoing,
+                start_position_ms,
+            } => {
+                let len = track_ids.len();
+                let window = window_tracks(len, start_index as usize);
+                let mut start_index = start_index;
+                if window.len() < len {
+                    track_ids.truncate(window.end);
+                    track_ids.drain(..window.start);
+                    start_index = (start_index as usize).saturating_sub(window.start) as u32;
+                }
+                SessionOp::PlayTracks {
+                    server_id,
+                    track_ids,
+                    start_index,
+                    label,
+                    shuffle,
+                    save_outgoing,
+                    start_position_ms,
+                }
+            }
+            SessionOp::PlayNext {
+                server_id,
+                track_ids,
+                keys,
+                queued,
+            } => SessionOp::PlayNext {
+                server_id,
+                track_ids: cut(track_ids),
+                keys: cut(keys),
+                queued,
+            },
+            SessionOp::AddToQueue {
+                server_id,
+                track_ids,
+                keys,
+            } => SessionOp::AddToQueue {
+                server_id,
+                track_ids: cut(track_ids),
+                keys: cut(keys),
+            },
+            SessionOp::PlayLater {
+                server_id,
+                track_ids,
+                keys,
+            } => SessionOp::PlayLater {
+                server_id,
+                track_ids: cut(track_ids),
+                keys: cut(keys),
+            },
+            SessionOp::InsertTracks {
+                server_id,
+                track_ids,
+                keys,
+                after,
+                in_group,
+            } => SessionOp::InsertTracks {
+                server_id,
+                track_ids: cut(track_ids),
+                keys: cut(keys),
+                after,
+                in_group,
+            },
+            SessionOp::SetContextTracks { mut tracks } => {
+                window_around(&mut tracks, doc.current.as_ref());
+                SessionOp::SetContextTracks { tracks }
+            }
+            SessionOp::RestoreSavedQueue {
+                id,
+                tracks: Some(mut tracks),
+            } => {
+                let current = doc
+                    .saved_queues
+                    .iter()
+                    .find(|q| q.id == id)
+                    .and_then(|q| q.current.as_ref());
+                window_around(&mut tracks, current);
+                SessionOp::RestoreSavedQueue {
+                    id,
+                    tracks: Some(tracks),
+                }
+            }
+            op => op,
+        }
     }
 
     /// True for ops that change what is playing (track change) rather than
@@ -507,6 +701,68 @@ impl SessionOp {
             self,
             SessionOp::MoveQueueItem { .. } | SessionOp::RemoveQueueItems { .. }
         )
+    }
+
+    /// Where a `PlayTracks` should start. Other ops start at the beginning.
+    pub fn start_position_ms(&self) -> Ms {
+        match self {
+            SessionOp::PlayTracks {
+                start_position_ms, ..
+            } => *start_position_ms,
+            _ => 0,
+        }
+    }
+
+    /// What the op is and the queue keys it names, for a log line (never the
+    /// track lists a queue replacement carries).
+    pub fn summary(&self) -> String {
+        match self {
+            SessionOp::MoveQueueItem {
+                key,
+                after,
+                in_group,
+            } => {
+                let place = if *in_group { "in group" } else { "" };
+                format!("moveQueueItem {key} after {after} {place}")
+                    .trim_end()
+                    .to_string()
+            }
+            SessionOp::RemoveQueueItems { keys } => format!("removeQueueItems {}", keys.join(" ")),
+            SessionOp::JumpToQueueItem { key } => format!("jumpToQueueItem {key}"),
+            SessionOp::SkipUnavailable { key } => format!("skipUnavailable {key}"),
+            SessionOp::PlayNext {
+                track_ids, keys, ..
+            } => {
+                format!("playNext ({} tracks)", track_ids.len() + keys.len())
+            }
+            SessionOp::AddToQueue {
+                track_ids, keys, ..
+            } => {
+                format!("addToQueue ({} tracks)", track_ids.len() + keys.len())
+            }
+            SessionOp::PlayLater {
+                track_ids, keys, ..
+            } => {
+                format!("playLater ({} tracks)", track_ids.len() + keys.len())
+            }
+            SessionOp::InsertTracks {
+                track_ids,
+                keys,
+                after,
+                in_group,
+                ..
+            } => {
+                let place = if *in_group { " in group" } else { "" };
+                format!(
+                    "insertTracks ({} tracks) after {after}{place}",
+                    track_ids.len() + keys.len()
+                )
+            }
+            other => serde_json::to_value(other)
+                .ok()
+                .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "op".into()),
+        }
     }
 
     /// Ops only the transport owner issues (they follow playback itself).
@@ -539,6 +795,16 @@ pub struct PlaylistEdit {
 // ---------------------------------------------------------------------------
 
 /// Everything that crosses the wire. Struct variants keep the JSON readable.
+/// Leave to create reports on the hosted coordinator (`POST /reports`,
+/// `docs/reports.md`), good until `expires_in_ms` after it was sent.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportGrant {
+    pub token: String,
+    pub expires_in_ms: u64,
+}
+
 #[typeshare]
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -803,6 +1069,21 @@ pub enum Msg {
     SettingsSync {
         settings: Vec<Setting>,
     },
+    /// Either direction. The song stash, merged LWW on `updatedAt` per entry id
+    /// (`crate::stash::merge`). Older builds drop it.
+    StashSync {
+        entries: Vec<StashEntry>,
+    },
+    /// Either direction. Snoozes, merged LWW on `updatedAt` per track id
+    /// (`crate::snooze::merge`). Older builds drop it.
+    SnoozeSync {
+        entries: Vec<Snooze>,
+    },
+    /// Either direction. Album resume points, merged LWW per album id
+    /// (`crate::album_resume::merge`). Older builds drop it.
+    AlbumResumeSync {
+        entries: Vec<AlbumResumeEntry>,
+    },
 
     // -- undo -----------------------------------------------------------
     /// Either direction. A session-tier undo entry shared with the session,
@@ -827,6 +1108,50 @@ pub enum Msg {
         items: Vec<LibraryItemState>,
         #[serde(default)]
         playlists: Vec<PlaylistEdit>,
+    },
+
+    // -- developer diagnostics -------------------------------------------
+    /// → room. Developer diagnostics: collect a bundle from every other
+    /// device in the room. The room answers for itself at once (a
+    /// [`Msg::DiagnosticsReply`] from [`diagnostics::ROOM`] that names the
+    /// devices it asked) and passes the request on to them with `from` set
+    /// to the sender. A device answers only while its own developer mode is
+    /// on. See [`crate::connect::diagnostics`]. Peers that do not know it
+    /// ignore it.
+    ///
+    /// [`diagnostics::ROOM`]: crate::connect::diagnostics::ROOM
+    DiagnosticsRequest {
+        request_id: String,
+        from: DeviceId,
+    },
+    /// → room, routed to `to`; or → client from the room (or the hosted
+    /// coordinator) itself. One part of an answer: `text` is part `part` of
+    /// `parts` (0-based), or `declined` says why there is none. The room
+    /// fills in `from` and `fromName` for a device's answer.
+    DiagnosticsReply {
+        request_id: String,
+        /// The answering device, or [`crate::connect::diagnostics::ROOM`] /
+        /// [`crate::connect::diagnostics::COORDINATOR`].
+        from: String,
+        #[serde(default)]
+        from_name: String,
+        to: DeviceId,
+        part: u32,
+        parts: u32,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        declined: Option<String>,
+        /// The room's own answer only: the devices it passed the request to.
+        #[serde(default)]
+        asked: Vec<DeviceInfo>,
+        /// The hosted coordinator's answer only (part 0), and only to an
+        /// account named with `--diagnostics-user` on a coordinator that
+        /// keeps reports: leave to save reports there. The room strips it
+        /// from everything it relays; a client takes it only from
+        /// [`crate::connect::diagnostics::COORDINATOR`]. See `docs/reports.md`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        report_grant: Option<ReportGrant>,
     },
 
     /// Anything this build does not know. Ignored.
@@ -872,8 +1197,13 @@ impl Msg {
         "scrobbleDedupeAnswer",
         "savedQueuesSync",
         "settingsSync",
+        "stashSync",
+        "snoozeSync",
+        "albumResumeSync",
         "undoEntryShared",
         "libraryEdited",
+        "diagnosticsRequest",
+        "diagnosticsReply",
         "unknown",
     ];
 
@@ -919,8 +1249,13 @@ impl Msg {
             Msg::ScrobbleDedupeAnswer { .. } => "scrobbleDedupeAnswer",
             Msg::SavedQueuesSync { .. } => "savedQueuesSync",
             Msg::SettingsSync { .. } => "settingsSync",
+            Msg::StashSync { .. } => "stashSync",
+            Msg::SnoozeSync { .. } => "snoozeSync",
+            Msg::AlbumResumeSync { .. } => "albumResumeSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
+            Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
+            Msg::DiagnosticsReply { .. } => "diagnosticsReply",
             Msg::Unknown => "unknown",
         }
     }
@@ -974,7 +1309,7 @@ pub fn merge_settings(ours: &[Setting], theirs: &[Setting]) -> (Vec<Setting>, bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{Platform, QueueMode, RepeatMode, SettingScope, TransportState};
+    use crate::api::{Platform, RepeatMode, SettingScope, TransportState};
 
     pub(crate) fn device(id: &str) -> DeviceInfo {
         DeviceInfo {
@@ -991,18 +1326,16 @@ mod tests {
 
     pub(crate) fn doc() -> SessionDocument {
         SessionDocument {
-            schema_version: 1,
+            schema_version: crate::session::SESSION_SCHEMA_VERSION,
             session_id: "s1".into(),
             scope: "srv|user".into(),
             revision: 3,
             updated_at: 10.0,
             context: None,
-            mode: QueueMode::Apple,
-            cursor: 0,
-            current: None,
             history: vec![],
-            insertions: vec![],
-            shuffle: None,
+            current: None,
+            upcoming: vec![],
+            shuffle: false,
             repeat: RepeatMode::Off,
             autoplay: false,
             transport: TransportState::default(),
@@ -1127,6 +1460,8 @@ mod tests {
             },
             Msg::SavedQueuesSync { queues: vec![] },
             Msg::SettingsSync { settings: vec![] },
+            Msg::StashSync { entries: vec![] },
+            Msg::AlbumResumeSync { entries: vec![] },
             Msg::LibraryEdited {
                 device_id: "a".into(),
                 items: vec![],
@@ -1190,6 +1525,9 @@ mod tests {
             document: doc(),
             saved_queues: vec![],
             settings: vec![],
+            stash: vec![],
+            snoozes: vec![],
+            album_resumes: vec![],
             devices: vec![],
             transport_lease: TransportLease::default(),
             last_stamp: None,
@@ -1288,11 +1626,10 @@ mod tests {
                 tracks: vec![],
             },
             label: id.into(),
-            cursor: 0,
-            current: None,
             history: vec![],
-            insertions: vec![],
-            shuffle: None,
+            current: None,
+            upcoming: vec![],
+            shuffle: false,
             repeat: RepeatMode::Off,
             position_ms: 0,
             pinned,
@@ -1368,6 +1705,98 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn insert_tracks_round_trips_from_the_command() {
+        let cmd = Command::InsertTracks {
+            server_id: "s".into(),
+            track_ids: vec!["t1".into(), "t2".into()],
+            keys: vec!["k".into()],
+            after: "a".into(),
+            in_group: true,
+        };
+        // The UI's JSON (variant camelCase, fields as declared), `keys` optional.
+        let ui = r#"{"type":"insertTracks","data":{"server_id":"s","track_ids":["t1","t2"],"after":"a","in_group":true}}"#;
+        let parsed: Command = serde_json::from_str(ui).unwrap();
+        assert!(matches!(
+            &parsed,
+            Command::InsertTracks { keys, in_group: true, .. } if keys.is_empty()
+        ));
+        let op = SessionOp::from_command(&cmd).unwrap();
+        assert_eq!(
+            op,
+            SessionOp::InsertTracks {
+                server_id: "s".into(),
+                track_ids: vec!["t1".into(), "t2".into()],
+                keys: vec!["k".into()],
+                after: "a".into(),
+                in_group: true,
+            }
+        );
+        let msg = WireMessage::new(Msg::Op {
+            base_revision: 1,
+            op: op.clone(),
+            device_id: "d".into(),
+            op_id: "o".into(),
+            epoch: None,
+            at: 1.0,
+            position_ms: 0,
+        });
+        let text = msg.encode().unwrap();
+        assert!(text.contains(r#""type":"insertTracks""#), "{text}");
+        assert!(text.contains(r#""in_group":true"#), "{text}");
+        assert_eq!(WireMessage::decode(&text).unwrap(), msg);
+        assert_eq!(op.summary(), "insertTracks (3 tracks) after a in group");
+    }
+
+    #[test]
+    fn op_track_lists_are_cut_to_the_queue_cap() {
+        use crate::session::{HISTORY_CAP, MAX_QUEUE_LEN};
+        let n = MAX_QUEUE_LEN + 5000;
+        let tracks: Vec<String> = (0..n).map(|i| format!("t{i}")).collect();
+        let d = doc();
+        let op = SessionOp::PlayTracks {
+            server_id: "s".into(),
+            track_ids: tracks.clone(),
+            start_index: 9000,
+            label: "All".into(),
+            shuffle: false,
+            save_outgoing: true,
+            start_position_ms: 0,
+        }
+        .within_caps(&d);
+        let SessionOp::PlayTracks {
+            track_ids,
+            start_index,
+            ..
+        } = op
+        else {
+            panic!()
+        };
+        assert_eq!(track_ids.len(), MAX_QUEUE_LEN);
+        assert_eq!(start_index as usize, HISTORY_CAP);
+        assert_eq!(track_ids[start_index as usize], "t9000");
+        let op = SessionOp::PlayLater {
+            server_id: "s".into(),
+            track_ids: tracks,
+            keys: vec![],
+        }
+        .within_caps(&d);
+        assert!(
+            matches!(op, SessionOp::PlayLater { track_ids, .. } if track_ids.len() == MAX_QUEUE_LEN)
+        );
+        // Short lists are untouched.
+        let small = SessionOp::PlayTracks {
+            server_id: "s".into(),
+            track_ids: vec!["a".into(), "b".into()],
+            start_index: 1,
+            label: "x".into(),
+            shuffle: true,
+            save_outgoing: true,
+            start_position_ms: 0,
+        };
+        assert_eq!(small.clone().within_caps(&d), small);
     }
 }
 

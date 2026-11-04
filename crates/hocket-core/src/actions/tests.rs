@@ -30,6 +30,7 @@ fn state() -> StateView {
         has_session: true,
         has_current: true,
         current_track_id: Some("cur".into()),
+        queue_section: true,
         ..Default::default()
     }
 }
@@ -55,7 +56,10 @@ fn registry_is_well_formed() {
     for required in [
         "play",
         "playNext",
+        "addToQueue",
         "playLater",
+        "clearQueueGroup",
+        "stashQueueGroup",
         "addToPlaylist",
         "removeFromPlaylist",
         "removeFromQueue",
@@ -165,11 +169,11 @@ fn shortcut_rebinding_and_conflicts() {
             other_action_id: "openCommandPalette".into()
         })
     );
-    r.set_shortcut("shuffle", Some("ctrl+shift+s")).unwrap();
-    assert_eq!(r.shortcut_for("shuffle").as_deref(), Some("Ctrl+Shift+S"));
-    assert_eq!(r.action_for_chord("Ctrl+Shift+S"), Some("shuffle"));
+    r.set_shortcut("shuffle", Some("ctrl+shift+u")).unwrap();
+    assert_eq!(r.shortcut_for("shuffle").as_deref(), Some("Ctrl+Shift+U"));
+    assert_eq!(r.action_for_chord("Ctrl+Shift+U"), Some("shuffle"));
     // Rebinding an action to its own chord is fine; unbinding frees the chord.
-    r.set_shortcut("shuffle", Some("Ctrl+Shift+S")).unwrap();
+    r.set_shortcut("shuffle", Some("Ctrl+Shift+U")).unwrap();
     r.set_shortcut("openCommandPalette", None).unwrap();
     assert_eq!(r.action_for_chord("Ctrl+K"), None);
     r.set_shortcut("shuffle", Some("Ctrl+K")).unwrap();
@@ -198,7 +202,7 @@ fn shortcut_rebinding_and_conflicts() {
 #[test]
 fn customisation_round_trips_across_platforms() {
     let mut linux = ActionRegistry::new(Platform::Linux);
-    linux.set_shortcut("shuffle", Some("Mod+S")).unwrap();
+    linux.set_shortcut("shuffle", Some("Mod+U")).unwrap();
     linux.set_shortcut("undo", None).unwrap();
     linux.set_order(
         Surface::MediaSession,
@@ -212,7 +216,7 @@ fn customisation_round_trips_across_platforms() {
     linux.set_order(Surface::Sidebar, linux.default_order(Surface::Sidebar));
     let json = linux.to_json();
     let c: ActionCustomisation = serde_json::from_str(&json).unwrap();
-    assert_eq!(c.shortcuts["shuffle"].as_deref(), Some("Mod+S"));
+    assert_eq!(c.shortcuts["shuffle"].as_deref(), Some("Mod+U"));
     assert_eq!(c.shortcuts["undo"], None);
     assert_eq!(c.orders["mediaSession"], vec!["togglePlay", "next"]);
     assert!(
@@ -222,7 +226,7 @@ fn customisation_round_trips_across_platforms() {
 
     let mut mac = ActionRegistry::new(Platform::MacOs);
     mac.from_json(&json).unwrap();
-    assert_eq!(mac.shortcut_for("shuffle").as_deref(), Some("Cmd+S"));
+    assert_eq!(mac.shortcut_for("shuffle").as_deref(), Some("Cmd+U"));
     assert_eq!(mac.shortcut_for("undo"), None);
     assert_eq!(mac.order(Surface::MediaSession), vec!["togglePlay", "next"]);
     assert_eq!(mac.to_json(), json);
@@ -260,10 +264,13 @@ fn version_one_orders_gain_the_library() {
             "goToArtist",
             "pinToLibrary",
             "unpinFromLibrary",
-            "addToPlaylist"
+            "addToPlaylist",
+            "stash",
+            "snooze",
+            "unsnooze"
         ]
     );
-    // Written back as version 2: removing the Library again sticks.
+    // Written back as the current version: removing the Library again sticks.
     r.set_order(
         Surface::Sidebar,
         vec!["navigateHome".into(), "navigateAlbums".into()],
@@ -277,15 +284,44 @@ fn version_one_orders_gain_the_library() {
 }
 
 #[test]
+fn one_song_is_not_offered_shuffle() {
+    let r = ActionRegistry::new(Platform::Linux);
+    let s = state();
+    let offered = |t: &ActionTarget| {
+        r.actions_for(Surface::ContextMenu, t, &s)
+            .iter()
+            .any(|d| d.id == "playShuffled")
+    };
+    assert!(!offered(&tracks(&["a"])));
+    assert!(offered(&tracks(&["a", "b"])));
+    assert!(offered(&ActionTarget::Albums {
+        ids: vec!["x".into()]
+    }));
+}
+
+#[test]
 fn surfaces_filter_and_order() {
     let mut r = ActionRegistry::new(Platform::Linux);
     let s = state();
     let menu = r.actions_for(Surface::ContextMenu, &tracks(&["a", "b"]), &s);
     let ids: Vec<&str> = menu.iter().map(|d| d.id.as_str()).collect();
     assert_eq!(
-        &ids[..4],
-        &["play", "playShuffled", "playNext", "playLater"]
+        &ids[..5],
+        &[
+            "play",
+            "playShuffled",
+            "playNext",
+            "addToQueue",
+            "playLater"
+        ]
     );
+    // With the Queue section off, "Add to queue" leaves the menu.
+    let off = StateView {
+        queue_section: false,
+        ..s.clone()
+    };
+    let menu = r.actions_for(Surface::ContextMenu, &tracks(&["a", "b"]), &off);
+    assert!(!menu.iter().any(|d| d.id == "addToQueue"));
     assert!(ids.contains(&"rate3") && ids.contains(&"download") && ids.contains(&"addToPlaylist"));
     assert!(!ids.contains(&"removeFromQueue"), "not for tracks");
     assert!(
@@ -299,7 +335,13 @@ fn surfaces_filter_and_order() {
     assert!(menu.iter().all(|d| d.enabled
         || matches!(
             d.id.as_str(),
-            "removeFromPlaylist" | "goToAlbum" | "goToArtist" | "pinToLibrary" | "unpinFromLibrary"
+            "removeFromPlaylist"
+                | "goToAlbum"
+                | "goToArtist"
+                | "pinToLibrary"
+                | "unpinFromLibrary"
+                | "preview"
+                | "unsnooze"
         )));
 
     let queue_menu = r.actions_for(
@@ -396,7 +438,8 @@ fn handlers_map_to_commands() {
             track_ids: vec!["a".into(), "b".into()],
             start_index: 0,
             label: "Selection".into(),
-            shuffle: false
+            shuffle: false,
+            start_position_ms: 0,
         }]
     );
     let c = r
@@ -414,6 +457,7 @@ fn handlers_map_to_commands() {
             assert_eq!(args.context.kind, ContextKind::Album { id: "al".into() });
             assert_eq!(args.context.tracks, vec!["al-1", "al-2"]);
             assert!(args.shuffle);
+            assert_eq!(args.start_index, None);
         }
         other => panic!("{other:?}"),
     }
@@ -428,6 +472,28 @@ fn handlers_map_to_commands() {
         )
         .unwrap();
     assert!(matches!(&c[0], Command::PlayTracks { track_ids, .. } if track_ids.len() == 4));
+    for (action, shuffle) in [("play", false), ("playShuffled", true)] {
+        let c = r
+            .commands(
+                action,
+                &ActionTarget::Playlists {
+                    ids: vec!["late".into()],
+                },
+                &s,
+                &res,
+            )
+            .unwrap();
+        match &c[0] {
+            Command::PlayContext { args } => {
+                assert_eq!(args.shuffle, shuffle, "{action}");
+                assert_eq!(
+                    args.start_index, None,
+                    "{action} starts at the top, so a snoozed first song stays out"
+                );
+            }
+            other => panic!("{action}: {other:?}"),
+        }
+    }
     assert_eq!(
         r.commands(
             "play",
@@ -469,50 +535,76 @@ fn handlers_map_to_commands() {
         .unwrap(),
         vec![Command::PlayNext {
             server_id: "srv".into(),
-            track_ids: vec!["track-1".into(), "track-2".into()]
+            track_ids: vec![],
+            keys: vec!["key-1".into(), "key-2".into()]
         }]
     );
-    // Items still to play move up instead of being queued twice (#37): removed in one op (their
-    // keys may be index-based) and queued again behind the played ones.
+    // Queue rows travel by key: the reducer moves the ones still to play and
+    // copies the ones already played.
     assert_eq!(
         r.commands(
-            "playNext",
+            "addToQueue",
             &ActionTarget::QueueItems {
-                keys: vec!["key-up1".into(), "key-1".into(), "key-up2".into()]
+                keys: vec!["key-up1".into(), "key-1".into()]
             },
             &s,
             &res
         )
         .unwrap(),
-        vec![
-            Command::RemoveQueueItems {
-                keys: vec!["key-up1".into(), "key-up2".into()]
-            },
-            Command::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["track-1".into(), "track-up1".into(), "track-up2".into()]
-            },
-        ]
+        vec![Command::AddToQueue {
+            server_id: "srv".into(),
+            track_ids: vec![],
+            keys: vec!["key-up1".into(), "key-1".into()]
+        }]
     );
     assert_eq!(
         r.commands(
-            "playNext",
-            &ActionTarget::QueueItems {
-                keys: vec!["key-up1".into()]
+            "addToQueue",
+            &ActionTarget::Tracks {
+                ids: vec!["t9".into()]
             },
             &s,
             &res
         )
         .unwrap(),
-        vec![
-            Command::RemoveQueueItems {
-                keys: vec!["key-up1".into()]
+        vec![Command::AddToQueue {
+            server_id: "srv".into(),
+            track_ids: vec!["t9".into()],
+            keys: vec![]
+        }]
+    );
+    // "Add to queue" is offered only with the Queue section setting on.
+    let off = StateView {
+        queue_section: false,
+        ..s.clone()
+    };
+    assert!(r
+        .commands(
+            "addToQueue",
+            &ActionTarget::Tracks {
+                ids: vec!["t9".into()]
             },
-            Command::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["track-up1".into()]
-            },
-        ]
+            &off,
+            &res
+        )
+        .is_err());
+    // The group's actions need a group.
+    assert!(r
+        .commands("clearQueueGroup", &ActionTarget::None, &s, &res)
+        .is_err());
+    let grouped = StateView {
+        queue_group_count: 2,
+        ..s.clone()
+    };
+    assert_eq!(
+        r.commands("clearQueueGroup", &ActionTarget::None, &grouped, &res)
+            .unwrap(),
+        vec![Command::ClearQueueGroup]
+    );
+    assert_eq!(
+        r.commands("stashQueueGroup", &ActionTarget::None, &grouped, &res)
+            .unwrap(),
+        vec![Command::StashQueueGroup]
     );
     assert_eq!(
         r.commands(
@@ -526,7 +618,8 @@ fn handlers_map_to_commands() {
         .unwrap(),
         vec![Command::PlayLater {
             server_id: "srv".into(),
-            track_ids: vec!["pl-a".into()]
+            track_ids: vec!["pl-a".into()],
+            keys: vec![]
         }]
     );
     assert_eq!(
@@ -862,6 +955,70 @@ fn media_session_buttons_follow_customisation() {
     assert_eq!(r.media_session_actions(&StateView::default()), vec![]);
 }
 
+/// Stash is a media-session button only after the user turns it on. It stays
+/// offered once the track is already stashed: the tap is a no-op, not an unstash.
+#[test]
+fn stash_is_off_the_media_session_until_chosen() {
+    let mut r = ActionRegistry::new(Platform::Android);
+    let s = state();
+    assert!(!r
+        .media_session_actions(&s)
+        .contains(&MediaSessionAction::Stash));
+    r.set_order(
+        Surface::MediaSession,
+        vec!["togglePlay".into(), "stash".into()],
+    );
+    let a = r.media_session_actions(&s);
+    assert!(a.contains(&MediaSessionAction::Stash));
+    assert_eq!(a[0], MediaSessionAction::Play);
+}
+
+/// Android shows about two custom buttons. Stash starts after shuffle, repeat
+/// and love, so the user-edit path moves it up. Saving that order and loading
+/// it again does not: a reload has no "previous" order and must not treat the
+/// saved place as a fresh opt-in.
+#[test]
+fn turning_stash_on_puts_it_among_the_buttons_android_shows() {
+    let media = [
+        "previous",
+        "togglePlay",
+        "next",
+        "shuffle",
+        "repeat",
+        "love",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    let with_stash_last = {
+        let mut ids = media.clone();
+        ids.push("stash".into());
+        ids
+    };
+    let shown = show_new_stash(&media, with_stash_last.clone());
+    assert_eq!(
+        shown,
+        [
+            "previous",
+            "togglePlay",
+            "next",
+            "stash",
+            "shuffle",
+            "repeat",
+            "love"
+        ]
+        .map(str::to_string)
+        .to_vec()
+    );
+
+    let mut r = ActionRegistry::new(Platform::Android);
+    r.set_order(Surface::MediaSession, with_stash_last.clone());
+    assert_eq!(r.order(Surface::MediaSession), with_stash_last);
+    let saved = r.to_json();
+    let mut loaded = ActionRegistry::new(Platform::Android);
+    loaded.from_json(&saved).unwrap();
+    assert_eq!(loaded.order(Surface::MediaSession), with_stash_last);
+}
+
 /// The Library place has its own action (it used to borrow `navigateAlbums`); the desktop's
 /// default sidebar is Home and the Library, with the pins under them.
 #[test]
@@ -990,4 +1147,49 @@ fn library_pins_toggle_through_the_setting() {
         .actions_for(Surface::ContextMenu, &saved, &s)
         .iter()
         .any(|d| d.id == "pinToLibrary"));
+}
+
+/// A version-2 context menu gains Stash after Add to playlist (or at the end without one), once.
+#[test]
+fn version_two_orders_gain_the_stash() {
+    let mut r = ActionRegistry::new(Platform::Linux);
+    r.from_json(
+        r#"{"version":2,"orders":{"contextMenu":["playNext","addToPlaylist","love"],"nowPlaying":["love"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        r.order(Surface::ContextMenu),
+        vec![
+            "playNext",
+            "addToPlaylist",
+            "stash",
+            "love",
+            "snooze",
+            "unsnooze"
+        ]
+    );
+    assert_eq!(r.order(Surface::NowPlaying), vec!["love", "stash"]);
+    r.set_order(Surface::ContextMenu, vec!["playNext".into()]);
+    let mut again = ActionRegistry::new(Platform::Linux);
+    again.from_json(&r.to_json()).unwrap();
+    assert_eq!(again.order(Surface::ContextMenu), vec!["playNext"]);
+}
+
+/// A chord the user had bound before the stash took it by default stays theirs; the stash action
+/// starts unbound, and that sticks once saved.
+#[test]
+fn user_chords_win_over_the_stash_defaults() {
+    let mut r = ActionRegistry::new(Platform::Linux);
+    r.from_json(r#"{"version":2,"shortcuts":{"shuffle":"Mod+S"}}"#)
+        .unwrap();
+    assert_eq!(r.action_for_chord("Ctrl+S"), Some("shuffle"));
+    assert_eq!(r.shortcut_for("stash"), None);
+    assert_eq!(r.action_for_chord("Ctrl+Shift+S"), Some("openStash"));
+    let mut again = ActionRegistry::new(Platform::Linux);
+    again.from_json(&r.to_json()).unwrap();
+    assert_eq!(again.action_for_chord("Ctrl+S"), Some("shuffle"));
+    assert_eq!(again.shortcut_for("stash"), None);
+    // Without an older save, the defaults hold.
+    let fresh = ActionRegistry::new(Platform::Linux);
+    assert_eq!(fresh.action_for_chord("Ctrl+S"), Some("stash"));
 }

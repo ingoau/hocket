@@ -148,6 +148,9 @@ impl AutoplayPick {
                 score: self.score,
             },
             unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: 0,
         }
     }
 

@@ -25,7 +25,7 @@ export function Artists() {
   }, [serverId, sort, desc]);
   const { rows, total, onNeedRange } = usePagedGrid<Artist>(fetchPage, [serverId, sort, desc], 120);
   const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: albumCount(a), coverArt: a.coverArt, round: true } : undefined));
-  const playArtist = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label, sort: "default", tracks: [] }, startIndex: 0, shuffle: true, saveOutgoing: true } } });
+  const playArtist = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: true, saveOutgoing: true } } });
   const sorter = <SortMenu list="artists" value={order} onChange={(v) => { setOrder(v); saveListSort("artists", v); }} testId="artists-sort" />;
   return (
     <div className="view" data-testid="view-artists">

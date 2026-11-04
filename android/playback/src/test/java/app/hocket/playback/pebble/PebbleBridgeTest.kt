@@ -4,9 +4,15 @@ import android.os.SystemClock
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
+import app.hocket.core.CoreKind
+import app.hocket.core.DevLog
 import app.hocket.core.api.Command
+import app.hocket.core.api.CommandStashAddInner
 import app.hocket.core.api.Event
+import app.hocket.core.api.Query
+import app.hocket.core.api.QueryResult
 import app.hocket.core.api.EventMediaSessionInner
 import app.hocket.core.api.EventSettingChangedInner
 import app.hocket.core.api.EventStartedInner
@@ -29,6 +35,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -119,6 +126,30 @@ class PebbleBridgeTest {
     }
 
     @Test
+    fun theLinkIsLoggedForDeveloperDiagnostics() = runTest {
+        // DevLog's ring is process-wide: only what this test logs counts.
+        val marker = "marker-${java.util.UUID.randomUUID()}"
+        DevLog.append("info", "kotlin/Test", marker)
+        val b = bridge()
+        b.onEvent(session(state(0)))
+        repeat(PebbleBridge.SEND_RETRIES + 1) { answers += Delivery.Failed }
+        b.onMessage(hello())
+        advanceTimeBy(5_000)
+        runCurrent()
+        b.appClosed()
+        // What the diagnostics page shows as the core log.
+        val log = DevLog.recent().substringAfter(marker).lines().filter { "kotlin/Pebble:" in it }
+        assertTrue(log.toString(), log.any { "<- hello: watchapp" in it && "proto ${PebbleProtocol.PROTO}" in it })
+        assertTrue(log.toString(), log.any { "-> hello-reply not delivered after ${PebbleBridge.SEND_RETRIES + 1} attempts" in it })
+        assertTrue(log.toString(), log.any { "DEBUG" in it && "-> now" in it })
+        assertTrue(log.toString(), log.any { "watchapp closed" in it })
+        b.onMessage(mapOf(Key.TYPE to PebbleDictionaryItem.UInt8(Type.LIST_REQ.toUByte()), Key.PATH to PebbleDictionaryItem.Text("search:secret words")))
+        runCurrent()
+        assertTrue(DevLog.recent().substringAfter(marker).contains("search:…"))
+        assertTrue(!DevLog.recent().contains("secret words"))
+    }
+
+    @Test
     fun aNowThatNeverArrivesIsPushedAgainOnTheNextTick() = runTest {
         val b = bridge()
         b.onEvent(session(state(0)))
@@ -189,5 +220,32 @@ class PebbleBridgeTest {
         println("Now messages in 10 min of playback: ${count(Type.NOW)} (elapsed ${SystemClock.elapsedRealtime()})")
         assertEquals(PebbleBridge.NOW_RESYNC_MS, 60_000L)
         assertEquals(10, count(Type.NOW))
+    }
+
+    @Test
+    fun stashAddsThePlayingTrackWithoutToggling() = runTest {
+        val dispatched = mutableListOf<Command>()
+        val b = PebbleBridge(
+            ApplicationProvider.getApplicationContext(),
+            core = {
+                object : CoreHandle {
+                    override val kind = CoreKind.Fake
+                    override fun dispatch(command: Command) { dispatched += command }
+                    override suspend fun query(query: Query): QueryResult = error("unused")
+                    override val events = MutableSharedFlow<Event>()
+                    override fun close() = Unit
+                }
+            },
+            serverId = { null },
+            scope = backgroundScope,
+            transmit = { sent += it; Delivery.Sent },
+        )
+        b.onEvent(session(state(0)))
+        b.onMessage(mapOf(
+            Key.TYPE to PebbleDictionaryItem.UInt8(Type.CMD.toUByte()),
+            Key.CMD to PebbleDictionaryItem.UInt8(PebbleProtocol.Cmd.STASH.toUByte()),
+        ))
+        runCurrent()
+        assertEquals(listOf<Command>(Command.StashAdd(CommandStashAddInner(listOf("t1")))), dispatched)
     }
 }

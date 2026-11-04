@@ -28,6 +28,8 @@ class ServerSetupFlowTest {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").assertIsDisplayed()
         compose.onNodeWithTag("setup.connect").performScrollTo().assertIsDisplayed()
@@ -35,8 +37,11 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.username").performTextInput("ada")
         compose.onNodeWithTag("setup.password").performTextInput("secret")
         compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
-        // A server that meets the floor takes us into the shell: Home appears.
+        // A server that meets the floor shows its summary, then Continue takes us into the shell: Home appears.
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 0 }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.continue") == 1 }
+        compose.onNodeWithTag("setup.continue").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
         compose.onNodeWithTag("home.screen").assertIsDisplayed()
     }
 
@@ -45,6 +50,8 @@ class ServerSetupFlowTest {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").performTextInput("https://old.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
@@ -52,6 +59,9 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.tooOld") == 1 }
         compose.onNodeWithTag("setup.tooOld").performScrollTo().assertIsDisplayed()
+        // The only way on from a server that is too old: another server, back on the form.
+        compose.onNodeWithTag("setup.differentServer").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         // Still on setup: the URL field is there, not the shell.
         compose.onNodeWithTag("setup.url").performScrollTo().assertIsDisplayed()
     }
@@ -61,6 +71,8 @@ class ServerSetupFlowTest {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
@@ -84,6 +96,7 @@ class ServerSetupFlowTest {
                 }
             }
         }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
         compose.onNodeWithTag("setup.password").performTextInput("secret")
@@ -100,6 +113,8 @@ class ServerSetupFlowTest {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
         assertEquals(0, compose.onAllNodesWithTagCount("setup.cleartextWarning"))

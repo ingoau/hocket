@@ -14,6 +14,7 @@ sealed interface Route {
     @Serializable data object Artists : Route
     @Serializable data object Playlists : Route
     @Serializable data object Songs : Route
+    @Serializable data object Snoozed : Route
     @Serializable data object Genres : Route
     @Serializable data object AvailableOffline : Route
     @Serializable data object Filters : Route
@@ -23,7 +24,6 @@ sealed interface Route {
     @Serializable data class Artist(val id: String) : Route
     @Serializable data class Playlist(val id: String) : Route
     @Serializable data class Genre(val name: String) : Route
-    @Serializable data object SavedQueues : Route
     @Serializable data object AudioSettings : Route
     @Serializable data object TranscodingSettings : Route
     @Serializable data object ConnectSettings : Route

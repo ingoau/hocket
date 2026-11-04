@@ -11,12 +11,12 @@ use crate::api::*;
 use crate::connect::engine::{
     DocChange, Engine, EngineConfig, Input, Output, PersistedConnectState,
 };
-use crate::connect::session_adapter::TunableReducer;
+use crate::connect::session_adapter::RealReducer;
 use crate::connect::wire::{scope_key, SessionOp, TransportCommand};
 use crate::core::actor::{Actor, AUTOPLAY_BATCH};
 use crate::core::state::SavedPosition;
 use crate::session::reducer::{
-    derive, derive_window, reduce, upcoming_context, QueueOp, ReduceCtx, QUEUE_VIEW_UPCOMING,
+    derive_range, derive_window, reduce, QueueOp, ReduceCtx, QUEUE_VIEW_AFTER, QUEUE_VIEW_BEFORE,
 };
 use crate::session::{saved, Effect};
 use crate::undo::{SessionUndo, UndoAction, UndoTier};
@@ -29,19 +29,12 @@ pub(crate) struct DbResolver<'a> {
 impl Resolver for DbResolver<'_> {
     fn track_for_key(&self, key: &QueueKey) -> Option<TrackId> {
         let doc = self.actor.engine.as_ref()?.document();
-        if let Some(c) = &doc.current {
-            if &c.key == key {
-                return Some(c.track_id.clone());
-            }
-        }
-        for i in doc.history.iter().chain(doc.insertions.iter()) {
-            if &i.key == key {
-                return Some(i.track_id.clone());
-            }
-        }
-        upcoming_context(doc)
+        doc.history
+            .iter()
+            .chain(doc.current.iter())
+            .chain(doc.upcoming.iter())
             .find(|i| &i.key == key)
-            .map(|i| i.track_id)
+            .map(|i| i.track_id.clone())
     }
 
     fn is_upcoming(&self, key: &QueueKey) -> bool {
@@ -49,7 +42,7 @@ impl Resolver for DbResolver<'_> {
             return false;
         };
         let doc = e.document();
-        doc.insertions.iter().any(|i| &i.key == key) || upcoming_context(doc).any(|i| &i.key == key)
+        doc.upcoming.iter().any(|i| &i.key == key)
     }
 
     fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
@@ -119,7 +112,10 @@ impl Actor {
             .settings
             .get_bool(crate::settings::keys::CONNECT_LAN_DISCOVERY)
             && self.cfg.coordinator_listen.is_none();
-        let reducer = TunableReducer::shared(self.reducer_policy.clone());
+        let reducer = self
+            .reducer_override
+            .clone()
+            .unwrap_or_else(RealReducer::shared);
         let mut engine = Engine::new(cfg, self.clock.clone(), reducer, doc.clone(), sync_base);
         // The scrobble dedupe log survives restarts (review connect #16).
         engine.restore_known_scrobbled(known_scrobbled);
@@ -138,6 +134,9 @@ impl Actor {
                 self.engine_input(Input::SettingChanged(s));
             }
         }
+        self.load_stash();
+        self.load_snoozes();
+        self.load_album_resumes();
         // Restore the resume point: the last known item and position, dormant
         // (never auto-resume on start).
         if let Ok(Some(pos)) = self
@@ -165,6 +164,7 @@ impl Actor {
     /// reactions queue.
     pub(crate) fn engine_input(&mut self, input: Input) {
         self.queued_inputs.push_back(input);
+        let base_before = self.engine.as_ref().and_then(|e| e.sync_base().cloned());
         let mut guard = 0;
         while let Some(input) = self.queued_inputs.pop_front() {
             let outs = match &mut self.engine {
@@ -179,6 +179,14 @@ impl Actor {
                 self.log("error", "engine reaction loop did not converge");
                 self.queued_inputs.clear();
                 break;
+            }
+        }
+        // An ack for our own op moves the sync point without changing the
+        // document: save it too, or after a restart the next fast-forward
+        // misses and ops made before rejoining are filed and replaced.
+        if let Some(e) = &self.engine {
+            if e.sync_base() != base_before.as_ref() {
+                self.mark_doc_dirty();
             }
         }
     }
@@ -206,12 +214,9 @@ impl Actor {
         // Same reducer, same document: the effects are exactly what the
         // engine's apply will produce (keys differ, the document tells us those).
         let effects = crate::connect::session_adapter::to_queue_op(&op).and_then(|qop| {
-            let (history_cap, saved) = self.reducer_policy.get();
             let ctx = ReduceCtx {
                 now: engine.now_session_ms(),
                 position_ms: self.playback.position_now(self.now()),
-                history_cap,
-                saved,
                 entropy: self.entropy.as_ref(),
             };
             match reduce(&before, qop, &ctx) {
@@ -226,9 +231,18 @@ impl Actor {
             self.toast("That doesn't apply right now", None);
             return false;
         }
+        let album_ended = effects.as_ref().is_some_and(|fx| {
+            fx.iter()
+                .any(|e| matches!(e, Effect::Stopped | Effect::NeedsAutoplay))
+        });
         self.pending_effects = effects;
         self.engine_input(Input::LocalOp { op });
         self.pending_effects = None;
+        // Ending the queue often leaves the document where it was (the last track stays
+        // current), so there is no document-changed event to clear the resume point from.
+        if album_ended {
+            self.finish_album_resume();
+        }
         true
     }
 
@@ -241,12 +255,9 @@ impl Actor {
             return false;
         };
         let before = engine.document().clone();
-        let (history_cap, saved) = self.reducer_policy.get();
         let ctx = ReduceCtx {
             now: engine.now_session_ms(),
             position_ms: self.playback.position_now(self.now()),
-            history_cap,
-            saved,
             entropy: self.entropy.as_ref(),
         };
         let (document, effects) = match reduce(&before, op, &ctx) {
@@ -312,11 +323,33 @@ impl Actor {
         }
     }
 
+    /// The saved queues the UIs show: pinned ones and as many recent
+    /// unpinned ones as the `queue.savedCap` setting says (the document
+    /// keeps up to the protocol's [`saved::MAX_CAP`]).
+    pub(crate) fn visible_saved_queues(&self) -> Vec<SavedQueue> {
+        self.doc()
+            .map(|d| self.visible_of(&d.saved_queues))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn visible_of(&self, list: &[SavedQueue]) -> Vec<SavedQueue> {
+        let cap = self
+            .settings
+            .get_i64(crate::settings::keys::QUEUE_SAVED_CAP)
+            .clamp(0, i64::from(saved::MAX_CAP)) as u32;
+        saved::visible(list, cap)
+    }
+
     /// A public queue command: undo snapshot around the op.
     pub(crate) fn queue_command(&mut self, cmd: Command) {
-        let Some(op) = SessionOp::from_command(&cmd) else {
+        let Some(mut op) = SessionOp::from_command(&cmd) else {
             return;
         };
+        // Whether Play Next starts or joins the "Next in queue" group is the
+        // Queue section setting's call, made here so every replica agrees.
+        if let SessionOp::PlayNext { queued, .. } = &mut op {
+            *queued = self.settings.get_bool(crate::settings::keys::QUEUE_SECTION);
+        }
         let label = command_label(&cmd);
         self.undoable_op(op, &label, command_kind(&cmd));
     }
@@ -392,13 +425,12 @@ impl Actor {
             Output::StopListener => self.io_stop_listener(),
             Output::Advertise(a) => self.io_advertise(a),
             Output::VerifyCredential { peer, credential } => self.io_verify(peer, credential),
-            Output::DocumentChanged { document, cause } => {
-                self.on_document_changed(document, cause)
-            }
-            Output::TransportChanged { transport } => {
-                self.last_transport = transport;
-                self.emit_transport();
-            }
+            Output::DocumentChanged {
+                document,
+                cause,
+                start_position_ms,
+            } => self.on_document_changed(document, cause, start_position_ms),
+            Output::TransportChanged { .. } => self.emit_transport(),
             Output::LeaseChanged {
                 owns,
                 detached,
@@ -483,6 +515,9 @@ impl Actor {
                 }
             }
             Output::SettingsMerged(list) => self.on_settings_merged(list),
+            Output::StashMerged(list) => self.on_stash_merged(list),
+            Output::SnoozesMerged(list) => self.on_snoozes_merged(list),
+            Output::AlbumResumeMerged(list) => self.on_album_resume_merged(list),
             Output::UndoEntryReceived {
                 entry,
                 before_revision: _,
@@ -507,6 +542,10 @@ impl Actor {
                 items,
                 playlists,
             } => self.on_library_edit_received(from, items, playlists),
+            Output::DiagnosticsRequested { request_id, from } => {
+                self.on_diagnostics_requested(request_id, from)
+            }
+            Output::DiagnosticsReply(part) => self.on_diagnostics_reply(part),
             Output::ReplicaChanged(_) => {}
             Output::Log { level, message } => self.log(level, message),
         }
@@ -514,7 +553,12 @@ impl Actor {
 
     // -- document changes -------------------------------------------------------
 
-    fn on_document_changed(&mut self, document: SessionDocument, cause: DocChange) {
+    fn on_document_changed(
+        &mut self,
+        document: SessionDocument,
+        cause: DocChange,
+        start_position_ms: Ms,
+    ) {
         if cause != DocChange::Local {
             self.on_offline_clear_refused(&document);
         }
@@ -526,7 +570,31 @@ impl Actor {
         let old_key = old
             .as_ref()
             .and_then(|d| d.current.as_ref().map(|c| c.key.clone()));
-        let new_key = document.current.as_ref().map(|c| c.key.clone());
+        let mut new_key = document.current.as_ref().map(|c| c.key.clone());
+        // The room's document can name the item playing here by another key
+        // without anyone moving the queue: a room running another build keys
+        // context items differently, so adopting its document (a resync, a
+        // rollback after a reject) re-keys the current item. Same track, no
+        // op asked for a change: keep playing it where it is.
+        let rekeyed = matches!(cause, DocChange::Sync | DocChange::Rollback)
+            && new_key != old_key
+            && old_key.is_some()
+            && self.playback.doc_key == old_key
+            && old
+                .as_ref()
+                .and_then(|d| d.current.as_ref())
+                .map(|c| &c.track_id)
+                == document.current.as_ref().map(|c| &c.track_id);
+        if rekeyed {
+            tracing::debug!(target: "hocket::player", from = ?old_key, to = ?new_key, "the room re-keyed the current item: keeping it playing");
+            if let Some((k, _)) = self.playback.restore_position.as_mut() {
+                if Some(&*k) == old_key.as_ref() {
+                    *k = new_key.clone().unwrap_or_default();
+                }
+            }
+            self.playback.doc_key = new_key.clone();
+            new_key = old_key.clone();
+        }
         let owns = self.owns_transport();
         // As in `transport_command`: a lease naming this device that it does
         // not hold is no owner, and new music started here claims it.
@@ -558,12 +626,44 @@ impl Actor {
                 _ => {}
             }
         }
+        // A remote `PlayTracks` carries its start time on the op. The document
+        // does not, and a remote change has no reducer effects, so without
+        // this the device that owns playback would load at the beginning.
+        if restore_position.is_none() && start_position_ms > 0 {
+            restore_position = Some(start_position_ms);
+        }
         for key in skipped {
             let name = self.track_title_for_key(&document, &key);
             self.player_notice(
                 PlayerNoticeCode::CouldNotPlaySkipped,
                 format!("Couldn't play {name}, skipped"),
                 Some(name),
+            );
+        }
+
+        let key_changed = new_key != old_key;
+        // A resume started on another device carries the position in the op. This device
+        // applies that op with no local effects, so the position is handed across here.
+        let remote_at = if cause == DocChange::Remote {
+            self.engine.as_mut().and_then(|e| e.take_resume_load_ms())
+        } else {
+            None
+        };
+        let resume_at = if key_changed {
+            self.take_pending_resume(document.current.as_ref().map(|c| c.track_id.as_str()))
+        } else {
+            None
+        };
+        // A change another device sent (Next, a tapped track, a new album) while this device
+        // plays is recorded here too: the outgoing track is still loaded, so its position is
+        // the real one. The device that sent it does not play and records nothing.
+        if cause == DocChange::Local || (cause == DocChange::Remote && owns) {
+            self.note_album_transition(
+                old.as_ref(),
+                &document,
+                key_changed,
+                stopped || needs_autoplay,
+                resume_at.or(remote_at),
             );
         }
 
@@ -577,6 +677,8 @@ impl Actor {
                         .filter(|(k, _)| *k == item.key)
                         .map(|(_, p)| p)
                         .or(restore_position)
+                        .or(resume_at)
+                        .or(remote_at)
                         .unwrap_or(0);
                     if owns {
                         let keep_playing = match cause {
@@ -592,13 +694,14 @@ impl Actor {
                         self.playback.restore_position = Some((item.key.clone(), position));
                         self.queue_input(Input::ClaimTransport { takeover: false });
                     } else {
-                        // Another device plays; we only render. Whatever this
-                        // backend had loaded is stopped, and the old item's
-                        // position is not carried onto the new one.
+                        // Another device plays. Show the position this change asked for
+                        // (a resume). The device that holds playback loads it from the
+                        // same op, so a seek from here would land on whatever it still
+                        // had loaded.
                         self.render_only();
                         self.playback.doc_key = Some(item.key.clone());
                         self.playback.track = self.track_or_bare(&item.track_id);
-                        self.playback.position_ms = 0;
+                        self.playback.position_ms = position;
                         self.playback.position_at = self.now();
                     }
                 }
@@ -616,11 +719,16 @@ impl Actor {
             // Queue edits around the current item: keep the gapless preload right.
             self.refresh_next();
         }
+        if rekeyed {
+            // Tell the room (and the saved position) the key it knows.
+            self.stamp();
+            self.save_position();
+        }
         // A restored context resolves its tracks with a nested op once this
         // document's bookkeeping is done (below), so it is persisted and
         // announced even when that op does not apply.
         let resolve_tracks = resolve
-            .map(|context| self.resolve_context_tracks(&context.server_id, &context.kind))
+            .map(|context| self.resolve_queued_context_tracks(&context.server_id, &context.kind))
             .filter(|tracks| !tracks.is_empty());
         if needs_autoplay && owns && resolve_tracks.is_none() {
             self.autoplay_advance = true;
@@ -636,7 +744,7 @@ impl Actor {
         if !same_saved_set(&document.saved_queues, &self.last_saved_queues) {
             self.last_saved_queues = document.saved_queues.clone();
             self.emit(Event::SavedQueuesChanged {
-                queues: document.saved_queues.clone(),
+                queues: self.visible_of(&document.saved_queues),
             });
             let engine_has = self
                 .engine
@@ -712,7 +820,7 @@ impl Actor {
         let last = doc.autoplay
             && doc.repeat == RepeatMode::Off
             && self.playback.loaded
-            && derive_window(doc, 0).total_upcoming == 0;
+            && doc.upcoming.is_empty();
         if !last
             || self.autoplay.is_none()
             || self.autoplay_prefetched.as_ref() == Some(&current.key)
@@ -755,8 +863,9 @@ impl Actor {
             .as_ref()
             .map(|c| c.tracks.clone())
             .unwrap_or_default();
-        exclude.extend(doc.insertions.iter().map(|i| i.track_id.clone()));
+        exclude.extend(doc.upcoming.iter().map(|i| i.track_id.clone()));
         exclude.extend(recent_ids);
+        exclude.extend(self.snoozed_ids());
         let seeds = crate::autoplay::SeedInput {
             recent,
             context: doc
@@ -831,10 +940,7 @@ impl Actor {
         // Dropped; the end of the queue asks again if it still needs to.
         let wanted = self.doc().is_some_and(|d| {
             d.current.as_ref().map(|c| &c.key) == self.autoplay_prefetched.as_ref()
-                && (advance
-                    || (d.autoplay
-                        && d.repeat == RepeatMode::Off
-                        && derive_window(d, 0).total_upcoming == 0))
+                && (advance || (d.autoplay && d.repeat == RepeatMode::Off && d.upcoming.is_empty()))
         });
         if !wanted {
             // The engine is back: fetch ahead for whatever is last now.
@@ -844,6 +950,11 @@ impl Actor {
             }
             return;
         }
+        let snoozed = self.snoozed_ids();
+        let picks: Vec<_> = picks
+            .into_iter()
+            .filter(|p| !snoozed.iter().any(|id| id == &p.track.id))
+            .collect();
         if picks.is_empty() {
             if !advance {
                 // Fetched ahead: the end of the queue asks again, and says so.
@@ -875,11 +986,7 @@ impl Actor {
             let changed = vec![None; tracks.len()];
             let _ = self.db.upsert_tracks(&tracks, &changed, 0);
         }
-        let queue_ran_out = advance
-            && self
-                .doc()
-                .map(|d| derive_window(d, 0).total_upcoming == 0)
-                .unwrap_or(false);
+        let queue_ran_out = advance && self.doc().map(|d| d.upcoming.is_empty()).unwrap_or(false);
         self.local_op(SessionOp::AppendAutoplay { items });
         if queue_ran_out && self.owns_transport() {
             self.playback.want_playing = true;
@@ -897,10 +1004,15 @@ impl Actor {
             args.context.tracks =
                 self.resolve_context_tracks(&args.context.server_id, &args.context.kind);
         }
+        let (tracks, start) =
+            self.filter_snoozed_context(&args.context.tracks, &args.context.kind, args.start_index);
+        args.context.tracks = tracks;
+        args.start_index = start;
         if args.context.label.is_empty() {
             args.context.label = self.context_label(&args.context.server_id, &args.context.kind);
         }
         if args.context.tracks.is_empty() {
+            self.pending_resume_at = None;
             self.toast("Nothing to play", None);
             return;
         }
@@ -915,7 +1027,7 @@ impl Actor {
             return;
         };
         let tracks = if saved::needs_resolution(&sq) {
-            let t = self.resolve_context_tracks(&sq.context.server_id, &sq.context.kind);
+            let t = self.resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
             if t.is_empty() {
                 None
             } else {
@@ -934,10 +1046,9 @@ impl Actor {
 
     pub(crate) fn previous(&mut self) {
         // The track is loaded here, or another device plays it and the
-        // room's position stamp says how far in it is. The engine's lease,
-        // not `last_transport` (not refreshed when a lease lapses), and the
-        // same test as `transport_command`, which drops the seek when there
-        // is no other device to send it to.
+        // room's position stamp says how far in it is. The same test as
+        // `transport_command`, which drops the seek when there is no other
+        // device to send it to.
         let position = if self.playback.loaded {
             Some(self.playback.position_now(self.now()))
         } else {
@@ -980,36 +1091,32 @@ impl Actor {
                     self.toast("That saved queue is gone", None);
                     return;
                 };
-                let mut tracks = sq.context.tracks.clone();
-                if tracks.is_empty() {
-                    tracks = self.resolve_context_tracks(&sq.context.server_id, &sq.context.kind);
-                }
-                let mut ids: Vec<TrackId> = sq.history.iter().map(|i| i.track_id.clone()).collect();
-                ids.extend(sq.current.iter().map(|i| i.track_id.clone()));
-                ids.extend(sq.insertions.iter().map(|i| i.track_id.clone()));
-                let perm = crate::session::shuffle::Permutation::from_state(
-                    sq.shuffle.as_ref(),
-                    tracks.len(),
-                );
-                for pos in sq.cursor..perm.len() as u32 {
-                    if let Some(i) = perm.to_context(pos) {
-                        if let Some(t) = tracks.get(i as usize) {
-                            ids.push(t.clone());
-                        }
+                if crate::session::saved::needs_resolution(sq)
+                    || (sq.history.is_empty() && sq.upcoming.is_empty())
+                {
+                    // Stored without its entries: the context's tracks are the list.
+                    let mut tracks = sq.context.tracks.clone();
+                    if tracks.is_empty() {
+                        tracks = self
+                            .resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
                     }
+                    tracks
+                } else {
+                    sq.history
+                        .iter()
+                        .chain(sq.current.iter())
+                        .chain(sq.upcoming.iter())
+                        .map(|i| i.track_id.clone())
+                        .collect()
                 }
-                ids
             }
-            None => {
-                let d = derive(&doc);
-                d.history
-                    .iter()
-                    .chain(d.current.iter())
-                    .chain(d.playing_next.iter())
-                    .chain(d.upcoming.iter())
-                    .map(|i| i.track_id.clone())
-                    .collect()
-            }
+            None => doc
+                .history
+                .iter()
+                .chain(doc.current.iter())
+                .chain(doc.upcoming.iter())
+                .map(|i| i.track_id.clone())
+                .collect(),
         };
         if ids.is_empty() {
             self.toast("Nothing to save", None);
@@ -1059,6 +1166,7 @@ impl Actor {
                 self.clear_offline_skips();
             }
             UndoAction::Cas(mutations) => self.run_cas(&result.entry_id, &label, mutations, redo),
+            UndoAction::Snoozes(states) => self.apply_snooze_states(states),
             UndoAction::Nothing => {}
         }
         self.selection = result.target;
@@ -1091,20 +1199,36 @@ impl Actor {
 
     // -- views ------------------------------------------------------------------
 
+    /// The queue view every change sends: a window of rows around the
+    /// pointer (`QUEUE_VIEW_BEFORE` behind, `QUEUE_VIEW_AFTER` ahead) with
+    /// exact totals, so a long history or context costs the same as a short one.
     pub(crate) fn queue_view(&self) -> QueueView {
         let Some(doc) = self.doc() else {
             return QueueView::default();
         };
-        let derived = derive_window(doc, QUEUE_VIEW_UPCOMING);
+        self.resolve_view(derive_window(doc, QUEUE_VIEW_BEFORE, QUEUE_VIEW_AFTER))
+    }
+
+    /// Rows `start..start + count` of the queue list (`Query::QueueRange`).
+    pub(crate) fn queue_range_view(&self, start: u32, count: u32) -> QueueView {
+        let Some(doc) = self.doc() else {
+            return QueueView::default();
+        };
+        // One page at a time: a runaway count can't ask for the whole list.
+        let count = (count as usize).min(QUEUE_VIEW_BEFORE + QUEUE_VIEW_AFTER + 1);
+        self.resolve_view(derive_range(doc, start as usize, count))
+    }
+
+    fn resolve_view(&self, derived: crate::session::DerivedQueue) -> QueueView {
         let mut seen: HashSet<&TrackId> = HashSet::new();
         let mut ids: Vec<TrackId> = vec![];
         for i in derived
-            .history
+            .entries
             .iter()
+            .map(|(i, _)| i)
             .chain(derived.current.iter())
-            .chain(derived.playing_next.iter())
-            .chain(derived.upcoming.iter())
             .chain(derived.wrap_next.iter())
+            .chain(derived.previous.iter())
         {
             if seen.insert(&i.track_id) {
                 ids.push(i.track_id.clone());
@@ -1121,15 +1245,27 @@ impl Actor {
         let Some(doc) = self.doc() else {
             return QueueView::default();
         };
+        let history_count = doc.history.len() as u32;
         QueueView {
             current: doc.current.as_ref().map(|item| QueueEntry {
                 track: self.summary_or_bare(&item.track_id),
                 item: item.clone(),
+                in_group: false,
+                autoplay: matches!(item.source, QueueSource::Autoplay { .. }),
             }),
-            shuffle: doc.shuffle.is_some(),
+            window_start: history_count,
+            total: history_count + u32::from(doc.current.is_some()) + doc.upcoming.len() as u32,
+            history_count,
+            current_index: doc.current.as_ref().map(|_| history_count),
+            group_count: if doc.current.is_some() {
+                doc.upcoming.iter().take_while(|i| i.queued).count() as u32
+            } else {
+                0
+            },
+            total_upcoming: doc.upcoming.len() as u32,
+            shuffle: doc.shuffle,
             repeat: doc.repeat,
             autoplay: doc.autoplay,
-            mode: doc.mode,
             ..QueueView::default()
         }
     }
@@ -1203,7 +1339,7 @@ impl Actor {
             .history
             .iter()
             .chain(doc.current.iter())
-            .chain(doc.insertions.iter())
+            .chain(doc.upcoming.iter())
             .find(|i| &i.key == key)
             .map(|i| i.track_id.clone());
         match id {
@@ -1303,10 +1439,14 @@ impl Actor {
             has_session: doc.is_some_and(|d| d.context.is_some()),
             has_current: current.is_some(),
             is_playing: self.playback.playing
-                || self.last_transport.position.is_playing && !self.owns_transport(),
+                || !self.owns_transport()
+                    && self
+                        .engine
+                        .as_ref()
+                        .is_some_and(|e| e.transport().position.is_playing),
             can_undo: self.undo.can_undo(),
             can_redo: self.undo.can_redo(),
-            shuffle: doc.is_some_and(|d| d.shuffle.is_some()),
+            shuffle: doc.is_some_and(|d| d.shuffle),
             repeat: doc.map(|d| d.repeat).unwrap_or_default(),
             autoplay: doc.is_some_and(|d| d.autoplay),
             current_track_id: current.map(|c| c.track_id.clone()),
@@ -1325,7 +1465,9 @@ impl Actor {
             has_resume_offer: has_resume,
             has_cleared_selection: self.undo.has_cleared_selection(),
             text_field_focused: false,
-            saved_queue_count: doc.map(|d| d.saved_queues.len() as u32).unwrap_or(0),
+            saved_queue_count: doc
+                .map(|d| self.visible_of(&d.saved_queues).len() as u32)
+                .unwrap_or(0),
             volume: {
                 let (_, v) = self.volume_control();
                 if v.muted {
@@ -1335,11 +1477,19 @@ impl Actor {
                 }
             },
             volume_unknown: self.volume_control().0.is_none(),
+            snoozed_tracks: self.snoozed_ids(),
             library_pins: crate::actions::LibraryPin::list_from(
                 &self
                     .settings
                     .get(crate::settings::registry::keys::LIBRARY_PINS),
             ),
+            queue_section: self
+                .settings
+                .get_bool(crate::settings::registry::keys::QUEUE_SECTION),
+            queue_group_count: doc
+                .filter(|d| d.current.is_some())
+                .map(|d| d.upcoming.iter().take_while(|i| i.queued).count() as u32)
+                .unwrap_or(0),
         }
     }
 
@@ -1471,22 +1621,24 @@ fn command_kind(cmd: &Command) -> &'static str {
         Command::PlayContext { .. } => "playContext",
         Command::PlayTracks { .. } => "playTracks",
         Command::PlayNext { .. } => "playNext",
+        Command::AddToQueue { .. } => "addToQueue",
         Command::PlayLater { .. } => "playLater",
         Command::JumpToQueueItem { .. } => "jump",
         Command::RemoveQueueItems { .. } => "removeFromQueue",
         Command::MoveQueueItem { .. } => "moveQueueItem",
+        Command::InsertTracks { .. } => "insertTracks",
         Command::ClearQueue => "clearQueue",
-        Command::ClearInsertions => "clearInsertions",
+        Command::ClearQueueGroup => "clearQueueGroup",
         Command::SetShuffle { .. } => "shuffle",
         Command::SetRepeat { .. } => "repeat",
         Command::SetAutoplay { .. } => "autoplay",
-        Command::SetQueueMode { .. } => "queueMode",
         Command::Next => "next",
-        Command::Previous => "previous",
+        Command::Previous | Command::PreviousTrack => "previous",
         Command::SkipUnavailable { .. } => "skipUnavailable",
         Command::RestoreSavedQueue { .. } => "restoreSavedQueue",
         Command::PinSavedQueue { .. } => "pinSavedQueue",
         Command::DeleteSavedQueue { .. } => "deleteSavedQueue",
+        Command::RenameQueue { .. } => "renameQueue",
         _ => "session",
     }
 }
@@ -1494,13 +1646,23 @@ fn command_kind(cmd: &Command) -> &'static str {
 fn command_label(cmd: &Command) -> String {
     match cmd {
         Command::PlayTracks { label, .. } => format!("Play {label}"),
-        Command::PlayNext { track_ids, .. } => plural("Play next", track_ids.len()),
-        Command::PlayLater { track_ids, .. } => plural("Play later", track_ids.len()),
+        Command::PlayNext {
+            track_ids, keys, ..
+        } => plural("Play next", track_ids.len() + keys.len()),
+        Command::AddToQueue {
+            track_ids, keys, ..
+        } => plural("Add to queue", track_ids.len() + keys.len()),
+        Command::PlayLater {
+            track_ids, keys, ..
+        } => plural("Play later", track_ids.len() + keys.len()),
         Command::JumpToQueueItem { .. } => "Jump to track".into(),
         Command::RemoveQueueItems { keys } => plural("Remove from queue", keys.len()),
         Command::MoveQueueItem { .. } => "Move track".into(),
+        Command::InsertTracks {
+            track_ids, keys, ..
+        } => plural("Add to queue", track_ids.len() + keys.len()),
         Command::ClearQueue => "Clear queue".into(),
-        Command::ClearInsertions => "Clear playing next".into(),
+        Command::ClearQueueGroup => "Clear next in queue".into(),
         Command::SetShuffle { enabled } => {
             if *enabled {
                 "Shuffle on".into()
@@ -1516,9 +1678,8 @@ fn command_label(cmd: &Command) -> String {
                 "Autoplay off".into()
             }
         }
-        Command::SetQueueMode { mode } => format!("Queue mode {mode:?}"),
         Command::Next => "Next track".into(),
-        Command::Previous => "Previous track".into(),
+        Command::Previous | Command::PreviousTrack => "Previous track".into(),
         Command::SkipUnavailable { .. } => "Skip unavailable".into(),
         Command::RestoreSavedQueue { .. } => "Restore queue".into(),
         Command::PinSavedQueue { pinned, .. } => {
@@ -1529,6 +1690,7 @@ fn command_label(cmd: &Command) -> String {
             }
         }
         Command::DeleteSavedQueue { .. } => "Delete saved queue".into(),
+        Command::RenameQueue { .. } => "Rename queue".into(),
         _ => "Queue change".into(),
     }
 }

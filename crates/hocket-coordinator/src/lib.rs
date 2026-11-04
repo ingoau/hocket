@@ -13,6 +13,14 @@
 //! hocket-coordinator --listen 0.0.0.0:7373 --data-dir /var/lib/hocket
 //!   GET /health          → 200 {"status":"ok","rooms":n}
 //!   GET /ws              → WebSocket, first frame must be Hello
+//!   POST /reports        → create a report (grant token), 201 {id, uploadKey, files}
+//!   PUT /reports/{id}/files/{index}
+//!                        → the next bytes of a file (upload key, Upload-Offset)
+//!   GET /reports/{id}    → what has arrived (upload key), to resume
+//!   DELETE /reports/{id} → drop an unfinished report (upload key), 204
+//!
+//! hocket-coordinator --data-dir /var/lib/hocket reports list
+//! hocket-coordinator --data-dir /var/lib/hocket reports show R-20261101-7k3f
 //! ```
 //!
 //! Hardening, since everything before `Welcome` is unauthenticated:
@@ -33,6 +41,21 @@
 //!   changes coalesced within [`SAVE_DEBOUNCE`] and heartbeat-only changes
 //!   (a lease `expiresAt` moving) written at most every
 //!   [`TOUCH_SAVE_INTERVAL`].
+//!
+//! Developer diagnostics: a member's `DiagnosticsRequest` gets the room's own
+//! state (from the room) and a coordinator section (from here): the version
+//! for anyone, plus this process's whole log and its flags for the accounts
+//! named with `--diagnostics-user`. That log covers every room, so the
+//! account is matched against the credential this socket was verified with,
+//! never against anything the request says.
+//!
+//! Reports (`docs/reports.md`, [`reports`]): with a `--data-dir`, at least one
+//! `--diagnostics-user` and no `--no-reports`, the answer to such an account
+//! also carries a `reportGrant` on part 0. The grant lets that device save a
+//! report (note, bundle, screenshots, a recording) under
+//! `<data-dir>/reports/` over the HTTP routes above, together with this
+//! process's log at that moment. Reports are capped by `--reports-quota-mb`
+//! (oldest finished ones go first) and purged by age every hour.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -43,28 +66,38 @@ use std::time::{Duration, Instant};
 
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::DefaultBodyLimit;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post, put};
 use axum::Router;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use hocket_core::connect::auth::ip_is_private;
+use hocket_core::connect::diagnostics;
 use hocket_core::connect::replica::{
     FileReplicaStore, MemoryReplicaStore, ReplicaError, ReplicaStore,
 };
 use hocket_core::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use hocket_core::connect::session_adapter::RealReducer;
-use hocket_core::connect::wire::{Credential, Msg, RefuseReason, ReplicaState, WireMessage};
+use hocket_core::connect::wire::{
+    scope_key, Credential, Msg, RefuseReason, ReplicaState, WireMessage,
+};
 use hocket_core::connect::PeerId;
 use hocket_core::util::WallClock;
 
 pub use hocket_core::connect::transport::MAX_FRAME_BYTES;
+
+pub mod reports;
+
+/// Epoch milliseconds now; injectable so tests can move time (grant expiry,
+/// retention).
+pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// A socket that has not sent its `Hello` within this long is dropped.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -79,6 +112,8 @@ pub const VERIFY_BODY_CAP: usize = 64 * 1024;
 pub const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 /// Heartbeat-only changes are written at most this often per room.
 pub const TOUCH_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Pause between the parts of the coordinator's diagnostics answer.
+pub const DIAGNOSTICS_PART_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -89,8 +124,9 @@ pub struct Args {
     /// Address to listen on.
     #[arg(long, default_value = "0.0.0.0:7373")]
     pub listen: SocketAddr,
-    /// Directory for replica persistence. Omit for in-memory only.
-    #[arg(long)]
+    /// Directory for replica persistence (and reports, in `reports/`). Omit
+    /// for in-memory only.
+    #[arg(long, global = true)]
     pub data_dir: Option<PathBuf>,
     /// Verify every credential against this Subsonic base URL instead of the
     /// one the client states (single-server deployments).
@@ -117,6 +153,125 @@ pub struct Args {
     /// New WebSocket connections per minute per client address.
     #[arg(long, default_value_t = 60)]
     pub per_ip_rate: u32,
+    /// An account whose devices may receive this coordinator's whole log
+    /// (every room: other users' names, servers, device names and addresses;
+    /// never credentials) in developer diagnostics. `USER@https://server`,
+    /// or just `USER` with `--verify-url`. Repeatable. Refused with
+    /// `--no-verify`. Everyone else gets the coordinator's version only.
+    #[arg(long = "diagnostics-user", value_name = "USER[@URL]")]
+    pub diagnostics_users: Vec<String>,
+    /// Never keep reports, even with `--data-dir` and `--diagnostics-user`.
+    #[arg(long, default_value_t = false)]
+    pub no_reports: bool,
+    /// Cap on all reports together, in MiB; the oldest finished ones are
+    /// deleted to make room.
+    #[arg(long, default_value_t = 20480)]
+    pub reports_quota_mb: u64,
+    /// Without a subcommand the coordinator serves.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Offline commands (no subcommand: serve).
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Read the reports saved in `--data-dir`.
+    Reports {
+        #[command(subcommand)]
+        action: ReportsCommand,
+    },
+}
+
+/// `reports …`.
+#[derive(Subcommand, Debug, Clone)]
+pub enum ReportsCommand {
+    /// One line per report, newest first.
+    List,
+    /// A report's metadata, note and the absolute path of every file.
+    Show {
+        /// `R-YYYYMMDD-xxxx`.
+        id: String,
+    },
+}
+
+/// One `--diagnostics-user`: a username and, unless every credential is
+/// verified against `--verify-url`, the server it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticsUser {
+    pub username: String,
+    pub server_url: Option<String>,
+}
+
+impl DiagnosticsUser {
+    /// `user@https://server` (a username may hold `@` itself: the server
+    /// starts at the last `@http://` or `@https://`) or a bare `user`.
+    pub fn parse(spec: &str) -> anyhow::Result<DiagnosticsUser> {
+        let spec = spec.trim();
+        let at = ["@https://", "@http://"]
+            .iter()
+            .filter_map(|p| spec.to_ascii_lowercase().rfind(p))
+            .max();
+        let (username, server_url) = match at {
+            Some(i) => (&spec[..i], Some(spec[i + 1..].to_string())),
+            None => (spec, None),
+        };
+        if username.is_empty() {
+            anyhow::bail!("--diagnostics-user {spec:?} has no username");
+        }
+        Ok(DiagnosticsUser {
+            username: username.to_string(),
+            server_url,
+        })
+    }
+
+    /// Whether a credential this coordinator verified names this account.
+    /// With `--verify-url` only the username was verified (the server named
+    /// in the credential is the client's word, so it is never compared; the
+    /// flags are checked to name that server), otherwise the pair was.
+    fn matches(&self, server_url: &str, username: &str, verify_url_set: bool) -> bool {
+        if self.username != username {
+            return false;
+        }
+        match &self.server_url {
+            _ if verify_url_set => true,
+            Some(url) => scope_key(url, username) == scope_key(server_url, username),
+            None => false,
+        }
+    }
+}
+
+/// The `--diagnostics-user` list, checked against the other flags.
+fn diagnostics_users(args: &Args) -> anyhow::Result<Vec<DiagnosticsUser>> {
+    let users = args
+        .diagnostics_users
+        .iter()
+        .map(|s| DiagnosticsUser::parse(s))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    if !users.is_empty() && args.no_verify {
+        anyhow::bail!(
+            "--diagnostics-user needs verified credentials: it cannot be used with --no-verify"
+        );
+    }
+    if let Some(verify) = &args.verify_url {
+        // Every credential is checked against that server alone: naming another one would grant
+        // the log to whoever has this username there.
+        if let Some(u) = users.iter().find(|u| {
+            u.server_url
+                .as_deref()
+                .is_some_and(|url| scope_key(url, "") != scope_key(verify, ""))
+        }) {
+            anyhow::bail!(
+                "--diagnostics-user {:?} names a server other than --verify-url",
+                u.username
+            );
+        }
+    } else if let Some(u) = users.iter().find(|u| u.server_url.is_none()) {
+        anyhow::bail!(
+            "--diagnostics-user {:?} names no server: write USER@https://server, or set --verify-url",
+            u.username
+        );
+    }
+    Ok(users)
 }
 
 impl Args {
@@ -132,6 +287,10 @@ impl Args {
             max_connections: 4096,
             per_ip_connections: 1024,
             per_ip_rate: 1_000_000,
+            diagnostics_users: vec![],
+            no_reports: false,
+            reports_quota_mb: 20480,
+            command: None,
         }
     }
 }
@@ -281,15 +440,36 @@ pub struct App {
     verifications: AtomicU64,
     /// Write ordering per scope (see [`SaveSlot`]).
     saves: Mutex<HashMap<String, Arc<SaveSlot>>>,
+    /// `--diagnostics-user`, parsed.
+    diagnostics_users: Vec<DiagnosticsUser>,
+    /// Report storage and grants; `None` when reports are off.
+    reports: Option<reports::Reports>,
+    clock: Clock,
+    started: Instant,
 }
 
 impl App {
     pub fn new(args: Args) -> anyhow::Result<Arc<App>> {
+        App::with_clock(args, Arc::new(|| hocket_core::util::now_ms() as u64))
+    }
+
+    /// [`App::new`] with another clock (tests).
+    pub fn with_clock(args: Args, clock: Clock) -> anyhow::Result<Arc<App>> {
         let store: Arc<dyn ReplicaStore> = match &args.data_dir {
             Some(dir) => Arc::new(FileReplicaStore::new(dir)?),
             None => Arc::new(MemoryReplicaStore::new()),
         };
         let http = http_client(None)?;
+        let diagnostics_users = diagnostics_users(&args)?;
+        let reports = match &args.data_dir {
+            Some(dir) if !diagnostics_users.is_empty() && !args.no_reports && !args.no_verify => {
+                Some(reports::Reports::new(
+                    dir.join(reports::REPORTS_DIR),
+                    args.reports_quota_mb,
+                )?)
+            }
+            _ => None,
+        };
         Ok(Arc::new(App {
             args,
             rooms: Mutex::new(HashMap::new()),
@@ -300,7 +480,157 @@ impl App {
             admission: Mutex::new(Admission::default()),
             verifications: AtomicU64::new(0),
             saves: Mutex::new(HashMap::new()),
+            diagnostics_users,
+            reports,
+            clock,
+            started: Instant::now(),
         }))
+    }
+
+    /// Whether a socket verified with this account may have the whole log.
+    pub fn may_read_full_log(&self, server_url: &str, username: &str) -> bool {
+        self.diagnostics_users
+            .iter()
+            .any(|u| u.matches(server_url, username, self.args.verify_url.is_some()))
+    }
+
+    /// Epoch milliseconds by this app's clock.
+    pub fn now_ms(&self) -> u64 {
+        (self.clock)()
+    }
+
+    /// Whether this coordinator keeps reports.
+    pub fn reports_enabled(&self) -> bool {
+        self.reports.is_some()
+    }
+
+    /// Apply report retention now (also run at startup and hourly by [`serve`]).
+    pub fn purge_reports(&self) -> reports::PurgeStats {
+        match &self.reports {
+            Some(r) => r.purge(self.now_ms()),
+            None => reports::PurgeStats::default(),
+        }
+    }
+
+    /// The coordinator's section of a diagnostics bundle.
+    fn diagnostics_text(&self, full: bool) -> String {
+        let mut out = format!(
+            "hocket-coordinator {} (protocol {}..={})\n",
+            env!("CARGO_PKG_VERSION"),
+            hocket_core::connect::wire::PROTOCOL_MIN,
+            hocket_core::connect::wire::PROTOCOL
+        );
+        if !full {
+            out.push_str(
+                "The coordinator's own log is only sent to the accounts its operator named with --diagnostics-user.\n",
+            );
+            return out;
+        }
+        let a = &self.args;
+        out.push_str(&format!(
+            "up {} s; {} rooms open, {} connections, {} verifications\n",
+            self.started.elapsed().as_secs(),
+            self.room_count(),
+            self.connection_count(),
+            self.verification_count()
+        ));
+        out.push_str(&format!(
+            "listen {} data_dir {:?} verify_url {:?} no_verify {} allow_private_servers {}\n",
+            a.listen, a.data_dir, a.verify_url, a.no_verify, a.allow_private_servers
+        ));
+        out.push_str(&format!(
+            "max_members {} max_connections {} per_ip_connections {} per_ip_rate {}/min; {} diagnostics users\n",
+            a.max_members,
+            a.max_connections,
+            a.per_ip_connections,
+            a.per_ip_rate,
+            self.diagnostics_users.len()
+        ));
+        out.push_str(&format!(
+            "reports {} (no_reports {} reports_quota_mb {})\n",
+            if self.reports_enabled() { "on" } else { "off" },
+            a.no_reports,
+            a.reports_quota_mb
+        ));
+        // The asking device looks for this heading to tell the full answer from the short one.
+        out.push_str(&format!(
+            "\n{}{} minutes)\n----------------------------\n",
+            diagnostics::COORDINATOR_LOG_HEADING,
+            hocket_core::devlog::WINDOW_MS / 60_000
+        ));
+        let log = hocket_core::devlog::recent(hocket_core::devlog::WINDOW_MS);
+        if log.is_empty() {
+            out.push_str("(nothing captured: the log capture is not installed in this process)\n");
+        } else {
+            out.push_str(&log);
+        }
+        out
+    }
+
+    /// Answer a member's diagnostics request with the coordinator's section:
+    /// the first part at once (so it reaches the asking device ahead of the
+    /// room's answer, and the device knows to wait for the rest), the rest
+    /// paced on a task.
+    fn answer_diagnostics(
+        &self,
+        tx: &mpsc::UnboundedSender<Message>,
+        request_id: String,
+        to: String,
+        identity: Option<&(String, String)>,
+    ) {
+        let full = identity.is_some_and(|(url, user)| self.may_read_full_log(url, user));
+        if let Some((_, user)) = identity {
+            info!(user, full, "diagnostics requested");
+        }
+        // Report users are the diagnostics users; with --verify-url the account's server is that
+        // one, never the client's word.
+        let grant = match (&self.reports, identity) {
+            (Some(reports), Some((url, user))) if full => Some(reports.mint_grant(
+                self.args.verify_url.as_deref().unwrap_or(url),
+                user,
+                self.now_ms(),
+            )),
+            _ => None,
+        };
+        let parts = diagnostics::parts(&self.diagnostics_text(full));
+        let count = parts.len() as u32;
+        let frames: Vec<String> = parts
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, text)| {
+                WireMessage::new(Msg::DiagnosticsReply {
+                    request_id: request_id.clone(),
+                    from: diagnostics::COORDINATOR.into(),
+                    from_name: "Coordinator".into(),
+                    to: to.clone(),
+                    part: i as u32,
+                    parts: count,
+                    text,
+                    declined: None,
+                    asked: vec![],
+                    report_grant: if i == 0 { grant.clone() } else { None },
+                })
+                .encode()
+                .ok()
+            })
+            .collect();
+        let mut frames = frames.into_iter();
+        if let Some(first) = frames.next() {
+            let _ = tx.send(Message::Text(first.into()));
+        }
+        let rest: Vec<String> = frames.collect();
+        if rest.is_empty() {
+            return;
+        }
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            for f in rest {
+                tokio::time::sleep(DIAGNOSTICS_PART_INTERVAL).await;
+                if tx.send(Message::Text(f.into())).is_err() {
+                    return;
+                }
+            }
+        });
     }
 
     fn next_peer(&self) -> PeerId {
@@ -718,6 +1048,9 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
     });
 
     let mut scope: Option<String> = None;
+    // The account this socket's credential was verified for.
+    let mut identity: Option<(String, String)> = None;
+    let mut last_diagnostics: Option<Instant> = None;
     loop {
         let limit = if scope.is_some() {
             READ_TIMEOUT
@@ -774,9 +1107,22 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
             }
             (Some(s), _) => s.clone(),
         };
+        if let Msg::DiagnosticsRequest { request_id, from } = &msg.msg {
+            let admitted = app.has_member(&current_scope, from);
+            let too_soon = last_diagnostics.is_some_and(|t| {
+                t.elapsed().as_secs_f64() * 1000.0 < diagnostics::REQUEST_INTERVAL_MS
+            });
+            if admitted && !too_soon {
+                last_diagnostics = Some(Instant::now());
+                app.answer_diagnostics(&tx, request_id.clone(), from.clone(), identity.as_ref());
+            }
+        }
         let to_verify = app.drive(&current_scope, RoomInput::Message(peer.clone(), msg));
         for (p, credential) in to_verify {
             let ok = app.verify(&credential).await;
+            if ok && p == peer {
+                identity = Some((credential.server_url.clone(), credential.username.clone()));
+            }
             drop(credential);
             app.drive(&current_scope, RoomInput::Verified { peer: p, ok });
         }
@@ -807,6 +1153,16 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws_upgrade))
+        .route("/reports", post(reports::create))
+        .route(
+            "/reports/{id}",
+            get(reports::status).delete(reports::remove),
+        )
+        // The upload streams its body to disk under its own caps, not axum's 2 MB default.
+        .route(
+            "/reports/{id}/files/{index}",
+            put(reports::upload).layer(DefaultBodyLimit::disable()),
+        )
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(app)
 }
@@ -842,6 +1198,19 @@ pub async fn serve(
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => warn!(error = %e, "replica purge failed"),
                 Err(e) => warn!(error = %e, "replica purge task failed"),
+            }
+            // The first tick is immediate: this also purges at startup.
+            if purge_app.reports_enabled() {
+                let reports_app = purge_app.clone();
+                match tokio::task::spawn_blocking(move || reports_app.purge_reports()).await {
+                    Ok(s) if s.reports + s.recordings > 0 => info!(
+                        reports = s.reports,
+                        recordings = s.recordings,
+                        "old reports purged"
+                    ),
+                    Ok(_) => {}
+                    Err(e) => warn!(error = %e, "report purge task failed"),
+                }
             }
         }
     });
@@ -890,6 +1259,24 @@ mod tests {
         // a fragment cannot swallow the path
         let t = verify_target("http://127.0.0.1:4533#", true).await.unwrap();
         assert_eq!(t.url.path(), "/rest/ping.view");
+    }
+
+    #[test]
+    fn diagnostics_users_parse_and_match() {
+        let u = DiagnosticsUser::parse("me@example.com@https://Music.Example/").unwrap();
+        assert_eq!(u.username, "me@example.com");
+        assert_eq!(u.server_url.as_deref(), Some("https://Music.Example/"));
+        assert!(u.matches("https://music.example", "me@example.com", false));
+        assert!(!u.matches("https://other.example", "me@example.com", false));
+        assert!(!u.matches("https://music.example", "someone", false));
+        // With --verify-url the credential's server is the client's word: never compared.
+        assert!(u.matches("https://other.example", "me@example.com", true));
+        let bare = DiagnosticsUser::parse("alice").unwrap();
+        assert_eq!(bare.server_url, None);
+        assert!(bare.matches("https://anything", "alice", true));
+        assert!(!bare.matches("https://anything", "alice", false));
+        assert!(!bare.matches("https://anything", "Alice", true));
+        assert!(DiagnosticsUser::parse("@https://music.example").is_err());
     }
 
     #[test]

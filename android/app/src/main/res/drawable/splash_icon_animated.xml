@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The splash screen's icon (API 31+): the Crescendo mark drawn in by one pen, left to right, each
+     note picking up where the last one ended, while the mark swells to full size (a crescendo).
+     The geometry is ic_launcher_foreground's; keep the two in step. The system caps the animation
+     at windowSplashScreenAnimationDuration (values-v31/themes.xml). -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector
+            android:width="108dp"
+            android:height="108dp"
+            android:viewportWidth="108"
+            android:viewportHeight="108">
+            <group
+                android:name="swell"
+                android:pivotX="54"
+                android:pivotY="54"
+                android:scaleX="0.8"
+                android:scaleY="0.8">
+                <group
+                    android:scaleX="0.72"
+                    android:scaleY="0.72"
+                    android:translateX="18"
+                    android:translateY="18">
+                    <path
+                        android:name="note1"
+                        android:pathData="M16,48.5 C23,37.81 26,37.81 33,48.5"
+                        android:strokeColor="#FFE4DFFF"
+                        android:strokeLineCap="round"
+                        android:strokeWidth="12"
+                        android:trimPathEnd="0" />
+                    <path
+                        android:name="note2"
+                        android:pathData="M33,48.5 C40,63.2 43,63.2 50,48.5"
+                        android:strokeColor="#FF8F80F5"
+                        android:strokeLineCap="round"
+                        android:strokeWidth="12"
+                        android:trimPathEnd="0" />
+                    <path
+                        android:name="note3"
+                        android:pathData="M50,48.5 C57,29.8 60,29.8 67,48.5"
+                        android:strokeColor="#FFE4DFFF"
+                        android:strokeLineCap="round"
+                        android:strokeWidth="12"
+                        android:trimPathEnd="0" />
+                    <path
+                        android:name="note4"
+                        android:pathData="M67,48.5 C74,71.21 77,71.21 84,48.5"
+                        android:strokeColor="#FF8F80F5"
+                        android:strokeLineCap="round"
+                        android:strokeWidth="12"
+                        android:trimPathEnd="0" />
+                </group>
+            </group>
+        </vector>
+    </aapt:attr>
+
+    <!-- The pen: accelerates into the first note, keeps an even pace through the middle two and
+         eases out of the last. A quarter second of stillness first: the system starts the animation
+         as the splash window is created, so the launcher's zoom into it lands before the pen moves. -->
+    <target android:name="note1">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="160"
+                android:interpolator="@android:interpolator/accelerate_quad"
+                android:propertyName="trimPathEnd"
+                android:startOffset="260"
+                android:valueFrom="0"
+                android:valueTo="1" />
+        </aapt:attr>
+    </target>
+    <target android:name="note2">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="130"
+                android:interpolator="@android:interpolator/linear"
+                android:propertyName="trimPathEnd"
+                android:startOffset="420"
+                android:valueFrom="0"
+                android:valueTo="1" />
+        </aapt:attr>
+    </target>
+    <target android:name="note3">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="130"
+                android:interpolator="@android:interpolator/linear"
+                android:propertyName="trimPathEnd"
+                android:startOffset="550"
+                android:valueFrom="0"
+                android:valueTo="1" />
+        </aapt:attr>
+    </target>
+    <target android:name="note4">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="220"
+                android:interpolator="@android:interpolator/decelerate_cubic"
+                android:propertyName="trimPathEnd"
+                android:startOffset="680"
+                android:valueFrom="0"
+                android:valueTo="1" />
+        </aapt:attr>
+    </target>
+    <!-- The swell: grows with the line and settles with a slight overshoot as the pen lifts. -->
+    <target android:name="swell">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator
+                    android:duration="680"
+                    android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleX"
+                    android:startOffset="260"
+                    android:valueFrom="0.8"
+                    android:valueTo="1" />
+                <objectAnimator
+                    android:duration="680"
+                    android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleY"
+                    android:startOffset="260"
+                    android:valueFrom="0.8"
+                    android:valueTo="1" />
+            </set>
+        </aapt:attr>
+    </target>
+</animated-vector>

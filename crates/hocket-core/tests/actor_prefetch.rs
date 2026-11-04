@@ -26,6 +26,7 @@ async fn play_album(t: &TestCore, n: usize, start: u32) {
         start_index: start,
         label: "Album".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
 }
@@ -70,8 +71,7 @@ async fn the_next_two_items_are_prefetched_and_play_from_disk() {
     // The queue shows them cached.
     let q = t.queue().await;
     let up: Vec<_> = q
-        .upcoming
-        .iter()
+        .upcoming()
         .map(|e| (e.track.id.clone(), e.track.offline))
         .collect();
     assert_eq!(up[0], ("t1".into(), OfflineState::Cached), "{up:?}");
@@ -123,6 +123,7 @@ async fn a_queue_change_cancels_a_stale_prefetch() {
         start_index: 0,
         label: "Other".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     wait_cached(&t, "t4").await;
@@ -253,6 +254,7 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
         start_index: 0,
         label: "Album".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     let mut in_flight = false;

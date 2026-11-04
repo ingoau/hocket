@@ -17,7 +17,6 @@ use crate::autoplay::AutoplayEngine;
 use crate::cache::Caches;
 use crate::connect::discovery::Discovery;
 use crate::connect::engine::{Engine, Input, PersistedConnectState};
-use crate::connect::session_adapter::ReducerPolicy;
 use crate::connect::transport::PeerIds;
 use crate::connect::wire::WireMessage;
 use crate::connect::PeerId;
@@ -156,7 +155,9 @@ pub(crate) struct Actor {
     /// it): a batch that found nothing is not asked for again on every
     /// change, and one that lands after the queue moved on is dropped.
     pub autoplay_prefetched: Option<QueueKey>,
-    pub reducer_policy: Arc<ReducerPolicy>,
+    /// Stands in for [`crate::connect::session_adapter::RealReducer`] when set (tests: a room running
+    /// another build).
+    pub reducer_override: Option<crate::connect::ReducerHandle>,
     pub entropy: Arc<dyn Entropy>,
 
     pub backend: Arc<dyn PlaybackBackend>,
@@ -183,7 +184,16 @@ pub(crate) struct Actor {
     pub pending_effects: Option<Vec<crate::session::Effect>>,
     pub last_doc: Option<SessionDocument>,
     pub last_saved_queues: Vec<SavedQueue>,
-    pub last_transport: TransportState,
+    /// The signed-in account's song stash, tombstones included (`crate::stash`).
+    pub stash: Vec<crate::api::StashEntry>,
+    /// The signed-in account's snoozes, tombstones included (`crate::snooze`).
+    pub snoozes: Vec<crate::api::Snooze>,
+    /// Where albums were left off, tombstones included (`crate::album_resume`).
+    pub album_resumes: Vec<crate::api::AlbumResumeEntry>,
+    /// Track and position the next local load should land on (album resume).
+    pub pending_resume_at: Option<(TrackId, Ms)>,
+    /// When the oldest offered album resume point expires (re-announced from the tick).
+    pub album_resume_expires_at: Option<crate::api::EpochMs>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
     /// sent: one that would only repeat it is not sent (see
     /// [`Actor::emit_transport_state`]).
@@ -197,6 +207,9 @@ pub(crate) struct Actor {
     pub outbox_entries: HashMap<String, String>,
 
     pub playback: Playback,
+    /// Song preview, separate from the transport. `None` when nothing is
+    /// being previewed.
+    pub preview: Option<super::state::PreviewSession>,
     /// Track summaries already read from the mirror, for the queue view
     /// (rebuilt on every queue change): see [`Actor::summaries`].
     pub summary_cache: Mutex<super::state::SummaryCache>,
@@ -222,6 +235,18 @@ pub(crate) struct Actor {
     pub lyrics_for: Option<TrackId>,
     pub media_art_pending: Option<(String, u32)>,
     pub log_ring: VecDeque<String>,
+    /// `Query::RoomDiagnostics` waiting for the room's answers.
+    pub diagnostics_collections: Vec<(
+        crate::connect::diagnostics::Collection,
+        tokio::sync::oneshot::Sender<QueryResult>,
+    )>,
+    /// The newest room diagnostics collection the room answered (its final
+    /// status and text), kept for a request the room turns away.
+    pub last_room_diagnostics: Option<(RoomDiagnosticsStatus, String)>,
+    /// Other devices' diagnostics requests waiting for the platform's bundle.
+    pub diagnostics_answers: Vec<crate::core::handlers::diagnostics::PendingAnswer>,
+    /// Save to Coordinator: the coordinator's grant and the upload.
+    pub reports: crate::core::handlers::reports::ReportsState,
 
     pub started: bool,
     pub shutting_down: bool,
@@ -356,11 +381,6 @@ impl Actor {
         if let Ok(Some(ids)) = db.saved_state_get::<Vec<TrackId>>("autoplay:exclusion") {
             autoplay.restore_exclusion(ids);
         }
-        let reducer_policy = ReducerPolicy::new(
-            settings.get_i64(keys::QUEUE_HISTORY_CAP).max(10) as usize,
-            crate::session::SavedQueuePolicy::default()
-                .with_cap(settings.get_i64(keys::QUEUE_SAVED_CAP).max(0) as u32),
-        );
 
         let (backend, backend_poll, external): (
             Arc<dyn PlaybackBackend>,
@@ -439,7 +459,7 @@ impl Actor {
             autoplay_wanted: false,
             autoplay_advance: false,
             autoplay_prefetched: None,
-            reducer_policy,
+            reducer_override: deps.reducer.clone(),
             entropy,
             backend,
             backend_poll,
@@ -461,7 +481,11 @@ impl Actor {
             pending_effects: None,
             last_doc: None,
             last_saved_queues: vec![],
-            last_transport: TransportState::default(),
+            stash: vec![],
+            snoozes: vec![],
+            album_resumes: vec![],
+            pending_resume_at: None,
+            album_resume_expires_at: None,
             emitted_transport: None,
             emitted_media_session: None,
             emitted_devices: None,
@@ -473,6 +497,7 @@ impl Actor {
                 muted,
                 ..Default::default()
             },
+            preview: None,
             summary_cache: Mutex::new(Default::default()),
             last_skip_at: None,
             skip_op: false,
@@ -490,6 +515,10 @@ impl Actor {
             lyrics_for: None,
             media_art_pending: None,
             log_ring: VecDeque::new(),
+            diagnostics_collections: vec![],
+            last_room_diagnostics: None,
+            diagnostics_answers: vec![],
+            reports: Default::default(),
             started: false,
             shutting_down: false,
             in_flight: 0,
@@ -670,6 +699,9 @@ impl Actor {
             Internal::ClearOfflineSkips => self.clear_offline_skips(),
             Internal::RetryOfflineClear => self.run_offline_clear(false),
             Internal::PrimeDone { generation } => self.on_prime_done(generation),
+            Internal::ReportUpload(msg) => self.on_report_upload(msg),
+            #[cfg(any(feature = "sim", test))]
+            Internal::ReportGrant(grant) => self.reports.grant = Some(grant),
             Internal::TaskDone => {
                 self.in_flight = self.in_flight.saturating_sub(1);
             }
@@ -761,6 +793,7 @@ impl Actor {
             self.log("debug", format!("set_volume: {e}"));
         }
         self.output_devices = self.backend.output_devices();
+        self.restore_report_upload();
         self.emit_everything(true);
         // Kick the connect tier selection, library sync and the outbox.
         self.engine_input(Input::Tick);
@@ -791,6 +824,8 @@ impl Actor {
         let _ = self.backend.stop();
         self.cancel_prefetch();
         self.cancel_prime();
+        // An upload still running carries on from `job.json` next time.
+        self.reports.abort();
         if let Some(r) = &self.stream_reader {
             r.stop();
         }
@@ -833,9 +868,12 @@ impl Actor {
             queues: snapshot
                 .session
                 .as_ref()
-                .map(|d| d.saved_queues.clone())
+                .map(|d| self.visible_of(&d.saved_queues))
                 .unwrap_or_default(),
         });
+        self.emit_stash();
+        self.emit_snoozes();
+        self.emit_album_resumes();
         self.emit(Event::UndoChanged {
             state: snapshot.undo.clone(),
         });
@@ -880,6 +918,9 @@ impl Actor {
         self.emit(Event::OutputDevicesChanged {
             devices: self.output_devices.clone(),
         });
+        self.emit(Event::ReportUploadChanged {
+            status: self.reports.status.clone(),
+        });
         self.emit(Event::SleepTimerChanged {
             timer: snapshot.sleep_timer.clone(),
         });
@@ -899,6 +940,7 @@ impl Actor {
         self.emit(Event::MediaSession {
             state: snapshot.media_session,
         });
+        self.emit_preview();
     }
 
     // -- tick -----------------------------------------------------------------
@@ -918,13 +960,17 @@ impl Actor {
             return;
         }
         self.hot.store(
-            self.playback.playing || self.playback.buffering || self.pending_load_timer.is_some(),
+            self.playback.playing
+                || self.playback.buffering
+                || self.pending_load_timer.is_some()
+                || self.preview.as_ref().is_some_and(|p| p.playing),
             Ordering::Relaxed,
         );
         if now - self.last_engine_tick >= ENGINE_TICK_MS - 1.0 {
             self.last_engine_tick = now;
             self.engine_input(Input::Tick);
         }
+        self.diagnostics_tick(now);
         self.prefetch_tick(now);
         self.flush_pending_load(false);
         self.playback_tick(now);
@@ -939,12 +985,24 @@ impl Actor {
         if self.playback.playing && now - self.position_saved_at >= POSITION_HEARTBEAT_MS {
             self.save_position();
         }
+        if self.playback.playing {
+            self.capture_album_resume(false);
+        }
+        self.album_resume_tick(now);
         // Outbox retry.
         if now - self.last_outbox_retry >= OUTBOX_RETRY_MS {
             self.last_outbox_retry = now;
             if self.outbox.pending_count().unwrap_or(0) > 0 {
                 self.schedule_flush();
             }
+        }
+        // A snooze whose end has passed drops out of the lists as soon as the clock passes it.
+        if self
+            .snoozes
+            .iter()
+            .any(|e| !e.removed && e.until.is_some_and(|u| u <= now))
+        {
+            self.prune_snoozes();
         }
         // Library sync timer (checked once a minute).
         if now - self.last_sync_check >= 60_000.0 {
@@ -977,6 +1035,7 @@ impl Actor {
             Err(e) => self.log("warn", format!("stream cache reconcile: {e}")),
         }
         self.downloads.save_traffic();
+        self.prune_snoozes();
     }
 
     // -- persistence ----------------------------------------------------------

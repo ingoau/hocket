@@ -25,8 +25,15 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "play", label: "Play", icon: "play", category: "playback", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"] },
   { id: "playShuffled", label: "Shuffle play", icon: "shuffle", category: "playback", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"] },
   { id: "playNext", label: "Play next", icon: "playNext", category: "queue", targets: ["tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu"], undoable: true },
-  { id: "playLater", label: "Play later", icon: "playLater", category: "queue", targets: ["tracks", "albums", "artists", "playlists"], surfaces: ["contextMenu"], undoable: true },
+  { id: "addToQueue", label: "Add to queue", icon: "queue_music", category: "queue", targets: ["tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu"], undoable: true },
+  { id: "playLater", label: "Play later", icon: "playLater", category: "queue", targets: ["tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu"], undoable: true },
+  { id: "preview", label: "Preview", icon: "headphones", category: "playback", targets: ["tracks", "queueItems"], surfaces: ["contextMenu"] },
   { id: "addToPlaylist", label: "Add to playlist…", icon: "playlistAdd", category: "library", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"], undoable: true },
+  { id: "stash", label: "Stash", icon: "stash", category: "queue", targets: ["none", "tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu", "palette", "mediaSession"], defaultShortcut: "Mod+S" },
+  { id: "openStash", label: "Open stash", icon: "stash", category: "view", targets: ["none"], surfaces: ["palette"], defaultShortcut: "Mod+Shift+S" },
+  { id: "clearStash", label: "Clear stash", icon: "clear_all", category: "queue", targets: ["none"], surfaces: ["palette"] },
+  { id: "snooze", label: "Snooze", icon: "bedtime", category: "queue", targets: ["tracks", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
+  { id: "unsnooze", label: "Unsnooze", icon: "bedtime", category: "queue", targets: ["tracks", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
   { id: "love", label: "Love", icon: "favorite", category: "library", targets: ["none", "tracks", "albums", "artists", "queueItems"], surfaces: ["contextMenu", "palette", "mediaSession"], undoable: true, defaultShortcut: "Mod+L" },
   { id: "unlove", label: "Unlove", icon: "heart_minus", category: "library", targets: ["none", "tracks", "albums", "artists", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
   { id: "rate5", label: "Rate 5 stars", icon: "star", category: "library", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"], undoable: true, defaultShortcut: "5" },
@@ -65,6 +72,8 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "volumeDown", label: "Volume down", icon: "volume", category: "playback", targets: ["none"], surfaces: ["palette"], defaultShortcut: "Mod+ArrowDown" },
   { id: "resumeHere", label: "Resume here", icon: "resume", category: "connect", targets: ["none"], surfaces: ["palette"] },
   { id: "stop", label: "Stop", icon: "stop", category: "playback", targets: ["none"], surfaces: ["palette", "mediaSession"] },
+  { id: "clearQueueGroup", label: "Clear next in queue", icon: "playlist_remove", category: "queue", targets: ["none"], surfaces: ["palette"], undoable: true },
+  { id: "stashQueueGroup", label: "Stash next in queue", icon: "stash", category: "queue", targets: ["none"], surfaces: ["palette"], undoable: true },
   { id: "clearQueue", label: "Clear queue", icon: "trash", category: "queue", targets: ["none"], surfaces: ["palette"], undoable: true },
   { id: "undo", label: "Undo", icon: "undo", category: "edit", targets: ["none"], surfaces: ["palette"], defaultShortcut: "Mod+Z" },
   { id: "redo", label: "Redo", icon: "redo", category: "edit", targets: ["none"], surfaces: ["palette"], defaultShortcut: "Mod+Shift+Z" },
@@ -103,11 +112,15 @@ export const REGISTRY: RegistryEntry[] = [
 export const DEFAULT_ORDERS: Record<string, string[]> = {
   sidebar: ["navigateHome", "navigateLibrary"],
   mediaSession: ["previous", "togglePlay", "next", "shuffle", "repeat", "love"],
-  contextMenu: ["play", "playShuffled", "playNext", "playLater", "addToPlaylist", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "pinToLibrary", "unpinFromLibrary", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
+  contextMenu: ["play", "playShuffled", "playNext", "addToQueue", "playLater", "preview", "addToPlaylist", "stash", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "snooze", "unsnooze", "pinToLibrary", "unpinFromLibrary", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
 };
 
 export interface ActionContext {
   hasCurrent: boolean;
+  /** The `queue.section` setting: "Add to queue" is enabled only with it on. */
+  queueSection?: boolean;
+  /** Entries in the "Next in queue" group (Clear / Stash next in queue need some). */
+  queueGroupCount?: number;
   canUndo: boolean;
   canRedo: boolean;
   hasResumeOffer: boolean;
@@ -142,6 +155,10 @@ export function describeActions(surface: string, target: ActionTarget, order: st
   const filtered = sequence && (surface === "sidebar" || surface === "mediaSession") ? sorted.filter((e) => sequence.includes(e.id)) : sorted;
   return filtered
     .filter((e) => {
+      if (e.id === "preview") {
+        const n = target.type === "tracks" ? target.data.ids.length : target.type === "queueItems" ? target.data.keys.length : 0;
+        if (n !== 1) return false;
+      }
       if (e.id === "love" && (ctx.allLoved || (kind === "none" && ctx.currentLoved))) return false;
       if (e.id === "unlove" && (ctx.allLoved === false || (kind === "none" && ctx.currentLoved === false))) return false;
       if (e.id === "unpin" && !ctx.anyDownloaded) return false;
@@ -152,6 +169,10 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       // Like the core: offered for one album, artist, playlist or song; the one that doesn't apply is disabled.
       if ((e.id === "pinToLibrary" || e.id === "unpinFromLibrary") && ctx.libraryPinned === undefined) return false;
       if (e.id === "resumeHere" && !ctx.hasResumeOffer) return false;
+      // Like the core's `visible` hook: hidden, not just disabled, with the Queue section off.
+      if (e.id === "addToQueue" && ctx.queueSection === false) return false;
+      // Like the core: shuffling one song is just playing it.
+      if (e.id === "playShuffled" && target.type === "tracks" && target.data.ids.length === 1) return false;
       return true;
     })
     .map((e) => ({
@@ -169,6 +190,8 @@ export function describeActions(surface: string, target: ActionTarget, order: st
 function enabledFor(id: string, ctx: ActionContext): boolean {
   if (["next", "previous", "seekBackward", "seekForward", "shuffle", "repeat", "autoplay", "volumeUp", "volumeDown", "stop", "clearQueue"].includes(id)) return ctx.hasCurrent;
   if (id === "togglePlay") return true;
+  if (id === "addToQueue") return ctx.queueSection !== false;
+  if (id === "clearQueueGroup" || id === "stashQueueGroup") return (ctx.queueGroupCount ?? 0) > 0;
   if (id === "undo") return ctx.canUndo;
   if (id === "redo") return ctx.canRedo;
   if (id === "pinToLibrary") return ctx.libraryPinned === false && !ctx.libraryFull;

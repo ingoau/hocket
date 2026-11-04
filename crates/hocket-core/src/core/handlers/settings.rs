@@ -4,7 +4,6 @@
 use crate::actions::canonical_id;
 use crate::api::*;
 use crate::connect::engine::Input;
-use crate::connect::wire::SessionOp;
 use crate::core::actor::Actor;
 use crate::core::handlers::session::DbResolver;
 use crate::settings::{keys, ConfigInputs};
@@ -41,33 +40,26 @@ impl Actor {
         self.emit(Event::SettingChanged {
             setting: setting.clone(),
         });
-        self.apply_setting_side_effects(&setting.key, local);
+        self.apply_setting_side_effects(&setting.key);
         if local && setting.scope == SettingScope::AccountSynced && self.settings.sync_enabled() {
             self.engine_input(Input::SettingChanged(setting));
         }
     }
 
     /// What a changed key means for the running subsystems.
-    pub(crate) fn apply_setting_side_effects(&mut self, key: &str, local: bool) {
+    pub(crate) fn apply_setting_side_effects(&mut self, key: &str) {
         match key {
-            keys::QUEUE_MODE => {
-                let mode = match self.settings.get_string(key).as_deref() {
-                    Some("youTube") => QueueMode::YouTube,
-                    _ => QueueMode::Apple,
-                };
-                if local && self.doc().is_some_and(|d| d.mode != mode) {
-                    self.local_op(SessionOp::SetQueueMode { mode });
-                }
+            keys::QUEUE_SECTION => {
+                // "Add to queue" comes and goes with it.
+                self.emit(Event::ActionsChanged {
+                    surface: "contextMenu".into(),
+                });
             }
             keys::QUEUE_SAVED_CAP => {
-                let cap = self.settings.get_i64(key).max(0) as u32;
-                let (_, mut saved) = self.reducer_policy.get();
-                saved = saved.with_cap(cap);
-                self.reducer_policy.set_saved(saved);
-            }
-            keys::QUEUE_HISTORY_CAP => {
-                self.reducer_policy
-                    .set_history_cap(self.settings.get_i64(key).max(10) as usize);
+                // Only how many unpinned queues are shown (the document keeps
+                // the protocol's own count): show the new number.
+                let queues = self.visible_saved_queues();
+                self.emit(Event::SavedQueuesChanged { queues });
             }
             keys::AUTOPLAY_SETTINGS => {
                 if let (Some(a), Some(s)) = (
@@ -120,6 +112,7 @@ impl Actor {
             }
             keys::CONNECT_COORDINATOR_URL => {
                 let url = self.settings.get_string(key);
+                self.coordinator_url_changed(url.as_deref());
                 self.engine_input(Input::SetCoordinatorUrl(url));
             }
             keys::DEVELOPER_MODE => {
@@ -177,6 +170,7 @@ impl Actor {
                 self.media_art = None;
                 self.emit_media_session();
             }
+            keys::PLAYBACK_RESUME_ALBUMS => self.emit_album_resumes(),
             keys::LIBRARY_SYNC_INTERVAL_MINUTES | keys::LIBRARY_FULL_RECONCILE_DAYS => {
                 self.last_sync_check = 0.0;
             }
@@ -359,7 +353,7 @@ impl Actor {
         }
         for key in &out.applied {
             if !changed_synced.contains(key.as_str()) {
-                self.apply_setting_side_effects(key, true);
+                self.apply_setting_side_effects(key);
             }
         }
         for s in all {
@@ -428,6 +422,15 @@ impl Actor {
     }
 
     pub(crate) fn set_action_order(&mut self, surface: &str, action_ids: Vec<String>) {
+        // Stash starts after shuffle, repeat and love, past the two custom
+        // buttons Android shows. Move it up only for this edit. A reload or a
+        // synced copy must keep a drag the user already made.
+        let action_ids = if surface == "mediaSession" {
+            let previous = self.registry.order(crate::actions::Surface::MediaSession);
+            crate::actions::show_new_stash(&previous, action_ids)
+        } else {
+            action_ids
+        };
         match self.registry.set_order_str(surface, action_ids) {
             Ok(()) => {
                 self.persist_registry();

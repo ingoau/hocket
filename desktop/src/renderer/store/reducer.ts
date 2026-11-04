@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
+  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -13,6 +13,8 @@ export interface CoreState {
   session: SessionDocument | undefined;
   queue: QueueView;
   transport: TransportState;
+  /** A song preview playing beside the queue, or none. */
+  preview: PreviewState | undefined;
   nowPlaying: QueueEntry | undefined;
   connection: ConnectionState;
   devices: DeviceInfo[];
@@ -30,6 +32,12 @@ export interface CoreState {
   batterySaver: boolean;
   syncProgress: SyncProgress | undefined;
   savedQueues: SavedQueue[];
+  /** The song stash, in order (core's `StashChanged`). */
+  stash: StashItem[];
+  /** Songs snoozed right now (core's `SnoozesChanged`). */
+  snoozes: SnoozeItem[];
+  /** Albums that offer resume (core's `AlbumResumesChanged`). */
+  albumResumes: AlbumResumePoint[];
   pins: Pin[];
   storage: StorageSummary | undefined;
   filters: Filter[];
@@ -51,9 +59,13 @@ export interface CoreState {
   /** Undo entry ids whose action replaced or cleared the queue: the only ones that get toasts. */
   queueReplacingUndo: string[];
   exported: { kind: "nsp" | "config"; document: string; path?: string; at: number } | undefined;
+  /** The newest room diagnostics collection, for the developer diagnostics page. */
+  roomDiagnostics: RoomDiagnosticsStatus | undefined;
+  /** The Save to Coordinator upload, for the bar across the top of the window. */
+  reportUpload: ReportUploadStatus | undefined;
 }
 
-export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, history: [], current: undefined, playingNext: [], upcoming: [], shuffle: false, repeat: "off", autoplay: false, mode: "apple", totalUpcoming: 0 };
+export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: false, repeat: "off", autoplay: false };
 
 export const EMPTY_TRANSPORT: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: 0, rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 1, muted: false, volumeDevice: undefined };
 
@@ -63,6 +75,7 @@ export const initialCoreState: CoreState = {
   session: undefined,
   queue: EMPTY_QUEUE,
   transport: EMPTY_TRANSPORT,
+  preview: undefined,
   nowPlaying: undefined,
   connection: { tier: "local", connected: false, coordinatorUrl: undefined, clockOffsetMs: 0, roundTripMs: undefined, peerCount: 0, error: undefined },
   devices: [],
@@ -80,6 +93,9 @@ export const initialCoreState: CoreState = {
   batterySaver: false,
   syncProgress: undefined,
   savedQueues: [],
+  stash: [],
+  snoozes: [],
+  albumResumes: [],
   pins: [],
   storage: undefined,
   filters: [],
@@ -93,6 +109,8 @@ export const initialCoreState: CoreState = {
   lastServerSearch: undefined,
   lastError: undefined,
   exported: undefined,
+  roomDiagnostics: undefined,
+  reportUpload: undefined,
   announcedUndo: [],
   queueReplacingUndo: [],
 };
@@ -162,10 +180,18 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, queue: e.data.queue, nowPlaying: e.data.queue.current ?? state.nowPlaying };
     case "transportChanged":
       return isPositionTick(state.transport, e.data.transport) ? state : { ...state, transport: e.data.transport };
+    case "previewChanged":
+      return { ...state, preview: e.data.preview };
     case "nowPlayingChanged":
       return { ...state, nowPlaying: e.data.entry };
     case "savedQueuesChanged":
       return { ...state, savedQueues: e.data.queues };
+    case "stashChanged":
+      return { ...state, stash: e.data.items };
+    case "snoozesChanged":
+      return { ...state, snoozes: e.data.items };
+    case "albumResumesChanged":
+      return { ...state, albumResumes: e.data.points };
     case "undoChanged": {
       // design.md "Global undo": a fresh mutation that throws the queue away gets
       // one toast with the single Undo action; everything else stays quiet (the
@@ -229,7 +255,12 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, exported: { kind: "nsp", document: e.data.document, path: e.data.path, at: Date.now() } };
     case "configExported":
       return { ...state, exported: { kind: "config", document: e.data.document, at: Date.now() } };
+    case "roomDiagnosticsChanged":
+      return { ...state, roomDiagnostics: e.data.status };
+    case "reportUploadChanged":
+      return { ...state, reportUpload: e.data.status };
     case "backend":
+    case "diagnosticsRequested": // main answers it
       return state;
     case "mediaSession":
       // OS media session is owned by the main process; the renderer uses transport / nowPlaying.
@@ -269,12 +300,10 @@ function sameEntryRefs(a: QueueEntry[], b: QueueEntry[]): boolean {
 }
 
 function patchQueue(q: QueueView, items: LibraryItemState[]): QueueView {
-  const history = q.history.map((e) => patchEntry(e, items));
+  const entries = q.entries.map((e) => patchEntry(e, items));
   const current = q.current && patchEntry(q.current, items);
-  const playingNext = q.playingNext.map((e) => patchEntry(e, items));
-  const upcoming = q.upcoming.map((e) => patchEntry(e, items));
-  if (sameEntryRefs(history, q.history) && current === q.current && sameEntryRefs(playingNext, q.playingNext) && sameEntryRefs(upcoming, q.upcoming)) return q;
-  return { ...q, history, current, playingNext, upcoming };
+  if (sameEntryRefs(entries, q.entries) && current === q.current) return q;
+  return { ...q, entries, current };
 }
 
 /** ~1 Hz position reports: keep the previous object so zustand subscribers do not re-render. */
@@ -291,6 +320,10 @@ export function patchSearch(r: SearchResults, items: LibraryItemState[]): Search
     artists: r.artists.map((a) => {
       const s = findItem(items, "artist", a.id);
       return s ? { ...a, loved: s.loved } : a;
+    }),
+    lyrics: (r.lyrics ?? []).map((h) => {
+      const track = patchTrack(h.track, items);
+      return track === h.track ? h : { ...h, track };
     }),
   };
 }

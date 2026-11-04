@@ -1,4 +1,5 @@
-import { completeSetup, expect, playFirstAlbum, test, openPlace } from "./fixtures";
+import { completeSetup, expect, playFirstAlbum, showSideView, test, openPlace } from "./fixtures";
+import { serverId } from "./a11y-helpers";
 
 test.describe("playback and queue", () => {
   test("playing an album fills the queue timeline with the model visible", async ({ hocket }) => {
@@ -8,21 +9,21 @@ test.describe("playback and queue", () => {
     const timeline = page.getByTestId("queue-timeline");
     await expect(timeline).toBeVisible();
     await expect(page.getByTestId("queue-row-current")).toHaveCount(1);
-    await expect(page.getByTestId("queue-row-upcoming").first()).toBeVisible();
-    await expect(timeline).toContainText("Continue playing");
+    await expect(page.getByTestId("queue-row-rest").first()).toBeVisible();
+    await expect(timeline).toContainText("Next from");
     // Next moves the current item into history (nothing consumed).
     await page.getByTestId("next").click();
     await expect(page.getByTestId("queue-row-history")).toHaveCount(1);
     await page.getByTestId("previous").click();
     await page.getByTestId("previous").click();
     await expect(page.getByTestId("queue-row-history")).toHaveCount(0);
-    // Play next inserts into "Playing next".
+    // Play next starts the "Next in queue" group, right after the current song.
     await openPlace(page, "songs");
     const row = page.getByTestId("track-row").nth(3);
     await row.click({ button: "right" });
     await page.getByTestId("context-menu").locator('[data-action="playNext"]').click();
-    await expect(page.getByTestId("queue-row-next")).toHaveCount(1);
-    await expect(page.getByTestId("queue-timeline")).toContainText("Playing next");
+    await expect(page.getByTestId("queue-row-group")).toHaveCount(1);
+    await expect(page.getByTestId("queue-timeline")).toContainText("Next in queue · 1");
     // Position ticks while playing.
     const pos = page.getByTestId("seek-position").first();
     await expect(pos).not.toHaveText("0:00", { timeout: 8000 });
@@ -133,5 +134,31 @@ test.describe("playback and queue", () => {
     await page.getByTestId("fullscreen-exit").click();
     await expect(page.getByTestId("fullscreen-player")).toHaveCount(0);
     await expect.poll(windowFullscreen).toBe(false);
+  });
+
+  test("a long queue pages in more rows on scroll, both ways", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await showSideView(page, "queue");
+    const sid = await serverId(page);
+    const ids = Array.from({ length: 600 }, (_, i) => `tr-${i + 1}`);
+    await page.evaluate(([s, t]) => window.hocket.dispatch({ type: "playTracks", data: { server_id: s as string, track_ids: t as string[], start_index: 300, label: "Long", shuffle: false } }), [sid, ids] as const);
+    await expect(page.getByTestId("queue-row-current")).toBeVisible();
+    // The event carries 100 rows each side of the pointer.
+    await expect(page.getByTestId("queue-row-history")).toHaveCount(100);
+    await expect(page.getByTestId("queue-row-rest")).toHaveCount(100);
+    await expect(page.getByTestId("queue-timeline")).toContainText("Next from: Long");
+    const scroll = page.getByTestId("queue-scroll");
+    await scroll.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
+    await expect.poll(() => page.getByTestId("queue-row-rest").count()).toBeGreaterThan(100);
+    await scroll.evaluate((el) => el.scrollTo({ top: 0 }));
+    await expect.poll(() => page.getByTestId("queue-row-history").count()).toBeGreaterThan(100);
+    // A history row plays on double-click (the pointer moves back; nothing is removed).
+    const total = await page.evaluate(async () => ((await window.hocket.query({ type: "queue" })) as { data: { total: number } }).data.total);
+    const row = page.getByTestId("queue-row-history").last();
+    const title = (await row.locator(".t1").textContent())!;
+    await row.dblclick();
+    await expect(page.getByTestId("queue-row-current").locator(".t1")).toHaveText(title);
+    expect(await page.evaluate(async () => ((await window.hocket.query({ type: "queue" })) as { data: { total: number } }).data.total)).toBe(total);
   });
 });

@@ -51,9 +51,10 @@ import { Stars } from "../components/Stars";
 import { Slider } from "../components/controls";
 import { openMenuFromButton } from "../components/ContextMenu";
 import { trapTab, useReturnFocus } from "../lib/focus";
+import { upcomingEntries } from "../lib/queue-view";
 import { usePresence, type Presence } from "../lib/presence";
 import { useMediaQuery, usePrefersReducedMotion } from "../lib/media";
-import { drawContinuation, isFlat, prepareScene, useScene, withTone, type Orientation, type Scene } from "../lib/immersive";
+import { drawContinuation, isFlat, prepareScene, sceneKey, useScene, withTone, type Orientation, type Scene } from "../lib/immersive";
 import { IDLE_HIDE_MS, useIdleHide } from "../lib/idle-hide";
 import { extractBrightest } from "../lib/accent";
 import { scrimAlpha } from "../lib/contrast";
@@ -179,7 +180,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   // The artwork, its layout and its continuation switch together, once the new cover's scene is
   // ready (the next track's is prepared ahead), and the new scene crossfades in over the last.
   const scene = useScene(track?.coverArt, preference, dark);
-  const next = (queue.playingNext[0] ?? queue.upcoming[0])?.track.coverArt;
+  const next = upcomingEntries(queue)[0]?.track.coverArt;
   useEffect(() => {
     if (next) void prepareScene(next, preference, dark);
   }, [next, preference, dark]);
@@ -220,7 +221,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const fading = shown.length > 1;
   const layers = shown.filter((s, i) => i === shown.length - 1 || !immersiveOf(s) === !immersive);
   const bigArtContent = layers.length ? (
-    layers.map((s, i) => (s.url ? <img key={s.coverArt} className={`np-art-img np-scene${fading && i === layers.length - 1 ? " np-scene-in" : ""}`} src={s.url} alt="" draggable={false} onAnimationEnd={settle} /> : <div key={s.coverArt} className="np-art-img np-scene placeholder"><Icon name="music" size={48} /></div>))
+    layers.map((s, i) => (s.url ? <img key={sceneKey(s)} className={`np-art-img np-scene${fading && i === layers.length - 1 ? " np-scene-in" : ""}`} src={s.url} alt="" draggable={false} onAnimationEnd={settle} /> : <div key={sceneKey(s)} className="np-art-img np-scene placeholder"><Icon name="music" size={48} /></div>))
   ) : (
     <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>
   );
@@ -351,7 +352,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       {layers.map((s) => {
         const im = immersiveOf(s);
         return im ? (
-          <Fragment key={s.coverArt}>
+          <Fragment key={sceneKey(s)}>
             <ImmersiveContinuation img={s.img} edge={im.edge} orientation={im.orientation} controls={im.orientation === "right" ? pill : controls} split={!!im.left} />
             {im.left ? <ImmersiveContinuation img={s.img} edge={im.left} orientation="left" controls={pill} split shown={centred} /> : null}
           </Fragment>

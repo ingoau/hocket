@@ -82,6 +82,61 @@ class PredictiveBackTest {
         compose.waitUntil(5_000) { exists("settings.categories") && !exists("settings.screen") }
     }
 
+    private fun startPushToSubPage() {
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.openSettingsFromAccount()
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("settings.category.appearance").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
+        compose.mainClock.advanceTimeBy(100)
+    }
+
+    private fun pageLeft() = compose.onNodeWithTag("settings.screen").fetchSemanticsNode().boundsInRoot.left
+
+    /** Swipes back while the push is still playing; returns the page's left edge after each step. */
+    private fun swipeDuringPush(): List<Float> {
+        val lefts = mutableListOf(pageLeft())
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.dispatchOnBackStarted(event(0f)) }
+        for (p in listOf(0.2f, 0.4f, 0.6f)) {
+            compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.dispatchOnBackProgressed(event(p)) }
+            compose.mainClock.advanceTimeBy(32)
+            lefts += pageLeft()
+        }
+        return lefts
+    }
+
+    // R-20261102-yyrs: a gesture that started mid-push seeked the NavHost toward the previous page
+    // while the push kept running underneath, so both pages blended under the scrim and snapped to
+    // the end of the push instead of following the finger.
+    @Test
+    fun aGestureDuringAPushDoesNotScrubItAndCancellingLeavesThePushToFinish() {
+        startPushToSubPage()
+        val full = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val lefts = swipeDuringPush()
+        assertTrue("the push keeps sliding in smoothly, not seeked by the finger: $lefts", lefts.zipWithNext().all { (a, b) -> b < a } && lefts.last() > full.left)
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.dispatchOnBackCancelled() }
+        compose.mainClock.autoAdvance = true
+        compose.waitUntil(5_000) { !exists("settings.categories") }
+        assertEquals(full.left, pageLeft(), 1f)
+        // Settled: the next gesture is predictive again.
+        back { it.dispatchOnBackStarted(event(0f)) }
+        back { it.dispatchOnBackProgressed(event(0.3f)) }
+        assertTrue(exists("settings.categories"))
+        assertTrue(pageLeft() > full.left + 1f)
+    }
+
+    @Test
+    fun releasingBackDuringAPushReversesItToThePreviousPage() {
+        startPushToSubPage()
+        val lefts = swipeDuringPush()
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.mainClock.advanceTimeBy(100)
+        assertTrue("the page slides back out toward the trailing edge: ${pageLeft()} after $lefts", pageLeft() > lefts.last())
+        compose.mainClock.autoAdvance = true
+        compose.waitUntil(5_000) { exists("settings.categories") && !exists("settings.screen") }
+    }
+
     /**
      * R-20261104-9x79: Search is a plain Column with no Scaffold behind it, so going back from it to
      * Home drew Home (dimmed by the covered-page scrim) straight through the search page. The page

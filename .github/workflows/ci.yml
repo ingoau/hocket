@@ -34,6 +34,11 @@ jobs:
     # The weekly schedule exists for the fuzz job only.
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    env:
+      # This addon is only tested, never shipped (desktop-dist builds its own), so skip the release
+      # profile's thin LTO and single codegen unit: still optimised, a fraction of the build time.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -46,7 +51,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config xvfb
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - run: cargo install typeshare-cli
       - run: pnpm install --frozen-lockfile
         working-directory: desktop
@@ -54,9 +59,46 @@ jobs:
         working-directory: desktop
       - run: pnpm typecheck && pnpm lint && pnpm test && pnpm build
         working-directory: desktop
+      # The built app and addon, for the e2e shards.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-build
+          path: |
+            desktop/out
+            desktop/native
+          if-no-files-found: error
+          retention-days: 1
+
+  desktop-e2e:
+    name: Desktop e2e (${{ matrix.shard }}/4)
+    # The weekly schedule exists for the fuzz job only.
+    if: github.event_name != 'schedule'
+    needs: desktop
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev xvfb
+      - run: pnpm install --frozen-lockfile
+        working-directory: desktop
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-build
+          path: desktop
       # A screen larger than the default 1280x1024: the immersive layout tests size the window to
-      # 1456x912 (3:2), which a smaller screen would clamp.
-      - run: xvfb-run -a -s "-screen 0 2000x1600x24" pnpm test:e2e
+      # 1456x912 (3:2), which a smaller screen would clamp. Playwright shards by spec file.
+      - run: xvfb-run -a -s "-screen 0 2000x1600x24" pnpm test:e2e --shard=${{ matrix.shard }}/4
         working-directory: desktop
 
   pebble:
@@ -76,9 +118,72 @@ jobs:
 
   android:
     name: Android
-    # The weekly schedule exists for the fuzz job only. Runs even when the pebble job failed (a
-    # Pebble SDK install problem shouldn't hide Android results); the APK then has no watchapp.
-    if: ${{ !cancelled() && github.event_name != 'schedule' }}
+    # The weekly schedule exists for the fuzz job only. A debug core for one ABI is all the unit
+    # tests and the debug APK need; the published APK is built by android-release.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # build-android-core.sh checks for all three, even when building one.
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+        with:
+          # The default also asks for the legacy `tools` package, which the
+          # SDK repository no longer serves.
+          packages: platform-tools
+      - run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "ndk;27.2.12479018"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: cargo install typeshare-cli
+      - run: scripts/gen-bindings.sh
+      - run: scripts/build-android-core.sh debug x86_64
+      # Robolectric downloads its android-all runtime jars at test time, outside Gradle (so
+      # setup-gradle doesn't cache them), into ~/.m2. A Maven Central 404 there fails every
+      # Robolectric test class, so keep them cached between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ hashFiles('android/gradle/libs.versions.toml', 'android/**/robolectric.properties') }}
+          restore-keys: robolectric-
+      - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+        working-directory: android
+
+  android-lint:
+    name: Android lint
+    # The weekly schedule exists for the fuzz job only. Lint needs the generated bindings but not
+    # the native core, so it runs beside the build instead of after it.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-37.1" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: cargo install typeshare-cli
+      - run: scripts/gen-bindings.sh
+      - run: ./gradlew --no-daemon :app:lintDebug
+        working-directory: android
+
+  android-release:
+    name: Android release APK
+    # Pushes to main only: the signed release APK the release job publishes, versionName
+    # 0.1.<run number> and a versionCode that only goes up. Runs even when the pebble job failed (a
+    # Pebble SDK install problem shouldn't hold back the APK); the APK then has no watchapp.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     # The APK bundles the watchapp the pebble job built, when there is one.
     needs: pebble
     runs-on: ubuntu-latest
@@ -99,15 +204,112 @@ jobs:
           java-version: 21
       - uses: android-actions/setup-android@v3
         with:
-          # The default also asks for the legacy `tools` package, which the
-          # SDK repository no longer serves.
           packages: platform-tools
       - run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "ndk;27.2.12479018"
-      - run: cargo install cargo-ndk typeshare-cli
+      - uses: gradle/actions/setup-gradle@v4
+      - run: cargo install typeshare-cli
       - run: scripts/gen-bindings.sh
       - run: scripts/build-android-core.sh release
-      - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug :app:lintDebug
+      # Signed with the key the installed app already uses.
+      - name: Build release APK
         working-directory: android
+        env:
+          HOCKET_KEYSTORE_B64: ${{ secrets.HOCKET_KEYSTORE_B64 }}
+          HOCKET_KEYSTORE_PASSWORD: ${{ secrets.HOCKET_KEYSTORE_PASSWORD }}
+          HOCKET_KEY_ALIAS: ${{ secrets.HOCKET_KEY_ALIAS }}
+          HOCKET_KEY_PASSWORD: ${{ secrets.HOCKET_KEY_PASSWORD }}
+        run: |
+          if [ -z "$HOCKET_KEYSTORE_B64" ]; then
+            echo "::error::HOCKET_KEYSTORE_B64 isn't set; refusing to publish an unsigned APK"
+            exit 1
+          fi
+          echo "$HOCKET_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export HOCKET_KEYSTORE="$RUNNER_TEMP/release.jks"
+          ./gradlew --no-daemon assembleRelease \
+            -PversionCode=${{ github.run_number }} -PversionName=0.1.${{ github.run_number }}
+          rm "$RUNNER_TEMP/release.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hocket-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+  desktop-dist:
+    name: Desktop package (${{ matrix.os }})
+    # Installers for the release job; pushes to main only. One OS failing doesn't hold back the
+    # others or the release.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo install typeshare-cli
+      - run: pnpm install --frozen-lockfile
+        working-directory: desktop
+      - run: pnpm pkg set version=0.1.${{ github.run_number }}
+        working-directory: desktop
+      - run: pnpm gen
+        working-directory: desktop
+      # Unsigned (no signing identity is configured; don't go looking for one on the runner).
+      - run: pnpm dist --publish never
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hocket-desktop-${{ runner.os }}
+          path: |
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.exe
+            desktop/release/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Release
+    # Every push to main is a pre-release, v0.1.<run number>, once the Android tests pass and the
+    # signed APK exists. The watchapp and desktop installers go on it when their jobs succeeded.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.android.result == 'success' && needs.android-release.result == 'success' }}
+    needs: [pebble, android, android-release, desktop-dist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: 0.1.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir dist
+          cp artifacts/hocket-apk/app-release.apk "dist/hocket-$VERSION.apk"
+          if [ -f artifacts/hocket-pbw/hocket.pbw ]; then
+            cp artifacts/hocket-pbw/hocket.pbw "dist/hocket-$VERSION.pbw"
+          fi
+          find artifacts -path 'artifacts/hocket-desktop-*' -type f -exec cp {} dist/ \;
+          ls -l dist
+          git log -1 --format=%B > notes.md
+          gh release create "v$VERSION" dist/* \
+            --target "$GITHUB_SHA" --title "Hocket $VERSION" --notes-file notes.md --prerelease
 
   fuzz:
     name: Fuzz (${{ matrix.target }})

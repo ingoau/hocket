@@ -24,6 +24,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
@@ -34,6 +37,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
@@ -57,12 +61,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -71,6 +77,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -134,6 +141,38 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed, initialMo
         }
     val isExpanded: Boolean get() = draggable.currentValue == SheetValue.Expanded || draggable.targetValue == SheetValue.Expanded
 
+    /**
+     * Large screens' panel layout ([PlayerPlacement.panel]): whether the open player has gone full
+     * screen; otherwise it is the side panel beside the page. Cleared as the player closes.
+     */
+    var fullScreen by mutableStateOf(false)
+
+    /** Beside the open panel: what takes over the main screen ([PlayerMode.Lyrics] or [PlayerMode.Queue]; null: the page). */
+    var panelPage by mutableStateOf<PlayerMode?>(null)
+
+    /** 1 while the player opens over the whole screen (always, outside the panel layout), 0 as the side panel; eased between. */
+    internal val cover = Animatable(1f)
+
+    /**
+     * How far the player covers the screen: [progress], times [cover]. What sits behind a full
+     * player (the receding page, the bar fading out, the scrim) follows this, so the side panel
+     * leaves the page as it is.
+     */
+    val coverProgress: Float get() = progress * cover.value
+
+    /** From the panel to the full-screen player: what the main screen showed beside it becomes the player's mode. */
+    fun enterFullScreen() {
+        mode = panelPage ?: PlayerMode.Artwork
+        panelPage = null
+        fullScreen = true
+    }
+
+    /** Back to the panel: lyrics or the queue go back to the main screen beside it. */
+    fun exitFullScreen() {
+        panelPage = mode.takeIf { it == PlayerMode.Lyrics || it == PlayerMode.Queue }
+        fullScreen = false
+    }
+
     /** Fling speed (px/s) past which a release settles in the fling's direction; set from the density. */
     internal var velocityThreshold by mutableStateOf(Float.POSITIVE_INFINITY)
 
@@ -175,17 +214,20 @@ class NowPlayingSheetState(initial: SheetValue = SheetValue.Collapsed, initialMo
     companion object {
         /** Saves where the sheet is headed and the player's mode, so a rotation keeps both. */
         val Saver: Saver<NowPlayingSheetState, String> = Saver(
-            save = { it.draggable.targetValue.name + "|" + it.mode.name },
+            save = { it.draggable.targetValue.name + "|" + it.mode.name + "|" + it.fullScreen + "|" + (it.panelPage?.name ?: "") },
             restore = { saved ->
                 val parts = saved.split("|")
                 NowPlayingSheetState(
                     SheetValue.valueOf(parts[0]),
                     // About is a sheet now (from the title): a saved About mode opens on the artwork.
                     parts.getOrNull(1)?.let { m -> PlayerMode.entries.firstOrNull { it.name == m } }?.takeIf { it != PlayerMode.About } ?: PlayerMode.Artwork,
-                )
+                ).apply {
+                    fullScreen = parts.getOrNull(2) == "true"
+                    panelPage = parts.getOrNull(3)?.let { p -> PlayerMode.entries.firstOrNull { it.name == p } }
+                }
             },
         )
-        val MINI_HEIGHT: Dp = 68.dp
+        val MINI_HEIGHT: Dp = 64.dp
         /** The gap the floating mini player keeps above the navigation bar (or the screen's bottom inset). */
         val MINI_GAP: Dp = 8.dp
         /** A release moves the sheet to the other anchor once it has travelled this share of the distance. */
@@ -232,6 +274,8 @@ internal class HeroGeometry {
     /** The corners at both ends (px), set from the density. */
     var bigCorner = 0f
     var smallCorner = 0f
+    /** The small slot is the large one above the title ([PlayerLayoutWide]), not the thumbnail: it keeps the big corners. */
+    var artAbove = false
     /** The mode animation (0 = artwork mode, 1 = another mode), read in layout and draw lambdas. */
     var modeFraction: () -> Float = { 0f }
     /**
@@ -256,6 +300,9 @@ internal class HeroGeometry {
     var titleFold = 0f
     /** The full player's skip swipe (px, read in layer lambdas): the immersive continuation slides with it. */
     var swipe: () -> Float = { 0f }
+    /** The swipe up to the queue or the lyrics ([SwipeUpPull]): the artwork's lift (px, upwards) and its share of the most (read in layer lambdas). */
+    var lift: () -> Float = { 0f }
+    var liftFraction: () -> Float = { 0f }
 
     fun measure(coordinates: LayoutCoordinates): Rect {
         val r = root ?: return Rect.Zero
@@ -301,7 +348,7 @@ internal class HeroGeometry {
     }
 
     /** The visible corner radius at mode fraction [f]. */
-    fun cornerFor(f: Float, @Suppress("UNUSED_PARAMETER") width: Float): Float = lerpF(if (immersive) 0f else bigCorner, smallCorner, f.coerceIn(0f, 1f))
+    fun cornerFor(f: Float, @Suppress("UNUSED_PARAMETER") width: Float): Float = lerpF(if (immersive) 0f else bigCorner, if (artAbove) bigCorner else smallCorner, f.coerceIn(0f, 1f))
 
     /**
      * Where the artwork in flight is at sheet progress [p] (0 = the mini player's thumbnail, 1 =
@@ -339,9 +386,9 @@ internal class HeroGeometry {
     }
 
     companion object {
-        /** The mini player's artwork and its corners (square-ish, Navic). */
-        val THUMB_SIZE: Dp = 48.dp
-        val THUMB_CORNER: Dp = 8.dp
+        /** The mini player's artwork and its corners. */
+        val THUMB_SIZE: Dp = 44.dp
+        val THUMB_CORNER: Dp = 12.dp
         /**
          * The thumbnail beside the title in a non-artwork mode (before the title block has been
          * measured: it spans that block, about this at the default font size) and its corners.
@@ -352,26 +399,55 @@ internal class HeroGeometry {
         val HERO_CORNER: Dp = 28.dp
         val HERO_ELEVATION: Dp = 16.dp
         /** The floating mini player: side margin, gap above the navigation bar, corners, shadow and widest size. */
-        val MINI_MARGIN: Dp = 12.dp
+        val MINI_MARGIN: Dp = 16.dp
         val MINI_GAP: Dp = NowPlayingSheetState.MINI_GAP
-        val MINI_CORNER: Dp = 16.dp
-        val MINI_ELEVATION: Dp = 8.dp
+        val MINI_CORNER: Dp = 32.dp
+        val MINI_ELEVATION: Dp = 4.dp
         val MINI_MAX_WIDTH: Dp = 600.dp
         /** How much the artwork shrinks while paused (Navic). */
         const val PAUSED_SCALE = 0.86f
         /** Sheet progress above which an immersive artwork in flight keeps its full size ([flightRect]). */
         const val SHRINK_FROM = 0.6f
 
-        /** The immersive continuation while the sheet moves: gone before the artwork starts shrinking. */
+        /** The immersive continuation's and top strip's opacity when not in flight (in flight they are wiped: [continuationReveal]). */
         fun continuationAlpha(p: Float): Float = ((p - 0.45f) / 0.45f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
 
-        /** The immersive artwork's seam fade in flight: the landed one until the continuation has gone. */
-        fun seamFraction(p: Float): Float = ((p - 0.3f) / 0.15f).coerceIn(0f, 1f)
+        /**
+         * How much of the immersive continuation below the artwork shows while the sheet moves (1
+         * all of it, 0 none): it stays opaque and is wiped up from the bottom of the screen to the
+         * seam (from fully open to [SHRINK_FROM]), so it never turns see-through over the backdrop
+         * behind the title; and it has gone by the time the artwork starts shrinking.
+         */
+        fun continuationReveal(p: Float): Float = ((p - SHRINK_FROM) / (REVEAL_FULL - SHRINK_FROM)).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+        private const val REVEAL_FULL = 0.9f
+
+        /**
+         * The immersive artwork's seam fade in flight: the landed one while the continuation is
+         * under it, easing off as the wipe's last [SEAM_OFF] reaches the seam, so once it has gone
+         * the artwork shrinking into the thumbnail is a crisp card, not one with a faded bottom.
+         */
+        fun seamFraction(p: Float): Float = (continuationReveal(p) / SEAM_OFF).coerceIn(0f, 1f)
+        private const val SEAM_OFF = 0.15f
 
         /** The handle (and the immersive header scrim) fade out first, so nothing hangs over the art. */
         fun headerAlpha(p: Float): Float = ((p - 0.85f) / 0.1f).coerceIn(0f, 1f)
     }
 }
+
+/**
+ * Where the player sits. By default ([miniWidth] null) the phone's: the floating card centred above
+ * the navigation bar (up to [HeroGeometry.MINI_MAX_WIDTH]), growing into the full-screen player.
+ * With a [miniWidth], the card keeps that width at the end edge (beside the floating bar on wide
+ * screens, or beside the rail). With [panel] too (landscape tablets), it grows up into a side panel
+ * of the same width instead, leaving the page usable beside it; the panel's own button takes it full
+ * screen ([NowPlayingSheetState.fullScreen]).
+ */
+@androidx.compose.runtime.Immutable
+data class PlayerPlacement(val miniWidth: Dp? = null, val panel: Boolean = false)
+
+/** The side panel's corners and its gap under the status bar. */
+private val PANEL_CORNER = 28.dp
+private val PANEL_TOP_GAP = 12.dp
 
 /**
  * The player as one morphing sheet (Metrolist): a floating mini-player pill above the navigation bar
@@ -382,7 +458,7 @@ internal class HeroGeometry {
  * track changes. The pill slides in when something starts playing and out when nothing is left.
  */
 @Composable
-fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit) {
+fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit, placement: PlayerPlacement = PlayerPlacement()) {
     val client = LocalCoreClient.current
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -408,15 +484,62 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val miniHeight = miniPlayerHeight()
         val miniHeightPx = with(density) { miniHeight.toPx() }
         val collapsedOffset = maxHeightPx - miniHeightPx - with(density) { HeroGeometry.MINI_GAP.toPx() } - navPx
+        // The frame the sheet lives in: the whole screen, or (the panel layout) the side panel's
+        // column at the end edge, under the status bar and down to the mini player's bottom line,
+        // easing out to the whole screen as the player goes full screen ([NowPlayingSheetState.cover]).
+        val widthPx = constraints.maxWidth.toFloat()
+        val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+        val panelMode = placement.panel && placement.miniWidth != null
+        val edgeMargin = with(density) { HeroGeometry.MINI_MARGIN.toPx() }
+        val endCardWidth = placement.miniWidth?.let { with(density) { it.toPx() } }
+        val panelWidth = endCardWidth ?: widthPx
+        val panelLeft = if (rtl) edgeMargin else widthPx - edgeMargin - panelWidth
+        val panelTop = WindowInsets.statusBars.getTop(density) + with(density) { PANEL_TOP_GAP.toPx() }
+        val panelBottom = collapsedOffset + miniHeightPx
+        val coverNow: () -> Float = { if (panelMode) state.cover.value else 1f }
+        val reducedCover = LocalReducedMotion.current
+        // (The first run snaps: a player restored open is already where it belongs.)
+        var coverSettled by remember { mutableStateOf(false) }
+        LaunchedEffect(panelMode, state.fullScreen, reducedCover) {
+            val target = if (!panelMode || state.fullScreen) 1f else 0f
+            if (reducedCover || !state.isExpanded || !coverSettled) state.cover.snapTo(target) else state.cover.animateTo(target, Motion.sheet)
+            coverSettled = true
+        }
+        // Turning into the panel layout with the player open (a rotation to landscape), lyrics or
+        // the queue it showed move to the main screen beside the panel.
+        LaunchedEffect(panelMode) {
+            if (panelMode && state.isExpanded && !state.fullScreen && state.panelPage == null) {
+                state.panelPage = state.mode.takeIf { it == PlayerMode.Lyrics || it == PlayerMode.Queue }
+            }
+        }
+        // Closing the player leaves full screen and hands the main screen back to the page (once it
+        // has closed: a drag passing half way, then back up, keeps both).
+        LaunchedEffect(state) {
+            snapshotFlow { state.draggable.settledValue }.collect { if (it == SheetValue.Collapsed) { state.fullScreen = false; state.panelPage = null } }
+        }
+        // What the player shows: always the artwork as the panel (lyrics and the queue go to the main screen).
+        val shownMode: () -> PlayerMode = { if (panelMode && !state.fullScreen) PlayerMode.Artwork else state.mode }
         LaunchedEffect(collapsedOffset, density) {
             state.collapsedOffset = collapsedOffset
             state.velocityThreshold = with(density) { NowPlayingSheetState.VELOCITY_THRESHOLD.toPx() }
             state.draggable.updateAnchors(DraggableAnchors { SheetValue.Collapsed at collapsedOffset; SheetValue.Expanded at 0f }, state.draggable.targetValue)
         }
+        val haptics = LocalHapticFeedback.current
+        // Swiping up on the open player opens the queue, the lyrics or a sheet (see [SwipeUpPull]).
+        val queuePull = remember { SwipeUpPull(scope) }
+        queuePull.haptics = haptics
+        queuePull.reduced = reducedMotion
+        with(density) {
+            queuePull.maxLift = SwipeUpPull.MAX_LIFT.toPx()
+            queuePull.commit = SwipeUpPull.COMMIT.toPx()
+            queuePull.flingVelocity = SwipeUpPull.FLING.toPx()
+        }
         val fling = AnchoredDraggableDefaults.flingBehavior(state.draggable, positionalThreshold = { d -> d * NowPlayingSheetState.POSITIONAL_THRESHOLD }, animationSpec = Motion.sheet)
 
         // Predictive back drives the sheet down with the gesture, then settles either way.
-        PredictiveBackHandler(enabled = state.isExpanded) { events ->
+        // (The side panel is part of the page, not a modal: back does not close it. Full screen
+        // from the panel, back returns to the panel.)
+        PredictiveBackHandler(enabled = state.isExpanded && !panelMode) { events ->
             try {
                 events.collect { ev ->
                     val target = collapsedOffset * (ev.progress * 0.35f)
@@ -427,19 +550,22 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 state.expand()
             }
         }
+        androidx.activity.compose.BackHandler(enabled = panelMode && state.fullScreen && state.isExpanded) { state.exitFullScreen() }
 
         // Thresholds of the progress, as derived state: composition reacts when one is crossed,
         // never on every frame of a drag.
         val fullPlayerAccessible by remember(state) { derivedStateOf { state.progress >= FULL_PLAYER_A11Y_PROGRESS } }
-        val scrimShown by remember(state) { derivedStateOf { state.progress > 0f } }
-        val scrimTappable by remember(state) { derivedStateOf { state.progress > 0.5f } }
+        val scrimShown by remember(state) { derivedStateOf { state.coverProgress > 0f } }
+        val scrimTappable by remember(state) { derivedStateOf { state.coverProgress > 0.5f } }
         val settledOpen by remember(state) { derivedStateOf { state.progress > 0.9f } }
         // Only the big artwork flies to and from the mini player. In lyrics / queue / about the
         // artwork is a thumbnail beside the title near the bottom of the page: flown opaque from
         // there to the mini player's thumbnail it would float over the fading, shrinking sheet and
         // over the screen behind it, so instead it stays on the page (sliding and fading with it)
         // while the mini player's own thumbnail fades in with the bar.
-        val flying by remember(state) { derivedStateOf { state.mode == PlayerMode.Artwork && state.progress.let { it > FLY_EPSILON && it < 1f - FLY_EPSILON } } }
+        val flying by remember(state, panelMode) { derivedStateOf { shownMode() == PlayerMode.Artwork && state.progress.let { it > FLY_EPSILON && it < 1f - FLY_EPSILON } } }
+        // Whether the full player's backdrop shows at all ([backgroundAlpha] is 0 up to 0.1).
+        val backdropShown by remember(state) { derivedStateOf { backgroundAlpha(state.progress) > 0f } }
 
         // Scrim behind the sheet (a pointer affordance only: the collapse button and the sheet's
         // collapse/dismiss actions are the accessible way out).
@@ -447,7 +573,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             // clearAndSetSemantics first: semantics modifiers after it on the same node (the click)
             // would otherwise survive.
             Box(
-                Modifier.fillMaxSize().clearAndSetSemantics { }.graphicsLayer { alpha = state.progress * 0.6f }.background(Color.Black)
+                Modifier.fillMaxSize().clearAndSetSemantics { }.graphicsLayer { alpha = state.coverProgress * 0.6f }.background(Color.Black)
                     .let { if (scrimTappable) it.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { scope.launch { state.collapse() } } else it },
             )
         }
@@ -456,13 +582,27 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // or up while the sheet is still opening) moves the sheet, and flings settle it.
         val nested = remember(state) {
             object : NestedScrollConnection {
+                // The page scrolled in this gesture: the rest of it (and its fling) stays the page's,
+                // so a flick that runs into the end of a short screen's scroll never opens the queue.
+                var pageScrolled = false
                 override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                     val d = available.y
-                    return if (d < 0 && source == NestedScrollSource.UserInput && state.progress < 1f) Offset(0f, state.draggable.dispatchRawDelta(d)) else Offset.Zero
+                    if (source != NestedScrollSource.UserInput) return Offset.Zero
+                    // Dragging down after a swipe up gives back the artwork's lift before the page scrolls.
+                    if (d > 0 && queuePull.held) return Offset(0f, queuePull.pull(d))
+                    return if (d < 0 && state.progress < 1f) Offset(0f, state.draggable.dispatchRawDelta(d)) else Offset.Zero
                 }
-                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
-                    if (source == NestedScrollSource.UserInput) Offset(0f, state.draggable.dispatchRawDelta(available.y)) else Offset.Zero
+                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                    if (source != NestedScrollSource.UserInput) return Offset.Zero
+                    if (consumed.y != 0f) pageScrolled = true
+                    val moved = state.draggable.dispatchRawDelta(available.y)
+                    // Up past the open sheet: the swipe to the queue.
+                    val left = available.y - moved
+                    return Offset(0f, moved + if (left < 0f && !pageScrolled) queuePull.pull(left) else 0f)
+                }
                 override suspend fun onPreFling(available: Velocity): Velocity {
+                    pageScrolled = false
+                    if (queuePull.held) { queuePull.release(available.y); return available }
                     return if (available.y < 0 && state.progress < 1f) { state.settle(available.y); available } else Velocity.Zero
                 }
                 override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
@@ -478,12 +618,16 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // Immersive artwork on a portrait screen (the square artwork leaves room for the controls).
         val settings by client.settings.collectAsStateWithLifecycle()
         val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
-        val portrait = constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
+        // (The panel's own shape: a tall panel takes an immersive artwork even on a landscape screen.)
+        val portrait = if (panelMode && !state.fullScreen) panelWidth <= (panelBottom - panelTop) * ImmersiveArtwork.MAX_WIDTH_SHARE
+            else constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
         fun ArtworkLayout?.immersiveOrNull() = this?.takeIf { portrait && it.bottom.style != ArtworkStyle.Card }
-        // The scene (the cover, its layout and its colours) changes as one: a new cover waits until
-        // its layout and seed are known (at once for one already worked out, a neighbour's, say),
-        // so it never shows as a card and then turns immersive, or in the wrong colours. A slow
-        // one gives up waiting after [SCENE_HOLD_MS] and shows as a card until it is known.
+        // The scene's style (the layout and colours) changes as one: a new cover's waits until its
+        // layout and seed are known (at once for one already worked out, a neighbour's, say), so
+        // it never shows as a card and then turns immersive, or in the wrong colours. Meanwhile the
+        // last style holds around the new cover (never the last cover itself: that is another
+        // song's art). A slow one gives up waiting after [SCENE_HOLD_MS] and shows as a card until
+        // it is known.
         val trackLayout by rememberArtworkLayout(trackCover, preference, dark = appDark)
         val trackSeed by artworkSeed(trackCover)
         val carousel = remember { SkipCarousel() }
@@ -491,12 +635,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         var held by remember { mutableStateOf<Scene?>(null) }
         var holdOver by remember(trackCover) { mutableStateOf(false) }
         LaunchedEffect(trackCover) { kotlinx.coroutines.delay(SCENE_HOLD_MS); holdOver = true }
-        val scene = when {
-            ready -> Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed)
-            // A skip swipe has already shown the new song in its own style: no holding the old one.
-            !holdOver && held != null && !carousel.committing -> held!!
-            else -> Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed)
-        }
+        // A skip swipe has already shown the new song in its own style: no holding the old one.
+        val scene = sceneShown(Scene(trackCover, trackLayout?.layout.immersiveOrNull(), trackSeed), ready, held, holding = !holdOver && !carousel.committing)
         SideEffect { if (ready) held = scene }
         val coverArt = scene.coverArt
         val seed = scene.seed ?: coverArt?.let { ArtworkColors.seedFor(it) }
@@ -506,7 +646,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         hero.immersive = immersiveEdge != null
         // The skip swipe's neighbours, with their layouts and colours worked out ahead (cached), so
         // a neighbour slides in in its own style and the commit changes nothing on screen.
-        val neighbours by rememberNeighbours()
+        // Held while a skip settles (see [SkipCarousel.shown]); the mini player holds its own.
+        val liveNeighbours by rememberNeighbours()
+        val neighbours = carousel.shown(liveNeighbours)
         val previousCover = neighbours.previous?.track?.coverArt
         val nextCover = neighbours.next?.track?.coverArt
         val previousLayout = rememberArtworkLayout(previousCover, preference, dark = appDark).value?.layout.immersiveOrNull()
@@ -517,13 +659,12 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // The swipe's fraction towards a neighbour in steps (1 = previous, -1 = next): the backdrop
         // and the colours follow it, recomposing a few times a swipe, not every frame.
         val towards by remember(carousel) { derivedStateOf { (carousel.fraction() * SCHEME_STEPS).roundToInt() / SCHEME_STEPS.toFloat() } }
-        // What the previous slot shows: the current song again when Previous will restart it.
-        val previousShown = if (carousel.restartPeek) Triple(coverArt, artworkLayout, scene.seed) else Triple(previousCover, previousLayout, previousSeed)
+        val previousShown = Triple(previousCover, previousLayout, previousSeed)
         // The full player is dark (it sits on darkened artwork), themed from the artwork, except in
         // artwork mode over a light immersive continuation (a white cover carried on in white): dark
         // controls there. The scheme crossfades on a track or mode change while the player is
         // showing, snaps while hidden, and follows a skip swipe towards the neighbour's.
-        val artworkMode = state.mode == PlayerMode.Artwork
+        val artworkMode = shownMode() == PlayerMode.Artwork
         val lightPlayer = immersiveEdge?.light == true && artworkMode
         val targetScheme = remember(seed, lightPlayer) { playerSchemeFor(seed, lightPlayer) }
         // Read as derived state: the swipe's offset changes every frame, the flag only twice a swipe.
@@ -547,13 +688,31 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         hero.smallCorner = with(density) { HeroGeometry.SMALL_CORNER.toPx() }
         // The mode's animation: 0 with the big artwork, 1 with lyrics / queue / about (the artwork
         // then small beside the title). Snaps while the full player is not showing.
-        val mode = state.mode
+        val mode = shownMode()
         val modeAnim = remember { Animatable(if (mode == PlayerMode.Artwork) 0f else 1f) }
         LaunchedEffect(mode, reducedMotion) {
             val target = if (mode == PlayerMode.Artwork) 0f else 1f
             if (reducedMotion || !state.isExpanded) modeAnim.snapTo(target) else modeAnim.animateTo(target, Motion.mode)
         }
         hero.modeFraction = { modeAnim.value }
+        // The lift eases out as the artwork flies to the thumbnail (and is gone in another mode).
+        hero.lift = { queuePull.lift() * (1f - modeAnim.value) }
+        hero.liftFraction = { queuePull.fraction() * (1f - modeAnim.value) }
+        // Only from a player already resting open: an expand drag that carries on past the top
+        // (settledValue stays Collapsed until it ends) never turns into a pull.
+        queuePull.enabled = {
+            shownMode() == PlayerMode.Artwork && state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded && (!panelMode || state.fullScreen) &&
+                !carousel.busy && !state.draggable.isAnimationRunning
+        }
+        // `swipe.playerUp`: the queue or the lyrics take the artwork's place; the device picker and
+        // the song menu come up as sheets ([FullPlayer] sets [SwipeUpPull.openSheet] for those).
+        val swipeUp = settings[app.hocket.core.SettingKeys.SWIPE_PLAYER_UP]?.value?.trim()?.removeSurrounding("\"")
+        queuePull.onOpen = { state.mode = if (swipeUp == app.hocket.core.SwipeOptions.PLAYER_UP_LYRICS) PlayerMode.Lyrics else PlayerMode.Queue }
+        // The sheet moving (a collapse by the button, back or the scrim) drops any lift, so the
+        // artwork in flight takes over from an unlifted one.
+        LaunchedEffect(queuePull, state) {
+            snapshotFlow { state.progress >= 1f && state.draggable.settledValue == SheetValue.Expanded }.collect { open -> if (!open) queuePull.reset() }
+        }
         val sheetTitle = stringResource(R.string.player_sheet_title)
         val collapseLabel = stringResource(R.string.player_collapse)
         val expandLabel = stringResource(R.string.player_expand)
@@ -564,12 +723,33 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val sheetCorner = with(density) { SHEET_CORNER.toPx() }
         val cardElevation = with(density) { HeroGeometry.MINI_ELEVATION.toPx() }
         val appearShift = miniHeightPx + with(density) { HeroGeometry.MINI_GAP.toPx() }
+        val thumbFallback = fallbackThumb(density)
+        // Below the thumbnail in the mini player: the room the card keeps under the artwork in flight.
+        val thumbPad = (miniHeightPx - with(density) { HeroGeometry.THUMB_SIZE.toPx() }) / 2f
+        // The card's own fill, opaque throughout: the mini player's container under the full
+        // player's backdrop, so the card never shows the page through it while one fades into the other.
+        val cardFill = miniPlayerColours(coverArt).container
         val sheetOffset: () -> Float = { state.draggable.offset.takeIf { !it.isNaN() } ?: if (state.draggable.currentValue == SheetValue.Expanded) 0f else collapsedOffset }
+        // The sheet, and above it (outside its clip) the artwork in flight, so the artwork is
+        // whole while it grows out of the small card at the start of a swipe up.
+        // The frame's top: the sheet's, plus (as the panel) the gap under the status bar as it opens.
+        val frameTop: () -> Float = { sheetOffset() + state.progress * (1f - coverNow()) * panelTop }
         Box(
             Modifier
-                .fillMaxWidth()
-                .height(with(density) { maxHeightPx.toDp() })
-                .offset { IntOffset(0, sheetOffset().roundToInt()) }
+                // From the left edge whatever the layout direction (the offset is absolute too).
+                .align(androidx.compose.ui.AbsoluteAlignment.TopLeft)
+                .absoluteOffset { IntOffset(lerpF(panelLeft, 0f, coverNow()).roundToInt(), frameTop().roundToInt()) }
+                .layout { measurable, _ ->
+                    val f = coverNow()
+                    val w = lerpF(panelWidth, widthPx, f).roundToInt()
+                    val h = lerpF(panelBottom - panelTop, maxHeightPx, f).roundToInt()
+                    val p = measurable.measure(Constraints.fixed(w, h))
+                    layout(w, h) { p.place(0, 0) }
+                },
+        ) {
+        Box(
+            Modifier
+                .fillMaxSize()
                 // The floating card's margins, corners, height and shadow morph into the
                 // full-screen sheet; the whole sheet slides in/out with `appear`. One layer, no
                 // relayout.
@@ -577,19 +757,26 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                     val p = state.progress
                     alpha = appear.value
                     translationY = (1f - appear.value) * appearShift
-                    val cardInset = maxOf(margin, (size.width - maxCard) / 2f + margin)
-                    val screenBottom = maxHeightPx - sheetOffset()
+                    val f = coverNow()
+                    val spread = 1f - (p / CARD_TO_SHEET).coerceIn(0f, 1f)
+                    val (startInset, endInset) = cardInsets(size.width, margin, maxCard, endCardWidth, panelMode)
+                    // The frame's bottom (the screen's, or the panel's) from the frame's top.
+                    val screenBottom = lerpF(panelBottom, maxHeightPx, f) - frameTop()
+                    val panelCorner = lerpF(corner, PANEL_CORNER.toPx(), p)
                     shape = SheetShape(
-                        inset = cardInset * (1f - (p / 0.3f).coerceIn(0f, 1f)),
-                        topCorner = sheetTopCorner(p, corner, sheetCorner),
-                        bottomCorner = corner * (1f - p),
-                        bottom = lerpF(miniHeightPx, screenBottom, (p / 0.5f).coerceIn(0f, 1f)),
+                        start = startInset * spread,
+                        end = endInset * spread,
+                        topCorner = lerpF(panelCorner, sheetTopCorner(p, corner, sheetCorner), f),
+                        bottomCorner = lerpF(panelCorner, corner * (1f - p), f),
+                        // Never short of the artwork in flight: the card grows around it from the
+                        // start, so the artwork never hangs out below a strip of a card.
+                        bottom = maxOf(lerpF(miniHeightPx, screenBottom, (p / 0.5f).coerceIn(0f, 1f)), if (flying) hero.flightRect(p, modeAnim.value, artScale.value, thumbFallback).bottom + thumbPad else 0f),
                     )
                     clip = true
-                    shadowElevation = cardElevation * (1f - p * 3f).coerceIn(0f, 1f)
+                    shadowElevation = lerpF(cardElevation, cardElevation * (1f - p * 3f).coerceIn(0f, 1f), coverNow())
                 }
                 .nestedScroll(nested)
-                .anchoredDraggable(state.draggable, Orientation.Vertical, flingBehavior = fling)
+                .anchoredDraggable(state.draggable, Orientation.Vertical, overscrollEffect = queuePull, flingBehavior = fling)
                 // The drag has non-gesture equivalents: expand from the mini player, and collapse or
                 // dismiss the open sheet (also the collapse button and back).
                 .semantics {
@@ -604,11 +791,17 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 }
                 .testTag("nowPlaying.sheet"),
         ) {
-            Box(Modifier.fillMaxSize().onPlaced { hero.root = it }) {
+            // (The fill only while the backdrop over it is not yet opaque.)
+            Box(Modifier.fillMaxSize().onPlaced { hero.root = it }.drawBehind { if (backgroundAlpha(state.progress) < 1f) drawRect(cardFill) }) {
                 // The full player's backdrop: blurred artwork over the artwork's colour fading to
                 // near black, fading in as the sheet opens (Metrolist's curve: nothing for the first
-                // tenth, then quickly opaque).
-                PlayerBackground(coverArt, seed, moving = settledOpen, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) })
+                // tenth, then quickly opaque). Before Android 13 it is a full-screen RenderEffect
+                // blur, rendered offscreen every frame even at alpha 0, so it is only composed once
+                // it can show: under the collapsed card it cost a full-screen blur per frame, and on
+                // a Galaxy S10 (Android 12) the card's own content stopped drawing.
+                if (Build.VERSION.SDK_INT >= 33 || backdropShown) {
+                    PlayerBackground(coverArt, seed, moving = settledOpen, Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha(state.progress) })
+                }
                 // While the artwork is swiped, the neighbour's backdrop fades in with the swipe.
                 if (swiping && neighbourShown != null) {
                     val sign = if (towards > 0f) 1f else -1f
@@ -641,12 +834,27 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                         Box(
                             Modifier
                                 .fillMaxSize()
-                                .graphicsLayer { alpha = ((state.progress - 0.15f) * 4f).coerceIn(0f, 1f) }
+                                .graphicsLayer {
+                                    alpha = ((state.progress - 0.15f) * 4f).coerceIn(0f, 1f)
+                                    // Over an immersive artwork in flight the controls are wiped with its
+                                    // continuation (below), so they never sit on the bare backdrop.
+                                    compositingStrategy = if (artworkLayout != null && flying) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+                                }
+                                .drawWithContent {
+                                    drawContent()
+                                    if (artworkLayout != null && flying) wipeBelow(hero.bigSlot().bottom, HeroGeometry.continuationReveal(state.progress))
+                                }
                                 .then(if (fullPlayerAccessible) Modifier else Modifier.clearAndSetSemantics { }),
                         ) {
+                            val asPanel = panelMode && !state.fullScreen
                             FullPlayer(
                                 mode = mode,
-                                onMode = { state.mode = it },
+                                // As the panel, Lyrics and the Queue take over the main screen instead.
+                                onMode = { m -> if (asPanel) state.panelPage = m.takeIf { it == PlayerMode.Lyrics || it == PlayerMode.Queue } else state.mode = m },
+                                actionsMode = if (asPanel) state.panelPage ?: PlayerMode.Artwork else mode,
+                                fullScreenToggle = if (panelMode) state.fullScreen else null,
+                                onToggleFullScreen = { if (state.fullScreen) state.exitFullScreen() else state.enterFullScreen() },
+                                asPanel = asPanel,
                                 onCollapse = { scope.launch { state.collapse() } },
                                 onOpenAlbum = onOpenAlbum,
                                 onOpenArtist = onOpenArtist,
@@ -663,6 +871,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 neighbours = neighbours,
                                 neighbourLayouts = previousLayout to nextLayout,
                                 headerAlpha = { HeroGeometry.headerAlpha(state.progress) },
+                                swipeUp = queuePull,
+                                swipeUpAction = swipeUp,
                             )
                         }
                     }
@@ -671,14 +881,23 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 // player is what accessibility sees).
                 if (!fullPlayerAccessible) {
                     Box(Modifier.fillMaxWidth().height(miniHeight).graphicsLayer { alpha = 1f - (state.progress * 4f).coerceAtMost(1f) }) {
-                        MiniPlayerBar(onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, neighbours = neighbours)
+                        // (As the panel the insets are none whatever the width: nothing to follow per frame.)
+                        val (miniStart, miniEnd) = cardInsets(widthPx, edgeMargin, maxCard, endCardWidth, panelMode)
+                        MiniPlayerBar(
+                            onExpand = { scope.launch { state.expand() } }, position = readPosition, hero = hero, thumbHidden = { flying }, liveNeighbours = liveNeighbours,
+                            start = with(density) { miniStart.toDp() }, end = with(density) { miniEnd.toDp() },
+                        )
                     }
                 }
-                // The one artwork that flies from the mini player's thumbnail to the full player's
-                // big artwork while the sheet moves in artwork mode (both of those hide meanwhile;
-                // see `flying`). Decorative.
-                FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge, immersiveLayout = artworkLayout)
             }
+        }
+        // The one artwork that flies from the mini player's thumbnail to the full player's big
+        // artwork while the sheet moves in artwork mode (both of those hide meanwhile; see
+        // `flying`). Decorative. Laid out over the sheet's own box (where [HeroGeometry.root] is),
+        // so it lands in the same place, but not clipped by the card.
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = appear.value; translationY = (1f - appear.value) * appearShift }) {
+            FlyingArtwork(coverArt, hero, progress = { state.progress }, flying = { flying }, modeFraction = { modeAnim.value }, scale = { artScale.value }, immersiveEdge = immersiveEdge, immersiveLayout = artworkLayout)
+        }
         }
     }
 }
@@ -706,7 +925,19 @@ private fun StatusBarOver(light: Boolean?) {
 private val IMMERSIVE_DARK = Color(0xFF1C1B1F)
 
 /** What the player shows for a song: its cover, its immersive layout (null: a card) and its seed colour. */
-private data class Scene(val coverArt: String?, val layout: ArtworkLayout?, val seed: Color?)
+internal data class Scene(val coverArt: String?, val layout: ArtworkLayout?, val seed: Color?)
+
+/**
+ * The scene the full player shows for the current track's [current]: itself once [ready]; while
+ * [holding], the [held] (last ready) scene's layout and colours around the current cover; else
+ * itself as it is. The cover is always the current track's (issue #147: a skip showed the last
+ * song's cover until the new one's layout was worked out).
+ */
+internal fun sceneShown(current: Scene, ready: Boolean, held: Scene?, holding: Boolean): Scene = when {
+    ready -> current
+    holding && held != null -> held.copy(coverArt = current.coverArt)
+    else -> current
+}
 
 /** How long a new cover's scene waits for its layout and colours before showing as a card. */
 private const val SCENE_HOLD_MS = 400L
@@ -754,7 +985,10 @@ private const val FLY_EPSILON = 0.002f
 private fun backgroundAlpha(p: Float): Float = (1.4f * sqrt((p.coerceAtLeast(0.1f) - 0.1f))).coerceIn(0f, 1f)
 
 /** A moving sheet's top corners (Material's extra-large shape, as a bottom sheet being dragged keeps). */
-private val SHEET_CORNER = 28.dp
+private val SHEET_CORNER = 20.dp
+
+/** Sheet progress by which the floating card has spread to the screen's full width. */
+private const val CARD_TO_SHEET = 0.12f
 
 /** How much of the travel from fully open the top corners take to round (and to square off as it lands open). */
 private const val TOP_CORNER_RAMP = 0.05f
@@ -774,14 +1008,25 @@ internal fun sheetTopCorner(p: Float, miniCorner: Float, sheetCorner: Float): Fl
  * growing into a full-screen rectangle; its top corners per [sheetTopCorner], its bottom ones
  * going from the card's to square (the bottom reaches the screen's).
  */
-private class SheetShape(private val inset: Float, private val topCorner: Float, private val bottomCorner: Float, private val bottom: Float) : Shape {
+private class SheetShape(private val start: Float, private val end: Float, private val topCorner: Float, private val bottomCorner: Float, private val bottom: Float) : Shape {
     override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
         val top = CornerRadius(topCorner)
         val low = CornerRadius(bottomCorner)
-        return Outline.Rounded(RoundRect(left = inset, top = 0f, right = size.width - inset, bottom = bottom.coerceIn(0f, size.height), topLeftCornerRadius = top, topRightCornerRadius = top, bottomRightCornerRadius = low, bottomLeftCornerRadius = low))
+        val (left, right) = if (layoutDirection == LayoutDirection.Rtl) end to start else start to end
+        return Outline.Rounded(RoundRect(left = left, top = 0f, right = size.width - right, bottom = bottom.coerceIn(0f, size.height), topLeftCornerRadius = top, topRightCornerRadius = top, bottomRightCornerRadius = low, bottomLeftCornerRadius = low))
     }
-    override fun equals(other: Any?): Boolean = other is SheetShape && other.inset == inset && other.topCorner == topCorner && other.bottomCorner == bottomCorner && other.bottom == bottom
-    override fun hashCode(): Int = ((31 * inset.hashCode() + topCorner.hashCode()) * 31 + bottomCorner.hashCode()) * 31 + bottom.hashCode()
+    override fun equals(other: Any?): Boolean = other is SheetShape && other.start == start && other.end == end && other.topCorner == topCorner && other.bottomCorner == bottomCorner && other.bottom == bottom
+    override fun hashCode(): Int = (((31 * start.hashCode() + end.hashCode()) * 31 + topCorner.hashCode()) * 31 + bottomCorner.hashCode()) * 31 + bottom.hashCode()
+}
+
+/**
+ * The floating card's insets from a [width]-wide frame's start and end (px): centred up to
+ * [maxCard] by default; [endCardWidth] wide at the end edge; none as the panel (its frame is the card).
+ */
+internal fun cardInsets(width: Float, margin: Float, maxCard: Float, endCardWidth: Float?, panel: Boolean): Pair<Float, Float> = when {
+    panel -> 0f to 0f
+    endCardWidth != null -> maxOf(margin, width - margin - endCardWidth) to margin
+    else -> maxOf(margin, (width - maxCard) / 2f + margin).let { it to it }
 }
 
 /** A scale about the top-left corner, then a translation (px). */
@@ -790,7 +1035,7 @@ internal data class FlightTransform(val scale: Float, val x: Float, val y: Float
 /** Where the mini player's thumbnail is before it has been measured. */
 private fun fallbackThumb(density: Density): Rect = with(density) {
     val thumbSizePx = HeroGeometry.THUMB_SIZE.toPx()
-    val margin = HeroGeometry.MINI_MARGIN.toPx() + 10.dp.toPx()
+    val margin = HeroGeometry.MINI_MARGIN.toPx() + MINI_START_PADDING.toPx()
     Rect(Offset(margin, (NowPlayingSheetState.MINI_HEIGHT.toPx() - thumbSizePx) / 2), Size(thumbSizePx, thumbSizePx))
 }
 
@@ -799,8 +1044,8 @@ private fun fallbackThumb(density: Density): Rect = with(density) {
  * [HeroGeometry.immersiveSlot]): at rest it follows the full player's skip swipe, [offsetSpans]
  * pages ([span]) along (a neighbour's continuation: -1 the previous, 1 the next); while the sheet moves it takes
  * the artwork in flight's transform ([HeroGeometry.flightRect]), so the two stay one unit, and
- * fades out ([HeroGeometry.continuationAlpha]) before the artwork shrinks. It fades with the mode
- * too (lyrics / queue).
+ * is wiped towards the artwork ([HeroGeometry.continuationReveal]) before the artwork shrinks. It
+ * fades with the mode too (lyrics / queue).
  */
 private fun Modifier.continuationLayer(
     hero: HeroGeometry,
@@ -815,10 +1060,13 @@ private fun Modifier.continuationLayer(
 ): Modifier = graphicsLayer {
     val p = state.progress
     val big = hero.bigSlot()
-    alpha = HeroGeometry.continuationAlpha(p) * (1f - modeFraction())
+    // In flight both the continuation below the artwork and the strip above it stay opaque and
+    // are wiped instead ([HeroGeometry.continuationReveal], below), so neither turns see-through.
+    val wiping = flying()
+    alpha = (if (wiping) (if (HeroGeometry.continuationReveal(p) > 0f) 1f else 0f) else HeroGeometry.continuationAlpha(p)) * (1f - modeFraction())
     transformOrigin = TransformOrigin(0f, 0f)
-    // Offscreen only while a seam is feathered (below).
-    compositingStrategy = if (feather && seamFeather(hero, offsetSpans, flying()) != 0f) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+    // Offscreen only while a seam is feathered or the wipe is masked (below).
+    compositingStrategy = if (wiping || (feather && seamFeather(hero, offsetSpans, flying()) != 0f)) CompositingStrategy.Offscreen else CompositingStrategy.Auto
     if (flying() && big.width > 0f) {
         val t = hero.flightTransform(p, modeFraction(), scale(), fallbackThumb(density))
         scaleX = t.scale
@@ -827,9 +1075,37 @@ private fun Modifier.continuationLayer(
         translationY = t.y
     } else {
         translationX = hero.swipe() + offsetSpans * span()
+        // Rising with the artwork as it lifts towards the queue; the continuation (not the top
+        // strip, which is part of the artwork) stretches below the artwork's bottom edge, so it
+        // stays joined to the artwork there and still reaches the screen's bottom.
+        val lift = hero.lift()
+        translationY = -lift
+        val seam = big.bottom
+        if (feather && lift > 0f && seam > 0f && seam < size.height) {
+            transformOrigin = TransformOrigin(0f, seam / size.height)
+            scaleY = (size.height - seam + lift) / (size.height - seam)
+        }
     }
 }.drawWithContent {
     drawContent()
+    // In flight, wiped softly (over [WIPE_FEATHER]) towards the artwork: the continuation from the
+    // bottom of the screen up to the seam (the artwork's bottom edge), the top strip from the top
+    // of the sheet down to the artwork's top edge.
+    if (flying()) {
+        val reveal = HeroGeometry.continuationReveal(state.progress)
+        val art = hero.bigSlot()
+        if (reveal < 1f && art.width > 0f) {
+            val soft = WIPE_FEATHER.toPx()
+            if (feather) {
+                wipeBelow(art.bottom, reveal)
+            } else {
+                val edge = lerpF(art.top, -soft, reveal)
+                drawRect(Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black, startY = edge, endY = edge + soft), topLeft = Offset(0f, edge), size = size.copy(height = soft), blendMode = BlendMode.DstIn)
+                if (edge > 0f) drawRect(Color.Transparent, topLeft = Offset.Zero, size = size.copy(height = edge), blendMode = BlendMode.Clear)
+            }
+        }
+        return@drawWithContent
+    }
     // While the artwork is swiped, the edge facing the other page fades out over [SEAM_FEATHER], so
     // the two pages' continuations and backdrops blend across the seam instead of meeting in a
     // hard line (the artwork above stays crisp). It eases in with the first [SEAM_FEATHER] of the
@@ -845,6 +1121,22 @@ private fun Modifier.continuationLayer(
         drawRect(Brush.horizontalGradient(0f to Color.Black, 1f to faded, startX = size.width - w, endX = size.width), topLeft = Offset(size.width - w, 0f), size = size.copy(width = w), blendMode = BlendMode.DstIn)
     }
 }
+
+/**
+ * Masks what is drawn below the wipe's edge, which runs from [seamY] (at [reveal] 0) to past the
+ * bottom (at 1), softly over [WIPE_FEATHER]: the immersive continuation and the controls over it,
+ * wiped as one while the sheet moves. Needs an offscreen layer.
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.wipeBelow(seamY: Float, reveal: Float) {
+    if (reveal >= 1f || seamY <= 0f) return
+    val soft = WIPE_FEATHER.toPx()
+    val edge = lerpF(seamY, size.height + soft, reveal)
+    drawRect(Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent, startY = edge - soft, endY = edge), topLeft = Offset(0f, edge - soft), size = size.copy(height = soft), blendMode = BlendMode.DstIn)
+    if (edge < size.height) drawRect(Color.Transparent, topLeft = Offset(0f, edge), size = size.copy(height = size.height - edge), blendMode = BlendMode.Clear)
+}
+
+/** How soft the edge of the continuation's wipe is while the sheet moves. */
+private val WIPE_FEATHER = 96.dp
 
 /** How wide the soft edge between two swiped pages' continuations is. */
 private val SEAM_FEATHER = 56.dp
@@ -913,7 +1205,12 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
                 }
                 shape = RoundedCornerShape(visibleRadius / k.coerceAtLeast(0.01f))
                 clip = true
-                shadowElevation = if (landed) hero.elevationFor(f, this) * t else 0f
+                shadowElevation = when {
+                    !landed -> 0f
+                    // Off the edges an immersive artwork is a card in flight: a card's shadow.
+                    hero.immersive -> HeroGeometry.HERO_ELEVATION.toPx() * t * ((1f - t) / 0.15f).coerceIn(0f, 1f)
+                    else -> hero.elevationFor(f, this) * t
+                }
                 alpha = if (landed) 1f else (1f - p * 4f).coerceIn(0f, 1f)
             }
             .clearAndSetSemantics { },
@@ -921,14 +1218,17 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
         // Immersive: the landed seam (its bottom fading into the continuation) while the
         // continuation shows, square once it has gone. A flat extension has no seam (the colour
         // carries on crisply): its edge fades as the continuation does instead, so the opaque
-        // artwork never ends in a hard line over a half-faded continuation.
+        // artwork never ends in a hard line over a half-faded continuation; and, where the seam
+        // shows, its own short fade, as on the page.
         val flat = immersiveEdge?.isFlat() == true
         Artwork(
             coverArt, ArtworkSizes.FULL, null,
             Modifier.fillMaxSize().immersiveFade(immersiveEdge, evenFlat = flat, fraction = {
                 val p = progress()
-                if (flat) (1f - HeroGeometry.continuationAlpha(p)) * HeroGeometry.seamFraction(p) else HeroGeometry.seamFraction(p)
-            }, top = immersiveLayout?.top, topFraction = { HeroGeometry.continuationAlpha(progress()) }),
+                // A flat edge keeps the landed artwork's short crisp fade (below) over its opaque
+                // colour; any other, its landed seam, until the wipe reaches it.
+                if (flat) 0f else HeroGeometry.seamFraction(p)
+            }, top = immersiveLayout?.top, topFraction = { HeroGeometry.seamFraction(progress()) }, crispFraction = { HeroGeometry.seamFraction(progress()) }),
             RectangleShape,
         )
     }

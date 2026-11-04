@@ -40,6 +40,8 @@ export const DEFAULT_KEYMAP: DefaultBinding[] = [
   { actionId: "volumeUp", shortcut: "Mod+ArrowUp", labelId: "action.volumeUp", category: "playback" },
   { actionId: "volumeDown", shortcut: "Mod+ArrowDown", labelId: "action.volumeDown", category: "playback" },
   { actionId: "love", shortcut: "Mod+L", labelId: "action.love", category: "library" },
+  { actionId: "stash", shortcut: "Mod+S", labelId: "action.stash", category: "library" },
+  { actionId: "openStash", shortcut: "Mod+Shift+S", labelId: "action.openStash", category: "view" },
   { actionId: "ui.back", shortcut: "Alt+ArrowLeft", labelId: "action.back", category: "view" },
   { actionId: "ui.forward", shortcut: "Alt+ArrowRight", labelId: "action.forward", category: "view" },
   // Only while developer mode is on (Settings → Advanced).

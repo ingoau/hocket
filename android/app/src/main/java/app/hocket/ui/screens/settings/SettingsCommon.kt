@@ -49,6 +49,7 @@ import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.BottomContentInset
+import app.hocket.ui.components.contentMaxWidth
 import app.hocket.core.Commands
 import app.hocket.core.api.SettingScope
 import app.hocket.ui.LocalCoreClient
@@ -135,7 +136,7 @@ fun settingTag(id: String) = "setting.$id"
  */
 @Composable
 fun SettingRow(title: String, subtitle: String? = null, scope: SettingScope? = null, onClick: (() -> Unit)? = null, tag: String? = null, destructive: Boolean = false, trailing: (@Composable () -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).let { if (tag != null) it.testTag(settingTag(tag)) else it }.let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).settingAnchor(tag).let { if (tag != null) it.testTag(settingTag(tag)) else it }.let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             SettingTitle(title, scope, color = if (destructive) MaterialTheme.colorScheme.error else Color.Unspecified)
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -151,7 +152,7 @@ fun SettingRow(title: String, subtitle: String? = null, scope: SettingScope? = n
 @Composable
 fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, subtitle: String? = null, scope: SettingScope? = null, tag: String? = null) {
     Row(
-        Modifier.fillMaxWidth().let { if (tag != null) it.testTag(settingTag(tag)) else it }
+        Modifier.fillMaxWidth().settingAnchor(tag).let { if (tag != null) it.testTag(settingTag(tag)) else it }
             .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -165,27 +166,40 @@ fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, subt
     }
 }
 
+/** A heading over a run of rows; with a [tag] it is the target settings search jumps to for the run (a field or an editor, not a row). */
 @Composable
-fun SettingsSection(title: String) {
-    Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp).semantics { heading() })
+fun SettingsSection(title: String, tag: String? = null) {
+    Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth().settingAnchor(tag).let { if (tag != null) it.testTag(settingTag(tag)) else it }.padding(start = 16.dp, top = 20.dp, bottom = 4.dp).semantics { heading() })
 }
+
+/** True for a category's screen in the pane beside the settings list: there is nothing to go back to. */
+val LocalSettingsPane = androidx.compose.runtime.staticCompositionLocalOf { false }
 
 /** A settings sub-screen: large flexible top app bar that collapses as the page scrolls, back arrow, scrolling rows. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SubScreen(nav: NavHostController, title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    // The row a settings search picked, if it opened this screen: scrolled to, focused and highlighted.
+    val jump = remember { SettingsJump.take()?.let(::JumpTarget) }
+    val scrollState = rememberScrollState()
+    JumpEffect(jump, scrollState)
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.screen"),
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(title, modifier = Modifier.semantics { heading() }.testTag("settings.title")) },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
+                navigationIcon = { if (!LocalSettingsPane.current) IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,
             )
         },
     ) { padding ->
         // Top only: the shell already keeps content clear of the navigation bar.
-        Column(Modifier.padding(top = padding.calculateTopPadding()).verticalScroll(rememberScrollState()).padding(bottom = BottomContentInset)) { content() }
+        androidx.compose.runtime.CompositionLocalProvider(LocalJumpTarget provides jump) {
+            // The scroll spans the screen; the rows stop at ContentMaxWidth, centred.
+            Column(Modifier.padding(top = padding.calculateTopPadding()).verticalScroll(scrollState).padding(bottom = BottomContentInset)) {
+                Column(Modifier.contentMaxWidth()) { content() }
+            }
+        }
     }
 }

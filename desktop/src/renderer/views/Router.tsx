@@ -6,6 +6,7 @@ import { Albums } from "./Albums";
 import { Artists } from "./Artists";
 import { Playlists } from "./Playlists";
 import { Songs } from "./Songs";
+import { Snoozed } from "./Snoozed";
 import { Genres } from "./Genres";
 import { AlbumDetail } from "./AlbumDetail";
 import { ArtistDetail } from "./ArtistDetail";
@@ -14,7 +15,6 @@ import { GenreDetail } from "./GenreDetail";
 import { SearchView } from "./SearchView";
 import { Downloads } from "./Downloads";
 import { Filters } from "./Filters";
-import { FilterBuilder } from "./FilterBuilder";
 import { Stats } from "./Stats";
 import { Settings } from "./Settings";
 import { DeveloperDiagnostics } from "./DeveloperDiagnostics";
@@ -48,6 +48,8 @@ function RouteView({ route }: { route: Route }) {
       return <Playlists />;
     case "songs":
       return <Songs />;
+    case "snoozed":
+      return <Snoozed />;
     case "genres":
       return <Genres />;
     case "album":
@@ -66,7 +68,7 @@ function RouteView({ route }: { route: Route }) {
     case "filters":
       return <Filters />;
     case "filter":
-      return <FilterBuilder id={route.id ?? "new"} />;
+      return <Filters selected={route.id ?? "new"} />;
     case "stats":
       return <Stats />;
     case "settings":

@@ -6,9 +6,12 @@ package app.hocket.core
  * (the core refuses unknown keys).
  */
 object SettingKeys {
-    const val QUEUE_MODE = "queue.mode"
+    /** Offer "Add to queue" and the "Next in queue" group (bool, on by default). */
+    const val QUEUE_SECTION = "queue.section"
+    /** How many unpinned recent queues are shown (the session document keeps up to 50). */
     const val QUEUE_SAVED_CAP = "queue.savedCap"
-    const val QUEUE_HISTORY_CAP = "queue.historyCap"
+    /** Offer to continue an album left unfinished. Off, Play always starts at the beginning. */
+    const val PLAYBACK_RESUME_ALBUMS = "playback.resumeAlbums"
     const val AUTOPLAY_SETTINGS = "autoplay.settings"
     const val AUDIO_SETTINGS = "audio.settings"
     const val TRANSCODING_PROFILES = "transcoding.profiles"
@@ -31,6 +34,8 @@ object SettingKeys {
     const val DISPLAY_IMMERSIVE_ARTWORK = "display.immersiveArtwork"
     /** Whether the full player shows the star rating (synced). */
     const val DISPLAY_PLAYER_RATING = "display.playerRating"
+    const val DISPLAY_FLOATING_NAV_BAR = "display.floatingNavBar"
+    const val DISPLAY_ALBUM_TRACK_ARTISTS = "display.albumTrackArtists"
     const val DISPLAY_ACCENT = "display.accent"
     const val DISPLAY_DYNAMIC_COLOUR = "display.dynamicColour"
     const val ACTIONS_ORDER_CONTEXT_MENU = "actions.order.contextMenu"
@@ -81,6 +86,8 @@ object SettingKeys {
     const val SWIPE_QUEUE_END_TO_START = "swipe.queue.endToStart"
     const val SWIPE_LIST_START_TO_END = "swipe.list.startToEnd"
     const val SWIPE_LIST_END_TO_START = "swipe.list.endToStart"
+    /** What swiping up on the full player opens: one of [SwipeOptions.PLAYER_UP]. */
+    const val SWIPE_PLAYER_UP = "swipe.playerUp"
 
     fun actionOrder(surface: String) = "actions.order.$surface"
 }
@@ -97,7 +104,11 @@ object ActionIds {
     const val NEXT = "next"
     const val PREVIOUS = "previous"
     const val PLAY_NEXT = "playNext"
+    const val ADD_TO_QUEUE = "addToQueue" // hidden with the Queue section setting off
     const val PLAY_LATER = "playLater"
+    const val CLEAR_QUEUE_GROUP = "clearQueueGroup"
+    const val STASH_QUEUE_GROUP = "stashQueueGroup"
+    const val PREVIEW = "preview"
     const val REMOVE_FROM_QUEUE = "removeFromQueue"
     const val SHUFFLE = "shuffle"
     const val REPEAT = "repeat"
@@ -123,19 +134,42 @@ object ActionIds {
     const val HANDOFF = "handoff"
     const val TOGGLE_LYRICS = "toggleLyrics" // ui-handled
     const val COPY_DIAGNOSTICS = "copyDiagnostics" // ui-handled
+    const val STASH = "stash"
+    const val OPEN_STASH = "openStash" // ui-handled
+    const val CLEAR_STASH = "clearStash"
+    const val SNOOZE = "snooze"
+    const val UNSNOOZE = "unsnooze"
 
     fun rate(stars: Int) = "rate$stars"
 
     /** Ids the platform performs itself (`ActionDef::ui_handled`). */
-    val UI_HANDLED = setOf(ADD_TO_PLAYLIST, RATE, GO_TO_ALBUM, GO_TO_ARTIST, SLEEP_TIMER, TOGGLE_LYRICS, COPY_DIAGNOSTICS,
+    val UI_HANDLED = setOf(ADD_TO_PLAYLIST, RATE, GO_TO_ALBUM, GO_TO_ARTIST, SLEEP_TIMER, TOGGLE_LYRICS, COPY_DIAGNOSTICS, OPEN_STASH,
         "navigateHome", "navigateLibrary", "navigateTracks", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateGenres",
         "navigateRecent", "navigateFilters", "navigateDownloads", "navigateStats", "navigateSettings")
 
     /** The registry's default context-menu order (surface `contextMenu`). */
-    val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, PLAY_LATER, ADD_TO_PLAYLIST, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
-        DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
+    val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, ADD_TO_QUEUE, PLAY_LATER, PREVIEW, ADD_TO_PLAYLIST, STASH, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
+        DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, SNOOZE, UNSNOOZE, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
         SAVE_QUEUE_AS_PLAYLIST, DELETE_SAVED_QUEUE, DELETE_PLAYLIST)
+    /** Default media-session buttons. Stash is a choice, not part of this set. */
     val MEDIA_SESSION = listOf(PREVIOUS, TOGGLE_PLAY, NEXT, SHUFFLE, REPEAT, LOVE)
+
+    /** Everything the notification-button editor can turn on. Stash is last, and off until chosen. */
+    val MEDIA_SESSION_CHOICES = MEDIA_SESSION + STASH
+
+    private val MEDIA_SESSION_TRANSPORT = setOf(PREVIOUS, TOGGLE_PLAY, "play", "pause", NEXT)
+
+    /**
+     * A stash that was just turned on moves to sit after play and skip. Android shows about two
+     * extra buttons, and the editor otherwise leaves Stash after shuffle, repeat and love.
+     * A stash the user already had stays where they dragged it. Mirrors `show_new_stash` in the core.
+     */
+    fun withNewlyEnabledStash(previous: List<String>, ids: List<String>): List<String> {
+        if (STASH !in ids || STASH in previous) return ids
+        val rest = ids.filter { it != STASH }
+        val at = rest.indexOfLast { it in MEDIA_SESSION_TRANSPORT }.let { if (it < 0) 0 else it + 1 }
+        return rest.toMutableList().apply { add(at, STASH) }
+    }
 }
 
 /**
@@ -144,12 +178,19 @@ object ActionIds {
  */
 object SwipeOptions {
     const val NONE = "none"
-    val QUEUE = listOf(NONE, ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD)
-    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD)
+    val QUEUE = listOf(NONE, ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
+    val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.ADD_TO_QUEUE, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.STASH, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
     val DEFAULTS = mapOf(
         SettingKeys.SWIPE_QUEUE_START_TO_END to ActionIds.REMOVE_FROM_QUEUE,
         SettingKeys.SWIPE_QUEUE_END_TO_START to ActionIds.REMOVE_FROM_QUEUE,
         SettingKeys.SWIPE_LIST_START_TO_END to ActionIds.PLAY_NEXT,
         SettingKeys.SWIPE_LIST_END_TO_START to ActionIds.PLAY_LATER,
     )
+
+    /** What swiping up on the full player can open (`SWIPE_PLAYER_UP_ACTIONS`); the first is the default. */
+    const val PLAYER_UP_QUEUE = "queue"
+    const val PLAYER_UP_LYRICS = "lyrics"
+    const val PLAYER_UP_CONNECT = "connect"
+    const val PLAYER_UP_MENU = "menu"
+    val PLAYER_UP = listOf(PLAYER_UP_QUEUE, PLAYER_UP_LYRICS, PLAYER_UP_CONNECT, PLAYER_UP_MENU)
 }

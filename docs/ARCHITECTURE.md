@@ -141,7 +141,7 @@ xvfb-run -a pnpm test:e2e                        # Playwright Electron e2e (fake
 pnpm dist:dir                                    # electron-builder unpacked build
 
 # Android (Gradle 9, AGP 9, Kotlin 2.4, compileSdk 37.1, Material 3 Expressive)
-scripts/build-android-core.sh release            # cargo-ndk -> android/core/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
+scripts/build-android-core.sh release            # one multi-target cargo build -> android/core/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
 cd android && ./gradlew testDebugUnitTest assembleDebug :app:lintDebug   # ANDROID_HOME=/opt/android-sdk
 
 # Pebble watchapp (uv tool install pebble-tool && pebble sdk install latest)
@@ -150,6 +150,10 @@ cd pebble && HOCKET_DEMO=1 pebble build          # sample data, for emulator scr
 
 # Coordinator
 cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --data-dir /var/lib/hocket
+# … and let one account's devices receive its whole log in developer diagnostics
+cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --diagnostics-user 'me@https://music.example.net'
+# … with --data-dir as well, that account can save reports there (docs/reports.md); read them with
+cargo run -p hocket-coordinator -- --data-dir /var/lib/hocket reports list
 ```
 
 Linux builds of the core need `libasound2-dev` (cpal). The desktop app's OS media

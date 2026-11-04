@@ -227,6 +227,8 @@ pub trait SubsonicApi: Send + Sync + 'static {
     ) -> ApiFuture<'_, PlaylistWithSongs>;
     fn update_playlist(&self, id: &str, update: PlaylistUpdate) -> ApiFuture<'_, ()>;
     fn delete_playlist(&self, id: &str) -> ApiFuture<'_, ()>;
+    /// `createShare`: a public URL for these song, album or playlist ids. The URL needs no login.
+    fn create_share(&self, ids: &[String]) -> ApiFuture<'_, String>;
     /// `search3`. An empty query with paging is the full-library sync path.
     fn search3(&self, query: &str, page: Search3Page) -> ApiFuture<'_, SearchResult3>;
     fn lyrics_by_song_id(&self, id: &str) -> ApiFuture<'_, Vec<StructuredLyrics>>;
@@ -238,6 +240,7 @@ pub trait SubsonicApi: Send + Sync + 'static {
         count: u32,
         include_not_present: bool,
     ) -> ApiFuture<'_, ArtistInfo2>;
+    fn album_info2(&self, id: &str) -> ApiFuture<'_, AlbumInfo>;
     /// `sonicSimilarity` extension. `Unsupported` when not advertised.
     fn sonic_similar_tracks(&self, id: &str, count: u32) -> ApiFuture<'_, Vec<SonicMatch>>;
     fn star(&self, targets: &[StarTarget]) -> ApiFuture<'_, ()>;

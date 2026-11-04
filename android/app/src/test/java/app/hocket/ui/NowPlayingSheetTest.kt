@@ -1,9 +1,13 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.semantics.SemanticsActions
@@ -103,12 +107,12 @@ class NowPlayingSheetTest {
         collapseByDrag()
     }
 
-    /** A one-track queue with autoplay off, so skipping past it leaves nothing current. */
+    /** A one-track queue with autoplay off: skipping past it stops on it, removing it leaves nothing current. */
     private fun playOnlyOneTrack(core: TestCore): String {
         val track = core.client.nowPlaying.value!!.track.id
         core.client.dispatch(Commands.setAutoplay(false))
         core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "One track"))
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
         return track
     }
 
@@ -122,8 +126,14 @@ class NowPlayingSheetTest {
         compose.waitForIdle()
         compose.onNodeWithTag("miniPlayer").assertIsDisplayed()
         assertEquals(track, core.client.nowPlaying.value!!.track.id)
-        // Forward on the last track: nothing is current any more and the player goes away mid-gesture.
+        // Forward on the last track: playback stops there (the pointer never runs off the list) and the bar stays.
         compose.onNodeWithTag("miniPlayer").performTouchInput { swipe(start = center, end = center - Offset(300f, 0f), durationMillis = 150) }
+        compose.waitUntil(5_000) { !core.client.isPlaying.value }
+        compose.waitForIdle()
+        assertEquals(track, core.client.nowPlaying.value?.track?.id)
+        assertTrue(displayed("miniPlayer"))
+        // Removing it leaves nothing current: the player goes away.
+        core.client.dispatch(Commands.removeQueueItems(listOf(core.client.nowPlaying.value!!.item.key)))
         compose.waitUntil(5_000) { core.client.nowPlaying.value == null }
         compose.waitForIdle()
         assertFalse(displayed("miniPlayer"))
@@ -256,8 +266,8 @@ class NowPlayingSheetTest {
         start(core)
         playOnlyOneTrack(core)
         expand()
-        // Skip past the only track from the full player: nothing is current, the sheet stays open.
-        compose.onNodeWithTag("player.next").performClick()
+        // Remove the only track while the full player shows it: nothing is current, the sheet stays open.
+        core.client.dispatch(Commands.removeQueueItems(listOf(core.client.nowPlaying.value!!.item.key)))
         compose.waitUntil(5_000) { core.client.nowPlaying.value == null }
         compose.waitForIdle()
         // Swiping it away with no current item removes the whole sheet.
@@ -279,6 +289,128 @@ class NowPlayingSheetTest {
         val before = core.client.nowPlaying.value!!.track.id
         compose.onNodeWithTag("player.next").performClick()
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id != before }
+    }
+
+    /** A vertical drag from the middle of [tag], [by] px up over [millis]. */
+    private fun dragUp(tag: String, by: Float, millis: Long) {
+        compose.onNodeWithTag(tag).performTouchInput { swipe(start = center, end = center - Offset(0f, by), durationMillis = millis) }
+    }
+
+    /**
+     * Swiping up on the open player opens the queue; a short slow pull springs back; and the mini
+     * player's long expand swipe, which carries on past the top, never does (the mode would stick).
+     */
+    @Test
+    fun swipingUpOnTheOpenPlayerOpensTheQueue() {
+        val core = TestCore()
+        start(core)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            assertTrue("the expand swipe opened the queue", modes.none { modeSelected(it) })
+            val density = compose.density.density
+            // Short and slow: under the commit travel, so it springs back to the artwork.
+            dragUp("player.artwork", 30f * density, 2_000)
+            repeat(60) { compose.mainClock.advanceTimeByFrame() }
+            assertTrue("a short pull opened the queue", modes.none { modeSelected(it) })
+            // Past the commit travel: the queue.
+            dragUp("player.artwork", 160f * density, 600)
+            advanceUntil("the queue") { modeSelected("queue") && displayed("queue.list") }
+            assertTrue(sheetOpen())
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /** Sets `swipe.playerUp` to [action] and waits for it to reach the client. */
+    private fun swipeUpOpens(core: TestCore, action: String) {
+        core.client.dispatch(Commands.setSetting(app.hocket.core.SettingKeys.SWIPE_PLAYER_UP, "\"$action\""))
+        compose.waitUntil(5_000) { core.client.settings.value[app.hocket.core.SettingKeys.SWIPE_PLAYER_UP]?.value == "\"$action\"" }
+    }
+
+    private fun exists(tag: String): Boolean = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+    private fun topOf(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.top
+
+    /** With `swipe.playerUp` on the lyrics, the same swipe opens the lyrics instead of the queue. */
+    @Test
+    fun swipingUpCanOpenTheLyrics() {
+        val core = TestCore()
+        start(core)
+        swipeUpOpens(core, app.hocket.core.SwipeOptions.PLAYER_UP_LYRICS)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            dragUp("player.artwork", 160f * compose.density.density, 600)
+            advanceUntil("the lyrics") { modeSelected("lyrics") && displayed("lyrics.page") }
+            assertFalse(modeSelected("queue"))
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /**
+     * With `swipe.playerUp` on "Play on", the swipe brings the device picker up under the finger:
+     * its top follows the finger; let go short and slowly, it drops back and closes; a long swipe
+     * opens it, and the player stays in artwork mode throughout.
+     */
+    @Test
+    fun swipingUpCanBringUpPlayOnUnderTheFinger() {
+        val core = TestCore()
+        start(core)
+        swipeUpOpens(core, app.hocket.core.SwipeOptions.PLAYER_UP_CONNECT)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            val step = 10f * compose.density.density
+            compose.onNodeWithTag("player.artwork").performTouchInput {
+                down(center)
+                moveBy(Offset(0f, -viewConfiguration.touchSlop - 1f))
+                repeat(4) { moveBy(Offset(0f, -step)) }
+            }
+            advanceUntil("the picker to come up") { exists("handoff.sheet") && topOf("handoff.sheet") < topOf("player.playPause") + 10_000f }
+            repeat(5) { compose.mainClock.advanceTimeByFrame() }
+            val first = topOf("handoff.sheet")
+            compose.onNodeWithTag("player.artwork").performTouchInput { repeat(4) { moveBy(Offset(0f, -step)) } }
+            repeat(5) { compose.mainClock.advanceTimeByFrame() }
+            val second = topOf("handoff.sheet")
+            assertEquals("the sheet follows the finger", 4 * step, first - second, 2f)
+            // Held still, then let go: short of half the sheet, it drops back and closes.
+            compose.mainClock.advanceTimeBy(500)
+            compose.onNodeWithTag("player.artwork").performTouchInput { advanceEventTime(500); up() }
+            advanceUntil("the picker to close") { !exists("handoff.sheet") }
+            assertTrue("the swipe changed the mode", modes.none { modeSelected(it) })
+            // A long swipe opens it.
+            dragUp("player.artwork", 400f * compose.density.density, 300)
+            advanceUntil("the picker") { exists("handoff.sheet") }
+            repeat(120) { compose.mainClock.advanceTimeByFrame() }
+            assertTrue("the picker stays open", exists("handoff.sheet"))
+            assertTrue(modes.none { modeSelected(it) })
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /** With `swipe.playerUp` on the menu, a swipe up opens the song's menu. */
+    @Test
+    fun swipingUpCanOpenTheSongMenu() {
+        val core = TestCore()
+        start(core)
+        swipeUpOpens(core, app.hocket.core.SwipeOptions.PLAYER_UP_MENU)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            advanceUntil("the sheet to settle open") { sheetOpen() }
+            dragUp("player.artwork", 400f * compose.density.density, 300)
+            advanceUntil("the song menu") { exists("songMenu") }
+            repeat(120) { compose.mainClock.advanceTimeByFrame() }
+            assertTrue("the menu stays open", exists("songMenu"))
+            assertTrue(modes.none { modeSelected(it) })
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
     }
 
     @Test
@@ -350,7 +482,13 @@ class NowPlayingSheetTest {
         val shrinkFrom = app.hocket.ui.player.HeroGeometry.SHRINK_FROM
         assertEquals(0f, app.hocket.ui.player.HeroGeometry.continuationAlpha(shrinkFrom - 0.15f), 1e-4f)
         assertEquals(1f, app.hocket.ui.player.HeroGeometry.continuationAlpha(0.9f), 1e-4f)
-        assertEquals(1f, app.hocket.ui.player.HeroGeometry.seamFraction(0.45f), 1e-4f)
+        assertEquals(1f, app.hocket.ui.player.HeroGeometry.seamFraction(0.9f), 1e-4f)
+        // The continuation is wiped (opaque, never see-through) from fully open to where the
+        // artwork starts shrinking; once it has gone, the shrinking artwork has no faded edge.
+        assertEquals(1f, app.hocket.ui.player.HeroGeometry.continuationReveal(0.9f), 1e-4f)
+        assertEquals(0f, app.hocket.ui.player.HeroGeometry.continuationReveal(shrinkFrom), 1e-4f)
+        assertEquals(0f, app.hocket.ui.player.HeroGeometry.seamFraction(shrinkFrom), 1e-4f)
+        assertEquals(0f, app.hocket.ui.player.HeroGeometry.seamFraction(0.45f), 1e-4f)
         assertEquals(0f, app.hocket.ui.player.HeroGeometry.headerAlpha(0.85f), 1e-4f)
         assertEquals(1f, app.hocket.ui.player.HeroGeometry.headerAlpha(1f), 1e-4f)
         // A card is unchanged: it follows the progress from the start.
@@ -365,7 +503,7 @@ class NowPlayingSheetTest {
         val core = TestCore()
         start(core)
         val before = core.client.nowPlaying.value!!.item.key
-        val next = core.client.queue.value.let { it.playingNext.firstOrNull() ?: it.upcoming.first() }
+        val next = core.client.queue.value.let { it.groupEntries.firstOrNull() ?: it.restEntries.first() }
         val width = compose.onNodeWithTag("miniPlayer").fetchSemanticsNode().size.width.toFloat()
         assertFalse(displayed("miniPlayer.next"))
         compose.onNodeWithTag("miniPlayer").performTouchInput {
