@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DropdownMenu
@@ -99,10 +100,14 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
             HorizontalFloatingToolbar(
                 expanded = true,
                 colors = FloatingToolbarDefaults.vibrantFloatingToolbarColors(),
-                modifier = Modifier.semantics { contentDescription = count },
+                modifier = Modifier.semantics { contentDescription = count }.testTag("selection.toolbar"),
                 leadingContent = {
-                    IconButton(onClick = { client.clearSelection() }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.action_clear_selection)) }
-                    Text(count, style = MaterialTheme.typography.labelLarge)
+                    // Centred on the icons explicitly: the toolbar's leading slot tops-aligns its
+                    // children, which left "1 selected" riding above the buttons (R-20261103-hpkz).
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("selection.leading")) {
+                        IconButton(onClick = { client.clearSelection() }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.action_clear_selection)) }
+                        Text(count, style = MaterialTheme.typography.labelLarge, modifier = Modifier.testTag("selection.count"))
+                    }
                 },
                 trailingContent = {
                     if (onSelectAll != null) IconButton(onClick = onSelectAll) { Icon(HocketIcons.Filled.SelectAll, stringResource(R.string.action_select_all)) }
