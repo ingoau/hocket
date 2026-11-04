@@ -28,8 +28,9 @@ test.describe("context menu", () => {
     const menu = page.getByTestId("context-menu");
     await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
     await expect(menu).toBeVisible();
-    // The play strip: icon-only, named by tooltip and label.
-    for (const name of ["Play", "Shuffle", "Play next", "Play later"]) {
+    // The play strip: icon-only, named by tooltip and label. One song gets no Shuffle.
+    await expect(menu.getByRole("menuitem", { name: "Shuffle", exact: true })).toHaveCount(0);
+    for (const name of ["Play", "Play next", "Play later"]) {
       await expect(menu.getByRole("menuitem", { name, exact: true })).toHaveAttribute("title", name);
     }
     await expect(menu.getByRole("group", { name: "Rating" }).getByRole("menuitemradio")).toHaveCount(5);

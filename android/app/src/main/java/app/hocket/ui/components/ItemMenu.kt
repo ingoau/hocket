@@ -27,6 +27,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -228,8 +230,8 @@ private val CONTEXT_IDS = setOf(ActionIds.REMOVE_FROM_QUEUE, ActionIds.REMOVE_FR
 private val UNPERFORMABLE = ActionIds.UI_HANDLED - setOf(ActionIds.ADD_TO_PLAYLIST, ActionIds.RATE, ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST)
 
 /**
- * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play, Shuffle,
- * Play next, Add to queue (the registry leaves it out with the Queue section setting off), Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
+ * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play (the registry offers
+ * one song no Shuffle), Play next, Add to queue (the registry leaves it out with the Queue section setting off), Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
  * More: Pin to Library, Go to artist, Song info; then the destructive rows (Remove from Late night).
  * Album: the same without the stars, Go to artist in the short list and Album info under More.
  * Artist and playlist: no go-to rows. Several songs: no go-to, pin or info. Availability and
@@ -308,7 +310,7 @@ fun connectedShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 6.dp):
 
 /**
  * The compact menu for a song, an album, an artist, a playlist or several songs: a sheet that opens
- * short (header with the love toggle, the connected Play / Shuffle / Play next / Play later group,
+ * short (header with the love toggle, the connected Play / Shuffle / queue actions group,
  * the star row for songs, a short connected list ending in "More"), and grows to the rest when More,
  * the handle or an upward drag asks; "Show less" shrinks it again. Toggles (love, rating, download,
  * pin) apply in place; every other row closes the sheet with its hide animation, its action or
@@ -784,35 +786,63 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
     }
 }
 
-/** Play / Shuffle / Play next / Add to queue (when offered) / Play later as one connected group, Play filled and wider. */
+/**
+ * Play and Shuffle on top (Shuffle isn't offered for one song), then Play next / Add to queue (when offered) /
+ * Play later below, as one connected group: rounded outer corners, tight inner ones, Play filled and wider.
+ */
 @Composable
 private fun PlayGroup(play: List<ActionDescriptor>, tag: String, onRun: (ActionDescriptor) -> Unit) {
     val groupLabel = stringResource(R.string.menu_play_group)
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { isTraversalGroup = true; contentDescription = groupLabel }, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-        play.forEachIndexed { i, a ->
-            val lead = if (i == 0) 22.dp else 8.dp
-            val trail = if (i == play.lastIndex) 22.dp else 8.dp
-            val main = a.id == ActionIds.PLAY
-            val (label, icon) = when (a.id) {
-                ActionIds.PLAY -> stringResource(R.string.action_play) to HocketIcons.Filled.PlayArrow
-                ActionIds.PLAY_SHUFFLED -> stringResource(R.string.action_shuffle) to HocketIcons.Filled.Shuffle
-                ActionIds.PLAY_NEXT -> stringResource(R.string.action_play_next) to HocketIcons.Filled.PlaylistPlay
-                ActionIds.ADD_TO_QUEUE -> stringResource(R.string.action_label_add_to_queue) to HocketIcons.Filled.QueueMusic
-                else -> stringResource(R.string.action_play_later) to HocketIcons.Filled.PlaylistAdd
-            }
-            Surface(
-                onClick = { onRun(a) },
-                enabled = a.enabled,
-                shape = RoundedCornerShape(topStart = lead, bottomStart = lead, topEnd = trail, bottomEnd = trail),
-                color = if (main) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = if (main) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.weight(if (main) 1.35f else 1f).heightIn(min = 76.dp).testTag("$tag.action.${a.id}"),
-            ) {
-                Column(Modifier.padding(horizontal = 4.dp, vertical = 10.dp).alpha(if (a.enabled) 1f else 0.38f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)) {
-                    Icon(icon, null, Modifier.size(if (main) 26.dp else 22.dp))
-                    Text(label, style = if (main) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp),
-                        fontWeight = if (main) FontWeight.SemiBold else FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    val rows = play.partition { it.id == ActionIds.PLAY || it.id == ActionIds.PLAY_SHUFFLED }.toList().filter { it.isNotEmpty() }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { isTraversalGroup = true; contentDescription = groupLabel }, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        rows.forEachIndexed { r, row ->
+            val top = r == 0
+            val bottom = r == rows.lastIndex
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                row.forEachIndexed { i, a ->
+                    fun corner(outer: Boolean) = if (outer) 24.dp else 8.dp
+                    val shape = RoundedCornerShape(
+                        topStart = corner(top && i == 0), topEnd = corner(top && i == row.lastIndex),
+                        bottomStart = corner(bottom && i == 0), bottomEnd = corner(bottom && i == row.lastIndex),
+                    )
+                    PlayGroupButton(a, shape, tag, Modifier.weight(if (a.id == ActionIds.PLAY) 1.6f else 1f), onRun)
                 }
+            }
+        }
+    }
+}
+
+/** One button of [PlayGroup]: Play and Shuffle put the icon beside the label, the queue actions above it. */
+@Composable
+private fun PlayGroupButton(a: ActionDescriptor, shape: Shape, tag: String, modifier: Modifier, onRun: (ActionDescriptor) -> Unit) {
+    val main = a.id == ActionIds.PLAY
+    val start = main || a.id == ActionIds.PLAY_SHUFFLED
+    val (label, icon) = when (a.id) {
+        ActionIds.PLAY -> stringResource(R.string.action_play) to HocketIcons.Filled.PlayArrow
+        ActionIds.PLAY_SHUFFLED -> stringResource(R.string.action_shuffle) to HocketIcons.Filled.Shuffle
+        ActionIds.PLAY_NEXT -> stringResource(R.string.action_play_next) to HocketIcons.Filled.PlaylistPlay
+        ActionIds.ADD_TO_QUEUE -> stringResource(R.string.action_label_add_to_queue) to HocketIcons.Filled.QueueMusic
+        else -> stringResource(R.string.action_play_later) to HocketIcons.Filled.PlaylistAdd
+    }
+    Surface(
+        onClick = { onRun(a) },
+        enabled = a.enabled,
+        shape = shape,
+        color = if (main) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = if (main) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = modifier.fillMaxHeight().heightIn(min = if (start) 60.dp else 64.dp).testTag("$tag.action.${a.id}"),
+    ) {
+        val content = Modifier.alpha(if (a.enabled) 1f else 0.38f)
+        if (start) {
+            Row(content.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, Modifier.size(if (main) 26.dp else 22.dp))
+                Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = if (main) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        } else {
+            Column(content.padding(horizontal = 6.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically)) {
+                Icon(icon, null, Modifier.size(22.dp))
+                // One line at normal font sizes; a large font size wraps rather than cutting the label off.
+                Text(label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp), fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }

@@ -1629,8 +1629,10 @@ class FakeCore(
             ActionDescriptor(id, label, icon, category, enabled, null, undoable, destructive)
         // As the core's `visible` hook: "Add to queue" only with the Queue section setting on.
         val addToQueue = if (queueSection) listOf(d(ActionIds.ADD_TO_QUEUE, "Add to queue", "queue_music", "queue")) else emptyList()
+        // And Shuffle isn't offered for one song: shuffling it is just playing it.
+        val shuffle = if (target is ActionTarget.Tracks && target.data.ids.size == 1) emptyList() else listOf(d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"))
         val library = listOf(
-            d(ActionIds.PLAY, "Play", "play_arrow", "playback"), d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"),
+            d(ActionIds.PLAY, "Play", "play_arrow", "playback"), *shuffle.toTypedArray(),
             d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"), *addToQueue.toTypedArray(), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
             d(ActionIds.PREVIEW, "Preview", "headphones", "playback", undoable = false, enabled = (target is ActionTarget.Tracks && target.data.ids.size == 1) || (target is ActionTarget.QueueItems && target.data.keys.size == 1)),
             d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false),

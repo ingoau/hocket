@@ -211,6 +211,11 @@ fn can_add_to_queue(t: &ActionTarget, s: &StateView) -> bool {
     s.queue_section && has_selection(t, s)
 }
 
+/// Shuffling one song is just playing it, so a single song isn't offered Shuffle.
+fn not_one_song(t: &ActionTarget, _: &StateView) -> bool {
+    !matches!(t, ActionTarget::Tracks { ids } if ids.len() == 1)
+}
+
 fn queue_section_on(_: &ActionTarget, s: &StateView) -> bool {
     s.queue_section
 }
@@ -702,7 +707,8 @@ static ALL: &[ActionDef] = &[
         PLAYABLE,
         has_items,
         play_shuffled,
-        undoable = true
+        undoable = true,
+        visible = Some(not_one_song)
     ),
     action!(
         "togglePlay",

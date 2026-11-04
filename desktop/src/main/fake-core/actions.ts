@@ -171,6 +171,8 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       if (e.id === "resumeHere" && !ctx.hasResumeOffer) return false;
       // Like the core's `visible` hook: hidden, not just disabled, with the Queue section off.
       if (e.id === "addToQueue" && ctx.queueSection === false) return false;
+      // Like the core: shuffling one song is just playing it.
+      if (e.id === "playShuffled" && target.type === "tracks" && target.data.ids.length === 1) return false;
       return true;
     })
     .map((e) => ({
