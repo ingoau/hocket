@@ -20,7 +20,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import app.hocket.ui.a11y.LocalReducedMotion
+import app.hocket.ui.nav.ShellEntrance
 import app.hocket.ui.nav.SplashHold
+import app.hocket.ui.nav.stagedPart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -45,6 +47,8 @@ private const val SPLASH_HOLD_MAX_MS = 2_000L
 private const val ENTRANCE_WINDOW_MS = 600L
 private const val ENTRANCE_STAGGER_MS = 45L
 private const val ENTRANCE_MS = 320
+private val STAGED_RISE = 40.dp
+private const val STAGED_HERO_SCALE = 0.06f
 
 @Stable
 class HomeReveal internal constructor(phase: RevealPhase) {
@@ -53,6 +57,13 @@ class HomeReveal internal constructor(phase: RevealPhase) {
 
     /** True just after a cold reveal: sections composed now fade and rise in, in order. */
     var entrance by mutableStateOf(false)
+        internal set
+
+    /**
+     * The feed was in under the splash: sections come in on the shell's entrance ([stagedPart])
+     * as the splash clears, rather than on their own clock.
+     */
+    var staged by mutableStateOf(false)
         internal set
 
     internal var holdingSplash = false
@@ -74,7 +85,7 @@ class HomeReveal internal constructor(phase: RevealPhase) {
 /**
  * Paces Home's first appearance. With a cached feed it's [RevealPhase.Shown] at once, with no
  * entrance. Under the launch splash it holds the splash ([SplashHold]) until the feed is [ready],
- * then is just there for the shell's own entrance; if the splash gives up first, skeletons show
+ * then its sections come in on the shell's own entrance ([HomeReveal.staged]); if the splash gives up first, skeletons show
  * straight away. Otherwise a cold load shows nothing for [SKELETON_DELAY_MS]; if the feed is ready
  * by then it comes straight in, otherwise skeletons show (for at least [SKELETON_MIN_MS]) until the
  * feed is ready or [REVEAL_CAP_MS] passes, and whatever has loaded comes in together.
@@ -100,6 +111,11 @@ internal fun rememberHomeReveal(key: Any, ready: () -> Boolean): HomeReveal {
             }
             reveal.releaseSplash()
             if (isReady()) {
+                // The shell's entrance brings the sections in, top-down, as the splash clears.
+                if (!reducedMotion) {
+                    reveal.staged = true
+                    ShellEntrance.pageStaged = true
+                }
                 reveal.phase = RevealPhase.Shown
                 return@LaunchedEffect
             }
@@ -124,8 +140,29 @@ internal fun rememberHomeReveal(key: Any, ready: () -> Boolean): HomeReveal {
     return reveal
 }
 
-/** The cold-reveal entrance for the [step]th section: a fade and a short rise, staggered top-down. */
-internal fun Modifier.homeEntrance(reveal: HomeReveal, step: Int): Modifier = composed {
+/**
+ * The cold-reveal entrance for the [step]th section: a fade and a short rise, staggered top-down.
+ * A [hero] (Spotlight) settles in from a little larger instead, when the entrance is staged.
+ */
+internal fun Modifier.homeEntrance(reveal: HomeReveal, step: Int, hero: Boolean = false): Modifier = composed {
+    // On the splash's exit: in step with the shell's entrance. Spotlight (the hero, always first)
+    // settles down from a little larger, carrying on the mark's swell; the sections rise in.
+    if (remember { reveal.staged }) {
+        val density = LocalDensity.current
+        val rise = with(density) { STAGED_RISE.toPx() }
+        return@composed graphicsLayer {
+            val e = stagedPart(ShellEntrance.progress.value, step)
+            if (e >= 1f) return@graphicsLayer
+            alpha = (e * 1.6f).coerceAtMost(1f)
+            if (hero) {
+                val s = 1f + STAGED_HERO_SCALE * (1f - e)
+                scaleX = s
+                scaleY = s
+            } else {
+                translationY = (1f - e) * rise
+            }
+        }
+    }
     val play = remember { reveal.entrance }
     if (!play) return@composed this
     val progress = remember { Animatable(0f) }

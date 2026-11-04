@@ -582,7 +582,9 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     val p = sheet.coverProgress.coerceIn(0f, 1f)
                     // Fully under the open player: not drawn at all (and left at its own size,
                     // so whatever reads its bounds meanwhile sees the page as laid out).
-                    val e = entrancePart(entrance(), ShellEntrance.CONTENT_START_MS, ShellEntrance.CONTENT_END_MS)
+                    // A page that stages its own entrance (Home's sections) only fades in here.
+                    val staged = ShellEntrance.pageStaged
+                    val e = entrancePart(entrance(), ShellEntrance.CONTENT_START_MS, if (staged) ShellEntrance.STAGED_FADE_END_MS else ShellEntrance.CONTENT_END_MS)
                     alpha = if (p >= 1f) 0f else e
                     if (recede && p > 0f && p < 1f) {
                         val s = 1f - RecedeScale * p
@@ -590,7 +592,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                         scaleY = s
                         shape = RoundedCornerShape(RecedeCorner * p)
                         clip = true
-                    } else if (entranceMoves && e < 1f) {
+                    } else if (entranceMoves && !staged && e < 1f) {
                         val s = 0.94f + 0.06f * e
                         scaleX = s
                         scaleY = s

@@ -297,7 +297,7 @@ fun HomeScreen(nav: NavHostController) {
                                 onOpen = { s -> openSlide(nav, s) },
                                 onPlay = { s, shuffle -> playSlide(client, serverId, s, shuffle) },
                                 onMenu = { s -> s.album?.let { sheets.album = it } ?: s.artist?.let { sheets.artist = it } ?: s.playlist?.let { sheets.playlist = it } },
-                                modifier = Modifier.homeEntrance(reveal, step).onGloballyPositioned { spotlightLeft.floatValue = it.positionInWindow().x },
+                                modifier = Modifier.homeEntrance(reveal, step, hero = true).onGloballyPositioned { spotlightLeft.floatValue = it.positionInWindow().x },
                             )
                         }
                     }
