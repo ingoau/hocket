@@ -461,7 +461,7 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
-    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val scroll = TopAppBarDefaults.pinnedScrollBehavior()
     val (sort, setSort) = rememberListSort(list)
     val control = SortControl(sort, list.sortKeys, setSort)
     val sharedArtwork = app.hocket.ui.nav.LocalSharedArtwork.current

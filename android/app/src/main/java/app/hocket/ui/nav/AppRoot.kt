@@ -855,9 +855,21 @@ internal fun barFade(p: Float, end: Float = BAR_FADE_END): Float {
  * A vertical gradient from transparent (top) to [color] (bottom) on a smoothstep curve, so the scrim
  * eases in slowly from its top edge and levels off towards the bar instead of showing a band. It
  * peaks at [SCRIM_PEAK] (a hint of the page shows through); the lowest [solid] share holds there.
+ * [fromTop] flips it for a top bar: [TOP_SCRIM_PEAK] at the top (the page shows through a
+ * little more than at the bottom), easing out downwards on a smootherstep curve. Pass [endY] when drawing it
+ * past the drawing area's bottom: otherwise it spans that area, not the rect it fills.
  */
-private fun easedScrim(color: Color, stops: Int = 24, solid: Float = 0f): Brush {
-    val peak = color.copy(alpha = color.alpha * SCRIM_PEAK)
+internal fun easedScrim(color: Color, stops: Int = 24, solid: Float = 0f, fromTop: Boolean = false, endY: Float = Float.POSITIVE_INFINITY): Brush {
+    val peak = color.copy(alpha = color.alpha * if (fromTop) TOP_SCRIM_PEAK else SCRIM_PEAK)
+    // Smootherstep for the top's longer fade: flat at both ends, so neither the solid edge nor the tail shows a line.
+    if (fromTop) return Brush.verticalGradient(
+        0f to peak,
+        *Array(stops) { i ->
+            val t = 1f - i / (stops - 1f)
+            solid + (1f - t) * (1f - solid) to color.copy(alpha = peak.alpha * t * t * t * (t * (t * 6f - 15f) + 10f))
+        },
+        endY = endY,
+    )
     return Brush.verticalGradient(
         *Array(stops) { i ->
             val t = i / (stops - 1f)
@@ -869,6 +881,9 @@ private fun easedScrim(color: Color, stops: Int = 24, solid: Float = 0f): Brush 
 
 /** The bottom scrim's strongest opacity. */
 private const val SCRIM_PEAK = 0.94f
+
+/** A top scrim's strongest opacity. */
+private const val TOP_SCRIM_PEAK = 0.85f
 
 /**
  * A NavHost destination drawn inside [PageTransitionLayer], so every screen (places, details,
