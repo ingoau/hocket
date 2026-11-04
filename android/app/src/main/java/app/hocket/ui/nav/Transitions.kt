@@ -17,9 +17,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -300,6 +302,10 @@ internal fun AnimatedVisibilityScope.PageTransitionLayer(transitions: ShellTrans
                 if (f > 0f && entryId == transitions.coveredEntryId) {
                     drawRect(Color.Black.copy(alpha = DIM_AMOUNT * f))
                 }
-            },
+            }
+            // Every page is opaque, whether or not it has its own Scaffold: during a push, pop or
+            // predictive back both pages are drawn at once, and a see-through page (Search is a plain
+            // Column) would show the one underneath straight through it.
+            .background(MaterialTheme.colorScheme.background),
     ) { content() }
 }
