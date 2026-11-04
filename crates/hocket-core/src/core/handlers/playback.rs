@@ -1748,11 +1748,7 @@ impl Actor {
     }
 
     fn media_art_size(&self) -> u32 {
-        if self.battery_saver
-            && self
-                .settings
-                .get_bool(crate::settings::keys::BATTERY_SMALL_ARTWORK)
-        {
+        if self.battery_saver.has(crate::api::SaverFeature::SmallArtwork) {
             MEDIA_SESSION_ART_SMALL
         } else {
             MEDIA_SESSION_ART
@@ -1834,13 +1830,6 @@ impl Actor {
         ) {
             return;
         }
-        if self.battery_saver
-            && self
-                .settings
-                .get_bool(crate::settings::keys::BATTERY_PAUSE_PREFETCH)
-        {
-            return;
-        }
         self.fetch_artwork(cover, size);
     }
 
@@ -1872,11 +1861,34 @@ impl Actor {
         }
     }
 
-    pub(crate) fn set_battery_saver(&mut self, enabled: bool) {
-        if self.battery_saver != enabled {
-            self.battery_saver = enabled;
-            self.emit(Event::BatterySaverChanged { enabled });
+    pub(crate) fn set_power_save(&mut self, enabled: bool) {
+        if self.power_save != enabled {
+            self.power_save = enabled;
+            self.refresh_battery_saver();
+        }
+    }
+
+    /// Battery saver from the power-save state and the `battery.*` settings;
+    /// announced (and acted on) when it changes.
+    pub(crate) fn refresh_battery_saver(&mut self) {
+        use crate::settings::keys;
+        let level = |key| crate::saver::parse_level(&self.settings.get(key));
+        let saver = crate::saver::resolve(
+            level(keys::BATTERY_LEVEL).unwrap_or(crate::api::SaverLevel::Off),
+            level(keys::BATTERY_AUTO_LEVEL).unwrap_or(crate::api::SaverLevel::Medium),
+            self.settings.get_bool(keys::BATTERY_AUTO_ENGAGE),
+            self.power_save,
+            &crate::saver::parse_custom(&self.settings.get(keys::BATTERY_CUSTOM)),
+        );
+        if saver == self.battery_saver {
+            return;
+        }
+        let was = std::mem::replace(&mut self.battery_saver, saver.clone());
+        self.emit(Event::BatterySaverChanged { saver });
+        if was.engaged() != self.battery_saver.engaged() {
             self.mark_prefetch_check();
+        }
+        if was.has(crate::api::SaverFeature::SmallArtwork) != self.battery_saver.has(crate::api::SaverFeature::SmallArtwork) {
             self.media_art = None;
             self.emit_media_session();
         }

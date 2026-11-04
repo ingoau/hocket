@@ -117,7 +117,7 @@ impl Actor {
             || self.stream_reader.is_none()
             || self.api().is_none()
             || self.shutting_down
-            || self.battery_saver
+            || self.battery_saver.engaged()
         {
             return false;
         }

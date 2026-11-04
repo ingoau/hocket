@@ -572,7 +572,15 @@ mod tests {
         );
         push(
             "event.batterySaverChanged",
-            json!(Event::BatterySaverChanged { enabled: true }),
+            json!(Event::BatterySaverChanged {
+                saver: hocket_core::saver::resolve(
+                    SaverLevel::Off,
+                    SaverLevel::Medium,
+                    true,
+                    true,
+                    &[],
+                ),
+            }),
         );
         push(
             "event.libraryChanged",

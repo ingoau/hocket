@@ -442,6 +442,74 @@ pub struct TranscodingProfile {
     pub cannot_decode: Vec<String>,
 }
 
+/// A battery saver level (`battery.level`, `battery.autoLevel`). Each preset
+/// turns off everything the one before it does, and more
+/// ([`crate::saver::features`]); `Custom` is the `battery.custom` set.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum SaverLevel {
+    Off,
+    Light,
+    Medium,
+    Max,
+    Custom,
+}
+
+/// Something battery saver turns off or tones down.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub enum SaverFeature {
+    /// Animated backgrounds hold still.
+    StillBackground,
+    /// The wavy seek bar keeps its shape but stops moving.
+    StillSeekWave,
+    /// Lyrics at a lower frame rate, without the depth-of-field blur.
+    LighterLyrics,
+    /// The player and lyrics cap the display at 60 Hz.
+    RefreshCap,
+    /// Connect keeps in touch less often, even with other devices around.
+    SlowSync,
+    /// Lyrics light a whole line at once, with no per-word animation.
+    SimpleLyrics,
+    /// Artwork always shows as a card, never immersive.
+    NoImmersiveArtwork,
+    /// No blurred artwork behind the player or album pages.
+    NoArtworkBlur,
+    /// Artwork one size smaller, the media session's too.
+    SmallArtwork,
+}
+
+/// Battery saver as engaged now: the level in force (`battery.level`, or
+/// `battery.autoLevel` while the device saves power and `battery.autoEngage`
+/// is on) and what it turns off.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BatterySaver {
+    pub level: SaverLevel,
+    /// Engaged by the device's power-save state rather than chosen.
+    pub automatic: bool,
+    pub features: Vec<SaverFeature>,
+}
+
+impl Default for BatterySaver {
+    fn default() -> Self {
+        Self { level: SaverLevel::Off, automatic: false, features: Vec::new() }
+    }
+}
+
+impl BatterySaver {
+    pub fn has(&self, feature: SaverFeature) -> bool {
+        self.features.contains(&feature)
+    }
+
+    pub fn engaged(&self) -> bool {
+        !self.features.is_empty()
+    }
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -2033,7 +2101,10 @@ pub enum Command {
         visible: bool,
         focused: bool,
     },
-    SetBatterySaver {
+    /// The device's own power-save state (Android Power Saver, a laptop on
+    /// battery). While `battery.autoEngage` is on it engages battery saver at
+    /// `battery.autoLevel`; the level itself is the `battery.level` setting.
+    SetPowerSave {
         enabled: bool,
     },
 
@@ -2895,7 +2966,7 @@ pub struct Snapshot {
     pub resume_offer: Option<ResumeOffer>,
     pub sleep_timer: Option<SleepTimer>,
     pub network: Option<NetworkState>,
-    pub battery_saver: bool,
+    pub battery_saver: BatterySaver,
     pub sync_progress: Option<SyncProgress>,
 }
 
@@ -3293,11 +3364,10 @@ pub enum Event {
     NetworkChanged {
         network: Option<NetworkState>,
     },
-    /// Battery saver as last set with `SetBatterySaver`
-    /// (`Snapshot.batterySaver`): emitted whenever it changes and in every
-    /// replay.
+    /// Battery saver as it is engaged now (`Snapshot.batterySaver`): emitted
+    /// whenever it changes and in every replay.
     BatterySaverChanged {
-        enabled: bool,
+        saver: BatterySaver,
     },
     DevicesChanged {
         devices: Vec<DeviceInfo>,

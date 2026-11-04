@@ -168,19 +168,14 @@ async fn priming_needs_an_unmetered_network_and_no_battery_saver() {
         );
     }
     t.run(network(NetworkKind::Wifi, false)).await;
-    t.run(Command::SetBatterySaver { enabled: true }).await;
-    t.run(Command::SetSetting {
-        key: "battery.pausePrefetch".into(),
-        value: "false".into(),
-    })
-    .await;
+    t.run(Command::SetPowerSave { enabled: true }).await;
     t.run(Command::PrimeTrack {
         track_id: "t0".into(),
     })
     .await;
     run_real(&t, 1000.0).await;
     assert!(t.upstream.calls().is_empty(), "battery saver");
-    t.run(Command::SetBatterySaver { enabled: false }).await;
+    t.run(Command::SetPowerSave { enabled: false }).await;
     t.run(Command::PrimeTrack {
         track_id: "t0".into(),
     })

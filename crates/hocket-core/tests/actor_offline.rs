@@ -315,12 +315,12 @@ async fn network_changes_are_announced_and_replayed() {
     t.core.shutdown().await;
 }
 
-fn battery_saver_events(t: &TestCore) -> Vec<bool> {
+fn battery_saver_events(t: &TestCore) -> Vec<(SaverLevel, bool)> {
     t.events
         .all()
         .into_iter()
         .filter_map(|e| match e {
-            Event::BatterySaverChanged { enabled } => Some(enabled),
+            Event::BatterySaverChanged { saver } => Some((saver.level, saver.automatic)),
             _ => None,
         })
         .collect()
@@ -335,16 +335,24 @@ async fn battery_saver_changes_are_announced_and_replayed() {
     )
     .await;
     t.events.clear();
-    t.run(Command::SetBatterySaver { enabled: true }).await;
-    assert_eq!(battery_saver_events(&t), [true]);
+    // Power save engages the automatic level (medium by default).
+    t.run(Command::SetPowerSave { enabled: true }).await;
+    assert_eq!(battery_saver_events(&t), [(SaverLevel::Medium, true)]);
     // The same state again is not a change.
-    t.run(Command::SetBatterySaver { enabled: true }).await;
-    assert_eq!(battery_saver_events(&t), [true]);
-    t.run(Command::SetBatterySaver { enabled: false }).await;
-    assert_eq!(battery_saver_events(&t), [true, false]);
+    t.run(Command::SetPowerSave { enabled: true }).await;
+    assert_eq!(battery_saver_events(&t), [(SaverLevel::Medium, true)]);
+    // A stronger chosen level holds over the automatic one.
+    t.run(Command::SetSetting { key: "battery.level".into(), value: "\"max\"".into() }).await;
+    t.run(Command::SetPowerSave { enabled: false }).await;
+    assert_eq!(
+        battery_saver_events(&t),
+        [(SaverLevel::Medium, true), (SaverLevel::Max, false)]
+    );
+    t.run(Command::SetSetting { key: "battery.level".into(), value: "\"off\"".into() }).await;
+    assert_eq!(battery_saver_events(&t).last(), Some(&(SaverLevel::Off, false)));
 
     t.events.clear();
     t.run(Command::RequestSnapshot).await;
-    assert_eq!(battery_saver_events(&t), [false]);
+    assert_eq!(battery_saver_events(&t), [(SaverLevel::Off, false)]);
     t.core.shutdown().await;
 }
