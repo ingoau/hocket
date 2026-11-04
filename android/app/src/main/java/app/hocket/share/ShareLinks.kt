@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,7 +48,11 @@ import app.hocket.ui.components.MenuKind
 import app.hocket.ui.components.MenuSubject
 import app.hocket.ui.components.resolveTrackIds
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -106,11 +111,13 @@ object ShareActions {
             ShareChoice.Navidrome -> {
                 val ids = navidromeIds(client, request.target, request.subject.kind)
                 val url = if (ids.isEmpty()) null else (client.query(Queries.createShare(ids)) as? QueryResult.Share)?.data?.url
+                currentCoroutineContext().ensureActive()
                 if (url.isNullOrBlank()) toast(context, R.string.toast_share_failed) else sendText(context, url)
             }
             ShareChoice.SongLink -> {
                 val url = songLinkQuery(request.subject, request.target)
                     ?.let { (client.query(it) as? QueryResult.SongLink)?.data }
+                currentCoroutineContext().ensureActive()
                 if (url.isNullOrBlank()) toast(context, R.string.toast_share_failed) else sendText(context, url)
             }
             ShareChoice.Genius -> {
@@ -152,6 +159,7 @@ object ShareActions {
             ?: (request.target as? ActionTarget.Tracks)?.data?.ids?.singleOrNull()
         val exported = trackId?.let { (client.query(Queries.exportAudio(it)) as? QueryResult.AudioFile)?.data }
         val src = exported?.path?.let(::File)?.takeIf { it.isFile }
+        currentCoroutineContext().ensureActive()
         if (exported == null || src == null) {
             toast(context, R.string.toast_share_failed)
             return
@@ -172,6 +180,7 @@ object ShareActions {
             clipData = ClipData.newRawUri(exported.fileName, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        currentCoroutineContext().ensureActive()
         val chooser = Intent.createChooser(send, context.getString(R.string.action_share))
         if (context !is android.app.Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(chooser)
@@ -190,9 +199,12 @@ object ShareActions {
 fun ShareRequestEffect(request: ShareRequest?, onDone: () -> Unit) {
     val context = LocalContext.current
     val client = LocalCoreClient.current
+    val finish by rememberUpdatedState(onDone)
     var busy by remember(request) { mutableStateOf(false) }
+    val run = remember(request) { ShareRun() }
     LaunchedEffect(request) {
         val req = request ?: return@LaunchedEffect
+        run.job = coroutineContext.job
         // Genius only opens a search page: nothing to wait for.
         val beat = if (req.choice == ShareChoice.Genius) null else launch { delay(BUSY_DELAY_MS); busy = true }
         try {
@@ -201,9 +213,23 @@ fun ShareRequestEffect(request: ShareRequest?, onDone: () -> Unit) {
             beat?.cancel()
             busy = false
         }
+        run.finish(finish)
+    }
+    // Cancel stops the work at once, not a frame later when the request is cleared: a link landing in
+    // between must not open the share sheet.
+    if (busy && request != null) ShareBusyDialog(request.choice, onCancel = { run.job?.cancel(); run.finish(finish) })
+}
+
+/** One share's work, finished once whether it ends by itself or by Cancel. */
+private class ShareRun {
+    var job: Job? = null
+    private var done = false
+
+    fun finish(onDone: () -> Unit) {
+        if (done) return
+        done = true
         onDone()
     }
-    if (busy && request != null) ShareBusyDialog(request.choice, onCancel = onDone)
 }
 
 /** Long enough that a cached link never flashes the dialog. */

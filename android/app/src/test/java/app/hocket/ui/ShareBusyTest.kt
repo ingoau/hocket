@@ -25,10 +25,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
@@ -93,6 +95,7 @@ class ShareBusyTest {
         slow.release.complete(Unit)
         compose.waitForIdle()
         assertFalse(compose.onAllNodesWithTag("share.busy").fetchSemanticsNodes().isNotEmpty())
+        assertNull(shadowOf(compose.activity).nextStartedActivity)
     }
 
     private fun awaitTag(tag: String) {

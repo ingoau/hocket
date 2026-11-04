@@ -726,6 +726,7 @@ button.qrow { width: 100%; }
 .toast.closing { animation: toast-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 @keyframes toast-out { to { opacity: 0; transform: translateY(12px) scale(0.94); } }
 .toast:not(:has(.btn)) { padding-right: 18px; }
+.toast .spin { flex: none; animation: spin 1.2s linear infinite; }
 .toast .btn { background: transparent; color: var(--accent-inverse); border-color: transparent; font-weight: 600; }
 /* The action is --accent-inverse at 4.5:1 on the toast itself; a lighter hover layer would drop it below that, so hover draws a ring in the text colour instead. */
 .toast .btn:hover, .toast .btn:active { background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, currentColor 60%, transparent); }
