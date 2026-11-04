@@ -854,16 +854,19 @@ internal fun barFade(p: Float, end: Float = BAR_FADE_END): Float {
  * eases in slowly from its top edge and levels off towards the bar instead of showing a band. It
  * peaks at [SCRIM_PEAK] (a hint of the page shows through); the lowest [solid] share holds there.
  * [fromTop] flips it for a top bar: fully opaque at the top (nothing reads through behind the
- * bar's title and icons), easing out downwards.
+ * bar's title and icons), easing out downwards on a smootherstep curve. Pass [endY] when drawing it
+ * past the drawing area's bottom: otherwise it spans that area, not the rect it fills.
  */
-internal fun easedScrim(color: Color, stops: Int = 24, solid: Float = 0f, fromTop: Boolean = false): Brush {
+internal fun easedScrim(color: Color, stops: Int = 24, solid: Float = 0f, fromTop: Boolean = false, endY: Float = Float.POSITIVE_INFINITY): Brush {
     val peak = if (fromTop) color else color.copy(alpha = color.alpha * SCRIM_PEAK)
+    // Smootherstep for the top's longer fade: flat at both ends, so neither the solid edge nor the tail shows a line.
     if (fromTop) return Brush.verticalGradient(
         0f to peak,
         *Array(stops) { i ->
             val t = 1f - i / (stops - 1f)
-            solid + (1f - t) * (1f - solid) to color.copy(alpha = peak.alpha * t * t * (3f - 2f * t))
+            solid + (1f - t) * (1f - solid) to color.copy(alpha = peak.alpha * t * t * t * (t * (t * 6f - 15f) + 10f))
         },
+        endY = endY,
     )
     return Brush.verticalGradient(
         *Array(stops) { i ->

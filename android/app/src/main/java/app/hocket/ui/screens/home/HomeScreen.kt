@@ -274,9 +274,11 @@ fun HomeScreen(nav: NavHostController) {
             val scrimAlpha by animateFloatAsState(if (scrolled) 1f else 0f, MaterialTheme.motionScheme.defaultEffectsSpec(), label = "homeBarScrim")
             val scrimColor = MaterialTheme.colorScheme.surface
             Box(Modifier.drawWithCache {
-                // Solid over the whole bar (status bar included), then easing out below its bottom edge.
-                val reach = size.height + HomeBarScrimFade.toPx()
-                val scrim = easedScrim(scrimColor, solid = size.height / reach, fromTop = true)
+                // Solid over the bar (status bar included) down to just under its icons, then a long, soft
+                // fade past its bottom edge.
+                val solidEnd = (size.height - HomeBarScrimFadeStart.toPx()).coerceAtLeast(0f)
+                val reach = solidEnd + HomeBarScrimFade.toPx()
+                val scrim = easedScrim(scrimColor, stops = 32, solid = solidEnd / reach, fromTop = true, endY = reach)
                 onDrawBehind { if (scrimAlpha > 0f) drawRect(scrim, size = Size(size.width, reach), alpha = scrimAlpha) }
             }.testTag("home.barScrim")) {
             TopAppBar(title = { if (overArt) HeaderMark(wipe = markWipe) else HeaderMark() }, colors = barColors, actions = {
@@ -666,5 +668,8 @@ private fun ListeningTile(content: SectionContent.Listening, onOpen: () -> Unit)
     }
 }
 
-/** How far below Home's top bar its scrim fades out. */
-private val HomeBarScrimFade = 40.dp
+/** How far above the bottom of Home's top bar its scrim starts to fade (the empty space under its icons). */
+private val HomeBarScrimFadeStart = 8.dp
+
+/** How long Home's top-bar scrim takes to fade out. */
+private val HomeBarScrimFade = 96.dp
