@@ -38,9 +38,15 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.MediumFlexibleTopAppBar
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import app.hocket.ui.brand.HeaderLockup
+import app.hocket.ui.brand.HeaderMark
+import app.hocket.ui.brand.MarkWipe
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import kotlin.math.floor
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -57,6 +63,7 @@ import app.hocket.ui.brand.Brand
 import app.hocket.ui.nav.PageColors
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -179,7 +186,11 @@ fun HomeScreen(nav: NavHostController) {
     val pager = rememberPagerState { slides.size }
     shownSlide.value = slides.getOrNull(pager.currentPage)
     val dark = LocalDarkTheme.current
-    val slideSeeds = slides.map { key(it.key) { artworkSeed(it.coverArt).value } }
+    // Each slide's artwork seed, and whether the top of its cover (under the bar) is light; until
+    // it's been read, the slide shows the page's own surface: the theme's ink.
+    val slideLooks = slides.map { key(it.key) { artworkSeed(it.coverArt).value to (artworkTopLight(it.coverArt).value ?: !dark) } }
+    val slideSeeds = slideLooks.map { it.first }
+    val slideInks = slideLooks.map { if (it.second) Brand.inkOnLight else Brand.inkOnDark }
     // The slides, and the rest of Home, take the colours of the slide in view (as the app does from
     // what's playing), unless colour from artwork is off.
     val dynamicColour = settings[SettingKeys.DISPLAY_DYNAMIC_COLOUR]?.value?.trim() != "false"
@@ -199,12 +210,28 @@ fun HomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val songMenu = rememberSongMenu()
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    // Over the cover (Spotlight first, the page not scrolled under the bar) the bar's lockup, icons
+    // Over the cover (Spotlight first, the page not scrolled under the bar) the bar's mark, icons
     // and the status bar take the ink that reads on the top of the slide in view.
     val overArt = heroFirst && scroll.state.overlappedFraction < 0.01f
-    // Until the cover's been read, the slide shows the page's own surface: the theme's ink.
-    val topLight = slides.getOrNull(pager.currentPage)?.coverArt?.let { c -> key(c) { artworkTopLight(c).value } } ?: !dark
-    val barInk = if (topLight) Brand.inkOnLight else Brand.inkOnDark
+    val topLight = slideInks.getOrNull(pager.currentPage)?.let { it == Brand.inkOnLight } ?: !dark
+    val barInk = slideInks.getOrNull(pager.currentPage) ?: Brand.inkOnDark
+    // The mark takes each slide's ink where that slide is behind it: split at the edge between the
+    // two slides in view, read from the pager's live offset, so it wipes across with the finger.
+    val spotlightLeft = remember { mutableFloatStateOf(0f) }
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val markWipe: () -> MarkWipe? = {
+        val info = pager.layoutInfo
+        val step = info.pageSize + info.pageSpacing
+        if (step <= 0 || slideInks.isEmpty()) null else {
+            val p = pager.currentPage + pager.currentPageOffsetFraction
+            val i = floor(p).toInt().coerceIn(0, slideInks.lastIndex)
+            val here = slideInks[i]
+            val next = slideInks.getOrElse(i + 1) { here }
+            // Page i+1 comes in from the right, or from the left in RTL. The pager is one page wide.
+            if (rtl) MarkWipe(spotlightLeft.floatValue + (p - i) * step, next, here)
+            else MarkWipe(spotlightLeft.floatValue + (i + 1 - p) * step, here, next)
+        }
+    }
     // Only with Spotlight showing: otherwise Home leaves the chrome and status bar to the app theme, as before.
     if (heroFirst) PageColors(pageScheme, statusLight = if (overArt) topLight else !dark)
     val hiddenLabel = stringResource(R.string.home_section_hidden, "%s")
@@ -222,7 +249,7 @@ fun HomeScreen(nav: NavHostController) {
     CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("home.screen"),
-        // The app's lockup as the title, at the Library header's size; the server is in the account sheet (#29).
+        // The app's mark as the title, level with the actions; the server is in the account sheet (#29).
         // Clear over Spotlight's artwork until the page scrolls under it.
         topBar = {
             val barColors = when {
@@ -230,7 +257,7 @@ fun HomeScreen(nav: NavHostController) {
                 heroFirst -> TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer)
                 else -> TopAppBarDefaults.topAppBarColors()
             }
-            MediumFlexibleTopAppBar(title = { if (overArt) HeaderLockup(ink = barInk) else HeaderLockup() }, colors = barColors, actions = {
+            TopAppBar(title = { if (overArt) HeaderMark(wipe = markWipe) else HeaderMark() }, colors = barColors, actions = {
                 IconButton(onClick = { customising = true }, modifier = Modifier.testTag("home.customise")) { Icon(HocketIcons.Filled.Tune, stringResource(R.string.home_customise)) }
                 JobsIndicator(onClick = { jobs = true })
                 AccountButton()
@@ -264,7 +291,7 @@ fun HomeScreen(nav: NavHostController) {
                             onOpen = { s -> openSlide(nav, s) },
                             onPlay = { s, shuffle -> playSlide(client, serverId, s, shuffle) },
                             onMenu = { s -> s.album?.let { sheets.album = it } ?: s.artist?.let { sheets.artist = it } ?: s.playlist?.let { sheets.playlist = it } },
-                            modifier = Modifier.homeEntrance(reveal, step),
+                            modifier = Modifier.homeEntrance(reveal, step).onGloballyPositioned { spotlightLeft.floatValue = it.positionInWindow().x },
                         )
                     }
                 }
