@@ -138,6 +138,25 @@ impl Actor {
                 };
                 self.write_snoozes(track_ids, Some(until), "snooze", "Snooze", Some(message));
             }
+            Command::SnoozeUntil { track_ids, until } => {
+                if until <= self.now() {
+                    self.toast("Pick a time in the future to snooze until", None);
+                    return;
+                }
+                let n = track_ids.len();
+                let message = if n == 1 {
+                    "Snoozed".to_string()
+                } else {
+                    format!("Snoozed {}", songs(n))
+                };
+                self.write_snoozes(
+                    track_ids,
+                    Some(Some(until)),
+                    "snooze",
+                    "Snooze",
+                    Some(message),
+                );
+            }
             Command::Unsnooze { track_ids } => {
                 let n = track_ids.len();
                 let message = if n == 1 {

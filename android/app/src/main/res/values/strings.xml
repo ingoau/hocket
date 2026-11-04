@@ -955,6 +955,9 @@
     <string name="snooze_week">1 week</string>
     <string name="snooze_month">1 month</string>
     <string name="snooze_indefinite">Indefinitely</string>
+    <string name="snooze_custom">Custom…</string>
+    <string name="snooze_custom_title">Snooze until</string>
+    <string name="snooze_custom_next">Next</string>
     <string name="snooze_until">Until %1$s</string>
     <string name="snooze_until_never">Until you unsnooze it</string>
     <string name="snooze_title">Snoozed</string>

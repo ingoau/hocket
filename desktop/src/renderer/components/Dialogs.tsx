@@ -1,4 +1,4 @@
-// Modal dialogs: prompt, confirm, add-to-playlist, sleep timer, Connect picker, track info, Save to Coordinator.
+// Modal dialogs: prompt, confirm, add-to-playlist, sleep timer, snooze until, Connect picker, track info, Save to Coordinator.
 import { useEffect, useRef, useState } from "react";
 import type { Album, DeviceInfo } from "@core/api";
 import { t } from "@shared/strings";
@@ -52,6 +52,7 @@ export function Dialogs() {
         {dialog.kind === "prompt" ? <Prompt {...dialog} /> : null}
         {dialog.kind === "confirm" ? <Confirm {...dialog} /> : null}
         {dialog.kind === "sleepTimer" ? <SleepTimerDialog /> : null}
+        {dialog.kind === "snoozeUntil" ? <SnoozeUntilDialog trackIds={dialog.trackIds} /> : null}
         {dialog.kind === "connect" ? <ConnectDialog /> : null}
         {dialog.kind === "trackInfo" ? <SongInfo trackId={dialog.trackId} /> : null}
         {dialog.kind === "albumInfo" ? <AlbumInfo albumId={dialog.albumId} /> : null}
@@ -121,6 +122,42 @@ function SleepTimerDialog() {
         <button type="button" className="btn" onClick={close}>{t("dialog.cancel")}</button>
       </div>
     </>
+  );
+}
+
+/** `<input type="datetime-local">`'s value for a moment, in local time. */
+export function localDateTimeValue(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** Snooze songs until a date and time, a week from now to start. */
+function SnoozeUntilDialog({ trackIds }: { trackIds: string[] }) {
+  const close = useApp((s) => s.closeDialog);
+  const [value, setValue] = useState(() => localDateTimeValue(Date.now() + 7 * 24 * 3600_000));
+  // A datetime-local value with no zone parses as local time.
+  const until = value ? new Date(value).getTime() : NaN;
+  const valid = Number.isFinite(until) && until > Date.now();
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!valid) return;
+    bridge().dispatch({ type: "snoozeUntil", data: { track_ids: trackIds, until } });
+    close();
+  };
+  return (
+    <form onSubmit={submit}>
+      <h2 className="dialog-title" id="dialog-title">{t("snooze.customTitle")}</h2>
+      <label style={{ marginTop: 10 }}>
+        {t("snooze.customLabel")}
+        <input className="input" type="datetime-local" value={value} min={localDateTimeValue(Date.now())} onChange={(e) => setValue(e.target.value)} data-testid="snooze-until-input" data-autofocus />
+      </label>
+      {value && !valid ? <div className="muted small" role="alert">{t("snooze.customPast")}</div> : null}
+      <div className="buttons">
+        <button type="button" className="btn" onClick={close}>{t("dialog.cancel")}</button>
+        <button type="submit" className="btn primary" disabled={!valid} data-testid="snooze-until-ok">{t("action.snooze")}</button>
+      </div>
+    </form>
   );
 }
 
