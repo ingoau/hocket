@@ -1,5 +1,11 @@
 package app.hocket.ui.components
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
@@ -114,7 +120,9 @@ import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.QueryResult
+import app.hocket.share.ShareActions
 import app.hocket.share.ShareChoice
+import app.hocket.share.ShareRequest
 import app.hocket.share.shareChoices
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
@@ -319,13 +327,13 @@ fun MenuSheet(
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: (() -> Unit)? = null,
     onInfo: (() -> Unit)? = null,
-    onShare: (ShareChoice) -> Unit = {},
     onRan: () -> Unit = {},
     extraTop: (@Composable () -> Unit)? = null,
     tag: String = "songMenu",
     pull: SheetPull? = null,
 ) {
     val client = LocalCoreClient.current
+    val context = LocalContext.current
     // Every menu that hosts this sheet (the song menu, a one-song selection, an item menu)
     // stops the preview when the sheet leaves, however it was closed.
     DisposableEffect(Unit) {
@@ -358,6 +366,17 @@ fun MenuSheet(
     /** How far a predictive back gesture has pulled the sheet in, 0 to 1 (the sheet scales with it). */
     val backPull = remember { Animatable(0f) }
     val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
+    /** The share being fetched (a link, the file): the sheet shows it loading, then hides as the share sheet opens. */
+    var sharing by remember { mutableStateOf<ShareChoice?>(null) }
+    fun share(choice: ShareChoice) {
+        sharing = choice
+        goTo(MenuPage.Sharing)
+        // On the sheet's scope: closing the sheet (a drag, the scrim) gives up on the share.
+        scope.launch {
+            ShareActions.perform(context, client, ShareRequest(choice, subject, target))
+            hideThen()
+        }
+    }
     var loved by remember { mutableStateOf(subject.loved) }
     var rating by remember { mutableStateOf(subject.rating) }
     var downloaded by remember { mutableStateOf(subject.downloaded) }
@@ -503,7 +522,7 @@ fun MenuSheet(
             MenuEntry.Share -> MenuRow(AnnotatedString(stringResource(R.string.action_share)), HocketIcons.Filled.Share, shape, tag = "$tag.share",
                 trailing = { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
             ) { goTo(MenuPage.Share) }
-            MenuEntry.Genius -> MenuRow(AnnotatedString(stringResource(R.string.menu_open_genius)), HocketIcons.Filled.Lyrics, shape, tag = "$tag.genius") { hideThen { onShare(ShareChoice.Genius) } }
+            MenuEntry.Genius -> MenuRow(AnnotatedString(stringResource(R.string.menu_open_genius)), HocketIcons.Filled.Lyrics, shape, tag = "$tag.genius") { hideThen { ShareActions.openGenius(context, subject) } }
             is MenuEntry.Extra -> {
                 val e = entry.extra
                 MenuRow(AnnotatedString(e.label), e.icon, shape, supporting = e.supporting, destructive = e.destructive, highlighted = e.highlighted, tag = e.testTag) { hideThen(e.onClick) }
@@ -525,7 +544,7 @@ fun MenuSheet(
         // the rest, cancelling slides the sub-page back. A back key (no gesture) just goes.
         // Back during a slide in already goes back; once back is let go the page is the menu, so a
         // second back (even mid-slide) is the sheet's own and closes it.
-        PredictiveBackHandler(enabled = page != MenuPage.Main) { events ->
+        PredictiveBackHandler(enabled = page == MenuPage.Share || page == MenuPage.Snooze) { events ->
             val from = page
             try {
                 events.collect { e ->
@@ -542,6 +561,8 @@ fun MenuSheet(
                 throw e
             }
         }
+        // While a share loads, back does nothing: neither the menu nor closing the sheet.
+        BackHandler(enabled = page == MenuPage.Sharing) {}
         Column(Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
             MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
@@ -562,7 +583,8 @@ fun MenuSheet(
                 contentAlignment = Alignment.TopCenter,
             ) { shownPage ->
             when (shownPage) {
-            MenuPage.Share -> SharePage(shareOptions, tag) { choice -> if (choice == null) goTo(MenuPage.Main) else hideThen { onShare(choice) } }
+            MenuPage.Share -> SharePage(shareOptions, tag) { choice -> if (choice == null) goTo(MenuPage.Main) else share(choice) }
+            MenuPage.Sharing -> SharingPage(sharing, tag)
             MenuPage.Snooze -> SnoozePage(tag) { duration ->
                 if (duration == null) goTo(MenuPage.Main)
                 else hideThen {
@@ -625,7 +647,7 @@ fun MenuSheet(
 }
 
 /** What the sheet shows under its header: the menu, or one of its sub-pages. */
-private enum class MenuPage { Main, Share, Snooze }
+private enum class MenuPage { Main, Share, Snooze, Sharing }
 
 /** Material's predictive back easing: the gesture's progress as the sheet follows it. */
 private val PredictiveBackEasing = CubicBezierEasing(0.1f, 0.1f, 0f, 1f)
@@ -821,6 +843,21 @@ private fun snoozeEnds(until: Double?): String = if (until == null) {
     stringResource(R.string.snooze_until_never)
 } else {
     stringResource(R.string.snooze_until, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(until.toLong())))
+}
+
+/** A share on its way: the loading indicator and what it is getting, with no way back. Tag: `[tag].sharing`. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SharingPage(choice: ShareChoice?, tag: String) {
+    val label = stringResource(if (choice == ShareChoice.File) R.string.share_busy_file else R.string.share_busy_link)
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 24.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }.testTag("$tag.sharing"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        LoadingIndicator(Modifier.size(56.dp))
+        Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+    }
 }
 
 /** Snooze's page: its title with back, then each duration. Null from [onChoose] is back. */

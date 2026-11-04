@@ -24,7 +24,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -36,13 +36,14 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 
 /**
- * A share link the server is slow to make: after a beat a dialog says it is on its way, and Cancel
- * gives up on it (the share sheet never opens). With `HOCKET_SCREENSHOT_DIR` it also saves the dialog.
+ * A share link the server is slow to make: the menu sheet stays up showing it load, back is held off,
+ * and once the link comes the sheet goes and the share sheet opens. With `HOCKET_SCREENSHOT_DIR` it
+ * also saves the loading sheet.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-class ShareBusyTest {
+class ShareLoadingTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
 
@@ -60,7 +61,7 @@ class ShareBusyTest {
 
     @Test
     @Config(qualifiers = "+night")
-    fun slowLinkShowsBusyDialogAndCancels() {
+    fun slowLinkLoadsInTheSheet() {
         val core = TestCore(startPlaying = false)
         val slow = SlowShare(core.fake, CompletableDeferred())
         val client = CoreClient(slow, CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)) { System.currentTimeMillis().toDouble() }
@@ -82,20 +83,32 @@ class ShareBusyTest {
         awaitTag("songMenu.share.navidrome")
         compose.onNodeWithTag("songMenu.share.navidrome").performSemanticsAction(SemanticsActions.OnClick)
 
-        awaitTag("share.busy")
+        // The sheet stays up, its menu giving way to the loader.
+        awaitTag("songMenu.sharing")
         assertTrue(slow.asked)
         compose.onNodeWithText("Getting link…").assertExists()
         compose.mainClock.advanceTimeBy(1_000)
         compose.waitForIdle()
-        shot("android-share-busy")
+        shot("android-share-loading")
 
-        compose.onNodeWithText("Cancel").performSemanticsAction(SemanticsActions.OnClick)
-        compose.waitUntil(5_000) { compose.onAllNodesWithTag("share.busy").fetchSemanticsNodes().isEmpty() }
-        // Given up: the link arriving now opens nothing.
-        slow.release.complete(Unit)
-        compose.waitForIdle()
-        assertFalse(compose.onAllNodesWithTag("share.busy").fetchSemanticsNodes().isNotEmpty())
+        // Back is held off while it loads: neither the Share page nor closing the sheet.
+        pressBack()
+        compose.onNodeWithTag("songMenu.sharing").assertExists()
         assertNull(shadowOf(compose.activity).nextStartedActivity)
+
+        // The link arrives: the share sheet opens and the menu goes.
+        slow.release.complete(Unit)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("songMenu").fetchSemanticsNodes().isEmpty() }
+        assertEquals(android.content.Intent.ACTION_CHOOSER, shadowOf(compose.activity).nextStartedActivity?.action)
+    }
+
+    private fun pressBack() {
+        val v = rootViews().last { it !== compose.activity.window.decorView }
+        val down = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK)
+        val up = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK)
+        compose.runOnUiThread { v.dispatchKeyEvent(down); v.dispatchKeyEvent(up) }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
     }
 
     private fun awaitTag(tag: String) {
@@ -110,7 +123,7 @@ class ShareBusyTest {
         return (field.get(global) as List<android.view.View>).toList()
     }
 
-    /** The activity's window with the dialog drawn over it, placed as on a device; only when HOCKET_SCREENSHOT_DIR is set. */
+    /** The activity's window with the sheet drawn over it; only when HOCKET_SCREENSHOT_DIR is set. */
     private fun shot(name: String) {
         val dir = (System.getProperty("hocket.screenshotDir") ?: System.getenv("HOCKET_SCREENSHOT_DIR"))?.takeIf { it.isNotBlank() }?.let(::File) ?: return
         dir.mkdirs()
@@ -119,11 +132,9 @@ class ShareBusyTest {
         val activityDecor = compose.activity.window.decorView
         for (view in rootViews()) {
             if (view === activityDecor || view.width == 0) continue
-            // Robolectric leaves a dialog's window at the top left with no dim; place it as the window
-            // manager does on a device: centred, over the dialog scrim.
-            canvas.drawColor(android.graphics.Color.argb(82, 0, 0, 0))
+            val at = IntArray(2).also { view.getLocationOnScreen(it) }
             canvas.save()
-            canvas.translate((bitmap.width - view.width) / 2f, (bitmap.height - view.height) / 2f)
+            canvas.translate(at[0].toFloat(), at[1].toFloat())
             view.draw(canvas)
             canvas.restore()
         }
