@@ -231,7 +231,7 @@ private fun Modifier.verticalMask(unit: () -> Float, phase: Float, vararg stops:
     }
 
 /** How far a [WavyMask]'s edges dip, as a share of the artwork's side. */
-private const val WAVE = 0.07f
+private const val WAVE = 0.12f
 
 /** A phase for [WavyMask] from the cover's [ArtworkEdge.baseColor]: each cover its own wave, the same every time. */
 private fun ArtworkEdge.wavePhase(): Float = ((baseColor.toLong() * 2654435761L).mod(10007L)) / 10007f * 60f
@@ -241,9 +241,9 @@ private fun ArtworkEdge.wavePhase(): Float = ((baseColor.toLong() * 2654435761L)
  * by between 0 and `amp` px along a smooth wave across the width: a fade that runs on further in
  * some places than others instead of ending along a ruler line. Moved down only, so nothing fades
  * earlier than it did (whatever lies under the fade still covers it). With `pin` it goes the other
- * way, inside the stops: the first stays put and the rest move up, more the further down (the
- * last by up to about `amp × span / (span + amp)`), so a fade that has to be done by an edge (the
- * artwork's own, over its blurred copy) ends early in places. Needs Android 13; before it a straight gradient.
+ * way, inside the stops: the first stays put and the rest close up towards it, the last by up to
+ * `amp` (keep it under the span), so a fade that has to be done by an edge (the artwork's own,
+ * over its blurred copy) ends early in places. Each segment eases in and out. Needs Android 13; before it a straight gradient.
  */
 private class WavyMask {
     /** Compiled on first use: not at all where a mask stays straight. */
@@ -260,7 +260,7 @@ private class WavyMask {
         rs.setFloatUniform("ys", s[0].first, s[1].first, s[2].first, s[3].first)
         rs.setFloatUniform("alphas", s[0].second, s[1].second, s[2].second, s[3].second)
         rs.setFloatUniform("amp", amp)
-        rs.setFloatUniform("period", (width / 2.4f).coerceAtLeast(1f))
+        rs.setFloatUniform("period", (width / 3f).coerceAtLeast(1f))
         rs.setFloatUniform("phase", phase)
         rs.setFloatUniform("pin", if (pin) 1f else 0f)
         return ShaderBrush(rs)
@@ -276,13 +276,19 @@ uniform float phase;
 uniform float pin;
 half4 main(float2 p) {
     float x = p.x / period + phase;
-    float w = 0.5 + 0.5 * (0.55 * sin(x) + 0.3 * sin(2.17 * x + 1.3) + 0.15 * sin(4.61 * x + 4.1));
-    float inside = clamp((p.y - ys.x) / max(ys.w - ys.x, 0.001), 0.0, 1.0);
-    float y = p.y + amp * w * mix(-1.0, inside, pin);
+    // Uneven: four sines at unrelated frequencies, so no bump repeats the last.
+    float w = 0.5 + 0.5 * (0.45 * sin(x) + 0.27 * sin(1.93 * x + 1.3) + 0.18 * sin(3.71 * x + 4.1) + 0.1 * sin(7.3 * x + 2.2));
+    float span = max(ys.w - ys.x, 0.001);
+    float y = p.y - amp * w;
+    if (pin > 0.5) {
+        // The stops squeezed towards the first: the last ends up amp × w higher.
+        y = p.y <= ys.x ? p.y : ys.x + (p.y - ys.x) * span / max(span - amp * w, 0.001);
+    }
+    // Eased segments: a fade with no visible start or end of its own.
     float a = alphas.x;
-    a = mix(a, alphas.y, clamp((y - ys.x) / max(ys.y - ys.x, 0.001), 0.0, 1.0));
-    a = mix(a, alphas.z, clamp((y - ys.y) / max(ys.z - ys.y, 0.001), 0.0, 1.0));
-    a = mix(a, alphas.w, clamp((y - ys.z) / max(ys.w - ys.z, 0.001), 0.0, 1.0));
+    a = mix(a, alphas.y, smoothstep(0.0, 1.0, clamp((y - ys.x) / max(ys.y - ys.x, 0.001), 0.0, 1.0)));
+    a = mix(a, alphas.z, smoothstep(0.0, 1.0, clamp((y - ys.y) / max(ys.z - ys.y, 0.001), 0.0, 1.0)));
+    a = mix(a, alphas.w, smoothstep(0.0, 1.0, clamp((y - ys.z) / max(ys.w - ys.z, 0.001), 0.0, 1.0)));
     return half4(0.0, 0.0, 0.0, half(a));
 }
 """
@@ -473,7 +479,7 @@ internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, e
                 val f = fraction().coerceIn(0f, 1f)
                 if (bottom && f > 0f) {
                     val from = size.height * (1f - bottomFeather)
-                    val amp = if (wavy) size.width * bottomFeather * 0.6f else 0f
+                    val amp = if (wavy) size.width * bottomFeather * 0.5f else 0f
                     drawRect(
                         mask.brush(size.width, amp, phase, listOf(from to 1f, size.height to 1f - f), pin = true),
                         topLeft = androidx.compose.ui.geometry.Offset(0f, from),
