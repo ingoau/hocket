@@ -1,8 +1,10 @@
 package app.hocket.share
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -99,16 +101,31 @@ object ShareActions {
         else -> emptyList()
     }
 
-    /** Genius's search for this song; nothing to fetch first. */
+    /**
+     * Genius's search for this song; nothing to fetch first. In the browser: the Genius app
+     * claims genius.com links but has no search page to take this one to.
+     */
     fun openGenius(context: Context, subject: MenuSubject) {
         val url = geniusSearch(subject.title, subject.artist)
-        if (url == null) toast(context, R.string.toast_share_failed) else openUrl(context, url)
+        if (url == null) toast(context, R.string.toast_share_failed) else openInBrowser(context, url)
     }
 
-    private fun openUrl(context: Context, url: String) {
-        val view = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+    /**
+     * [url] in the default browser, past any app that claims its domain. With no default browser
+     * (the resolver, package "android") the system picks as usual.
+     */
+    private fun openInBrowser(context: Context, url: String) {
+        val view = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
         if (context !is android.app.Activity) view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(view)
+        // A bare https URL matches no app's links, so what handles it is the browser.
+        val probe = Intent(Intent.ACTION_VIEW, Uri.parse("https://")).addCategory(Intent.CATEGORY_BROWSABLE)
+        val browser = context.packageManager.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo?.packageName?.takeIf { it != "android" }
+        try {
+            context.startActivity(if (browser != null) Intent(view).setPackage(browser) else view)
+        } catch (_: ActivityNotFoundException) {
+            if (browser != null) context.startActivity(view) else toast(context, R.string.toast_share_failed)
+        }
     }
 
     private fun sendText(context: Context, text: String) {
