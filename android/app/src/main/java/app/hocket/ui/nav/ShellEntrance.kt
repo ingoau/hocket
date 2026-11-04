@@ -40,6 +40,15 @@ object ShellEntrance {
         _phase.compareAndSet(Phase.Hidden, Phase.Entering)
     }
 
+    /**
+     * A fresh start: whatever a previous instance left (a hidden shell, a staged page) is reset,
+     * and a shell it hid but never got to bring in [play]s now.
+     */
+    fun restart() {
+        pageStaged = false
+        play()
+    }
+
     /** No entrance after all (a recreation has no splash): the shell is just there. */
     fun finish() {
         _phase.value = Phase.Shown
