@@ -354,13 +354,17 @@ test.describe("now playing", () => {
     await playFirstAlbum(page);
     const title = page.getByTestId("player-bar").locator(".now .title");
     await title.locator("a").evaluate((el) => { el.textContent = "A Rather Long Song Title (Extended Version)"; });
+    // Both badges on: they take room on the right too.
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSleepTimer", data: { timer: { endsAt: Date.now() + 3_600_000, stopAtEndOfTrack: false } } }));
+    await page.evaluate(() => window.hocket.dispatch({ type: "setBatterySaver", data: { enabled: true } }));
+    await expect(page.getByTestId("player-bar").locator(".right .badge")).toHaveCount(2);
     for (const where of ["local", "remote"] as const) {
       if (where === "remote") {
         await handoff(page, "remote");
         await expect(page.getByTestId("connect-button-name")).toBeVisible();
         await page.getByTestId("connect-button-name").evaluate((el) => { el.textContent = "Someone's Pixel 7 Pro"; });
       }
-      for (const w of [900, 910, 920, 940, 960, 980, 1000, 1030, 1060, 1100, 1180, 1280, 1400]) {
+      for (const w of [900, 910, 920, 940, 960, 980, 1000, 1030, 1060, 1100, 1180, 1220, 1280, 1320, 1400, 1500]) {
         await resizeWindow(app, page, w, 800);
         await page.waitForTimeout(150);
         const geo = await page.getByTestId("player-bar").evaluate((bar) => {
