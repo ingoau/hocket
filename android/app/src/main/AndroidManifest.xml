@@ -15,7 +15,8 @@
         <intent>
             <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
         </intent>
-        <!-- The default browser, so Open in Genius can skip the Genius app (ShareLinks.kt). -->
+        <!-- Open in Genius searches in the Genius app, else the website in the browser (ShareLinks.kt). -->
+        <package android:name="com.genius.android" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />
