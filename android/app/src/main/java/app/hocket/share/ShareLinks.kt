@@ -111,16 +111,19 @@ object ShareActions {
     }
 
     /**
-     * [url] in the default browser, past any app that claims its domain. With no default browser
-     * (the resolver, package "android") the system picks as usual.
+     * [url] in the default browser, past any app that claims its domain. With no default (the
+     * probe resolves to the chooser, package "android"), the first browser installed.
      */
     private fun openInBrowser(context: Context, url: String) {
         val view = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
         if (context !is android.app.Activity) view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         // A bare https URL matches no app's links, so what handles it is the browser.
         val probe = Intent(Intent.ACTION_VIEW, Uri.parse("https://")).addCategory(Intent.CATEGORY_BROWSABLE)
-        val browser = context.packageManager.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)
+        val pm = context.packageManager
+        val browser = pm.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)
             ?.activityInfo?.packageName?.takeIf { it != "android" }
+            ?: pm.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY)
+                .firstNotNullOfOrNull { it.activityInfo?.packageName?.takeIf { p -> p != "android" } }
         try {
             context.startActivity(if (browser != null) Intent(view).setPackage(browser) else view)
         } catch (_: ActivityNotFoundException) {
