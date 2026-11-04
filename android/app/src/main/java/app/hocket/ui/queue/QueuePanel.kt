@@ -151,11 +151,13 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
         val under = strip - STRIP_TOP_PAD + 14.dp
         Box(modifier) {
             QueueTimeline(
-                Modifier.fillMaxSize().padding(bottom = under).then(listModifier).fadeOut().testTag("queue.timeline"),
+                Modifier.fillMaxSize().padding(bottom = under).then(listModifier).testTag("queue.timeline"),
                 PaddingValues(
                     start = contentPadding.calculateStartPadding(dir), end = contentPadding.calculateEndPadding(dir),
                     top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 44.dp - under,
                 ),
+                // Only the list fades: the selection toolbar floats over it unmasked (R-20261103-hpkz).
+                listDecoration = Modifier.fadeOut(),
             )
             QueueToggles(
                 Modifier
@@ -319,7 +321,7 @@ private suspend fun allHistoryKeys(client: app.hocket.core.client.CoreClient, vi
  * (remove by default, with Undo), tap jumps (history too: the pointer moves back).
  */
 @Composable
-private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
+private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues, listDecoration: Modifier = Modifier) {
     val client = LocalCoreClient.current
     val queue by client.queue.collectAsStateWithLifecycle()
     val selection by client.selection.collectAsStateWithLifecycle()
@@ -460,7 +462,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
         if (listState.firstVisibleItemIndex != target && !leaveAlone()) listState.scrollToItem(target)
     }
     Box(modifier) {
-        LazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize().testTag("queue.list")) {
+        LazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize().then(listDecoration).testTag("queue.list")) {
             items(rows, key = { it.key }) { row ->
                 when (row) {
                     // Headers and the footer move with the rows (ReorderableItem animates those), so a
