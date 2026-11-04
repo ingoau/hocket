@@ -2712,6 +2712,9 @@ export class FakeCore implements CoreHandle {
   async query(q: Query): Promise<QueryResult> {
     // The one query that waits on the (simulated) network.
     if (q.type === "roomDiagnostics") return { type: "text", data: await this.roomDiagnostics() };
+    // Share links come from the server or Squigly; e2e can make them slow to see the busy toast.
+    const shareDelay = Number(process.env.HOCKET_FAKE_SHARE_DELAY_MS) || 0;
+    if (shareDelay > 0 && (q.type === "createShare" || q.type === "songLink")) await new Promise((r) => setTimeout(r, shareDelay));
     try {
       return this.answer(q);
     } catch (err) {

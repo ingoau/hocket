@@ -1076,6 +1076,7 @@ const STRINGS = {
   "toast.linkCopied": "Link copied",
   "toast.shareSaved": "Saved",
   "toast.shareFailed": "Couldn't share",
+  "toast.gettingLink": "Getting link…",
   "menu.songInfo": "Song info",
   "menu.albumInfo": "Album info",
   "menu.removeFrom": "Remove from {playlist}",

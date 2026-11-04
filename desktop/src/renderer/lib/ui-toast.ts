@@ -23,6 +23,32 @@ export function showToast(message: string, undo?: () => void): string {
   return id;
 }
 
+/** A renderer toast that shows a spinner: it says work is under way, and stays until that work ends. */
+export interface BusyToast {
+  busy?: true;
+}
+
+/**
+ * Runs [work] with a spinner toast saying [message], shown only if it takes longer than a beat (a cached
+ * answer never flashes it). The toast goes when [work] settles, making way for whatever toast that raises.
+ */
+export async function withBusyToast<T>(message: string, work: () => Promise<T>): Promise<T> {
+  const id = `ui-busy-${Date.now()}-${++seq}`;
+  let shown = false;
+  const timer = setTimeout(() => {
+    shown = true;
+    useApp.getState().applyEvent({ type: "toast", data: { toast: { id, message, busy: true, durationMs: 120_000 } } } as never);
+  }, BUSY_DELAY_MS);
+  try {
+    return await work();
+  } finally {
+    clearTimeout(timer);
+    if (shown) useApp.getState().dismissToast(id);
+  }
+}
+
+const BUSY_DELAY_MS = 300;
+
 /** Runs a renderer toast's Undo; false when [id] is not one (its action is a core command). */
 export function runUiUndo(id: string): boolean {
   const undo = undos.get(id);

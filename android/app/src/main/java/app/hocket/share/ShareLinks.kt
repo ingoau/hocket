@@ -12,14 +12,12 @@ import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.client.CoreClient
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.platform.LocalContext
-import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.MenuKind
 import app.hocket.ui.components.MenuSubject
 import app.hocket.ui.components.resolveTrackIds
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URLEncoder
@@ -67,7 +65,7 @@ fun songLinkQuery(subject: MenuSubject, target: ActionTarget): Query? = when (su
     else -> null
 }
 
-/** One share the menu asked for, kept by the host so the work outlives the sheet. */
+/** One share the menu asked for: which, of what. */
 data class ShareRequest(val choice: ShareChoice, val subject: MenuSubject, val target: ActionTarget)
 
 /** Opens the system share sheet for a Navidrome link, a Squigly link, or the audio file. */
@@ -77,17 +75,16 @@ object ShareActions {
             ShareChoice.Navidrome -> {
                 val ids = navidromeIds(client, request.target, request.subject.kind)
                 val url = if (ids.isEmpty()) null else (client.query(Queries.createShare(ids)) as? QueryResult.Share)?.data?.url
+                currentCoroutineContext().ensureActive()
                 if (url.isNullOrBlank()) toast(context, R.string.toast_share_failed) else sendText(context, url)
             }
             ShareChoice.SongLink -> {
                 val url = songLinkQuery(request.subject, request.target)
                     ?.let { (client.query(it) as? QueryResult.SongLink)?.data }
+                currentCoroutineContext().ensureActive()
                 if (url.isNullOrBlank()) toast(context, R.string.toast_share_failed) else sendText(context, url)
             }
-            ShareChoice.Genius -> {
-                val url = geniusSearch(request.subject.title, request.subject.artist)
-                if (url == null) toast(context, R.string.toast_share_failed) else openUrl(context, url)
-            }
+            ShareChoice.Genius -> openGenius(context, request.subject)
             ShareChoice.File -> shareFile(context, client, request)
         }
     }
@@ -100,6 +97,12 @@ object ShareActions {
             else -> resolveTrackIds(client, target)
         }
         else -> emptyList()
+    }
+
+    /** Genius's search for this song; nothing to fetch first. */
+    fun openGenius(context: Context, subject: MenuSubject) {
+        val url = geniusSearch(subject.title, subject.artist)
+        if (url == null) toast(context, R.string.toast_share_failed) else openUrl(context, url)
     }
 
     private fun openUrl(context: Context, url: String) {
@@ -123,6 +126,7 @@ object ShareActions {
             ?: (request.target as? ActionTarget.Tracks)?.data?.ids?.singleOrNull()
         val exported = trackId?.let { (client.query(Queries.exportAudio(it)) as? QueryResult.AudioFile)?.data }
         val src = exported?.path?.let(::File)?.takeIf { it.isFile }
+        currentCoroutineContext().ensureActive()
         if (exported == null || src == null) {
             toast(context, R.string.toast_share_failed)
             return
@@ -143,6 +147,7 @@ object ShareActions {
             clipData = ClipData.newRawUri(exported.fileName, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        currentCoroutineContext().ensureActive()
         val chooser = Intent.createChooser(send, context.getString(R.string.action_share))
         if (context !is android.app.Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(chooser)
@@ -150,17 +155,5 @@ object ShareActions {
 
     private fun toast(context: Context, text: Int) {
         Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
-    }
-}
-
-/** Runs [request] on a scope that outlives the menu sheet, then [onDone]. */
-@Composable
-fun ShareRequestEffect(request: ShareRequest?, onDone: () -> Unit) {
-    val context = LocalContext.current
-    val client = LocalCoreClient.current
-    LaunchedEffect(request) {
-        val req = request ?: return@LaunchedEffect
-        ShareActions.perform(context, client, req)
-        onDone()
     }
 }
