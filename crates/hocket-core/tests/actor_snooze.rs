@@ -399,3 +399,31 @@ async fn a_restored_playlist_queue_still_leaves_snoozed_songs_out() {
     t.run_for(500.0).await;
     assert_eq!(queue_ids(&t.queue().await), before);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snooze_until_a_chosen_time() {
+    let t = TestCore::start("snooze-until", seeded_server(3, 200.0)).await;
+    let at = t.clock.now_ms() + 5.0 * 24.0 * 3600.0 * 1000.0;
+    t.run(Command::SnoozeUntil {
+        track_ids: ids(&["a", "b"]),
+        until: at,
+    })
+    .await;
+    let items = match t.query(Query::Snoozes).await {
+        QueryResult::SnoozeItems(items) => items,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().all(|i| i.until == Some(at)));
+
+    // A time that has already passed snoozes nothing.
+    t.run(Command::SnoozeUntil {
+        track_ids: ids(&["c"]),
+        until: t.clock.now_ms() - 1.0,
+    })
+    .await;
+    assert_eq!(snoozed(&t).await.len(), 2);
+
+    t.run(Command::Undo).await;
+    assert!(snoozed(&t).await.is_empty(), "undo brings both back");
+}

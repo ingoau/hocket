@@ -30,6 +30,9 @@ object Commands {
     fun snooze(trackIds: List<TrackId>, duration: app.hocket.core.api.SnoozeFor) =
         Command.Snooze(CommandSnoozeInner(trackIds, duration))
 
+    fun snoozeUntil(trackIds: List<TrackId>, until: Double) =
+        Command.SnoozeUntil(CommandSnoozeUntilInner(trackIds, until))
+
     fun unsnooze(trackIds: List<TrackId>) = Command.Unsnooze(CommandUnsnoozeInner(trackIds))
 
     fun playContext(context: QueueContext, startIndex: Int? = null, shuffle: Boolean = false, saveOutgoing: Boolean = true) =

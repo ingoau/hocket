@@ -798,6 +798,9 @@ export class FakeCore implements CoreHandle {
       case "snooze":
         this.applySnooze(cmd.data.track_ids, cmd.data.duration);
         return;
+      case "snoozeUntil":
+        this.applySnoozeUntil(cmd.data.track_ids, cmd.data.until);
+        return;
       case "unsnooze":
         this.clearSnooze(cmd.data.track_ids);
         return;
@@ -1761,6 +1764,22 @@ export class FakeCore implements CoreHandle {
     this.emitSnoozes();
     const length = duration === "day" ? "1 day" : duration === "threeDays" ? "3 days" : duration === "week" ? "1 week" : duration === "month" ? "1 month" : "indefinitely";
     this.toast(duration === "indefinite" ? (n === 1 ? "Snoozed indefinitely" : `Snoozed ${n} songs indefinitely`) : (n === 1 ? `Snoozed for ${length}` : `Snoozed ${n} songs for ${length}`));
+  }
+
+  private applySnoozeUntil(trackIds: string[], until: number): void {
+    if (until <= Date.now()) {
+      this.toast("Pick a time in the future to snooze until");
+      return;
+    }
+    let n = 0;
+    for (const id of trackIds) {
+      if (!this.lib?.tracksById.has(id)) continue;
+      this.snoozes.set(id, until);
+      n++;
+    }
+    if (!n) return;
+    this.emitSnoozes();
+    this.toast(n === 1 ? "Snoozed" : `Snoozed ${n} songs`);
   }
 
   private clearSnooze(trackIds: string[]): void {

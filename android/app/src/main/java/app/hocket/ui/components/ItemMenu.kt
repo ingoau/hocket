@@ -364,6 +364,7 @@ fun MenuSheet(
     val pinEntry = (layout.more + layout.primary).filterIsInstance<MenuEntry.LibraryPin>().firstOrNull()
     var pinned by remember { mutableStateOf(pinEntry?.unpin?.enabled == true) }
     var rateDialog by remember { mutableStateOf(false) }
+    var snoozeCustom by remember { mutableStateOf(false) }
     val size by produceState<Double?>(initialValue = null, subject.trackId) {
         value = subject.trackId?.let { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data?.sizeBytes }
     }
@@ -563,7 +564,7 @@ fun MenuSheet(
             ) { shownPage ->
             when (shownPage) {
             MenuPage.Share -> SharePage(shareOptions, tag) { choice -> if (choice == null) goTo(MenuPage.Main) else hideThen { onShare(choice) } }
-            MenuPage.Snooze -> SnoozePage(tag) { duration ->
+            MenuPage.Snooze -> SnoozePage(tag, onCustom = { snoozeCustom = true }) { duration ->
                 if (duration == null) goTo(MenuPage.Main)
                 else hideThen {
                     val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
@@ -616,6 +617,15 @@ fun MenuSheet(
             }
             }
             }
+            }
+        }
+    }
+    if (snoozeCustom) {
+        SnoozeUntilPicker(tag, onDismiss = { snoozeCustom = false }) { until ->
+            snoozeCustom = false
+            hideThen {
+                val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
+                if (ids.isNotEmpty()) client.dispatch(Commands.snoozeUntil(ids, until.toDouble()))
             }
         }
     }
@@ -823,9 +833,9 @@ private fun snoozeEnds(until: Double?): String = if (until == null) {
     stringResource(R.string.snooze_until, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(until.toLong())))
 }
 
-/** Snooze's page: its title with back, then each duration. Null from [onChoose] is back. */
+/** Snooze's page: its title with back, then each duration and Custom. Null from [onChoose] is back. */
 @Composable
-private fun SnoozePage(tag: String, onChoose: (SnoozeFor?) -> Unit) {
+private fun SnoozePage(tag: String, onCustom: () -> Unit, onChoose: (SnoozeFor?) -> Unit) {
     val rows = listOf(
         SnoozeFor.Day to R.string.snooze_day,
         SnoozeFor.ThreeDays to R.string.snooze_three_days,
@@ -835,8 +845,9 @@ private fun SnoozePage(tag: String, onChoose: (SnoozeFor?) -> Unit) {
     )
     SubPage(stringResource(R.string.action_snooze), "$tag.snooze", onBack = { onChoose(null) }) {
         rows.forEachIndexed { i, (duration, label) ->
-            MenuRow(AnnotatedString(stringResource(label)), HocketIcons.Filled.Bedtime, connectedShape(i, rows.size), tag = "$tag.snooze.${duration.string}") { onChoose(duration) }
+            MenuRow(AnnotatedString(stringResource(label)), HocketIcons.Filled.Bedtime, connectedShape(i, rows.size + 1), tag = "$tag.snooze.${duration.string}") { onChoose(duration) }
         }
+        MenuRow(AnnotatedString(stringResource(R.string.snooze_custom)), HocketIcons.Filled.CalendarToday, connectedShape(rows.size, rows.size + 1), tag = "$tag.snooze.custom", onClick = onCustom)
     }
 }
 
