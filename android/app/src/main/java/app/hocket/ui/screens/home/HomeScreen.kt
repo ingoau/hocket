@@ -45,6 +45,8 @@ import app.hocket.ui.brand.MarkWipe
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import kotlin.math.floor
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -216,13 +218,18 @@ fun HomeScreen(nav: NavHostController) {
     // The mark takes each slide's ink where that slide is behind it: split at the edge between the
     // two slides in view, read from the pager's live offset, so it wipes across with the finger.
     val spotlightLeft = remember { mutableFloatStateOf(0f) }
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val markWipe: () -> MarkWipe? = {
         val info = pager.layoutInfo
         val step = info.pageSize + info.pageSpacing
         if (step <= 0 || slideInks.isEmpty()) null else {
             val p = pager.currentPage + pager.currentPageOffsetFraction
             val i = floor(p).toInt().coerceIn(0, slideInks.lastIndex)
-            MarkWipe(spotlightLeft.floatValue + (i + 1 - p) * step, slideInks[i], slideInks.getOrElse(i + 1) { slideInks[i] })
+            val here = slideInks[i]
+            val next = slideInks.getOrElse(i + 1) { here }
+            // Page i+1 comes in from the right, or from the left in RTL. The pager is one page wide.
+            if (rtl) MarkWipe(spotlightLeft.floatValue + (p - i) * step, next, here)
+            else MarkWipe(spotlightLeft.floatValue + (i + 1 - p) * step, here, next)
         }
     }
     // Only with Spotlight showing: otherwise Home leaves the chrome and status bar to the app theme, as before.
