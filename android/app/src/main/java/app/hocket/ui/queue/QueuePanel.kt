@@ -109,7 +109,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.DisposableEffect
@@ -492,7 +491,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues) {
                         }
                     }
                     is QueueLine.More -> Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        androidx.compose.material3.LoadingIndicator(Modifier.size(32.dp))
                     }
                     QueueLine.Footer -> Column(Modifier.animateItem().fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                         TextButton(onClick = { client.dispatch(Command.ClearQueue) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(stringResource(R.string.queue_clear)) }

@@ -43,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -373,8 +374,10 @@ internal fun HeroMoreButton(onClick: () -> Unit, modifier: Modifier = Modifier) 
 /** Love in the bar: the heart filled in the primary colour once loved. */
 @Composable
 internal fun DetailLoveButton(loved: Boolean, onToggle: (Boolean) -> Unit) {
+    // Only this button's own taps that love burst the heart, not a refresh finding it loved.
+    var bursts by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
     DetailBarButton(if (loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, stringResource(if (loved) R.string.action_unlove else R.string.action_love),
-        onClick = { onToggle(!loved) }, modifier = Modifier.testTag("detail.love"), tint = if (loved && !LocalHeroBarOverArt.current) MaterialTheme.colorScheme.primary else null)
+        onClick = { if (!loved) bursts++; onToggle(!loved) }, modifier = Modifier.testTag("detail.love"), tint = if (loved && !LocalHeroBarOverArt.current) MaterialTheme.colorScheme.primary else null, bursts = bursts)
 }
 
 /** Download in the bar; a check once the item is kept on the device. */
@@ -564,8 +567,11 @@ internal val LocalHeroBarColors = androidx.compose.runtime.staticCompositionLoca
 
 /** One of the page's actions in [DetailTopBar]: a bare icon like Back. */
 @Composable
-internal fun DetailBarButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, tint: Color? = null) {
+internal fun DetailBarButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, tint: Color? = null, bursts: Int? = null) {
     FilledTonalIconButton(onClick = onClick, enabled = enabled, colors = LocalHeroBarColors.current ?: IconButtonDefaults.filledTonalIconButtonColors(), shapes = IconButtonDefaults.shapes(), modifier = modifier.size(48.dp)) {
-        if (tint != null) Icon(icon, label, tint = tint) else Icon(icon, label)
+        @Composable fun glyph() { if (tint != null) Icon(icon, label, tint = tint) else Icon(icon, label) }
+        // The love button bursts as it's loved (see [LoveBurst]).
+        if (bursts != null) app.hocket.ui.components.LoveBurst(bursts, tint ?: androidx.compose.material3.LocalContentColor.current, Modifier.fillMaxSize()) { glyph() }
+        else glyph()
     }
 }

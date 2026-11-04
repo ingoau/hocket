@@ -194,11 +194,11 @@ private fun <T> LazyGridScope.gridGroups(
 private fun <T> LazyListScope.listGroups(groups: ListGroups<T>, allTitle: Int, control: SortControl, key: (T) -> String, row: @Composable (T, List<T>) -> Unit) {
     if (groups.pinned.isNotEmpty()) {
         item(key = "pinned.h", contentType = "header") { ListHeader(stringResource(R.string.library_group_pinned), Modifier.testTag("library.group.pinned")) }
-        items(groups.pinned, key = { "pinned." + key(it) }) { row(it, groups.pinned) }
+        items(groups.pinned, key = { "pinned." + key(it) }) { Box(Modifier.animateItem()) { row(it, groups.pinned) } }
     }
     if (groups.recent.isNotEmpty()) {
         item(key = "recent.h", contentType = "header") { ListHeader(stringResource(R.string.library_group_recent), Modifier.testTag("library.group.recent")) }
-        items(groups.recent, key = { "recent." + key(it) }) { row(it, groups.recent) }
+        items(groups.recent, key = { "recent." + key(it) }) { Box(Modifier.animateItem()) { row(it, groups.recent) } }
     }
     item(key = "all.h", contentType = "header") {
         ListHeader(stringResource(allTitle), Modifier.testTag("library.group.all")) { SortChip(control.sort, control.options, control.onSort) }

@@ -753,6 +753,8 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
         Tick.Off -> null
     }
     val primary = MaterialTheme.colorScheme.primary
+    // Taps that love (not unlove) burst the heart.
+    var bursts by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     Box(
         Modifier
             .size(48.dp)
@@ -762,12 +764,13 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
                 state = when (state) { Tick.On -> ToggleableState.On; Tick.Off -> ToggleableState.Off; Tick.Mixed -> ToggleableState.Indeterminate },
                 enabled = enabled,
                 role = Role.Checkbox,
-                onClick = onToggle,
+                onClick = { if (state != Tick.On) bursts++; onToggle() },
             )
             .semantics { contentDescription = label; spoken?.let { stateDescription = it } }
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
+      LoveBurst(bursts, primary, Modifier.matchParentSize()) {
         when (state) {
             Tick.On -> Icon(HocketIcons.Filled.Favorite, null, tint = primary)
             Tick.Off -> Icon(HocketIcons.Filled.FavoriteBorder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -777,6 +780,7 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
                 Icon(HocketIcons.Filled.Favorite, null, tint = primary, modifier = Modifier.drawWithContent { clipRect(right = size.width / 2f) { this@drawWithContent.drawContent() } })
             }
         }
+      }
     }
 }
 
