@@ -1,6 +1,6 @@
 // Ctrl/Cmd+K: library results and actions in one list, results first.
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { ActionDescriptor, SearchResults } from "@core/api";
+import type { ActionDescriptor, ActionTarget, SearchResults } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
@@ -12,6 +12,7 @@ import { LyricSnippet } from "./LyricSnippet";
 import { Icon, hasIcon } from "./Icon";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
+import { openContextMenu, openContextMenuFromKeyboard } from "./ContextMenu";
 
 interface Item extends Rankable {
   icon?: string;
@@ -20,6 +21,8 @@ interface Item extends Rankable {
   lyric?: { line: string; start: number; end: number };
   /** The song a track or lyric row plays, so one song is not listed twice. */
   trackId?: string;
+  /** What a right-click (or the context-menu key) on a library result opens the menu for. */
+  target?: ActionTarget;
   run: () => void;
 }
 
@@ -30,6 +33,8 @@ export function CommandPalette() {
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
   const navigate = useApp((s) => s.navigate);
+  // A dialog a result's menu opened (delete, rename, …) may have changed the results: search again once it closes.
+  const dialogOpen = useApp((s) => !!s.dialog);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | undefined>(undefined);
   const [actions, setActions] = useState<ActionDescriptor[]>([]);
@@ -62,14 +67,14 @@ export function CommandPalette() {
       void bridge().query({ type: "search", data: { server_id: serverId, query, limit: 8, include_server: false, request_id: id } }).then((r) => mine === seq.current && r.type === "search" && setResults(r.data));
     }, 60);
     return () => clearTimeout(h);
-  }, [open, query, serverId]);
+  }, [open, query, serverId, dialogOpen]);
 
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
     const sid = serverId ?? "";
     // A slower answer for the previous letters must not stay on top of Enter.
     const found = results?.query.trim().toLowerCase() === query.trim().toLowerCase() ? results : undefined;
-    for (const tr of found?.tracks ?? []) out.push({ id: `t:${tr.id}`, trackId: tr.id, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, run: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } }) });
+    for (const tr of found?.tracks ?? []) out.push({ id: `t:${tr.id}`, trackId: tr.id, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, target: { type: "tracks", data: { ids: [tr.id] } }, run: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } }) });
     for (const hit of found?.lyrics ?? []) out.push({
       id: `ly:${hit.track.id}`,
       trackId: hit.track.id,
@@ -77,14 +82,15 @@ export function CommandPalette() {
       sub: hit.line.split("\n").join(" "),
       kind: "track",
       coverArt: hit.track.coverArt,
+      target: { type: "tracks", data: { ids: [hit.track.id] } },
       lyric: { line: hit.line, start: hit.matchStart, end: hit.matchEnd },
       run: () => {
         bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [hit.track.id], start_index: 0, label: hit.track.title, shuffle: false, start_position_ms: hit.startMs ?? 0 } });
       },
     });
-    for (const al of found?.albums ?? []) out.push({ id: `al:${al.id}`, label: al.name, sub: al.artist, kind: "album", coverArt: al.coverArt, run: () => navigate({ view: "album", id: al.id }) });
-    for (const ar of found?.artists ?? []) out.push({ id: `ar:${ar.id}`, label: ar.name, kind: "artist", coverArt: ar.coverArt, run: () => navigate({ view: "artist", id: ar.id }) });
-    for (const pl of found?.playlists ?? []) out.push({ id: `pl:${pl.id}`, label: pl.name, kind: "playlist", coverArt: pl.coverArt, run: () => navigate({ view: "playlist", id: pl.id }) });
+    for (const al of found?.albums ?? []) out.push({ id: `al:${al.id}`, label: al.name, sub: al.artist, kind: "album", coverArt: al.coverArt, target: { type: "albums", data: { ids: [al.id] } }, run: () => navigate({ view: "album", id: al.id }) });
+    for (const ar of found?.artists ?? []) out.push({ id: `ar:${ar.id}`, label: ar.name, kind: "artist", coverArt: ar.coverArt, target: { type: "artists", data: { ids: [ar.id] } }, run: () => navigate({ view: "artist", id: ar.id }) });
+    for (const pl of found?.playlists ?? []) out.push({ id: `pl:${pl.id}`, label: pl.name, kind: "playlist", coverArt: pl.coverArt, target: { type: "playlists", data: { ids: [pl.id] } }, run: () => navigate({ view: "playlist", id: pl.id }) });
     for (const a of actions) {
       if (!a.enabled) continue;
       const sc = shortcuts.find((s) => s.actionId === a.id)?.shortcut ?? a.defaultShortcut;
@@ -116,6 +122,8 @@ export function CommandPalette() {
     else if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(ranked.length - 1, a + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
     else if (e.key === "Enter") { e.preventDefault(); const r = ranked[active]; if (r) run(r.item); }
+    // The global handler leaves these to text fields; the input points at the active option, so open its menu.
+    else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) { if (openContextMenuFromKeyboard()) e.preventDefault(); }
     else trapTab(e);
   };
   const firstAction = ranked.findIndex((r) => r.item.kind === "action");
@@ -134,7 +142,7 @@ export function CommandPalette() {
                 {i === 0 && it.kind !== "action" && !it.lyric ? <div className="group" role="presentation">{t("palette.results")}</div> : null}
                 {i === firstAction ? <div className="group" role="presentation">{t("palette.actions")}</div> : null}
                 {i === firstLyric ? <div className="group" role="presentation">{t("palette.lyrics")}</div> : null}
-                <div id={`pal-opt-${i}`} className={`pi ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onClick={() => run(it)} data-testid="palette-item">
+                <div id={`pal-opt-${i}`} className={`pi ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onMouseDown={(e) => e.preventDefault()} onClick={() => run(it)} onContextMenu={(e) => { if (!it.target) return; setActive(i); input.current?.focus(); void openContextMenu(e, it.target); }} data-testid="palette-item">
                   {it.kind === "action" ? (hasIcon(it.icon ?? "") ? <Icon name={it.icon as string} size={16} /> : <Icon name="command" size={16} />) : <Artwork id={it.coverArt} size={64} className="art" />}
                   <div className="grow truncate">
                     <Highlight text={it.label} matches={r.matches} />

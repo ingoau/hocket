@@ -346,6 +346,42 @@ test.describe("now playing", () => {
     await expect(pill).not.toHaveAttribute("data-remote", "");
   });
 
+  // Report R-20261104-6ykh: a window a little over the 900px minimum kept every control on one row,
+  // so the bar ran past the window's edge and the title shrank to its first letter.
+  test("the player bar fits the window at every width, with room for the song's title", async ({ hocket }) => {
+    const { app, page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    const title = page.getByTestId("player-bar").locator(".now .title");
+    await title.locator("a").evaluate((el) => { el.textContent = "A Rather Long Song Title (Extended Version)"; });
+    // Both badges on: they take room on the right too.
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSleepTimer", data: { timer: { endsAt: Date.now() + 3_600_000, stopAtEndOfTrack: false } } }));
+    await page.evaluate(() => window.hocket.dispatch({ type: "setBatterySaver", data: { enabled: true } }));
+    await expect(page.getByTestId("player-bar").locator(".right .badge")).toHaveCount(2);
+    for (const where of ["local", "remote"] as const) {
+      if (where === "remote") {
+        await handoff(page, "remote");
+        await expect(page.getByTestId("connect-button-name")).toBeVisible();
+        await page.getByTestId("connect-button-name").evaluate((el) => { el.textContent = "Someone's Pixel 7 Pro"; });
+      }
+      for (const w of [900, 910, 920, 940, 960, 980, 1000, 1030, 1060, 1100, 1180, 1220, 1280, 1320, 1400, 1500]) {
+        await resizeWindow(app, page, w, 800);
+        await page.waitForTimeout(150);
+        const geo = await page.getByTestId("player-bar").evaluate((bar) => {
+          const r = bar.getBoundingClientRect();
+          const right = Math.max(...Array.from(bar.querySelectorAll("button, [role=slider], .now .title")).map((el) => el.getBoundingClientRect().right));
+          return { barRight: r.right, winRight: window.innerWidth, right, overflow: bar.scrollWidth - bar.clientWidth, title: bar.querySelector(".now .title")!.getBoundingClientRect().width };
+        });
+        const at = `${where} at ${w}px`;
+        expect(geo.overflow, at).toBeLessThanOrEqual(0);
+        expect(geo.barRight, at).toBeLessThanOrEqual(geo.winRight + 0.5);
+        expect(geo.right, at).toBeLessThanOrEqual(geo.barRight + 0.5);
+        expect(geo.title, at).toBeGreaterThanOrEqual(110);
+      }
+      if (where === "remote") await handoff(page, "self");
+    }
+  });
+
   test("turning the player's rating off hides the stars in the bar and the fullscreen player, not in About", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

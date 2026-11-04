@@ -164,7 +164,7 @@ fun SearchScreen(nav: NavHostController) {
     // A new query starts back on All: the kind picked for the last one may have nothing here.
     var kindQuery by rememberSaveable { mutableStateOf(query) }
     LaunchedEffect(query) { if (query != kindQuery) { kindQuery = query; kind = SearchKind.All } }
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().testTag("search.screen").statusBarsPadding()) {
         Row(Modifier.padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             // The M3 search bar: a full-round 56dp field on the highest container, no outline.
             TextField(

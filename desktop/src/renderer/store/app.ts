@@ -222,8 +222,12 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   navigate(route, replace = false) {
     const cur = get().route;
-    if (cur.view === route.view && cur.id === route.id && cur.param === route.param) return;
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, contextMenu: undefined, playlistPicker: undefined }));
+    // Going where you already are still takes the palette (and any menu) away.
+    if (cur.view === route.view && cur.id === route.id && cur.param === route.param) {
+      if (get().paletteOpen) set({ paletteOpen: false, contextMenu: undefined, playlistPicker: undefined });
+      return;
+    }
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false }));
   },
   back() {
     const { history, route } = get();

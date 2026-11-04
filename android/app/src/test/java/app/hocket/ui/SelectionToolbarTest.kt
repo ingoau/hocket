@@ -9,6 +9,11 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.ActionIds
@@ -86,5 +91,50 @@ class SelectionToolbarTest {
         compose.onNodeWithTag("selectionMenu.action.${ActionIds.PLAY}").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { !core.client.selection.value.active }
         compose.waitUntil(5_000) { core.client.queue.value.current?.track?.id in ids }
+    }
+
+    private fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+
+    /** R-20261103-hpkz: "1 selected" sat above the close button instead of beside it. */
+    @Test
+    fun theCountIsCentredOnTheCloseButton() {
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { SelectionToolbar() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.runOnIdle { core.client.toggleSelected(SelectionKind.Tracks, core.fake.library.tracks.first().id) }
+        compose.waitUntil(5_000) { present("selection.count") }
+        compose.waitForIdle()
+        val close = compose.onAllNodesWithContentDescription("Clear selection", useUnmergedTree = true).onFirst().fetchSemanticsNode().boundsInRoot
+        val count = bounds("selection.count")
+        assertEquals("count centred on the close button", close.center.y, count.center.y, 2f)
+        assertEquals("count centred in the toolbar", bounds("selection.toolbar").center.y, count.center.y, 2f)
+    }
+
+    /**
+     * R-20261103-hpkz: over the full player's queue the toolbar sat inside the list's bottom fade,
+     * so its lower half faded into the backdrop. Its container is one colour, top to bottom.
+     */
+    @Test
+    fun theToolbarOverThePlayersQueueIsNotFaded() {
+        val core = TestCore(startPlaying = true)
+        compose.setThemedContent(core) {
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)) {
+                app.hocket.ui.queue.QueueList(androidx.compose.ui.Modifier.fillMaxSize(), controlsAtBottom = true)
+            }
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value && core.client.queue.value.entries.isNotEmpty() }
+        compose.runOnIdle { core.client.toggleSelected(SelectionKind.QueueItems, core.client.queue.value.entries.last().item.key) }
+        compose.waitUntil(5_000) { present("selection.toolbar") }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        val image = compose.onRoot().captureToImage().asAndroidBitmap()
+        val box = bounds("selection.toolbar")
+        val x = box.center.x.toInt()
+        val top = image.getPixel(x, (box.top + box.height * 0.12f).toInt())
+        val bottom = image.getPixel(x, (box.top + box.height * 0.88f).toInt())
+        fun channels(c: Int) = listOf(android.graphics.Color.red(c), android.graphics.Color.green(c), android.graphics.Color.blue(c))
+        channels(top).zip(channels(bottom)).forEach { (t, b) -> assertEquals("toolbar colour top %08x vs bottom %08x".format(top, bottom), t.toFloat(), b.toFloat(), 6f) }
     }
 }
