@@ -207,6 +207,7 @@ Not instant, deliberately. When the picker opens, targets pre-buffer while the c
 - **Accumulated `playedMs` travels with the track**, so taking over 90 seconds in doesn't silently eat the scrobble.
 - **Dedupe is the coordinator's one optional job** — a short log of submitted `(trackId, startedAt)` pairs.
 - **Unplayable items skip.** A device that can't play an item marks it unavailable and moves on, with a line in the player. The handoff doesn't fail, playback doesn't stop, and nothing scrobbles.
+- **Headphone handoff (beta, off by default, Advanced settings).** Headphones connecting to a device pull playback there when another device plays, or paused within 15 s (the same headphones leaving it usually pause it). It is the one exception to never resuming on connect: moving your headphones is a deliberate act. A toast offers "Moved from X · Undo". Android counts Bluetooth, wired and USB outputs appearing. Desktop counts a new output that becomes the system default (Chromium's device list, since ALSA doesn't show PipeWire's Bluetooth sinks). This only works while the app runs and is in the room.
 
 
 ## Resume and recovery  
