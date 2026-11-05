@@ -26,8 +26,11 @@ use crate::connect::PeerId;
 /// `a_document_at_every_cap_fits_a_frame`. Shared with the coordinator.
 pub const MAX_FRAME_BYTES: usize = 8 << 20;
 /// A socket that delivers nothing for this long is dead, whatever the
-/// engine or room think (they time out at 30 s; this is the backstop).
-pub const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// engine or room think. They time out at 30 s at the normal cadence and at
+/// up to 140 s for a member keeping the slowest one
+/// ([`MAX_CADENCE_MS`](crate::connect::lease::MAX_CADENCE_MS)); this is the
+/// backstop, so it sits above that.
+pub const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 
 /// tungstenite configuration with the frame caps applied.
 pub fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {

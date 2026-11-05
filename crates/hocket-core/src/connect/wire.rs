@@ -940,7 +940,8 @@ pub enum Msg {
         track_id: TrackId,
         from: DeviceId,
     },
-    /// → room. Every 5 s while owning transport. `sentAt` (sender's clock) is
+    /// → room. Every keepalive period (5 s unless a slower [`Msg::Cadence`]
+    /// was accepted) while owning transport. `sentAt` (sender's clock) is
     /// echoed back as `ackOf` so the owner knows exactly which heartbeat was
     /// answered.
     LeaseHeartbeat {
@@ -987,6 +988,20 @@ pub enum Msg {
         t0: EpochMs,
         t1: EpochMs,
         t2: EpochMs,
+    },
+    /// → room. This member's keepalive period from now on: it sends a clock
+    /// ping (and, while owning transport, a lease heartbeat) at least this
+    /// often. The room clamps it ([`crate::connect::lease::clamp_cadence`]),
+    /// scales the member's timeout and lease window by it and answers with
+    /// [`Msg::CadenceAck`]. A member only slows down once acknowledged, so a
+    /// room that doesn't know the message keeps it at the normal 5 s.
+    Cadence {
+        interval_ms: f64,
+    },
+    /// → client. The cadence the room now holds the member to (the clamped
+    /// [`Msg::Cadence`]).
+    CadenceAck {
+        interval_ms: f64,
     },
 
     // -- handoff --------------------------------------------------------
@@ -1185,6 +1200,8 @@ impl Msg {
         "presence",
         "clockPing",
         "clockPong",
+        "cadence",
+        "cadenceAck",
         "handoffPickerOpen",
         "handoffPickerClose",
         "handoffPrepare",
@@ -1237,6 +1254,8 @@ impl Msg {
             Msg::Presence { .. } => "presence",
             Msg::ClockPing { .. } => "clockPing",
             Msg::ClockPong { .. } => "clockPong",
+            Msg::Cadence { .. } => "cadence",
+            Msg::CadenceAck { .. } => "cadenceAck",
             Msg::HandoffPickerOpen { .. } => "handoffPickerOpen",
             Msg::HandoffPickerClose { .. } => "handoffPickerClose",
             Msg::HandoffPrepare { .. } => "handoffPrepare",
@@ -1441,6 +1460,12 @@ mod tests {
             Msg::SyncRequest,
             Msg::Bye { reason: "x".into() },
             Msg::ClockPing { t0: 0.0 },
+            Msg::Cadence {
+                interval_ms: 45_000.0,
+            },
+            Msg::CadenceAck {
+                interval_ms: 45_000.0,
+            },
             Msg::LeaseHeartbeat {
                 epoch: 0,
                 sent_at: 0.0,

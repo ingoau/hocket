@@ -36,7 +36,7 @@ use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEst
 use crate::connect::diagnostics::{self, ReplyPart};
 use crate::connect::discovery::{scope_hash, PeerAdvert};
 use crate::connect::election::{elect_id, Candidate};
-use crate::connect::lease::HeldLease;
+use crate::connect::lease::{cadence_slack_ms, lease_window_ms, HeldLease, LEASE_DURATION_MS};
 use crate::connect::replica::ReplicaExt;
 use crate::connect::room::{LanAuth, Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
@@ -67,21 +67,35 @@ pub const DEFAULT_SHARED_SCROBBLE_GRACE_MS: f64 = 3_600_000.0;
 const SHARED_PLAYS_CAP: usize = 256;
 /// Cap on pending shared verdicts persisted through [`Engine::known_scrobbled`].
 const PENDING_SHARED_CAP: usize = 64;
-/// An attached upstream that says nothing for this long is dead.
+/// An attached upstream that says nothing for this long is dead (at the
+/// normal cadence: a slower accepted cadence adds [`cadence_slack_ms`], as
+/// the room only answers our pings).
 pub const DEFAULT_UPSTREAM_IDLE_MS: f64 = 30_000.0;
 /// A scrobble dedupe query without an answer is asked again after this long.
 pub const SCROBBLE_QUERY_RETRY_MS: f64 = 10_000.0;
 /// A LAN leader whose members have all been silent this long (two missed
 /// heartbeat/ping periods) may be the one that is cut off: its own room
 /// stops being authoritative for scrobble verdicts until they speak again.
+/// Members that announced a slower cadence get [`cadence_slack_ms`] on top.
 pub const MEMBER_QUIET_MS: f64 = 12_000.0;
 /// After the engine starts (or LAN discovery is switched on) mDNS needs a
 /// moment to report the peers already on the network: until then being
 /// alone proves nothing, and our own room is not the scrobble authority (a
 /// restarted device would otherwise judge its outbox in a room of one).
 pub const LAN_SETTLE_MS: f64 = 5_000.0;
-/// Clock ping cadence once synced.
+/// Clock ping (and lease heartbeat) cadence once synced, with other devices
+/// in the room.
 const PING_INTERVAL_MS: f64 = 5_000.0;
+/// Cadence with the battery saver's `SlowSync` on and other devices around:
+/// the radio still idles between beats more often, and clock drift over
+/// 15 s (or 45 s) is a few ms at most, far inside
+/// [`RESYNC_TOLERANCE_MS`](crate::media_session::RESYNC_TOLERANCE_MS).
+pub const SLOW_SYNC_CADENCE_MS: f64 = 15_000.0;
+/// Cadence while nobody else is in the room: a cellular radio drops to idle
+/// about 10 s after the last packet, so 5 s keepalives would hold it awake
+/// through a whole screen-off listen. 45 s stays inside what carrier NATs
+/// keep an idle TCP mapping for. Back to normal the moment someone joins.
+pub const SOLO_CADENCE_MS: f64 = 45_000.0;
 /// Pings sent quickly after joining to converge the offset.
 const PING_BURST: u32 = 3;
 const PING_BURST_INTERVAL_MS: f64 = 300.0;
@@ -149,6 +163,10 @@ pub struct EngineConfig {
     /// (non-loopback) host: the `connect.allowInsecureCoordinator` setting.
     /// A `ws://` coordinator on a public host is never used.
     pub allow_insecure_coordinator: bool,
+    /// Battery saver `SlowSync`: keep in touch every
+    /// [`SLOW_SYNC_CADENCE_MS`] even with other devices around
+    /// ([`Input::SetSlowSync`]).
+    pub slow_sync: bool,
 }
 
 impl EngineConfig {
@@ -169,6 +187,7 @@ impl EngineConfig {
             verify_lan_peers: false,
             lan_key: None,
             allow_insecure_coordinator: false,
+            slow_sync: false,
         }
     }
 
@@ -217,6 +236,9 @@ pub enum Input {
     SetLanKey(Option<LanKey>),
     /// The `connect.allowInsecureCoordinator` setting changed.
     SetAllowInsecureCoordinator(bool),
+    /// Battery saver `SlowSync`: ping and heartbeat every
+    /// [`SLOW_SYNC_CADENCE_MS`] even with other devices around.
+    SetSlowSync(bool),
 
     // -- I/O reports -------------------------------------------------------
     /// The upstream socket requested by `Output::Connect` is open.
@@ -652,6 +674,12 @@ pub struct Engine {
     provisional_offset: Option<f64>,
     last_ping_at: EpochMs,
     pings_in_burst: u32,
+    /// The cadence last announced to the attached room ([`Msg::Cadence`]).
+    cadence_announced: f64,
+    /// The cadence the attached room last acknowledged. We only slow down
+    /// to what it acknowledged; a room that doesn't know `Cadence` keeps us
+    /// at [`PING_INTERVAL_MS`].
+    cadence_acked: f64,
     last_reported_offset: Option<(f64, Option<f64>)>,
     last_error: Option<String>,
     coordinator_failures: u32,
@@ -820,6 +848,8 @@ impl Engine {
             provisional_offset: None,
             last_ping_at: 0.0,
             pings_in_burst: 0,
+            cadence_announced: PING_INTERVAL_MS,
+            cadence_acked: PING_INTERVAL_MS,
             last_reported_offset: None,
             last_error: None,
             coordinator_failures: 0,
@@ -1004,6 +1034,17 @@ impl Engine {
     /// The epoch this device believes it holds, if any.
     pub fn held_epoch(&self) -> Option<u32> {
         self.held.as_ref().map(|h| h.epoch)
+    }
+
+    /// The lease window of the last renewal the room answered (longer than
+    /// [`LEASE_DURATION_MS`] while we keep a slower cadence).
+    pub fn held_window_ms(&self) -> Option<f64> {
+        self.held.as_ref().map(|h| h.window_ms)
+    }
+
+    /// The keepalive cadence pings and heartbeats run at right now.
+    pub fn keepalive_cadence_ms(&self) -> f64 {
+        self.cadence()
     }
 
     /// The lease we hold was granted by the remote room we are attached to
@@ -1273,6 +1314,10 @@ impl Engine {
                 self.coordinator_failures = 0;
                 self.reevaluate();
             }
+            Input::SetSlowSync(on) => {
+                self.cfg.slow_sync = on;
+                self.sync_cadence();
+            }
             Input::Connected { peer, url } => self.on_connected(peer, url),
             Input::ConnectFailed { error } => self.on_upstream_lost(Some(error)),
             Input::Disconnected { peer } => self.on_disconnected(peer),
@@ -1512,9 +1557,8 @@ impl Engine {
             return false; // nobody around yet may just mean not heard yet
         }
         if !self.inbound.is_empty() {
-            match self.room.last_member_seen() {
-                Some(t) if now - t <= MEMBER_QUIET_MS => {}
-                _ => return false,
+            if !self.room.member_heard_within(MEMBER_QUIET_MS) {
+                return false;
             }
         } else if let Some(lost) = self.lost_members_at {
             if now - lost < self.cfg.scrobble_grace_ms {
@@ -2659,6 +2703,11 @@ impl Engine {
             }
             Msg::Presence { devices } => {
                 self.devices = devices;
+                if !from_loopback {
+                    // Someone joined (or the last other device left): change
+                    // pace now, not at the next beat.
+                    self.sync_cadence();
+                }
                 if let Some(p) = &mut self.picker {
                     let present: Vec<DeviceId> =
                         self.devices.iter().map(|d| d.id.clone()).collect();
@@ -2667,6 +2716,13 @@ impl Engine {
                 self.emit_devices();
                 if self.picker.is_some() {
                     self.emit_picker();
+                }
+            }
+            Msg::CadenceAck { interval_ms } => {
+                // Only the answer to our latest announcement counts: an
+                // older one is overtaken by what is still in flight.
+                if !from_loopback && self.is_connected() && interval_ms == self.cadence_announced {
+                    self.cadence_acked = interval_ms;
                 }
             }
             Msg::ClockPong { t0, t1, t2 } => {
@@ -2908,6 +2964,7 @@ impl Engine {
             | Msg::LeaseClaim { .. }
             | Msg::LeaseRelease { .. }
             | Msg::ClockPing { .. }
+            | Msg::Cadence { .. }
             | Msg::HandoffRelease { .. }
             | Msg::ScrobbleDedupeQuery { .. }
             | Msg::Unknown => {}
@@ -3026,6 +3083,9 @@ impl Engine {
             self.provisional_offset = Some(session_clock_ms - now);
             self.pings_in_burst = 0;
             self.last_ping_at = 0.0;
+            // A fresh room holds us to the normal cadence until told otherwise.
+            self.cadence_announced = PING_INTERVAL_MS;
+            self.cadence_acked = PING_INTERVAL_MS;
             self.send_ping();
             self.rebase_stamp();
             self.restamp_on_grant = self.held.is_some().then_some(false);
@@ -3706,8 +3766,9 @@ impl Engine {
     /// Send a lease claim, stamping it so the answer can be credited.
     fn claim(&mut self, epoch_expected: Option<u32>, takeover: bool) {
         let now = self.now_local_ms();
+        let window = self.heartbeat_window();
         if let Some(h) = &mut self.held {
-            h.sent(now);
+            h.sent(now, window);
         }
         self.upstream_send(Msg::LeaseClaim {
             epoch_expected,
@@ -4381,6 +4442,78 @@ impl Engine {
         }
     }
 
+    /// Whether anyone else is in the room we are attached to.
+    fn alone_in_room(&self) -> bool {
+        !self.devices.iter().any(|d| d.id != self.cfg.device.id)
+    }
+
+    /// The keepalive cadence this device wants right now.
+    fn wanted_cadence(&self) -> f64 {
+        if !self.is_connected() {
+            PING_INTERVAL_MS
+        } else if self.alone_in_room() {
+            SOLO_CADENCE_MS
+        } else if self.cfg.slow_sync {
+            SLOW_SYNC_CADENCE_MS
+        } else {
+            PING_INTERVAL_MS
+        }
+    }
+
+    /// The cadence pings and heartbeats actually run at: faster at once,
+    /// slower only once the room acknowledged it (and so stretched our
+    /// member timeout and lease window to match).
+    fn cadence(&self) -> f64 {
+        if !self.is_connected() {
+            return PING_INTERVAL_MS;
+        }
+        self.wanted_cadence().min(self.cadence_acked)
+    }
+
+    /// The shortest lease window the room can grant a heartbeat sent now:
+    /// what it knows of our cadence is the last one we announced, and only
+    /// if it understood the announcement (acknowledged one).
+    fn heartbeat_window(&self) -> f64 {
+        if !self.is_connected() {
+            return LEASE_DURATION_MS;
+        }
+        lease_window_ms(self.cadence_announced.min(self.cadence_acked))
+    }
+
+    /// Tell the attached room when the cadence we want changed. Speeding up
+    /// also restarts the ping burst: another device just appeared, and the
+    /// offset it will be compared against should be fresh.
+    fn sync_cadence(&mut self) {
+        if !self.is_connected() {
+            return;
+        }
+        let wanted = self.wanted_cadence();
+        if wanted == self.cadence_announced {
+            return;
+        }
+        if wanted < self.cadence_announced {
+            self.pings_in_burst = 0;
+        }
+        self.cadence_announced = wanted;
+        // Faster holds at once (the room is being told); slower waits for
+        // the room's answer.
+        self.cadence_acked = self.cadence_acked.min(wanted);
+        self.upstream_send(Msg::Cadence {
+            interval_ms: wanted,
+        });
+    }
+
+    fn send_heartbeat(&mut self, now: EpochMs) {
+        let window = self.heartbeat_window();
+        let Some(h) = &mut self.held else { return };
+        h.sent(now, window);
+        let epoch = h.epoch;
+        self.upstream_send(Msg::LeaseHeartbeat {
+            epoch,
+            sent_at: now,
+        });
+    }
+
     fn send_ping(&mut self) {
         let t0 = self.now_local_ms();
         self.last_ping_at = t0;
@@ -4415,6 +4548,7 @@ impl Engine {
         }
 
         // Remote connection lifecycle.
+        let mut pinged = false;
         if let Some(r) = self.remote.clone() {
             match r.state {
                 RemoteState::Connecting { since, .. } if now - since > CONNECT_TIMEOUT_MS => {
@@ -4437,17 +4571,34 @@ impl Engine {
                     }
                 }
                 RemoteState::Attached { peer } => {
-                    if now - self.last_upstream_msg_at > self.cfg.upstream_idle_ms {
+                    // The room only answers our pings: a slower cadence it
+                    // accepted means longer silences that are not death.
+                    let idle_limit =
+                        self.cfg.upstream_idle_ms + cadence_slack_ms(self.cadence_acked);
+                    if now - self.last_upstream_msg_at > idle_limit {
                         self.out.push(Output::Disconnect { peer });
                         self.on_upstream_lost(Some("upstream silent".into()));
                     } else {
+                        self.sync_cadence();
+                        let cadence = self.cadence();
                         let interval = if self.pings_in_burst < PING_BURST {
                             PING_BURST_INTERVAL_MS
                         } else {
-                            PING_INTERVAL_MS
+                            cadence
                         };
-                        if now - self.last_ping_at >= interval {
+                        // At a stretched cadence a ping rides along with a
+                        // due heartbeat (and the other way round below), so
+                        // the radio wakes once per period, not twice.
+                        let heartbeat_due = self
+                            .held
+                            .as_ref()
+                            .is_some_and(|h| h.heartbeat_due(now, cadence));
+                        let ride_along = cadence > PING_INTERVAL_MS
+                            && heartbeat_due
+                            && now - self.last_ping_at >= cadence / 2.0;
+                        if now - self.last_ping_at >= interval || ride_along {
                             self.send_ping();
+                            pinged = cadence > PING_INTERVAL_MS;
                         }
                     }
                 }
@@ -4471,14 +4622,9 @@ impl Engine {
 
         // Heartbeat while owning transport.
         if let Some(h) = self.held.clone() {
-            if h.heartbeat_due(now) {
-                if let Some(h) = &mut self.held {
-                    h.sent(now);
-                }
-                self.upstream_send(Msg::LeaseHeartbeat {
-                    epoch: h.epoch,
-                    sent_at: now,
-                });
+            let cadence = self.cadence();
+            if h.heartbeat_due(now, cadence) || (pinged && h.heartbeat_due(now, cadence / 2.0)) {
+                self.send_heartbeat(now);
             }
             if h.lapsed(now) && !self.detached && self.remote.is_some() {
                 self.detached = true;
@@ -8542,5 +8688,272 @@ mod tests {
         assert_eq!(k.awaiting_since, None);
         let json = serde_json::to_string(&k).unwrap();
         assert!(!json.contains("awaitingSince"), "{json}");
+    }
+    // -- keepalive cadence ------------------------------------------------------
+
+    fn tick_at(e: &mut Engine, clock: &TestClock, t: u64) -> Vec<Output> {
+        clock.0.store(t, Ordering::SeqCst);
+        e.handle(Input::Tick)
+    }
+
+    fn from_up(e: &mut Engine, msg: Msg) -> Vec<Output> {
+        e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(msg),
+        })
+    }
+
+    fn pings(outs: &[Output]) -> usize {
+        wire_outs(outs)
+            .iter()
+            .filter(|(_, m)| matches!(m, Msg::ClockPing { .. }))
+            .count()
+    }
+
+    fn heartbeats(outs: &[Output]) -> Vec<EpochMs> {
+        wire_outs(outs)
+            .iter()
+            .filter_map(|(_, m)| match m {
+                Msg::LeaseHeartbeat { sent_at, .. } => Some(*sent_at),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn cadences(outs: &[Output]) -> Vec<f64> {
+        wire_outs(outs)
+            .iter()
+            .filter_map(|(_, m)| match m {
+                Msg::Cadence { interval_ms } => Some(*interval_ms),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn disconnects(outs: &[Output]) -> bool {
+        outs.iter().any(|o| matches!(o, Output::Disconnect { .. }))
+    }
+
+    /// Attached alone at 10 s, through the join burst, with the room's ack
+    /// of the solo cadence in at 15.6 s.
+    fn solo_and_slowed(e: &mut Engine, clock: &TestClock) {
+        attach(e, None, vec![]);
+        let outs = tick_at(e, clock, 10_300);
+        assert_eq!(cadences(&outs), vec![SOLO_CADENCE_MS]);
+        assert_eq!(pings(&outs), 1, "the join burst still runs");
+        assert_eq!(pings(&tick_at(e, clock, 10_600)), 1);
+        // Not acknowledged yet: still the normal cadence.
+        assert_eq!(e.keepalive_cadence_ms(), PING_INTERVAL_MS);
+        assert_eq!(pings(&tick_at(e, clock, 15_000)), 0);
+        assert_eq!(pings(&tick_at(e, clock, 15_600)), 1);
+        from_up(
+            e,
+            Msg::CadenceAck {
+                interval_ms: SOLO_CADENCE_MS,
+            },
+        );
+        assert_eq!(e.keepalive_cadence_ms(), SOLO_CADENCE_MS);
+    }
+
+    #[test]
+    fn alone_in_the_room_keeps_in_touch_every_45_s_once_the_room_agrees() {
+        let (mut e, clock) = engine("a");
+        solo_and_slowed(&mut e, &clock);
+        for t in (16_600..60_600).step_by(1_000) {
+            let outs = tick_at(&mut e, &clock, t);
+            assert_eq!(pings(&outs), 0, "{t}");
+            assert!(cadences(&outs).is_empty());
+        }
+        assert_eq!(pings(&tick_at(&mut e, &clock, 60_600)), 1);
+        // A room that only answers our pings is quiet for longer than the
+        // usual 30 s without being dead: 30 s + 2 × 40 s since its last word.
+        let outs = tick_at(&mut e, &clock, 15_600 + 110_000);
+        assert!(!disconnects(&outs) && e.is_connected());
+        let outs = tick_at(&mut e, &clock, 15_600 + 110_001);
+        assert!(disconnects(&outs));
+        assert!(!e.is_connected());
+    }
+
+    #[test]
+    fn another_device_appearing_snaps_back_with_a_fresh_burst() {
+        let (mut e, clock) = engine("a");
+        solo_and_slowed(&mut e, &clock);
+        tick_at(&mut e, &clock, 30_000);
+        let outs = from_up(
+            &mut e,
+            Msg::Presence {
+                devices: vec![dev("a"), dev("b")],
+            },
+        );
+        assert_eq!(cadences(&outs), vec![PING_INTERVAL_MS]);
+        assert_eq!(e.keepalive_cadence_ms(), PING_INTERVAL_MS);
+        // A fresh burst for the clock offset the other device will compare.
+        assert_eq!(pings(&tick_at(&mut e, &clock, 30_000)), 1);
+        assert_eq!(pings(&tick_at(&mut e, &clock, 30_300)), 1);
+        assert_eq!(pings(&tick_at(&mut e, &clock, 30_600)), 1);
+        assert_eq!(pings(&tick_at(&mut e, &clock, 31_000)), 0);
+        assert_eq!(pings(&tick_at(&mut e, &clock, 35_600)), 1);
+        // Alone again: slow again (once acknowledged).
+        let outs = from_up(
+            &mut e,
+            Msg::Presence {
+                devices: vec![dev("a")],
+            },
+        );
+        assert_eq!(cadences(&outs), vec![SOLO_CADENCE_MS]);
+        assert_eq!(e.keepalive_cadence_ms(), PING_INTERVAL_MS);
+        // A late answer to an older announcement changes nothing.
+        from_up(
+            &mut e,
+            Msg::CadenceAck {
+                interval_ms: PING_INTERVAL_MS,
+            },
+        );
+        assert_eq!(e.keepalive_cadence_ms(), PING_INTERVAL_MS);
+        from_up(
+            &mut e,
+            Msg::CadenceAck {
+                interval_ms: SOLO_CADENCE_MS,
+            },
+        );
+        assert_eq!(e.keepalive_cadence_ms(), SOLO_CADENCE_MS);
+    }
+
+    #[test]
+    fn slow_sync_keeps_in_touch_every_15_s_with_others_around() {
+        let (mut e, clock) = engine("a");
+        attach(&mut e, None, vec![dev("a"), dev("b")]);
+        let outs = tick_at(&mut e, &clock, 10_300);
+        assert!(
+            cadences(&outs).is_empty(),
+            "with company the normal cadence"
+        );
+        let outs = e.handle(Input::SetSlowSync(true));
+        assert_eq!(cadences(&outs), vec![SLOW_SYNC_CADENCE_MS]);
+        from_up(
+            &mut e,
+            Msg::CadenceAck {
+                interval_ms: SLOW_SYNC_CADENCE_MS,
+            },
+        );
+        assert_eq!(e.keepalive_cadence_ms(), SLOW_SYNC_CADENCE_MS);
+        tick_at(&mut e, &clock, 10_600);
+        assert_eq!(pings(&tick_at(&mut e, &clock, 25_000)), 0);
+        assert_eq!(pings(&tick_at(&mut e, &clock, 25_600)), 1);
+        // Off again: back to normal at once.
+        let outs = e.handle(Input::SetSlowSync(false));
+        assert_eq!(cadences(&outs), vec![PING_INTERVAL_MS]);
+        assert_eq!(e.keepalive_cadence_ms(), PING_INTERVAL_MS);
+    }
+
+    #[test]
+    fn slow_sync_from_the_start_is_announced_on_attach() {
+        let clock = Arc::new(TestClock(AtomicU64::new(10_000)));
+        let mut cfg = EngineConfig::new(dev("a"), "scope");
+        cfg.lan_enabled = false;
+        cfg.credential = Some(credential());
+        cfg.slow_sync = true;
+        let doc = crate::session::new_document("scope", "sid-a".into(), 0.0);
+        let mut e = Engine::new(cfg, clock.clone(), RealReducer::shared(), doc, None);
+        attach(&mut e, None, vec![dev("a"), dev("b")]);
+        let outs = tick_at(&mut e, &clock, 10_300);
+        assert_eq!(cadences(&outs), vec![SLOW_SYNC_CADENCE_MS]);
+    }
+
+    #[test]
+    fn a_room_that_never_acknowledges_keeps_the_normal_cadence() {
+        let (mut e, clock) = engine("a");
+        e.cfg.upstream_idle_ms = 1e12;
+        attach(&mut e, None, vec![]);
+        let mut n = 0;
+        for t in (10_100..40_000).step_by(100) {
+            let outs = tick_at(&mut e, &clock, t);
+            n += pings(&outs);
+            assert!(cadences(&outs).len() <= 1);
+        }
+        assert_eq!(e.keepalive_cadence_ms(), PING_INTERVAL_MS);
+        assert!(n >= 7, "{n} pings in 30 s");
+        // A heartbeat it answers is credited the plain 20 s window.
+        e.handle(Input::ClaimTransport { takeover: false });
+        let lease = TransportLease {
+            owner: Some("a".into()),
+            epoch: 4,
+            expires_at: 0.0,
+        };
+        from_up(
+            &mut e,
+            Msg::LeaseGranted {
+                lease,
+                ack_of: Some(39_900.0),
+            },
+        );
+        assert_eq!(e.held_window_ms(), Some(LEASE_DURATION_MS));
+    }
+
+    #[test]
+    fn a_solo_owner_heartbeats_with_its_ping_and_holds_the_longer_window() {
+        let (mut e, clock) = engine("a");
+        solo_and_slowed(&mut e, &clock);
+        clock.0.store(16_000, Ordering::SeqCst);
+        let outs = e.handle(Input::ClaimTransport { takeover: false });
+        let sent_at = wire_outs(&outs)
+            .iter()
+            .find_map(|(_, m)| match m {
+                Msg::LeaseClaim { sent_at, .. } => Some(*sent_at),
+                _ => None,
+            })
+            .expect("claim");
+        let lease = TransportLease {
+            owner: Some("a".into()),
+            epoch: 4,
+            expires_at: 0.0,
+        };
+        from_up(
+            &mut e,
+            Msg::LeaseGranted {
+                lease: lease.clone(),
+                ack_of: Some(sent_at),
+            },
+        );
+        // Granted before the room renewed us at the slow cadence: only the
+        // short window counts, so the first heartbeat comes early.
+        assert_eq!(e.held_window_ms(), Some(LEASE_DURATION_MS));
+        for t in (17_000..25_000).step_by(1_000) {
+            assert!(heartbeats(&tick_at(&mut e, &clock, t)).is_empty(), "{t}");
+        }
+        let outs = tick_at(&mut e, &clock, 25_000);
+        assert_eq!(heartbeats(&outs), vec![25_000.0]);
+        assert_eq!(pings(&outs), 0, "the last ping is too recent to ride along");
+        from_up(
+            &mut e,
+            Msg::LeaseGranted {
+                lease: lease.clone(),
+                ack_of: Some(25_000.0),
+            },
+        );
+        assert_eq!(e.held_window_ms(), Some(100_000.0));
+        for t in (26_000..60_600).step_by(1_000) {
+            assert!(heartbeats(&tick_at(&mut e, &clock, t)).is_empty(), "{t}");
+        }
+        assert!(!e.is_detached());
+        // The ping is due first; the heartbeat rides along in the same wake.
+        let outs = tick_at(&mut e, &clock, 60_600);
+        assert_eq!(pings(&outs), 1);
+        assert_eq!(heartbeats(&outs), vec![60_600.0]);
+        assert!(heartbeats(&tick_at(&mut e, &clock, 61_000)).is_empty());
+        from_up(
+            &mut e,
+            Msg::LeaseGranted {
+                lease,
+                ack_of: Some(60_600.0),
+            },
+        );
+        assert_eq!(e.held_window_ms(), Some(100_000.0));
+        // Unanswered from here on: detached only once that window (less the
+        // margin) is over, not after the usual 18 s.
+        tick_at(&mut e, &clock, 60_600 + 97_000);
+        assert!(!e.is_detached());
+        tick_at(&mut e, &clock, 60_600 + 98_000);
+        assert!(e.is_detached());
     }
 }

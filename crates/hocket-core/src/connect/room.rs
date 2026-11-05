@@ -18,7 +18,10 @@ use std::sync::Arc;
 use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackId, TransportLease};
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::diagnostics;
-use crate::connect::lease::{LeaseError, LeaseEvent, LeaseMachine};
+use crate::connect::lease::{
+    cadence_slack_ms, clamp_cadence, lease_window_ms, LeaseError, LeaseEvent, LeaseMachine,
+    HEARTBEAT_INTERVAL_MS,
+};
 use crate::connect::replica::{new_replica, same_start, ReplicaExt, ScrobbleClaim};
 use crate::connect::wire::{
     negotiate, scope_key, Credential, LastStamp, Msg, RefuseReason, RejectReason, ReplicaState,
@@ -28,7 +31,9 @@ use crate::connect::{apply_op, op_context, PeerId, ReducerHandle, LOOPBACK};
 use crate::util::Clock;
 
 /// A member that has sent nothing for this long is dropped. Clients ping
-/// every 5 s, so this is six missed pings.
+/// every 5 s, so this is six missed pings. A member that announced a slower
+/// [`Msg::Cadence`] gets [`cadence_slack_ms`] on top
+/// ([`Room::member_timeout_ms`]).
 pub const MEMBER_TIMEOUT_MS: f64 = 30_000.0;
 /// How often the replica's expiring parts are swept.
 const SWEEP_INTERVAL_MS: f64 = 60_000.0;
@@ -136,6 +141,8 @@ struct Member {
     device: DeviceInfo,
     protocol: u32,
     last_seen: EpochMs,
+    /// Its accepted keepalive period ([`Msg::Cadence`], clamped).
+    cadence_ms: f64,
     /// Pre-buffered and ready for this key.
     ready_key: Option<QueueKey>,
     picker_open: bool,
@@ -478,6 +485,32 @@ impl Room {
             .filter(|m| m.peer != LOOPBACK)
             .map(|m| m.last_seen)
             .fold(None, |acc, t| Some(acc.map_or(t, |a: EpochMs| a.max(t))))
+    }
+
+    /// Whether a member other than the loopback was heard from within
+    /// `quiet_ms` (its 5 s-cadence limit), each member's limit stretched by
+    /// its announced cadence ([`cadence_slack_ms`]).
+    pub fn member_heard_within(&self, quiet_ms: f64) -> bool {
+        let now = self.now();
+        self.members
+            .iter()
+            .filter(|m| m.peer != LOOPBACK)
+            .any(|m| now - m.last_seen <= quiet_ms + cadence_slack_ms(m.cadence_ms))
+    }
+
+    /// How long a member may stay silent before it is dropped.
+    fn member_timeout_ms(m: &Member) -> f64 {
+        MEMBER_TIMEOUT_MS + cadence_slack_ms(m.cadence_ms)
+    }
+
+    /// The lease window for `device_id` at its announced cadence.
+    fn lease_window_for(&self, device_id: &str) -> f64 {
+        let cadence = self
+            .members
+            .iter()
+            .find(|m| m.device.id == device_id)
+            .map_or(HEARTBEAT_INTERVAL_MS, |m| m.cadence_ms);
+        lease_window_ms(cadence)
     }
 
     /// Live transport owner, if any.
@@ -987,6 +1020,7 @@ impl Room {
             device,
             protocol,
             last_seen: now,
+            cadence_ms: HEARTBEAT_INTERVAL_MS,
             ready_key: None,
             picker_open: false,
             answers_diagnostics,
@@ -1276,7 +1310,8 @@ impl Room {
                 }
             }
             Msg::LeaseHeartbeat { epoch, sent_at } => {
-                match self.lease.heartbeat(&device_id, epoch, now) {
+                let window = lease_window_ms(me.cadence_ms);
+                match self.lease.heartbeat(&device_id, epoch, now, window) {
                     Ok(LeaseEvent::Renewed { lease }) | Ok(LeaseEvent::Changed { lease, .. }) => {
                         let now = self.now();
                         self.replica.set_lease(lease.clone(), now);
@@ -1300,7 +1335,11 @@ impl Room {
                 takeover,
                 sent_at,
             } => {
-                match self.lease.claim(&device_id, epoch_expected, takeover, now) {
+                let window = lease_window_ms(me.cadence_ms);
+                match self
+                    .lease
+                    .claim(&device_id, epoch_expected, takeover, now, window)
+                {
                     Ok(LeaseEvent::Changed { .. }) => {
                         // The claimant gets its echo first, then everyone the change.
                         let lease = self.lease.lease().clone();
@@ -1349,6 +1388,19 @@ impl Room {
                 self.send(peer, Msg::ClockPong { t0, t1: t, t2: t });
             }
             Msg::ClockPong { .. } => {}
+            Msg::Cadence { interval_ms } => {
+                let cadence = clamp_cadence(interval_ms);
+                if let Some(m) = self.member_mut_by_peer(peer) {
+                    m.cadence_ms = cadence;
+                }
+                self.send(
+                    peer,
+                    Msg::CadenceAck {
+                        interval_ms: cadence,
+                    },
+                );
+            }
+            Msg::CadenceAck { .. } => {}
 
             Msg::HandoffPickerOpen { .. } => {
                 if let Some(m) = self.member_mut_by_peer(peer) {
@@ -1420,7 +1472,8 @@ impl Room {
                     // Target vanished: nothing to transfer to; the source keeps playing.
                     return;
                 }
-                match self.lease.transfer(&device_id, epoch, &target, now) {
+                let window = self.lease_window_for(&target);
+                match self.lease.transfer(&device_id, epoch, &target, now, window) {
                     Ok(_) => {
                         let lease = self.lease.lease().clone();
                         if let Some(p) = self.peer_of_device(&target) {
@@ -1711,7 +1764,7 @@ impl Room {
         let idle: Vec<PeerId> = self
             .members
             .iter()
-            .filter(|m| m.peer != LOOPBACK && now - m.last_seen >= MEMBER_TIMEOUT_MS)
+            .filter(|m| m.peer != LOOPBACK && now - m.last_seen >= Self::member_timeout_ms(m))
             .map(|m| m.peer.clone())
             .collect();
         for p in idle {
@@ -2477,6 +2530,128 @@ mod tests {
         assert!(outs.contains(&RoomOutput::Close("p2".into())));
         assert_eq!(r.member_count(), 1);
         assert_eq!(r.member_device_ids(), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn a_slower_cadence_is_acked_clamped_and_stretches_timeout_and_lease() {
+        let (mut r, clock) = room();
+        join(&mut r, "p1", "a");
+        join(&mut r, "p2", "b");
+        let cadence = |r: &mut Room, peer: &str, ms: f64| {
+            r.handle(RoomInput::Message(
+                peer.into(),
+                WireMessage::new(Msg::Cadence { interval_ms: ms }),
+            ))
+        };
+        // Clamped both ways, and never relayed.
+        let outs = cadence(&mut r, "p2", 1_000.0);
+        assert!(
+            matches!(sent(&outs, "p2")[..], [Msg::CadenceAck { interval_ms }] if *interval_ms == 5_000.0)
+        );
+        let outs = cadence(&mut r, "p2", 600_000.0);
+        assert!(
+            matches!(sent(&outs, "p2")[..], [Msg::CadenceAck { interval_ms }] if *interval_ms == 60_000.0)
+        );
+        assert!(sent(&outs, "p1").is_empty());
+        let outs = cadence(&mut r, "p1", 45_000.0);
+        assert!(
+            matches!(sent(&outs, "p1")[..], [Msg::CadenceAck { interval_ms }] if *interval_ms == 45_000.0)
+        );
+
+        // The lease lasts 20 s + 2 × 40 s at a 45 s cadence.
+        r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::LeaseClaim {
+                epoch_expected: None,
+                takeover: false,
+                sent_at: 1_000.0,
+            }),
+        ));
+        assert_eq!(r.lease().expires_at, 1_000.0 + 100_000.0);
+        clock.0.store(46_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::LeaseHeartbeat {
+                epoch: 1,
+                sent_at: 46_000.0,
+            }),
+        ));
+        assert!(
+            matches!(sent(&outs, "p1")[0], Msg::LeaseGranted { lease, .. } if lease.expires_at == 146_000.0)
+        );
+
+        // a, silent since 46 s, outlasts the 30 s timeout (110 s at its
+        // cadence); b, silent since 1 s at 60 s, is held to 140 s.
+        clock.0.store(130_000, Ordering::SeqCst);
+        assert!(r.member_heard_within(12_000.0), "a: 12 s + 80 s");
+        clock.0.store(140_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Tick);
+        assert!(!outs.contains(&RoomOutput::Close("p1".into())));
+        assert!(!outs.contains(&RoomOutput::Close("p2".into())));
+        clock.0.store(141_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Tick);
+        assert!(!outs.contains(&RoomOutput::Close("p1".into())));
+        assert!(outs.contains(&RoomOutput::Close("p2".into())));
+        clock.0.store(156_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Tick);
+        assert!(outs.contains(&RoomOutput::Close("p1".into())));
+
+        // Back to normal: the next renewal is the plain 20 s again.
+        let (mut r, clock) = room();
+        join(&mut r, "p1", "a");
+        cadence(&mut r, "p1", 45_000.0);
+        cadence(&mut r, "p1", 5_000.0);
+        r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::LeaseClaim {
+                epoch_expected: None,
+                takeover: false,
+                sent_at: 1_000.0,
+            }),
+        ));
+        assert_eq!(r.lease().expires_at, 21_000.0);
+        clock.0.store(31_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Tick);
+        assert!(outs.contains(&RoomOutput::Close("p1".into())));
+    }
+
+    #[test]
+    fn a_handoff_target_gets_the_window_of_its_own_cadence() {
+        let (mut r, _) = room();
+        join(&mut r, "p1", "a");
+        join(&mut r, "p2", "b");
+        r.handle(RoomInput::Message(
+            "p2".into(),
+            WireMessage::new(Msg::Cadence {
+                interval_ms: 15_000.0,
+            }),
+        ));
+        r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::LeaseClaim {
+                epoch_expected: None,
+                takeover: false,
+                sent_at: 1_000.0,
+            }),
+        ));
+        assert_eq!(r.lease().expires_at, 21_000.0);
+        r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::HandoffTakeover {
+                from: "a".into(),
+                target: "b".into(),
+                key: "k".into(),
+                track_id: "t".into(),
+                position_ms: 0,
+                played_ms: 0,
+                started_at: 5.0,
+                scrobbled: false,
+                epoch: 1,
+                lease: None,
+            }),
+        ));
+        assert_eq!(r.live_owner().as_deref(), Some("b"));
+        assert_eq!(r.lease().expires_at, 1_000.0 + 40_000.0);
     }
 
     #[test]

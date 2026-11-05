@@ -43,7 +43,9 @@ pub const COORDINATOR_NODE: &str = "coordinator";
 /// handed the lease elsewhere. The news needs one delivery plus a tick and a
 /// lossy link may drop it repeatedly, but without any answer the owner
 /// declares itself detached after `LEASE_DURATION - OWNER_LAPSE_MARGIN`
-/// (18 s) plus a tick, so 20 s is the true bound.
+/// (18 s) plus a tick, so 20 s is the true bound. An owner that renewed at
+/// a slower cadence (alone in its room, or `SlowSync`) was granted a longer
+/// window and gets the difference on top.
 pub const STALE_OWNER_GRACE_MS: f64 = 20_000.0;
 pub const COORDINATOR_URL: &str = "wss://coordinator.example/";
 
@@ -1036,7 +1038,13 @@ impl World {
             }
             if stale {
                 let since = *self.stale_owner_since[i].get_or_insert(now);
-                if now - since > STALE_OWNER_GRACE_MS {
+                let window = self.devices[i]
+                    .engine
+                    .held_window_ms()
+                    .unwrap_or(crate::connect::lease::LEASE_DURATION_MS);
+                let grace =
+                    STALE_OWNER_GRACE_MS + (window - crate::connect::lease::LEASE_DURATION_MS);
+                if now - since > grace {
                     self.violations.push(format!(
                         "[{now:.0}] {} still owns transport {:.0} ms after the room moved to another epoch",
                         d.id,

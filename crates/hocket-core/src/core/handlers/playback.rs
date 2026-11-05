@@ -1748,7 +1748,10 @@ impl Actor {
     }
 
     fn media_art_size(&self) -> u32 {
-        if self.battery_saver.has(crate::api::SaverFeature::SmallArtwork) {
+        if self
+            .battery_saver
+            .has(crate::api::SaverFeature::SmallArtwork)
+        {
             MEDIA_SESSION_ART_SMALL
         } else {
             MEDIA_SESSION_ART
@@ -1888,9 +1891,17 @@ impl Actor {
         if was.engaged() != self.battery_saver.engaged() {
             self.mark_prefetch_check();
         }
-        if was.has(crate::api::SaverFeature::SmallArtwork) != self.battery_saver.has(crate::api::SaverFeature::SmallArtwork) {
+        if was.has(crate::api::SaverFeature::SmallArtwork)
+            != self
+                .battery_saver
+                .has(crate::api::SaverFeature::SmallArtwork)
+        {
             self.media_art = None;
             self.emit_media_session();
+        }
+        let slow_sync = self.battery_saver.has(crate::api::SaverFeature::SlowSync);
+        if slow_sync != was.has(crate::api::SaverFeature::SlowSync) && self.engine.is_some() {
+            self.engine_input(Input::SetSlowSync(slow_sync));
         }
     }
 }
