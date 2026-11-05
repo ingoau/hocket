@@ -34,14 +34,13 @@ internal object OutputForms {
     @SuppressLint("InlinedApi")
     fun formOf(type: Int, name: String, deviceClass: Int? = null): Form = when (type) {
         AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> Form.Phone
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_USB_HEADSET,
-        AudioDeviceInfo.TYPE_BLE_HEADSET -> headphones(name)
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_USB_HEADSET -> headphones(name)
         // A line out feeds an amplifier or powered speakers, as does a dock.
         AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_DOCK, AudioDeviceInfo.TYPE_DOCK_ANALOG,
         AudioDeviceInfo.TYPE_BLE_SPEAKER -> Form.Speaker
         AudioDeviceInfo.TYPE_HEARING_AID -> Form.HearingAid
         AudioDeviceInfo.TYPE_HDMI -> Form.Tv
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> bluetoothForm(deviceClass) ?: headphones(name)
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLE_HEADSET -> bluetoothForm(deviceClass) ?: headphones(name)
         else -> Form.Unknown
     }
 
@@ -61,14 +60,16 @@ internal object OutputForms {
         return when {
             // "Buds" first: "QC Ultra Earbuds", "Studio Buds" are earbuds despite the over-ear brand words below.
             "buds" in n -> Form.Earbuds
-            OVER_EAR.any { it in n } -> Form.Headphones
+            OVER_EAR.any { it in n } || QC.containsMatchIn(n) -> Form.Headphones
             EARBUDS.any { it in n } || EAR_WORD.containsMatchIn(n) -> Form.Earbuds
             else -> Form.Headphones
         }
     }
 
-    private val OVER_EAR = listOf("airpods max", "wh-", "qc", "quietcomfort", "headphone", "over-ear", "on-ear")
-    private val EARBUDS = listOf("airpods", "wf-", "earphone", "in-ear", "tws", "powerbeats", "beats fit")
+    private val OVER_EAR = listOf("airpods max", "wh-", "quietcomfort", "headphone", "over-ear", "over ear", "on-ear", "on ear")
+    /** Bose "QC45", "QC Ultra", but not the earbud brand QCY. */
+    private val QC = Regex("""\bqc(\d|\b)""")
+    private val EARBUDS = listOf("airpods", "wf-", "earphone", "in-ear", "tws", "powerbeats", "beats fit", "qcy")
     /** "Nothing Ear (2)", "OnePlus Ear": "ear" as a word, not inside "heart" or "Earth". */
     private val EAR_WORD = Regex("""\bear\b""")
 }

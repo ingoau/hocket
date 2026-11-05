@@ -177,8 +177,7 @@ private fun BluetoothClassPermission(bluetoothConnected: Boolean) {
         if (AudioOutputs.canReadBluetoothClass(context)) return@LaunchedEffect AudioOutputs.refresh()
         val prefs = context.getSharedPreferences(PERMISSION_PREFS, android.content.Context.MODE_PRIVATE)
         if (prefs.getBoolean(ASKED_BLUETOOTH, false)) return@LaunchedEffect
-        prefs.edit { putBoolean(ASKED_BLUETOOTH, true) }
-        runCatching { launcher.launch(permission) }
+        runCatching { launcher.launch(permission) }.onSuccess { prefs.edit { putBoolean(ASKED_BLUETOOTH, true) } }
     }
 }
 

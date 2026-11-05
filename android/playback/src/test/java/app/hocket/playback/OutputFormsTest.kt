@@ -30,6 +30,7 @@ class OutputFormsTest {
         assertEquals(Form.Speaker, OutputForms.formOf(AudioDeviceInfo.TYPE_BLE_SPEAKER, "Kitchen"))
         assertEquals(Form.Headphones, OutputForms.formOf(AudioDeviceInfo.TYPE_BLE_HEADSET, ""))
         assertEquals(Form.Earbuds, OutputForms.formOf(AudioDeviceInfo.TYPE_BLE_HEADSET, "Galaxy Buds3 Pro"))
+        assertEquals(Form.Speaker, OutputForms.formOf(AudioDeviceInfo.TYPE_BLE_HEADSET, "Party", android.bluetooth.BluetoothClass.Device.AUDIO_VIDEO_LOUDSPEAKER))
         assertEquals(Form.HearingAid, OutputForms.formOf(AudioDeviceInfo.TYPE_HEARING_AID, "Left"))
         assertEquals(Form.Headphones, OutputForms.formOf(AudioDeviceInfo.TYPE_WIRED_HEADPHONES, ""))
         assertEquals(Form.Headphones, OutputForms.formOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, ""))
@@ -66,12 +67,12 @@ class OutputFormsTest {
     fun namesSplitEarbudsFromOverEar() {
         val earbuds = listOf(
             "AirPods", "AirPods Pro", "Pixel Buds Pro 2", "Galaxy Buds2", "Sony WF-1000XM5", "HUAWEI FreeBuds 5i",
-            "Bose QC Ultra Earbuds", "Beats Studio Buds", "Nothing Ear (2)", "OnePlus Ear", "Powerbeats Pro", "TWS-X9", "Soundcore in-ear",
+            "Bose QC Ultra Earbuds", "Beats Studio Buds", "Nothing Ear (2)", "OnePlus Ear", "Powerbeats Pro", "TWS-X9", "Soundcore in-ear", "QCY T13",
         )
         for (n in earbuds) assertEquals(n, Form.Earbuds, OutputForms.headphones(n))
         val overEar = listOf(
             "AirPods Max", "WH-1000XM4", "Bose QC45", "Bose QuietComfort 35", "Sennheiser Momentum 4", "Hearts", "Earth Speaker", "",
-            "Jabra headphones",
+            "Jabra headphones", "Bose QC Ultra", "Marshall Major Over Ear", "Koss On Ear",
         )
         for (n in overEar) assertEquals(n, Form.Headphones, OutputForms.headphones(n))
     }

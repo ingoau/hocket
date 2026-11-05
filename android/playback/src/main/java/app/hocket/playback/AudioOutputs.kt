@@ -99,7 +99,8 @@ object AudioOutputs {
             val kind = OutputForms.kindOf(d.type) ?: return@mapNotNull null
             devices[d.id] = d
             val name = if (kind == Kind.Phone) "" else d.productName?.toString().orEmpty()
-            val deviceClass = if (d.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) bluetoothClass(d.address) else null
+            // Dual-mode devices list as LE and classic: either row gets the class, whichever is kept below.
+            val deviceClass = if (kind == Kind.Bluetooth) bluetoothClass(d.address) else null
             Output(d.id, name, kind, OutputForms.formOf(d.type, name, deviceClass))
         }
             // One row per physical device: Bluetooth shows up as A2DP and SCO, keep the first.
