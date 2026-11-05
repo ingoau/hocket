@@ -129,19 +129,20 @@ class PlaybackTickCostTest {
         runCurrent()
         client.dispatch(Command.Play)
         runCurrent()
+        assertTrue(client.isPlaying.value)
         backgroundScope.launch { client.progress.collect { } }
         runCurrent()
+        // One clock read per emission (the clock stands still, so the StateFlow's values would dedupe).
         reads = 0
         advanceTimeBy(1_000)
         runCurrent()
         println("MEASURE progress playing 1 s: position reads=$reads")
-        assertTrue("progress: ~4 Hz ($reads reads)", reads in 2..8)
-        // A seek still shows within one tick.
+        assertTrue("progress: ~4 Hz, not ~30 ($reads reads)", reads in 3..6)
+        // A seek shows at once, not at the next tick.
+        advanceTimeBy(CoreClient.PROGRESS_TICK_MS / 2)
         client.dispatch(Commands.seekTo(42_000))
         runCurrent()
-        advanceTimeBy(CoreClient.PROGRESS_TICK_MS)
-        runCurrent()
-        assertTrue(client.progress.value in 42_000L..42_500L)
+        assertEquals(42_000L, client.progress.value)
     }
 
     @Test

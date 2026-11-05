@@ -136,10 +136,11 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
                 it.setFloatUniform("texSize", tex.width.toFloat(), tex.height.toFloat())
             }
         }
-        // Still: drawn into an offscreen layer that the renderer keeps, so whatever redraws above it
-        // (lyrics, the seek bar) composites a cached texture instead of re-running the full-screen
-        // warp shader every frame. Moving, the layer would be redrawn each frame anyway: no layer.
-        val still = !shouldAnimate
+        // Still and showing: drawn into an offscreen layer that the renderer keeps, so whatever
+        // redraws above it (lyrics, the seek bar) composites a cached texture instead of re-running
+        // the full-screen warp shader every frame. Moving, the layer would be redrawn each frame
+        // anyway; hidden (the player collapsed), it would hold a screen-sized texture for nothing.
+        val still = !shouldAnimate && visible
         Canvas(modifier.fillMaxSize().graphicsLayer { compositingStrategy = if (still) CompositingStrategy.Offscreen else CompositingStrategy.Auto }
             .semantics { this[LyricsBackgroundAnimated] = shouldAnimate }.testTag(tag)) {
             shader.setFloatUniform("size", size.width, size.height)

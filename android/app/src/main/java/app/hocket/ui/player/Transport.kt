@@ -285,7 +285,7 @@ private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, co
  * and `setProgress` for the screen reader's adjust gestures.
  */
 @Composable
-fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, stillWave: Boolean = false, centre: (@Composable () -> Unit)? = null) {
+fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, stillWave: Boolean = false, advancing: Boolean = playing, centre: (@Composable () -> Unit)? = null) {
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
     val currentPosition by rememberUpdatedState(position)
@@ -295,18 +295,27 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
     // A seek sent to the core that it has not reported back yet: shown instead of the stale position.
     var pending by remember { mutableStateOf<Long?>(null) }
     // [position] ticks at ~4 Hz (CoreClient.progress). Where a tick moves the thumb by more than a
-    // couple of pixels (a short track) the bar eases across the quarter second to the new position;
-    // on a long track it steps (a pixel or less) and nothing animates between ticks.
+    // couple of pixels (a short track), the bar runs on at real speed towards where the next tick
+    // will be ([advancing]: playing), so it neither steps nor trails the lyrics by a tick; paused, it
+    // eases back the little it ran ahead. On a long track it steps (a pixel or less) and nothing
+    // animates between ticks.
+    val currentAdvancing by rememberUpdatedState(advancing)
     var widthPx by remember { mutableIntStateOf(0) }
     val smoothed = remember { Animatable(position().toFloat()) }
     LaunchedEffect(Unit) {
         snapshotFlow { currentPosition() }.collectLatest { ms ->
-            val step = ms - smoothed.value
-            val stepPx = if (currentDuration > 0) widthPx * step / currentDuration else 0f
-            if (step > 0f && step <= 2f * CoreClient.PROGRESS_TICK_MS && stepPx > SMOOTH_STEP_PX) {
-                smoothed.animateTo(ms.toFloat(), tween(CoreClient.PROGRESS_TICK_MS.toInt(), easing = LinearEasing))
-            } else {
-                smoothed.snapTo(ms.toFloat())
+            val duration = currentDuration
+            val tick = CoreClient.PROGRESS_TICK_MS
+            val tickPx = if (duration > 0) widthPx * tick.toFloat() / duration else 0f
+            val gap = ms - smoothed.value
+            when {
+                tickPx <= SMOOTH_STEP_PX || abs(gap) > 2f * tick -> smoothed.snapTo(ms.toFloat())
+                currentAdvancing -> {
+                    val target = (ms + tick).coerceAtMost(duration).toFloat()
+                    val runMs = (target - smoothed.value).toInt()
+                    if (runMs <= 0) smoothed.snapTo(target) else smoothed.animateTo(target, tween(runMs, easing = LinearEasing))
+                }
+                gap != 0f -> smoothed.animateTo(ms.toFloat(), tween(SEEK_SETTLE_MS))
             }
         }
     }
@@ -455,6 +464,9 @@ private const val SEEK_HOLD_MS = 2_500L
 
 /** A progress tick that moves the seek bar's thumb further than this eases there instead of stepping. */
 private const val SMOOTH_STEP_PX = 2f
+
+/** How long the seek bar takes to settle back onto a paused position it had run ahead of. */
+private const val SEEK_SETTLE_MS = 150
 
 /** Linear interpolation for layer maths. */
 internal fun lerpF(a: Float, b: Float, t: Float): Float = lerp(a, b, t)

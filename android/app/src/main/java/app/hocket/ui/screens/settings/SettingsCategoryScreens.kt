@@ -37,6 +37,7 @@ import app.hocket.core.api.SettingScope
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -375,9 +376,23 @@ fun BatterySettingsScreen(nav: NavHostController) {
     val customSetting = setting(SettingKeys.BATTERY_CUSTOM)
     val autoSaver = setting(SettingKeys.BATTERY_AUTO_ENGAGE)
     val autoLevelSetting = setting(SettingKeys.BATTERY_AUTO_LEVEL)
-    val chosen = Saver.parseLevel(levelSetting.raw) ?: SaverLevel.Off
-    val custom = Saver.parseCustom(customSetting.raw)
-    val chosenFeatures = Saver.features(chosen, custom)
+    val storedLevel = Saver.parseLevel(levelSetting.raw) ?: SaverLevel.Off
+    val storedCustom = Saver.parseCustom(customSetting.raw)
+    // What this screen last wrote, shown until the core reports it back: the slider does not snap
+    // back to the old stop on release, and quick toggles build on each other instead of on the
+    // last reported set. Dropped once the setting matches (or after a while, if it never does).
+    var pendingLevel by remember { mutableStateOf<SaverLevel?>(null) }
+    var pendingCustom by remember { mutableStateOf<List<SaverFeature>?>(null) }
+    LaunchedEffect(pendingLevel, storedLevel) {
+        val p = pendingLevel ?: return@LaunchedEffect
+        if (p == storedLevel) pendingLevel = null else { kotlinx.coroutines.delay(PENDING_SETTING_MS); pendingLevel = null }
+    }
+    LaunchedEffect(pendingCustom, customSetting.raw) {
+        val p = pendingCustom ?: return@LaunchedEffect
+        if (Saver.customValue(p) == Saver.customValue(storedCustom)) pendingCustom = null else { kotlinx.coroutines.delay(PENDING_SETTING_MS); pendingCustom = null }
+    }
+    val chosen = pendingLevel ?: storedLevel
+    val chosenFeatures = Saver.features(chosen, pendingCustom ?: storedCustom)
     SubScreen(nav, stringResource(R.string.settings_section_battery)) {
         val title = stringResource(R.string.settings_battery_saver)
         val levelName = saverLevelName(chosen)
@@ -394,7 +409,11 @@ fun BatterySettingsScreen(nav: NavHostController) {
         LabelledSlider(
             value = value, onValueChange = { drag = it },
             onValueChangeFinished = {
-                drag?.let { client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(Saver.PRESETS[it.roundToInt()]))) }
+                drag?.let {
+                    val level = Saver.PRESETS[it.roundToInt()]
+                    pendingLevel = level
+                    client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(level)))
+                }
                 drag = null
             },
             valueRange = 0f..last, steps = Saver.PRESETS.size - 2, showTicks = presetIndex >= 0,
@@ -416,9 +435,13 @@ fun BatterySettingsScreen(nav: NavHostController) {
                 Saver.ALL.forEach { feature ->
                     val (name, body) = saverFeatureText(feature)
                     SwitchRow(name, feature in chosenFeatures, { on ->
-                        val next = if (on) chosenFeatures + feature else chosenFeatures - feature
+                        val next = (if (on) chosenFeatures + feature else chosenFeatures - feature).distinct().sorted()
+                        pendingCustom = next
                         client.dispatch(Commands.setSetting(SettingKeys.BATTERY_CUSTOM, Saver.customValue(next)))
-                        if (chosen != SaverLevel.Custom) client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(SaverLevel.Custom)))
+                        if (chosen != SaverLevel.Custom) {
+                            pendingLevel = SaverLevel.Custom
+                            client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(SaverLevel.Custom)))
+                        }
                     }, subtitle = body, tag = "battery.feature.${feature.string}")
                 }
             }
@@ -434,6 +457,9 @@ fun BatterySettingsScreen(nav: NavHostController) {
         }
     }
 }
+
+/** How long the battery screen shows a level or custom set it wrote before trusting the stored one again. */
+private const val PENDING_SETTING_MS = 3_000L
 
 @Composable
 internal fun saverLevelName(level: SaverLevel): String = stringResource(

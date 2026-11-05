@@ -1443,7 +1443,6 @@ class FakeCore(
         }
     }
 
-    /** Like the core: unknown keys are refused (an Error event), known ones keep their registry scope. */
     /** As the core: the level in force from the power-save state and the `battery.*` settings. */
     private fun refreshBatterySaver() {
         val saver = Saver.resolve(
@@ -1458,6 +1457,7 @@ class FakeCore(
         emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(saver)))
     }
 
+    /** Like the core: unknown keys are refused (an Error event), known ones keep their registry scope. */
     private fun setSetting(key: String, value: String) {
         val existing = settings[key]
         if (existing == null) {

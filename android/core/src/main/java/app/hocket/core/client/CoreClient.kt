@@ -12,7 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.Deferred
@@ -272,14 +272,40 @@ class CoreClient(
      */
     val progress: StateFlow<Long> = positionTicker(PROGRESS_TICK_MS)
 
+    /**
+     * Emits [positionNow] every [periodMs] while playing, and at once when the position jumps (a
+     * seek, play or pause, another track) rather than at the next tick: a slow ticker would
+     * otherwise show a seek up to a period late. Paused, it waits for the next stamp.
+     */
     private fun positionTicker(periodMs: Long): StateFlow<Long> = flow {
         while (true) {
             val mark = positionMark()
             emit(positionNow())
-            delay(periodMs)
-            awaitPositionMayMove(mark)
+            if (mark.moving) withTimeoutOrNull(periodMs) { awaitPositionJump(mark) }
+            else awaitPositionMayMove(mark)
         }
     }.stateIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 500), 0L)
+
+    /**
+     * Suspends until the position stops following [mark]: another track, play or pause, or a
+     * stamp that puts it more than [POSITION_JUMP_MS] from where [mark] would (a seek). The
+     * playing player's routine re-stamps (~1 Hz) agree with [mark] and do not count.
+     */
+    private suspend fun awaitPositionJump(mark: PositionMark) {
+        combine(_clock, _nowPlaying) { t, e ->
+            when {
+                e !== mark.entry -> true
+                t === mark.stamp -> false
+                t.position.isPlaying != mark.stamp.position.isPlaying -> true
+                else -> {
+                    val at = now()
+                    val offset = _connection.value.clockOffsetMs
+                    val duration = e?.track?.durationMs?.toLong()
+                    kotlin.math.abs(PositionClock.extrapolate(t, at, offset, duration) - PositionClock.extrapolate(mark.stamp, at, offset, duration)) > POSITION_JUMP_MS
+                }
+            }
+        }.first { it }
+    }
 
     // -- page caches -------------------------------------------------------------------------------
     val trackPages = PageCache<TrackListKey, Track>(scope) { key, offset, limit ->
@@ -697,6 +723,8 @@ class CoreClient(
         const val POSITION_TICK_MS = 32L
         /** [progress]'s period while playing (~4 Hz). */
         const val PROGRESS_TICK_MS = 250L
+        /** A re-stamp that moves the position further than this is a jump (a seek): tickers show it at once. */
+        const val POSITION_JUMP_MS = 300L
     }
 }
 

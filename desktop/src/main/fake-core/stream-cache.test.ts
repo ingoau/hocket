@@ -6,14 +6,13 @@ const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
 type T = { id: string; offline: OfflineState; sizeBytes?: number; bitRate?: number; durationMs: number };
 const tr = (id: string, offline: OfflineState = "none", sizeBytes = 8 * MIB): T => ({ id, offline, sizeBytes, bitRate: 320, durationMs: 200_000 });
-const ok = { offline: false, metered: false, batterySaver: false };
+const ok = { offline: false, metered: false };
 
 describe("FakeStreamCache", () => {
-  it("primes a partial start (not available offline) only when unmetered and not in battery saver", () => {
+  it("primes a partial start (not available offline) only when unmetered", () => {
     const c = new FakeStreamCache();
     const a = tr("a");
     expect(c.prime("album", "alb", a, { ...ok, metered: true }, 0).outcome).toBe("declined");
-    expect(c.prime("album", "alb", a, { ...ok, batterySaver: true }, 0).outcome).toBe("declined");
     const r = c.prime("album", "alb", a, ok, 0);
     expect(r).toMatchObject({ outcome: "primed", trackId: "a", bytes: primeBytes(a) });
     expect(c.partialBytes()).toBe(primeBytes(a));

@@ -2112,7 +2112,7 @@ export class FakeCore implements CoreHandle {
   /** The album primer, on the transport owner (this device in the fake), gated on its network and battery. */
   private prime(kind: "album" | "track", id: string, trackId: string | undefined): void {
     const t = trackId ? this.lib?.tracksById.get(trackId) : undefined;
-    const rec = this.cache.prime(kind, id, t, { offline: this.isOffline(), metered: !!this.network?.metered, batterySaver: this.batterySaver.features.length > 0 }, Date.now());
+    const rec = this.cache.prime(kind, id, t, { offline: this.isOffline(), metered: !!this.network?.metered }, Date.now());
     this.emit({ type: "log", data: { level: "debug", target: "fake_core::prime", message: `prime ${kind} ${id} -> ${rec.trackId ?? "?"}: ${rec.outcome}${rec.reason ? ` (${rec.reason})` : ""}` } });
     if (rec.outcome === "primed") this.emit({ type: "storageChanged", data: { storage: this.storage() } });
   }

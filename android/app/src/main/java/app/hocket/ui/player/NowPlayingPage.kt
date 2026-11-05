@@ -740,7 +740,7 @@ private fun PlayerSeek(position: () -> Long) {
     val saver by client.batterySaver.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING).graphicsLayer { alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f }) {
         WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) },
-            stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), centre = { SeekStatus() })
+            stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), advancing = playing, centre = { SeekStatus() })
     }
 }
 
