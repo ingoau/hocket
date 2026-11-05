@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Bluetooth outputs' Class of Device (car, speaker, headphones) for their icons (AudioOutputs).
+         Asked for when the Connect sheet opens with a Bluetooth output; optional. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- Reading the SSID (for per-network transcoding profiles) needs location on Android 8.1+. Optional: without it the network id falls back to the transport type. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />

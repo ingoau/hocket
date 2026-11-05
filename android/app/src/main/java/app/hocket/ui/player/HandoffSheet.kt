@@ -1,5 +1,7 @@
 package app.hocket.ui.player
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +49,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.core.content.edit
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -93,6 +97,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
     val context = LocalContext.current
     DisposableEffect(context) { AudioOutputs.start(context); onDispose { } }
     val outputs by AudioOutputs.outputs.collectAsStateWithLifecycle()
+    BluetoothClassPermission(outputs.outputs.any { it.kind == AudioOutputs.Kind.Bluetooth })
     val self = devices.firstOrNull { it.isSelf }
     // The output playing on this phone, named on the volume card ("Volume – Pixel Buds Pro").
     val currentOutput = outputs.current?.takeIf { self?.playing != false }?.let { outputName(it) }
@@ -119,7 +124,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                         val on = self.playing && o.id == outputs.current?.id
                         val detail = outputDetail(o)
                         val sub = if (on) listOfNotNull(stringResource(R.string.handoff_playing), detail).joinToString(stringResource(R.string.dot_separator)) else detail
-                        DeviceRow(i, outputs.outputs.size, outputName(o), sub, outputIcon(o.kind), on, onClick = { pick(o.id) }, modifier = Modifier.testTag("handoff.output.${o.id}"))
+                        DeviceRow(i, outputs.outputs.size, outputName(o), sub, outputIcon(o), on, onClick = { pick(o.id) }, modifier = Modifier.testTag("handoff.output.${o.id}"))
                     }
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
@@ -155,6 +160,30 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
         }
     }
 }
+
+/**
+ * Asks once, ever, for BLUETOOTH_CONNECT, the first time the sheet shows a Bluetooth output: the
+ * moment its use is plain (the rows can then show a car or a speaker instead of headphones).
+ * Denied, those stay headphones, as before; the system's settings can still grant it later.
+ */
+@Composable
+private fun BluetoothClassPermission(bluetoothConnected: Boolean) {
+    val permission = AudioOutputs.BLUETOOTH_PERMISSION ?: return
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) AudioOutputs.refresh() }
+    LaunchedEffect(bluetoothConnected) {
+        if (!bluetoothConnected) return@LaunchedEffect
+        // Granted from settings since the outputs were read: read them again with the classes.
+        if (AudioOutputs.canReadBluetoothClass(context)) return@LaunchedEffect AudioOutputs.refresh()
+        val prefs = context.getSharedPreferences(PERMISSION_PREFS, android.content.Context.MODE_PRIVATE)
+        if (prefs.getBoolean(ASKED_BLUETOOTH, false)) return@LaunchedEffect
+        prefs.edit { putBoolean(ASKED_BLUETOOTH, true) }
+        runCatching { launcher.launch(permission) }
+    }
+}
+
+private const val PERMISSION_PREFS = "hocket-permissions"
+private const val ASKED_BLUETOOTH = "asked_bluetooth_connect"
 
 /**
  * One output or device: its icon in a tonal circle, its name and state. The one playing is filled
@@ -196,26 +225,32 @@ private fun deviceRowIcon(platform: Platform): ImageVector = when (platform) {
 private fun outputDetail(o: AudioOutputs.Output): String? = when (o.kind) {
     AudioOutputs.Kind.Phone -> android.os.Build.MODEL?.takeIf { it.isNotBlank() }
     AudioOutputs.Kind.Bluetooth -> stringResource(R.string.handoff_bluetooth_short)
-    AudioOutputs.Kind.Wired -> null
     AudioOutputs.Kind.Usb -> stringResource(R.string.handoff_usb_short)
-    AudioOutputs.Kind.Other -> null
+    // A TV or dock's own name, when it has one, gets the link under it.
+    AudioOutputs.Kind.Hdmi -> o.name.takeIf { it.isNotBlank() }?.let { stringResource(R.string.handoff_hdmi) }
+    AudioOutputs.Kind.Wired, AudioOutputs.Kind.Dock -> null
 }
 
 @Composable
-private fun outputName(o: AudioOutputs.Output): String = when {
-    o.kind == AudioOutputs.Kind.Phone -> stringResource(R.string.handoff_phone_speaker)
-    o.name.isNotBlank() && o.kind == AudioOutputs.Kind.Bluetooth -> o.name
-    o.kind == AudioOutputs.Kind.Wired -> stringResource(R.string.handoff_wired)
-    o.kind == AudioOutputs.Kind.Usb -> o.name.ifBlank { stringResource(R.string.handoff_usb) }
-    else -> o.name.ifBlank { stringResource(R.string.handoff_bluetooth) }
+private fun outputName(o: AudioOutputs.Output): String = when (o.kind) {
+    AudioOutputs.Kind.Phone -> stringResource(R.string.handoff_phone_speaker)
+    AudioOutputs.Kind.Bluetooth -> o.name.ifBlank { stringResource(R.string.handoff_bluetooth) }
+    AudioOutputs.Kind.Wired -> stringResource(if (o.form == AudioOutputs.Form.Speaker) R.string.handoff_line_out else R.string.handoff_wired)
+    AudioOutputs.Kind.Usb -> o.name.ifBlank { stringResource(R.string.handoff_usb) }
+    AudioOutputs.Kind.Hdmi -> o.name.ifBlank { stringResource(R.string.handoff_hdmi) }
+    AudioOutputs.Kind.Dock -> o.name.ifBlank { stringResource(R.string.handoff_dock) }
 }
 
-private fun outputIcon(kind: AudioOutputs.Kind) = when (kind) {
-    AudioOutputs.Kind.Phone -> HocketIcons.Outlined.PhoneAndroid
-    AudioOutputs.Kind.Bluetooth -> HocketIcons.Outlined.Headphones
-    AudioOutputs.Kind.Wired -> HocketIcons.Outlined.Headphones
-    AudioOutputs.Kind.Usb -> HocketIcons.Filled.Usb
-    AudioOutputs.Kind.Other -> HocketIcons.Outlined.Speaker
+/** An output's icon in the sheet's rows (outlined; the connect button has the filled ones). */
+private fun outputIcon(o: AudioOutputs.Output): ImageVector = when (o.form) {
+    AudioOutputs.Form.Phone -> HocketIcons.Outlined.PhoneAndroid
+    AudioOutputs.Form.Headphones -> HocketIcons.Outlined.Headphones
+    AudioOutputs.Form.Earbuds -> HocketIcons.Outlined.Earbuds
+    AudioOutputs.Form.Speaker -> HocketIcons.Outlined.Speaker
+    AudioOutputs.Form.Car -> HocketIcons.Outlined.DirectionsCar
+    AudioOutputs.Form.HearingAid -> HocketIcons.Outlined.Hearing
+    AudioOutputs.Form.Tv -> HocketIcons.Outlined.Tv
+    AudioOutputs.Form.Unknown -> if (o.kind == AudioOutputs.Kind.Usb) HocketIcons.Filled.Usb else HocketIcons.Outlined.Speaker
 }
 
 /**
