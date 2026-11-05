@@ -363,6 +363,9 @@
     <string name="handoff_wired">Wired headphones</string>
     <string name="handoff_usb">USB audio</string>
     <string name="handoff_bluetooth">Bluetooth audio</string>
+    <string name="handoff_line_out">Line out</string>
+    <string name="handoff_hdmi">HDMI</string>
+    <string name="handoff_dock">Dock</string>
     <string name="handoff_bluetooth_settings">Bluetooth settings</string>
     <string name="search_recent">Recent searches</string>
     <string name="search_recent_local">Kept on this device</string>

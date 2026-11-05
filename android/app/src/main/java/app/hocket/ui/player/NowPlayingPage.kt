@@ -1148,7 +1148,7 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val context = LocalContext.current
     DisposableEffect(context) { AudioOutputs.start(context); onDispose { } }
     val output by AudioOutputs.outputs.collectAsStateWithLifecycle()
-    val icon = remote?.let { deviceIcon(it.platform) } ?: outputButtonIcon(output.current?.kind)
+    val icon = remote?.let { deviceIcon(it.platform) } ?: outputButtonIcon(output.current)
     Box(
         Modifier
             .size(48.dp)
@@ -1176,12 +1176,16 @@ private fun DeviceButton(onConnect: () -> Unit) {
     }
 }
 
-/** This phone's button while it plays: what it plays out of (headphones, a USB device), else the phone. */
-private fun outputButtonIcon(kind: AudioOutputs.Kind?): ImageVector = when (kind) {
-    AudioOutputs.Kind.Bluetooth, AudioOutputs.Kind.Wired -> HocketIcons.Filled.Headphones
-    AudioOutputs.Kind.Usb -> HocketIcons.Filled.Usb
-    AudioOutputs.Kind.Other -> HocketIcons.Filled.Speaker
-    AudioOutputs.Kind.Phone, null -> HocketIcons.Filled.PhoneAndroid
+/** This phone's button while it plays: what it plays out of (earbuds, the car, a speaker), else the phone. */
+private fun outputButtonIcon(output: AudioOutputs.Output?): ImageVector = when (output?.form) {
+    AudioOutputs.Form.Headphones -> HocketIcons.Filled.Headphones
+    AudioOutputs.Form.Earbuds -> HocketIcons.Filled.Earbuds
+    AudioOutputs.Form.Speaker -> HocketIcons.Filled.Speaker
+    AudioOutputs.Form.Car -> HocketIcons.Filled.DirectionsCar
+    AudioOutputs.Form.HearingAid -> HocketIcons.Filled.Hearing
+    AudioOutputs.Form.Tv -> HocketIcons.Filled.Tv
+    AudioOutputs.Form.Unknown -> if (output?.kind == AudioOutputs.Kind.Usb) HocketIcons.Filled.Usb else HocketIcons.Filled.Speaker
+    AudioOutputs.Form.Phone, null -> HocketIcons.Filled.PhoneAndroid
 }
 
 /** A device's icon by platform: a phone, a computer, or a speaker (the coordinator). */

@@ -46,6 +46,7 @@ const SYMBOLS = {
   SortByAlpha: "sort_by_alpha", Speed: "speed", Timer: "timer", TrendingUp: "trending_up", Update: "update",
   BugReport: "bug_report", Code: "code", ContentCopy: "content_copy",
   Bluetooth: "bluetooth", Headphones: "headphones", Usb: "usb",
+  Earbuds: "earbuds", DirectionsCar: "directions_car", Hearing: "hearing", Tv: "tv",
   OpenInNew: "open_in_new", Laptop: "laptop_windows", DesktopWindows: "desktop_windows", Warning: "warning", Equalizer: "equalizer",
 };
 
@@ -67,6 +68,8 @@ const GROUPS = [
     "Inventory2",
     // Large screens: the player panel's full-screen toggle and the navigation rail's menu.
     "OpenInFull", "CloseFullscreen", "Menu", "MenuOpen",
+    // What this phone plays out of: the connect button and the Connect sheet.
+    "Earbuds", "DirectionsCar", "Hearing", "Tv",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",
@@ -74,6 +77,7 @@ const GROUPS = [
     "Delete", "Edit", "Settings", "Palette", "Bolt", "Warning", "Laptop", "DesktopWindows", "PhoneAndroid", "Headphones",
     "ContentCopy", "Speaker", "Lyrics", "Dns", "Devices", "BatterySaver", "Tune", "Sync",
     "Inventory2",
+    "Earbuds", "DirectionsCar", "Hearing", "Tv",
   ] },
   { path: ["AutoMirrored", "Filled"], fill: true, mirror: true, names: [
     "ArrowBack", "Logout", "PlaylistAdd", "PlaylistPlay", "QueueMusic", "Redo", "Undo",

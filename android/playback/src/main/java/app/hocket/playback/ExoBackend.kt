@@ -204,7 +204,8 @@ class ExoBackend(
         scope.launch {
             var known: Set<String>? = null
             AudioOutputs.outputs.collect { state ->
-                val headphones = state.outputs.filter { it.kind in HEADPHONE_KINDS }
+                // Hearing aids are worn all day: connecting them says nothing about wanting the music here.
+                val headphones = state.outputs.filter { it.kind in HEADPHONE_KINDS && it.form != AudioOutputs.Form.HearingAid }
                 val keys = headphones.map { "${it.kind}:${it.name}" }.toSet()
                 val before = known
                 known = keys

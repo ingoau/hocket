@@ -1,9 +1,13 @@
 package app.hocket.playback
 
+import android.Manifest
+import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.annotation.SuppressLint
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -22,9 +26,16 @@ import kotlinx.coroutines.flow.asStateFlow
  * between [ExoBackend] (which applies the choice) and the UI (which lists and picks).
  */
 object AudioOutputs {
-    enum class Kind { Phone, Wired, Usb, Bluetooth, Other }
+    /** How an output is connected. */
+    enum class Kind { Phone, Wired, Usb, Bluetooth, Hdmi, Dock }
 
-    data class Output(val id: Int, val name: String, val kind: Kind)
+    /**
+     * What an output is, for its icon ([OutputForms]). Bluetooth cars, speakers and TVs need the
+     * BLUETOOTH_CONNECT permission ([BLUETOOTH_PERMISSION]); without it they show as headphones.
+     */
+    enum class Form { Phone, Headphones, Earbuds, Speaker, Car, HearingAid, Tv, Unknown }
+
+    data class Output(val id: Int, val name: String, val kind: Kind, val form: Form = Form.Unknown)
 
     data class State(
         val outputs: List<Output> = emptyList(),
@@ -38,7 +49,14 @@ object AudioOutputs {
     private val state = MutableStateFlow(State())
     val outputs: StateFlow<State> = state.asStateFlow()
 
+    /**
+     * The runtime permission that reads a Bluetooth device's class (car, speaker, headphones), null
+     * below Android 12, where the install-time BLUETOOTH permission covers it.
+     */
+    val BLUETOOTH_PERMISSION: String? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Manifest.permission.BLUETOOTH_CONNECT else null
+
     private var manager: AudioManager? = null
+    private var appContext: Context? = null
     private val devices = HashMap<Int, AudioDeviceInfo>()
     /** Set by [ExoBackend]: applies a preferred device (null = the system's default) to the player. */
     @Volatile private var apply: ((AudioDeviceInfo?) -> Unit)? = null
@@ -53,6 +71,7 @@ object AudioOutputs {
         if (manager != null) return
         val am = context.applicationContext.getSystemService(AudioManager::class.java) ?: return
         manager = am
+        appContext = context.applicationContext
         am.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
         refresh()
     }
@@ -72,13 +91,17 @@ object AudioOutputs {
         apply?.invoke(device)
     }
 
-    private fun refresh() {
+    /** Reads the outputs again; after BLUETOOTH_CONNECT is granted, so Bluetooth ones get their form. */
+    fun refresh() {
         val am = manager ?: return
         devices.clear()
         val list = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).mapNotNull { d ->
-            val kind = kindOf(d.type) ?: return@mapNotNull null
+            val kind = OutputForms.kindOf(d.type) ?: return@mapNotNull null
             devices[d.id] = d
-            Output(d.id, if (kind == Kind.Phone) "" else d.productName?.toString().orEmpty(), kind)
+            val name = if (kind == Kind.Phone) "" else d.productName?.toString().orEmpty()
+            // Dual-mode devices list as LE and classic: either row gets the class, whichever is kept below.
+            val deviceClass = if (kind == Kind.Bluetooth) bluetoothClass(d.address) else null
+            Output(d.id, name, kind, OutputForms.formOf(d.type, name, deviceClass))
         }
             // One row per physical device: Bluetooth shows up as A2DP and SCO, keep the first.
             .distinctBy { if (it.kind == Kind.Phone) "phone" else "${it.kind}:${it.name}" }
@@ -88,20 +111,30 @@ object AudioOutputs {
         state.value = State(list, preferred)
     }
 
-    private fun kindOf(type: Int): Kind? = when (type) {
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> Kind.Phone
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_LINE_ANALOG -> Kind.Wired
-        AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_DEVICE -> Kind.Usb
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> Kind.Bluetooth
-        else -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (type == AudioDeviceInfo.TYPE_BLE_HEADSET || type == AudioDeviceInfo.TYPE_BLE_SPEAKER)) Kind.Bluetooth else null
+    /** Whether Hocket may read Bluetooth devices' classes: granted, or not a runtime permission here. */
+    fun canReadBluetoothClass(context: Context): Boolean =
+        BLUETOOTH_PERMISSION == null || context.checkSelfPermission(BLUETOOTH_PERMISSION) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * The Class of Device of the Bluetooth device at [address], null without the permission. Without
+     * BLUETOOTH_CONNECT, Android 14+ also anonymises the address ("XX:XX:XX:XX:12:34"), which
+     * getRemoteDevice rejects, so the permission check only saves a doomed lookup there.
+     */
+    @SuppressLint("MissingPermission") // canReadBluetoothClass checks it.
+    private fun bluetoothClass(address: String?): Int? {
+        val context = appContext ?: return null
+        if (address.isNullOrBlank() || !canReadBluetoothClass(context)) return null
+        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return null
+        return runCatching { adapter.getRemoteDevice(address).bluetoothClass?.deviceClass }.getOrNull()
     }
 
     /** How the system tends to route media: a headset over the speaker, the speaker last. */
     private fun priority(kind: Kind): Int = when (kind) {
-        Kind.Bluetooth -> 4
-        Kind.Usb -> 3
-        Kind.Wired -> 2
-        Kind.Other -> 1
+        Kind.Bluetooth -> 5
+        Kind.Usb -> 4
+        Kind.Wired -> 3
+        Kind.Hdmi -> 2
+        Kind.Dock -> 1
         Kind.Phone -> 0
     }
 }
