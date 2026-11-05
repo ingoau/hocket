@@ -32,6 +32,7 @@ export const SK = {
   displayAlbumTrackArtists: "display.albumTrackArtists",
   /** Developer mode: detailed logging, and the shortcut that opens developer diagnostics. Device-local. */
   developerMode: "developer.mode",
+  headphoneHandoff: "connect.headphone_handoff",
   syncEnabled: "sync.enabled",
   connectCoordinatorUrl: "connect.coordinatorUrl",
   connectLanDiscovery: "connect.lanDiscovery",

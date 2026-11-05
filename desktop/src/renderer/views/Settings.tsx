@@ -775,6 +775,7 @@ function Advanced() {
   const chord = raw ? parseChord(raw) : undefined;
   return (
     <>
+      <Toggle anchor="headphoneHandoff" settingKey={SK.headphoneHandoff} title={t("settings.headphoneHandoff")} desc={t("settings.headphoneHandoffDesc")} />
       <Toggle anchor="developerMode" settingKey={SK.developerMode} title={t("settings.developerMode")} desc={t("settings.developerModeDesc", { shortcut: chord ? formatChord(chord, platform) : "—" })} />
       <Row anchor="developerOpen" title={t("settings.developerOpen")} desc={t("settings.developerOpenDesc")}>
         <button type="button" className="btn" onClick={() => navigate({ view: "developer" })} data-testid="open-developer"><Icon name="bug" size={16} /> {t("settings.developerOpen")}</button>

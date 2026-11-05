@@ -30,6 +30,7 @@ import { handOnFocus } from "./lib/focus";
 import { loadAmll } from "./lib/amll";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ReportUploadBar } from "./components/ReportUploadBar";
+import { useHeadphoneWatch } from "./lib/headphone-watch";
 
 // One retry: React.lazy keeps a failed import for good, which would leave fullscreen broken.
 const loadFullscreen = () => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer }));
@@ -51,6 +52,7 @@ export function App() {
   const narrow = useMediaQuery(NARROW);
   const loadedFs = useFullscreenChunk(ready, fullscreen);
   useLyricPlayerPreload();
+  useHeadphoneWatch();
   // The fullscreen player makes the rest of the window inert: if it fails it closes (the
   // window works again) and the next open starts afresh.
   const [fsFailures, setFsFailures] = useState(0);

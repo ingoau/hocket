@@ -707,6 +707,8 @@ export class FakeCore implements CoreHandle {
         for (const d of this.devices) if (!d.isSelf) d.ready = false;
         this.emit({ type: "handoffPickerChanged", data: { open: false, targets: [] } });
         return;
+      case "headphonesConnected":
+        return;
       case "handoffTo":
         this.handoffTo(cmd.data.device_id);
         return;
@@ -2194,6 +2196,7 @@ export class FakeCore implements CoreHandle {
       ["library.pins", [], "accountSynced"],
       ["shortcuts", {}, "deviceLocal"],
       ["developer.mode", false, "deviceLocal"],
+      ["connect.headphone_handoff", false, "deviceLocal"],
       ["sync.enabled", true, "deviceLocal"],
       ["connect.coordinatorUrl", null, "deviceLocal"],
       ["connect.lanDiscovery", true, "deviceLocal"],
