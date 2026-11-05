@@ -87,9 +87,12 @@ pub const LAN_SETTLE_MS: f64 = 5_000.0;
 /// in the room.
 const PING_INTERVAL_MS: f64 = 5_000.0;
 /// Cadence with the battery saver's `SlowSync` on and other devices around:
-/// the radio still idles between beats more often, and clock drift over
-/// 15 s (or 45 s) is a few ms at most, far inside
-/// [`RESYNC_TOLERANCE_MS`](crate::media_session::RESYNC_TOLERANCE_MS).
+/// the radio idles between beats more often. The offset estimate only uses
+/// samples from the last [`SAMPLE_MAX_AGE_MS`](crate::connect::clock::SAMPLE_MAX_AGE_MS)
+/// (or the latest one), so it is at most one period old: at a worst-case
+/// relative crystal drift of ~100 ppm that is ~1.5 ms at 15 s (~4.5 ms at
+/// the solo 45 s, re-measured by a fresh burst the moment anyone joins),
+/// well inside [`RESYNC_TOLERANCE_MS`](crate::media_session::RESYNC_TOLERANCE_MS).
 pub const SLOW_SYNC_CADENCE_MS: f64 = 15_000.0;
 /// Cadence while nobody else is in the room: a cellular radio drops to idle
 /// about 10 s after the last packet, so 5 s keepalives would hold it awake
@@ -1040,6 +1043,11 @@ impl Engine {
     /// [`LEASE_DURATION_MS`] while we keep a slower cadence).
     pub fn held_window_ms(&self) -> Option<f64> {
         self.held.as_ref().map(|h| h.window_ms)
+    }
+
+    /// Whether the battery saver's `SlowSync` is on ([`Input::SetSlowSync`]).
+    pub fn slow_sync(&self) -> bool {
+        self.cfg.slow_sync
     }
 
     /// The keepalive cadence pings and heartbeats run at right now.
@@ -3086,6 +3094,9 @@ impl Engine {
             // A fresh room holds us to the normal cadence until told otherwise.
             self.cadence_announced = PING_INTERVAL_MS;
             self.cadence_acked = PING_INTERVAL_MS;
+            if let Some(h) = &mut self.held {
+                h.reset_window();
+            }
             self.send_ping();
             self.rebase_stamp();
             self.restamp_on_grant = self.held.is_some().then_some(false);

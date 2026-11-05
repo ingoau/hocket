@@ -20,7 +20,7 @@ use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::diagnostics;
 use crate::connect::lease::{
     cadence_slack_ms, clamp_cadence, lease_window_ms, LeaseError, LeaseEvent, LeaseMachine,
-    HEARTBEAT_INTERVAL_MS,
+    HEARTBEAT_INTERVAL_MS, LEASE_DURATION_MS,
 };
 use crate::connect::replica::{new_replica, same_start, ReplicaExt, ScrobbleClaim};
 use crate::connect::wire::{
@@ -476,15 +476,6 @@ impl Room {
             self.out.push(RoomOutput::ReplicaChanged);
         }
         std::mem::take(&mut self.out)
-    }
-
-    /// When a member other than the loopback was last heard from.
-    pub fn last_member_seen(&self) -> Option<EpochMs> {
-        self.members
-            .iter()
-            .filter(|m| m.peer != LOOPBACK)
-            .map(|m| m.last_seen)
-            .fold(None, |acc, t| Some(acc.map_or(t, |a: EpochMs| a.max(t))))
     }
 
     /// Whether a member other than the loopback was heard from within
@@ -1010,6 +1001,19 @@ impl Room {
         }
         device.is_self = false;
         device.last_seen = now;
+        // An owner alone until now renewed for its long solo window. It hears
+        // of this join through the presence below, drops to the normal
+        // cadence and renews within a beat, so the normal window is enough
+        // from here; one that died alone lapses 20 s after the join instead
+        // of up to 100 s, and the joiner can play.
+        if self
+            .lease
+            .live_owner(now)
+            .is_some_and(|owner| owner != &device.id)
+            && self.lease.cap_expiry(now + LEASE_DURATION_MS)
+        {
+            self.replica.set_lease(self.lease.lease().clone(), now);
+        }
         self.admitted_any = true;
         self.replica.touch_device(&device, now);
         // A second Hello on the same socket re-admits rather than duplicates.
@@ -2613,6 +2617,45 @@ mod tests {
         clock.0.store(31_000, Ordering::SeqCst);
         let outs = r.handle(RoomInput::Tick);
         assert!(outs.contains(&RoomOutput::Close("p1".into())));
+    }
+
+    #[test]
+    fn company_shortens_a_solo_owners_long_window() {
+        let solo_owner = || {
+            let (mut r, clock) = room();
+            join(&mut r, "p1", "a");
+            r.handle(RoomInput::Message(
+                "p1".into(),
+                WireMessage::new(Msg::Cadence {
+                    interval_ms: 45_000.0,
+                }),
+            ));
+            r.handle(RoomInput::Message(
+                "p1".into(),
+                WireMessage::new(Msg::LeaseClaim {
+                    epoch_expected: None,
+                    takeover: false,
+                    sent_at: 1_000.0,
+                }),
+            ));
+            assert_eq!(r.lease().expires_at, 101_000.0);
+            clock.0.store(11_000, Ordering::SeqCst);
+            (r, clock)
+        };
+        // The owner on a new socket is no company.
+        let (mut r, _) = solo_owner();
+        join(&mut r, "p3", "a");
+        assert_eq!(r.lease().expires_at, 101_000.0);
+        // Another device is: the window drops to the normal one from now,
+        // and the joiner is welcomed with it.
+        let (mut r, clock) = solo_owner();
+        let outs = join(&mut r, "p2", "b");
+        assert_eq!(r.lease().expires_at, 31_000.0);
+        assert!(sent(&outs, "p2").iter().any(|m| matches!(m, Msg::Welcome { replica: Some(rep), .. } if rep.transport_lease.expires_at == 31_000.0)));
+        // An owner that never answers lapses then, and b may play.
+        clock.0.store(31_000, Ordering::SeqCst);
+        r.handle(RoomInput::Tick);
+        assert_eq!(r.live_owner(), None);
     }
 
     #[test]

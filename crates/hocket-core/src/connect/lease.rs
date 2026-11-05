@@ -260,6 +260,20 @@ impl LeaseMachine {
         }
     }
 
+    /// Bring a live lease's expiry forward to `at` if it runs later. Returns
+    /// whether it moved. The owner is not told directly: the room does this
+    /// when the owner's reason for a long window (being alone) ended, which
+    /// the owner learns from the presence change and answers with a
+    /// normal-cadence heartbeat well inside the shortened window.
+    pub fn cap_expiry(&mut self, at: EpochMs) -> bool {
+        if self.lease.owner.is_some() && self.lease.expires_at > at {
+            self.lease.expires_at = at;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Time until the lease lapses, if held.
     pub fn remaining_ms(&self, now: EpochMs) -> Option<f64> {
         self.lease
@@ -349,6 +363,13 @@ impl HeldLease {
                 .unwrap_or(LEASE_DURATION_MS);
         }
         self.in_flight.retain(|(t, _)| *t > sent_at);
+    }
+
+    /// A different room took us in: whatever window the last one granted
+    /// says nothing about this one, so until it answers, count the shortest.
+    pub fn reset_window(&mut self) {
+        self.window_ms = LEASE_DURATION_MS;
+        self.in_flight.clear();
     }
 
     /// Whether the window has closed without an ack.

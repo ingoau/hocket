@@ -45,7 +45,8 @@ pub const COORDINATOR_NODE: &str = "coordinator";
 /// declares itself detached after `LEASE_DURATION - OWNER_LAPSE_MARGIN`
 /// (18 s) plus a tick, so 20 s is the true bound. An owner that renewed at
 /// a slower cadence (alone in its room, or `SlowSync`) was granted a longer
-/// window and gets the difference on top.
+/// window and gets the difference on top: the window as the granting room
+/// sent it (`World::granted`), not as the owner believes it.
 pub const STALE_OWNER_GRACE_MS: f64 = 20_000.0;
 pub const COORDINATOR_URL: &str = "wss://coordinator.example/";
 
@@ -239,6 +240,9 @@ pub struct World {
     coordinator_down: bool,
     /// Since when a device has held an epoch the room already moved past.
     stale_owner_since: Vec<Option<EpochMs>>,
+    /// The last lease window a room granted per (owner, epoch): the grant's
+    /// `expiresAt` less the granting room's clock when it was sent.
+    granted: BTreeMap<(DeviceId, u32), f64>,
     pub violations: Vec<String>,
     pub events: u64,
     /// `Hello` frames sent to LAN peers (all checked to carry no credential).
@@ -284,6 +288,7 @@ impl World {
             device_rev_watermark: vec![None; cfg.devices + usize::from(cfg.hostile)],
             stale_owner_since: vec![None; cfg.devices + usize::from(cfg.hostile)],
             coordinator_down: cfg.topology == Topology::LanThenCoordinator,
+            granted: BTreeMap::new(),
             violations: vec![],
             events: 0,
             lan_hellos: 0,
@@ -478,6 +483,15 @@ impl World {
         }
     }
 
+    fn record_grant(&mut self, msg: &Msg, room_now: EpochMs) {
+        if let Msg::LeaseGranted { lease, .. } = msg {
+            if let Some(owner) = &lease.owner {
+                self.granted
+                    .insert((owner.clone(), lease.epoch), lease.expires_at - room_now);
+            }
+        }
+    }
+
     fn deliver(&mut self, node: &str, ev: NetEvent) {
         if node == COORDINATOR_NODE {
             let input = match ev {
@@ -519,6 +533,7 @@ impl World {
         for o in outs {
             match o {
                 RoomOutput::Send(peer, msg) => {
+                    self.record_grant(&msg.msg, now);
                     self.net
                         .send(now, &mut self.rng, COORDINATOR_NODE, &peer, msg)
                 }
@@ -589,6 +604,9 @@ impl World {
                         }
                         DeviceEffect::Send { peer, msg } => {
                             self.check_outbound_frame(i, &peer, &msg);
+                            let room_now =
+                                crate::util::Clock::now_ms(self.devices[i].clock.as_ref());
+                            self.record_grant(&msg.msg, room_now);
                             self.net.send(now, &mut self.rng, &id, &peer, msg)
                         }
                         DeviceEffect::Close { peer } => self.net.close(now, &id, &peer),
@@ -1038,12 +1056,13 @@ impl World {
             }
             if stale {
                 let since = *self.stale_owner_since[i].get_or_insert(now);
-                let window = self.devices[i]
+                let window = d
                     .engine
-                    .held_window_ms()
+                    .held_epoch()
+                    .and_then(|e| self.granted.get(&(d.id.clone(), e)).copied())
                     .unwrap_or(crate::connect::lease::LEASE_DURATION_MS);
-                let grace =
-                    STALE_OWNER_GRACE_MS + (window - crate::connect::lease::LEASE_DURATION_MS);
+                let grace = STALE_OWNER_GRACE_MS
+                    + (window - crate::connect::lease::LEASE_DURATION_MS).max(0.0);
                 if now - since > grace {
                     self.violations.push(format!(
                         "[{now:.0}] {} still owns transport {:.0} ms after the room moved to another epoch",
