@@ -5,7 +5,7 @@
 // show the queue (without writing the remembered view) so the drop can pick a
 // place; the player comes back when the drag ends.
 import { useEffect, type DragEvent as ReactDragEvent } from "react";
-import type { ActionTarget, Command, QueueView } from "@core/api";
+import type { ActionTarget, Command, QueueEntry, QueueView } from "@core/api";
 import { SK } from "@shared/settings-keys";
 import { useApp } from "../store/app";
 import { settingValue } from "../store/reducer";
@@ -184,6 +184,37 @@ export function placeBlock(order: readonly string[], dropped: readonly string[],
     prev = key;
   }
   return moves;
+}
+
+/**
+ * The queue as it will be once the core has applied `moves` (sent for a pointer reorder),
+ * shown until its answer arrives. The new order only comes back with the next queue
+ * update, a round trip later, while dnd-kit drops its drag transforms at once: without
+ * this the rows snap back to the old order, then animate a second time into the new
+ * one (R-20261104-74r7). Left as it is when the window doesn't start by the current
+ * entry, since the group's border could then lie outside it.
+ */
+export function previewMoves(q: QueueView, moves: readonly QueueMove[], section: boolean): QueueView {
+  if (!moves.length) return q;
+  const from = pointerIndex(q) + (q.currentIndex === undefined ? 0 : 1) - q.windowStart;
+  if (from < 0) return q;
+  const { group, rest } = queueSections(q);
+  const byKey = new Map(q.entries.slice(from).map((e) => [e.item.key, e]));
+  const { order } = queueDragLayout(group.map((e) => e.item.key), rest.map((e) => e.item.key), section, q.groupCount);
+  const work = moves.reduce((o, m) => (o.includes(m.key) ? applyMove(o, m) : o), order);
+  const upcoming = work.filter((k) => k !== GROUP_END).map((k) => byKey.get(k));
+  if (upcoming.some((e) => !e) || upcoming.length !== byKey.size) return q;
+  const head = work.indexOf(GROUP_END);
+  const groupCount = head >= 0 ? head : q.groupCount;
+  // A moved row's membership follows where it lands (its marker reads it).
+  const moved = new Set(moves.map((m) => m.key));
+  const entries = (upcoming as QueueEntry[]).map((e, i) => (moved.has(e.item.key) ? { ...e, inGroup: i < groupCount } : e));
+  return { ...q, entries: [...q.entries.slice(0, from), ...entries], groupCount };
+}
+
+/** Whether two views list the same entries in the same order with the same group. */
+export function sameOrder(a: QueueView, b: QueueView): boolean {
+  return a === b || (a.groupCount === b.groupCount && a.entries.length === b.entries.length && a.entries.every((e, i) => e.item.key === b.entries[i]!.item.key));
 }
 
 /** Alt+Up/Down: one place up or down, crossing the "Next from" heading counts as a step. */

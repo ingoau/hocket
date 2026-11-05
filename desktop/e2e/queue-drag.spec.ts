@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { ElectronApplication, Locator, Page } from "@playwright/test";
 import { completeSetup, expect, html5DragEnd, html5DragOver, html5DragStart, html5Drop, openPlace, playFirstAlbum, test } from "./fixtures";
 
 /** Titles of the queue rows of one kind, in order. */
@@ -15,6 +15,26 @@ async function playNextSong(page: Page, index: number): Promise<string> {
   await page.getByRole("menuitem", { name: /play next/i }).click();
   await expect(page.getByTestId("queue-row-group").first()).toContainText(title);
   return title;
+}
+
+/**
+ * Hold events from main back: the real core answers a reorder a round trip later, one
+ * queue update per move, while the FakeCore answers within a frame, which would hide
+ * anything shown in between. Each event goes `step` ms after the one before, in order.
+ */
+async function holdEvents(app: ElectronApplication, ms = 250, step = 60): Promise<void> {
+  await app.evaluate(({ BrowserWindow }, { delay, gap }) => {
+    let next = 0;
+    for (const w of BrowserWindow.getAllWindows()) {
+      const send = w.webContents.send.bind(w.webContents);
+      w.webContents.send = (...args: Parameters<typeof send>) => {
+        next = Math.max(next + gap, Date.now() + delay);
+        setTimeout(() => {
+          if (!w.isDestroyed()) send(...args);
+        }, next - Date.now());
+      };
+    }
+  }, { delay: ms, gap: step });
 }
 
 test.describe("dragging onto the queue", () => {
@@ -222,5 +242,75 @@ test.describe("dragging onto the queue", () => {
     await page.mouse.up();
     await expect.poll(() => titles(page, "group")).toEqual([rest[1], rest[2], queued]);
     expect(await titles(page, "rest")).toEqual([rest[0], ...rest.slice(3)]);
+  });
+
+  test("a dropped queue item stays where it was dropped instead of snapping back and animating again (R-20261104-74r7)", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    const first = page.getByTestId("queue-row-rest").first();
+    const third = page.getByTestId("queue-row-rest").nth(2);
+    await expect(third).toBeVisible();
+    // By title: the FakeCore may re-key context items on a change.
+    const title = (await first.locator(".t1").textContent())!;
+    const a = (await first.boundingBox())!;
+    const b = (await third.boundingBox())!;
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 16 });
+    // Watch the dragged row every frame from the drop on.
+    await page.evaluate((name) => {
+      const w = window as unknown as { __tops: number[] };
+      w.__tops = [];
+      const start = performance.now();
+      const tick = () => {
+        const el = Array.from(document.querySelectorAll("[data-testid='queue-timeline'] .qrow")).find((r) => r.querySelector(".t1")?.textContent === name);
+        if (el) w.__tops.push(el.getBoundingClientRect().top);
+        if (performance.now() - start < 1000) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }, title);
+    await holdEvents(hocket.app);
+    await page.mouse.up();
+    await page.waitForTimeout(1100);
+    await expect(page.getByTestId("queue-row-rest").nth(2).locator(".t1")).toHaveText(title);
+    const tops = await page.evaluate(() => (window as unknown as { __tops: number[] }).__tops);
+    const final = tops[tops.length - 1]!;
+    // Dropped on the third row's slot, it never travels back toward the first's.
+    expect(tops.filter((t) => Math.abs(t - final) > a.height / 2)).toEqual([]);
+  });
+
+  test("a dragged selection shows its new order from the drop on, not one row at a time (R-20261104-74r7)", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    const before = await titles(page, "rest");
+    const rows = page.getByTestId("queue-row-rest");
+    await rows.nth(0).click();
+    await rows.nth(1).click({ modifiers: ["Shift"] });
+    await expect(page.locator(".qrow.rest.selected")).toHaveCount(2);
+    const a = (await rows.nth(0).locator(".text").boundingBox())!;
+    const b = (await rows.nth(3).locator(".text").boundingBox())!;
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 16 });
+    await holdEvents(hocket.app);
+    await page.mouse.up();
+    // The order of the rows every frame from the drop on (one move per row reaches the core).
+    await page.evaluate(() => {
+      const w = window as unknown as { __orders: string[][] };
+      w.__orders = [];
+      const start = performance.now();
+      const tick = () => {
+        w.__orders.push(Array.from(document.querySelectorAll("[data-testid='queue-row-rest'] .t1")).map((e) => e.textContent ?? ""));
+        if (performance.now() - start < 1000) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    await page.waitForTimeout(1100);
+    const after = [before[2], before[3], before[0], before[1], ...before.slice(4)];
+    expect(await titles(page, "rest")).toEqual(after);
+    const orders = await page.evaluate(() => (window as unknown as { __orders: string[][] }).__orders);
+    expect(orders.filter((o) => o.join("|") !== after.join("|"))).toEqual([]);
   });
 });

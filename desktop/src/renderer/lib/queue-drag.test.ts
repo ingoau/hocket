@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { QueueEntry, QueueView } from "@core/api";
 import { EMPTY_QUEUE } from "../store/reducer";
-import { GROUP_END, applyMove, dropSlot, insertAnchor, insertTracksCommand, libraryDropPlan, parseLibraryTarget, placeBlock, queueDragLayout, sortableOrder, stepMove, type QueueMove } from "./queue-drag";
+import { GROUP_END, applyMove, dropSlot, insertAnchor, insertTracksCommand, libraryDropPlan, parseLibraryTarget, placeBlock, previewMoves, queueDragLayout, sameOrder, sortableOrder, stepMove, type QueueMove } from "./queue-drag";
 
 describe("parseLibraryTarget", () => {
   it("reads a tracks, albums, artists or playlists target", () => {
@@ -200,5 +200,68 @@ describe("insertTracksCommand", () => {
     expect(insertAnchor(moved, "unloaded")).toBe("unloaded");
     expect(insertTracksCommand(moved, "s1", ["x"], { after: "h0", in_group: true })).toEqual({ type: "insertTracks", data: { server_id: "s1", track_ids: ["x"], after: "g0", in_group: true } });
     expect(insertTracksCommand(moved, "s1", [], { after: "r1", in_group: false })).toBeUndefined();
+  });
+});
+
+describe("previewMoves", () => {
+  const entry = (key: string, inGroup = false): QueueEntry => ({
+    item: { key, trackId: `t-${key}`, source: { type: "context", data: { index: 0 } } },
+    track: { id: `t-${key}`, serverId: "s", title: key, durationMs: 1, rating: 0, loved: false, offline: "none" },
+    ...(inGroup ? { inGroup: true } : {}),
+  });
+  /** h0 | c | g0 g1 (group) | r0 r1 r2, windowed from `start`. */
+  const view = (start = 0): QueueView => {
+    const all = [entry("h0"), entry("c"), entry("g0", true), entry("g1", true), entry("r0"), entry("r1"), entry("r2")];
+    return { ...EMPTY_QUEUE, entries: all.slice(start), windowStart: start, total: all.length, historyCount: 1, currentIndex: 1, groupCount: 2, totalUpcoming: 5, current: all[1] };
+  };
+  const keys = (q: QueueView) => q.entries.map((e) => e.item.key);
+
+  it("reorders the rest", () => {
+    const q = previewMoves(view(), [{ key: "r0", after: "r2", in_group: false }], true);
+    expect(keys(q)).toEqual(["h0", "c", "g0", "g1", "r1", "r2", "r0"]);
+    expect(q.groupCount).toBe(2);
+  });
+
+  it("moves the group's border when a row joins or leaves it", () => {
+    const joined = previewMoves(view(), [{ key: "r1", after: "g0", in_group: true }], true);
+    expect(keys(joined)).toEqual(["h0", "c", "g0", "r1", "g1", "r0", "r2"]);
+    expect(joined.groupCount).toBe(3);
+    expect(joined.entries[3]!.inGroup).toBe(true);
+    const left = previewMoves(view(), [{ key: "g0", after: "r0", in_group: false }], true);
+    expect(keys(left)).toEqual(["h0", "c", "g1", "r0", "g0", "r1", "r2"]);
+    expect(left.groupCount).toBe(1);
+    expect(left.entries[4]!.inGroup).toBe(false);
+  });
+
+  it("applies a block of moves in order, matching placeBlock", () => {
+    const order = ["g0", "g1", GROUP_END, "r0", "r1", "r2"];
+    const moves = placeBlock(order, ["g0", "g1", GROUP_END, "r1", "r2", "r0"], "r0", ["r0"], "c");
+    expect(keys(previewMoves(view(), moves, true))).toEqual(["h0", "c", "g0", "g1", ...apply(["r0", "r1", "r2"], moves)]);
+  });
+
+  it("works on a window that starts at the current entry or later in history", () => {
+    expect(keys(previewMoves(view(1), [{ key: "r2", after: "c", in_group: true }], true))).toEqual(["c", "r2", "g0", "g1", "r0", "r1"]);
+  });
+
+  it("changes nothing on a queue that already holds the moves, so they can stay applied until it does", () => {
+    // r0 and r1 dragged together into the group after g0.
+    const moves: QueueMove[] = [{ key: "r0", after: "g0", in_group: true }, { key: "r1", after: "r0", in_group: true }];
+    const done = previewMoves(view(), moves, true);
+    // The core's answer to the first move only, then to both.
+    const half = previewMoves(view(), moves.slice(0, 1), true);
+    expect(sameOrder(previewMoves(half, moves, true), done)).toBe(true);
+    expect(sameOrder(previewMoves(half, moves, true), half)).toBe(false);
+    expect(sameOrder(previewMoves(done, moves, true), done)).toBe(true);
+    expect(done.entries.map((e) => e.item.key)).toEqual(["h0", "c", "g0", "r0", "r1", "g1", "r2"]);
+    expect(done.groupCount).toBe(4);
+    const joined = previewMoves(view(), [{ key: "r1", after: "g0", in_group: true }], true);
+    expect(sameOrder(previewMoves(joined, [{ key: "r1", after: "g0", in_group: true }], true), joined)).toBe(true);
+  });
+
+  it("leaves the queue alone with nothing to apply or a window past the current entry", () => {
+    const q = view();
+    expect(previewMoves(q, [], true)).toBe(q);
+    const late = view(3);
+    expect(previewMoves(late, [{ key: "r0", after: "r2", in_group: false }], true)).toBe(late);
   });
 });
