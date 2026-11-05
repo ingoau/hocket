@@ -150,19 +150,29 @@ internal class SkipCarousel {
             orientation = Orientation.Horizontal,
             enabled = enabled,
             onDragStarted = {
-                // A skip still settling: it is done now (sent once), and this drag carries on
-                // from its page.
-                pending?.let { finishNow(client, scope, drag, it) }
-                settle.stop()
-                drag.raw = settle.value
+                drag.generation++
                 drag.crossed = false
-                follow = settle.value
-                following = true
+                if (following) {
+                    // The last drag's release is still waiting on a rebase (and now never acts):
+                    // this one carries on from where the finger is.
+                    drag.raw = follow
+                } else {
+                    // A skip still settling: it is done now (sent once), and this drag carries on
+                    // from its page.
+                    pending?.let { finishNow(client, scope, drag, it) }
+                    settle.stop()
+                    drag.raw = settle.value
+                    follow = settle.value
+                    following = true
+                }
             },
             onDragStopped = { v ->
+                val generation = drag.generation
                 scope.launch {
                     // A finished skip's page becomes the current one first (see [finishNow]).
                     rebase?.join()
+                    // A newer drag started meanwhile: its own release decides.
+                    if (drag.generation != generation) return@launch
                     // The finger's position hands over to the spring.
                     settle.snapTo(follow)
                     following = false
@@ -262,8 +272,8 @@ internal class SkipCarousel {
         }
     }
 
-    /** The finger's own travel in this drag (px), and whether it is past the commit point. */
-    private class DragTrack { var raw = 0f; var crossed = false }
+    /** The finger's own travel in this drag (px), whether it is past the commit point, and which drag it is. */
+    private class DragTrack { var raw = 0f; var crossed = false; var generation = 0 }
 
     /** Next, or back to the song before this one (never Previous's restart of this one). */
     private fun skip(client: CoreClient, forward: Boolean) = client.dispatch(if (forward) Command.Next else Command.PreviousTrack)
