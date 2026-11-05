@@ -444,6 +444,12 @@ impl Actor {
                 self.picker_targets = targets.clone();
                 self.emit(Event::HandoffPickerChanged { open, targets });
             }
+            Output::HeadphonePull { from, from_name } => {
+                self.toast(
+                    format!("Moved from {from_name}"),
+                    Some(("Undo".into(), Command::HandoffTo { device_id: from })),
+                );
+            }
             Output::ResumeOffer(draft) => {
                 self.resume_offer = draft.map(|d| ResumeOffer {
                     device_name: d.device_name,

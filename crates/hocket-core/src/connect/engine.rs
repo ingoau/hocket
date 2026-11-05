@@ -129,6 +129,10 @@ const ADVERT_MIN_INTERVAL_MS: f64 = 10_000.0;
 /// know the request, an owner that is gone or wedged) this device takes the
 /// lease over itself, from the owner's last stamp.
 pub const PULL_FALLBACK_MS: f64 = 3_000.0;
+/// Headphone handoff (beta): headphones connecting here pull playback from a
+/// device that is playing, or that paused at most this long ago (its output
+/// went away, most likely the same headphones leaving it).
+pub const HEADPHONE_PULL_WINDOW_MS: f64 = 15_000.0;
 
 /// Diagnostics answer parts waiting to be sent, at most (two whole answers).
 const DIAGNOSTICS_QUEUE_PARTS: usize = 2 * diagnostics::MAX_PARTS as usize;
@@ -315,6 +319,12 @@ pub enum Input {
     HandoffTo {
         device_id: DeviceId,
     },
+    /// Headphones connected to this device (headphone handoff, beta; the
+    /// actor checks the setting). Pulls playback here when another device
+    /// plays, or paused within [`HEADPHONE_PULL_WINDOW_MS`].
+    HeadphonesConnected {
+        name: Option<String>,
+    },
     PreBufferReady {
         key: QueueKey,
     },
@@ -468,6 +478,11 @@ pub enum Output {
     },
     /// This device lost or gave up transport: pause, keep the document.
     ReleaseTransport,
+    /// Headphones connecting here pulled playback from `from`.
+    HeadphonePull {
+        from: DeviceId,
+        from_name: String,
+    },
     /// Remote control for the transport owner (this device).
     TransportCommand(TransportCommand),
     /// Prime this track's first seconds into the stream cache here.
@@ -1412,6 +1427,7 @@ impl Engine {
             Input::OpenPicker => self.open_picker(),
             Input::ClosePicker => self.close_picker(true),
             Input::HandoffTo { device_id } => self.handoff_to(device_id),
+            Input::HeadphonesConnected { name } => self.on_headphones_connected(name),
             Input::PreBufferReady { key } => self.on_prebuffer_result(key, true),
             Input::PreBufferFailed { key } => self.on_prebuffer_result(key, false),
             Input::ResumeHere => {
@@ -4222,6 +4238,59 @@ impl Engine {
             });
         }
         self.emit_lease();
+    }
+
+    fn on_headphones_connected(&mut self, name: Option<String>) {
+        let name = name.unwrap_or_else(|| "headphones".into());
+        if self.held.is_some() {
+            self.log("debug", format!("{name} connected: already playing here"));
+            return;
+        }
+        let Some(owner) = self.remote_owner() else {
+            self.log(
+                "debug",
+                format!("{name} connected: nothing plays elsewhere"),
+            );
+            return;
+        };
+        let Some(stamp) = self
+            .last_remote_stamp
+            .as_ref()
+            .filter(|s| s.device_id == owner)
+        else {
+            self.log(
+                "debug",
+                format!("{name} connected: no stamp from the owner"),
+            );
+            return;
+        };
+        let since = self.now_session_ms() - stamp.position.taken_at;
+        if !stamp.position.is_playing && since > HEADPHONE_PULL_WINDOW_MS {
+            self.log(
+                "debug",
+                format!(
+                    "{name} connected: the owner paused {:.0} s ago",
+                    since / 1000.0
+                ),
+            );
+            return;
+        }
+        let from_name = self
+            .devices
+            .iter()
+            .find(|d| d.id == owner)
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| stamp.device_name.clone());
+        self.log(
+            "info",
+            format!("{name} connected: pulling playback from {from_name}"),
+        );
+        let me = self.cfg.device.id.clone();
+        self.handoff_to(me);
+        self.out.push(Output::HeadphonePull {
+            from: owner,
+            from_name,
+        });
     }
 
     /// The device the room last named as transport owner, when that is not

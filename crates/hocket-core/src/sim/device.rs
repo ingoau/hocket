@@ -603,6 +603,9 @@ impl SimDevice {
             | Output::DiagnosticsReply(_)
             | Output::ReplicaChanged(_) => {}
             Output::Log { level, message } => self.note(format!("{level}: {message}")),
+            Output::HeadphonePull { from, .. } => {
+                self.note(format!("headphones pulled from {from}"))
+            }
         }
     }
 

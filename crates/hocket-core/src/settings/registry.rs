@@ -139,6 +139,9 @@ pub mod keys {
     /// Developer mode: detailed (debug) logging into the capture buffer, and the shake or
     /// keybind that opens the developer diagnostics page.
     pub const DEVELOPER_MODE: &str = "developer.mode";
+    /// Headphone handoff (beta): headphones connecting to this device pull
+    /// playback from another device that plays or just paused.
+    pub const CONNECT_HEADPHONE_HANDOFF: &str = "connect.headphone_handoff";
     pub const SYNC_ENABLED: &str = "sync.enabled";
     pub const CONNECT_COORDINATOR_URL: &str = "connect.coordinatorUrl";
     pub const CONNECT_LAN_DISCOVERY: &str = "connect.lanDiscovery";
@@ -731,6 +734,9 @@ pub static REGISTRY: &[SettingDef] = &[
     }),
     def(PEBBLE_AUTO_OPEN, Local, SettingKind::Bool, || json!(false)),
     def(DEVELOPER_MODE, Local, SettingKind::Bool, || json!(false)),
+    def(CONNECT_HEADPHONE_HANDOFF, Local, SettingKind::Bool, || {
+        json!(false)
+    }),
     def(SYNC_ENABLED, Local, SettingKind::Bool, || json!(true)),
     json_def(CONNECT_COORDINATOR_URL, Local, || Value::Null, url_valid),
     def(

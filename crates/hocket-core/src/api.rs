@@ -2583,6 +2583,12 @@ pub enum Command {
     HandoffTo {
         device_id: DeviceId,
     },
+    /// Headphones (Bluetooth or wired) connected to this device. With headphone
+    /// handoff on (beta, `connect.headphone_handoff`), pulls playback here
+    /// from a device that plays or just paused.
+    HeadphonesConnected {
+        name: Option<String>,
+    },
     /// Accept the dormant resume offer and take transport here.
     ResumeHere,
     DismissResumeOffer,
