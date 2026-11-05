@@ -1156,6 +1156,8 @@ async fn headphones_pull_a_play_that_paused_moments_ago() {
     TestCore::run_all_for(&[&a, &b], 5_000.0).await;
     assert!(b.backend.is_playing(), "b resumed the paused play");
     assert!(!a.backend.is_playing());
+    // Undo would start it out loud on a: no Undo for a paused play.
+    assert_eq!(moved_toast(&b).expect("moved toast").action_label, None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1174,4 +1176,22 @@ async fn headphones_leave_a_long_paused_play_alone() {
         "a keeps the paused play"
     );
     assert!(moved_toast(&b).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_connect_reported_twice_pulls_once() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    headphones_connect(&b).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(b.backend.is_playing());
+    let toasts = b
+        .events
+        .all()
+        .into_iter()
+        .filter(|e| matches!(e, Event::Toast { toast } if toast.message.starts_with("Moved from")))
+        .count();
+    assert_eq!(toasts, 1);
 }

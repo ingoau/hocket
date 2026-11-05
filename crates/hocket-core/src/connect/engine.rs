@@ -478,10 +478,12 @@ pub enum Output {
     },
     /// This device lost or gave up transport: pause, keep the document.
     ReleaseTransport,
-    /// Headphones connecting here pulled playback from `from`.
+    /// Headphones connecting here pulled playback from `from`, which was
+    /// playing (or had paused, most likely as the headphones left it).
     HeadphonePull {
         from: DeviceId,
         from_name: String,
+        was_playing: bool,
     },
     /// Remote control for the transport owner (this device).
     TransportCommand(TransportCommand),
@@ -4162,7 +4164,14 @@ impl Engine {
             // pick (this device, to pull playback here, or a third one).
             match self.remote_owner() {
                 Some(owner) if owner == device_id => {
-                    self.log("debug", "handoff target already plays");
+                    // Picking the owner while a pull is pending (Undo on the
+                    // headphone toast) cancels the pull.
+                    if self.pull_since.take().is_some() {
+                        self.pending_take = None;
+                        self.log("debug", "pull cancelled: the owner keeps playing");
+                    } else {
+                        self.log("debug", "handoff target already plays");
+                    }
                 }
                 Some(_) => {
                     self.upstream_send(Msg::HandoffRequest {
@@ -4246,6 +4255,11 @@ impl Engine {
             self.log("debug", format!("{name} connected: already playing here"));
             return;
         }
+        if self.pull_since.is_some() || self.pending_take.is_some() {
+            // One connect often arrives as several events (A2DP, LE audio).
+            self.log("debug", format!("{name} connected: a pull is under way"));
+            return;
+        }
         let Some(owner) = self.remote_owner() else {
             self.log(
                 "debug",
@@ -4257,6 +4271,12 @@ impl Engine {
             .last_remote_stamp
             .as_ref()
             .filter(|s| s.device_id == owner)
+            // A stamp for another item (the queue moved on since) is no play
+            // to pull: the fallback takeover would find nothing either.
+            .filter(|s| {
+                s.key.is_some()
+                    && s.key.as_deref() == self.doc.current.as_ref().map(|c| c.key.as_str())
+            })
         else {
             self.log(
                 "debug",
@@ -4275,6 +4295,7 @@ impl Engine {
             );
             return;
         }
+        let was_playing = stamp.position.is_playing;
         let from_name = self
             .devices
             .iter()
@@ -4290,6 +4311,7 @@ impl Engine {
         self.out.push(Output::HeadphonePull {
             from: owner,
             from_name,
+            was_playing,
         });
     }
 
