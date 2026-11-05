@@ -794,6 +794,9 @@
     <string name="settings_summary_backup">Export · Import · Diagnostics</string>
     <string name="settings_category_advanced">Advanced</string>
     <string name="settings_summary_advanced">Developer mode: %1$s</string>
+    <string name="settings_headphone_handoff">Headphone handoff (beta)</string>
+    <string name="settings_headphone_handoff_body">When headphones connect to this phone while another device is playing, or paused in the last few seconds, move the music here.</string>
+    <string name="settings_search_kw_headphone_handoff">bluetooth earbuds earphones headset transfer move connect</string>
     <string name="settings_developer_mode">Developer mode</string>
     <string name="settings_developer_mode_body">Keep detailed logs on this phone, and shake it (or press Ctrl+Shift+D on a keyboard) to open developer diagnostics.</string>
     <string name="settings_developer_diagnostics">Developer diagnostics</string>

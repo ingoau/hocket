@@ -64,7 +64,7 @@ class SettingsCategoriesTest {
     )
 
     /** The Advanced category: all new. */
-    private val advancedRows = setOf("developer.mode", "developer.open")
+    private val advancedRows = setOf("connect.headphone_handoff", "developer.mode", "developer.open")
 
     /** Registry settings the old page did not show, now in their category. */
     private val added = setOf("queue.section", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",

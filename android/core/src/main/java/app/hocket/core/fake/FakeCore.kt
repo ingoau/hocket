@@ -190,6 +190,7 @@ class FakeCore(
         def(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION, "[]", SettingScope.AccountSynced)
         def(SettingKeys.SYNC_ENABLED, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DEVELOPER_MODE, "false", SettingScope.DeviceLocal)
+        def(SettingKeys.CONNECT_HEADPHONE_HANDOFF, "false", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_COORDINATOR_URL, "null", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_LAN_DISCOVERY, "true", SettingScope.DeviceLocal)
         def(SettingKeys.STORAGE_WARN_THRESHOLD_BYTES, "4294967296.0", SettingScope.DeviceLocal)
@@ -1106,6 +1107,7 @@ class FakeCore(
                 emitDevices()
                 emit(Event.HandoffPickerChanged(EventHandoffPickerChangedInner(false, emptyList())))
             }
+            is Command.HeadphonesConnected -> {}
             is Command.HandoffTo -> {
                 pickerOpen = false
                 transportOwner = c.data.device_id

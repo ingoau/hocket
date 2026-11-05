@@ -128,6 +128,7 @@ val SETTINGS_INDEX: List<SettingEntry> = listOf(
     SettingEntry("backup.export", SettingsCategory.Backup, R.string.settings_export_config, keywords = R.string.settings_search_kw_backup),
     SettingEntry("backup.import", SettingsCategory.Backup, R.string.settings_import_config, keywords = R.string.settings_search_kw_backup),
     SettingEntry("backup.diagnostics", SettingsCategory.Backup, R.string.settings_copy_diagnostics, keywords = R.string.settings_search_kw_diagnostics),
+    SettingEntry("connect.headphone_handoff", SettingsCategory.Advanced, R.string.settings_headphone_handoff, R.string.settings_headphone_handoff_body, R.string.settings_search_kw_headphone_handoff),
     SettingEntry("developer.mode", SettingsCategory.Advanced, R.string.settings_developer_mode, R.string.settings_developer_mode_body, R.string.settings_search_kw_diagnostics),
     SettingEntry("developer.open", SettingsCategory.Advanced, R.string.settings_developer_diagnostics, R.string.settings_developer_diagnostics_body, R.string.settings_search_kw_diagnostics),
 )
