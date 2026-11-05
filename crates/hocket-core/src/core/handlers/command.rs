@@ -304,6 +304,14 @@ impl Actor {
             Command::OpenHandoffPicker => self.engine_input(Input::OpenPicker),
             Command::CloseHandoffPicker => self.engine_input(Input::ClosePicker),
             Command::HandoffTo { device_id } => self.engine_input(Input::HandoffTo { device_id }),
+            Command::HeadphonesConnected { name } => {
+                if self
+                    .settings
+                    .get_bool(crate::settings::keys::CONNECT_HEADPHONE_HANDOFF)
+                {
+                    self.engine_input(Input::HeadphonesConnected { name });
+                }
+            }
             Command::ResumeHere => {
                 self.playback.want_playing = true;
                 self.engine_input(Input::ResumeHere);

@@ -69,6 +69,7 @@ object SettingKeys {
     const val PEBBLE_AUTO_OPEN = "pebble.autoOpen"
     /** Developer mode: detailed logging, and shaking the phone opens developer diagnostics. */
     const val DEVELOPER_MODE = "developer.mode"
+    const val CONNECT_HEADPHONE_HANDOFF = "connect.headphone_handoff"
     const val SYNC_ENABLED = "sync.enabled"
     const val CONNECT_COORDINATOR_URL = "connect.coordinatorUrl"
     const val CONNECT_LAN_DISCOVERY = "connect.lanDiscovery"

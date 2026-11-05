@@ -82,11 +82,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
-/** Advanced: developer mode (detailed logs, shake to open diagnostics) and the developer diagnostics page. */
+/** Advanced: headphone handoff (beta), developer mode (detailed logs, shake to open diagnostics) and the developer diagnostics page. */
 @Composable
 fun AdvancedSettingsScreen(nav: NavHostController) {
     val devMode = setting(SettingKeys.DEVELOPER_MODE)
+    val headphoneHandoff = setting(SettingKeys.CONNECT_HEADPHONE_HANDOFF)
     SubScreen(nav, stringResource(R.string.settings_category_advanced)) {
+        SwitchRow(stringResource(R.string.settings_headphone_handoff), headphoneHandoff.bool ?: false, { headphoneHandoff.setBool(it) }, stringResource(R.string.settings_headphone_handoff_body), headphoneHandoff.scope, tag = "connect.headphone_handoff")
         SwitchRow(stringResource(R.string.settings_developer_mode), devMode.bool ?: false, { devMode.setBool(it) }, stringResource(R.string.settings_developer_mode_body), devMode.scope, tag = "developer.mode")
         SettingRow(stringResource(R.string.settings_developer_diagnostics), stringResource(R.string.settings_developer_diagnostics_body), onClick = { nav.navigate(Route.DeveloperDiagnostics) }, tag = "developer.open") { Chevron() }
     }

@@ -1077,3 +1077,121 @@ async fn skips_made_before_rejoining_after_a_restart_are_kept() {
     leader.core.shutdown().await;
     follower.core.shutdown().await;
 }
+
+async fn play_for_headphones(a: &TestCore, b: &TestCore) {
+    a.run(Command::PlayTracks {
+        server_id: a.server_id.clone(),
+        track_ids: vec!["t0".into(), "t1".into()],
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[a, b], 5_000.0).await;
+    assert!(a.backend.is_playing());
+}
+
+async fn headphone_handoff(c: &TestCore, on: bool) {
+    c.run(Command::SetSetting {
+        key: "connect.headphone_handoff".into(),
+        value: on.to_string(),
+    })
+    .await;
+}
+
+async fn headphones_connect(c: &TestCore) {
+    c.run(Command::HeadphonesConnected {
+        name: Some("Buds".into()),
+    })
+    .await;
+}
+
+fn moved_toast(c: &TestCore) -> Option<Toast> {
+    c.events.all().into_iter().find_map(|e| match e {
+        Event::Toast { toast } if toast.message.starts_with("Moved from") => Some(toast),
+        _ => None,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headphone_handoff_is_off_by_default() {
+    let (a, b) = pair().await;
+    play_for_headphones(&a, &b).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(a.backend.is_playing());
+    assert!(!b.backend.is_playing());
+    assert!(moved_toast(&b).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headphones_connecting_pull_playback_from_the_playing_device() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(b.backend.is_playing(), "b took over");
+    assert!(!a.backend.is_playing(), "a stopped");
+    assert_eq!(
+        b.snapshot().await.transport.lease.owner.as_deref(),
+        Some(b.device_id.as_str())
+    );
+    let toast = moved_toast(&b).expect("moved toast");
+    assert_eq!(toast.action_label.as_deref(), Some("Undo"));
+    assert!(toast.action_command.unwrap().contains(a.device_id.as_str()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headphones_pull_a_play_that_paused_moments_ago() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    // The headphones leaving a paused it (becoming noisy).
+    a.run(Command::Pause).await;
+    TestCore::run_all_for(&[&a, &b], 3_000.0).await;
+    assert!(!a.backend.is_playing());
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(b.backend.is_playing(), "b resumed the paused play");
+    assert!(!a.backend.is_playing());
+    // Undo would start it out loud on a: no Undo for a paused play.
+    assert_eq!(moved_toast(&b).expect("moved toast").action_label, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headphones_leave_a_long_paused_play_alone() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    a.run(Command::Pause).await;
+    TestCore::run_all_for(&[&a, &b], 30_000.0).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(!b.backend.is_playing());
+    assert_eq!(
+        b.snapshot().await.transport.lease.owner.as_deref(),
+        Some(a.device_id.as_str()),
+        "a keeps the paused play"
+    );
+    assert!(moved_toast(&b).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_connect_reported_twice_pulls_once() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    headphones_connect(&b).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(b.backend.is_playing());
+    let toasts = b
+        .events
+        .all()
+        .into_iter()
+        .filter(|e| matches!(e, Event::Toast { toast } if toast.message.starts_with("Moved from")))
+        .count();
+    assert_eq!(toasts, 1);
+}

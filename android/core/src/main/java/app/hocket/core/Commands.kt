@@ -127,6 +127,7 @@ object Commands {
     fun setCoordinatorUrl(url: String?) = Command.SetCoordinatorUrl(CommandSetCoordinatorUrlInner(url))
     fun setLanDiscovery(enabled: Boolean) = Command.SetLanDiscovery(CommandSetLanDiscoveryInner(enabled))
     fun handoffTo(deviceId: DeviceId) = Command.HandoffTo(CommandHandoffToInner(deviceId))
+    fun headphonesConnected(name: String?) = Command.HeadphonesConnected(CommandHeadphonesConnectedInner(name))
     fun setSleepTimer(timer: SleepTimer?) = Command.SetSleepTimer(CommandSetSleepTimerInner(timer))
 
     fun backendReport(report: BackendReport) = Command.BackendReport(CommandBackendReportInner(report))

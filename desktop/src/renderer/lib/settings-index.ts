@@ -67,6 +67,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "exportConfig", section: "backup", label: "settings.exportConfig", keywords: "settingsSearch.kw.backup" },
   { id: "importConfig", section: "backup", label: "settings.importConfig", keywords: "settingsSearch.kw.backup" },
   { id: "copyDiagnostics", section: "diagnostics", label: "settings.copyDiagnostics", keywords: "settingsSearch.kw.diagnostics" },
+  { id: "headphoneHandoff", section: "advanced", label: "settings.headphoneHandoff", desc: "settings.headphoneHandoffDesc", keywords: "settingsSearch.kw.headphoneHandoff" },
   { id: "developerMode", section: "advanced", label: "settings.developerMode", keywords: "settingsSearch.kw.developer" },
   { id: "developerOpen", section: "advanced", label: "settings.developerOpen", desc: "settings.developerOpenDesc", keywords: "settingsSearch.kw.developer" },
 ];

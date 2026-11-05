@@ -113,6 +113,8 @@ class ExoBackend(
         /** The native desktop engine's cadence (`audio/native/engine.rs`): receivers extrapolate between reports. */
         private const val POSITION_INTERVAL_MS = 1_000L
         private val RECOVERY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
+        /** Outputs that count as headphones for headphone handoff. */
+        private val HEADPHONE_KINDS = setOf(AudioOutputs.Kind.Bluetooth, AudioOutputs.Kind.Wired, AudioOutputs.Kind.Usb)
 
         /** Backoff before recovery attempt [attempt] (0-based) of a network error, or null when out of attempts. */
         internal fun recoveryDelayMs(attempt: Int): Long? = RECOVERY_DELAYS_MS.getOrNull(attempt)
@@ -189,6 +191,29 @@ class ExoBackend(
             preferredDevice = device
             player.setPreferredAudioDevice(device)
             previewPlayer?.setPreferredAudioDevice(device)
+        }
+        watchHeadphones()
+    }
+
+    /**
+     * Headphone handoff (beta): tells the core when headphones (Bluetooth, wired, USB) connect, so
+     * it can pull playback here from a device that plays. The core checks the setting. The first
+     * list is the baseline: headphones already connected when the app starts don't count.
+     */
+    private fun watchHeadphones() {
+        scope.launch {
+            var known: Set<String>? = null
+            AudioOutputs.outputs.collect { state ->
+                val headphones = state.outputs.filter { it.kind in HEADPHONE_KINDS }
+                val keys = headphones.map { "${it.kind}:${it.name}" }.toSet()
+                val before = known
+                known = keys
+                if (before == null) return@collect
+                headphones.firstOrNull { "${it.kind}:${it.name}" !in before }?.let {
+                    PlaybackLog.i("headphones connected: ${it.kind} \"${it.name}\"")
+                    dispatch(Commands.headphonesConnected(it.name.ifEmpty { null }))
+                }
+            }
         }
     }
 

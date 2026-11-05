@@ -444,6 +444,18 @@ impl Actor {
                 self.picker_targets = targets.clone();
                 self.emit(Event::HandoffPickerChanged { open, targets });
             }
+            Output::HeadphonePull {
+                from,
+                from_name,
+                was_playing,
+            } => {
+                // A handoff always lands playing, so moving a paused play back
+                // would start it out loud on a device whose headphones left:
+                // Undo only when it was playing there.
+                let undo = was_playing
+                    .then(|| ("Undo".to_string(), Command::HandoffTo { device_id: from }));
+                self.toast(format!("Moved from {from_name}"), undo);
+            }
             Output::ResumeOffer(draft) => {
                 self.resume_offer = draft.map(|d| ResumeOffer {
                     device_name: d.device_name,
