@@ -342,14 +342,25 @@ async fn battery_saver_changes_are_announced_and_replayed() {
     t.run(Command::SetPowerSave { enabled: true }).await;
     assert_eq!(battery_saver_events(&t), [(SaverLevel::Medium, true)]);
     // A stronger chosen level holds over the automatic one.
-    t.run(Command::SetSetting { key: "battery.level".into(), value: "\"max\"".into() }).await;
+    t.run(Command::SetSetting {
+        key: "battery.level".into(),
+        value: "\"max\"".into(),
+    })
+    .await;
     t.run(Command::SetPowerSave { enabled: false }).await;
     assert_eq!(
         battery_saver_events(&t),
         [(SaverLevel::Medium, true), (SaverLevel::Max, false)]
     );
-    t.run(Command::SetSetting { key: "battery.level".into(), value: "\"off\"".into() }).await;
-    assert_eq!(battery_saver_events(&t).last(), Some(&(SaverLevel::Off, false)));
+    t.run(Command::SetSetting {
+        key: "battery.level".into(),
+        value: "\"off\"".into(),
+    })
+    .await;
+    assert_eq!(
+        battery_saver_events(&t).last(),
+        Some(&(SaverLevel::Off, false))
+    );
 
     t.events.clear();
     t.run(Command::RequestSnapshot).await;

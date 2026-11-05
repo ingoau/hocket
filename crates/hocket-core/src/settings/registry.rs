@@ -198,7 +198,8 @@ const fn json_def(
 }
 
 fn battery_custom_default() -> Value {
-    serde_json::to_value(crate::saver::preset(crate::api::SaverLevel::Medium)).unwrap_or(Value::Null)
+    serde_json::to_value(crate::saver::preset(crate::api::SaverLevel::Medium))
+        .unwrap_or(Value::Null)
 }
 
 fn battery_custom_valid(v: &Value) -> Result<(), String> {
@@ -555,7 +556,12 @@ pub static REGISTRY: &[SettingDef] = &[
         SettingKind::Enum(&["light", "medium", "max", "custom"]),
         || json!("medium"),
     ),
-    json_def(BATTERY_CUSTOM, Local, battery_custom_default, battery_custom_valid),
+    json_def(
+        BATTERY_CUSTOM,
+        Local,
+        battery_custom_default,
+        battery_custom_valid,
+    ),
     def(
         DISPLAY_ANIMATED_BACKGROUND,
         Local,

@@ -496,7 +496,11 @@ pub struct BatterySaver {
 
 impl Default for BatterySaver {
     fn default() -> Self {
-        Self { level: SaverLevel::Off, automatic: false, features: Vec::new() }
+        Self {
+            level: SaverLevel::Off,
+            automatic: false,
+            features: Vec::new(),
+        }
     }
 }
 
@@ -1547,6 +1551,12 @@ pub struct MediaSource {
     /// Gain to apply in dB after ReplayGain/normalisation. External backends apply this.
     pub gain_db: f64,
     pub transcoded: bool,
+    /// Every byte is on this device when the source is resolved (a
+    /// download, or a complete stream-cache entry, whatever the URL):
+    /// playing it needs no network. A streamed source may become local
+    /// while it plays (the queue's `offline` state shows it).
+    #[serde(default)]
+    pub local: bool,
 }
 
 /// A URL with its query string (where Subsonic carries the auth token) and
@@ -3517,6 +3527,7 @@ mod redaction_tests {
             mime_type: None,
             gain_db: 0.0,
             transcoded: false,
+            local: false,
         };
         let dbg = format!("{source:?}");
         assert!(dbg.contains("https://music.example/rest/stream"), "{dbg}");

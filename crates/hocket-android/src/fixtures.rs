@@ -451,6 +451,7 @@ mod tests {
                         mime_type: Some("audio/flac".into()),
                         gain_db: -6.5,
                         transcoded: false,
+                        local: false,
                     },
                     next: None,
                     position_ms: 0,

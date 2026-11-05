@@ -121,10 +121,18 @@ pub struct Row {
     pub path: String,
 }
 
-/// The stream-cache index, ordered by track.
+/// The stream-cache index, ordered by track. Read over a read-only
+/// connection: `Db::open` writes (migrations, the lyrics index), and a
+/// second writer makes the core's own index writes fail with
+/// `SQLITE_BUSY` while a test polls.
 pub fn cache_rows(t: &TestCore) -> Vec<Row> {
-    let db = t.open_db();
-    db.with_conn(|c| {
+    let c = rusqlite::Connection::open_with_flags(
+        t.data_dir().join("hocket.sqlite"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .expect("db");
+    c.busy_timeout(std::time::Duration::from_secs(10)).unwrap();
+    (|| -> rusqlite::Result<Vec<Row>> {
         let mut st = c.prepare(
             "SELECT track_id, profile, complete, spans, bytes, total_bytes, path FROM cache_entries ORDER BY track_id, profile",
         )?;
@@ -139,8 +147,8 @@ pub fn cache_rows(t: &TestCore) -> Vec<Row> {
                 path: r.get(6)?,
             })
         })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
-    })
+        rows.collect()
+    })()
     .unwrap()
 }
 

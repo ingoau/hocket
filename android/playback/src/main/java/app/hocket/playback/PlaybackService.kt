@@ -151,7 +151,10 @@ class PlaybackService : MediaLibraryService() {
                 val now = ConnectRoutes.state.value
                 if (now.remote != was.remote || now.remoteVolume != was.remoteVolume) applySession(bridge.player.state)
             }
-            is Event.QueueChanged -> bridge.applyQueue(event.data.queue)
+            is Event.QueueChanged -> {
+                bridge.applyQueue(event.data.queue)
+                backend.onQueue(event.data.queue)
+            }
             is Event.ServersChanged -> serverId = event.data.servers.firstOrNull()?.id
             is Event.LibraryChanged -> scheduleLibraryNotify()
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs

@@ -100,7 +100,8 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
     run_real(&t, 2000.0).await;
     assert_eq!(t.upstream.calls().len(), 1);
 
-    // Pressing play: the first span comes from disk, no request...
+    // Pressing play: the first span comes from disk, while the rest is
+    // fetched from where it ends, ahead of the player...
     let s = source(&t, "t0").await;
     let info = t.core.stream_open(&s.url, 0, None).await.unwrap();
     assert_eq!(info.total_length, Some(3_000_000));
@@ -109,12 +110,15 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
         let want = (PRIMED as usize - out.len()).min(64 * 1024);
         out.extend_from_slice(&t.core.stream_read(info.handle, want).await.unwrap());
     }
-    assert_eq!(
-        t.upstream.calls().len(),
-        1,
-        "the primed span came from disk"
+    let calls = t.upstream.calls();
+    assert!(
+        calls.len() <= 2
+            && calls
+                .get(1)
+                .is_none_or(|c| c.range.as_deref() == Some("bytes=262144-")),
+        "the primed span came from disk: {calls:?}"
     );
-    // ...and the rest is fetched from where it ends.
+    // ...and read from there.
     loop {
         let b = t.core.stream_read(info.handle, 64 * 1024).await.unwrap();
         if b.is_empty() {
@@ -125,6 +129,7 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
     t.core.stream_close(info.handle);
     assert_eq!(out, media);
     let calls = t.upstream.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
     assert_eq!(calls[1].range.as_deref(), Some("bytes=262144-"));
     wait_offline(&t, "t0", OfflineState::Cached).await;
     // Playing it clears the primed mark.

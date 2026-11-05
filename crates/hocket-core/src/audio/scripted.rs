@@ -789,6 +789,7 @@ mod tests {
             mime_type: None,
             gain_db: 0.0,
             transcoded: false,
+            local: false,
         }
     }
 

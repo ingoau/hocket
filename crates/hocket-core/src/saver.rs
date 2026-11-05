@@ -10,7 +10,13 @@ use crate::api::{BatterySaver, SaverFeature, SaverLevel};
 use SaverFeature::*;
 
 const LIGHT: &[SaverFeature] = &[StillBackground, StillSeekWave, LighterLyrics];
-const MEDIUM: &[SaverFeature] = &[StillBackground, StillSeekWave, LighterLyrics, RefreshCap, SlowSync];
+const MEDIUM: &[SaverFeature] = &[
+    StillBackground,
+    StillSeekWave,
+    LighterLyrics,
+    RefreshCap,
+    SlowSync,
+];
 const MAX: &[SaverFeature] = &[
     StillBackground,
     StillSeekWave,
@@ -76,7 +82,11 @@ pub fn resolve(
             _ => false,
         };
     let level = if auto { auto_level } else { chosen };
-    BatterySaver { level, automatic: auto, features: features(level, custom) }
+    BatterySaver {
+        level,
+        automatic: auto,
+        features: features(level, custom),
+    }
 }
 
 /// `battery.custom`'s value: a list of feature names.
@@ -124,7 +134,10 @@ mod tests {
     fn custom_only_replaces_off() {
         let custom = [SimpleLyrics, StillBackground];
         let auto = resolve(Off, Custom, true, true, &custom);
-        assert_eq!((auto.level, auto.features.clone()), (Custom, vec![StillBackground, SimpleLyrics]));
+        assert_eq!(
+            (auto.level, auto.features.clone()),
+            (Custom, vec![StillBackground, SimpleLyrics])
+        );
         assert_eq!(resolve(Light, Custom, true, true, &custom).level, Light);
         assert_eq!(resolve(Custom, Max, true, true, &custom).level, Custom);
     }
@@ -132,7 +145,10 @@ mod tests {
     #[test]
     fn custom_value_parses_names() {
         let v = serde_json::json!(["simpleLyrics", "refreshCap", "simpleLyrics"]);
-        assert_eq!(features(Custom, &parse_custom(&v)), vec![RefreshCap, SimpleLyrics]);
+        assert_eq!(
+            features(Custom, &parse_custom(&v)),
+            vec![RefreshCap, SimpleLyrics]
+        );
         assert!(parse_custom(&serde_json::json!("nope")).is_empty());
     }
 }

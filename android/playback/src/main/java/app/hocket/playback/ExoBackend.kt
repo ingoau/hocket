@@ -33,6 +33,8 @@ import app.hocket.core.api.BackendReportSystemVolumeInner
 import app.hocket.core.api.BackendReportTransitionedToNextInner
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSource as CoreMediaSource
+import app.hocket.core.api.OfflineState
+import app.hocket.core.api.QueueView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -73,8 +75,13 @@ import kotlin.math.roundToInt
  *   then resumes by itself when focus returns and reports `Playing`).
  * - The main player's audio session is announced to equalizer apps once it first plays, and closed
  *   on release ([AudioEffectSession]).
- * - The player holds a wake lock and a Wi-Fi lock while playing ([C.WAKE_MODE_NETWORK]): without
- *   them a stream stalls once the screen is off and the CPU or Wi-Fi radio sleeps.
+ * - The player holds a wake lock while playing, and a Wi-Fi lock too ([C.WAKE_MODE_NETWORK]) while
+ *   the current or the next item is streamed: without them a stream stalls once the screen is off and
+ *   the CPU or Wi-Fi radio sleeps. When both are on the device (a download, a `file:` URL, or a
+ *   stream the core has whole: `MediaSource.local`, or the queue showing it Cached/Downloaded once
+ *   the core's burst fetch finished it) the wake lock alone does ([C.WAKE_MODE_LOCAL], [wakeModeFor]):
+ *   the high-performance Wi-Fi lock keeps the Wi-Fi radio out of power save, which costs battery for
+ *   nothing when no byte comes over the network.
  * - `Paused` is reported only when the player no longer means to play (`playWhenReady` false: a
  *   pause, becoming noisy, a lasting focus loss). A stall with `playWhenReady` still set (an empty
  *   buffer, a load being retried, an error being recovered from) is `Buffering`, never `Paused`: the
@@ -143,6 +150,13 @@ class ExoBackend(
          * means to play, [Stall.Buffering] while it does but has nothing to play yet; idle (an error,
          * a stop) and ended are reported by their own callbacks.
          */
+        /**
+         * The wake mode for the current item and the one after it (null: none) by whether each is on
+         * the device: [C.WAKE_MODE_LOCAL] when every one is, else [C.WAKE_MODE_NETWORK].
+         */
+        internal fun wakeModeFor(current: Boolean, next: Boolean?): Int =
+            if (current && next != false) C.WAKE_MODE_LOCAL else C.WAKE_MODE_NETWORK
+
         internal fun stall(playWhenReady: Boolean, playbackState: Int): Stall = when {
             !playWhenReady -> if (playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) Stall.Nothing else Stall.Paused
             playbackState == Player.STATE_BUFFERING -> Stall.Buffering
@@ -190,6 +204,11 @@ class ExoBackend(
     /** Connectivity as the service last reported it; a retry waits while this is false. */
     @Volatile
     private var online = true
+    /** The wake mode set on the main player ([updateWakeMode]). */
+    internal var wakeMode = C.WAKE_MODE_NETWORK
+        private set
+    /** Queue keys the core's queue last showed as on the device (Cached or Downloaded) or not. */
+    private val queueLocal = HashMap<String, Boolean>()
     /** The key of the last `Load`, so an error raised after the playlist emptied is still attributable. */
     private var lastLoadedKey: String? = null
     /** Keys by media id, so reports name the queue key the core gave us. */
@@ -272,6 +291,7 @@ class ExoBackend(
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) onAutoTransition(mediaItem)
+                updateWakeMode()
             }
 
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
@@ -365,6 +385,7 @@ class ExoBackend(
                 lastLoadedKey = d.source.key
                 cancelRecovery()
                 player.setMediaSources(sources, 0, d.position_ms.toLong())
+                updateWakeMode()
                 applyGain(d.source.gainDb)
                 player.playWhenReady = d.play
                 player.prepare()
@@ -375,6 +396,7 @@ class ExoBackend(
                 if (player.mediaItemCount == 0) return
                 while (player.mediaItemCount > 1) player.removeMediaItem(player.mediaItemCount - 1)
                 command.data.next?.let { player.addMediaSource(mediaSource(it)) }
+                updateWakeMode()
             }
             BackendCommand.Play -> {
                 if (player.playbackState == Player.STATE_IDLE) player.prepare()
@@ -593,6 +615,36 @@ class ExoBackend(
 
     private fun gainFor(item: MediaItem): Double = item.requestMetadata.extras?.getDouble("gainDb", 0.0) ?: 0.0
 
+    /**
+     * The core's queue changed: a streamed item it shows Cached (the core fetched it whole) or
+     * Downloaded needs no network any more, which may let the player drop its Wi-Fi lock.
+     */
+    fun onQueue(queue: QueueView) {
+        val rows = listOfNotNull(queue.current) + queue.entries
+        for (row in rows) queueLocal[row.item.key] = row.track.offline == OfflineState.Cached || row.track.offline == OfflineState.Downloaded
+        val inPlaylist = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
+        queueLocal.keys.retainAll(inPlaylist + rows.map { it.item.key })
+        updateWakeMode()
+    }
+
+    /** Whether playing [item] needs no network: the core said so, or it is a core stream the queue shows on the device. */
+    private fun isLocal(item: MediaItem): Boolean {
+        if (item.requestMetadata.extras?.getBoolean("local", false) == true) return true
+        return item.localConfiguration?.uri?.scheme == CoreStreams.SCHEME && queueLocal[item.mediaId] == true
+    }
+
+    /** The wake mode for what is playing and what follows ([wakeModeFor]); nothing loaded keeps the last one. */
+    private fun updateWakeMode() {
+        val index = player.currentMediaItemIndex
+        if (player.mediaItemCount == 0 || index !in 0 until player.mediaItemCount) return
+        val next = (index + 1).takeIf { it < player.mediaItemCount }?.let { isLocal(player.getMediaItemAt(it)) }
+        val mode = wakeModeFor(isLocal(player.getMediaItemAt(index)), next)
+        if (mode == wakeMode) return
+        PlaybackLog.i("wake mode ${if (mode == C.WAKE_MODE_LOCAL) "local (no Wi-Fi lock)" else "network"}")
+        wakeMode = mode
+        player.setWakeMode(mode)
+    }
+
     private fun applyGain(gainDb: Double) {
         currentGainDb = gainDb
         val linear = 10.0.pow(gainDb / 20.0)
@@ -604,7 +656,11 @@ class ExoBackend(
             .setLoadErrorHandlingPolicy(CoreStreamLoadErrorPolicy())
 
     private fun mediaSource(source: CoreMediaSource): MediaSource {
-        val extras = android.os.Bundle().apply { putDouble("gainDb", source.gainDb) }
+        val local = source.local == true || source.url.startsWith("file:")
+        val extras = android.os.Bundle().apply {
+            putDouble("gainDb", source.gainDb)
+            putBoolean("local", local)
+        }
         val item = MediaItem.Builder()
             .setMediaId(source.key)
             .setUri(Uri.parse(source.url))

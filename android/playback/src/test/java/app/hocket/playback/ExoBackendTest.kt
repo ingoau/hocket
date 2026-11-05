@@ -44,6 +44,52 @@ class ExoBackendTest {
         "file:///nonexistent/$key.wav", HashMap(), "audio/wav", 0.0, false,
     )
 
+    /** A core stream the core does not have whole yet. */
+    private fun stream(key: String, local: Boolean? = null) = source(key).copy(url = "hocket-stream://tok-$key", local = local)
+
+    private fun queueOf(vararg rows: Pair<String, OfflineState>): app.hocket.core.api.QueueView {
+        val entries = rows.map { (key, offline) ->
+            app.hocket.core.api.QueueEntry(
+                app.hocket.core.api.QueueItem(key, "t-$key", app.hocket.core.api.QueueSource.Inserted),
+                source(key).track.copy(offline = offline),
+            )
+        }
+        return app.hocket.core.api.QueueView(
+            entries = entries, windowStart = 0u, total = entries.size.toUInt(), historyCount = 0u, currentIndex = 0u,
+            groupCount = 0u, totalUpcoming = (entries.size - 1).toUInt(), current = entries.firstOrNull(), shuffle = false,
+            repeat = app.hocket.core.api.RepeatMode.Off, autoplay = false,
+        )
+    }
+
+    @Test
+    fun theWifiLockIsHeldOnlyWhileTheCurrentOrNextItemIsStreamed() {
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, backend.wakeMode)
+        // Both on the device (`file:`): the wake lock alone.
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, backend.wakeMode)
+        // A streamed follow-up needs the network.
+        backend.handle(BackendCommand.SetNext(BackendCommandSetNextInner(stream("c"))))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, backend.wakeMode)
+        // The core fetched it whole: the queue shows it Cached.
+        backend.onQueue(queueOf("a" to OfflineState.Downloaded, "c" to OfflineState.Cached))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, backend.wakeMode)
+        // A core stream the core already had whole when it resolved it.
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(stream("d", local = true), null, 0u, false)))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, backend.wakeMode)
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(stream("e"), source("f"), 0u, false)))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, backend.wakeMode)
+        backend.onQueue(queueOf("e" to OfflineState.Downloading))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, backend.wakeMode)
+    }
+
+    @Test
+    fun wakeModeForNeedsEveryItemOnTheDevice() {
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, ExoBackend.wakeModeFor(true, null))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, ExoBackend.wakeModeFor(true, true))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, ExoBackend.wakeModeFor(true, false))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, ExoBackend.wakeModeFor(false, true))
+    }
+
     @Before
     fun setUp() {
         backend = ExoBackend(ApplicationProvider.getApplicationContext(), scope, { dispatched += it })

@@ -145,7 +145,11 @@ async fn a_queue_change_cancels_a_stale_prefetch() {
 async fn battery_saver_keeps_prefetching() {
     // Fetching ahead in one go lets the radio sleep in between: saver leaves it on.
     let t = started("battery", seeded_server(4, 100.0)).await;
-    t.run(Command::SetSetting { key: "battery.level".into(), value: "\"max\"".into() }).await;
+    t.run(Command::SetSetting {
+        key: "battery.level".into(),
+        value: "\"max\"".into(),
+    })
+    .await;
     play_album(&t, 4, 0).await;
     wait_cached(&t, "t1").await;
     t.core.shutdown().await;

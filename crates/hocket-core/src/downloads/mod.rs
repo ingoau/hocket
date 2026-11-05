@@ -1397,6 +1397,7 @@ impl Downloads {
                 mime_type: ct.or(track.content_type.clone()),
                 gain_db,
                 transcoded: false,
+                local: true,
             });
         }
         let profile = self.effective_profile(track.suffix.as_deref());
@@ -1415,6 +1416,7 @@ impl Downloads {
             let cached = self.cache_lookup(sid, &track.id, profile.as_ref(), false)?;
             // A complete original serves a transcoded request as it is.
             let transcoded = transcoded && !cached.as_ref().is_some_and(|e| e.profile.is_empty());
+            let local = cached.is_some();
             let cached_type = cached.and_then(|e| e.content_type);
             let suffix = if transcoded {
                 profile.as_ref().and_then(|p| p.format.clone())
@@ -1437,6 +1439,7 @@ impl Downloads {
                     mime_type,
                     gain_db,
                     transcoded,
+                    local,
                 });
             }
         }
@@ -1449,6 +1452,7 @@ impl Downloads {
                 mime_type: ct.or(track.content_type.clone()),
                 gain_db,
                 transcoded: profile.is_some(),
+                local: true,
             });
         }
         let opts = stream_options(profile.as_ref());
@@ -1460,6 +1464,7 @@ impl Downloads {
             mime_type: mime,
             gain_db,
             transcoded,
+            local: false,
         })
     }
 
