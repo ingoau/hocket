@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -42,6 +43,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -86,6 +88,9 @@ import app.hocket.ui.components.formatClock
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.theme.Motion
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.ui.layout.onSizeChanged
+import app.hocket.core.client.CoreClient
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
@@ -280,7 +285,7 @@ private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, co
  * and `setProgress` for the screen reader's adjust gestures.
  */
 @Composable
-fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, centre: (@Composable () -> Unit)? = null) {
+fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, stillWave: Boolean = false, centre: (@Composable () -> Unit)? = null) {
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
     val currentPosition by rememberUpdatedState(position)
@@ -289,8 +294,24 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
     var dragFraction by remember { mutableStateOf<Float?>(null) }
     // A seek sent to the core that it has not reported back yet: shown instead of the stale position.
     var pending by remember { mutableStateOf<Long?>(null) }
+    // [position] ticks at ~4 Hz (CoreClient.progress). Where a tick moves the thumb by more than a
+    // couple of pixels (a short track) the bar eases across the quarter second to the new position;
+    // on a long track it steps (a pixel or less) and nothing animates between ticks.
+    var widthPx by remember { mutableIntStateOf(0) }
+    val smoothed = remember { Animatable(position().toFloat()) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { currentPosition() }.collectLatest { ms ->
+            val step = ms - smoothed.value
+            val stepPx = if (currentDuration > 0) widthPx * step / currentDuration else 0f
+            if (step > 0f && step <= 2f * CoreClient.PROGRESS_TICK_MS && stepPx > SMOOTH_STEP_PX) {
+                smoothed.animateTo(ms.toFloat(), tween(CoreClient.PROGRESS_TICK_MS.toInt(), easing = LinearEasing))
+            } else {
+                smoothed.snapTo(ms.toFloat())
+            }
+        }
+    }
     val shownMs: () -> Long = remember {
-        { dragFraction?.let { (it * currentDuration).toLong() } ?: pending ?: currentPosition() }
+        { dragFraction?.let { (it * currentDuration).toLong() } ?: pending ?: smoothed.value.toLong() }
     }
     val fraction: () -> Float = remember { { if (currentDuration > 0) (shownMs().toFloat() / currentDuration).coerceIn(0f, 1f) else 0f } }
     LaunchedEffect(pending) {
@@ -326,6 +347,7 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
                 .fillMaxWidth()
                 // A 48 dp touch target from just above the wave; the times tuck up into its slack below.
                 .height(48.dp)
+                .onSizeChanged { widthPx = it.width }
                 .testTag("player.seek")
                 .pointerInput(durationMs) {
                     detectTapGestures(onTap = { o ->
@@ -378,6 +400,8 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
                 gapSize = 8.dp,
                 amplitude = { amplitude },
                 wavelength = 32.dp,
+                // Battery saver: the wave keeps its shape but stops travelling (no frame per vsync).
+                waveSpeed = if (stillWave) 0.dp else 32.dp,
             )
         }
     }
@@ -428,6 +452,9 @@ val SeekTimesBaseline = HorizontalAlignmentLine(::maxOf)
 
 /** How long a seek's target is held on screen at most while waiting for the core to report it. */
 private const val SEEK_HOLD_MS = 2_500L
+
+/** A progress tick that moves the seek bar's thumb further than this eases there instead of stepping. */
+private const val SMOOTH_STEP_PX = 2f
 
 /** Linear interpolation for layer maths. */
 internal fun lerpF(a: Float, b: Float, t: Float): Float = lerp(a, b, t)

@@ -260,14 +260,23 @@ class CoreClient(
 
     /**
      * ~30 Hz position while subscribed and playing; nothing runs when no screen collects it, and a
-     * paused player is not polled ([awaitPositionMayMove]). Lyrics uses [positionNow] on its own
-     * frame loop.
+     * paused player is not polled ([awaitPositionMayMove]). For smooth motion only: progress bars
+     * use [progress]. Lyrics uses [positionNow] on its own frame loop.
      */
-    val position: StateFlow<Long> = flow {
+    val position: StateFlow<Long> = positionTicker(POSITION_TICK_MS)
+
+    /**
+     * Position at ~4 Hz, for progress bars and clocks (the mini player's line, the seek bar, the
+     * playing queue's time): a quarter second on a track of minutes is about a pixel, and waking
+     * the UI 30 times a second for it costs battery. Runs only while subscribed, like [position].
+     */
+    val progress: StateFlow<Long> = positionTicker(PROGRESS_TICK_MS)
+
+    private fun positionTicker(periodMs: Long): StateFlow<Long> = flow {
         while (true) {
             val mark = positionMark()
             emit(positionNow())
-            delay(POSITION_TICK_MS)
+            delay(periodMs)
             awaitPositionMayMove(mark)
         }
     }.stateIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 500), 0L)
@@ -686,6 +695,8 @@ class CoreClient(
         const val LYRICS_CACHE_CAP = 12
         /** [position]'s period while playing (~30 Hz). */
         const val POSITION_TICK_MS = 32L
+        /** [progress]'s period while playing (~4 Hz). */
+        const val PROGRESS_TICK_MS = 250L
     }
 }
 

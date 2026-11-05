@@ -116,6 +116,10 @@ object ImmersiveArtwork {
         return Preference.entries.firstOrNull { it.string == v } ?: Preference.Automatic
     }
 
+    /** As [preference], but never immersive while battery saver turns immersive artwork off. */
+    fun preference(json: String?, saver: app.hocket.core.api.BatterySaver): Preference =
+        if (saver.features.contains(app.hocket.core.api.SaverFeature.NoImmersiveArtwork)) Preference.Never else preference(json)
+
     /** The layout for the cover at [path], or null when it cannot be decoded or classified. */
     suspend fun analyse(path: String, preference: Preference, dark: Boolean): ArtworkLayout? = withContext(Dispatchers.Default) {
         val key = key(path, preference, dark)
@@ -186,7 +190,9 @@ object ImmersiveArtwork {
 @Composable
 fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boolean): State<ImmersiveArtwork.Resolved?> {
     val client = LocalCoreClient.current
-    val state = remember(coverArt, preference, dark) { mutableStateOf(ImmersiveArtwork.cached(coverArt, preference, dark)) }
+    // Never immersive: a card, known at once, with no cover to fetch, decode or classify.
+    val never = preference == Preference.Never
+    val state = remember(coverArt, preference, dark) { mutableStateOf(if (never) ImmersiveArtwork.Resolved(null) else ImmersiveArtwork.cached(coverArt, preference, dark)) }
     // A cover the core could not fetch (a network drop) is asked for again, as [Artwork] does: a
     // card meanwhile, the immersive layout once the file comes.
     val network by client.network.collectAsStateWithLifecycle()
@@ -194,7 +200,7 @@ fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boole
     var fetched by remember(state) { mutableStateOf(state.value != null) }
     var attempt by remember(state, network) { mutableIntStateOf(0) }
     LaunchedEffect(state, attempt, network) {
-        if (fetched || coverArt == null) return@LaunchedEffect
+        if (fetched || coverArt == null || never) return@LaunchedEffect
         val path = client.artworkPath(coverArt, ArtworkSizes.GRID)
         if (path != null) ArtworkPathCache.put(ArtworkPathCache.key(coverArt, ArtworkSizes.GRID), path)
         state.value = ImmersiveArtwork.Resolved(path?.let { ImmersiveArtwork.analyse(it, preference, dark) })

@@ -464,7 +464,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
     val client = LocalCoreClient.current
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
-    val position = client.position.collectAsStateWithLifecycle()
+    // ~4 Hz: the mini player's line and the seek bar (which eases between ticks where a step would show).
+    val position = client.progress.collectAsStateWithLifecycle()
     val readPosition: () -> Long = remember(position) { { position.value } }
     val scope = rememberCoroutineScope()
     val reducedMotion = LocalReducedMotion.current
@@ -560,6 +561,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val scrimShown by remember(state) { derivedStateOf { state.coverProgress > 0f } }
         val scrimTappable by remember(state) { derivedStateOf { state.coverProgress > 0.5f } }
         val settledOpen by remember(state) { derivedStateOf { state.progress > 0.9f } }
+        // Battery saver: the open player runs the display at 60 Hz (the sheet's own drag and
+        // settle run at the screen's full rate; the cap comes once it is open).
+        RefreshRateCap(active = settledOpen && state.isExpanded)
         // Only the big artwork flies to and from the mini player. In lyrics / queue / about the
         // artwork is a thumbnail beside the title near the bottom of the page: flown opaque from
         // there to the mini player's thumbnail it would float over the fading, shrinking sheet and
@@ -619,7 +623,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val trackCover = entry?.track?.coverArt
         // Immersive artwork on a portrait screen (the square artwork leaves room for the controls).
         val settings by client.settings.collectAsStateWithLifecycle()
-        val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
+        val saver by client.batterySaver.collectAsStateWithLifecycle()
+        val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value, saver)
         // (The panel's own shape: a tall panel takes an immersive artwork even on a landscape screen.)
         val portrait = if (panelMode && !state.fullScreen) panelWidth <= (panelBottom - panelTop) * ImmersiveArtwork.MAX_WIDTH_SHARE
             else constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE

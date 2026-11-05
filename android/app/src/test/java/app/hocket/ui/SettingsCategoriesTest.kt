@@ -47,7 +47,7 @@ class SettingsCategoriesTest {
         "open.audio", "open.transcoding", "open.connect",
         "queue.savedCap", "queue.autoplay",
         "open.downloads", "storage.clearCache", "storage.warnThreshold",
-        "battery.saver", "battery.autoEngage",
+        "battery.level", "battery.autoEngage",
         "lyrics.external",
         "ratings.loveThreshold",
         "open.customise", "open.filters", "open.stats",
@@ -68,7 +68,7 @@ class SettingsCategoriesTest {
 
     /** Registry settings the old page did not show, now in their category. */
     private val added = setOf("queue.section", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",
-        "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists") + pebbleRows + advancedRows
+        "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists", "battery.customise", "battery.autoLevel") + pebbleRows + advancedRows
 
     /** Categories that open one of the older sub-screens: the old page's row for it. */
     private val screenCategories = mapOf(
@@ -83,7 +83,7 @@ class SettingsCategoriesTest {
         SettingsCategory.Downloads to setOf("open.downloads", "downloads.wifiOnly", "storage.clearCache", "storage.warnThreshold", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved"),
         SettingsCategory.Lyrics to setOf("lyrics.external", "lyrics.defaultOffsetMs", "lyrics.showTranslations"),
         SettingsCategory.Library to setOf("ratings.loveThreshold", "open.filters", "open.stats"),
-        SettingsCategory.Battery to setOf("battery.saver", "battery.autoEngage"),
+        SettingsCategory.Battery to setOf("battery.level", "battery.customise", "battery.autoEngage", "battery.autoLevel"),
         SettingsCategory.Pebble to pebbleRows,
         SettingsCategory.Backup to setOf("backup.includeSecrets", "backup.export", "backup.import", "backup.diagnostics"),
         SettingsCategory.Advanced to advancedRows,

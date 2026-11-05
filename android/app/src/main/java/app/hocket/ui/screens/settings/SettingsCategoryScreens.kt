@@ -1,7 +1,13 @@
 package app.hocket.ui.screens.settings
 
-import app.hocket.core.has
-import app.hocket.core.engaged
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.pluralStringResource
+import app.hocket.core.Saver
+import app.hocket.core.api.SaverFeature
+import app.hocket.core.api.SaverLevel
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -356,16 +362,113 @@ fun LibrarySettingsScreen(nav: NavHostController) {
     }
 }
 
-/** Battery: the saver mode and whether it follows the system's battery saver. */
+/**
+ * Battery: the saver level (a four-stop slider, Off to Max), the switches it stands for (editing
+ * one makes the level Custom, starting from what the chosen level turns off), and whether the
+ * system's battery saver engages it, at which level.
+ */
 @Composable
 fun BatterySettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
-    val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
+    val saver by client.batterySaver.collectAsStateWithLifecycle()
+    val levelSetting = setting(SettingKeys.BATTERY_LEVEL)
+    val customSetting = setting(SettingKeys.BATTERY_CUSTOM)
     val autoSaver = setting(SettingKeys.BATTERY_AUTO_ENGAGE)
+    val autoLevelSetting = setting(SettingKeys.BATTERY_AUTO_LEVEL)
+    val chosen = Saver.parseLevel(levelSetting.raw) ?: SaverLevel.Off
+    val custom = Saver.parseCustom(customSetting.raw)
+    val chosenFeatures = Saver.features(chosen, custom)
     SubScreen(nav, stringResource(R.string.settings_section_battery)) {
-        SwitchRow(stringResource(R.string.settings_battery_saver), batterySaver.engaged, { client.dispatch(Commands.setSetting(app.hocket.core.SettingKeys.BATTERY_LEVEL, app.hocket.core.Saver.levelValue(if (it) app.hocket.core.api.SaverLevel.Medium else app.hocket.core.api.SaverLevel.Off))) }, stringResource(R.string.settings_battery_body), tag = "battery.saver")
-        SwitchRow(stringResource(R.string.settings_battery_auto), autoSaver.bool ?: true, { autoSaver.setBool(it) }, scope = autoSaver.scope, tag = "battery.autoEngage")
+        val title = stringResource(R.string.settings_battery_saver)
+        val levelName = saverLevelName(chosen)
+        val summary = saverLevelSummary(chosen, chosenFeatures.size)
+        SettingRow(title, stringResource(R.string.settings_battery_level_value, levelName, summary), levelSetting.scope, tag = "battery.level")
+        // A preset sits on its stop. Custom has no stop: the track loses its ticks and the thumb
+        // sits between stops, as far along as the share of savings it turns on. A drag is held
+        // locally and committed on release (the tick count changing mid-drag would restart the slider).
+        val presetIndex = Saver.PRESETS.indexOf(chosen)
+        var drag by remember { mutableStateOf<Float?>(null) }
+        val last = Saver.PRESETS.lastIndex.toFloat()
+        val value = drag ?: if (presetIndex >= 0) presetIndex.toFloat() else last * chosenFeatures.size / Saver.ALL.size
+        val shownName = drag?.let { saverLevelName(Saver.PRESETS[it.roundToInt()]) } ?: levelName
+        LabelledSlider(
+            value = value, onValueChange = { drag = it },
+            onValueChangeFinished = {
+                drag?.let { client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(Saver.PRESETS[it.roundToInt()]))) }
+                drag = null
+            },
+            valueRange = 0f..last, steps = Saver.PRESETS.size - 2, showTicks = presetIndex >= 0,
+            label = title, valueText = shownName,
+            modifier = Modifier.padding(horizontal = 16.dp).testTag("battery.level.slider"),
+        )
+        if (saver.automatic) {
+            Text(stringResource(R.string.settings_battery_automatic_note, saverLevelName(saver.level)), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag("battery.automaticNote"))
+        }
+
+        var expanded by rememberSaveable { mutableStateOf(chosen == SaverLevel.Custom) }
+        val turn by animateFloatAsState(if (expanded) 180f else 0f, label = "customiseArrow")
+        SettingRow(stringResource(R.string.settings_battery_customise), stringResource(R.string.settings_battery_customise_body), onClick = { expanded = !expanded }, tag = "battery.customise") {
+            Icon(HocketIcons.Filled.KeyboardArrowDown, null, Modifier.graphicsLayer { rotationZ = turn })
+        }
+        AnimatedVisibility(expanded) {
+            androidx.compose.foundation.layout.Column {
+                Saver.ALL.forEach { feature ->
+                    val (name, body) = saverFeatureText(feature)
+                    SwitchRow(name, feature in chosenFeatures, { on ->
+                        val next = if (on) chosenFeatures + feature else chosenFeatures - feature
+                        client.dispatch(Commands.setSetting(SettingKeys.BATTERY_CUSTOM, Saver.customValue(next)))
+                        if (chosen != SaverLevel.Custom) client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(SaverLevel.Custom)))
+                    }, subtitle = body, tag = "battery.feature.${feature.string}")
+                }
+            }
+        }
+
+        val autoOn = autoSaver.bool ?: true
+        SwitchRow(stringResource(R.string.settings_battery_auto), autoOn, { autoSaver.setBool(it) }, scope = autoSaver.scope, tag = "battery.autoEngage")
+        if (autoOn) {
+            val autoLevel = Saver.parseLevel(autoLevelSetting.raw)?.takeIf { it != SaverLevel.Off } ?: SaverLevel.Medium
+            SettingRow(stringResource(R.string.settings_battery_auto_level), saverLevelName(autoLevel), autoLevelSetting.scope, tag = "battery.autoLevel")
+            val options = listOf(SaverLevel.Light, SaverLevel.Medium, SaverLevel.Max, SaverLevel.Custom).map { it to saverLevelName(it) }
+            ChoiceRow(options, isSelected = { it == autoLevel }, onSelect = { autoLevelSetting.setRaw(Saver.levelValue(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+        }
     }
+}
+
+@Composable
+internal fun saverLevelName(level: SaverLevel): String = stringResource(
+    when (level) {
+        SaverLevel.Off -> R.string.saver_level_off
+        SaverLevel.Light -> R.string.saver_level_light
+        SaverLevel.Medium -> R.string.saver_level_medium
+        SaverLevel.Max -> R.string.saver_level_max
+        SaverLevel.Custom -> R.string.saver_level_custom
+    },
+)
+
+@Composable
+private fun saverLevelSummary(level: SaverLevel, customCount: Int): String = when (level) {
+    SaverLevel.Off -> stringResource(R.string.saver_summary_off)
+    SaverLevel.Light -> stringResource(R.string.saver_summary_light)
+    SaverLevel.Medium -> stringResource(R.string.saver_summary_medium)
+    SaverLevel.Max -> stringResource(R.string.saver_summary_max)
+    SaverLevel.Custom -> pluralStringResource(R.plurals.saver_summary_custom, customCount, customCount, Saver.ALL.size)
+}
+
+@Composable
+private fun saverFeatureText(feature: SaverFeature): Pair<String, String> {
+    val (name, body) = when (feature) {
+        SaverFeature.StillBackground -> R.string.saver_feature_still_background to R.string.saver_feature_still_background_body
+        SaverFeature.StillSeekWave -> R.string.saver_feature_still_seek_wave to R.string.saver_feature_still_seek_wave_body
+        SaverFeature.LighterLyrics -> R.string.saver_feature_lighter_lyrics to R.string.saver_feature_lighter_lyrics_body
+        SaverFeature.RefreshCap -> R.string.saver_feature_refresh_cap to R.string.saver_feature_refresh_cap_body
+        SaverFeature.SlowSync -> R.string.saver_feature_slow_sync to R.string.saver_feature_slow_sync_body
+        SaverFeature.SimpleLyrics -> R.string.saver_feature_simple_lyrics to R.string.saver_feature_simple_lyrics_body
+        SaverFeature.NoImmersiveArtwork -> R.string.saver_feature_no_immersive_artwork to R.string.saver_feature_no_immersive_artwork_body
+        SaverFeature.NoArtworkBlur -> R.string.saver_feature_no_artwork_blur to R.string.saver_feature_no_artwork_blur_body
+        SaverFeature.SmallArtwork -> R.string.saver_feature_small_artwork to R.string.saver_feature_small_artwork_body
+    }
+    return stringResource(name) to stringResource(body)
 }
 
 /** Backup & diagnostics: export (optionally with secrets), import, copy diagnostics. */

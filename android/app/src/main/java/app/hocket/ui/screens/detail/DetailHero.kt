@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.has
 import app.hocket.core.api.Album
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.Artwork
@@ -144,7 +145,8 @@ internal fun rememberDetailLook(coverArt: String?, round: Boolean, width: Dp): D
     val settings by client.settings.collectAsStateWithLifecycle()
     val appDark = LocalDarkTheme.current
     val app = MaterialTheme.colorScheme
-    val preference = ImmersiveArtwork.preference(settings[SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
+    val saver by client.batterySaver.collectAsStateWithLifecycle()
+    val preference = ImmersiveArtwork.preference(settings[SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value, saver)
     val candidate = coverArt != null && !round && width <= IMMERSIVE_MAX_WIDTH && preference != ImmersiveArtworkPreference.Never
     val resolved = if (candidate) rememberArtworkLayout(coverArt, preference, appDark).value else null
     val layout = resolved?.layout?.takeIf { it.bottom.style != ArtworkStyle.Card }
@@ -436,7 +438,11 @@ private fun DetailContinuation(coverArt: String?, edge: ArtworkEdge, side: Dp, a
         Box(Modifier.fillMaxSize().background(base))
         if (flat) Box(Modifier.fillMaxSize().background(grainBrush(edge.metrics.grain)))
         else Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(soften(edge.edgeColors.map(::argb).ifEmpty { listOf(base) }, 6))))
-        if (mirror) {
+        // Battery saver without artwork blur: a mirror keeps only its edge colours (below), no blurred reflection.
+        val noBlur = LocalCoreClient.current.batterySaver.collectAsStateWithLifecycle().value.has(app.hocket.core.api.SaverFeature.NoArtworkBlur)
+        if (mirror && noBlur) {
+            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(soften(edge.edgeColors.map(::argb).ifEmpty { listOf(base) }, 6))))
+        } else if (mirror) {
             Reflected(side * 0.08f, 0.55f)
             Reflected(side * 0.03f, 0.12f)
         } else if (!flat) {

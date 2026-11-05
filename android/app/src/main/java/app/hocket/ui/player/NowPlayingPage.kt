@@ -121,6 +121,7 @@ import app.hocket.R
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
+import app.hocket.core.has
 import app.hocket.core.SwipeOptions
 import app.hocket.core.api.ArtworkEdge
 import app.hocket.core.api.ArtworkLayout
@@ -736,8 +737,10 @@ private fun PlayerSeek(position: () -> Long) {
     val reducedMotion = LocalReducedMotion.current
     val track = entry?.track ?: return
     val syncing = rememberConnectSyncing()
+    val saver by client.batterySaver.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING).graphicsLayer { alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f }) {
-        WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, centre = { SeekStatus() })
+        WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) },
+            stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), centre = { SeekStatus() })
     }
 }
 
