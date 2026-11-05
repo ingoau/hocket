@@ -264,7 +264,7 @@ test.describe("dragging onto the queue", () => {
       w.__tops = [];
       const start = performance.now();
       const tick = () => {
-        const el = [...document.querySelectorAll("[data-testid='queue-timeline'] .qrow")].find((r) => r.querySelector(".t1")?.textContent === name);
+        const el = Array.from(document.querySelectorAll("[data-testid='queue-timeline'] .qrow")).find((r) => r.querySelector(".t1")?.textContent === name);
         if (el) w.__tops.push(el.getBoundingClientRect().top);
         if (performance.now() - start < 1000) requestAnimationFrame(tick);
       };
@@ -302,7 +302,7 @@ test.describe("dragging onto the queue", () => {
       w.__orders = [];
       const start = performance.now();
       const tick = () => {
-        w.__orders.push([...document.querySelectorAll("[data-testid='queue-row-rest'] .t1")].map((e) => e.textContent ?? ""));
+        w.__orders.push(Array.from(document.querySelectorAll("[data-testid='queue-row-rest'] .t1")).map((e) => e.textContent ?? ""));
         if (performance.now() - start < 1000) requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
