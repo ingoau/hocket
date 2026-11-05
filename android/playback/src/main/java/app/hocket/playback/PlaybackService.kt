@@ -151,14 +151,16 @@ class PlaybackService : MediaLibraryService() {
                 val now = ConnectRoutes.state.value
                 if (now.remote != was.remote || now.remoteVolume != was.remoteVolume) applySession(bridge.player.state)
             }
-            is Event.QueueChanged -> bridge.applyQueue(event.data.queue)
+            is Event.QueueChanged -> {
+                bridge.applyQueue(event.data.queue)
+                backend.onQueueChanged()
+            }
             is Event.ServersChanged -> serverId = event.data.servers.firstOrNull()?.id
             is Event.LibraryChanged -> scheduleLibraryNotify()
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.Started -> applySnapshot(event.data.snapshot)
             is Event.Snapshot -> applySnapshot(event.data.snapshot)
             is Event.SettingChanged -> when (event.data.setting.key) {
-                SettingKeys.BATTERY_AUTO_ENGAGE -> battery.automatic = event.data.setting.value.trim() != "false"
                 SettingKeys.MEDIA_EXTERNAL_CONTROL -> bridge.setExternalControl(event.data.setting.value.trim() == "true")
             }
             else -> Unit
@@ -173,7 +175,6 @@ class PlaybackService : MediaLibraryService() {
         ConnectRoutes.onDevices(snapshot.devices)
         ConnectRoutes.onTransport(snapshot.transport)
         applySession(snapshot.mediaSession)
-        battery.automatic = snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
         bridge.setExternalControl(snapshot.settings.firstOrNull { it.key == SettingKeys.MEDIA_EXTERNAL_CONTROL }?.value?.trim() == "true")
     }
 

@@ -19,7 +19,6 @@ const PRIME_WINDOW_MAX = 20;
 export interface PrimeGate {
   offline: boolean;
   metered: boolean;
-  batterySaver: boolean;
 }
 
 export interface PrimeRecord {
@@ -74,7 +73,6 @@ export class FakeStreamCache {
     if (this.primes.length > 200) this.primes.splice(0, this.primes.length - 200);
     if (!track) return Object.assign(rec, { reason: "unknown" });
     if (gate.offline || gate.metered) return Object.assign(rec, { reason: "metered" });
-    if (gate.batterySaver) return Object.assign(rec, { reason: "battery saver" });
     if (track.offline === "downloaded" || track.offline === "cached" || this.partial.has(track.id)) return Object.assign(rec, { outcome: "skipped", reason: "already on disk" });
     const recent = this.primes.filter((p) => p.outcome === "primed" && now - p.at < PRIME_WINDOW_MS).length;
     if (recent >= PRIME_WINDOW_MAX) return Object.assign(rec, { reason: "rate limited" });

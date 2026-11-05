@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Kawarp } from "@kawarp/core";
 import { useApp, useSetting } from "../store/app";
+import { saverHas } from "../store/reducer";
 import { useArtwork } from "./Artwork";
 import { SK } from "@shared/settings-keys";
 import { usePrefersReducedMotion } from "../lib/media";
@@ -26,10 +27,10 @@ const TARGET = 4.8;
 
 export function FluidBackground({ coverArt }: { coverArt: string | undefined }) {
   const perf = useApp((s) => s.perf);
-  const batterySaver = useApp((s) => s.batterySaver);
+  const still = useApp((s) => saverHas(s.batterySaver, "stillBackground"));
   const animatedSetting = useSetting(SK.displayAnimatedBackground, true);
   const reducedMotion = usePrefersReducedMotion();
-  const animated = animatedSetting && !batterySaver && !reducedMotion;
+  const animated = animatedSetting && !still && !reducedMotion;
   const url = useArtwork(coverArt, animated ? 300 : 64);
   const canvas = useRef<HTMLCanvasElement>(null);
   const kawarp = useRef<Kawarp | undefined>(undefined);

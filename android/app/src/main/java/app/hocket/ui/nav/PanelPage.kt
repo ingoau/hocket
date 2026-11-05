@@ -1,5 +1,7 @@
 package app.hocket.ui.nav
 
+import app.hocket.core.has
+import app.hocket.core.engaged
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.spring
@@ -78,7 +80,7 @@ internal fun PanelPageHost(page: PlayerMode?, onClose: () -> Unit, endInset: Dp 
                 val entry by client.nowPlaying.collectAsStateWithLifecycle()
                 val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
                 val settings by client.settings.collectAsStateWithLifecycle()
-                val animated = settings[SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false" && !batterySaver
+                val animated = settings[SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false" && !batterySaver.has(app.hocket.core.api.SaverFeature.StillBackground)
                 LyricsBackground(entry?.track?.coverArt, animated = animated, visible = page == PlayerMode.Lyrics, modifier = Modifier.fillMaxSize())
                 Box(Modifier.fillMaxSize().padding(end = endInset)) {
                     LyricsPage(

@@ -90,7 +90,8 @@ impl Actor {
                 self.apply_transcoding_settings();
                 self.mark_prefetch_check();
             }
-            keys::BATTERY_PAUSE_PREFETCH | keys::STORAGE_PREFETCH_ON_MOBILE_DATA => {
+            keys::STORAGE_PREFETCH_ON_MOBILE_DATA => {
+                self.apply_storage_settings();
                 self.mark_prefetch_check();
             }
             keys::STORAGE_WARN_THRESHOLD_BYTES | keys::STORAGE_CACHE_MAX_BYTES => {
@@ -166,10 +167,10 @@ impl Actor {
                     self.engine_input(Input::Tick);
                 }
             }
-            keys::BATTERY_SMALL_ARTWORK => {
-                self.media_art = None;
-                self.emit_media_session();
-            }
+            keys::BATTERY_LEVEL
+            | keys::BATTERY_AUTO_LEVEL
+            | keys::BATTERY_CUSTOM
+            | keys::BATTERY_AUTO_ENGAGE => self.refresh_battery_saver(),
             keys::PLAYBACK_RESUME_ALBUMS => self.emit_album_resumes(),
             keys::LIBRARY_SYNC_INTERVAL_MINUTES | keys::LIBRARY_FULL_RECONCILE_DAYS => {
                 self.last_sync_check = 0.0;
@@ -182,6 +183,10 @@ impl Actor {
         let warn = self.settings.get_f64(keys::STORAGE_WARN_THRESHOLD_BYTES);
         self.downloads
             .set_warn_threshold(if warn > 0.0 { Some(warn) } else { None });
+        self.downloads.set_prefetch_on_mobile_data(
+            self.settings
+                .get_bool(keys::STORAGE_PREFETCH_ON_MOBILE_DATA),
+        );
         self.apply_cache_budget();
     }
 

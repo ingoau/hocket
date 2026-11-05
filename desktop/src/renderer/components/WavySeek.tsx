@@ -22,6 +22,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
+import { saverHas } from "../store/reducer";
 import { extrapolate, ticker } from "../store/position";
 import { bridge } from "../core/bridge";
 import { fmtTime } from "../lib/format";
@@ -83,7 +84,7 @@ export function WavySeek({ durationMs, playing, variant = "player" }: { duration
   // The player bar's wave moves only while the window has focus and the battery saver is off (it
   // is always on screen, unlike the fullscreen player's); otherwise it holds still, like with
   // reduced motion. The fullscreen one stops only with the window hidden.
-  const stopped = useApp((s) => (variant === "bar" ? s.perf !== "full" || s.batterySaver || s.fullscreen : s.perf === "stopped"));
+  const stopped = useApp((s) => (variant === "bar" ? s.perf !== "full" || saverHas(s.batterySaver, "stillSeekWave") || s.fullscreen : s.perf === "stopped"));
   const reducedMotion = usePrefersReducedMotion();
   const [drag, setDrag] = useState<number | undefined>(undefined);
   const [hover, setHover] = useState<number | undefined>(undefined);

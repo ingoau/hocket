@@ -8,7 +8,6 @@ export interface MainState {
   mainBounds?: { x: number; y: number; width: number; height: number; maximized: boolean };
   miniBounds?: { x: number; y: number };
   closeToTray?: boolean;
-  batterySaverAuto?: boolean;
 }
 
 export class StoreFile {

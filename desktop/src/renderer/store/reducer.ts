@@ -1,11 +1,19 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem,
+  AudioSettings, BatterySaver, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem, SaverFeature,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
 import type { PlayerNotice } from "../lib/notice";
+
+export const SAVER_OFF: BatterySaver = { level: "off", automatic: false, features: [] };
+
+/** Whether battery saver currently turns off `feature`. */
+export const saverHas = (saver: BatterySaver, feature: SaverFeature): boolean => saver.features.includes(feature);
+
+/** Whether battery saver is engaged at all (some level that turns something off). */
+export const saverEngaged = (saver: BatterySaver): boolean => saver.features.length > 0;
 
 export interface CoreState {
   ready: boolean;
@@ -29,7 +37,8 @@ export interface CoreState {
   resumeOffer: ResumeOffer | undefined;
   sleepTimer: SleepTimer | undefined;
   network: NetworkState | undefined;
-  batterySaver: boolean;
+  /** Battery saver as the core has it engaged; components test `features` ({@link saverHas}). */
+  batterySaver: BatterySaver;
   syncProgress: SyncProgress | undefined;
   savedQueues: SavedQueue[];
   /** The song stash, in order (core's `StashChanged`). */
@@ -90,7 +99,7 @@ export const initialCoreState: CoreState = {
   resumeOffer: undefined,
   sleepTimer: undefined,
   network: undefined,
-  batterySaver: false,
+  batterySaver: SAVER_OFF,
   syncProgress: undefined,
   savedQueues: [],
   stash: [],
@@ -224,7 +233,7 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "networkChanged":
       return { ...state, network: e.data.network ?? undefined };
     case "batterySaverChanged":
-      return { ...state, batterySaver: e.data.enabled };
+      return { ...state, batterySaver: e.data.saver };
     case "devicesChanged":
       return { ...state, devices: e.data.devices };
     case "handoffPickerChanged":

@@ -28,7 +28,7 @@ impl Actor {
                 self.visible = visible;
                 self.focused = focused;
             }
-            Command::SetBatterySaver { enabled } => self.set_battery_saver(enabled),
+            Command::SetPowerSave { enabled } => self.set_power_save(enabled),
 
             // -- servers --
             Command::AddServer {

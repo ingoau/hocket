@@ -12,7 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.Deferred
@@ -127,8 +127,9 @@ class CoreClient(
     val sleepTimer: StateFlow<SleepTimer?> = _sleepTimer.asStateFlow()
     private val _network = MutableStateFlow<NetworkState?>(null)
     val network: StateFlow<NetworkState?> = _network.asStateFlow()
-    private val _batterySaver = MutableStateFlow(false)
-    val batterySaver: StateFlow<Boolean> = _batterySaver.asStateFlow()
+    private val _batterySaver = MutableStateFlow(app.hocket.core.Saver.OFF)
+    /** Battery saver as engaged now; test a feature with [app.hocket.core.has]. */
+    val batterySaver: StateFlow<BatterySaver> = _batterySaver.asStateFlow()
     private val _syncProgress = MutableStateFlow<SyncProgress?>(null)
     val syncProgress: StateFlow<SyncProgress?> = _syncProgress.asStateFlow()
     private val _savedQueues = MutableStateFlow<List<SavedQueue>>(emptyList())
@@ -259,17 +260,52 @@ class CoreClient(
 
     /**
      * ~30 Hz position while subscribed and playing; nothing runs when no screen collects it, and a
-     * paused player is not polled ([awaitPositionMayMove]). Lyrics uses [positionNow] on its own
-     * frame loop.
+     * paused player is not polled ([awaitPositionMayMove]). For smooth motion only: progress bars
+     * use [progress]. Lyrics uses [positionNow] on its own frame loop.
      */
-    val position: StateFlow<Long> = flow {
+    val position: StateFlow<Long> = positionTicker(POSITION_TICK_MS)
+
+    /**
+     * Position at ~4 Hz, for progress bars and clocks (the mini player's line, the seek bar, the
+     * playing queue's time): a quarter second on a track of minutes is about a pixel, and waking
+     * the UI 30 times a second for it costs battery. Runs only while subscribed, like [position].
+     */
+    val progress: StateFlow<Long> = positionTicker(PROGRESS_TICK_MS)
+
+    /**
+     * Emits [positionNow] every [periodMs] while playing, and at once when the position jumps (a
+     * seek, play or pause, another track) rather than at the next tick: a slow ticker would
+     * otherwise show a seek up to a period late. Paused, it waits for the next stamp.
+     */
+    private fun positionTicker(periodMs: Long): StateFlow<Long> = flow {
         while (true) {
             val mark = positionMark()
             emit(positionNow())
-            delay(POSITION_TICK_MS)
-            awaitPositionMayMove(mark)
+            if (mark.moving) withTimeoutOrNull(periodMs) { awaitPositionJump(mark) }
+            else awaitPositionMayMove(mark)
         }
     }.stateIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 500), 0L)
+
+    /**
+     * Suspends until the position stops following [mark]: another track, play or pause, or a
+     * stamp that puts it more than [POSITION_JUMP_MS] from where [mark] would (a seek). The
+     * playing player's routine re-stamps (~1 Hz) agree with [mark] and do not count.
+     */
+    private suspend fun awaitPositionJump(mark: PositionMark) {
+        combine(_clock, _nowPlaying) { t, e ->
+            when {
+                e !== mark.entry -> true
+                t === mark.stamp -> false
+                t.position.isPlaying != mark.stamp.position.isPlaying -> true
+                else -> {
+                    val at = now()
+                    val offset = _connection.value.clockOffsetMs
+                    val duration = e?.track?.durationMs?.toLong()
+                    kotlin.math.abs(PositionClock.extrapolate(t, at, offset, duration) - PositionClock.extrapolate(mark.stamp, at, offset, duration)) > POSITION_JUMP_MS
+                }
+            }
+        }.first { it }
+    }
 
     // -- page caches -------------------------------------------------------------------------------
     val trackPages = PageCache<TrackListKey, Track>(scope) { key, offset, limit ->
@@ -575,7 +611,7 @@ class CoreClient(
             is Event.ConnectionChanged -> _connection.value = event.data.state
             // The core announces every SetNetworkState change (and replays it on attach).
             is Event.NetworkChanged -> _network.value = event.data.network
-            is Event.BatterySaverChanged -> _batterySaver.value = event.data.enabled
+            is Event.BatterySaverChanged -> _batterySaver.value = event.data.saver
             is Event.DevicesChanged -> _devices.value = event.data.devices
             is Event.HandoffPickerChanged -> _handoff.value = HandoffPicker(event.data.open, event.data.targets)
             is Event.ResumeOfferChanged -> _resumeOffer.value = event.data.offer
@@ -685,6 +721,10 @@ class CoreClient(
         const val LYRICS_CACHE_CAP = 12
         /** [position]'s period while playing (~30 Hz). */
         const val POSITION_TICK_MS = 32L
+        /** [progress]'s period while playing (~4 Hz). */
+        const val PROGRESS_TICK_MS = 250L
+        /** A re-stamp that moves the position further than this is a jump (a seek): tickers show it at once. */
+        const val POSITION_JUMP_MS = 300L
     }
 }
 

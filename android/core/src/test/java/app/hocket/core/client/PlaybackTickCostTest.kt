@@ -120,6 +120,32 @@ class PlaybackTickCostTest {
     }
 
     @Test
+    fun progressTicksAtFourHertzWhilePlaying() = runTest {
+        var reads = 0
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { reads++; clock })
+        runCurrent()
+        client.requestSnapshot()
+        runCurrent()
+        client.dispatch(Command.Play)
+        runCurrent()
+        assertTrue(client.isPlaying.value)
+        backgroundScope.launch { client.progress.collect { } }
+        runCurrent()
+        // One clock read per emission (the clock stands still, so the StateFlow's values would dedupe).
+        reads = 0
+        advanceTimeBy(1_000)
+        runCurrent()
+        println("MEASURE progress playing 1 s: position reads=$reads")
+        assertTrue("progress: ~4 Hz, not ~30 ($reads reads)", reads in 3..6)
+        // A seek shows at once, not at the next tick.
+        advanceTimeBy(CoreClient.PROGRESS_TICK_MS / 2)
+        client.dispatch(Commands.seekTo(42_000))
+        runCurrent()
+        assertEquals(42_000L, client.progress.value)
+    }
+
+    @Test
     fun ownsTransportFollowsMediaSessionEventsNotOnlySnapshots() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })

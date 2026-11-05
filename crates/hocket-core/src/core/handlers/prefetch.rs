@@ -12,9 +12,9 @@
 //!   fully cached count toward the two but need no fetch.
 //! - Who: only the transport owner, with its own battery/network state.
 //!   Losing ownership cancels at once; gaining it starts after the debounce.
-//! - Gating: off on the coordinator; paused offline, with battery saver on
-//!   and `battery.pausePrefetch`, and on metered/cellular networks unless
-//!   `storage.prefetchOnMobileData`.
+//! - Gating: off on the coordinator; paused offline, and on metered/cellular
+//!   networks unless `storage.prefetchOnMobileData`. Battery saver does not
+//!   pause it: fetching ahead in one go lets the radio sleep in between.
 //! - Budget: the targets are protected from eviction like the loaded
 //!   tracks; if fetching them would take more than a quarter of
 //!   `storage.cacheMaxBytes`, the ones that don't fit are skipped.
@@ -153,9 +153,6 @@ impl Actor {
             || !self.owns_transport()
             || self.shutting_down
         {
-            return false;
-        }
-        if self.battery_saver && self.settings.get_bool(keys::BATTERY_PAUSE_PREFETCH) {
             return false;
         }
         match &self.network {

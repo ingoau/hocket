@@ -142,18 +142,15 @@ async fn a_queue_change_cancels_a_stale_prefetch() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn battery_saver_with_pause_prefetch_stops_prefetch() {
+async fn battery_saver_keeps_prefetching() {
+    // Fetching ahead in one go lets the radio sleep in between: saver leaves it on.
     let t = started("battery", seeded_server(4, 100.0)).await;
-    t.run(Command::SetBatterySaver { enabled: true }).await;
-    play_album(&t, 4, 0).await;
-    run_real(&t, 5000.0).await;
-    assert!(t.upstream.calls().is_empty(), "{:?}", t.upstream.calls());
-    // `battery.pausePrefetch` off lets it run even in battery saver.
     t.run(Command::SetSetting {
-        key: "battery.pausePrefetch".into(),
-        value: "false".into(),
+        key: "battery.level".into(),
+        value: "\"max\"".into(),
     })
     .await;
+    play_album(&t, 4, 0).await;
     wait_cached(&t, "t1").await;
     t.core.shutdown().await;
 }

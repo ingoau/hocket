@@ -1472,6 +1472,7 @@ mod tests {
                 mime_type: Some("audio/wav".into()),
                 gain_db: 0.0,
                 transcoded: false,
+                local: false,
             }
         }
 
@@ -1738,6 +1739,7 @@ mod tests {
             mime_type: Some("audio/wav".into()),
             gain_db: -6.0,
             transcoded: false,
+            local: false,
         };
         rig.backend.load(src, None, 100, true).unwrap();
         let reports = rig.wait_for(

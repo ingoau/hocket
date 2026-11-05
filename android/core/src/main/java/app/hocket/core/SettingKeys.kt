@@ -25,8 +25,12 @@ object SettingKeys {
     /** Apps without notification access (media browsers, Auto) may browse and control playback. Off by default. */
     const val MEDIA_EXTERNAL_CONTROL = "media.externalControl"
     const val BATTERY_LYRICS_FPS = "battery.lyricsFps"
-    const val BATTERY_SMALL_ARTWORK = "battery.smallArtwork"
-    const val BATTERY_PAUSE_PREFETCH = "battery.pausePrefetch"
+    /** The battery saver level chosen here: `off` | `light` | `medium` | `max` | `custom` (see [Saver]). */
+    const val BATTERY_LEVEL = "battery.level"
+    /** The level `battery.autoEngage` switches to under the system's power saver. */
+    const val BATTERY_AUTO_LEVEL = "battery.autoLevel"
+    /** What the `custom` level turns off: a JSON list of saver features. */
+    const val BATTERY_CUSTOM = "battery.custom"
     const val DISPLAY_ANIMATED_BACKGROUND = "display.animatedBackground"
     const val DISPLAY_LYRICS_FPS = "display.lyricsFps"
     const val DISPLAY_THEME = "display.theme"

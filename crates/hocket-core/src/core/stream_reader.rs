@@ -46,6 +46,12 @@
 //! exactly where the reader was asked to start. Either is the end of the
 //! stream, at its real length. Open handles are bounded ([`MAX_HANDLES`]); handles left idle for [`HANDLE_IDLE_MS`] are
 //! closed on the next open.
+//!
+//! A playback handle (not background prefetch) whose stream is being cached
+//! fetches the rest of it in one burst, ahead of the player
+//! ([`StreamReader::pump`]): the player reads it back from disk, so the
+//! radio sleeps for the rest of the track instead of waking for each of the
+//! player's buffer refills.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -232,6 +238,7 @@ struct Token {
     profile: Option<TranscodingProfile>,
     suffix: Option<String>,
     mime_type: Option<String>,
+    duration_ms: Option<f64>,
     expires_at: f64,
 }
 
@@ -249,11 +256,69 @@ struct Handle {
     background: bool,
     /// Still pulling from the server (cleared at end of input or error).
     network: std::sync::atomic::AtomicBool,
+    /// The burst pump ([`StreamReader::pump`]) is running for this handle.
+    pumping: std::sync::atomic::AtomicBool,
+    /// No new pump before this (after a fetch the pump could not open).
+    pump_after: Mutex<f64>,
+    /// Reads waiting for the source: the pump lets them have it.
+    wake: Wake,
+}
+
+/// How a read tells the pump it wants the source.
+#[derive(Default)]
+struct Wake {
+    readers: std::sync::atomic::AtomicUsize,
+    notify: tokio::sync::Notify,
+}
+
+impl Wake {
+    /// Resolves once a read is waiting (at once if one already is).
+    async fn wanted(&self) {
+        loop {
+            let n = self.notify.notified();
+            tokio::pin!(n);
+            n.as_mut().enable();
+            if self.readers.load(Ordering::SeqCst) > 0 {
+                return;
+            }
+            n.await;
+        }
+    }
+
+    /// Count a read as waiting until the guard drops.
+    fn waiting(&self) -> WaitingRead<'_> {
+        self.readers.fetch_add(1, Ordering::SeqCst);
+        self.notify.notify_waiters();
+        WaitingRead(self)
+    }
+}
+
+struct WaitingRead<'a>(&'a Wake);
+
+impl Drop for WaitingRead<'_> {
+    fn drop(&mut self) {
+        self.0.readers.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// A playback stream that read from the server this recently still has
 /// priority over background prefetch.
 const FOREGROUND_BUSY_MS: f64 = 10_000.0;
+/// After the pump failed to open a fetch, a read restarts it no sooner.
+const PUMP_RETRY_MS: f64 = 30_000.0;
+/// A stream is fetched ahead only once it has been open this long: a song
+/// preview (held for a few seconds) or a stream skipped at once never
+/// downloads the whole track. The player's own first buffer covers the
+/// wait, and the pump starts at its next read.
+const PUMP_START_DELAY_MS: f64 = 20_000.0;
+/// How much playing time the pump fetches past the read position when
+/// [`Downloads::fetch_ahead_limited`] (a metered network): enough for the
+/// radio to sleep for minutes, without pulling a whole track the listener
+/// may skip, pause or never reach (Media3 preloads the next item).
+const METERED_AHEAD_MS: f64 = 5.0 * 60.0 * 1000.0;
+/// The bit rate assumed for that horizon when neither the stream's length
+/// nor a transcoding bit rate says (320 kbps).
+const ASSUMED_BYTES_PER_MS: f64 = 320.0 / 8.0;
 
 #[derive(Default)]
 struct Handles {
@@ -413,9 +478,18 @@ impl StreamReader {
                 last_used: Mutex::new(sh.clock.now_ms()),
                 background,
                 network: std::sync::atomic::AtomicBool::new(network),
+                pumping: std::sync::atomic::AtomicBool::new(false),
+                pump_after: Mutex::new(sh.clock.now_ms() + PUMP_START_DELAY_MS),
+                wake: Wake::default(),
             }),
         );
+        let h = handles.open.get(&id).cloned();
         drop(handles);
+        if let Some(h) = h {
+            if let Ok(src) = h.state.try_lock() {
+                self.maybe_pump(&h, &src);
+            }
+        }
         // Where the first read comes from: a fetch already under way, or
         // local bytes (cached, or a download). A later fetch logs itself.
         tracing::debug!(
@@ -451,24 +525,155 @@ impl StreamReader {
         }
         *h.last_used.lock() = self.shared.clock.now_ms();
         let max = max_bytes.clamp(1, MAX_READ);
+        // A pump waiting on the server lets go of the source.
+        let waiting = h.wake.waiting();
         let mut source = tokio::select! {
             _ = h.cancel.cancelled() => return Err(StreamError::Closed),
             s = h.state.lock() => s,
         };
+        drop(waiting);
         let r = source.read(max, &h.cancel).await;
         let pulling = matches!(&r, Ok(b) if !b.is_empty()) && source.pulling();
         h.network.store(pulling, Ordering::Relaxed);
+        if r.is_ok() {
+            self.maybe_pump(&h, &source);
+        }
         r
     }
 
+    /// Start the burst pump for a playback handle that has more of its
+    /// stream to fetch into the cache (see [`pump`](Self::pump)).
+    fn maybe_pump(&self, h: &Arc<Handle>, source: &Source) {
+        let Source::Cache(c) = source else {
+            return;
+        };
+        if h.background
+            || !c.wants_pump(true)
+            || *h.pump_after.lock() > self.shared.clock.now_ms()
+            || h.pumping.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        tokio::spawn(self.clone().pump(h.clone()));
+    }
+
+    /// Fetch the rest of a playing stream into the cache in one go, ahead
+    /// of the player: a player that reads in bursts (Media3 buffers a
+    /// couple of minutes) would otherwise wake the radio for each one, and
+    /// the mobile radio stays in its high-power state for seconds after
+    /// every transfer. The player then reads what the pump wrote from disk.
+    ///
+    /// Only for an open-ended playback (not background) handle whose
+    /// stream is being cached (it fits the budget): nothing is held in
+    /// memory beyond the chunk in flight. It runs whatever the network
+    /// (the bytes are the track being played, which the player would fetch
+    /// anyway), from the handle's position to the end of the stream (or of
+    /// the server's body when the length is unknown), skipping spans the
+    /// cache already has. A read always goes first: the pump gives the
+    /// source up while it waits on the server. Closing the handle (a skip,
+    /// a seek) stops it; what it fetched stays cached. A failure the reader
+    /// would have reported (a dropped connection, a body ending short) is
+    /// left for the reader to meet at the byte where it happened.
+    async fn pump(self, h: Arc<Handle>) {
+        tracing::debug!(target: "hocket::stream", "fetching the rest of the stream ahead of the player");
+        loop {
+            let mut src = tokio::select! {
+                _ = h.cancel.cancelled() => break,
+                s = h.state.lock() => s,
+            };
+            let Source::Cache(c) = &mut *src else {
+                break;
+            };
+            let step = c.pump_step(&h.cancel, &h.wake).await;
+            let step = match step {
+                PumpStep::Open(open) => {
+                    // The fetch opens without the source: reads go on from
+                    // disk meanwhile, and none of them aborts it.
+                    let track = c.token.track_id.clone();
+                    drop(src);
+                    let up = fetch_upstream(&self.shared, open.request, &h.cancel, &track).await;
+                    let mut src = tokio::select! {
+                        _ = h.cancel.cancelled() => break,
+                        s = h.state.lock() => s,
+                    };
+                    let Source::Cache(c) = &mut *src else {
+                        break;
+                    };
+                    match up {
+                        Err(StreamError::Closed) => PumpStep::Done,
+                        Err(e) => {
+                            tracing::debug!(target: "hocket::stream", track = %track, at = open.from, error = %e, "could not fetch ahead of the player");
+                            PumpStep::Retry
+                        }
+                        // The reader opened this gap itself meanwhile (it
+                        // caught up): its fetch serves it.
+                        Ok(_) if c.seg.is_some() || c.fill_from() != Some(open.from) => {
+                            PumpStep::More
+                        }
+                        Ok(up) => match c.attach_segment(open.from, open.gap_end, up) {
+                            Ok(()) => PumpStep::More,
+                            Err(e) => {
+                                tracing::debug!(target: "hocket::stream", track = %track, at = open.from, error = %e, "could not fetch ahead of the player");
+                                PumpStep::Retry
+                            }
+                        },
+                    }
+                }
+                step => {
+                    drop(src);
+                    step
+                }
+            };
+            match step {
+                PumpStep::More | PumpStep::Yield | PumpStep::Open(_) => {}
+                PumpStep::Done => break,
+                PumpStep::Retry => {
+                    *h.pump_after.lock() = self.shared.clock.now_ms() + PUMP_RETRY_MS;
+                    break;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+        h.pumping.store(false, Ordering::Release);
+    }
+
+    /// Whether every byte of the stream a `hocket-stream://` URL stands for
+    /// is on this device: a download, or the complete cache entry an open
+    /// would serve for its profile. Playing it needs no network.
+    pub fn is_local(&self, url_or_token: &str) -> bool {
+        let Ok(token) = self.lookup(url_or_token) else {
+            return false;
+        };
+        let dl = &self.shared.downloads;
+        if let Ok(Some(_)) = dl.downloaded_path(&token.server_id, &token.track_id) {
+            return true;
+        }
+        match dl.cache_complete(
+            &token.server_id,
+            &token.track_id,
+            token.profile.as_ref(),
+            false,
+        ) {
+            Ok((row, changed)) => {
+                if !changed.is_empty() {
+                    (self.shared.notify)(changed);
+                }
+                row.is_some()
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Whether a playback (non-background) stream is still pulling from
-    /// the server and was read from recently.
+    /// the server and was read from recently, or is fetching ahead of its
+    /// player (the playing track finishes first).
     fn foreground_busy(&self) -> bool {
         let now = self.shared.clock.now_ms();
         self.shared.handles.lock().open.values().any(|h| {
             !h.background
-                && h.network.load(Ordering::Relaxed)
-                && now - *h.last_used.lock() < FOREGROUND_BUSY_MS
+                && (h.pumping.load(Ordering::Relaxed)
+                    || h.network.load(Ordering::Relaxed)
+                        && now - *h.last_used.lock() < FOREGROUND_BUSY_MS)
         })
     }
 
@@ -608,6 +813,7 @@ impl StreamMinter for StreamReader {
             t.expires_at = now + TOKEN_TTL_MS;
             t.suffix = target.suffix.clone();
             t.mime_type = target.mime_type.clone();
+            t.duration_ms = target.duration_ms;
             return Some(format!("{STREAM_URL_PREFIX}{id}"));
         }
         while tokens.len() >= MAX_TOKENS {
@@ -631,6 +837,7 @@ impl StreamMinter for StreamReader {
                 profile: target.profile,
                 suffix: target.suffix,
                 mime_type: target.mime_type,
+                duration_ms: target.duration_ms,
                 expires_at: now + TOKEN_TTL_MS,
             },
         );
@@ -786,6 +993,9 @@ struct Segment {
     /// Asked for from here, but the server ignored the `Range` and sent the
     /// whole stream (`Some` only then, for an offset past 0).
     skip_to: Option<u64>,
+    /// The body failed while the pump read it ahead: the reader reports it
+    /// once it gets here.
+    error: Option<String>,
 }
 
 impl Segment {
@@ -796,6 +1006,27 @@ impl Segment {
     fn ended_at_skip(&self) -> bool {
         self.skip_to.is_some_and(|p| self.next_abs == p)
     }
+}
+
+/// What one [`CacheSource::pump_step`] did.
+enum PumpStep {
+    /// Fetched (or settled) something; go on.
+    More,
+    /// A read wants the source.
+    Yield,
+    /// Nothing more to fetch ahead (or left for the reader to deal with).
+    Done,
+    /// A fetch could not be opened: try again later.
+    Retry,
+    /// Open this fetch (outside the source lock), then attach it.
+    Open(PendingOpen),
+}
+
+/// A gap fetch the pump opens: from `from` up to `gap_end`.
+struct PendingOpen {
+    from: u64,
+    gap_end: Option<u64>,
+    request: UpstreamRequest,
 }
 
 /// The cache file a handle reads from and writes into.
@@ -811,6 +1042,10 @@ struct EntryState {
     /// Nothing was merged and nothing written yet (a failed first fetch
     /// leaves no empty row behind).
     fresh: bool,
+    /// The last index merge failed: no more merges every
+    /// [`PERSIST_EVERY`] (a sync and a transaction per chunk) until the
+    /// next one at a segment end or the close.
+    merge_failed: bool,
     _guard: ReaderGuard,
 }
 
@@ -842,6 +1077,9 @@ struct CacheSource {
     failed: Option<StreamError>,
     /// Bytes already returned (a stream change after that is an error).
     served: u64,
+    /// What this handle fetched and wrote: read back from disk, it saved
+    /// no data.
+    fetched_here: SpanSet,
 }
 
 impl CacheSource {
@@ -878,6 +1116,7 @@ impl CacheSource {
             seg: None,
             failed: None,
             served: 0,
+            fetched_here: SpanSet::new(),
         }
     }
 
@@ -896,6 +1135,7 @@ impl CacheSource {
             pending: SpanSet::new(),
             pending_bytes: 0,
             fresh: false,
+            merge_failed: false,
             _guard: guard,
         });
     }
@@ -915,7 +1155,7 @@ impl CacheSource {
         self.update_end();
         let at_end = self.end.is_some_and(|e| self.pos >= e);
         if !at_end && self.known.end_at(self.pos).is_none() {
-            self.open_segment(cancel).await?;
+            self.open_segment(self.pos, cancel).await?;
         }
         Ok(StreamInfo {
             handle: 0,
@@ -935,7 +1175,12 @@ impl CacheSource {
                 self.persist();
                 return Ok(Bytes::new());
             }
-            if let Some(mut seg) = self.seg.take() {
+            // The pump took the segment past us: what it fetched is on disk.
+            let ahead =
+                self.seg.as_ref().is_some_and(|s| {
+                    s.pending_at > self.pos && s.stop.is_none_or(|st| self.pos < st)
+                }) && self.known.end_at(self.pos).is_some();
+            if let Some(mut seg) = self.seg.take_if(|_| !ahead) {
                 if seg.stop.is_some_and(|s| self.pos >= s) || seg.pending_at > self.pos {
                     self.persist();
                     continue;
@@ -954,6 +1199,11 @@ impl CacheSource {
                     self.served += n;
                     self.seg = Some(seg);
                     return Ok(out);
+                }
+                if let Some(e) = seg.error.take() {
+                    self.persist();
+                    self.failed = Some(StreamError::Network(e));
+                    continue;
                 }
                 if seg.eof {
                     let ended_at = seg.next_abs;
@@ -1039,8 +1289,186 @@ impl CacheSource {
                     }
                 }
             }
-            if let Err(e) = self.open_segment(cancel).await {
+            if let Err(e) = self.open_segment(self.pos, cancel).await {
                 self.failed = Some(e);
+            }
+        }
+    }
+
+    /// The first byte at or after the read position the cache lacks, when
+    /// it lacks one before the end.
+    fn fill_from(&self) -> Option<u64> {
+        let mut p = self.pos;
+        while let Some(e) = self.known.end_at(p) {
+            p = e;
+        }
+        match self.end {
+            Some(e) if p >= e => None,
+            _ => Some(p),
+        }
+    }
+
+    /// Whether [`pump_step`](Self::pump_step) has anything to do: an
+    /// open-ended playback read whose bytes go into a writable cache entry,
+    /// with some of the stream still to fetch within the horizon and
+    /// nothing pending for the reader to resolve. `start`: whether to start
+    /// the pump (it starts with half the metered horizon left, so it runs
+    /// in few long bursts, and runs to all of it).
+    fn wants_pump(&self, start: bool) -> bool {
+        !self.background
+            && self.requested_length.is_none()
+            && self.failed.is_none()
+            && self.api.is_some()
+            && !self.sh.stopped.is_cancelled()
+            && self.entry.as_ref().is_some_and(|e| !e.read_only)
+            && self
+                .seg
+                .as_ref()
+                // An ended body is settled by the step (it may give the
+                // stream its length); one that failed is the reader's.
+                .is_none_or(|s| s.error.is_none() && !(start && s.eof))
+            && self.fill_from().is_some_and(|from| {
+                self.horizon().is_none_or(|h| {
+                    let ahead = from.saturating_sub(self.pos) as f64;
+                    ahead < if start { h / 2.0 } else { h }
+                })
+            })
+    }
+
+    /// How far past the read position the pump may fetch, in bytes; `None`
+    /// is to the end ([`METERED_AHEAD_MS`] of playing time when the network
+    /// is metered).
+    fn horizon(&self) -> Option<f64> {
+        if !self.sh.downloads.fetch_ahead_limited() {
+            return None;
+        }
+        let from_length = match (self.total, self.token.duration_ms) {
+            (Some(t), Some(d)) if d > 0.0 => Some(t as f64 / d),
+            _ => None,
+        };
+        let from_profile = self
+            .profile
+            .as_ref()
+            .and_then(|p| p.max_bit_rate)
+            .map(|kbps| kbps as f64 / 8.0);
+        let per_ms = from_length.or(from_profile).unwrap_or(ASSUMED_BYTES_PER_MS);
+        Some(per_ms * METERED_AHEAD_MS)
+    }
+
+    /// One step of the burst pump ([`StreamReader::pump`]): settle what the
+    /// reader has not taken from the segment (it is on disk), then pull the
+    /// next chunk into the cache, or open a fetch for the next gap.
+    async fn pump_step(&mut self, cancel: &CancellationToken, wake: &Wake) -> PumpStep {
+        if !self.wants_pump(false) {
+            // All fetched (or nothing more to do): into the index now, so
+            // the entry completes while the player is still reading.
+            self.persist();
+            return PumpStep::Done;
+        }
+        let Some(mut seg) = self.seg.take() else {
+            let Some(from) = self.fill_from() else {
+                return PumpStep::Done;
+            };
+            return match self.segment_request(from) {
+                Ok((request, gap_end)) => PumpStep::Open(PendingOpen {
+                    from,
+                    gap_end,
+                    request,
+                }),
+                Err(_) => PumpStep::Retry,
+            };
+        };
+        if seg.stop.is_some_and(|s| seg.next_abs >= s) && !seg.eof {
+            // A bounded fetch has what it was asked for.
+            seg.eof = true;
+        }
+        if !seg.pending.is_empty() {
+            let (a, b) = (seg.pending_at, seg.pending_at + seg.pending.len() as u64);
+            if self.known.end_at(a).is_none_or(|e| e < b) {
+                // Not on disk: the reader takes it from memory.
+                self.seg = Some(seg);
+                return PumpStep::Done;
+            }
+            seg.pending = Bytes::new();
+            seg.pending_at = b;
+        }
+        if seg.eof {
+            let ended_at = seg.next_abs;
+            let short = match (seg.stop, self.total) {
+                (Some(s), _) => ended_at < s,
+                (None, Some(t)) => ended_at < t,
+                (None, None) => false,
+            };
+            if short || ended_at < seg.pending_at {
+                // An estimate, a body ending early: the reader decides
+                // what that means when it gets here.
+                self.seg = Some(seg);
+                return PumpStep::Done;
+            }
+            if seg.stop.is_none() && self.total.is_none() {
+                self.total = Some(ended_at);
+                self.update_end();
+            }
+            self.persist();
+            return PumpStep::More;
+        }
+        let next = tokio::select! {
+            _ = cancel.cancelled() => {
+                self.seg = Some(seg);
+                return PumpStep::Done;
+            }
+            _ = wake.wanted() => {
+                self.seg = Some(seg);
+                return PumpStep::Yield;
+            }
+            c = tokio::time::timeout(UPSTREAM_WAIT, seg.body.next()) => match c {
+                Ok(c) => c,
+                Err(_) => Some(Err("no data from the server for 60s".into())),
+            },
+        };
+        match next {
+            Some(Ok(chunk)) => {
+                let at = seg.next_abs;
+                let end = at + chunk.len() as u64;
+                seg.next_abs = end;
+                self.sh
+                    .downloads
+                    .traffic()
+                    .fetched
+                    .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                self.write(at, &chunk);
+                if end > seg.pending_at {
+                    let from = seg.pending_at.max(at);
+                    if self.known.end_at(from).is_none_or(|e| e < end) {
+                        // Not stored (the write failed): hand it to the
+                        // reader from memory and stop here.
+                        let skip = (from - at) as usize;
+                        seg.pending = chunk.slice(skip..);
+                        seg.pending_at = from;
+                        self.seg = Some(seg);
+                        return PumpStep::Done;
+                    }
+                    seg.pending_at = end;
+                }
+                self.seg = Some(seg);
+                PumpStep::More
+            }
+            Some(Err(_)) if seg.ended_at_skip() => {
+                seg.eof = true;
+                self.seg = Some(seg);
+                PumpStep::More
+            }
+            Some(Err(e)) => {
+                tracing::info!(target: "hocket::stream", track = %self.token.track_id, at = seg.next_abs, error = %e, "the server's stream failed ahead of the player");
+                seg.error = Some(e);
+                self.persist();
+                self.seg = Some(seg);
+                PumpStep::Done
+            }
+            None => {
+                seg.eof = true;
+                self.seg = Some(seg);
+                PumpStep::More
             }
         }
     }
@@ -1078,15 +1506,22 @@ impl CacheSource {
             return Err(StreamError::Io("cache file shorter than its index".into()));
         }
         buf.truncate(n);
-        self.pos += n as u64;
+        let (from, to) = (self.pos, self.pos + n as u64);
+        self.pos = to;
         self.served += n as u64;
         self.disk = Some((file, self.pos));
         if !self.background {
+            let ours: u64 = self
+                .fetched_here
+                .spans()
+                .iter()
+                .map(|&(a, b)| b.min(to).saturating_sub(a.max(from)))
+                .sum();
             self.sh
                 .downloads
                 .traffic()
                 .from_disk
-                .fetch_add(n as u64, Ordering::Relaxed);
+                .fetch_add(n as u64 - ours, Ordering::Relaxed);
         }
         Ok(Bytes::from(buf))
     }
@@ -1096,6 +1531,7 @@ impl CacheSource {
     fn drop_entry(&mut self) {
         self.disk = None;
         self.known.clear();
+        self.fetched_here.clear();
         if let Some(e) = self.entry.take() {
             let dl = &self.sh.downloads;
             let row = dl
@@ -1114,12 +1550,23 @@ impl CacheSource {
         }
     }
 
-    /// Fetch the gap at `pos` (up to the next cached span or the end).
-    async fn open_segment(&mut self, cancel: &CancellationToken) -> Result<(), StreamError> {
+    /// Fetch the gap at `pos` (up to the next cached span or the end): the
+    /// read position, or further on for the pump.
+    async fn open_segment(
+        &mut self,
+        pos: u64,
+        cancel: &CancellationToken,
+    ) -> Result<(), StreamError> {
+        let (request, gap_end) = self.segment_request(pos)?;
+        let up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
+        self.attach_segment(pos, gap_end, up)
+    }
+
+    /// The request for the gap at `pos`, and where the gap ends.
+    fn segment_request(&self, pos: u64) -> Result<(UpstreamRequest, Option<u64>), StreamError> {
         let Some(api) = self.api.clone() else {
             return Err(StreamError::NoServer);
         };
-        let pos = self.pos;
         let gap_end = match (self.known.next_start_after(pos), self.end) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -1133,16 +1580,16 @@ impl CacheSource {
         };
         tracing::debug!(target: "hocket::stream", track = %self.token.track_id, ?range, "fetching from the server");
         let url = api.stream_url(&self.token.track_id, &stream_options(self.profile.as_ref()));
-        let fetch = self.sh.upstream.fetch(UpstreamRequest { url, range });
-        let up = tokio::select! {
-            _ = cancel.cancelled() => return Err(StreamError::Closed),
-            r = tokio::time::timeout(UPSTREAM_WAIT, fetch) => r
-                .unwrap_or_else(|_| Err("no response from the server for 60s".into()))
-                .map_err(|e| {
-                    tracing::warn!(target: "hocket_core", error = %e, track = %self.token.track_id, "stream upstream");
-                    StreamError::Network(e)
-                })?,
-        };
+        Ok((UpstreamRequest { url, range }, gap_end))
+    }
+
+    /// Start reading the server's answer to the gap fetch at `pos`.
+    fn attach_segment(
+        &mut self,
+        pos: u64,
+        gap_end: Option<u64>,
+        up: UpstreamResponse,
+    ) -> Result<(), StreamError> {
         if up.status == 416 {
             // Past the end. When the server says how long the stream really
             // is (`bytes */N`), that is the end of input, as Media3's own
@@ -1192,10 +1639,10 @@ impl CacheSource {
             self.update_end();
             if self.served > 0 {
                 // Bytes of the old stream already went out: the player
-                // must start over.
-                return Err(StreamError::Network(
-                    "the stream changed on the server".into(),
-                ));
+                // must start over (also when the pump found out).
+                let e = StreamError::Network("the stream changed on the server".into());
+                self.failed = Some(e.clone());
+                return Err(e);
             }
         } else {
             self.total = self.total.or(total);
@@ -1212,6 +1659,7 @@ impl CacheSource {
             stop: if whole { None } else { gap_end },
             eof: false,
             skip_to: (whole && pos > 0).then_some(pos),
+            error: None,
         });
         Ok(())
     }
@@ -1269,6 +1717,7 @@ impl CacheSource {
     /// from (another length or type). The entry starts over at `total`.
     fn discard_spans(&mut self, total: Option<u64>, content_type: Option<&str>) {
         self.known.clear();
+        self.fetched_here.clear();
         self.disk = None;
         if let Some(e) = &mut self.entry {
             e.pending.clear();
@@ -1327,6 +1776,7 @@ impl CacheSource {
                     pending: SpanSet::new(),
                     pending_bytes: 0,
                     fresh,
+                    merge_failed: false,
                     _guard: guard,
                 });
             }
@@ -1376,7 +1826,12 @@ impl CacheSource {
         e.fresh = false;
         e.pending.insert(at, at + data.len() as u64);
         e.pending_bytes += data.len() as u64;
-        if e.pending_bytes >= PERSIST_EVERY {
+        let full = e.pending_bytes >= PERSIST_EVERY && !e.merge_failed;
+        // Readable from disk at once (another handle on the file sees the
+        // write): the pump's bytes are served from there.
+        self.known.insert(at, at + data.len() as u64);
+        self.fetched_here.insert(at, at + data.len() as u64);
+        if full {
             self.persist();
         }
     }
@@ -1416,10 +1871,14 @@ impl CacheSource {
             .cache_merge(&e.key, &add, total, ct.as_deref())
         {
             Ok(out) => {
+                e.merge_failed = false;
                 if !out.accepted {
-                    // The entry was dropped or replaced meanwhile.
+                    // The entry was dropped or replaced meanwhile: none of
+                    // its spans is ours to read any more.
                     e.file = None;
                     e.read_only = true;
+                    self.known.clear();
+                    self.disk = None;
                 } else {
                     self.known.union(&add);
                     if out.complete {
@@ -1431,7 +1890,14 @@ impl CacheSource {
                     (self.sh.notify)(out.changed);
                 }
             }
-            Err(err) => tracing::warn!(target: "hocket_core", error = %err, "stream cache index"),
+            Err(err) => {
+                // Still written: merged by the next persist (end of the
+                // segment, the handle closing) instead of lost to the index.
+                tracing::warn!(target: "hocket_core", error = %err, "stream cache index");
+                e.pending.union(&add);
+                e.pending_bytes += add.bytes();
+                e.merge_failed = true;
+            }
         }
     }
 }
@@ -1446,6 +1912,25 @@ impl Drop for CacheSource {
                 }
             }
         }
+    }
+}
+
+/// Send a gap fetch and wait (at most [`UPSTREAM_WAIT`]) for the answer.
+async fn fetch_upstream(
+    sh: &Shared,
+    request: UpstreamRequest,
+    cancel: &CancellationToken,
+    track: &str,
+) -> Result<UpstreamResponse, StreamError> {
+    let fetch = sh.upstream.fetch(request);
+    tokio::select! {
+        _ = cancel.cancelled() => Err(StreamError::Closed),
+        r = tokio::time::timeout(UPSTREAM_WAIT, fetch) => r
+            .unwrap_or_else(|_| Err("no response from the server for 60s".into()))
+            .map_err(|e| {
+                tracing::warn!(target: "hocket_core", error = %e, track = %track, "stream upstream");
+                StreamError::Network(e)
+            }),
     }
 }
 
@@ -1611,6 +2096,7 @@ mod tests {
             profile: None,
             suffix: Some("flac".into()),
             mime_type: Some("audio/flac".into()),
+            duration_ms: None,
         }
     }
 

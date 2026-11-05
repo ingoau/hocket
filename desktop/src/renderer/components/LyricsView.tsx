@@ -15,6 +15,7 @@ import type { DomLyricPlayer, LyricLineMouseEvent } from "@applemusic-like-lyric
 import type { Lyrics } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
+import { saverHas } from "../store/reducer";
 import { extrapolate, frameDue, ticker } from "../store/position";
 import { mapLyrics, activeLineIndex, type AmllLine } from "../lib/lyrics-map";
 import { bridge } from "../core/bridge";
@@ -28,12 +29,15 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
   const clockOffset = useApp((s) => s.connection.clockOffsetMs);
   const duration = useApp((s) => s.nowPlaying?.track.durationMs);
   const perf = useApp((s) => s.perf);
-  const batterySaver = useApp((s) => s.batterySaver);
+  // Battery saver: lighter lyrics run at the battery frame rate without spring or blur;
+  // simple lyrics light whole lines (a syllable document drawn as its line tier).
+  const lighter = useApp((s) => saverHas(s.batterySaver, "lighterLyrics"));
+  const simple = useApp((s) => saverHas(s.batterySaver, "simpleLyrics"));
   const fpsCap = useApp((s) => Number(JSON.parse(s.settings[SK.displayLyricsFps]?.value ?? "30")) || 30);
   const batteryFps = useApp((s) => Number(JSON.parse(s.settings[SK.batteryLyricsFps]?.value ?? "30")) || 30);
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<DomLyricPlayer | undefined>(undefined);
-  const mapped = useMemo(() => mapLyrics(lyrics), [lyrics]);
+  const mapped = useMemo(() => mapLyrics(simple && lyrics.tier === "syllable" ? { ...lyrics, tier: "line" } : lyrics), [lyrics, simple]);
   const size = useLyricsSize();
   const plain = usePlainLyrics();
   const animated = mapped.synced && !plain;
@@ -63,8 +67,8 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     loadAmll().then((amll) => {
       if (!alive) return;
       p = new amll.DomLyricPlayer();
-      p.setEnableBlur(variant === "large");
-      p.setEnableSpring(variant === "large" && !batterySaver);
+      p.setEnableBlur(variant === "large" && !lighter);
+      p.setEnableSpring(variant === "large" && !lighter);
       p.setEnableScale(true);
       // The current line sits around the middle: the side panel's lyrics view has the pane's whole height.
       p.setAlignPosition(variant === "large" ? 0.5 : 0.45);
@@ -86,13 +90,14 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
   useEffect(() => {
     const p = player.current;
     if (!p || !animated) return;
-    p.setEnableSpring(variant === "large" && !batterySaver);
+    p.setEnableSpring(variant === "large" && !lighter);
+    p.setEnableBlur(variant === "large" && !lighter);
     p.setLyricLines(mapped.lines as never, extrapolate(stampRef.current, Date.now(), clockOffset, duration));
     p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration), true);
     p.update(0);
     if (stampRef.current.isPlaying) p.resume();
     else p.pause();
-  }, [mapped, batterySaver, animated, loaded]);
+  }, [mapped, lighter, animated, loaded]);
 
   // Seek detection: a jump in the stamp means isSeek=true so AMLL relayouts.
   const lastStamp = useRef(stamp);
@@ -110,12 +115,12 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     else p.pause();
   }, [stamp, clockOffset, duration]);
 
-  // Frame loop: explicit stop when hidden or paused; ~24 fps in the background; 30 cap in battery saver.
+  // Frame loop: explicit stop when hidden or paused; ~24 fps in the background; the battery fps cap with lighter lyrics.
   // On the shared position ticker, so the lyrics, the seek bar and the background paint in the
   // same frames instead of each loop adding frames of its own.
   useEffect(() => {
     if (!animated || perf === "stopped" || !stamp.isPlaying) return;
-    const fps = perf === "background" ? Math.min(24, fpsCap) : batterySaver ? Math.min(batteryFps, fpsCap) : fpsCap;
+    const fps = perf === "background" ? Math.min(24, fpsCap) : lighter ? Math.min(batteryFps, fpsCap) : fpsCap;
     let last = performance.now();
     return ticker.subscribe(() => {
       const now = ticker.now;
@@ -127,7 +132,7 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
       p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration));
       p.update(step);
     });
-  }, [animated, perf, batterySaver, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying]);
+  }, [animated, perf, lighter, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying]);
 
   return (
     <div className="lyrics-pane" data-testid="lyrics-view" data-tier={lyrics.tier} data-mode={animated ? "animated" : "plain"}>

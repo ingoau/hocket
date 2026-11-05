@@ -185,7 +185,10 @@ async fn aborted_reads_and_dropped_connections_keep_their_bytes_and_resume_with_
     assert_eq!(row_of(&t, "t1").spans, "0-50000");
     assert_eq!(offline(&t, "t1").await, OfflineState::None);
 
-    // Closed after one read on a healthy server: the chunk that arrived stays.
+    // Closed after one read (the server stalls before the end, so the pump
+    // fetching ahead cannot finish it): what arrived stays.
+    t.upstream
+        .set_behaviour("t2", UpstreamBehaviour::StallAfter(30_000));
     let s = source(&t, "t2").await;
     let info = t.core.stream_open(&s.url, 0, None).await.unwrap();
     let first = t.core.stream_read(info.handle, 1024).await.unwrap();

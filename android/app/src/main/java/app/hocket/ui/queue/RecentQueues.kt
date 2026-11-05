@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -129,7 +130,9 @@ fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValue
 @Composable
 private fun PlayingQueueCard(label: String?, count: Int, index: Int, onRename: () -> Unit, onCreatePlaylist: () -> Unit) {
     val client = LocalCoreClient.current
-    val position by client.position.collectAsStateWithLifecycle()
+    // Shown to the second: read at ~4 Hz, and recomposed only when the second changes.
+    val progress = client.progress.collectAsStateWithLifecycle()
+    val position by remember { derivedStateOf { progress.value / 1000 * 1000 } }
     val onCard = MaterialTheme.colorScheme.onPrimary
     val onCardSoft = onCard.copy(alpha = 0.82f)
     val tonal = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)

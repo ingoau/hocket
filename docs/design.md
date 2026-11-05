@@ -225,7 +225,7 @@ The coordinator keeps a replica of the session and the saved queues so a device 
 
 ### Split-brain, not storage, is the hard part
 
-A device going quiet might have died or might have lost network and kept playing. Transport ownership is a lease with an expiry, renewed by heartbeat every 5 seconds and lapsing after 20, carrying a monotonic epoch that increments on every ownership change. A device reconnecting inside the window keeps ownership. Deliberate takeover from the picker always works immediately — the lease only covers failure.
+A device going quiet might have died or might have lost network and kept playing. Transport ownership is a lease with an expiry, renewed by heartbeat every 5 seconds and lapsing after 20 (slower, with the window scaled to match, while a device is alone or in battery saver), carrying a monotonic epoch that increments on every ownership change. A device reconnecting inside the window keeps ownership. Deliberate takeover from the picker always works immediately — the lease only covers failure.
 
 > Figure: Without a fencing token both devices end up playing at once, and it only shows up on flaky wifi.
 
@@ -395,7 +395,13 @@ AMLL's own guidance: mainstream CPUs from the last five years manage 30fps, 60fp
 
 ### Battery saver
 
-A mode, not a toggle, with "engage automatically on battery" on by default: animated background off with a static blurred still in its place, lyrics capped at 30fps, artwork resolved at the smaller cache size, background prefetch and speculative pre-buffering paused.
+A level, not a toggle: Off, Light, Medium or Max, each turning off more, and on mobile a Custom set built from the same switches. "Engage automatically" (the system's power saver, or a laptop on battery) is on by default and raises the level to a chosen one (Medium unless changed), never lowering one picked by hand.
+
+- **Light:** animated backgrounds hold still (a cached blurred still), the seek bar's wave stops moving, lyrics run at 30fps without their depth blur.
+- **Medium:** also caps the player and lyrics at 60 Hz, and Connect keeps in touch less often even with other devices around.
+- **Max:** also simple lyrics (a whole line lights at once), no immersive artwork, no blurred artwork, smaller artwork.
+
+The levels only cost looks. What saves the most battery is on for everyone: progress bars update four times a second, Connect pings rarely while a device is alone, a playing track is fetched to its end in one burst so the radio can sleep, and the Wi-Fi lock is dropped while the audio is on the device. Battery saver does not pause prefetch: fetching ahead in one go is what lets the radio rest.
 
 
 ## Player features  

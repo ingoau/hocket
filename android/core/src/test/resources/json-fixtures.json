@@ -768,7 +768,8 @@
             },
             "mimeType": "audio/flac",
             "gainDb": -6.5,
-            "transcoded": false
+            "transcoded": false,
+            "local": false
           },
           "next": null,
           "position_ms": 0,
@@ -911,7 +912,17 @@
   "event.batterySaverChanged": {
     "type": "batterySaverChanged",
     "data": {
-      "enabled": true
+      "saver": {
+        "level": "medium",
+        "automatic": true,
+        "features": [
+          "stillBackground",
+          "stillSeekWave",
+          "lighterLyrics",
+          "refreshCap",
+          "slowSync"
+        ]
+      }
     }
   },
   "event.libraryChanged": {

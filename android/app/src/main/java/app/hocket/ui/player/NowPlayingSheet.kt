@@ -1,5 +1,7 @@
 package app.hocket.ui.player
 
+import app.hocket.core.has
+import app.hocket.core.engaged
 import android.os.Build
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.Crossfade
@@ -462,7 +464,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
     val client = LocalCoreClient.current
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
-    val position = client.position.collectAsStateWithLifecycle()
+    // ~4 Hz: the mini player's line and the seek bar (which eases between ticks where a step would show).
+    val position = client.progress.collectAsStateWithLifecycle()
     val readPosition: () -> Long = remember(position) { { position.value } }
     val scope = rememberCoroutineScope()
     val reducedMotion = LocalReducedMotion.current
@@ -558,6 +561,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val scrimShown by remember(state) { derivedStateOf { state.coverProgress > 0f } }
         val scrimTappable by remember(state) { derivedStateOf { state.coverProgress > 0.5f } }
         val settledOpen by remember(state) { derivedStateOf { state.progress > 0.9f } }
+        // Battery saver: the open player runs the display at 60 Hz (the sheet's own drag and
+        // settle run at the screen's full rate; the cap comes once it is open).
+        RefreshRateCap(active = settledOpen && state.isExpanded)
         // Only the big artwork flies to and from the mini player. In lyrics / queue / about the
         // artwork is a thumbnail beside the title near the bottom of the page: flown opaque from
         // there to the mini player's thumbnail it would float over the fading, shrinking sheet and
@@ -617,7 +623,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val trackCover = entry?.track?.coverArt
         // Immersive artwork on a portrait screen (the square artwork leaves room for the controls).
         val settings by client.settings.collectAsStateWithLifecycle()
-        val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value)
+        val saver by client.batterySaver.collectAsStateWithLifecycle()
+        val preference = ImmersiveArtwork.preference(settings[app.hocket.core.SettingKeys.DISPLAY_IMMERSIVE_ARTWORK]?.value, saver)
         // (The panel's own shape: a tall panel takes an immersive artwork even on a landscape screen.)
         val portrait = if (panelMode && !state.fullScreen) panelWidth <= (panelBottom - panelTop) * ImmersiveArtwork.MAX_WIDTH_SHARE
             else constraints.maxWidth <= constraints.maxHeight * ImmersiveArtwork.MAX_WIDTH_SHARE
@@ -1239,7 +1246,7 @@ private fun FlyingArtwork(coverArt: String?, hero: HeroGeometry, progress: () ->
  * warp, Android 13+, so artwork, lyrics and the queue share one backdrop), darkened by its adaptive
  * scrim. It moves only while [moving] (the player is open and settled) and the animated background
  * is on and battery saver off; otherwise a still. Before Android 13 (Metrolist): the artwork heavily
- * blurred (Android 12) over a gradient from the artwork's colour to near black (the whole backdrop
+ * blurred (Android 12, unless battery saver turns artwork blur off) over a gradient from the artwork's colour to near black (the whole backdrop
  * before Android 12, and what shows while the image loads), under a dark scrim. Crossfades on a
  * track change.
  */
@@ -1249,8 +1256,8 @@ private fun PlayerBackground(coverArt: String?, seed: Color?, moving: Boolean, m
     if (Build.VERSION.SDK_INT >= 33) {
         val client = LocalCoreClient.current
         val settings by client.settings.collectAsStateWithLifecycle()
-        val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
-        val animated = settings[app.hocket.core.SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false" && !batterySaver
+        val saver by client.batterySaver.collectAsStateWithLifecycle()
+        val animated = settings[app.hocket.core.SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false" && !saver.has(app.hocket.core.api.SaverFeature.StillBackground)
         Box(modifier.background(Color.Black)) {
             Crossfade(targetState = coverArt, animationSpec = tween(if (reduced) 0 else Motion.BACKGROUND_MS), label = "playerBackground") { art ->
                 app.hocket.ui.lyrics.LyricsBackground(art, animated = animated, visible = moving, modifier = Modifier.fillMaxSize())
@@ -1258,12 +1265,14 @@ private fun PlayerBackground(coverArt: String?, seed: Color?, moving: Boolean, m
         }
         return
     }
+    // A live 90dp blur of full-screen artwork is costly on these devices: battery saver keeps the gradient alone.
+    val noBlur = LocalCoreClient.current.batterySaver.collectAsStateWithLifecycle().value.has(app.hocket.core.api.SaverFeature.NoArtworkBlur)
     Box(modifier.background(Color.Black)) {
         Crossfade(targetState = coverArt to seed, animationSpec = tween(if (reduced) 0 else Motion.BACKGROUND_MS), label = "playerBackground") { (art, colour) ->
             Box(Modifier.fillMaxSize()) {
                 val c = colour ?: Color.DarkGray
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to c, 0.5f to c.darken(0.6f), 1f to Color(0xFF050505))))
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && art != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && art != null && !noBlur) {
                     Artwork(
                         art, ArtworkSizes.LIST, null,
                         Modifier.fillMaxSize().graphicsLayer { scaleX = 1.25f; scaleY = 1.25f }.blur(90.dp, BlurredEdgeTreatment.Rectangle),

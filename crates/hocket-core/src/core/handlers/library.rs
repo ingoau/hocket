@@ -1373,13 +1373,6 @@ impl Actor {
 
     /// Warm the cache for a track without announcing it (the next item).
     pub(crate) fn prefetch_lyrics(&mut self, track_id: TrackId) {
-        if self.battery_saver
-            && self
-                .settings
-                .get_bool(crate::settings::keys::BATTERY_PAUSE_PREFETCH)
-        {
-            return;
-        }
         let Some(sid) = self.server_id() else { return };
         let cached = self
             .caches

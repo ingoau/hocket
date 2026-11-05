@@ -20,6 +20,8 @@ import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.compositeOver
@@ -134,7 +136,13 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
                 it.setFloatUniform("texSize", tex.width.toFloat(), tex.height.toFloat())
             }
         }
-        Canvas(modifier.fillMaxSize().semantics { this[LyricsBackgroundAnimated] = shouldAnimate }.testTag(tag)) {
+        // Still and showing: drawn into an offscreen layer that the renderer keeps, so whatever
+        // redraws above it (lyrics, the seek bar) composites a cached texture instead of re-running
+        // the full-screen warp shader every frame. Moving, the layer would be redrawn each frame
+        // anyway; hidden (the player collapsed), it would hold a screen-sized texture for nothing.
+        val still = !shouldAnimate && visible
+        Canvas(modifier.fillMaxSize().graphicsLayer { compositingStrategy = if (still) CompositingStrategy.Offscreen else CompositingStrategy.Auto }
+            .semantics { this[LyricsBackgroundAnimated] = shouldAnimate }.testTag(tag)) {
             shader.setFloatUniform("size", size.width, size.height)
             shader.setFloatUniform("time", if (shouldAnimate) time else 0f)
             nativePaint.shader = shader

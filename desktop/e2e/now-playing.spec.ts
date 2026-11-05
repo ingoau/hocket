@@ -356,7 +356,7 @@ test.describe("now playing", () => {
     await title.locator("a").evaluate((el) => { el.textContent = "A Rather Long Song Title (Extended Version)"; });
     // Both badges on: they take room on the right too.
     await page.evaluate(() => window.hocket.dispatch({ type: "setSleepTimer", data: { timer: { endsAt: Date.now() + 3_600_000, stopAtEndOfTrack: false } } }));
-    await page.evaluate(() => window.hocket.dispatch({ type: "setBatterySaver", data: { enabled: true } }));
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "battery.level", value: JSON.stringify("light") } }));
     await expect(page.getByTestId("player-bar").locator(".right .badge")).toHaveCount(2);
     for (const where of ["local", "remote"] as const) {
       if (where === "remote") {
@@ -543,9 +543,9 @@ test.describe("the player bar's wave", () => {
     await playFirstAlbum(page);
     const wave = page.getByTestId("seek-slider");
     await expect(wave).toHaveAttribute("data-wave", "moving");
-    await page.evaluate(() => window.hocket.dispatch({ type: "setBatterySaver", data: { enabled: true } }));
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "battery.level", value: JSON.stringify("light") } }));
     await expect(wave).toHaveAttribute("data-wave", "still");
-    await page.evaluate(() => window.hocket.dispatch({ type: "setBatterySaver", data: { enabled: false } }));
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "battery.level", value: JSON.stringify("off") } }));
     await expect(wave).toHaveAttribute("data-wave", "moving");
   });
 });

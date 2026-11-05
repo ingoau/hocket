@@ -451,6 +451,7 @@ mod tests {
                         mime_type: Some("audio/flac".into()),
                         gain_db: -6.5,
                         transcoded: false,
+                        local: false,
                     },
                     next: None,
                     position_ms: 0,
@@ -572,7 +573,15 @@ mod tests {
         );
         push(
             "event.batterySaverChanged",
-            json!(Event::BatterySaverChanged { enabled: true }),
+            json!(Event::BatterySaverChanged {
+                saver: hocket_core::saver::resolve(
+                    SaverLevel::Off,
+                    SaverLevel::Medium,
+                    true,
+                    true,
+                    &[],
+                ),
+            }),
         );
         push(
             "event.libraryChanged",

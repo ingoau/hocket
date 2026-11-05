@@ -26,7 +26,12 @@ use tracing::{info, warn};
 
 use hocket_core::connect::wire::{scope_key, ReportGrant};
 
-use crate::{App, READ_TIMEOUT};
+use crate::App;
+
+/// An upload body that delivers nothing for this long is abandoned (the
+/// WebSocket `READ_TIMEOUT` is longer, stretched for slow keepalives; an
+/// upload has no reason to stall that long).
+const UPLOAD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 const MIB: u64 = 1024 * 1024;
 const HOUR_MS: u64 = 3_600_000;
@@ -975,7 +980,7 @@ async fn upload_inner(
     let mut over = false;
     let mut broken = false;
     loop {
-        match tokio::time::timeout(READ_TIMEOUT, stream.next()).await {
+        match tokio::time::timeout(UPLOAD_READ_TIMEOUT, stream.next()).await {
             Ok(Some(Ok(chunk))) => {
                 if written + chunk.len() as u64 > cap {
                     over = true;

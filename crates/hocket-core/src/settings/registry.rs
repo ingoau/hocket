@@ -71,8 +71,12 @@ pub mod keys {
     /// notification access always work.
     pub const MEDIA_EXTERNAL_CONTROL: &str = "media.externalControl";
     pub const BATTERY_LYRICS_FPS: &str = "battery.lyricsFps";
-    pub const BATTERY_SMALL_ARTWORK: &str = "battery.smallArtwork";
-    pub const BATTERY_PAUSE_PREFETCH: &str = "battery.pausePrefetch";
+    /// The battery saver level chosen on this device ([`crate::api::SaverLevel`]).
+    pub const BATTERY_LEVEL: &str = "battery.level";
+    /// The level `battery.autoEngage` switches to while the device saves power.
+    pub const BATTERY_AUTO_LEVEL: &str = "battery.autoLevel";
+    /// What the `custom` level turns off: a list of [`crate::api::SaverFeature`]s.
+    pub const BATTERY_CUSTOM: &str = "battery.custom";
     pub const DISPLAY_ANIMATED_BACKGROUND: &str = "display.animatedBackground";
     pub const DISPLAY_LYRICS_FPS: &str = "display.lyricsFps";
     pub const DISPLAY_THEME: &str = "display.theme";
@@ -191,6 +195,17 @@ const fn json_def(
         default,
         validate: Some(validate),
     }
+}
+
+fn battery_custom_default() -> Value {
+    serde_json::to_value(crate::saver::preset(crate::api::SaverLevel::Medium))
+        .unwrap_or(Value::Null)
+}
+
+fn battery_custom_valid(v: &Value) -> Result<(), String> {
+    serde_json::from_value::<Vec<crate::api::SaverFeature>>(v.clone())
+        .map(|_| ())
+        .map_err(|e| format!("not a list of battery saver features: {e}"))
 }
 
 fn autoplay_default() -> Value {
@@ -529,12 +544,24 @@ pub static REGISTRY: &[SettingDef] = &[
         SettingKind::Int { min: 10, max: 60 },
         || json!(30),
     ),
-    def(BATTERY_SMALL_ARTWORK, Local, SettingKind::Bool, || {
-        json!(true)
-    }),
-    def(BATTERY_PAUSE_PREFETCH, Local, SettingKind::Bool, || {
-        json!(true)
-    }),
+    def(
+        BATTERY_LEVEL,
+        Local,
+        SettingKind::Enum(&["off", "light", "medium", "max", "custom"]),
+        || json!("off"),
+    ),
+    def(
+        BATTERY_AUTO_LEVEL,
+        Local,
+        SettingKind::Enum(&["light", "medium", "max", "custom"]),
+        || json!("medium"),
+    ),
+    json_def(
+        BATTERY_CUSTOM,
+        Local,
+        battery_custom_default,
+        battery_custom_valid,
+    ),
     def(
         DISPLAY_ANIMATED_BACKGROUND,
         Local,

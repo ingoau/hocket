@@ -229,6 +229,10 @@ pub enum Internal {
     /// Test barrier: answered once every message before it was handled, with
     /// whether anything is still in flight.
     Barrier(oneshot::Sender<bool>),
+    /// Test probe: the Connect engine's `SlowSync` flag (`None` without a
+    /// session).
+    #[cfg(feature = "sim")]
+    EngineSlowSync(oneshot::Sender<Option<bool>>),
 }
 
 /// What the actor loop receives. One channel keeps commands, queries and
@@ -597,6 +601,14 @@ impl Core {
         }
     }
 
+    /// Whether a `hocket-stream://` source needs no network: a download,
+    /// or the complete cache entry an open would serve for its profile
+    /// (see [`stream_reader::StreamReader::is_local`]). A quick index
+    /// lookup; unknown tokens are not local.
+    pub fn stream_local(&self, url: &str) -> bool {
+        self.reader().is_ok_and(|r| r.is_local(url))
+    }
+
     /// [`Core::stream_open`] for FFI loader threads: runs on the core's
     /// runtime and blocks the calling thread (never the actor). Never call
     /// it from inside an async context.
@@ -637,6 +649,15 @@ impl Core {
     /// Open stream-reader handles (tests, diagnostics).
     pub fn stream_open_handles(&self) -> usize {
         self.reader().map_or(0, |r| r.open_handles())
+    }
+
+    /// Whether the Connect engine runs with the battery saver's `SlowSync`
+    /// (`None` without a session). Tests only.
+    #[cfg(feature = "sim")]
+    pub async fn engine_slow_sync(&self) -> Option<bool> {
+        let (tx, rx) = oneshot::channel();
+        self.post_internal(Internal::EngineSlowSync(tx)).ok()?;
+        rx.await.ok().flatten()
     }
 
     /// Deliver one tick to the actor (tests with `manual_tick`).

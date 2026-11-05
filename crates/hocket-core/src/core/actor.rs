@@ -224,7 +224,10 @@ pub(crate) struct Actor {
     pub network: Option<NetworkState>,
     pub visible: bool,
     pub focused: bool,
-    pub battery_saver: bool,
+    /// The device's own power-save state (`SetPowerSave`).
+    pub power_save: bool,
+    /// Battery saver as engaged ([`crate::saver::resolve`]).
+    pub battery_saver: crate::api::BatterySaver,
     pub selection: ActionTarget,
     pub sync_progress: Option<SyncProgress>,
     pub resume_offer: Option<ResumeOffer>,
@@ -505,7 +508,8 @@ impl Actor {
             network: None,
             visible: true,
             focused: true,
-            battery_saver: false,
+            power_save: false,
+            battery_saver: crate::api::BatterySaver::default(),
             selection: ActionTarget::None,
             sync_progress: None,
             resume_offer: None,
@@ -535,6 +539,15 @@ impl Actor {
         actor.undo = UndoStack::new(actor.cfg.device_id.clone(), crate::undo::DEFAULT_MAX_BYTES);
         actor.apply_storage_settings();
         actor.apply_transcoding_settings();
+        // A level chosen earlier is in force from the start (no event yet: nothing listens).
+        actor.battery_saver = crate::saver::resolve(
+            crate::saver::parse_level(&actor.settings.get(crate::settings::keys::BATTERY_LEVEL))
+                .unwrap_or(crate::api::SaverLevel::Off),
+            crate::api::SaverLevel::Off,
+            false,
+            false,
+            &crate::saver::parse_custom(&actor.settings.get(crate::settings::keys::BATTERY_CUSTOM)),
+        );
         crate::devlog::set_detailed(actor.settings.get_bool(keys::DEVELOPER_MODE));
         if let Some(preset) = deps.server {
             actor.attach_preset_server(preset);
@@ -708,6 +721,10 @@ impl Actor {
             Internal::Barrier(reply) => {
                 let busy = self.in_flight > 0 || self.flush_in_flight || self.jobs_busy();
                 let _ = reply.send(busy);
+            }
+            #[cfg(feature = "sim")]
+            Internal::EngineSlowSync(reply) => {
+                let _ = reply.send(self.engine.as_ref().map(|e| e.slow_sync()));
             }
         }
     }
@@ -890,7 +907,7 @@ impl Actor {
             network: snapshot.network.clone(),
         });
         self.emit(Event::BatterySaverChanged {
-            enabled: snapshot.battery_saver,
+            saver: snapshot.battery_saver.clone(),
         });
         self.emitted_devices = Some(snapshot.devices.clone());
         self.emit(Event::DevicesChanged {
@@ -1286,7 +1303,7 @@ impl Actor {
             resume_offer: self.resume_offer.clone(),
             sleep_timer: self.sleep.state(),
             network: self.network.clone(),
-            battery_saver: self.battery_saver,
+            battery_saver: self.battery_saver.clone(),
             sync_progress: self.sync_progress.clone(),
         }
     }

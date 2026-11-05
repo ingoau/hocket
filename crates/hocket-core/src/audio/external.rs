@@ -300,6 +300,7 @@ mod tests {
             mime_type: None,
             gain_db: -3.0,
             transcoded: false,
+            local: false,
         }
     }
 

@@ -101,9 +101,12 @@ pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// A socket that has not sent its `Hello` within this long is dropped.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-/// A member that sends nothing for this long is dropped (the room times
-/// members out at 30 s; this is the transport-level backstop).
-pub const READ_TIMEOUT: Duration = Duration::from_secs(60);
+/// A member that sends nothing for this long is dropped. The room times
+/// members out at 30 s, or up to 140 s for one that announced the slowest
+/// keepalive cadence (`Msg::Cadence`, see
+/// [`hocket_core::connect::lease::MAX_CADENCE_MS`]); this is the
+/// transport-level backstop, so it sits above that.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(150);
 /// The verification ping's whole budget.
 pub const VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 /// Largest ping response body read (a Subsonic ping is a few hundred bytes).

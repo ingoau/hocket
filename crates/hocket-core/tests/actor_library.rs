@@ -610,21 +610,6 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
         .all()
         .iter()
         .any(|e| matches!(e, Event::LyricsChanged { track_id, lyrics: Some(l) } if track_id == "t0" && l.tier == LyricsTier::Syllable)));
-    // Battery saver with prefetch paused: nothing is fetched ahead.
-    t.run(Command::SetBatterySaver { enabled: true }).await;
-    let calls = t.server.calls_to("getLyricsBySongId");
-    t.run(Command::PlayTracks {
-        server_id: "srv".into(),
-        track_ids: vec!["t1".into(), "t3".into()],
-        start_index: 0,
-        label: "Sel".into(),
-        shuffle: false,
-        start_position_ms: 0,
-    })
-    .await;
-    t.run_for(500.0).await;
-    assert_eq!(t.server.calls_to("getLyricsBySongId"), calls);
-    t.run(Command::SetBatterySaver { enabled: false }).await;
 
     // A per-track offset rides on top.
     t.run(Command::SetLyricsOffset {

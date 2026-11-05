@@ -92,6 +92,12 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle,
         }
     }
 
+    override fun streamLocal(url: String): Boolean = try {
+        core.streamLocal(url)
+    } catch (e: Exception) {
+        false // a freed core: its tokens are gone with it
+    }
+
     /**
      * Maps UniFFI's [StreamException] to [CoreStreamException]. A call on a core that has been freed
      * (UniFFI throws `IllegalStateException`) is [CoreStreamException.Kind.ShutDown], so a loader

@@ -178,7 +178,7 @@ the one core for the process through `CoreHost`:
   directly only with "Allow control by other apps" on; otherwise (or with no match) it opens search
   with the query.
 - `NetworkMonitor` -> `SetNetworkState` (kind, metered, hashed SSID or transport id);
-  `BatterySaverMonitor` -> `SetBatterySaver` while `battery.autoSaver` is on.
+  `BatterySaverMonitor` -> `SetPowerSave` (the core applies `battery.autoEngage`).
 - The app binds with `ACTION_BIND_CORE` (plus a per-process token, since the service is exported
   for Media3) only while some UI is started (`ForegroundBinder` on `ProcessLifecycleOwner`), with a
   plain `startService` (never `startForegroundService`: Media3 promotes the service itself once
@@ -202,7 +202,7 @@ id-keyed selection with select-all as a predicate.
 
 The app reads and writes only the core registry's keys (`app.hocket.core.SettingKeys`, mirroring
 `crates/hocket-core/src/settings/registry.rs`): `display.theme`, `display.accent` (null or
-`#RRGGBB`), `display.dynamicColour`, `display.animatedBackground`, `battery.autoEngage`,
+`#RRGGBB`), `display.dynamicColour`, `display.animatedBackground`, `battery.{level,autoLevel,custom,autoEngage}`,
 `lyrics.external.enabled`, `ratings.loveBridge.{enabled,threshold}`, `queue.savedCap`,
 `transcoding.profiles` (one map keyed `default` / `cellular` / `<networkId>`), `sync.enabled`,
 `connect.{coordinatorUrl,lanDiscovery}`, `actions.order.{contextMenu,sidebar,mediaSession}`, ….
@@ -313,7 +313,8 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   in an expressive `HorizontalFloatingToolbar`; drag handles reorder (playlists, queue); swipe
   removes from the queue (undo from the core's toast).
 - Lyrics: syllable gradient sweep per syllable driven by `withFrameNanos` and `LyricsCursor`,
-  30 fps in battery saver, stopped when not visible; AGSL warp background on Android 13+, static
+  30 fps with battery saver's lighter lyrics (whole lines at ~12 fps with simple lyrics), stopped
+  when not visible; AGSL warp background on Android 13+, static
   blurred still otherwise or when battery saver / "animated background off" applies. Holding a line
   (`LyricsShareDialog`) flies its text out of the lyrics into its place on a share card, which forms
   around it over a fading scrim while the options slide up (two copies of the line crossfade in

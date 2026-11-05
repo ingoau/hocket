@@ -1,5 +1,7 @@
 package app.hocket.ui.lyrics
 
+import app.hocket.core.has
+import app.hocket.core.engaged
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
@@ -128,7 +130,12 @@ import app.hocket.ui.icons.HocketIcons
 fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolean = false, listModifier: Modifier = Modifier, backdrop: Boolean = !embedded) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
-    val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
+    val saver by client.batterySaver.collectAsStateWithLifecycle()
+    val batterySaver = saver.has(app.hocket.core.api.SaverFeature.LighterLyrics)
+    val stillBackground = saver.has(app.hocket.core.api.SaverFeature.StillBackground)
+    // Simple lyrics: whole lines light at once (the reduced-motion rendering, with a short fade),
+    // so the tick only has to notice the next line: ~12 a second.
+    val simple = saver.has(app.hocket.core.api.SaverFeature.SimpleLyrics)
     val reducedMotion = LocalReducedMotion.current
     val settings by client.settings.collectAsStateWithLifecycle()
     val animatedSetting = settings[SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false"
@@ -137,17 +144,22 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
     val lyrics = current.lyrics
 
     // Position every display frame up to 60 fps, so the sweep and the rising words move as smoothly
-    // as the springs around them; 30 fps on battery saver; 4 per second with reduced motion (enough to
+    // as the springs around them; 30 fps on battery saver (lighter lyrics), ~12 with simple lyrics; 4 per second with reduced motion (enough to
     // move the static highlight between lines); nothing when not visible, and no frames at all
     // while paused (the position is frozen until a seek, play or another track).
     // A fresh stamp from the player can land a little behind the extrapolated position; the
     // lyrics then run at half speed until it catches up (PlayheadSmoother) instead of stepping back.
     var positionMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(visible, reducedMotion, batterySaver, trackId) {
+    LaunchedEffect(visible, reducedMotion, batterySaver, simple, trackId) {
         if (!visible) return@LaunchedEffect
         // At most about 60 a second: on a 90 or 120 Hz screen every other frame or so (the springs
         // still run at the screen's rate).
-        val interval = if (reducedMotion) 250_000_000L else if (batterySaver) 33_000_000L else 15_000_000L
+        val interval = when {
+            reducedMotion -> 250_000_000L
+            simple -> 80_000_000L
+            batterySaver -> 33_000_000L
+            else -> 15_000_000L
+        }
         var last = 0L
         val smoother = PlayheadSmoother()
         while (true) {
@@ -162,11 +174,14 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         }
     }
 
+    // Battery saver: 60 Hz while the lyrics show (the full player's own cap covers it there too).
+    app.hocket.ui.player.RefreshRateCap(active = visible)
+
     val pageLabel = stringResource(R.string.lyrics_page_a11y)
     Box(modifier.fillMaxSize().semantics { contentDescription = pageLabel; isTraversalGroup = true }.testTag("lyrics.page")) {
         // Inside the full player (embedded) the player's own artwork gradient shows through (and the
         // side panel's lyrics page draws its own, wider than the page).
-        if (backdrop) LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !batterySaver, visible = visible, modifier = Modifier.fillMaxSize())
+        if (backdrop) LyricsBackground(entry?.track?.coverArt, animated = animatedSetting && !stillBackground, visible = visible, modifier = Modifier.fillMaxSize())
         if (trackId == null) { EmptyState(stringResource(R.string.empty_queue_title), stringResource(R.string.empty_queue_body)); return@Box }
         if (current.loaded && lyrics == null) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -181,7 +196,7 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         var share by remember(doc.trackId) { mutableStateOf<LyricsShareRequest?>(null) }
         Column(Modifier.fillMaxSize()) {
             // A new song starts from a fresh list: no scroll, shift or line state carried over.
-            key(doc.trackId) { LyricsList(doc, positionMs, reducedMotion, lowPower = batterySaver, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, sharing = share?.line ?: -1, modifier = Modifier.weight(1f).then(listModifier)) }
+            key(doc.trackId) { LyricsList(doc, positionMs, reducedMotion, lowPower = batterySaver, simple = simple, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, sharing = share?.line ?: -1, modifier = Modifier.weight(1f).then(listModifier)) }
             // Inside the full player the timing lives in the song menu instead ([LyricsTimingSheet]).
             if (!embedded) OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) })
         }
@@ -378,7 +393,7 @@ internal fun lineBlur(distance: Int): Float = when {
 }
 
 @Composable
-private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lowPower: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, sharing: Int, modifier: Modifier) {
+private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lowPower: Boolean, simple: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, sharing: Int, modifier: Modifier) {
     val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
     val focus = remember(doc, cursor) { focusLine(doc, cursor) }
     // The view moves to a line a moment before it is sung.
@@ -427,6 +442,8 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lo
         onDispose { manager?.removeTouchExplorationStateChangeListener(listener) }
     }
     val collapse = !reducedMotion && !touchExploration
+    // Lines drawn as with reduced motion (no rise, swell, sweep or scale); [simple] alone still scrolls and fades.
+    val still = reducedMotion || simple
     val instrumental = stringResource(R.string.lyrics_instrumental)
 
     @Composable
@@ -441,14 +458,15 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lo
         // Live cursor only on the singing/focused rows. Past rows keep a stable "held at 1"
         // sweep; future rows stay at 0 — neither recomposes when the playhead moves.
         val past = !lit && !focused && (line.startMs?.toLong() ?: Long.MAX_VALUE) <= cursor.effectiveMs
-        val lineCursor = if (lit || focused) cursor else LyricsCursor.EMPTY
+        // Still lines light as a whole: no cursor, so a tick recomposes no line until the lit one changes.
+        val lineCursor = if ((lit || focused) && !still) cursor else LyricsCursor.EMPTY
         val main = mains[i]
         val revealed = !line.background || !collapse || lit || (main >= 0 && (main in cursor.activeLines || (main == focus && !cursor.inGap)))
-        val blur = if (reducedMotion || lowPower || lit || doc.tier == LyricsTier.Unsynced) 0f else lineBlur(distance)
+        val blur = if (still || lowPower || lit || doc.tier == LyricsTier.Unsynced) 0f else lineBlur(distance)
         val lazy = lazyIndex(i)
         // The core compares `position - offset` against the line start, so seeking to a line's
         // start means `start + offset` in audio time.
-        LyricLineView(i, line, doc.tier, lit, focused, lit || distance <= 1, revealed, side, duet, lineCursor, past, reducedMotion, blur.dp, lag = { scroller.lag(lazy) }, onShift = { scroller.shift(lazy, it) }, shifts = remember(scroller, lazy) { LineShifts(scroller, lazy) }, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
+        LyricLineView(i, line, doc.tier, lit, focused, lit || distance <= 1, revealed, side, duet, lineCursor, past, still, blur.dp, simple = simple, lag = { scroller.lag(lazy) }, onShift = { scroller.shift(lazy, it) }, shifts = remember(scroller, lazy) { LineShifts(scroller, lazy) }, onClick = { line.startMs?.let { onSeek((it.toLong() + doc.offsetMs).coerceAtLeast(0)) } }, onShare = { onShare(LyricsShareRequest(i, it)) }, hidden = i == sharing)
     }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -461,7 +479,7 @@ private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lo
                 items(dotsAt, key = { it }) { i -> LineRow(i, doc.lines[i]) }
                 item(key = "interlude") {
                     val side = doc.lines[dotsAt].agent?.let { sides[it] } ?: 0
-                    InterludeDots(gap, cursor.effectiveMs, side, reducedMotion, instrumental, lag = { scroller.lag(dotsAt) }, modifier = Modifier.animateItem())
+                    InterludeDots(gap, cursor.effectiveMs, side, still, instrumental, lag = { scroller.lag(dotsAt) }, modifier = Modifier.animateItem())
                 }
                 items(doc.lines.size - dotsAt, key = { dotsAt + it }) { k -> LineRow(dotsAt + k, doc.lines[dotsAt + k]) }
             }
@@ -476,6 +494,9 @@ internal class LineShifts(private val scroller: StaggeredScroll, private val ind
     fun apply(shift: StaggeredScroll.Kick?) = scroller.applyShift(shift)
     fun cancel(shift: StaggeredScroll.Kick?) = scroller.cancelShift(shift)
 }
+
+/** Simple lyrics (battery saver): how long a line takes to light or dim. */
+private const val SIMPLE_FADE_MS = 150
 
 private val dotEnter = androidx.compose.animation.core.CubicBezierEasing(0.34f, 1.56f, 0.64f, 1f)
 private val dotLight = androidx.compose.animation.core.CubicBezierEasing(0.56f, 0.01f, 0.45f, 1f)
@@ -532,12 +553,14 @@ private fun InterludeDots(gap: Interlude, timeMs: Long, side: Int, reducedMotion
 }
 
 @Composable
-private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, near: Boolean, revealed: Boolean, side: Int, duet: Boolean, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, blur: Dp, lag: () -> Float, onShift: (Float) -> Unit, shifts: LineShifts, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false) {
+private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Boolean, focused: Boolean, near: Boolean, revealed: Boolean, side: Int, duet: Boolean, cursor: LyricsCursor, past: Boolean, reducedMotion: Boolean, blur: Dp, lag: () -> Float, onShift: (Float) -> Unit, shifts: LineShifts, onClick: () -> Unit, onShare: (() -> SourceLine?) -> Unit, hidden: Boolean = false, simple: Boolean = false) {
+    // [reducedMotion] is also on for simple lyrics (battery saver): everything snaps but the line's
+    // lighting, which takes a short fade rather than a jump.
     // Read while drawing only: the line grows, lights and (background vocals) slides out without
     // recomposing.
     val feel = LocalLyricsFeel.current
     val scale = animateFloatAsState(if (lit || reducedMotion) 1f else LyricsMotion.INACTIVE_SCALE, spring(dampingRatio = feel.dampingRatio, stiffness = feel.scaleStiffness), label = "lineScale")
-    val bright = animateFloatAsState(if (lit) 1f else 0f, if (reducedMotion) snap() else tween(feel.brightenMs), label = "lineBright")
+    val bright = animateFloatAsState(if (lit) 1f else 0f, if (simple) tween(SIMPLE_FADE_MS) else if (reducedMotion) snap() else tween(feel.brightenMs), label = "lineBright")
     val blurRadius = animateFloatAsState(blur.value, if (reducedMotion) snap() else tween(feel.blurMs), label = "lineBlur")
     val shown = animateFloatAsState(if (revealed) 1f else 0f, if (reducedMotion) snap() else spring(dampingRatio = feel.dampingRatio, stiffness = feel.scaleStiffness), label = "lineShown")
     // Background sub-voices: smaller and lighter than the main voice.
@@ -567,7 +590,7 @@ private fun LyricLineView(index: Int, line: LyricLine, tier: LyricsTier, lit: Bo
     // Syllable sweep from this line's own timing (a background line lit beside its main line sweeps
     // independently); held at 1 once the line has ended, 0 before it starts. With reduced motion
     // the rendered sweep is static: the whole lit line highlighted, nothing moving across it.
-    val sweep = remember(line, tier, reducedMotion, lit, focused, past, if (lit || focused) cursor.effectiveMs else 0L) {
+    val sweep = remember(line, tier, reducedMotion, lit, focused, past, if ((lit || focused) && !reducedMotion) cursor.effectiveMs else 0L) {
         when {
             tier != LyricsTier.Syllable -> emptyList()
             reducedMotion -> List(line.syllables.size) { if (lit) 1f else 0f }

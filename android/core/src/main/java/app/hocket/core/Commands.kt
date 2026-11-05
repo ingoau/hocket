@@ -18,7 +18,8 @@ object Commands {
     fun previewSeek(positionMs: Long) = Command.PreviewSeek(CommandPreviewSeekInner(positionMs.coerceAtLeast(0).toUInt()))
     fun setNetworkState(state: NetworkState) = Command.SetNetworkState(CommandSetNetworkStateInner(state))
     fun setVisibility(visible: Boolean, focused: Boolean) = Command.SetVisibility(CommandSetVisibilityInner(visible, focused))
-    fun setBatterySaver(enabled: Boolean) = Command.SetBatterySaver(CommandSetBatterySaverInner(enabled))
+    /** The device's own power-save state; battery saver itself is the `battery.level` setting. */
+    fun setPowerSave(enabled: Boolean) = Command.SetPowerSave(CommandSetPowerSaveInner(enabled))
     fun addServer(url: String, username: String, password: String, name: String? = null) =
         Command.AddServer(CommandAddServerInner(url, username, password, name))
     fun removeServer(serverId: ServerId) = Command.RemoveServer(CommandRemoveServerInner(serverId))
