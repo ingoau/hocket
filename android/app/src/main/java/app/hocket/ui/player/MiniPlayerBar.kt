@@ -162,7 +162,7 @@ internal fun MiniPlayerBar(
                     Row(
                         Modifier
                             .fillMaxSize()
-                            .graphicsLayer { translationX = carousel.offset.value }
+                            .graphicsLayer { translationX = carousel.offset }
                             .padding(start = MINI_START_PADDING),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -244,7 +244,7 @@ private fun MiniNeighbour(track: app.hocket.core.api.TrackSummary, carousel: Ski
     Row(
         Modifier
             .fillMaxSize()
-            .graphicsLayer { translationX = carousel.offset.value + side * carousel.span }
+            .graphicsLayer { translationX = carousel.offset + side * carousel.span }
             .padding(start = MINI_START_PADDING)
             .testTag(tag)
             .clearAndSetSemantics { },

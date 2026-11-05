@@ -288,7 +288,7 @@ internal fun FullPlayer(
                 header = {
                     Box(
                         Modifier
-                            .graphicsLayer { alpha = if (immersive != null || carousel.offset.value != 0f) 0f else headerAlpha() }
+                            .graphicsLayer { alpha = if (immersive != null || carousel.offset != 0f) 0f else headerAlpha() }
                             .then(if (immersive != null) Modifier.clearAndSetSemantics { } else Modifier),
                     ) { header() }
                 },
@@ -349,7 +349,7 @@ internal fun FullPlayer(
                 Box(
                     Modifier
                         .offset { IntOffset(0, -scroll.value) }
-                        .graphicsLayer { alpha = if (immersive != null || carousel.offset.value != 0f) headerAlpha() else 0f }
+                        .graphicsLayer { alpha = if (immersive != null || carousel.offset != 0f) headerAlpha() else 0f }
                         .then(if (immersive == null) Modifier.clearAndSetSemantics { } else Modifier),
                 ) { header() }
             }
@@ -1233,7 +1233,7 @@ internal fun PlayerArtwork(
     // immersive artwork is one of them (it fills the page edge to edge).
     val anyImmersive = immersive != null || neighbourLayouts.first != null || neighbourLayouts.second != null
     val span = { pageSpan(hero, anyImmersive) }
-    hero.swipe = { carousel.offset.value * (1f - modeFraction()) }
+    hero.swipe = { carousel.offset * (1f - modeFraction()) }
     Box(
         Modifier
             // Laid out at its current size and place (so its bounds are what shows; it relays out

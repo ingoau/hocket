@@ -662,7 +662,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val nextLayout = rememberArtworkLayout(nextCover, preference, dark = appDark).value?.layout.immersiveOrNull()
         val previousSeed by artworkSeed(previousCover)
         val nextSeed by artworkSeed(nextCover)
-        val swiping by remember(carousel) { derivedStateOf { carousel.offset.value != 0f } }
+        val swiping by remember(carousel) { derivedStateOf { carousel.offset != 0f } }
         // The swipe's fraction towards a neighbour in steps (1 = previous, -1 = next): the backdrop
         // and the colours follow it, recomposing a few times a swipe, not every frame.
         val towards by remember(carousel) { derivedStateOf { (carousel.fraction() * SCHEME_STEPS).roundToInt() / SCHEME_STEPS.toFloat() } }
