@@ -435,8 +435,7 @@ function Storage() {
         </Select>
       </Row>
       <Row anchor="clearCache" title={t("downloads.clearCache")} settingKey="storage"><button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "clearStreamCache" })} data-testid="clear-cache">{t("downloads.clearCache")}</button></Row>
-      <Toggle anchor="batterySaverAuto" settingKey={SK.batteryAutoEngage} title={t("settings.batterySaverAuto")} desc={t("settings.batterySaverNow")} />
-      <BatterySaverRow />
+      <BatterySaverRows />
     </>
   );
 }
@@ -489,9 +488,34 @@ function CacheBudgetRow({ budget, auto }: { budget: number; auto: boolean }) {
   );
 }
 
-function BatterySaverRow() {
-  const on = useApp((s) => s.batterySaver);
-  return <Row anchor="batterySaver" title={t("settings.batterySaver")} settingKey="power.batterySaver"><Switch checked={on} onChange={(checked) => bridge().dispatch({ type: "setBatterySaver", data: { enabled: checked } })} aria-label={t("settings.batterySaver")} data-testid="setting-battery-saver" /></Row>;
+const SAVER_PRESETS = ["light", "medium", "max"] as const;
+
+/**
+ * Battery saver: the level (battery.level), whether running on battery engages it
+ * (battery.autoEngage) and at which level (battery.autoLevel). A custom level (its
+ * features chosen on mobile) is listed only while it is the one set.
+ */
+function BatterySaverRows() {
+  const level = useSetting<string>(SK.batteryLevel, "off");
+  const autoEngage = useSetting(SK.batteryAutoEngage, true);
+  const autoLevel = useSetting<string>(SK.batteryAutoLevel, "medium");
+  const set = useApp((s) => s.setSetting);
+  const label = (l: string) => t(`settings.batterySaverLevel.${l}` as never);
+  return (
+    <>
+      <Row anchor="batterySaver" title={t("settings.batterySaver")} desc={t("settings.batterySaverNow")} settingKey={SK.batteryLevel}>
+        <Select value={level} aria-label={t("settings.batterySaver")} onChange={(e) => set(SK.batteryLevel, e.target.value)} data-testid="setting-battery-level">
+          {["off", ...SAVER_PRESETS, ...(level === "custom" ? ["custom"] : [])].map((l) => <option key={l} value={l}>{label(l)}</option>)}
+        </Select>
+      </Row>
+      <Toggle anchor="batterySaverAuto" settingKey={SK.batteryAutoEngage} title={t("settings.batterySaverAuto")} fallback />
+      <Row anchor="batterySaverAutoLevel" title={t("settings.batterySaverAutoLevel")} settingKey={SK.batteryAutoLevel}>
+        <Select value={autoLevel} disabled={!autoEngage} aria-label={t("settings.batterySaverAutoLevel")} onChange={(e) => set(SK.batteryAutoLevel, e.target.value)} data-testid="setting-battery-auto-level">
+          {[...SAVER_PRESETS, "custom"].map((l) => <option key={l} value={l}>{label(l)}</option>)}
+        </Select>
+      </Row>
+    </>
+  );
 }
 
 function LyricsSettings() {

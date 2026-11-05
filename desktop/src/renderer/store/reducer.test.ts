@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Event, Snapshot } from "@core/api";
-import { applySnapshot, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
+import { SAVER_OFF, applySnapshot, dismissToast, initialCoreState, reduce, saverEngaged, saverHas, settingValue } from "./reducer";
 
 const snapshot: Snapshot = {
   servers: [],
@@ -18,7 +18,7 @@ const snapshot: Snapshot = {
   resumeOffer: undefined,
   sleepTimer: undefined,
   network: undefined,
-  batterySaver: true,
+  batterySaver: { level: "light", automatic: false, features: ["stillBackground", "stillSeekWave", "lighterLyrics"] },
   syncProgress: undefined,
 };
 
@@ -28,7 +28,9 @@ describe("reducer", () => {
     expect(s.ready).toBe(true);
     expect(s.queue.shuffle).toBe(true);
     expect(s.transport.volume).toBe(0.5);
-    expect(s.batterySaver).toBe(true);
+    expect(saverEngaged(s.batterySaver)).toBe(true);
+    expect(saverHas(s.batterySaver, "stillBackground")).toBe(true);
+    expect(saverHas(s.batterySaver, "simpleLyrics")).toBe(false);
     expect(settingValue(s, "appearance.theme", "system")).toBe("dark");
     expect(settingValue(s, "missing", 42)).toBe(42);
   });
@@ -114,10 +116,12 @@ describe("reducer", () => {
   });
 
   it("tracks battery saver from its event, without waiting for a snapshot", () => {
-    let s = reduce(initialCoreState, { type: "batterySaverChanged", data: { enabled: true } });
-    expect(s.batterySaver).toBe(true);
-    s = reduce(s, { type: "batterySaverChanged", data: { enabled: false } });
-    expect(s.batterySaver).toBe(false);
+    expect(saverEngaged(initialCoreState.batterySaver)).toBe(false);
+    let s = reduce(initialCoreState, { type: "batterySaverChanged", data: { saver: { level: "max", automatic: true, features: ["simpleLyrics", "lighterLyrics"] } } });
+    expect(s.batterySaver).toMatchObject({ level: "max", automatic: true });
+    expect(saverHas(s.batterySaver, "simpleLyrics")).toBe(true);
+    s = reduce(s, { type: "batterySaverChanged", data: { saver: SAVER_OFF } });
+    expect(saverEngaged(s.batterySaver)).toBe(false);
   });
 
   it("announces a fresh queue-replacing undo entry with one Undo toast, never twice, and not on undo/redo", () => {

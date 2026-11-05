@@ -8,7 +8,7 @@ import type { AppMeta, AppPrefs, WindowState } from "@shared/bridge-types";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
-import { type CoreState, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
+import { type CoreState, dismissToast, initialCoreState, reduce, saverHas, settingValue } from "./reducer";
 import { EMPTY_SELECTION, type Selection } from "./selection";
 import { ticker } from "./position";
 import { BACKGROUND_FPS, perfForWindow } from "../lib/kawarp-budget";
@@ -397,9 +397,9 @@ function recomputePerf(): void {
   const perf = perfForWindow(s.windowState.visible, s.windowState.focused);
   if (perf !== s.perf) useApp.setState({ perf });
   // Position ticker: stopped when hidden; 24 fps in the background; capped by
-  // battery saver (30 fps) and the lyrics fps setting when focused.
+  // battery saver's lighter lyrics (battery.lyricsFps) and the lyrics fps setting when focused.
   ticker.setPaused(perf === "stopped");
-  const cap = s.batterySaver ? Math.max(10, settingValue(s, SK.batteryLyricsFps, 30)) : Math.max(10, Math.min(144, settingValue(s, SK.displayLyricsFps, 30)));
+  const cap = saverHas(s.batterySaver, "lighterLyrics") ? Math.max(10, settingValue(s, SK.batteryLyricsFps, 30)) : Math.max(10, Math.min(144, settingValue(s, SK.displayLyricsFps, 30)));
   ticker.fps = perf === "background" ? Math.min(BACKGROUND_FPS, cap) : cap;
 }
 

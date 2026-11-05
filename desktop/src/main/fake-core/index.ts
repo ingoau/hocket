@@ -11,7 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, Album, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState, LyricHit,
+  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -21,6 +21,7 @@ import { generateLibrary, summary, coverSeed, type FakeLibrary } from "./library
 import { lyricsFor } from "./lyrics";
 import { Rng, hash32 } from "./random";
 import { FakeStreamCache, trackBytes } from "./stream-cache";
+import { DEFAULT_CUSTOM, parseCustom, parseLevel, resolveSaver } from "./saver";
 import * as Q from "./queue";
 import { AVAILABLE_OFFLINE_FILTER_ID, OFFLINE_NOTICE_CODES } from "@shared/constants";
 
@@ -146,7 +147,9 @@ export class FakeCore implements CoreHandle {
   private filters: Filter[] = [];
   private lyricsOffsets = new Map<string, number>();
   private externalLyrics = false;
-  private batterySaver = false;
+  private batterySaver: BatterySaver = { level: "off", automatic: false, features: [] };
+  /** The device's power-save state (SetPowerSave): on battery, for a laptop. */
+  private powerSave = false;
   private network: Snapshot["network"] = { kind: "wifi", metered: false, networkId: "home" };
   private resumeOffer: ResumeOffer | undefined;
   private sleepTimer: SleepTimer | undefined;
@@ -257,7 +260,7 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "storageChanged", data: { storage: this.storage() } });
         this.emit({ type: "filtersChanged", data: { filters: this.filters } });
         this.emit({ type: "networkChanged", data: { network: this.network } });
-        this.emit({ type: "batterySaverChanged", data: { enabled: this.batterySaver } });
+        this.emit({ type: "batterySaverChanged", data: { saver: this.batterySaver } });
         return;
       case "setNetworkState": {
         const wasOffline = this.isOffline();
@@ -273,10 +276,9 @@ export class FakeCore implements CoreHandle {
       }
       case "setVisibility":
         return;
-      case "setBatterySaver":
-        if (this.batterySaver === cmd.data.enabled) return;
-        this.batterySaver = cmd.data.enabled;
-        this.emit({ type: "batterySaverChanged", data: { enabled: this.batterySaver } });
+      case "setPowerSave":
+        this.powerSave = cmd.data.enabled;
+        this.refreshSaver();
         return;
       case "addServer":
         this.addServer(cmd.data.url, cmd.data.username, cmd.data.name ?? new URL(cmd.data.url).host, false);
@@ -2110,12 +2112,12 @@ export class FakeCore implements CoreHandle {
   /** The album primer, on the transport owner (this device in the fake), gated on its network and battery. */
   private prime(kind: "album" | "track", id: string, trackId: string | undefined): void {
     const t = trackId ? this.lib?.tracksById.get(trackId) : undefined;
-    const rec = this.cache.prime(kind, id, t, { offline: this.isOffline(), metered: !!this.network?.metered, batterySaver: this.batterySaver }, Date.now());
+    const rec = this.cache.prime(kind, id, t, { offline: this.isOffline(), metered: !!this.network?.metered, batterySaver: this.batterySaver.features.length > 0 }, Date.now());
     this.emit({ type: "log", data: { level: "debug", target: "fake_core::prime", message: `prime ${kind} ${id} -> ${rec.trackId ?? "?"}: ${rec.outcome}${rec.reason ? ` (${rec.reason})` : ""}` } });
     if (rec.outcome === "primed") this.emit({ type: "storageChanged", data: { storage: this.storage() } });
   }
 
-  /** Played a while: the current track is complete in the cache, and the next two are prefetched (network and battery permitting). */
+  /** Played a while: the current track is complete in the cache, and the next two are prefetched (network permitting; battery saver doesn't hold it back: one burst lets the radio sleep). */
   private fillCache(): void {
     const s = this.session;
     const cur = this.cur();
@@ -2124,7 +2126,7 @@ export class FakeCore implements CoreHandle {
     const changed: string[] = [];
     const t = this.lib.tracksById.get(cur.trackId);
     if (t && !this.isOffline() && this.cache.fill(t, false)) changed.push(t.id);
-    const prefetchOk = !this.isOffline() && (!this.network?.metered || this.setting<boolean>("storage.prefetchOnMobileData", false)) && !(this.batterySaver && this.setting<boolean>("battery.pausePrefetch", true));
+    const prefetchOk = !this.isOffline() && (!this.network?.metered || this.setting<boolean>("storage.prefetchOnMobileData", false));
     if (prefetchOk) {
       const upcoming = s.list.slice(s.ptr + 1).filter((i) => !i.unavailable).map((i) => i.trackId).slice(0, 2);
       for (const id of upcoming) {
@@ -2171,8 +2173,9 @@ export class FakeCore implements CoreHandle {
       ["battery.autoEngage", true, "deviceLocal"],
       ["media.externalControl", false, "deviceLocal"],
       ["battery.lyricsFps", 30, "deviceLocal"],
-      ["battery.smallArtwork", true, "deviceLocal"],
-      ["battery.pausePrefetch", true, "deviceLocal"],
+      ["battery.level", "off", "deviceLocal"],
+      ["battery.autoLevel", "medium", "deviceLocal"],
+      ["battery.custom", DEFAULT_CUSTOM, "deviceLocal"],
       ["display.animatedBackground", true, "deviceLocal"],
       ["display.lyricsFps", 30, "deviceLocal"],
       ["display.theme", "system", "deviceLocal"],
@@ -2214,6 +2217,21 @@ export class FakeCore implements CoreHandle {
       this.settings.set(key, setting);
       if (onlyKey) this.emit({ type: "settingChanged", data: { setting } });
     }
+    if (onlyKey?.startsWith("battery.")) this.refreshSaver();
+  }
+
+  /** Battery saver as the settings and the power-save state put it; announced when it changes. */
+  private refreshSaver(): void {
+    const next = resolveSaver(
+      parseLevel(this.setting<unknown>("battery.level", "off"), "off"),
+      parseLevel(this.setting<unknown>("battery.autoLevel", "medium"), "medium"),
+      this.setting<boolean>("battery.autoEngage", true) !== false,
+      this.powerSave,
+      parseCustom(this.setting<unknown>("battery.custom", DEFAULT_CUSTOM)),
+    );
+    if (JSON.stringify(next) === JSON.stringify(this.batterySaver)) return;
+    this.batterySaver = next;
+    this.emit({ type: "batterySaverChanged", data: { saver: next } });
   }
 
   /** `library.pins` as stored (entries that don't parse are dropped). */
@@ -2249,6 +2267,7 @@ export class FakeCore implements CoreHandle {
       this.emitSavedQueues();
     }
     this.emit({ type: "settingChanged", data: { setting } });
+    if (key.startsWith("battery.")) this.refreshSaver();
   }
 
   private settingNumber(key: string): number {
@@ -2289,6 +2308,7 @@ export class FakeCore implements CoreHandle {
       for (const s of doc.shortcuts ?? []) this.shortcutOverrides.set(s.actionId, s.shortcut);
       if (doc.audio) this.audio = doc.audio;
       if (doc.autoplay) this.autoplaySettings = doc.autoplay;
+      this.refreshSaver();
       this.emitSnapshot();
       this.emit({ type: "filtersChanged", data: { filters: this.filters } });
       this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });
@@ -3106,7 +3126,7 @@ export class FakeCore implements CoreHandle {
       `tracks: ${this.lib?.tracks.length ?? 0}`,
       `jobs: ${this.jobs.length}, problems: ${this.problems.length}`,
       `undo depth: ${this.undoStack.length}`,
-      `battery saver: ${this.batterySaver}`,
+      `battery saver: ${this.batterySaver.level}${this.batterySaver.automatic ? " (automatic)" : ""}, power save: ${this.powerSave}`,
       `network: ${JSON.stringify(this.network)}`,
       `stream cache: ${this.lib ? this.cache.usedBytes(this.lib.tracksById) : 0} bytes (${this.cache.partialBytes()} partial), budget ${this.cacheBudget().bytes}${this.cacheBudget().auto ? " (automatic)" : ""}`,
       `primes: ${this.cache.primes.length}`,

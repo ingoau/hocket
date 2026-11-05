@@ -19,6 +19,7 @@ const PRIME_WINDOW_MAX = 20;
 export interface PrimeGate {
   offline: boolean;
   metered: boolean;
+  /** Any battery saver level engaged: priming waits (prefetch doesn't). */
   batterySaver: boolean;
 }
 

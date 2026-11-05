@@ -11,6 +11,7 @@ import type { RepeatMode } from "@core/api";
 import { t } from "@shared/strings";
 import { SK } from "@shared/settings-keys";
 import { toggleSidePanel, useApp, useSetting } from "../store/app";
+import { saverEngaged } from "../store/reducer";
 import { extrapolate, ticker } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
@@ -47,7 +48,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const setFullscreen = useApp((s) => s.setFullscreen);
   const navigate = useApp((s) => s.navigate);
   const sleep = useApp((s) => s.sleepTimer);
-  const batterySaver = useApp((s) => s.batterySaver);
+  const batterySaver = useApp((s) => saverEngaged(s.batterySaver));
   const showRating = useSetting(SK.displayPlayerRating, true);
   const d = bridge().dispatch;
   const track = now?.track;

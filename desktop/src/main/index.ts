@@ -184,14 +184,6 @@ async function main(): Promise<void> {
     }),
     onCommand: (command: Command) => {
       credentials.intercept(command);
-      if (command.type === "setSetting" && command.data.key === "battery.autoEngage") {
-        try {
-          store.set("batterySaverAuto", JSON.parse(command.data.value) !== false);
-          applyBattery();
-        } catch {
-          /* ignore */
-        }
-      }
     },
     prefs: {
       get: () => ({ closeToTray: store.get("closeToTray") ?? true }),
@@ -258,11 +250,9 @@ async function main(): Promise<void> {
   let lastNowPlaying: string | undefined;
   let replayed = false;
 
-  // battery.autoEngage is a registry setting; mirror it so the power monitor can act before the UI attaches.
   const applySettingsFromSnapshot = (settings: { key: string; value: string }[]) => {
     for (const s of settings) {
       try {
-        if (s.key === "battery.autoEngage") store.set("batterySaverAuto", JSON.parse(s.value) !== false);
         if (s.key === "developer.mode") devlog.setDetailed(JSON.parse(s.value) === true);
       } catch {
         /* ignore */
@@ -270,12 +260,9 @@ async function main(): Promise<void> {
     }
   };
 
-  // Power: battery saver engages automatically on battery when the setting is on.
-  const applyBattery = () => {
-    const auto = store.get("batterySaverAuto") ?? true;
-    const onBattery = powerMonitor.isOnBatteryPower();
-    core.dispatch({ type: "setBatterySaver", data: { enabled: auto && onBattery } });
-  };
+  // Power: running on battery is this device's power-save state. The core
+  // decides what it engages (battery.autoEngage / battery.autoLevel).
+  const applyBattery = () => core.dispatch({ type: "setPowerSave", data: { enabled: powerMonitor.isOnBatteryPower() } });
   powerMonitor.on("on-battery", applyBattery);
   powerMonitor.on("on-ac", applyBattery);
   powerMonitor.on("suspend", () => core.dispatch({ type: "setVisibility", data: { visible: false, focused: false } }));

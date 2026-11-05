@@ -14,7 +14,11 @@ export const SK = {
   lyricsExternalEnabled: "lyrics.external.enabled",
   ratingsLoveBridgeEnabled: "ratings.loveBridge.enabled",
   ratingsLoveBridgeThreshold: "ratings.loveBridge.threshold",
+  /** "off" | "light" | "medium" | "max" | "custom": the battery saver level chosen. Device-local. */
+  batteryLevel: "battery.level",
   batteryAutoEngage: "battery.autoEngage",
+  /** "light" | "medium" | "max" | "custom": the level running on battery engages (with battery.autoEngage). Device-local. */
+  batteryAutoLevel: "battery.autoLevel",
   batteryLyricsFps: "battery.lyricsFps",
   displayAnimatedBackground: "display.animatedBackground",
   displayLyricsFps: "display.lyricsFps",
