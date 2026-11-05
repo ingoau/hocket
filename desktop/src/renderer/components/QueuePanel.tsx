@@ -28,7 +28,7 @@ import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import { fmtTime } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/media";
-import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, queueDragLayout, stepMove } from "../lib/queue-drag";
+import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, previewMoves, queueDragLayout, stepMove, type QueueMove } from "../lib/queue-drag";
 import { queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange, windowEnd, mergePages, pagedFits, type QueueRowKind } from "../lib/queue-view";
 import { EmptyState } from "./EmptyState";
 import { QueueHeader } from "./QueueSelector";
@@ -89,10 +89,27 @@ async function historyKeys(q: QueueView): Promise<string[]> {
   return rs.flatMap((r) => (r.type === "queue" ? r.data.entries : [])).slice(0, q.historyCount).map((e) => e.item.key);
 }
 
+/** How long sent moves are shown ahead of the core if no queue update answers them. */
+const PENDING_MS = 2000;
+
 export function QueuePanel({ large = false }: { large?: boolean }) {
   const base = useApp((s) => s.queue);
-  const { queue, loadBefore, loadAfter } = usePagedQueue(base);
+  const { queue: paged, loadBefore, loadAfter } = usePagedQueue(base);
   const section = useSetting<boolean>(SK.queueSection, true);
+  // Reorders show at once, until the next queue from the core (their answer) replaces
+  // them: otherwise a dropped row snaps back and animates a second time (R-20261104-74r7).
+  // Moves sent before that answer stack on the same queue.
+  const [pending, setPending] = useState<{ base: QueueView; moves: QueueMove[] } | undefined>(undefined);
+  const queue = useMemo(() => (pending?.base === base ? previewMoves(paged, pending.moves, section) : paged), [pending, base, paged, section]);
+  useEffect(() => {
+    if (!pending) return;
+    if (pending.base !== base) {
+      setPending(undefined);
+      return;
+    }
+    const id = window.setTimeout(() => setPending(undefined), PENDING_MS);
+    return () => window.clearTimeout(id);
+  }, [pending, base]);
   const selection = useApp((s) => (s.selectionScope === SCOPE ? s.selection : EMPTY_SELECTION));
   const setSelection = useApp((s) => s.setSelection);
   const [focusKey, setFocusKey] = useState<string | undefined>(undefined);
@@ -138,6 +155,12 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     d({ type: "setSelection", data: { target: { type: "queueItems", data: { keys: [...sel.ids] } } } });
   }, [setSelection, d]);
 
+  const sendMoves = (moves: QueueMove[]) => {
+    if (!moves.length) return;
+    setPending((p) => ({ base, moves: p?.base === base ? [...p.moves, ...moves] : moves }));
+    for (const m of moves) d({ type: "moveQueueItem", data: m });
+  };
+
   const click = (e: React.MouseEvent, key: string) => {
     setFocusKey(key);
     if (e.shiftKey) publish(selectRange(selection, key, keys, e.ctrlKey || e.metaKey));
@@ -155,7 +178,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && focusKey) {
       e.preventDefault();
       e.stopPropagation();
-      if (currentKey) for (const m of stepMove(order, focusKey, e.key === "ArrowDown" ? 1 : -1, currentKey, noHeadingInGroup)) d({ type: "moveQueueItem", data: m });
+      if (currentKey) sendMoves(stepMove(order, focusKey, e.key === "ArrowDown" ? 1 : -1, currentKey, noHeadingInGroup));
       return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {
@@ -195,7 +218,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     // Where dnd-kit leaves the dragged row decides the place and, by the side of the
     // "Next from" heading it ends up on, whether it is in the group. A selection lands
     // together there, in queue order.
-    for (const m of placeBlock(order, arrayMove(order, from, to), key, blockFor(key), currentKey, noHeadingInGroup)) d({ type: "moveQueueItem", data: m });
+    sendMoves(placeBlock(order, arrayMove(order, from, to), key, blockFor(key), currentKey, noHeadingInGroup));
   };
 
   // Rest with the current item at the top; follow it when it changes, unless

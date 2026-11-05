@@ -223,4 +223,47 @@ test.describe("dragging onto the queue", () => {
     await expect.poll(() => titles(page, "group")).toEqual([rest[1], rest[2], queued]);
     expect(await titles(page, "rest")).toEqual([rest[0], ...rest.slice(3)]);
   });
+
+  test("a dropped queue item stays where it was dropped instead of snapping back and animating again (R-20261104-74r7)", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    const first = page.getByTestId("queue-row-rest").first();
+    const third = page.getByTestId("queue-row-rest").nth(2);
+    await expect(third).toBeVisible();
+    // By title: the FakeCore may re-key context items on a change.
+    const title = (await first.locator(".t1").textContent())!;
+    const a = (await first.boundingBox())!;
+    const b = (await third.boundingBox())!;
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 16 });
+    // Watch the dragged row every frame from the drop on.
+    await page.evaluate((name) => {
+      const w = window as unknown as { __tops: number[] };
+      w.__tops = [];
+      const start = performance.now();
+      const tick = () => {
+        const el = [...document.querySelectorAll("[data-testid='queue-timeline'] .qrow")].find((r) => r.querySelector(".t1")?.textContent === name);
+        if (el) w.__tops.push(el.getBoundingClientRect().top);
+        if (performance.now() - start < 1000) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }, title);
+    // The real core answers a round trip later; the FakeCore within a frame. Hold
+    // events from main back a little so the gap before the answer shows.
+    await hocket.app.evaluate(({ BrowserWindow }) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        const send = w.webContents.send.bind(w.webContents);
+        w.webContents.send = (...args: Parameters<typeof send>) => void setTimeout(() => send(...args), 250);
+      }
+    });
+    await page.mouse.up();
+    await page.waitForTimeout(1100);
+    await expect(page.getByTestId("queue-row-rest").nth(2).locator(".t1")).toHaveText(title);
+    const tops = await page.evaluate(() => (window as unknown as { __tops: number[] }).__tops);
+    const final = tops[tops.length - 1]!;
+    // Dropped on the third row's slot, it never travels back toward the first's.
+    expect(tops.filter((t) => Math.abs(t - final) > a.height / 2)).toEqual([]);
+  });
 });
