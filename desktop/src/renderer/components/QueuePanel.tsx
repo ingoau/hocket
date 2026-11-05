@@ -28,7 +28,7 @@ import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import { fmtTime } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/media";
-import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, previewMoves, queueDragLayout, stepMove, type QueueMove } from "../lib/queue-drag";
+import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, previewMoves, queueDragLayout, sameOrder, stepMove, type QueueMove } from "../lib/queue-drag";
 import { queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange, windowEnd, mergePages, pagedFits, type QueueRowKind } from "../lib/queue-view";
 import { EmptyState } from "./EmptyState";
 import { QueueHeader } from "./QueueSelector";
@@ -96,20 +96,24 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const base = useApp((s) => s.queue);
   const { queue: paged, loadBefore, loadAfter } = usePagedQueue(base);
   const section = useSetting<boolean>(SK.queueSection, true);
-  // Reorders show at once, until the next queue from the core (their answer) replaces
-  // them: otherwise a dropped row snaps back and animates a second time (R-20261104-74r7).
-  // Moves sent before that answer stack on the same queue.
-  const [pending, setPending] = useState<{ base: QueueView; moves: QueueMove[] } | undefined>(undefined);
-  const queue = useMemo(() => (pending?.base === base ? previewMoves(paged, pending.moves, section) : paged), [pending, base, paged, section]);
+  // Reorders show at once, until the queue shown here has caught up with all of them:
+  // otherwise a dropped row snaps back and animates a second time (R-20261104-74r7). The
+  // core answers each move with its own queue update, and a widened window refetches its
+  // pages after that, so the moves stay applied on top of each newer queue (a no-op once
+  // it holds them). A new current entry or length means something else changed it.
+  const [pending, setPending] = useState<{ current: string | undefined; total: number; moves: QueueMove[] } | undefined>(undefined);
+  const live = pending && pending.current === paged.current?.item.key && pending.total === paged.total ? pending : undefined;
+  const queue = useMemo(() => (live ? previewMoves(paged, live.moves, section) : paged), [live, paged, section]);
+  const caughtUp = !live || sameOrder(queue, paged);
   useEffect(() => {
     if (!pending) return;
-    if (pending.base !== base) {
+    if (caughtUp) {
       setPending(undefined);
       return;
     }
     const id = window.setTimeout(() => setPending(undefined), PENDING_MS);
     return () => window.clearTimeout(id);
-  }, [pending, base]);
+  }, [pending, caughtUp]);
   const selection = useApp((s) => (s.selectionScope === SCOPE ? s.selection : EMPTY_SELECTION));
   const setSelection = useApp((s) => s.setSelection);
   const [focusKey, setFocusKey] = useState<string | undefined>(undefined);
@@ -157,7 +161,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
 
   const sendMoves = (moves: QueueMove[]) => {
     if (!moves.length) return;
-    setPending((p) => ({ base, moves: p?.base === base ? [...p.moves, ...moves] : moves }));
+    setPending((p) => ({ current: paged.current?.item.key, total: paged.total, moves: [...(p?.moves ?? []), ...moves] }));
     for (const m of moves) d({ type: "moveQueueItem", data: m });
   };
 

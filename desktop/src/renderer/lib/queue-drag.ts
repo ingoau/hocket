@@ -212,6 +212,11 @@ export function previewMoves(q: QueueView, moves: readonly QueueMove[], section:
   return { ...q, entries: [...q.entries.slice(0, from), ...entries], groupCount };
 }
 
+/** Whether two views list the same entries in the same order with the same group. */
+export function sameOrder(a: QueueView, b: QueueView): boolean {
+  return a === b || (a.groupCount === b.groupCount && a.entries.length === b.entries.length && a.entries.every((e, i) => e.item.key === b.entries[i]!.item.key));
+}
+
 /** Alt+Up/Down: one place up or down, crossing the "Next from" heading counts as a step. */
 export function stepMove(order: readonly string[], key: string, dir: 1 | -1, currentKey: string, noHeading = false): QueueMove[] {
   const from = order.indexOf(key);
