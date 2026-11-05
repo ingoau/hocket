@@ -91,6 +91,7 @@ impl Actor {
                 self.mark_prefetch_check();
             }
             keys::STORAGE_PREFETCH_ON_MOBILE_DATA => {
+                self.apply_storage_settings();
                 self.mark_prefetch_check();
             }
             keys::STORAGE_WARN_THRESHOLD_BYTES | keys::STORAGE_CACHE_MAX_BYTES => {
@@ -182,6 +183,10 @@ impl Actor {
         let warn = self.settings.get_f64(keys::STORAGE_WARN_THRESHOLD_BYTES);
         self.downloads
             .set_warn_threshold(if warn > 0.0 { Some(warn) } else { None });
+        self.downloads.set_prefetch_on_mobile_data(
+            self.settings
+                .get_bool(keys::STORAGE_PREFETCH_ON_MOBILE_DATA),
+        );
         self.apply_cache_budget();
     }
 

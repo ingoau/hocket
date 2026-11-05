@@ -226,6 +226,8 @@ struct Inner {
     warn_threshold: RwLock<Option<f64>>,
     policy: RwLock<TranscodingPolicy>,
     network: RwLock<Option<api::NetworkState>>,
+    /// `storage.prefetchOnMobileData`.
+    prefetch_on_mobile_data: RwLock<bool>,
     cache_use: parking_lot::Mutex<CacheUse>,
     traffic: Traffic,
     /// The traffic totals last persisted.
@@ -303,6 +305,7 @@ impl Downloads {
                 warn_threshold: RwLock::new(None),
                 policy: RwLock::new(TranscodingPolicy::default()),
                 network: RwLock::new(None),
+                prefetch_on_mobile_data: RwLock::new(false),
                 cache_use: parking_lot::Mutex::new(CacheUse::default()),
                 traffic: Traffic::default(),
                 traffic_saved: parking_lot::Mutex::new(None),
@@ -401,6 +404,21 @@ impl Downloads {
 
     pub fn set_network(&self, network: Option<api::NetworkState>) {
         *self.inner.network.write() = network;
+    }
+
+    pub fn set_prefetch_on_mobile_data(&self, on: bool) {
+        *self.inner.prefetch_on_mobile_data.write() = on;
+    }
+
+    /// On a metered or cellular network without `storage.prefetchOnMobileData`:
+    /// fetch only a little ahead of what plays (the rest may never be heard).
+    pub fn fetch_ahead_limited(&self) -> bool {
+        self.inner
+            .network
+            .read()
+            .as_ref()
+            .is_some_and(|n| n.metered || n.kind == api::NetworkKind::Cellular)
+            && !*self.inner.prefetch_on_mobile_data.read()
     }
 
     fn now(&self) -> f64 {
@@ -1413,7 +1431,9 @@ impl Downloads {
             track.content_type.clone()
         };
         if let Some(proxy) = proxy {
-            let cached = self.cache_lookup(sid, &track.id, profile.as_ref(), false)?;
+            // Touched: a source resolved as local is about to play, so it is
+            // the last entry the budget should evict.
+            let cached = self.cache_lookup(sid, &track.id, profile.as_ref(), true)?;
             // A complete original serves a transcoded request as it is.
             let transcoded = transcoded && !cached.as_ref().is_some_and(|e| e.profile.is_empty());
             let local = cached.is_some();
@@ -1430,6 +1450,7 @@ impl Downloads {
                 profile: profile.clone(),
                 suffix,
                 mime_type: mime_type.clone(),
+                duration_ms: (track.duration_ms > 0).then_some(track.duration_ms as f64),
             }) {
                 return Ok(MediaSource {
                     key: key.into(),
@@ -1554,6 +1575,9 @@ pub struct StreamTarget {
     /// File extension of what will be served (URL hint, cache file name).
     pub suffix: Option<String>,
     pub mime_type: Option<String>,
+    /// The track's length, when known (how many bytes a span of playing
+    /// time is).
+    pub duration_ms: Option<f64>,
 }
 
 /// Turns a [`StreamTarget`] into a URL a platform player can open (the

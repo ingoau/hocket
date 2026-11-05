@@ -153,7 +153,7 @@ class PlaybackService : MediaLibraryService() {
             }
             is Event.QueueChanged -> {
                 bridge.applyQueue(event.data.queue)
-                backend.onQueue(event.data.queue)
+                backend.onQueueChanged()
             }
             is Event.ServersChanged -> serverId = event.data.servers.firstOrNull()?.id
             is Event.LibraryChanged -> scheduleLibraryNotify()

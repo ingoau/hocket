@@ -9,8 +9,8 @@
 //!   ignore it). With no remote owner this device primes.
 //! - Gating, with the priming device's own state: never on the coordinator,
 //!   only on an unmetered, non-cellular network (no mobile-data override;
-//!   an unknown network counts as unmetered, as for prefetch), not in
-//!   battery saver, not offline.
+//!   an unknown network counts as unmetered, as for prefetch), not offline.
+//!   Battery saver does not stop it: a burst on Wi-Fi lets the radio rest.
 //! - Size: about [`PRIME_SECONDS`] of audio, estimated from the bit rate the
 //!   stream will have (the transcoding profile, else size/duration, else the
 //!   track's bit rate), clamped to [`PRIME_MIN_BYTES`]..[`PRIME_MAX_BYTES`].
@@ -117,7 +117,6 @@ impl Actor {
             || self.stream_reader.is_none()
             || self.api().is_none()
             || self.shutting_down
-            || self.battery_saver.engaged()
         {
             return false;
         }

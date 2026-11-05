@@ -147,7 +147,7 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn priming_needs_an_unmetered_network_and_no_battery_saver() {
+async fn priming_needs_an_unmetered_network() {
     let t = started("prime-gating", 8).await;
     for (cmd, why) in [
         (network(NetworkKind::Wifi, true), "metered wifi"),
@@ -172,15 +172,9 @@ async fn priming_needs_an_unmetered_network_and_no_battery_saver() {
             t.upstream.calls()
         );
     }
+    // Battery saver does not stop it.
     t.run(network(NetworkKind::Wifi, false)).await;
     t.run(Command::SetPowerSave { enabled: true }).await;
-    t.run(Command::PrimeTrack {
-        track_id: "t0".into(),
-    })
-    .await;
-    run_real(&t, 1000.0).await;
-    assert!(t.upstream.calls().is_empty(), "battery saver");
-    t.run(Command::SetPowerSave { enabled: false }).await;
     t.run(Command::PrimeTrack {
         track_id: "t0".into(),
     })

@@ -1888,9 +1888,6 @@ impl Actor {
         }
         let was = std::mem::replace(&mut self.battery_saver, saver.clone());
         self.emit(Event::BatterySaverChanged { saver });
-        if was.engaged() != self.battery_saver.engaged() {
-            self.mark_prefetch_check();
-        }
         if was.has(crate::api::SaverFeature::SmallArtwork)
             != self
                 .battery_saver

@@ -178,6 +178,13 @@ impl HocketCore {
             .to_vec())
     }
 
+    /// Whether a `hocket-stream://` source needs no network now: a download, or the complete cache
+    /// entry an open would serve for its profile. A quick index lookup, but it touches the database:
+    /// call it off the main thread.
+    pub fn stream_local(&self, url: String) -> bool {
+        self.core.stream_local(&url)
+    }
+
     /// Close a stream; a read in progress on it fails with `Closed`. Never blocks. Idempotent.
     pub fn stream_close(&self, handle: u64) {
         self.core.stream_close(handle);

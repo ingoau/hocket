@@ -47,39 +47,58 @@ class ExoBackendTest {
     /** A core stream the core does not have whole yet. */
     private fun stream(key: String, local: Boolean? = null) = source(key).copy(url = "hocket-stream://tok-$key", local = local)
 
-    private fun queueOf(vararg rows: Pair<String, OfflineState>): app.hocket.core.api.QueueView {
-        val entries = rows.map { (key, offline) ->
-            app.hocket.core.api.QueueEntry(
-                app.hocket.core.api.QueueItem(key, "t-$key", app.hocket.core.api.QueueSource.Inserted),
-                source(key).track.copy(offline = offline),
-            )
+    /** The core's answers to [app.hocket.core.CoreStreams.streamLocal], by URL. */
+    private class LocalStreams : app.hocket.core.CoreStreams {
+        val local = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        override fun streamOpen(url: String, offset: Long, length: Long?): app.hocket.core.CoreStreamInfo = throw UnsupportedOperationException()
+        override fun streamRead(handle: Long, maxBytes: Int): ByteArray = throw UnsupportedOperationException()
+        override fun streamClose(handle: Long) {}
+        override fun streamLocal(url: String): Boolean = local[url] ?: false
+    }
+
+    /** Runs the main looper until the backend's wake mode is [mode] (the core is asked off the main thread). */
+    private fun awaitWakeMode(b: ExoBackend, mode: Int) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (b.wakeMode != mode && System.currentTimeMillis() < deadline) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.sleep(5)
         }
-        return app.hocket.core.api.QueueView(
-            entries = entries, windowStart = 0u, total = entries.size.toUInt(), historyCount = 0u, currentIndex = 0u,
-            groupCount = 0u, totalUpcoming = (entries.size - 1).toUInt(), current = entries.firstOrNull(), shuffle = false,
-            repeat = app.hocket.core.api.RepeatMode.Off, autoplay = false,
-        )
+        assertEquals(mode, b.wakeMode)
     }
 
     @Test
     fun theWifiLockIsHeldOnlyWhileTheCurrentOrNextItemIsStreamed() {
-        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, backend.wakeMode)
-        // Both on the device (`file:`): the wake lock alone.
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
-        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, backend.wakeMode)
-        // A streamed follow-up needs the network.
-        backend.handle(BackendCommand.SetNext(BackendCommandSetNextInner(stream("c"))))
-        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, backend.wakeMode)
-        // The core fetched it whole: the queue shows it Cached.
-        backend.onQueue(queueOf("a" to OfflineState.Downloaded, "c" to OfflineState.Cached))
-        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, backend.wakeMode)
-        // A core stream the core already had whole when it resolved it.
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(stream("d", local = true), null, 0u, false)))
-        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, backend.wakeMode)
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(stream("e"), source("f"), 0u, false)))
-        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, backend.wakeMode)
-        backend.onQueue(queueOf("e" to OfflineState.Downloading))
-        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, backend.wakeMode)
+        val core = LocalStreams()
+        val b = ExoBackend(ApplicationProvider.getApplicationContext(), scope, { dispatched += it }, { core })
+        try {
+            val network = androidx.media3.common.C.WAKE_MODE_NETWORK
+            val local = androidx.media3.common.C.WAKE_MODE_LOCAL
+            assertEquals(network, b.wakeMode)
+            // Both on the device (`file:`): the wake lock alone.
+            b.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
+            awaitWakeMode(b, local)
+            // A streamed follow-up needs the network, whatever the queue shows: a copy at another
+            // profile makes the track Cached while this stream still comes from the server.
+            b.handle(BackendCommand.SetNext(BackendCommandSetNextInner(stream("c"))))
+            awaitWakeMode(b, network)
+            b.onQueueChanged()
+            awaitWakeMode(b, network)
+            // The core fetched it whole (and says so): the queue changing asks again.
+            core.local["hocket-stream://tok-c"] = true
+            b.onQueueChanged()
+            awaitWakeMode(b, local)
+            // Local when resolved, but evicted since: the core's "no" wins over the flag.
+            b.handle(BackendCommand.Load(BackendCommandLoadInner(stream("d", local = true), null, 0u, false)))
+            awaitWakeMode(b, network)
+            core.local["hocket-stream://tok-d"] = true
+            b.handle(BackendCommand.Load(BackendCommandLoadInner(stream("d", local = true), null, 0u, false)))
+            awaitWakeMode(b, local)
+            core.local.remove("hocket-stream://tok-d")
+            b.onQueueChanged()
+            awaitWakeMode(b, network)
+        } finally {
+            b.release()
+        }
     }
 
     @Test

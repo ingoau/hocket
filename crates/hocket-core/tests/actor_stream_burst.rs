@@ -18,7 +18,11 @@ use stream_common::*;
 const PUMP_DELAY_MS: f64 = 20_000.0;
 
 async fn started(name: &str, n: usize) -> TestCore {
-    let t = TestCore::start(name, seeded_server(n, 100.0)).await;
+    started_with(name, n, 100.0).await
+}
+
+async fn started_with(name: &str, n: usize, duration_s: f64) -> TestCore {
+    let t = TestCore::start(name, seeded_server(n, duration_s)).await;
     core_stream(&t).await;
     t.run(Command::SetNetworkState {
         state: NetworkState {
@@ -122,6 +126,7 @@ async fn a_short_listen_is_not_fetched_ahead() {
     t.core.stream_read(info.handle, 64 * 1024).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(storage(&t).await.fetched_bytes < 1_000_000.0);
+    assert_eq!(t.upstream.stream_requests("t0"), 1);
     t.core.stream_close(info.handle);
     t.core.shutdown().await;
 }
@@ -190,5 +195,233 @@ async fn a_connection_the_pump_lost_fails_the_read_where_it_dropped() {
     assert_eq!(out, &media[..120_000]);
     t.core.stream_close(info.handle);
     assert_eq!(t.upstream.stream_requests("t0"), 1);
+    t.core.shutdown().await;
+}
+
+/// Open at 0, read once, and once more after the start delay (which
+/// starts the pump). Returns the handle.
+async fn play_past_the_delay(t: &TestCore, url: &str) -> u64 {
+    let info = t.core.stream_open(url, 0, None).await.unwrap();
+    t.core.stream_read(info.handle, 1024).await.unwrap();
+    t.clock.advance(PUMP_DELAY_MS);
+    t.core.stream_read(info.handle, 1024).await.unwrap();
+    info.handle
+}
+
+/// Poll (real time) until the core counts this many fetched bytes.
+async fn wait_fetched(t: &TestCore, want: f64) {
+    for _ in 0..400 {
+        if storage(t).await.fetched_bytes >= want {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("fetched only {}", storage(t).await.fetched_bytes);
+}
+
+/// A head of `n` bytes from an earlier, short listen.
+async fn cache_head(t: &TestCore, url: &str, n: u64) {
+    let info = t.core.stream_open(url, 0, Some(n)).await.unwrap();
+    while !t
+        .core
+        .stream_read(info.handle, 64 * 1024)
+        .await
+        .unwrap()
+        .is_empty()
+    {}
+    t.core.stream_close(info.handle);
+    wait_handles_closed(t).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_in_the_middle_of_a_burst_keeps_what_was_written() {
+    let t = started("burst-close", 2).await;
+    let media: Vec<u8> = (0..2_000_000u32).map(|i| (i % 229) as u8).collect();
+    t.upstream.set_media("t0", media, "audio/flac");
+    // The server stalls part-way: the pump has written up to there.
+    t.upstream
+        .set_behaviour("t0", UpstreamBehaviour::StallAfter(1_200_000));
+    let s = source(&t, "t0").await;
+    let handle = play_past_the_delay(&t, &s.url).await;
+    wait_fetched(&t, 1_200_000.0).await;
+    t.core.stream_close(handle);
+    // Merged as the closed handle's source goes (the pump drops it once it
+    // sees the close), not before: nothing was due before the end.
+    wait_rows(&t, "the burst's bytes", |rows| {
+        rows.iter().any(|r| r.spans == "0-1200000" && !r.complete)
+    })
+    .await;
+    t.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_transcode_of_unknown_length_is_fetched_to_its_end_which_is_its_length() {
+    let t = started("burst-unknown", 2).await;
+    let media: Vec<u8> = (0..700_000u32).map(|i| (i % 223) as u8).collect();
+    t.upstream.set_media("t0", media.clone(), "audio/ogg");
+    t.upstream
+        .set_behaviour("t0", UpstreamBehaviour::UnknownLength);
+    let s = source(&t, "t0").await;
+    let info = t.core.stream_open(&s.url, 0, None).await.unwrap();
+    assert_eq!(info.total_length, None);
+    let mut out = t
+        .core
+        .stream_read(info.handle, 1024)
+        .await
+        .unwrap()
+        .to_vec();
+    t.clock.advance(PUMP_DELAY_MS);
+    out.extend_from_slice(&t.core.stream_read(info.handle, 1024).await.unwrap());
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    let row = row_of(&t, "t0");
+    assert_eq!((row.complete, row.total), (true, Some(700_000.0)));
+    loop {
+        let b = t.core.stream_read(info.handle, 64 * 1024).await.unwrap();
+        if b.is_empty() {
+            break;
+        }
+        out.extend_from_slice(&b);
+    }
+    t.core.stream_close(info.handle);
+    assert_eq!(out, media);
+    assert_eq!(t.upstream.stream_requests("t0"), 1);
+    t.core.shutdown().await;
+}
+
+/// The head is cached, so the pump opens its own fetch for the rest; a
+/// server slow to answer it does not hold up reads from disk, and the
+/// reads do not abort it (each abort would start another request, and
+/// for a transcode another ffmpeg on the server).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reads_from_disk_neither_wait_for_nor_abort_the_pumps_fetch() {
+    let t = started("burst-open", 2).await;
+    let media: Vec<u8> = (0..2_000_000u32).map(|i| (i % 211) as u8).collect();
+    t.upstream.set_media("t0", media.clone(), "audio/flac");
+    let s = source(&t, "t0").await;
+    cache_head(&t, &s.url, 500_000).await;
+    assert_eq!(row_of(&t, "t0").spans, "0-500000");
+    t.upstream.hold_responses("t0");
+    let handle = play_past_the_delay(&t, &s.url).await;
+    // The pump's fetch waits on the server; reads go on from disk.
+    for _ in 0..5 {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            t.core.stream_read(handle, 16 * 1024),
+        )
+        .await
+        .expect("a read from disk waited on the server")
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        t.upstream.stream_requests("t0"),
+        2,
+        "{:?}",
+        t.upstream.calls()
+    );
+    t.upstream.release_responses("t0");
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    let calls = t.upstream.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[1].range.as_deref(), Some("bytes=500000-"));
+    t.core.stream_close(handle);
+    t.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fetch_the_pump_could_not_open_is_tried_again_later() {
+    let t = started("burst-retry", 2).await;
+    let media: Vec<u8> = (0..2_000_000u32).map(|i| (i % 199) as u8).collect();
+    t.upstream.set_media("t0", media, "audio/flac");
+    let s = source(&t, "t0").await;
+    cache_head(&t, &s.url, 500_000).await;
+    t.upstream
+        .set_behaviour("t0", UpstreamBehaviour::RefuseOnce);
+    let handle = play_past_the_delay(&t, &s.url).await;
+    for _ in 0..400 {
+        if t.upstream.stream_requests("t0") == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(t.upstream.stream_requests("t0"), 2, "the pump tried");
+    // Reads within the back-off do not start it again...
+    t.core.stream_read(handle, 1024).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(t.upstream.stream_requests("t0"), 2);
+    assert!(!row_of(&t, "t0").complete);
+    // ...a read after it does, and the rest arrives.
+    t.clock.advance(30_000.0);
+    t.core.stream_read(handle, 1024).await.unwrap();
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    assert_eq!(t.upstream.stream_requests("t0"), 3);
+    t.core.stream_close(handle);
+    t.core.shutdown().await;
+}
+
+/// On a metered network (without prefetch on mobile data) the pump fetches
+/// five minutes of playing time past the read position, not the whole
+/// track; on an unmetered one, the rest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn on_a_metered_network_the_pump_fetches_five_minutes_ahead() {
+    // 1000 s in 10 MB: 10 bytes a ms, so five minutes is 3 MB.
+    let t = started_with("burst-metered", 2, 1000.0).await;
+    let media: Vec<u8> = (0..10_000_000u32).map(|i| (i % 197) as u8).collect();
+    t.upstream.set_media("t0", media, "audio/flac");
+    let s = source(&t, "t0").await;
+    let handle = play_past_the_delay(&t, &s.url).await;
+    wait_fetched(&t, 3_000_000.0).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let fetched = storage(&t).await.fetched_bytes;
+    assert!(fetched < 3_100_000.0, "{fetched}");
+    // Reading a little does not restart it (it waits for half the horizon)...
+    t.core.stream_read(handle, 64 * 1024).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(storage(&t).await.fetched_bytes, fetched);
+    // ...on Wi-Fi the next read fetches the rest.
+    t.run(Command::SetNetworkState {
+        state: NetworkState {
+            kind: NetworkKind::Wifi,
+            metered: false,
+            network_id: None,
+        },
+    })
+    .await;
+    t.core.stream_read(handle, 1024).await.unwrap();
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    t.core.stream_close(handle);
+    t.core.shutdown().await;
+}
+
+/// Whether a source needs the network is the core's answer for the very
+/// stream (its profile), not the track's offline state: a complete
+/// transcode makes the track Cached, but online an original is never
+/// served from it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_is_local_only_when_its_own_profile_is_cached() {
+    let t = started("burst-local", 2).await;
+    let media: Vec<u8> = (0..300_000u32).map(|i| (i % 193) as u8).collect();
+    t.upstream.set_media("t0", media, "audio/ogg");
+    let cellular = source(&t, "t0").await;
+    assert!(!t.core.stream_local(&cellular.url));
+    read_from(&t, &cellular.url, 0).await.unwrap();
+    wait_offline(&t, "t0", OfflineState::Cached).await;
+    assert!(t.core.stream_local(&cellular.url));
+    assert!(source(&t, "t0").await.local);
+    // On Wi-Fi the original plays: not cached, whatever the track shows.
+    t.run(Command::SetNetworkState {
+        state: NetworkState {
+            kind: NetworkKind::Wifi,
+            metered: false,
+            network_id: None,
+        },
+    })
+    .await;
+    let wifi = source(&t, "t0").await;
+    assert_ne!(wifi.url, cellular.url);
+    assert_eq!(offline(&t, "t0").await, OfflineState::Cached);
+    assert!(!wifi.local);
+    assert!(!t.core.stream_local(&wifi.url));
+    assert!(!t.core.stream_local("hocket-stream://unknown"));
     t.core.shutdown().await;
 }

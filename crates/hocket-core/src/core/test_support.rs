@@ -640,6 +640,11 @@ pub enum UpstreamBehaviour {
     /// [`EstimatedOnce`](Self::EstimatedOnce) every time: a server whose
     /// transcoding cache is off.
     Estimated(usize),
+    /// A live transcode of unknown length: HTTP 200 whatever the `Range`,
+    /// no `Content-Length`, the whole media.
+    UnknownLength,
+    /// The next request fails to connect, then [`Serve`](Self::Serve).
+    RefuseOnce,
 }
 
 /// One `stream` request the fake saw.
@@ -657,6 +662,8 @@ struct FakeUpstreamState {
     calls: Vec<UpstreamCall>,
     /// Bodies of these tracks wait until released.
     holds: std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>,
+    /// Responses (headers) of these tracks wait until released.
+    response_holds: std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>,
 }
 
 /// In-memory server side of the stream reader: serves registered media by
@@ -689,6 +696,20 @@ impl FakeUpstream {
     pub fn hold(&self, track_id: &str) {
         let (tx, _) = tokio::sync::watch::channel(false);
         self.state.lock().holds.insert(track_id.into(), tx);
+    }
+
+    /// Answer this track's requests only once
+    /// [`release_responses`](Self::release_responses) is called (a server
+    /// slow to start a stream: a transcode spinning up).
+    pub fn hold_responses(&self, track_id: &str) {
+        let (tx, _) = tokio::sync::watch::channel(false);
+        self.state.lock().response_holds.insert(track_id.into(), tx);
+    }
+
+    pub fn release_responses(&self, track_id: &str) {
+        if let Some(tx) = self.state.lock().response_holds.remove(track_id) {
+            let _ = tx.send(true);
+        }
     }
 
     /// Let held bodies of this track flow (and stop holding new ones).
@@ -762,13 +783,41 @@ impl StreamUpstream for FakeUpstream {
                 .get(&track_id)
                 .copied()
                 .unwrap_or(UpstreamBehaviour::Serve);
-            if matches!(b, UpstreamBehaviour::EstimatedOnce(_)) {
+            if matches!(
+                b,
+                UpstreamBehaviour::EstimatedOnce(_) | UpstreamBehaviour::RefuseOnce
+            ) {
                 st.behaviour
                     .insert(track_id.clone(), UpstreamBehaviour::Serve);
             }
             b
         };
+        let response_gate = self
+            .state
+            .lock()
+            .response_holds
+            .get(&track_id)
+            .map(|tx| tx.subscribe());
         Box::pin(async move {
+            if let Some(mut rx) = response_gate {
+                let _ = rx.wait_for(|open| *open).await;
+            }
+            if behaviour == UpstreamBehaviour::RefuseOnce {
+                return Err("connection refused".to_string());
+            }
+            if behaviour == UpstreamBehaviour::UnknownLength {
+                let chunks: Vec<Result<bytes::Bytes, String>> = media
+                    .chunks(16 * 1024)
+                    .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+                    .collect();
+                return Ok(UpstreamResponse {
+                    status: 200,
+                    content_type: Some(content_type),
+                    content_length: None,
+                    content_range: None,
+                    body: futures::stream::iter(chunks).boxed(),
+                });
+            }
             if behaviour == UpstreamBehaviour::ErrorEnvelope {
                 let body = br#"{"subsonic-response":{"status":"failed","version":"1.16.1","error":{"code":70,"message":"not found"}}}"#;
                 return Ok(UpstreamResponse {

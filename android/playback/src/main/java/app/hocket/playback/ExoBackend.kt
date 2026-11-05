@@ -33,13 +33,14 @@ import app.hocket.core.api.BackendReportSystemVolumeInner
 import app.hocket.core.api.BackendReportTransitionedToNextInner
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSource as CoreMediaSource
-import app.hocket.core.api.OfflineState
-import app.hocket.core.api.QueueView
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -78,8 +79,10 @@ import kotlin.math.roundToInt
  * - The player holds a wake lock while playing, and a Wi-Fi lock too ([C.WAKE_MODE_NETWORK]) while
  *   the current or the next item is streamed: without them a stream stalls once the screen is off and
  *   the CPU or Wi-Fi radio sleeps. When both are on the device (a download, a `file:` URL, or a
- *   stream the core has whole: `MediaSource.local`, or the queue showing it Cached/Downloaded once
- *   the core's burst fetch finished it) the wake lock alone does ([C.WAKE_MODE_LOCAL], [wakeModeFor]):
+ *   core stream the core has whole at the profile it serves: `MediaSource.local` when resolved, then
+ *   the core's own answer, [CoreStreams.streamLocal], asked again on every load, transition and queue
+ *   change, which is how the core's burst fetch finishing a track, or an eviction, shows up; a "no"
+ *   wins over the resolve-time flag) the wake lock alone does ([C.WAKE_MODE_LOCAL], [wakeModeFor]):
  *   the high-performance Wi-Fi lock keeps the Wi-Fi radio out of power save, which costs battery for
  *   nothing when no byte comes over the network.
  * - `Paused` is reported only when the player no longer means to play (`playWhenReady` false: a
@@ -100,6 +103,8 @@ class ExoBackend(
     private val dispatch: (Command) -> Unit,
     /** The running core's stream reader, read on each open (a restarted service has a new core). */
     private val streams: () -> CoreStreams? = { CoreHost.current as? CoreStreams },
+    /** Where [CoreStreams.streamLocal] (a blocking index lookup) runs. */
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     /** What a player that stopped playing while it still has an item is reporting. */
     internal enum class Stall { Paused, Buffering, Nothing }
@@ -207,8 +212,9 @@ class ExoBackend(
     /** The wake mode set on the main player ([updateWakeMode]). */
     internal var wakeMode = C.WAKE_MODE_NETWORK
         private set
-    /** Queue keys the core's queue last showed as on the device (Cached or Downloaded) or not. */
-    private val queueLocal = HashMap<String, Boolean>()
+    /** What the core last said of core-stream URLs in the playlist: on the device or not ([refreshLocality]). */
+    private val streamLocal = HashMap<String, Boolean>()
+    private var localityJob: Job? = null
     /** The key of the last `Load`, so an error raised after the playlist emptied is still attributable. */
     private var lastLoadedKey: String? = null
     /** Keys by media id, so reports name the queue key the core gave us. */
@@ -291,7 +297,7 @@ class ExoBackend(
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) onAutoTransition(mediaItem)
-                updateWakeMode()
+                refreshLocality()
             }
 
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
@@ -385,7 +391,7 @@ class ExoBackend(
                 lastLoadedKey = d.source.key
                 cancelRecovery()
                 player.setMediaSources(sources, 0, d.position_ms.toLong())
-                updateWakeMode()
+                refreshLocality()
                 applyGain(d.source.gainDb)
                 player.playWhenReady = d.play
                 player.prepare()
@@ -396,7 +402,7 @@ class ExoBackend(
                 if (player.mediaItemCount == 0) return
                 while (player.mediaItemCount > 1) player.removeMediaItem(player.mediaItemCount - 1)
                 command.data.next?.let { player.addMediaSource(mediaSource(it)) }
-                updateWakeMode()
+                refreshLocality()
             }
             BackendCommand.Play -> {
                 if (player.playbackState == Player.STATE_IDLE) player.prepare()
@@ -616,21 +622,38 @@ class ExoBackend(
     private fun gainFor(item: MediaItem): Double = item.requestMetadata.extras?.getDouble("gainDb", 0.0) ?: 0.0
 
     /**
-     * The core's queue changed: a streamed item it shows Cached (the core fetched it whole) or
-     * Downloaded needs no network any more, which may let the player drop its Wi-Fi lock.
+     * The core's queue changed, which it does whenever a queued track's cache state changes (the
+     * burst fetch completed it, the budget evicted it): ask the core again what is local.
      */
-    fun onQueue(queue: QueueView) {
-        val rows = listOfNotNull(queue.current) + queue.entries
-        for (row in rows) queueLocal[row.item.key] = row.track.offline == OfflineState.Cached || row.track.offline == OfflineState.Downloaded
-        val inPlaylist = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
-        queueLocal.keys.retainAll(inPlaylist + rows.map { it.item.key })
-        updateWakeMode()
+    fun onQueueChanged() = refreshLocality()
+
+    /** Whether playing [item] needs no network: a core stream by the core's latest answer, else the resolve-time flag. */
+    private fun isLocal(item: MediaItem): Boolean {
+        val url = item.localConfiguration?.uri?.toString()
+        if (url != null && url.startsWith(CoreStreams.SCHEME + ":")) streamLocal[url]?.let { return it }
+        return item.requestMetadata.extras?.getBoolean("local", false) == true
     }
 
-    /** Whether playing [item] needs no network: the core said so, or it is a core stream the queue shows on the device. */
-    private fun isLocal(item: MediaItem): Boolean {
-        if (item.requestMetadata.extras?.getBoolean("local", false) == true) return true
-        return item.localConfiguration?.uri?.scheme == CoreStreams.SCHEME && queueLocal[item.mediaId] == true
+    /** The current and the next item, when there are. */
+    private fun playing(): List<MediaItem> {
+        val index = player.currentMediaItemIndex
+        if (index !in 0 until player.mediaItemCount) return emptyList()
+        return listOfNotNull(player.getMediaItemAt(index), (index + 1).takeIf { it < player.mediaItemCount }?.let(player::getMediaItemAt))
+    }
+
+    /** Ask the core whether the core streams playing now and next are local, then set the wake mode. */
+    private fun refreshLocality() {
+        updateWakeMode()
+        val urls = playing().mapNotNull { it.localConfiguration?.uri?.toString() }.filter { it.startsWith(CoreStreams.SCHEME + ":") }
+        streamLocal.keys.retainAll(urls.toSet())
+        val core = streams() ?: return
+        if (urls.isEmpty()) return
+        localityJob?.cancel()
+        localityJob = scope.launch {
+            val answers = withContext(io) { urls.associateWith { runCatching { core.streamLocal(it) }.getOrDefault(false) } }
+            streamLocal.putAll(answers)
+            updateWakeMode()
+        }
     }
 
     /** The wake mode for what is playing and what follows ([wakeModeFor]); nothing loaded keeps the last one. */

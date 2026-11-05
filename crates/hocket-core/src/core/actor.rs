@@ -722,6 +722,10 @@ impl Actor {
                 let busy = self.in_flight > 0 || self.flush_in_flight || self.jobs_busy();
                 let _ = reply.send(busy);
             }
+            #[cfg(feature = "sim")]
+            Internal::EngineSlowSync(reply) => {
+                let _ = reply.send(self.engine.as_ref().map(|e| e.slow_sync()));
+            }
         }
     }
 
