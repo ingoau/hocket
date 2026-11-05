@@ -29,7 +29,6 @@ import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueView
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.theme.Motion
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -81,7 +80,13 @@ internal fun rememberNeighbours(): State<Neighbours> {
  */
 @Stable
 internal class SkipCarousel {
-    val offset = Animatable(0f)
+    /** Settling (springing back, or onto a neighbour): animated. Under the finger it is [follow]. */
+    private val settle = Animatable(0f)
+    /** Under the finger: written straight from each drag delta, so the strip never trails it by a frame. */
+    private var follow by mutableFloatStateOf(0f)
+    private var following by mutableStateOf(false)
+    /** Where the strip is (px, negative towards next). */
+    val offset: Float get() = if (following) follow else settle.value
     var span by mutableFloatStateOf(1f)
     /** The neighbours as they were when a settling skip started (see [shown]). */
     private var held by mutableStateOf<Neighbours?>(null)
@@ -89,10 +94,10 @@ internal class SkipCarousel {
     var committing by mutableStateOf(false)
         private set
     /** Under the finger, or settling a skip: the scene follows the swipe rather than animating. */
-    val busy: Boolean get() = committing || offset.value != 0f
+    val busy: Boolean get() = committing || offset != 0f
 
     /** -1..1: how far towards the previous (positive) or next (negative) neighbour. */
-    fun fraction(): Float = if (span <= 1f) 0f else (offset.value / span).coerceIn(-1f, 1f)
+    fun fraction(): Float = if (span <= 1f) 0f else (offset / span).coerceIn(-1f, 1f)
 
     /**
      * The neighbours to draw: [live], except while a skip settles. The new song is current a frame
@@ -115,7 +120,7 @@ internal class SkipCarousel {
         rubberThreshold: Float,
     ): Modifier {
         val density = LocalDensity.current
-        val fling = with(density) { 500.dp.toPx() }
+        val fling = with(density) { 400.dp.toPx() }
         val minFling = with(density) { 24.dp.toPx() }
         val drag = remember { DragTrack() }
         // The queue's own neighbours, not the ones drawn (held while a skip settles).
@@ -133,11 +138,12 @@ internal class SkipCarousel {
             }
             // Without a slot only a swipe on (ending the queue) does anything.
             val over = if (slot && !reduced) abs(shown) > span / 2f else (raw < 0f || (reduced && slot)) && abs(if (reduced) raw else shown) > rubberThreshold
+            // A light tick each way across the commit point; the firm one is the release's.
             if (over != drag.crossed) {
                 drag.crossed = over
-                haptics.performHapticFeedback(if (over) HapticFeedbackType.GestureThresholdActivate else HapticFeedbackType.SegmentTick)
+                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
             }
-            scope.launch { offset.snapTo(shown) }
+            follow = shown
         }
         return draggable(
             state = state,
@@ -147,21 +153,29 @@ internal class SkipCarousel {
                 // A skip still settling: it is done now (sent once), and this drag carries on
                 // from its page.
                 pending?.let { finishNow(client, scope, drag, it) }
-                offset.stop()
-                drag.raw = offset.value
+                settle.stop()
+                drag.raw = settle.value
                 drag.crossed = false
+                follow = settle.value
+                following = true
             },
             onDragStopped = { v ->
                 scope.launch {
                     // A finished skip's page becomes the current one first (see [finishNow]).
                     rebase?.join()
-                    val shown = offset.value
+                    // The finger's position hands over to the spring.
+                    settle.snapTo(follow)
+                    following = false
+                    val shown = settle.value
                     val raw = drag.raw
                     val d = if (reduced) raw else shown
                     val slot = slotFor(d)
                     val flung = abs(v) > fling && sign(v) == sign(d) && abs(d) > minFling
                     when {
-                        reduced -> if ((abs(raw) > rubberThreshold || flung) && (raw < 0f || slotFor(raw))) skip(client, forward = raw < 0f)
+                        reduced -> if ((abs(raw) > rubberThreshold || flung) && (raw < 0f || slotFor(raw))) {
+                            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                            skip(client, forward = raw < 0f)
+                        }
                         slot && (abs(shown) > span / 2f || flung) -> {
                             val forward = shown < 0f
                             // The song the skip is from: if another takes its place before the
@@ -172,15 +186,16 @@ internal class SkipCarousel {
                             pending = commit
                             held = neighbours
                             committing = true
+                            // Felt as the finger lifts, not once the strip has come to rest.
+                            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                             try {
-                                offset.animateTo(if (forward) -span else span, SETTLE, initialVelocity = v)
-                                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                                settle.animateTo(if (forward) -span else span, SETTLE, initialVelocity = v)
                                 send(client, commit)
                                 awaitChange(client, commit)
                                 // Let the new track's cover compose before the strip jumps back under it.
                                 withFrameNanos { }
                                 withFrameNanos { }
-                                offset.snapTo(0f)
+                                settle.snapTo(0f)
                             } finally {
                                 // Done, or finished early by a new drag ([finishNow]).
                                 if (pending === commit) {
@@ -193,9 +208,9 @@ internal class SkipCarousel {
                         !slot && shown < 0f && abs(shown) > rubberThreshold -> {
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                             skip(client, forward = true)
-                            offset.animateTo(0f, Motion.snap, initialVelocity = v)
+                            settle.animateTo(0f, BACK, initialVelocity = v)
                         }
-                        else -> offset.animateTo(0f, Motion.snap, initialVelocity = v)
+                        else -> settle.animateTo(0f, BACK, initialVelocity = v)
                     }
                 }
             },
@@ -230,7 +245,7 @@ internal class SkipCarousel {
         committing = false
         commit.job?.cancel()
         val page = if (commit.forward) -span else span
-        offset.snapTo(page)
+        settle.snapTo(page)
         send(client, commit)
         rebase?.cancel()
         rebase = scope.launch {
@@ -239,7 +254,7 @@ internal class SkipCarousel {
                 withFrameNanos { }
                 drag.raw -= page
                 held = null
-                offset.snapTo(offset.value - page)
+                if (following) follow -= page else settle.snapTo(settle.value - page)
             } finally {
                 // Cancelled (the artwork left): nothing settling any more.
                 held = null
@@ -264,7 +279,12 @@ internal class SkipCarousel {
     }
 
     companion object {
-        /** Settling on a neighbour: quick and never past it. */
-        private val SETTLE = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
+        /**
+         * Settling on a neighbour: quick and never past it. Done within a pixel (the default 0.01 px
+         * tail would hold the skip back ~150 ms after the strip has visibly stopped).
+         */
+        private val SETTLE = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 2_000f, visibilityThreshold = 1f)
+        /** Springing back to the current song, likewise done within a pixel. */
+        private val BACK = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium, visibilityThreshold = 1f)
     }
 }
