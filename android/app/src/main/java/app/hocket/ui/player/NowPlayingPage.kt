@@ -60,6 +60,7 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -92,6 +93,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -118,6 +120,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
+import app.hocket.playback.AudioOutputs
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
@@ -1121,7 +1124,7 @@ private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switch
 }
 
 /**
- * The device switcher: the playing device's icon (this phone, or the laptop / speaker another
+ * The device switcher: the playing device's icon (this phone, or the headphones it plays out of; the laptop / speaker another
  * device is), tonal while this device plays and filled with the accent while it controls another
  * one. A tap opens the device picker; a long press pulls playback straight to this device. Its
  * corners tighten while pressed (the expressive icon button's press shape).
@@ -1142,7 +1145,10 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val container by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, label = "deviceContainer")
     val content by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer, label = "deviceContent")
     val playingOn = remote?.let { stringResource(R.string.player_playing_on, it.name) }
-    val icon = remote?.let { deviceIcon(it.platform) } ?: HocketIcons.Filled.PhoneAndroid
+    val context = LocalContext.current
+    DisposableEffect(context) { AudioOutputs.start(context); onDispose { } }
+    val output by AudioOutputs.outputs.collectAsStateWithLifecycle()
+    val icon = remote?.let { deviceIcon(it.platform) } ?: outputButtonIcon(output.current?.kind)
     Box(
         Modifier
             .size(48.dp)
@@ -1168,6 +1174,14 @@ private fun DeviceButton(onConnect: () -> Unit) {
     ) {
         Icon(icon, stringResource(R.string.player_connect), tint = content)
     }
+}
+
+/** This phone's button while it plays: what it plays out of (headphones, a USB device), else the phone. */
+private fun outputButtonIcon(kind: AudioOutputs.Kind?): ImageVector = when (kind) {
+    AudioOutputs.Kind.Bluetooth, AudioOutputs.Kind.Wired -> HocketIcons.Filled.Headphones
+    AudioOutputs.Kind.Usb -> HocketIcons.Filled.Usb
+    AudioOutputs.Kind.Other -> HocketIcons.Filled.Speaker
+    AudioOutputs.Kind.Phone, null -> HocketIcons.Filled.PhoneAndroid
 }
 
 /** A device's icon by platform: a phone, a computer, or a speaker (the coordinator). */
