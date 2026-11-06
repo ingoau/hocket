@@ -152,6 +152,8 @@ impl Actor {
             || self.api().is_none()
             || !self.owns_transport()
             || self.shutting_down
+            // A remote renderer fetches its own audio: nothing here would read the cache.
+            || self.renderer.is_some()
         {
             return false;
         }

@@ -790,6 +790,7 @@ mod tests {
             gain_db: 0.0,
             transcoded: false,
             local: false,
+            artwork_url: None,
         }
     }
 

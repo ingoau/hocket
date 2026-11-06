@@ -1286,3 +1286,79 @@ async fn rating_off_queue_does_not_emit_queue() {
         "off-queue ratings must not rebuild MediaSession"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_renderer_reloads_at_the_position_and_pauses_on_the_way_back() {
+    let t = synced_core("renderer").await;
+    let sid = t.server_id.clone();
+    t.run(Command::SetBackendCapabilities { core_stream: true })
+        .await;
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(5_000.0).await;
+    t.backend.clear_log();
+
+    t.run(Command::SetRenderer {
+        renderer: Some("Living Room TV".into()),
+    })
+    .await;
+    t.run_for(200.0).await;
+    let load = t
+        .backend
+        .log()
+        .into_iter()
+        .find(|c| matches!(c, ScriptedCall::Load { .. }))
+        .expect("reloaded for the renderer");
+    match load {
+        ScriptedCall::Load {
+            key,
+            next,
+            position_ms,
+            play,
+        } => {
+            assert!(key.len() > 0);
+            assert!(next.is_some(), "the follow-up goes to the renderer's queue");
+            assert!(position_ms >= 4_000, "kept its place: {position_ms}");
+            assert!(play);
+        }
+        _ => unreachable!(),
+    }
+    // The renderer fetches the server URL itself, never a core stream.
+    match t
+        .query(Query::MediaSource {
+            track_id: "t1".into(),
+        })
+        .await
+    {
+        QueryResult::Source(Some(s)) => {
+            assert!(s.url.starts_with("https://"), "{}", s.url)
+        }
+        other => panic!("no source: {other:?}"),
+    }
+    let tr = t.transport().await;
+    assert_eq!(tr.renderer.as_deref(), Some("Living Room TV"));
+    assert!(tr.position.is_playing);
+
+    t.backend.clear_log();
+    t.run(Command::SetRenderer { renderer: None }).await;
+    t.run_for(200.0).await;
+    assert!(t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { play: false, position_ms, .. } if *position_ms >= 4_000)));
+    let tr = t.transport().await;
+    assert_eq!(tr.renderer, None);
+    assert!(!tr.position.is_playing, "back here it waits, paused");
+    match t
+        .query(Query::MediaSource {
+            track_id: "t1".into(),
+        })
+        .await
+    {
+        QueryResult::Source(Some(s)) => assert!(!s.url.starts_with("https://"), "{}", s.url),
+        other => panic!("no source: {other:?}"),
+    }
+}

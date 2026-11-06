@@ -301,6 +301,7 @@ mod tests {
             gain_db: -3.0,
             transcoded: false,
             local: false,
+            artwork_url: None,
         }
     }
 

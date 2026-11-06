@@ -23,7 +23,13 @@ cd android
 ./gradlew assembleDebug          # ANDROID_HOME=/path/to/sdk (or sdk.dir in local.properties)
 ./gradlew testDebugUnitTest      # JVM tests: JSON round-trips, client, lyrics cursor, fake core, Compose UI
 ./gradlew lint
+./gradlew -Phocket.foss=true assembleRelease   # FOSS build: no Google Cast SDK (`:cast` left out)
 ```
+
+`:cast` holds the Google Cast SDK (proprietary). The app includes it unless `-Phocket.foss=true`,
+which compiles `app/src/foss` instead of `app/src/gms` (`CastSetup`): no Cast provider is installed
+and the UI offers no Cast devices. A property rather than product flavours, so task names and APK
+paths stay the same.
 
 The generated Kotlin and the `.so` are gitignored; the build scripts produce them. Gradle 9.7 /
 AGP 9.4 with the Kotlin Gradle plugin kept on (`android.builtInKotlin=false`) because the
@@ -168,7 +174,21 @@ the one core for the process through `CoreHost`:
   device on the media controls' output chip; the other devices are routes in the system output
   switcher, and picking one (or this phone) is a `HandoffTo`. `PlaybackService` feeds
   `ConnectRoutes` from `DevicesChanged`/`TransportChanged`/`MediaSession` and registers the app's
-  MediaRouter2 discovery preference for `app.hocket.feature.CONNECT`, which keeps the provider bound.
+  MediaRouter2 discovery preference for `app.hocket.feature.CONNECT` (plus the Cast category, see
+  Cast), which keeps the provider bound.
+- Cast: the app installs `HocketCast` (`:cast`) as `CastDevices.provider` at startup. The service
+  creates its controller (Default Media Receiver; the SDK's own media session and notification off),
+  which publishes receivers to `CastDevices` (HandoffSheet's Cast group, scanning actively while the
+  sheet is open) and adds the Cast category to the MediaRouter2 discovery preference, so receivers
+  show in the system output switcher too. A session starting (here, from the output switcher, or
+  resumed) silences and stops `ExoBackend`, sends `SetRenderer(name)` and routes backend commands to
+  `CastRenderer` (previews stay on the phone); the core reloads the current item there with server
+  URLs. The session's end routes them back and sends `SetRenderer(null)`: the core reloads it here,
+  paused. `CastRenderer` keeps the receiver's queue at current + next, maps its status to reports
+  (`CastStatus`), reloads transcodes at `timeOffset` to seek, drives the receiver's volume as the
+  system volume (the session reports remote playback with volume while casting), and holds a wake
+  and Wi-Fi lock while the receiver plays. A receiver that fails before anything played ends the
+  session with a toast saying it can't reach the server.
 - Launcher shortcuts (`AppShortcuts`, app module): Resume, Shuffle loved / all / offline songs and
   Search, up to four, chosen in Settings > Playback (an app preference). They are dynamic shortcuts
   to `MainActivity` whose intents carry a per-install token (`hocket-shortcuts`, excluded from

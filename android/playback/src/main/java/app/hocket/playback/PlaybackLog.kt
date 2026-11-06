@@ -14,7 +14,7 @@ import app.hocket.core.DevLog
  * logcat: the bundle reads that too and would get every line twice. Debug lines are kept only in
  * developer mode.
  */
-internal object PlaybackLog {
+object PlaybackLog {
     private const val TAG = "kotlin/Playback"
 
     fun d(message: String) = DevLog.append("debug", TAG, message)

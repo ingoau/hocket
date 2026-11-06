@@ -926,6 +926,9 @@ pub enum Msg {
         /// show it. Absent from older peers.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         volume: Option<DeviceVolume>,
+        /// The remote renderer (a Cast device) the owner plays through.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renderer: Option<String>,
     },
     /// → room, relayed to the owner: a non-owner's remote control.
     TransportRequest {

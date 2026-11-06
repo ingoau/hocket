@@ -153,6 +153,9 @@ jobs:
           restore-keys: robolectric-
       - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
         working-directory: android
+      # The FOSS build (no Google Cast SDK) must keep compiling.
+      - run: ./gradlew --no-daemon -Phocket.foss=true :app:compileDebugKotlin
+        working-directory: android
 
   android-lint:
     name: Android lint

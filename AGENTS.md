@@ -50,6 +50,7 @@ scripts/dev-env.sh cargo test --workspace --all-features    # what CI runs (need
 scripts/gen-bindings.sh
 cd android && ../scripts/dev-env.sh ./gradlew -q :playback:compileDebugKotlin :playback:testDebugUnitTest
 # Results: android/playback/build/test-results/testDebugUnitTest/*.xml
+# Cast (Google Cast SDK) lives in :cast; -Phocket.foss=true builds without it.
 
 # Desktop. desktop/package.json pins pnpm 10 through corepack (pnpm 12 fails with ERR_PNPM_IGNORED_BUILDS).
 cd desktop && . ../scripts/dev-env.sh

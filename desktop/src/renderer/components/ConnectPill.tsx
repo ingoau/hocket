@@ -35,7 +35,10 @@ export function useRemoteDevice(): DeviceInfo | undefined {
 export function ConnectPill({ className = "", testId, dropdown = false, iconSize = 20 }: { className?: string; testId: string; dropdown?: boolean; iconSize?: number }) {
   const remote = useRemoteDevice();
   const syncing = useConnectSyncing();
-  const label = remote ? t("nowPlaying.connectOn", { device: remote.name }) : t("player.connect");
+  // The device playing casts: "Pixel → Living Room TV".
+  const renderer = useApp((s) => (remote ? s.transport.renderer : undefined));
+  const name = remote ? (renderer ? t("connect.deviceToRenderer", { device: remote.name, renderer }) : remote.name) : undefined;
+  const label = name ? t("nowPlaying.connectOn", { device: name }) : t("player.connect");
   const takeBack = (e: React.MouseEvent) => {
     e.preventDefault();
     const s = useApp.getState();
@@ -47,7 +50,7 @@ export function ConnectPill({ className = "", testId, dropdown = false, iconSize
     <button type="button" className={`connect-pill ${remote ? "remote" : ""} ${dropdown ? "dropdown" : ""} ${syncing ? "connect-syncing" : ""} ${className}`} aria-busy={syncing || undefined} aria-label={label} aria-haspopup="dialog" title={remote ? `${label} (${t("player.connectHint")})` : t("player.connectHint")}
       onClick={() => void executeAction("ui.playOn")} onContextMenu={takeBack} data-remote={remote ? "" : undefined} data-testid={testId}>
       <Icon name={remote ? deviceIcon(remote.platform) : "devices"} size={iconSize} />
-      {remote ? <span className="connect-name" data-testid={`${testId}-name`}>{remote.name}</span> : null}
+      {remote ? <span className="connect-name" data-testid={`${testId}-name`}>{name}</span> : null}
       {dropdown ? <Icon name="dropDown" size={iconSize} className="connect-caret" /> : null}
     </button>
   );

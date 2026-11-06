@@ -608,7 +608,21 @@ class ExoBackend(
         player.release()
     }
 
-    private fun report(report: BackendReport) = dispatch(Commands.backendReport(report))
+    /**
+     * Reports reach the core only while this is the backend playing: while casting the core's
+     * commands go to the Cast renderer, and this player, stopped, must not say anything about the
+     * items it played (a late `Paused` would pause the cast).
+     */
+    var active = true
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value) reportSystemVolume()
+        }
+
+    private fun report(report: BackendReport) {
+        if (active) dispatch(Commands.backendReport(report))
+    }
 
     private fun startPositionLoop() {
         if (positionJob?.isActive == true) return

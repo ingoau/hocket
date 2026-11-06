@@ -1215,6 +1215,7 @@ impl Room {
                 scrobbled,
                 epoch,
                 volume,
+                renderer,
                 ..
             } => {
                 if let Err(LeaseError::Fenced { current } | LeaseError::Held { current }) =
@@ -1257,6 +1258,10 @@ impl Room {
                         persist = true;
                     }
                 }
+                if self.replica.document.transport.renderer != renderer {
+                    self.replica.document.transport.renderer = renderer.clone();
+                    persist = true;
+                }
                 if persist {
                     self.dirty = true;
                 }
@@ -1269,6 +1274,7 @@ impl Room {
                     scrobbled,
                     epoch,
                     volume,
+                    renderer,
                 };
                 self.broadcast(relay, Some(peer));
             }
@@ -2169,6 +2175,7 @@ mod tests {
                 scrobbled: false,
                 epoch: 1,
                 volume: None,
+                renderer: None,
             }),
         ));
         assert!(matches!(
@@ -2222,6 +2229,7 @@ mod tests {
                 scrobbled: false,
                 epoch: 1,
                 volume: None,
+                renderer: None,
             })
         };
         let outs = r.handle(RoomInput::Message("p1".into(), stamp(0, true)));

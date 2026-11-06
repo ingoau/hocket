@@ -133,6 +133,8 @@ object Commands {
     fun backendReport(report: BackendReport) = Command.BackendReport(CommandBackendReportInner(report))
     /** `core_stream`: the backend reads `hocket-stream://` sources through the core. Not persisted: send on every core start. */
     fun setBackendCapabilities(coreStream: Boolean) = Command.SetBackendCapabilities(CommandSetBackendCapabilitiesInner(coreStream))
+    /** Playback goes to the remote renderer (a Cast receiver) [name], or back to this device (null). */
+    fun setRenderer(name: String?) = Command.SetRenderer(CommandSetRendererInner(name))
     fun mediaSessionCommand(action: MediaSessionAction, value: Double? = null) =
         Command.MediaSessionCommand(CommandMediaSessionCommandInner(action, value))
     fun runAction(actionId: String, target: ActionTarget) = Command.RunAction(CommandRunActionInner(actionId, target))

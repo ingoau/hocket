@@ -271,6 +271,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
         started_at,
         scrobbled: false,
         volume: None,
+        renderer: None,
     })
     .await;
 
@@ -311,6 +312,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
         started_at: a.engine.now_session_ms(),
         scrobbled: false,
         volume: None,
+        renderer: None,
     })
     .await;
 

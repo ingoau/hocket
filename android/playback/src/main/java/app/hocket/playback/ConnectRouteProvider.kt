@@ -197,19 +197,20 @@ class ConnectRouteProvider : MediaRoute2ProviderService() {
 }
 
 /**
- * The app's MediaRouter2 discovery preference for [ConnectRoutes.FEATURE]. It keeps the system bound
- * to [ConnectRouteProvider] and scopes the output switcher's list for this app to Connect devices
- * (no Cast or other providers' routes this app could not play to). Held by [PlaybackService].
+ * The app's MediaRouter2 discovery preference for [ConnectRoutes.FEATURE], plus the Cast provider's
+ * features when one is installed ([CastProvider.routeFeatures]). It keeps the system bound to
+ * [ConnectRouteProvider] and scopes the output switcher's list for this app to Connect devices and
+ * Cast receivers (no other providers' routes this app could not play to). Held by [PlaybackService].
  */
 @RequiresApi(Build.VERSION_CODES.R)
-internal class ConnectRouteDiscovery(private val context: Context) {
+internal class ConnectRouteDiscovery(private val context: Context, private val extraFeatures: List<String> = emptyList()) {
     private val router = MediaRouter2.getInstance(context)
     private val callback = object : MediaRouter2.RouteCallback() {}
 
     fun start() = router.registerRouteCallback(
         context.mainExecutor,
         callback,
-        RouteDiscoveryPreference.Builder(listOf(ConnectRoutes.FEATURE), false).build(),
+        RouteDiscoveryPreference.Builder(listOf(ConnectRoutes.FEATURE) + extraFeatures, false).build(),
     )
 
     fun stop() = router.unregisterRouteCallback(callback)

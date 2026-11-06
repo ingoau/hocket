@@ -106,11 +106,17 @@ impl Actor {
         }
     }
 
+    /// Playable with no network here: [`available_offline`](Self::available_offline),
+    /// and not on a remote renderer, which fetches everything from the server.
+    pub(crate) fn playable_offline(&self, track: &Track) -> bool {
+        self.renderer.is_none() && self.available_offline(track)
+    }
+
     /// Offline, an item that is neither downloaded nor fully cached is
     /// skipped (as unavailable on this device) instead of failing to load.
     /// `true` when it was skipped and must not be loaded.
     pub(crate) fn skip_if_unavailable_offline(&mut self, item: &QueueItem, track: &Track) -> bool {
-        if !self.is_offline() || !self.owns_transport() || self.available_offline(track) {
+        if !self.is_offline() || !self.owns_transport() || self.playable_offline(track) {
             self.cache.offline_skips = 0;
             self.cache.offline_notice = false;
             return false;

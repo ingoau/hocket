@@ -298,6 +298,8 @@ pub enum Input {
         scrobbled: bool,
         /// This device's volume, for the other devices' volume controls.
         volume: Option<DeviceVolume>,
+        /// The remote renderer (a Cast device) this device plays through.
+        renderer: Option<String>,
     },
     /// The user wants to play here (nobody owns, or a deliberate takeover).
     ClaimTransport {
@@ -596,6 +598,7 @@ struct CurrentStamp {
     started_at: EpochMs,
     scrobbled: bool,
     volume: Option<DeviceVolume>,
+    renderer: Option<String>,
     /// The session-clock offset `position.taken_at` was taken with.
     offset: f64,
 }
@@ -1182,6 +1185,7 @@ impl Engine {
                 volume: volume.volume,
                 muted: volume.muted,
                 volume_device: s.volume.map(|_| self.cfg.device.id.clone()),
+                renderer: s.renderer.clone(),
             }
         } else {
             let mut t = self.remote_transport.clone();
@@ -1376,6 +1380,7 @@ impl Engine {
                 started_at,
                 scrobbled,
                 volume,
+                renderer,
             } => self.on_local_stamp(CurrentStamp {
                 key,
                 track_id,
@@ -1384,6 +1389,7 @@ impl Engine {
                 started_at,
                 scrobbled,
                 volume,
+                renderer,
                 // Local time; `on_local_stamp` moves it onto the session clock.
                 offset: 0.0,
             }),
@@ -2628,11 +2634,13 @@ impl Engine {
                 started_at,
                 scrobbled,
                 volume,
+                renderer,
                 ..
             } => {
                 if device_id == self.cfg.device.id {
                     return;
                 }
+                self.remote_transport.renderer = renderer;
                 if let Some(v) = volume {
                     self.remote_transport.volume = v.volume;
                     self.remote_transport.muted = v.muted;
@@ -2850,6 +2858,7 @@ impl Engine {
                     started_at,
                     scrobbled,
                     volume: None,
+                    renderer: None,
                     offset: self.offset_ms(),
                 });
                 self.out.push(Output::TakeTransport {
@@ -3881,6 +3890,7 @@ impl Engine {
                     started_at: t.started_at,
                     scrobbled: t.scrobbled,
                     volume: None,
+                    renderer: None,
                     offset: self.offset_ms(),
                 });
                 self.out.push(Output::TakeTransport {
@@ -3971,6 +3981,7 @@ impl Engine {
             scrobbled: s.scrobbled,
             epoch,
             volume: s.volume,
+            renderer: s.renderer,
         });
     }
 
@@ -4009,6 +4020,7 @@ impl Engine {
             started_at,
             scrobbled,
             volume,
+            renderer,
             offset: _,
         } = stamp;
         let mut p = position;
@@ -4022,6 +4034,7 @@ impl Engine {
             started_at,
             scrobbled,
             volume,
+            renderer: renderer.clone(),
             offset: self.offset_ms(),
         });
         let Some(h) = &self.held else {
@@ -4042,6 +4055,7 @@ impl Engine {
             scrobbled,
             epoch,
             volume,
+            renderer,
         });
         if key_changed && self.picker.is_some() {
             self.reprepare_picker();
@@ -5252,6 +5266,7 @@ mod tests {
             started_at: 5.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         assert!(src.owns_transport());
         src.handle(Input::OpenPicker);
@@ -6108,6 +6123,7 @@ mod tests {
             started_at: 11_100.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         outs.extend(e.handle(Input::LocalOp {
             op: SessionOp::TrackEnded,
@@ -6181,6 +6197,7 @@ mod tests {
             started_at: 12_000.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         for t in (11_000..=30_000).step_by(1_000) {
             clock.0.store(t, Ordering::SeqCst);
@@ -6316,6 +6333,7 @@ mod tests {
             started_at: 12_000.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         for t in (11_000..=30_000).step_by(1_000) {
             clock.0.store(t, Ordering::SeqCst);
@@ -6392,6 +6410,7 @@ mod tests {
             started_at: 2_000.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         e.handle(Input::WireIn {
             peer: "up".into(),
@@ -6444,6 +6463,7 @@ mod tests {
             started_at: 2_000.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         e.handle(Input::ReleaseTransport);
         assert!(!e.owns_transport());
@@ -6664,6 +6684,7 @@ mod tests {
             started_at: 5.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         let outs = a.handle(Input::WireIn {
             peer: "up".into(),
@@ -6728,6 +6749,7 @@ mod tests {
                 scrobbled: false,
                 epoch: 1,
                 volume: None,
+                renderer: None,
             }),
         });
         // a minute on: the lease b knows "expired" 40 s ago
@@ -6869,6 +6891,7 @@ mod tests {
             started_at: 5.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         let outs = src.handle(Input::OpenPicker);
         let w = wire_outs(&outs);
@@ -7247,6 +7270,7 @@ mod tests {
             started_at: 15_000.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         // Back on a room whose clock runs 500 s ahead of ours.
         clock.0.store(20_000, Ordering::SeqCst);
@@ -7314,6 +7338,7 @@ mod tests {
             started_at: 15_000.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         let last = e.room.replica().last_stamp.clone().unwrap();
         assert!(last.position.is_playing, "the own room kept the play");
@@ -8152,6 +8177,7 @@ mod tests {
                 scrobbled: true,
                 epoch: 1,
                 volume: None,
+                renderer: None,
             })
         };
         e.handle(Input::WireIn {
@@ -8595,6 +8621,7 @@ mod tests {
             started_at: 6_000.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         src.handle(Input::OpenPicker);
         let outs = src.handle(Input::HandoffTo {
@@ -8630,6 +8657,7 @@ mod tests {
                 scrobbled: false,
                 epoch: 1,
                 volume: None,
+                renderer: None,
             }),
         });
         alone_defers_shared_but_not_origin(&mut e, 8_000.0);
@@ -8656,6 +8684,7 @@ mod tests {
             started_at: 10_000.0,
             scrobbled: false,
             volume: None,
+            renderer: None,
         });
         assert_eq!(reach(&mut e, "t", 10_000.0), vec![true]);
     }

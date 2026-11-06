@@ -701,6 +701,10 @@ pub struct TransportState {
     /// the control has nothing to show.
     #[serde(default)]
     pub volume_device: Option<DeviceId>,
+    /// The owner plays through a remote renderer (a Cast device) of this
+    /// name, not its own speaker: "Pixel → Living Room TV".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer: Option<String>,
 }
 
 /// A device's volume, as it travels with its transport stamps.
@@ -1557,6 +1561,10 @@ pub struct MediaSource {
     /// while it plays (the queue's `offline` state shows it).
     #[serde(default)]
     pub local: bool,
+    /// The cover art's server URL (auth in query), for a remote renderer
+    /// that shows it; only sources resolved for one carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artwork_url: Option<String>,
 }
 
 /// A URL with its query string (where Subsonic carries the auth token) and
@@ -2444,6 +2452,18 @@ pub enum Command {
     /// native backend always reads through the core.
     SetBackendCapabilities {
         core_stream: bool,
+    },
+    /// The external backend now plays through a remote renderer (a Cast
+    /// device named `renderer`), or back on this device (`None`). While a
+    /// renderer is set, media sources carry the server's stream URL (the
+    /// renderer fetches it itself, so neither downloads nor the stream
+    /// cache can serve it), formats it can't play are transcoded, the
+    /// follow-up is always preloaded (the renderer's own queue keeps
+    /// playing while this device sleeps), and nothing plays offline. The
+    /// current item reloads at its position: on the renderer it keeps its
+    /// play state, coming back it pauses.
+    SetRenderer {
+        renderer: Option<String>,
     },
     SetStorageWarnThreshold {
         bytes: Option<f64>,
@@ -3534,6 +3554,7 @@ mod redaction_tests {
             gain_db: 0.0,
             transcoded: false,
             local: false,
+            artwork_url: None,
         };
         let dbg = format!("{source:?}");
         assert!(dbg.contains("https://music.example/rest/stream"), "{dbg}");
