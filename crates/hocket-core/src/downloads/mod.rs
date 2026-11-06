@@ -1677,7 +1677,11 @@ fn remote_profile(
     let playable = |f: &str| REMOTE_FORMATS.iter().any(|x| x.eq_ignore_ascii_case(f));
     match profile.format.as_deref() {
         Some(f) if !playable(f) => profile.format = Some(REMOTE_TRANSCODE_FORMAT.into()),
-        None if undecodable => profile.format = Some(REMOTE_TRANSCODE_FORMAT.into()),
+        // A bitrate cap alone transcodes to the server's default format,
+        // which the receiver may not play and the MIME type can't name.
+        None if undecodable || profile.max_bit_rate.is_some() => {
+            profile.format = Some(REMOTE_TRANSCODE_FORMAT.into())
+        }
         _ => {}
     }
     Some(profile)
@@ -2359,6 +2363,17 @@ mod tests {
         let p = remote_profile(Some(weird), Some("flac")).unwrap();
         assert_eq!(p.format.as_deref(), Some("mp3"));
         assert_eq!(p.max_bit_rate, Some(96));
+        let capped = TranscodingProfile {
+            format: None,
+            max_bit_rate: Some(192),
+            cannot_decode: vec![],
+        };
+        let p = remote_profile(Some(capped), Some("flac")).unwrap();
+        assert_eq!(
+            p.format.as_deref(),
+            Some("mp3"),
+            "a bare cap names its format"
+        );
     }
 
     #[tokio::test]

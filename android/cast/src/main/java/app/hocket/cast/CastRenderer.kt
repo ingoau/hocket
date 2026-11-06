@@ -74,6 +74,15 @@ internal class CastRenderer(
     private var next: CoreMediaSource? = null
     /** Where the current item's stream starts (a transcode loaded at `timeOffset`). */
     private var offsetMs = 0L
+    /** The receiver's queue item id for [current], once a status names it. */
+    private var currentItemId: Int? = null
+    /** The key the receiver has queued after [current] (what [next] was when last sent). */
+    private var queuedNextKey: String? = null
+    /** The receiver's item ids from before the last load: their statuses are about the old queue. */
+    private var staleIds: Set<Int> = emptySet()
+    /** Each load's generation; a load reports at most one error. */
+    private var loadGen = 0
+    private var failedGen = -1
     private val status = CastStatus()
     /** Something has played on the receiver this session: a failure now is the item's, not the server's reach. */
     private var played = false
@@ -129,6 +138,9 @@ internal class CastRenderer(
         current = null
         next = null
         offsetMs = 0
+        currentItemId = null
+        queuedNextKey = null
+        staleIds = emptySet()
         status.reset()
     }
 
@@ -147,10 +159,11 @@ internal class CastRenderer(
             is BackendCommand.Load -> load(command.data.source, command.data.next, command.data.position_ms.toLong(), command.data.play)
             is BackendCommand.SetNext -> setNext(command.data.next)
             BackendCommand.Play -> {
-                val idle = client.mediaStatus?.playerState.let { it == null || it == MediaStatus.PLAYER_STATE_IDLE }
+                val st = client.mediaStatus
+                val finished = st?.playerState == MediaStatus.PLAYER_STATE_IDLE && st.idleReason == MediaStatus.IDLE_REASON_FINISHED
                 val c = current
-                // Finished or never loaded: the receiver has nothing to resume; load it again.
-                if (idle && c != null) load(c, next, 0, true) else client.play()
+                // Played to the end: the receiver has nothing to resume; start it again.
+                if (finished && c != null) load(c, next, 0, true) else client.play()
             }
             BackendCommand.Pause -> client.pause()
             BackendCommand.Stop -> {
@@ -162,11 +175,14 @@ internal class CastRenderer(
             is BackendCommand.SetVolume -> Unit
             is BackendCommand.SetSystemVolume -> {
                 val s = session ?: return
+                val volume = command.data.volume.coerceIn(0.0, 1.0)
                 runCatching {
-                    s.volume = command.data.volume.coerceIn(0.0, 1.0)
+                    s.volume = volume
                     if (s.isMute != command.data.muted) s.isMute = command.data.muted
                 }.onFailure { PlaybackLog.w("cast volume: ${it.message}") }
-                reportVolume()
+                // The session still holds the receiver's last level until it answers
+                // (onVolumeChanged): answer with what was asked, so a dragged slider doesn't jump.
+                report(BackendReport.SystemVolume(BackendReportSystemVolumeInner(volume, command.data.muted)))
             }
             // Nothing to warm up on this phone: the receiver loads it when it is told to.
             is BackendCommand.PreBuffer -> report(BackendReport.PreBufferReady(BackendReportPreBufferReadyInner(command.data.source.key)))
@@ -181,8 +197,14 @@ internal class CastRenderer(
 
     private fun load(source: CoreMediaSource, follow: CoreMediaSource?, positionMs: Long, play: Boolean) {
         val client = client ?: return
+        // The old item's position must not be reported as this one's.
+        stopPositionLoop()
+        staleIds = client.mediaStatus?.queueItems?.map { it.itemId }?.toSet().orEmpty()
         current = source
         next = follow
+        currentItemId = null
+        queuedNextKey = follow?.key
+        val gen = ++loadGen
         // `timeOffset` is in whole seconds; the rest is a seek within the stream.
         offsetMs = if (source.transcoded) positionMs / 1000 * 1000 else 0
         status.loading(source.key)
@@ -200,7 +222,7 @@ internal class CastRenderer(
             .setCurrentTime(positionMs - offsetMs)
             .build()
         client.load(request).setResultCallback { result ->
-            if (!result.status.isSuccess && current?.key == source.key) {
+            if (!result.status.isSuccess && gen == loadGen) {
                 PlaybackLog.w("cast load failed: ${result.status.statusCode} ${result.status.statusMessage}")
                 fail(result.status.statusMessage ?: "load failed (${result.status.statusCode})")
             }
@@ -208,15 +230,26 @@ internal class CastRenderer(
     }
 
     private fun setNext(follow: CoreMediaSource?) {
-        val client = client ?: return
         next = follow
-        val st = client.mediaStatus ?: return
-        val items = st.queueItems
-        val at = items.indexOfFirst { it.itemId == st.currentItemId }
+        syncNext()
+    }
+
+    /**
+     * Make the receiver's queue after the current item hold [next]. Until a status names the current
+     * item's id (just after a load) there is nothing to put it after: [onStatus] calls this again.
+     */
+    private fun syncNext() {
+        val client = client ?: return
+        val id = currentItemId ?: return
+        val want = next
+        if (queuedNextKey == want?.key) return
+        val items = client.mediaStatus?.queueItems ?: return
+        val at = items.indexOfFirst { it.itemId == id }
         if (at < 0) return
         val after = items.drop(at + 1).map { it.itemId }.toIntArray()
         if (after.isNotEmpty()) client.queueRemoveItems(after, null)
-        follow?.let { client.queueAppendItem(queueItem(it, 0), null) }
+        want?.let { client.queueAppendItem(queueItem(it, 0), null) }
+        queuedNextKey = want?.key
     }
 
     private fun seek(positionMs: Long) {
@@ -233,21 +266,29 @@ internal class CastRenderer(
     private fun onStatus() {
         if (!active) return
         val st = client?.mediaStatus ?: return
-        val playing = keyOf(st.getQueueItemById(st.currentItemId))
+        val itemId = st.currentItemId
+        val playing = keyOf(st.getQueueItemById(itemId))
         val c = current ?: return
-        // The receiver moved on to the follow-up by itself.
+        // Still the queue from before the last load: nothing to say about it.
+        if (currentItemId == null && itemId in staleIds) return
+        if (currentItemId == null && playing == c.key) currentItemId = itemId
+        // The receiver moved on to the follow-up by itself: told by the item id, since the
+        // follow-up may be the same key (Repeat All over one item).
         val n = next
-        if (playing != null && playing != c.key && n != null && playing == n.key) {
+        val was = currentItemId
+        if (was != null && itemId != 0 && itemId != was && n != null && playing == n.key) {
             report(BackendReport.Ended(BackendReportEndedInner(c.key)))
             current = n
             next = null
             offsetMs = 0
+            currentItemId = itemId
+            queuedNextKey = null
             status.transitioned(n.key)
             report(BackendReport.TransitionedToNext(BackendReportTransitionedToNextInner(n.key)))
             report(BackendReport.Position(BackendReportPositionInner(n.key, 0u)))
-            val old = st.queueItems.filter { keyOf(it) == c.key }.map { it.itemId }.toIntArray()
-            if (old.isNotEmpty()) client?.queueRemoveItems(old, null)
+            client?.queueRemoveItems(intArrayOf(was), null)
         }
+        syncNext()
         val key = current?.key ?: return
         if (playing != null && playing != key) return
         val duration = st.mediaInfo?.streamDuration?.takeIf { it > 0 }?.let { (it + offsetMs).toUInt() }
@@ -280,6 +321,9 @@ internal class CastRenderer(
     /** The receiver couldn't play [current]: before anything has played, the server is out of its reach. */
     private fun fail(message: String) {
         val key = current?.key ?: return
+        // One load, one error (a media error, the load's result and an error status can all say it).
+        if (failedGen == loadGen) return
+        failedGen = loadGen
         stopPositionLoop()
         if (!played) {
             val name = session?.castDevice?.friendlyName ?: context.getString(R.string.cast_receiver)
@@ -298,6 +342,8 @@ internal class CastRenderer(
         positionJob = scope.launch {
             while (isActive && active) {
                 current?.key?.let { report(BackendReport.Position(BackendReportPositionInner(it, position()))) }
+                // Renewed while it plays: a long track brings no status to renew it.
+                if (isBusy()) acquireLocks()
                 delay(POSITION_INTERVAL_MS)
             }
         }
@@ -354,7 +400,7 @@ internal class CastRenderer(
     companion object {
         const val POSITION_INTERVAL_MS = 1_000L
         const val PRELOAD_S = 20.0
-        /** Renewed by every status while it plays; a lost session cannot hold the phone awake for long. */
+        /** Renewed by statuses and the position loop while it plays; a lost session can't hold the phone awake for long. */
         const val WAKE_LOCK_TIMEOUT_MS = 10 * 60_000L
         private const val KEY = "hocketKey"
 

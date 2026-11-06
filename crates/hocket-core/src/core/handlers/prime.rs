@@ -180,6 +180,10 @@ impl Actor {
     }
 
     fn start_prime(&mut self, track: &Track) {
+        // A remote renderer fetches its own audio: a primed start here is never read.
+        if self.renderer.is_some() {
+            return;
+        }
         let now = self.now();
         while self
             .prime

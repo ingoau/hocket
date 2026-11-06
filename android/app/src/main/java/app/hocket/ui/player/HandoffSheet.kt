@@ -111,7 +111,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
     val castingTo = cast.active
     // The output playing on this phone, named on the volume card ("Volume – Pixel Buds Pro"), or
     // the Cast receiver it plays through.
-    val currentOutput = castingTo?.name ?: outputs.current?.takeIf { self?.playing != false }?.let { outputName(it) }
+    val currentOutput = castingTo?.takeIf { self?.playing == true }?.name ?: outputs.current?.takeIf { self?.playing != false }?.let { outputName(it) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberPulledSheetState(pull), scrimColor = pulledScrim(pull), modifier = Modifier.pulled(pull).testTag("handoff.sheet")) {
         Column(Modifier.navigationBarsPadding().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
             Row(Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -128,7 +128,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                 val elsewhere = !self.playing && devices.any { it.playing && !it.isSelf }
                 // Casting: picking one of the phone's own outputs brings playback back from the receiver.
                 val pick = { id: Int? ->
-                    if (castingTo != null) CastDevices.stop()
+                    if (castingTo != null || cast.connecting != null) CastDevices.stop()
                     if (elsewhere) client.dispatch(Commands.handoffTo(self.id))
                     AudioOutputs.select(id)
                     onDismiss()
@@ -165,14 +165,16 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                     }
                 } else SegmentedGroup {
                     cast.devices.forEachIndexed { i, d ->
-                        val on = castingTo?.id == d.id || (castingTo != null && castingTo.name == d.name)
+                        // Filled while this phone plays through it (not when another device took over).
+                        val on = castingTo?.id == d.id && self.playing
                         val connecting = cast.connecting == d.id
                         DeviceRow(i, cast.devices.size, d.name, if (on) stringResource(R.string.handoff_playing) else d.description, HocketIcons.Filled.Cast, on,
                             onClick = {
                                 if (on) CastDevices.stop() else {
-                                    // Another device plays: it comes to this phone, which casts it.
-                                    if (elsewhere) client.dispatch(Commands.handoffTo(self.id))
-                                    CastDevices.select(d.id)
+                                    // Another device plays: it comes to this phone once the session is
+                                    // up, so it lands on the receiver, not this phone's speaker.
+                                    val pull = if (elsewhere) ({ client.dispatch(Commands.handoffTo(self.id)) }) else null
+                                    CastDevices.select(d.id, pull)
                                 }
                                 onDismiss()
                             },

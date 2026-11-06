@@ -611,7 +611,8 @@ class ExoBackend(
     /**
      * Reports reach the core only while this is the backend playing: while casting the core's
      * commands go to the Cast renderer, and this player, stopped, must not say anything about the
-     * items it played (a late `Paused` would pause the cast).
+     * items it played (a late `Paused` would pause the cast). Previews play here either way, so
+     * theirs always go through.
      */
     var active = true
         set(value) {
@@ -621,7 +622,13 @@ class ExoBackend(
         }
 
     private fun report(report: BackendReport) {
-        if (active) dispatch(Commands.backendReport(report))
+        if (active || isPreview(report)) dispatch(Commands.backendReport(report))
+    }
+
+    private fun isPreview(report: BackendReport): Boolean = when (report) {
+        is BackendReport.PreviewReady, is BackendReport.PreviewProgress, BackendReport.PreviewEnded,
+        BackendReport.PreviewFailed, BackendReport.PreviewInterrupted -> true
+        else -> false
     }
 
     private fun startPositionLoop() {

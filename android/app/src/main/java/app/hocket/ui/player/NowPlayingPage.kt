@@ -741,11 +741,14 @@ private fun playingOn(remote: DeviceInfo?): String? {
     val client = LocalCoreClient.current
     val transport by client.transport.collectAsStateWithLifecycle()
     val cast by CastDevices.state.collectAsStateWithLifecycle()
+    val owns by client.ownsTransport.collectAsStateWithLifecycle()
     val renderer = transport.renderer
     return when {
         remote != null && renderer != null -> stringResource(R.string.handoff_device_to_renderer, remote.name, renderer)
         remote != null -> remote.name
-        else -> cast.active?.name
+        // This phone's receiver, while this phone plays (a session can outlast a handoff away).
+        owns -> cast.active?.name
+        else -> null
     }
 }
 

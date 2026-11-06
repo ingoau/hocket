@@ -1201,6 +1201,12 @@ impl Engine {
             {
                 t.position.is_playing = false;
             }
+            // The renderer rides with the stamps (as the volume does): it is
+            // the owner's only once the owner has stamped, never a previous
+            // owner's carried over.
+            if t.volume_device != t.lease.owner {
+                t.renderer = None;
+            }
             t
         }
     }

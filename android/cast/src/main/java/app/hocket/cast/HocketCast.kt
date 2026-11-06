@@ -61,6 +61,8 @@ object HocketCast : CastProvider {
         override val backend: RendererBackend get() = renderer
         /** Set when this end stops the session with something to say about it. */
         private var endError: String? = null
+        /** This end is stopping the session. */
+        private var stopping = false
 
         private val routes = object : MediaRouter.Callback() {
             override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) = publish()
@@ -78,7 +80,7 @@ object HocketCast : CastProvider {
                 val name = connecting?.let(::routeName) ?: context.getString(R.string.cast_receiver)
                 connecting = null
                 publish()
-                listener.onSessionEnded(context.getString(R.string.cast_connect_failed, name))
+                listener.onSessionEnded(context.getString(R.string.cast_connect_failed, name), stoppedHere = false)
             }
             override fun onSessionEnded(session: CastSession, error: Int) = ended(session, error)
             override fun onSessionResumeFailed(session: CastSession, error: Int) = ended(session, error)
@@ -97,6 +99,8 @@ object HocketCast : CastProvider {
         }
 
         private fun started(session: CastSession) {
+            // Already up (the session found at start, then the SDK's own resume of it).
+            if (this.session === session) return
             this.session = session
             connecting = null
             renderer.attach(session)
@@ -113,20 +117,28 @@ object HocketCast : CastProvider {
             publish()
             val message = endError ?: if (error != 0) context.getString(R.string.cast_disconnected, name) else null
             endError = null
-            listener.onSessionEnded(message)
+            val here = stopping
+            stopping = false
+            listener.onSessionEnded(message, here)
         }
 
         private fun routeName(id: String): String? = router.routes.firstOrNull { it.id == id }?.name
 
         private fun publish() {
             val receivers = router.routes.filter { !it.isDefault && !it.isBluetooth && it.isEnabled && it.matchesSelector(selector) }
-            val selected = router.selectedRoute.takeIf { session != null && it.matchesSelector(selector) }
+            // The receiver in use, as a route (the UI matches rows by route id): the selected route,
+            // else (a session resumed before the router caught up) the route of the same name.
+            val s = session
+            val selected = s?.let {
+                router.selectedRoute.takeIf { r -> r.matchesSelector(selector) && !r.isDefault }
+                    ?: receivers.firstOrNull { r -> r.name == it.castDevice?.friendlyName }
+            }
             CastDevices.publish(
                 CastDevices.State(
                     available = true,
                     devices = receivers.map { CastDevices.Device(it.id, it.name, it.description) },
                     active = selected?.let { CastDevices.Device(it.id, it.name, it.description) }
-                        ?: session?.castDevice?.let { d -> CastDevices.Device(d.deviceId, d.friendlyName ?: "", null) },
+                        ?: s?.castDevice?.let { d -> CastDevices.Device(d.deviceId, d.friendlyName ?: "", null) },
                     connecting = connecting,
                 ),
             )
@@ -145,12 +157,18 @@ object HocketCast : CastProvider {
 
         private fun stop(error: String?) {
             if (session == null) {
+                // Still connecting: give the route up, so the session never starts.
+                if (connecting != null) {
+                    router.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
+                    cast.sessionManager.endCurrentSession(true)
+                }
                 connecting = null
                 publish()
-                if (error != null) listener.onSessionEnded(error)
+                if (error != null) listener.onSessionEnded(error, stoppedHere = true)
                 return
             }
             endError = error
+            stopping = true
             cast.sessionManager.endCurrentSession(true)
         }
 

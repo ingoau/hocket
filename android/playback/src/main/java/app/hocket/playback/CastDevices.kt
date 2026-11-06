@@ -46,10 +46,22 @@ object CastDevices {
     var provider: CastProvider? = null
 
     private var controller: CastController? = null
+    private var onStarted: (() -> Unit)? = null
 
     internal fun attach(controller: CastController?) {
         this.controller = controller
-        if (controller == null) _state.value = State()
+        if (controller == null) {
+            _state.value = State()
+            onStarted = null
+        }
+    }
+
+    /** For the service: the action [select] left for when the session is up, once. */
+    internal fun takeOnStarted(): (() -> Unit)? = onStarted.also { onStarted = null }
+
+    /** For the service: the session didn't start; the action left for it is dropped. */
+    internal fun dropOnStarted() {
+        onStarted = null
     }
 
     /** For providers: what they see. */
@@ -57,11 +69,22 @@ object CastDevices {
         _state.value = state
     }
 
-    /** Start casting to [id] (the session's start switches playback over). */
-    fun select(id: String) = controller?.select(id)
+    /**
+     * Start casting to [id] (the session's start switches playback over). [onStarted] runs once the
+     * session is up and playback goes there (pulling playback from another device then lands it on
+     * the receiver, not this phone's speaker); not at all if the session doesn't start.
+     */
+    fun select(id: String, onStarted: (() -> Unit)? = null) {
+        val c = controller ?: return
+        this.onStarted = onStarted
+        c.select(id)
+    }
 
-    /** End the session; playback comes back to this phone, paused. */
-    fun stop() = controller?.stop()
+    /** End the session, or stop connecting; playback comes back to this phone, paused. */
+    fun stop() {
+        onStarted = null
+        controller?.stop()
+    }
 
     /** Look for receivers actively (the device picker is open) or passively. */
     fun scan(active: Boolean) = controller?.scan(active)
@@ -80,8 +103,11 @@ interface CastListener {
     /** A session is up with [name] (started here, from the system output switcher, or resumed). */
     fun onSessionStarted(name: String)
 
-    /** The session ended, from either end, or failed. [error] is shown when there is one. */
-    fun onSessionEnded(error: String?)
+    /**
+     * The session ended, from either end, or failed to start. [error] is shown when there is one;
+     * [stoppedHere]: this phone ended it (no other session is about to follow).
+     */
+    fun onSessionEnded(error: String?, stoppedHere: Boolean)
 }
 
 interface CastController {

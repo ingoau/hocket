@@ -106,18 +106,24 @@ impl Actor {
         self.audio.gapless || self.renderer.is_some()
     }
 
-    /// Playback moves to a remote renderer (a Cast device) or back here
-    /// (`Command::SetRenderer`). Sources resolve differently from now on, so
+    /// Playback moves to a remote renderer (a Cast device), to another one,
+    /// or back here (`Command::SetRenderer`). Sources resolve differently from now on, so
     /// the current item reloads at its position, keeping its played time:
     /// on the renderer it keeps playing (or not); back here it pauses,
     /// rather than bursting out of the phone's speaker.
     pub(crate) fn set_renderer(&mut self, renderer: Option<String>) {
-        if self.renderer == renderer {
+        // Some again (another session, maybe a receiver of the same name)
+        // still reloads: the new receiver has nothing loaded.
+        if self.renderer.is_none() && renderer.is_none() {
             return;
         }
         tracing::info!(target: "hocket::player", renderer = ?renderer, "renderer");
         let leaving = renderer.is_none();
         self.renderer = renderer;
+        if !leaving {
+            // Nothing here reads the stream cache while the renderer plays.
+            self.cancel_prefetch();
+        }
         let reload =
             self.owns_transport() && self.playback.loaded && self.playback.pending_load.is_none();
         if reload {

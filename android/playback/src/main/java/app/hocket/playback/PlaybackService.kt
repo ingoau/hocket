@@ -65,6 +65,8 @@ class PlaybackService : MediaLibraryService() {
         const val EXTRA_BIND_TOKEN = "app.hocket.playback.BIND_TOKEN"
         /** Library changes arrive in bursts (a sync); browsers hear about them once they settle. */
         const val LIBRARY_NOTIFY_DEBOUNCE_MS = 2_000L
+        /** How long a Cast session's end waits for the next session (switching receivers). */
+        const val CAST_END_GRACE_MS = 3_000L
 
         /**
          * True for this process's own core bind. `onBind` runs outside a binder transaction, so
@@ -103,6 +105,8 @@ class PlaybackService : MediaLibraryService() {
     private var cast: CastController? = null
     /** The Cast receiver playback goes to, while a session is up. */
     private var casting: String? = null
+    /** A session's end, held back briefly: switching receivers ends one session and starts the next. */
+    private var castEnd: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -189,11 +193,25 @@ class PlaybackService : MediaLibraryService() {
         val controller = runCatching {
             provider.create(this, scope, ::dispatch, object : CastListener {
                 override fun onSessionStarted(name: String) = main.post { castTo(name) }.let { }
-                override fun onSessionEnded(error: String?) = main.post { castTo(null, error) }.let { }
+                override fun onSessionEnded(error: String?, stoppedHere: Boolean) = main.post { castEnded(error, stoppedHere) }.let { }
             })
         }.onFailure { PlaybackLog.w("cast unavailable: ${it.message}") }.getOrNull()
         cast = controller
         CastDevices.attach(controller)
+    }
+
+    /**
+     * The session ended. Moving straight to another receiver ends this one first: an end this phone
+     * didn't ask for waits [CAST_END_GRACE_MS], and a session starting meanwhile takes over without
+     * playback coming here (which would leave it paused).
+     */
+    private fun castEnded(error: String?, stoppedHere: Boolean) {
+        CastDevices.dropOnStarted()
+        if (error != null) android.widget.Toast.makeText(this, error, android.widget.Toast.LENGTH_LONG).show()
+        if (casting == null) return
+        if (stoppedHere) return castTo(null)
+        castEnd?.let(main::removeCallbacks)
+        castEnd = Runnable { castEnd = null; castTo(null) }.also { main.postDelayed(it, CAST_END_GRACE_MS) }
     }
 
     /**
@@ -202,10 +220,11 @@ class PlaybackService : MediaLibraryService() {
      * reloads the current item at its position on the player taking over (`Command.SetRenderer`):
      * on the receiver it carries on, back here it waits, paused.
      */
-    private fun castTo(name: String?, error: String? = null) {
+    private fun castTo(name: String?) {
         val renderer = cast?.backend ?: return
-        if (error != null) android.widget.Toast.makeText(this, error, android.widget.Toast.LENGTH_LONG).show()
-        if (name == casting) return
+        castEnd?.let(main::removeCallbacks)
+        castEnd = null
+        if (name == null && casting == null) return
         PlaybackLog.i(if (name != null) "casting to $name" else "casting ended")
         val was = casting
         casting = name
@@ -219,6 +238,8 @@ class PlaybackService : MediaLibraryService() {
         }
         dispatch(Commands.setRenderer(name))
         applySession(bridge.player.state)
+        // Picked while another device played: playback comes here now, to the receiver.
+        if (name != null) CastDevices.takeOnStarted()?.invoke()
     }
 
     /** `Started` (once per core) and `Snapshot` (every RequestSnapshot) carry the same state. */
@@ -324,6 +345,7 @@ class PlaybackService : MediaLibraryService() {
         battery.stop()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) (routeDiscovery as? ConnectRouteDiscovery)?.stop()
         ConnectRoutes.clear()
+        castEnd?.let(main::removeCallbacks)
         CastDevices.attach(null)
         cast?.release()
         backend.release()
