@@ -687,6 +687,7 @@ impl SimDevice {
             started_at: p.started_at,
             scrobbled: p.scrobbled,
             volume: None,
+            renderer: None,
         };
         self.queued.push(input);
     }

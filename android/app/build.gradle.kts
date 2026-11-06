@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// Chromecast through the Google Cast SDK (the :cast module), which is proprietary: a FOSS build
+// (-Phocket.foss=true, e.g. for F-Droid) leaves it out and shows no Cast devices (android/README.md, Cast).
+val foss = providers.gradleProperty("hocket.foss").orNull == "true"
+
 android {
     namespace = "app.hocket"
     compileSdk = 37
@@ -66,6 +70,7 @@ android {
     // The Pebble watchapp, when scripts/build-pebble.sh has staged it (docs/pebble.md, Distribution).
     val pebbleAssets = rootProject.file("../pebble/build/android-assets")
     if (pebbleAssets.isDirectory) sourceSets.getByName("main").assets.directories.add(pebbleAssets.path)
+    sourceSets.getByName("main").java.srcDir(if (foss) "src/foss/java" else "src/gms/java")
     lint {
         abortOnError = false
         checkReleaseBuilds = false
@@ -93,6 +98,7 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     implementation(project(":playback"))
+    if (!foss) implementation(project(":cast"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)

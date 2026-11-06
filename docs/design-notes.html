@@ -859,7 +859,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 60px;font-family:var(--mo
     <table>
       <thead><tr><th>Item</th><th>Reason</th></tr></thead>
       <tbody>
-        <tr><td>Chromecast</td><td>Dropped. It would have been a backend rather than a Connect peer, but the detach-and-keep-playing property depends on stream URLs being reachable and CORS-clean from the receiver, and the usual workaround — proxying through the sender — destroys exactly that property. The backend seam leaves the slot open for it, or DLNA or AirPlay, later.</td></tr>
+        <tr><td>Cast beyond the SDK</td><td>A Rust CastV2 renderer for every platform, without the proprietary SDK (Android casts through the Google Cast SDK for now: design.md, Cast); then DLNA or AirPlay behind the same renderer seam. Expiring share URLs in place of the account token.</td></tr>
         <tr><td>Crossfade</td><td>Worst value per unit of effort, and unlike gapless it invents audio that isn't in the file.</td></tr>
         <tr><td>findSonicPath</td><td>Sonic paths from one track to another are a genuinely novel queue-building idea, but not now.</td></tr>
         <tr><td>Playback speed</td><td>Pitch-preserving resampling is a real chunk of DSP work for a feature not wanted.</td></tr>
@@ -881,7 +881,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 60px;font-family:var(--mo
       <thead><tr><th>Question</th><th>What turns on it</th></tr></thead>
       <tbody>
         <tr><td>Name availability</td><td>Confirm before committing: <code>github.com/hocket</code>, <code>npm view hocket</code>, <code>hocket.app</code> and <code>hocket.dev</code>, and IP Australia classes 9 and 42. The only known collision is <code>ryolang/hocket</code>, a one-commit protocol spec under another org — not a conflict in any sense that binds. Fallback: Ripieno.</td></tr>
-        <tr><td>Distribution</td><td>Which channels — Play Store, F-Droid, GitHub releases, Flathub. With Cast dropped there's no proprietary dependency left, so the whole app can be FOSS and no build flavour split is needed.</td></tr>
+        <tr><td>Distribution</td><td>Which channels — Play Store, F-Droid, GitHub releases, Flathub. The Google Cast SDK is the one proprietary dependency: the Play build includes it, a FOSS build (<code>-Phocket.foss=true</code>) leaves it out, until the Rust CastV2 renderer replaces it.</td></tr>
         <tr><td>Auto-update</td><td>Blocked on distribution. Different per channel, and some channels handle it for you.</td></tr>
         <tr><td>Code signing</td><td>Blocked on distribution. macOS notarisation applies to the native addons as much as the app.</td></tr>
         <tr><td>Remaining licences</td><td>Kawarp's own LICENSE file (the org states GPLv3, but an org README isn't authoritative per repo), cpal, UniFFI and napi-rs. All expected to be fine; none load-bearing enough to block.</td></tr>

@@ -209,6 +209,18 @@ Not instant, deliberately. When the picker opens, targets pre-buffer while the c
 - **Unplayable items skip.** A device that can't play an item marks it unavailable and moves on, with a line in the player. The handoff doesn't fail, playback doesn't stop, and nothing scrobbles.
 - **Headphone handoff (beta, off by default, Advanced settings).** Headphones connecting to a device pull playback there when another device plays, or paused within 15 s (the same headphones leaving it usually pause it). It is the one exception to never resuming on connect: moving your headphones is a deliberate act. A toast says "Moved from X", with Undo only when X was playing: a handoff always lands playing, and a paused play moved back would start on a device whose headphones just left. Android counts Bluetooth, wired and USB outputs appearing, so a car or Bluetooth speaker counts too. Desktop counts an output that connected in the last 10 s and is now the system default, from Chromium's device list (ALSA doesn't show PipeWire's Bluetooth sinks), polled on Linux, where Chromium only hears udev. On Android it only works while the playback service runs (the app is open, playing, or was in the last 5 minutes); on desktop, while the app runs. Either way the device must be in the room.
 
+### Cast
+
+Android casts to Chromecasts through the Google Cast SDK, as a stopgap until a Rust CastV2 renderer in the core can do it on every platform. A Cast receiver is a **renderer of the phone, not a Connect peer**: it can't hold the lease or speak the wire protocol, so the phone keeps both, and the receiver is just where its audio comes out.
+
+- **One seam.** `Command::SetRenderer` tells the core the backend now plays elsewhere. Sources then resolve to the server's stream URL, which the receiver fetches itself; downloads, the stream cache and `hocket-stream://` can't reach it. Formats the Default Media Receiver can't play are transcoded to mp3. The current item reloads at its position. The Rust renderer later sets the same state.
+- **Current plus next.** The follow-up is always preloaded on a renderer, gapless setting or not, so the receiver's own queue carries on while the phone dozes. The phone holds a wake lock and a Wi-Fi lock while the receiver plays, to queue the item after and keep the lease alive. A phone gone for good stops the music after the queued track: the detach-and-keep-playing property is the one thing this gives up.
+- **Coming back pauses.** A session ending from either end brings playback back to the phone, paused where it was, rather than bursting out of its speaker.
+- **Others see it.** Stamps carry the renderer's name, so other devices show "Pixel → Living Room TV" and control it through Connect as usual.
+- **Volume** is the receiver's: hardware keys, the notification and the Connect volume all drive it. Per-track gain has nowhere to go on the Default Media Receiver.
+- **Offline, nothing casts.** The receiver can't reach a download, so offline every item skips.
+- **Trade-offs.** Stream URLs carry the account's non-expiring Subsonic token and salt, and go to Google Play services and the receiver. A receiver that can't reach the server (a VPN-only or `.local` address, an untrusted certificate) ends the session with a message saying so. The SDK is proprietary, so a FOSS build (`-Phocket.foss=true`) leaves it out.
+
 
 ## Resume and recovery  
 *Status: decided*
@@ -525,7 +537,7 @@ It's also arguably the more fitting licence for something whose whole shape is s
 
 | Item | Reason |
 |---|---|
-| Chromecast | Dropped. It would have been a backend rather than a Connect peer, but the detach-and-keep-playing property depends on stream URLs being reachable and CORS-clean from the receiver, and the usual workaround — proxying through the sender — destroys exactly that property. The backend seam leaves the slot open for it, or DLNA or AirPlay, later. |
+| Cast beyond the SDK | A Rust CastV2 renderer for every platform, without the proprietary SDK (see Cast); then DLNA or AirPlay behind the same renderer seam. Expiring share URLs in place of the account token. |
 | Crossfade | Worst value per unit of effort, and unlike gapless it invents audio that isn't in the file. |
 | findSonicPath | Sonic paths from one track to another are a genuinely novel queue-building idea, but not now. |
 | Playback speed | Pitch-preserving resampling is a real chunk of DSP work for a feature not wanted. |
@@ -541,7 +553,7 @@ It's also arguably the more fitting licence for something whose whole shape is s
 | Question | What turns on it |
 |---|---|
 | Name availability | Confirm before committing: `github.com/hocket`, `npm view hocket`, `hocket.app` and `hocket.dev`, and IP Australia classes 9 and 42. The only known collision is `ryolang/hocket`, a one-commit protocol spec under another org — not a conflict in any sense that binds. Fallback: Ripieno. |
-| Distribution | Which channels — Play Store, F-Droid, GitHub releases, Flathub. With Cast dropped there's no proprietary dependency left, so the whole app can be FOSS and no build flavour split is needed. |
+| Distribution | Which channels — Play Store, F-Droid, GitHub releases, Flathub. The Google Cast SDK is the one proprietary dependency: the Play build includes it, a FOSS build (`-Phocket.foss=true`) leaves it out, until the Rust CastV2 renderer replaces it. |
 | Auto-update | Blocked on distribution. Different per channel, and some channels handle it for you. |
 | Code signing | Blocked on distribution. macOS notarisation applies to the native addons as much as the app. |
 | Remaining licences | Kawarp's own LICENSE file (the org states GPLv3, but an org README isn't authoritative per repo), cpal, UniFFI and napi-rs. All expected to be fine; none load-bearing enough to block. |

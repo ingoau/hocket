@@ -1473,6 +1473,7 @@ mod tests {
                 gain_db: 0.0,
                 transcoded: false,
                 local: false,
+                artwork_url: None,
             }
         }
 
@@ -1740,6 +1741,7 @@ mod tests {
             gain_db: -6.0,
             transcoded: false,
             local: false,
+            artwork_url: None,
         };
         rig.backend.load(src, None, 100, true).unwrap();
         let reports = rig.wait_for(

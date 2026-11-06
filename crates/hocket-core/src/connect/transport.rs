@@ -511,6 +511,7 @@ mod tests {
             volume: 0.123_456_789,
             muted: false,
             volume_device: Some(device.into()),
+            renderer: None,
         };
         doc.saved_queues = queues;
         // Every entry marked unavailable while offline.

@@ -168,6 +168,7 @@ function ConnectDialog() {
   const close = useApp((s) => s.closeDialog);
   const devices = useApp((s) => s.devices);
   const handoff = useApp((s) => s.handoff);
+  const transport = useApp((s) => s.transport);
   const connection = useApp((s) => s.connection);
   const navigate = useApp((s) => s.navigate);
   const others = devices.filter((d) => !d.isSelf);
@@ -208,7 +209,9 @@ function ConnectDialog() {
           {others.map((d) => {
             const target = handoff.targets.find((x) => x.id === d.id) ?? d;
             const preparing = !d.playing && !target.ready && handoff.open;
-            const sub = d.playing ? t("connect.playing") : target.ready ? t("connect.ready") : preparing ? t("connect.preparing") : t("connect.seen", { when: fmtRelative(d.lastSeen) });
+            // The device playing casts: name its receiver.
+            const renderer = d.playing && transport.lease.owner === d.id ? transport.renderer : undefined;
+            const sub = renderer ? t("connect.playingOn", { device: renderer }) : d.playing ? t("connect.playing") : target.ready ? t("connect.ready") : preparing ? t("connect.preparing") : t("connect.seen", { when: fmtRelative(d.lastSeen) });
             const trailing = preparing ? <Icon name="spinner" size={20} className="spin" /> : target.ready && d.lastSeen ? <span className="small muted connect-seen">{t("connect.seen", { when: fmtRelative(d.lastSeen) })}</span> : null;
             return row(d, d.name, sub, trailing, "device-choice");
           })}

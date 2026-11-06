@@ -121,6 +121,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
 import app.hocket.playback.AudioOutputs
+import app.hocket.playback.CastDevices
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
@@ -731,6 +732,26 @@ private fun remoteDevice(): DeviceInfo? {
     return devices.firstOrNull { it.id == owner && !it.isSelf }
 }
 
+/**
+ * Where playback is heard, when that isn't this phone: another device ("Pixel"), another device's
+ * Cast receiver ("Pixel → Living Room TV"), or this phone's Cast receiver.
+ */
+@Composable
+private fun playingOn(remote: DeviceInfo?): String? {
+    val client = LocalCoreClient.current
+    val transport by client.transport.collectAsStateWithLifecycle()
+    val cast by CastDevices.state.collectAsStateWithLifecycle()
+    val owns by client.ownsTransport.collectAsStateWithLifecycle()
+    val renderer = transport.renderer
+    return when {
+        remote != null && renderer != null -> stringResource(R.string.handoff_device_to_renderer, remote.name, renderer)
+        remote != null -> remote.name
+        // This phone's receiver, while this phone plays (a session can outlast a handoff away).
+        owns -> cast.active?.name
+        else -> null
+    }
+}
+
 /** The wavy seek bar with elapsed and remaining time, and the status line between them ([SeekStatus]). */
 @Composable
 private fun PlayerSeek(position: () -> Long) {
@@ -760,12 +781,13 @@ private fun SeekStatus() {
     val sleep by client.sleepTimer.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
     val remote = remoteDevice()
+    val target = playingOn(remote)
     val style = MaterialTheme.typography.labelLarge
     @Composable fun line(text: String, color: Color, tag: String, weight: FontWeight? = null) =
         Text(text, style = style, color = color, fontWeight = weight, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.testTag(tag))
     when {
         notice != null -> line(notice, MaterialTheme.colorScheme.error, "player.notice")
-        remote != null -> line(stringResource(R.string.player_playing_on, remote.name), MaterialTheme.colorScheme.primary, "player.playingOn", FontWeight.Bold)
+        target != null -> line(stringResource(R.string.player_playing_on, target), MaterialTheme.colorScheme.primary, "player.playingOn", FontWeight.Bold)
         sleep != null -> {
             val t = sleep!!
             line(t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track), MaterialTheme.colorScheme.onSurfaceVariant, "player.sleepLine")
@@ -1135,7 +1157,11 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val client = LocalCoreClient.current
     val devices by client.devices.collectAsStateWithLifecycle()
     val remote = remoteDevice()
-    val elsewhere = remote != null
+    val target = playingOn(remote)
+    val transport by client.transport.collectAsStateWithLifecycle()
+    // Casting from here, or the device playing casts: the Cast icon.
+    val casting = target != null && (remote == null || transport.renderer != null)
+    val elsewhere = target != null
     val syncing = rememberConnectSyncing()
     val haptics = LocalHapticFeedback.current
     val takeOverLabel = stringResource(R.string.player_take_over)
@@ -1144,11 +1170,11 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val corner by animateFloatAsState(if (pressed) 0.25f else 0.5f, Motion.morph, label = "deviceCorner")
     val container by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, label = "deviceContainer")
     val content by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer, label = "deviceContent")
-    val playingOn = remote?.let { stringResource(R.string.player_playing_on, it.name) }
+    val playingOn = target?.let { stringResource(R.string.player_playing_on, it) }
     val context = LocalContext.current
     DisposableEffect(context) { AudioOutputs.start(context); onDispose { } }
     val output by AudioOutputs.outputs.collectAsStateWithLifecycle()
-    val icon = remote?.let { deviceIcon(it.platform) } ?: outputButtonIcon(output.current)
+    val icon = if (casting) HocketIcons.Filled.Cast else remote?.let { deviceIcon(it.platform) } ?: outputButtonIcon(output.current)
     Box(
         Modifier
             .size(48.dp)
@@ -1162,7 +1188,11 @@ private fun DeviceButton(onConnect: () -> Unit) {
                 onLongClickLabel = takeOverLabel,
                 onLongClick = {
                     val self = devices.firstOrNull { it.isSelf }
-                    if (elsewhere && self != null) {
+                    if (remote == null && casting) {
+                        // Casting from here: back to this phone (paused, where it was).
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        CastDevices.stop()
+                    } else if (elsewhere && self != null) {
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         client.dispatch(Commands.handoffTo(self.id))
                     } else onConnect()

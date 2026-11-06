@@ -136,6 +136,9 @@ pub(crate) struct Actor {
     /// `Command::SetBackendCapabilities`). Otherwise media sources carry
     /// the server URL directly.
     pub core_stream: bool,
+    /// The remote renderer (a Cast device) the external backend plays
+    /// through, by name (`Command::SetRenderer`); `None` plays here.
+    pub renderer: Option<String>,
     /// Background prefetch of the next queue items (transport owner only).
     pub prefetch: super::handlers::prefetch::PrefetchState,
     /// The album primer (first seconds of a track the user is about to play).
@@ -451,6 +454,7 @@ impl Actor {
             downloads,
             stream_reader,
             core_stream,
+            renderer: None,
             prefetch: Default::default(),
             prime: Default::default(),
             cache: Default::default(),

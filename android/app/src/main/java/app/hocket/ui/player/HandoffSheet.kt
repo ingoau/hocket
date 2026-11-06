@@ -64,6 +64,7 @@ import android.content.Intent
 import android.provider.Settings
 import app.hocket.R
 import app.hocket.playback.AudioOutputs
+import app.hocket.playback.CastDevices
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.Platform
@@ -81,7 +82,9 @@ val LocalOpenConnectSettings = staticCompositionLocalOf<(() -> Unit)?> { null }
  * device playing (this phone's own volume, its music volume, while it plays or nobody does); then
  * this phone's connected outputs (speaker, earphones; [AudioOutputs]) as a segmented group, the one
  * playing filled, switchable either way, with a link to Bluetooth settings for connecting another;
- * then the other Hocket devices. The gear by the title opens Connect & devices settings
+ * then this phone's Cast receivers ([CastDevices], when the build has Cast), the one it plays through
+ * filled (tapping it again stops casting); then the other Hocket devices, naming the receiver one of
+ * them plays through. The gear by the title opens Connect & devices settings
  * ([onOpenSettings]).
  */
 @Composable
@@ -99,8 +102,16 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
     val outputs by AudioOutputs.outputs.collectAsStateWithLifecycle()
     BluetoothClassPermission(outputs.outputs.any { it.kind == AudioOutputs.Kind.Bluetooth })
     val self = devices.firstOrNull { it.isSelf }
-    // The output playing on this phone, named on the volume card ("Volume – Pixel Buds Pro").
-    val currentOutput = outputs.current?.takeIf { self?.playing != false }?.let { outputName(it) }
+    val cast by CastDevices.state.collectAsStateWithLifecycle()
+    DisposableEffect(Unit) {
+        CastDevices.scan(true)
+        onDispose { CastDevices.scan(false) }
+    }
+    val transport by client.transport.collectAsStateWithLifecycle()
+    val castingTo = cast.active
+    // The output playing on this phone, named on the volume card ("Volume – Pixel Buds Pro"), or
+    // the Cast receiver it plays through.
+    val currentOutput = castingTo?.takeIf { self?.playing == true }?.name ?: outputs.current?.takeIf { self?.playing != false }?.let { outputName(it) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberPulledSheetState(pull), scrimColor = pulledScrim(pull), modifier = Modifier.pulled(pull).testTag("handoff.sheet")) {
         Column(Modifier.navigationBarsPadding().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
             Row(Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -115,13 +126,20 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
             if (self != null) {
                 // Another device plays: picking an output here takes playback back to this phone first.
                 val elsewhere = !self.playing && devices.any { it.playing && !it.isSelf }
-                val pick = { id: Int? -> if (elsewhere) client.dispatch(Commands.handoffTo(self.id)); AudioOutputs.select(id); onDismiss() }
+                // Casting: picking one of the phone's own outputs brings playback back from the receiver.
+                val pick = { id: Int? ->
+                    if (castingTo != null || cast.connecting != null) CastDevices.stop()
+                    if (elsewhere) client.dispatch(Commands.handoffTo(self.id))
+                    AudioOutputs.select(id)
+                    onDismiss()
+                }
+                val heardHere = self.playing && castingTo == null
                 GroupLabel(stringResource(R.string.handoff_this_phone), Modifier.padding(top = 16.dp), color = MaterialTheme.colorScheme.primary)
                 SegmentedGroup {
                     if (outputs.outputs.isEmpty()) {
-                        DeviceRow(0, 1, stringResource(R.string.handoff_this_device), if (self.playing) stringResource(R.string.handoff_playing) else null, HocketIcons.Outlined.PhoneAndroid, self.playing, onClick = { pick(null) })
+                        DeviceRow(0, 1, stringResource(R.string.handoff_this_device), if (heardHere) stringResource(R.string.handoff_playing) else null, HocketIcons.Outlined.PhoneAndroid, heardHere, onClick = { pick(null) })
                     } else outputs.outputs.forEachIndexed { i, o ->
-                        val on = self.playing && o.id == outputs.current?.id
+                        val on = heardHere && o.id == outputs.current?.id
                         val detail = outputDetail(o)
                         val sub = if (on) listOfNotNull(stringResource(R.string.handoff_playing), detail).joinToString(stringResource(R.string.dot_separator)) else detail
                         DeviceRow(i, outputs.outputs.size, outputName(o), sub, outputIcon(o), on, onClick = { pick(o.id) }, modifier = Modifier.testTag("handoff.output.${o.id}"))
@@ -137,6 +155,34 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                     }
                 }
             }
+            if (cast.available && self != null) {
+                // This phone's Cast receivers: playback stays this phone's (its queue, its lease), heard there.
+                val elsewhere = !self.playing && devices.any { it.playing && !it.isSelf }
+                GroupLabel(stringResource(R.string.handoff_cast), Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
+                if (cast.devices.isEmpty()) {
+                    Segment(0, 1, Modifier.testTag("handoff.cast.empty")) {
+                        Text(stringResource(R.string.handoff_cast_empty), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+                    }
+                } else SegmentedGroup {
+                    cast.devices.forEachIndexed { i, d ->
+                        // Filled while this phone plays through it (not when another device took over).
+                        val on = castingTo?.id == d.id && self.playing
+                        val connecting = cast.connecting == d.id
+                        DeviceRow(i, cast.devices.size, d.name, if (on) stringResource(R.string.handoff_playing) else d.description, HocketIcons.Filled.Cast, on,
+                            onClick = {
+                                if (on) CastDevices.stop() else {
+                                    // Another device plays: it comes to this phone once the session is
+                                    // up, so it lands on the receiver, not this phone's speaker.
+                                    val pull = if (elsewhere) ({ client.dispatch(Commands.handoffTo(self.id)) }) else null
+                                    CastDevices.select(d.id, pull)
+                                }
+                                onDismiss()
+                            },
+                            modifier = Modifier.testTag("handoff.cast.${d.id}"),
+                            trailing = if (connecting) ({ LoadingIndicator(Modifier.size(32.dp)) }) else null)
+                    }
+                }
+            }
             GroupLabel(stringResource(R.string.handoff_other_devices), Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
             if (targets.isEmpty()) {
                 Segment(0, 1) {
@@ -147,7 +193,8 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                 }
             } else SegmentedGroup {
                 targets.forEachIndexed { i, d ->
-                    val state = when { d.playing -> stringResource(R.string.handoff_playing); d.ready -> stringResource(R.string.handoff_ready); else -> stringResource(R.string.handoff_preparing) }
+                    val renderer = transport.renderer?.takeIf { d.playing && transport.lease.owner == d.id }
+                    val state = when { renderer != null -> stringResource(R.string.handoff_playing_on, renderer); d.playing -> stringResource(R.string.handoff_playing); d.ready -> stringResource(R.string.handoff_ready); else -> stringResource(R.string.handoff_preparing) }
                     DeviceRow(i, targets.size, d.name, state, deviceRowIcon(d.platform), d.playing,
                         onClick = { client.dispatch(Commands.handoffTo(d.id)); onDismiss() }, modifier = Modifier.testTag("handoff.device.${d.id}"),
                         trailing = when {

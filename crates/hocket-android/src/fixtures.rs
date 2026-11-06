@@ -452,6 +452,7 @@ mod tests {
                         gain_db: -6.5,
                         transcoded: false,
                         local: false,
+                        artwork_url: None,
                     },
                     next: None,
                     position_ms: 0,

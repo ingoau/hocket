@@ -61,6 +61,8 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         // reads back the previous run's log. Whatever needs either waits for it, not the first frame.
         Thread({ app.hocket.core.DevLog.install(java.io.File(filesDir, "hocket")) }, "hocket-devlog").start()
         app.hocket.core.DevLog.installCrashHandler()
+        // Before the playback service can start (it asks for the Cast provider in onCreate).
+        CastSetup.install()
         connection = PlaybackServiceConnection(this)
         scope.launch {
             // The client exists for a handle the service delivered that CoreHost still runs: the

@@ -36,10 +36,13 @@ impl Actor {
             .as_ref()
             .filter(|_| self.core_stream)
             .map(|r| r as &dyn crate::downloads::StreamMinter);
-        let mut source = match self
-            .downloads
-            .resolve_with(api.as_ref(), key, track, reader)
-        {
+        let resolved = if self.renderer.is_some() {
+            self.downloads.resolve_remote(api.as_ref(), key, track)
+        } else {
+            self.downloads
+                .resolve_with(api.as_ref(), key, track, reader)
+        };
+        let mut source = match resolved {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(target: "hocket_core", error = %e, "resolve media source");
@@ -91,9 +94,61 @@ impl Actor {
                 !offline
                     || self
                         .track_or_bare(&i.track_id)
-                        .is_some_and(|t| self.available_offline(&t))
+                        .is_some_and(|t| self.playable_offline(&t))
             })
             .cloned()
+    }
+
+    /// Whether the backend gets the follow-up ahead of time: with gapless
+    /// on, and always on a remote renderer, whose own queue moves on to it
+    /// while this device sleeps.
+    fn preloads_next(&self) -> bool {
+        self.audio.gapless || self.renderer.is_some()
+    }
+
+    /// Playback moves to a remote renderer (a Cast device), to another one,
+    /// or back here (`Command::SetRenderer`). Sources resolve differently from now on, so
+    /// the current item reloads at its position, keeping its played time:
+    /// on the renderer it keeps playing (or not); back here it pauses,
+    /// rather than bursting out of the phone's speaker.
+    pub(crate) fn set_renderer(&mut self, renderer: Option<String>) {
+        // Some again (another session, maybe a receiver of the same name)
+        // still reloads: the new receiver has nothing loaded.
+        if self.renderer.is_none() && renderer.is_none() {
+            return;
+        }
+        tracing::info!(target: "hocket::player", renderer = ?renderer, "renderer");
+        let leaving = renderer.is_none();
+        self.renderer = renderer;
+        if !leaving {
+            // Nothing here reads the stream cache while the renderer plays.
+            self.cancel_prefetch();
+        }
+        let reload =
+            self.owns_transport() && self.playback.loaded && self.playback.pending_load.is_none();
+        if reload {
+            if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                let now = self.now();
+                let position = self.playback.position_now(now);
+                let play = self.playback.playing && !leaving;
+                let carried = (
+                    self.scrobbler.played_ms(),
+                    self.playback.started_at,
+                    self.playback.scrobbled,
+                );
+                self.load_item(&item, position, play, Some(carried));
+                if !play {
+                    self.playback.want_playing = false;
+                }
+                return;
+            }
+        }
+        // Nothing to reload: the follow-up (if any) still resolves anew.
+        self.playback.next = None;
+        self.playback.next_doc_key = None;
+        self.refresh_next();
+        self.stamp();
+        self.emit_transport();
     }
 
     pub(crate) fn refresh_next(&mut self) {
@@ -102,7 +157,7 @@ impl Actor {
             // deferred load hands over the follow-up with the item.
             return;
         }
-        if !self.audio.gapless {
+        if !self.preloads_next() {
             self.playback.next = None;
             self.playback.next_doc_key = None;
             let _ = self.backend.set_next(None);
@@ -267,7 +322,7 @@ impl Actor {
             self.playback.loaded = true;
             self.playback.next = None;
             self.playback.next_doc_key = None;
-            let next = self.audio.gapless.then(|| self.next_item()).flatten();
+            let next = self.preloads_next().then(|| self.next_item()).flatten();
             let next_source = next.as_ref().and_then(|i| {
                 let t = self.track_or_bare(&i.track_id)?;
                 self.media_source_for(&i.key, &t)
@@ -1054,6 +1109,7 @@ impl Actor {
                 volume: p.volume,
                 muted: p.muted,
             }),
+            renderer: self.renderer.clone(),
         };
         self.engine_input(input);
     }

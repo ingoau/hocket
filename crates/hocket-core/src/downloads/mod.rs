@@ -1416,6 +1416,7 @@ impl Downloads {
                 gain_db,
                 transcoded: false,
                 local: true,
+                artwork_url: None,
             });
         }
         let profile = self.effective_profile(track.suffix.as_deref());
@@ -1461,6 +1462,7 @@ impl Downloads {
                     gain_db,
                     transcoded,
                     local,
+                    artwork_url: None,
                 });
             }
         }
@@ -1474,6 +1476,7 @@ impl Downloads {
                 gain_db,
                 transcoded: profile.is_some(),
                 local: true,
+                artwork_url: None,
             });
         }
         let opts = stream_options(profile.as_ref());
@@ -1486,6 +1489,48 @@ impl Downloads {
             gain_db,
             transcoded,
             local: false,
+            artwork_url: None,
+        })
+    }
+
+    /// Resolve a track for a remote renderer (a Cast device), which fetches
+    /// it itself: always the server's stream URL, never a download, the
+    /// stream cache or a `hocket-stream://` handle it can't open. Formats
+    /// the renderer can't play, and transcodes to a format it can't, become
+    /// mp3; the network's transcoding profile still applies otherwise.
+    pub fn resolve_remote(
+        &self,
+        api: &dyn SubsonicApi,
+        key: &str,
+        track: &api::Track,
+    ) -> DbResult<MediaSource> {
+        let gain_db = self.gain(&track.server_id, &track.id)?.unwrap_or(0.0);
+        let profile = remote_profile(
+            self.effective_profile(track.suffix.as_deref()),
+            track.suffix.as_deref(),
+        );
+        let transcoded = profile
+            .as_ref()
+            .is_some_and(|p| p.format.is_some() || p.max_bit_rate.is_some());
+        let mime_type = match profile.as_ref().and_then(|p| p.format.as_deref()) {
+            Some(f) => Some(mime_for(f)),
+            None => track.content_type.clone(),
+        };
+        Ok(MediaSource {
+            key: key.into(),
+            track: crate::subsonic::convert::summary_of(track),
+            url: api
+                .stream_url(&track.id, &stream_options(profile.as_ref()))
+                .to_string(),
+            headers: HashMap::new(),
+            mime_type,
+            gain_db,
+            transcoded,
+            local: false,
+            artwork_url: track
+                .cover_art
+                .as_deref()
+                .map(|id| api.cover_art_url(id, Some(REMOTE_ARTWORK_SIZE)).to_string()),
         })
     }
 
@@ -1594,6 +1639,52 @@ pub struct CacheEntry {
     pub bytes: u64,
     /// `profile_key` of what the file holds (`""` = the original).
     pub profile: String,
+}
+
+/// File types a Cast receiver can't play (the Default Media Receiver plays
+/// MP3, AAC, FLAC, Opus, Vorbis and WAV in MP3, MP4, Ogg, WAV and WebM).
+const REMOTE_CANNOT_DECODE: &[&str] = &[
+    "ape", "dsf", "dff", "wv", "tak", "shn", "wma", "aif", "aiff", "mpc", "alac",
+];
+/// Transcode formats a Cast receiver plays.
+const REMOTE_FORMATS: &[&str] = &["mp3", "aac", "m4a", "flac", "opus", "ogg", "oga", "wav"];
+/// Cover art size for a remote renderer (a TV shows it large).
+const REMOTE_ARTWORK_SIZE: u32 = 800;
+/// What a remote renderer transcodes to when it can't play the original.
+const REMOTE_TRANSCODE_FORMAT: &str = "mp3";
+
+/// `profile` (this device's) adjusted for a remote renderer: the original
+/// is transcoded when the renderer can't play its `suffix`, and a format the
+/// renderer can't play becomes mp3.
+fn remote_profile(
+    profile: Option<TranscodingProfile>,
+    suffix: Option<&str>,
+) -> Option<TranscodingProfile> {
+    let undecodable = suffix.is_some_and(|s| {
+        REMOTE_CANNOT_DECODE
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(s))
+    });
+    let mut profile = match profile {
+        Some(p) => p,
+        None if undecodable => TranscodingProfile {
+            format: None,
+            max_bit_rate: None,
+            cannot_decode: vec![],
+        },
+        None => return None,
+    };
+    let playable = |f: &str| REMOTE_FORMATS.iter().any(|x| x.eq_ignore_ascii_case(f));
+    match profile.format.as_deref() {
+        Some(f) if !playable(f) => profile.format = Some(REMOTE_TRANSCODE_FORMAT.into()),
+        // A bitrate cap alone transcodes to the server's default format,
+        // which the receiver may not play and the MIME type can't name.
+        None if undecodable || profile.max_bit_rate.is_some() => {
+            profile.format = Some(REMOTE_TRANSCODE_FORMAT.into())
+        }
+        _ => {}
+    }
+    Some(profile)
 }
 
 fn default_transcode_format(platform: Platform) -> &'static str {
@@ -2251,6 +2342,63 @@ mod tests {
         );
         assert!(!part.exists() && !orphan.exists());
         assert!(c.exists());
+    }
+
+    #[test]
+    fn remote_profile_transcodes_what_a_cast_receiver_cannot_play() {
+        assert_eq!(remote_profile(None, Some("flac")), None);
+        let p = remote_profile(None, Some("ape")).unwrap();
+        assert_eq!(p.format.as_deref(), Some("mp3"));
+        let cellular = TranscodingProfile {
+            format: Some("opus".into()),
+            max_bit_rate: Some(96),
+            cannot_decode: vec![],
+        };
+        let p = remote_profile(Some(cellular.clone()), Some("flac")).unwrap();
+        assert_eq!(p, cellular, "a format the receiver plays stays");
+        let weird = TranscodingProfile {
+            format: Some("wma".into()),
+            ..cellular
+        };
+        let p = remote_profile(Some(weird), Some("flac")).unwrap();
+        assert_eq!(p.format.as_deref(), Some("mp3"));
+        assert_eq!(p.max_bit_rate, Some(96));
+        let capped = TranscodingProfile {
+            format: None,
+            max_bit_rate: Some(192),
+            cannot_decode: vec![],
+        };
+        let p = remote_profile(Some(capped), Some("flac")).unwrap();
+        assert_eq!(
+            p.format.as_deref(),
+            Some("mp3"),
+            "a bare cap names its format"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_remote_streams_from_the_server_even_when_cached() {
+        let f = fixture();
+        let track = f.db.track("t0").unwrap().unwrap();
+        let p = f.dl.cache_path("srv", "t0", None, Some("flac"));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"abc").unwrap();
+        f.dl.cache_put("srv", "t0", None, &p, 3.0, Some("audio/flac"))
+            .unwrap();
+        assert!(f
+            .dl
+            .resolve(&f.server, "k1", &track)
+            .unwrap()
+            .url
+            .starts_with("file://"));
+        let s = f.dl.resolve_remote(&f.server, "k1", &track).unwrap();
+        assert!(
+            s.url.starts_with("https://srv.fake/rest/stream?id=t0"),
+            "{}",
+            s.url
+        );
+        assert!(!s.local && !s.transcoded);
+        assert_eq!(s.key, "k1");
     }
 
     #[tokio::test]

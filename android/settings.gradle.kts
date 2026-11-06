@@ -20,4 +20,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "hocket"
-include(":app", ":core", ":playback")
+include(":app", ":core", ":playback", ":cast")

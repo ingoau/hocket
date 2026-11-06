@@ -359,6 +359,13 @@
     <string name="handoff_settings">Connect &amp; devices</string>
     <string name="handoff_this_phone">This phone</string>
     <string name="handoff_other_devices">Connect</string>
+    <!-- The Connect sheet's group of Chromecasts (Google Cast receivers) this phone can play through. -->
+    <string name="handoff_cast">Cast</string>
+    <string name="handoff_cast_empty">No Cast devices found on this network</string>
+    <!-- A Connect device playing through its Cast receiver: "Playing on Living Room TV". -->
+    <string name="handoff_playing_on">Playing on %1$s</string>
+    <!-- Another device playing through its Cast receiver: "Pixel → Living Room TV". -->
+    <string name="handoff_device_to_renderer">%1$s → %2$s</string>
     <string name="handoff_phone_speaker">Phone speaker</string>
     <string name="handoff_wired">Wired headphones</string>
     <string name="handoff_usb">USB audio</string>

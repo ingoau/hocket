@@ -10,6 +10,7 @@ lifecycle = "2.11.0"
 navigation = "2.10.1"
 coreKtx = "1.19.0"
 media3 = "1.11.1"
+playServicesCast = "23.0.0"
 coil = "3.6.2"
 jna = "5.19.1"
 palette = "1.0.0"
@@ -24,6 +25,7 @@ graphicsShapes = "1.1.0"
 pebblekit2 = "1.3.2"
 
 [libraries]
+play-services-cast-framework = { module = "com.google.android.gms:play-services-cast-framework", version.ref = "playServicesCast" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }

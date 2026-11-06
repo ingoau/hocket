@@ -169,6 +169,9 @@ const STRINGS = {
   "connect.seen": "Seen {when}",
   "connect.settings": "Connect & devices",
   "connect.playing": "Playing",
+  // A device playing through its Cast receiver.
+  "connect.playingOn": "Playing on {device}",
+  "connect.deviceToRenderer": "{device} → {renderer}",
   "connect.ready": "Ready",
   "connect.preparing": "Preparing…",
   "connect.noDevices": "No other devices are connected. Open Hocket on another device signed in to the same server.",

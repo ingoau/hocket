@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cast_receiver">The Cast device</string>
+    <string name="cast_unreachable">%1$s couldn\'t play from your server. It needs to reach the server address itself (not a VPN-only or .local address, and with a trusted certificate).</string>
+    <string name="cast_connect_failed">Couldn\'t connect to %1$s</string>
+    <string name="cast_disconnected">%1$s disconnected</string>
+</resources>
