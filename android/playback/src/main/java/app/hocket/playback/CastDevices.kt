@@ -3,6 +3,7 @@ package app.hocket.playback
 import android.content.Context
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.Command
+import app.hocket.core.api.Renderer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -100,14 +101,15 @@ interface CastProvider {
 }
 
 interface CastListener {
-    /** A session is up with [name] (started here, from the system output switcher, or resumed). */
-    fun onSessionStarted(name: String)
+    /** A session is up with [renderer] (started here, from the system output switcher, or resumed). */
+    fun onSessionStarted(renderer: Renderer)
 
     /**
      * The session ended, from either end, or failed to start. [error] is shown when there is one;
-     * [stoppedHere]: this phone ended it (no other session is about to follow).
+     * [stoppedHere]: this phone ended it (no other session is about to follow); [reconnecting]: the
+     * provider is starting a new session with the same receiver, which takes longer than a switch.
      */
-    fun onSessionEnded(error: String?, stoppedHere: Boolean)
+    fun onSessionEnded(error: String?, stoppedHere: Boolean, reconnecting: Boolean = false)
 }
 
 interface CastController {

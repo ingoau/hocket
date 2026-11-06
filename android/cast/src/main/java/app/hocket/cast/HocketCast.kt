@@ -1,7 +1,9 @@
 package app.hocket.cast
 
 import android.content.Context
+import app.hocket.core.Commands
 import app.hocket.core.api.Command
+import app.hocket.core.api.Renderer
 import app.hocket.playback.CastController
 import app.hocket.playback.CastDevices
 import app.hocket.playback.CastListener
@@ -20,6 +22,8 @@ import com.google.android.gms.cast.framework.media.CastMediaOptions
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.google.android.gms.cast.framework.CastOptions as GmsCastOptions
 
 /** The Google Cast SDK [CastProvider]; the app installs it at startup unless it is a FOSS build. */
@@ -47,8 +51,8 @@ object HocketCast : CastProvider {
     private class Controller(
         private val context: Context,
         private val cast: CastContext,
-        scope: CoroutineScope,
-        dispatch: (Command) -> Unit,
+        private val scope: CoroutineScope,
+        private val dispatch: (Command) -> Unit,
         private val listener: CastListener,
     ) : CastController {
         private val router = MediaRouter.getInstance(context)
@@ -63,6 +67,8 @@ object HocketCast : CastProvider {
         private var endError: String? = null
         /** This end is stopping the session. */
         private var stopping = false
+        /** Reconnected once since the user picked a receiver, after it crashed on a format. */
+        private var reconnected = false
 
         private val routes = object : MediaRouter.Callback() {
             override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) = publish()
@@ -83,7 +89,8 @@ object HocketCast : CastProvider {
                 listener.onSessionEnded(context.getString(R.string.cast_connect_failed, name), stoppedHere = false)
             }
             override fun onSessionEnded(session: CastSession, error: Int) = ended(session, error)
-            override fun onSessionResumeFailed(session: CastSession, error: Int) = ended(session, error)
+            // Out of reach (not a crash): nothing to learn from it.
+            override fun onSessionResumeFailed(session: CastSession, error: Int) = ended(session, error, mayHaveCrashed = false)
             override fun onSessionStarting(session: CastSession) = Unit
             override fun onSessionEnding(session: CastSession) = Unit
             override fun onSessionResuming(session: CastSession, sessionId: String) = Unit
@@ -105,15 +112,50 @@ object HocketCast : CastProvider {
             connecting = null
             renderer.attach(session)
             publish()
-            listener.onSessionStarted(session.castDevice?.friendlyName ?: context.getString(R.string.cast_receiver))
+            val device = session.castDevice
+            val name = device?.friendlyName ?: context.getString(R.string.cast_receiver)
+            listener.onSessionStarted(Renderer(device?.deviceId ?: name, name))
         }
 
-        private fun ended(session: CastSession, error: Int) {
+        /**
+         * The session ended. One the receiver ended with an error right after starting a track
+         * untranscoded is taken as it crashing on that track's format (it claims formats it can't
+         * play): the core notes the format for this receiver, and this reconnects once, which
+         * reloads the track transcoded. Another failure ends casting as usual.
+         */
+        private fun ended(session: CastSession, error: Int, mayHaveCrashed: Boolean = true) {
             if (this.session !== session) return
             PlaybackLog.i("cast: session ended ($error)")
             val name = session.castDevice?.friendlyName ?: context.getString(R.string.cast_receiver)
+            val suspect = if (mayHaveCrashed && error != 0 && !stopping && !reconnected) renderer.crashSuspect() else null
+            val route = suspect?.let { routeOf(session) }
             this.session = null
             renderer.detach()
+            if (suspect != null && route != null) {
+                PlaybackLog.w("cast: $name crashed on ${suspect.track.id} (${suspect.mimeType}); reconnecting transcoded")
+                reconnected = true
+                endError = null
+                dispatch(Commands.rendererFailed(suspect.track.id))
+                listener.onSessionEnded(null, stoppedHere = false, reconnecting = true)
+                connecting = route
+                publish()
+                scope.launch {
+                    // Let the router and the SDK finish with the old session first.
+                    delay(RECONNECT_DELAY_MS)
+                    if (connecting != route || this@Controller.session != null) return@launch
+                    val r = router.routes.firstOrNull { it.id == route }
+                    if (r == null) {
+                        connecting = null
+                        publish()
+                        listener.onSessionEnded(context.getString(R.string.cast_disconnected, name), stoppedHere = false)
+                        return@launch
+                    }
+                    if (r.isSelected) router.unselect(MediaRouter.UNSELECT_REASON_UNKNOWN)
+                    router.selectRoute(r)
+                }
+                return
+            }
+            reconnected = false
             publish()
             val message = endError ?: if (error != 0) context.getString(R.string.cast_disconnected, name) else null
             endError = null
@@ -123,6 +165,11 @@ object HocketCast : CastProvider {
         }
 
         private fun routeName(id: String): String? = router.routes.firstOrNull { it.id == id }?.name
+
+        /** The route of [session]'s receiver: the selected one, else the one of the same name. */
+        private fun routeOf(session: CastSession): String? =
+            router.selectedRoute.takeIf { it.matchesSelector(selector) && !it.isDefault }?.id
+                ?: router.routes.firstOrNull { it.matchesSelector(selector) && it.name == session.castDevice?.friendlyName }?.id
 
         private fun publish() {
             val receivers = router.routes.filter { !it.isDefault && !it.isBluetooth && it.isEnabled && it.matchesSelector(selector) }
@@ -147,6 +194,7 @@ object HocketCast : CastProvider {
         override fun select(id: String) {
             val route = router.routes.firstOrNull { it.id == id } ?: return
             if (route.isSelected && session != null) return
+            reconnected = false
             connecting = id
             publish()
             // The Cast SDK starts a session for a selected Cast route ([sessions] hears of it).
@@ -186,6 +234,9 @@ object HocketCast : CastProvider {
         }
     }
 }
+
+/** How long a reconnect after a receiver crash waits before selecting the route again. */
+private const val RECONNECT_DELAY_MS = 1_000L
 
 /**
  * The Cast SDK's options (named in the manifest): the Default Media Receiver, no media session or

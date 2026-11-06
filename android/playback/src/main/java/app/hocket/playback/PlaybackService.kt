@@ -14,6 +14,7 @@ import app.hocket.core.Commands
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
+import app.hocket.core.api.Renderer
 import app.hocket.playback.pebble.PebbleBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -67,6 +68,8 @@ class PlaybackService : MediaLibraryService() {
         const val LIBRARY_NOTIFY_DEBOUNCE_MS = 2_000L
         /** How long a Cast session's end waits for the next session (switching receivers). */
         const val CAST_END_GRACE_MS = 3_000L
+        /** How long it waits while the provider reconnects to the same receiver (its receiver app starts anew). */
+        const val CAST_RECONNECT_GRACE_MS = 20_000L
 
         /**
          * True for this process's own core bind. `onBind` runs outside a binder transaction, so
@@ -104,7 +107,7 @@ class PlaybackService : MediaLibraryService() {
     private val audioRoutes = AudioRouteLog(this)
     private var cast: CastController? = null
     /** The Cast receiver playback goes to, while a session is up. */
-    private var casting: String? = null
+    private var casting: Renderer? = null
     /** A session's end, held back briefly: switching receivers ends one session and starts the next. */
     private var castEnd: Runnable? = null
 
@@ -192,8 +195,9 @@ class PlaybackService : MediaLibraryService() {
         val provider = CastDevices.provider ?: return
         val controller = runCatching {
             provider.create(this, scope, ::dispatch, object : CastListener {
-                override fun onSessionStarted(name: String) = main.post { castTo(name) }.let { }
-                override fun onSessionEnded(error: String?, stoppedHere: Boolean) = main.post { castEnded(error, stoppedHere) }.let { }
+                override fun onSessionStarted(renderer: Renderer) = main.post { castTo(renderer) }.let { }
+                override fun onSessionEnded(error: String?, stoppedHere: Boolean, reconnecting: Boolean) =
+                    main.post { castEnded(error, stoppedHere, reconnecting) }.let { }
             })
         }.onFailure { PlaybackLog.w("cast unavailable: ${it.message}") }.getOrNull()
         cast = controller
@@ -203,43 +207,44 @@ class PlaybackService : MediaLibraryService() {
     /**
      * The session ended. Moving straight to another receiver ends this one first: an end this phone
      * didn't ask for waits [CAST_END_GRACE_MS], and a session starting meanwhile takes over without
-     * playback coming here (which would leave it paused).
+     * playback coming here (which would leave it paused). A reconnect to the same receiver waits
+     * [CAST_RECONNECT_GRACE_MS].
      */
-    private fun castEnded(error: String?, stoppedHere: Boolean) {
+    private fun castEnded(error: String?, stoppedHere: Boolean, reconnecting: Boolean) {
         CastDevices.dropOnStarted()
         if (error != null) android.widget.Toast.makeText(this, error, android.widget.Toast.LENGTH_LONG).show()
         if (casting == null) return
         if (stoppedHere) return castTo(null)
         castEnd?.let(main::removeCallbacks)
-        castEnd = Runnable { castEnd = null; castTo(null) }.also { main.postDelayed(it, CAST_END_GRACE_MS) }
+        castEnd = Runnable { castEnd = null; castTo(null) }.also { main.postDelayed(it, if (reconnecting) CAST_RECONNECT_GRACE_MS else CAST_END_GRACE_MS) }
     }
 
     /**
-     * Playback moves to the Cast receiver [name], or back here (null). The phone's player stops and
+     * Playback moves to the Cast receiver [to], or back here (null). The phone's player stops and
      * goes quiet first, so nothing it says about what it played reaches the core; the core then
      * reloads the current item at its position on the player taking over (`Command.SetRenderer`):
      * on the receiver it carries on, back here it waits, paused.
      */
-    private fun castTo(name: String?) {
+    private fun castTo(to: Renderer?) {
         val renderer = cast?.backend ?: return
         castEnd?.let(main::removeCallbacks)
         castEnd = null
-        if (name == null && casting == null) return
-        PlaybackLog.i(if (name != null) "casting to $name" else "casting ended")
+        if (to == null && casting == null) return
+        PlaybackLog.i(if (to != null) "casting to ${to.name}" else "casting ended")
         val was = casting
-        casting = name
-        if (name != null && was == null) {
+        casting = to
+        if (to != null && was == null) {
             backend.active = false
             backend.handle(BackendCommand.Stop)
             renderer.setActive(true)
-        } else if (name == null) {
+        } else if (to == null) {
             renderer.setActive(false)
             backend.active = true
         }
-        dispatch(Commands.setRenderer(name))
+        dispatch(Commands.setRenderer(to))
         applySession(bridge.player.state)
         // Picked while another device played: playback comes here now, to the receiver.
-        if (name != null) CastDevices.takeOnStarted()?.invoke()
+        if (to != null) CastDevices.takeOnStarted()?.invoke()
     }
 
     /** `Started` (once per core) and `Snapshot` (every RequestSnapshot) carry the same state. */

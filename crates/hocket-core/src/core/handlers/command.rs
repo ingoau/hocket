@@ -183,6 +183,7 @@ impl Actor {
                 self.core_stream = (core_stream || native) && self.stream_reader.is_some();
             }
             Command::SetRenderer { renderer } => self.set_renderer(renderer),
+            Command::RendererFailed { track_id } => self.renderer_failed(&track_id),
             Command::SetStorageWarnThreshold { bytes } => {
                 let v = match bytes {
                     Some(b) => serde_json::json!(b.max(0.0)),
