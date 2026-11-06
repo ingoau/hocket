@@ -48,9 +48,14 @@ pub fn cannot_play(renderer: &Renderer, learned: &Learned, track: &Track) -> boo
 
 /// Note that `renderer` failed on `track`. Returns whether that changed
 /// anything: a hi-res file marks only hi-res files of its format (until a
-/// plain one fails too), a plain one the whole format.
+/// plain one fails too), a plain one the whole format. What it would be
+/// transcoded to is never noted: that can't help (it was something else).
 pub fn learn(learned: &mut Learned, renderer: &Renderer, track: &Track) -> bool {
-    let Some(suffix) = track.suffix.as_deref().filter(|s| !s.is_empty()) else {
+    let Some(suffix) = track
+        .suffix
+        .as_deref()
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case(super::REMOTE_TRANSCODE_FORMAT))
+    else {
         return false;
     };
     let hi_res_only = hi_res(track);
@@ -133,6 +138,10 @@ mod tests {
         assert!(
             !learn(&mut learned, &tv, &Track::default()),
             "no suffix, nothing to learn"
+        );
+        assert!(
+            !learn(&mut learned, &tv, &track("mp3", 16, 44_100)),
+            "what it transcodes to"
         );
         assert_eq!(learned["tv"].len(), 1);
     }

@@ -346,6 +346,12 @@ internal class CastRenderer(
         return c.takeIf { SystemClock.elapsedRealtime() - startedAt <= CRASH_WINDOW_MS }
     }
 
+    /** The receiver is gone for a moment (reconnecting): the core holds the position where it is, still playing. */
+    fun hold() {
+        stopPositionLoop()
+        current?.key?.let { report(BackendReport.Buffering(BackendReportBufferingInner(it, true))) }
+    }
+
     /** The receiver couldn't play [current]: before anything has played, the server is out of its reach. */
     private fun fail(message: String) {
         val key = current?.key ?: return
