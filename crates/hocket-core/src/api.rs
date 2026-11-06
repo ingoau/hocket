@@ -2095,6 +2095,17 @@ impl From<&str> for Secret {
     }
 }
 
+/// A remote renderer (a Cast receiver) playback goes through.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Renderer {
+    /// Stable per receiver (the Cast device id): what learned formats are kept by.
+    pub id: String,
+    /// What the user calls it, shown to other devices.
+    pub name: String,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
@@ -2454,7 +2465,7 @@ pub enum Command {
         core_stream: bool,
     },
     /// The external backend now plays through a remote renderer (a Cast
-    /// device named `renderer`), or back on this device (`None`). While a
+    /// device), or back on this device (`None`). While a
     /// renderer is set, media sources carry the server's stream URL (the
     /// renderer fetches it itself, so neither downloads nor the stream
     /// cache can serve it), formats it can't play are transcoded, the
@@ -2463,7 +2474,15 @@ pub enum Command {
     /// current item reloads at its position: on the renderer it keeps its
     /// play state, coming back it pauses.
     SetRenderer {
-        renderer: Option<String>,
+        renderer: Option<Renderer>,
+    },
+    /// The renderer's receiver gave up (its session ended with an error)
+    /// shortly after it started playing `track_id` untranscoded: it can't
+    /// play that format after all. Remembered for this receiver, so the
+    /// track (and others like it) are transcoded on it from now on; the
+    /// platform then reconnects once and `SetRenderer` reloads it.
+    RendererFailed {
+        track_id: TrackId,
     },
     SetStorageWarnThreshold {
         bytes: Option<f64>,

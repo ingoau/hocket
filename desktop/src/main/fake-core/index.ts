@@ -761,6 +761,7 @@ export class FakeCore implements CoreHandle {
         // The fake core serves plain URLs; it has no core stream reader to switch to.
         return;
       case "setRenderer":
+      case "rendererFailed":
         // Only Android casts (its Cast SDK backend); the desktop never sends it.
         return;
       case "stashAdd":

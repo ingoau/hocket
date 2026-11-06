@@ -1287,6 +1287,75 @@ async fn rating_off_queue_does_not_emit_queue() {
     );
 }
 
+async fn source_t1(t: &TestCore) -> hocket_core::api::MediaSource {
+    match t
+        .query(Query::MediaSource {
+            track_id: "t1".into(),
+        })
+        .await
+    {
+        QueryResult::Source(Some(s)) => s,
+        other => panic!("no source: {other:?}"),
+    }
+}
+
+fn living_room() -> hocket_core::api::Renderer {
+    hocket_core::api::Renderer {
+        id: "cast-1".into(),
+        name: "Living Room TV".into(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_receiver_that_failed_on_a_format_gets_it_transcoded_from_then_on() {
+    let t = synced_core("renderer-failed").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    t.run(Command::SetRenderer {
+        renderer: Some(living_room()),
+    })
+    .await;
+    assert!(!source_t1(&t).await.transcoded);
+
+    // Its session died on t1 (FLAC); the platform reconnects to it.
+    t.run(Command::RendererFailed {
+        track_id: "t1".into(),
+    })
+    .await;
+    t.backend.clear_log();
+    t.run(Command::SetRenderer {
+        renderer: Some(living_room()),
+    })
+    .await;
+    t.run_for(200.0).await;
+    assert!(t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { play: true, .. })));
+    let s = source_t1(&t).await;
+    assert!(s.transcoded);
+    assert!(
+        s.url.contains("format=mp3") && s.url.contains("maxBitRate=320"),
+        "{}",
+        s.url
+    );
+
+    // Another receiver still gets it lossless.
+    t.run(Command::SetRenderer {
+        renderer: Some(hocket_core::api::Renderer {
+            id: "cast-2".into(),
+            name: "Kitchen".into(),
+        }),
+    })
+    .await;
+    assert!(!source_t1(&t).await.transcoded);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_remote_renderer_reloads_at_the_position_and_pauses_on_the_way_back() {
     let t = synced_core("renderer").await;
@@ -1301,7 +1370,7 @@ async fn a_remote_renderer_reloads_at_the_position_and_pauses_on_the_way_back() 
     t.backend.clear_log();
 
     t.run(Command::SetRenderer {
-        renderer: Some("Living Room TV".into()),
+        renderer: Some(living_room()),
     })
     .await;
     t.run_for(200.0).await;
@@ -1333,7 +1402,8 @@ async fn a_remote_renderer_reloads_at_the_position_and_pauses_on_the_way_back() 
         .await
     {
         QueryResult::Source(Some(s)) => {
-            assert!(s.url.starts_with("https://"), "{}", s.url)
+            assert!(s.url.starts_with("https://"), "{}", s.url);
+            assert!(!s.transcoded, "FLAC plays as it is");
         }
         other => panic!("no source: {other:?}"),
     }

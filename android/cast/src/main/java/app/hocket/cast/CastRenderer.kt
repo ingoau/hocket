@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.PowerManager
+import android.os.SystemClock
 import app.hocket.core.Commands
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.BackendReport
@@ -60,6 +61,8 @@ import org.json.JSONObject
  * - A receiver that can't play the first thing it is given (it can't reach the server, or doesn't
  *   trust its certificate) ends the session through [onUnreachable], which says why; later failures
  *   are reported to the core, which skips the item.
+ * - Some receivers claim a format and then crash on it (the Pixel Tablet's, on FLAC): the session
+ *   just ends. [crashSuspect] names what it had just started, for the controller to act on.
  */
 internal class CastRenderer(
     private val context: Context,
@@ -86,6 +89,10 @@ internal class CastRenderer(
     private val status = CastStatus()
     /** Something has played on the receiver this session: a failure now is the item's, not the server's reach. */
     private var played = false
+    /** When [current] was loaded, or (later) first played (elapsed realtime); 0 once it ended. */
+    private var startedAt = 0L
+    /** The item [startedAt] last marked playing. */
+    private var startedKey: String? = null
     private var positionJob: Job? = null
     private val wakeLock = (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
         .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hocket:cast").apply { setReferenceCounted(false) }
@@ -137,6 +144,8 @@ internal class CastRenderer(
         releaseLocks()
         current = null
         next = null
+        startedAt = 0
+        startedKey = null
         offsetMs = 0
         currentItemId = null
         queuedNextKey = null
@@ -205,6 +214,8 @@ internal class CastRenderer(
         currentItemId = null
         queuedNextKey = follow?.key
         val gen = ++loadGen
+        startedAt = SystemClock.elapsedRealtime()
+        startedKey = null
         // `timeOffset` is in whole seconds; the rest is a seek within the stream.
         offsetMs = if (source.transcoded) positionMs / 1000 * 1000 else 0
         status.loading(source.key)
@@ -283,6 +294,8 @@ internal class CastRenderer(
             offsetMs = 0
             currentItemId = itemId
             queuedNextKey = null
+            startedAt = SystemClock.elapsedRealtime()
+            startedKey = n.key
             status.transitioned(n.key)
             report(BackendReport.TransitionedToNext(BackendReportTransitionedToNextInner(n.key)))
             report(BackendReport.Position(BackendReportPositionInner(n.key, 0u)))
@@ -299,6 +312,10 @@ internal class CastRenderer(
                     report(BackendReport.Buffering(BackendReportBufferingInner(key, false)))
                 }
                 CastStatus.Event.Playing -> {
+                    if (startedKey != key) {
+                        startedAt = SystemClock.elapsedRealtime()
+                        startedKey = key
+                    }
                     played = true
                     report(BackendReport.Playing(BackendReportPlayingInner(key, position())))
                     startPositionLoop()
@@ -309,6 +326,7 @@ internal class CastRenderer(
                 }
                 CastStatus.Event.Buffering -> report(BackendReport.Buffering(BackendReportBufferingInner(key, true)))
                 CastStatus.Event.Ended -> {
+                    startedAt = 0
                     stopPositionLoop()
                     report(BackendReport.Ended(BackendReportEndedInner(key)))
                 }
@@ -316,6 +334,22 @@ internal class CastRenderer(
             }
         }
         if (isBusy()) acquireLocks() else releaseLocks()
+    }
+
+    /**
+     * What the receiver had just started untranscoded, if anything: a session dying now likely died
+     * of it. Read before [detach], which forgets it.
+     */
+    fun crashSuspect(): CoreMediaSource? {
+        val c = current ?: return null
+        if (c.transcoded || startedAt == 0L) return null
+        return c.takeIf { SystemClock.elapsedRealtime() - startedAt <= CRASH_WINDOW_MS }
+    }
+
+    /** The receiver is gone for a moment (reconnecting): the core holds the position where it is, still playing. */
+    fun hold() {
+        stopPositionLoop()
+        current?.key?.let { report(BackendReport.Buffering(BackendReportBufferingInner(it, true))) }
     }
 
     /** The receiver couldn't play [current]: before anything has played, the server is out of its reach. */
@@ -400,6 +434,8 @@ internal class CastRenderer(
     companion object {
         const val POSITION_INTERVAL_MS = 1_000L
         const val PRELOAD_S = 20.0
+        /** A session ending this soon after an item started is taken as the receiver crashing on it. */
+        const val CRASH_WINDOW_MS = 10_000L
         /** Renewed by statuses and the position loop while it plays; a lost session can't hold the phone awake for long. */
         const val WAKE_LOCK_TIMEOUT_MS = 10 * 60_000L
         private const val KEY = "hocketKey"

@@ -137,8 +137,11 @@ pub(crate) struct Actor {
     /// the server URL directly.
     pub core_stream: bool,
     /// The remote renderer (a Cast device) the external backend plays
-    /// through, by name (`Command::SetRenderer`); `None` plays here.
-    pub renderer: Option<String>,
+    /// through (`Command::SetRenderer`); `None` plays here.
+    pub renderer: Option<crate::api::Renderer>,
+    /// Formats particular receivers turned out not to play
+    /// (`Command::RendererFailed`), as saved.
+    pub renderer_formats: crate::downloads::receivers::Learned,
     /// Background prefetch of the next queue items (transport owner only).
     pub prefetch: super::handlers::prefetch::PrefetchState,
     /// The album primer (first seconds of a track the user is about to play).
@@ -429,6 +432,11 @@ impl Actor {
 
         let core_stream = cfg.audio == AudioMode::Native;
         let volume = saved_volume(&db, clock.as_ref());
+        let renderer_formats = db
+            .saved_state_get(crate::downloads::receivers::STATE_KEY)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let muted = db
             .saved_state_get::<bool>(MUTED_KEY)
             .ok()
@@ -455,6 +463,7 @@ impl Actor {
             stream_reader,
             core_stream,
             renderer: None,
+            renderer_formats,
             prefetch: Default::default(),
             prime: Default::default(),
             cache: Default::default(),

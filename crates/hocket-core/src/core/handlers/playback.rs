@@ -36,8 +36,11 @@ impl Actor {
             .as_ref()
             .filter(|_| self.core_stream)
             .map(|r| r as &dyn crate::downloads::StreamMinter);
-        let resolved = if self.renderer.is_some() {
-            self.downloads.resolve_remote(api.as_ref(), key, track)
+        let resolved = if let Some(r) = &self.renderer {
+            let cannot_play =
+                crate::downloads::receivers::cannot_play(r, &self.renderer_formats, track);
+            self.downloads
+                .resolve_remote(api.as_ref(), key, track, cannot_play)
         } else {
             self.downloads
                 .resolve_with(api.as_ref(), key, track, reader)
@@ -111,7 +114,7 @@ impl Actor {
     /// the current item reloads at its position, keeping its played time:
     /// on the renderer it keeps playing (or not); back here it pauses,
     /// rather than bursting out of the phone's speaker.
-    pub(crate) fn set_renderer(&mut self, renderer: Option<String>) {
+    pub(crate) fn set_renderer(&mut self, renderer: Option<crate::api::Renderer>) {
         // Some again (another session, maybe a receiver of the same name)
         // still reloads: the new receiver has nothing loaded.
         if self.renderer.is_none() && renderer.is_none() {
@@ -149,6 +152,40 @@ impl Actor {
         self.refresh_next();
         self.stamp();
         self.emit_transport();
+    }
+
+    /// The renderer's receiver died right after starting `track_id`
+    /// untranscoded (`Command::RendererFailed`): note its format as one
+    /// this receiver can't play, so from now on it is transcoded there.
+    pub(crate) fn renderer_failed(&mut self, track_id: &str) {
+        let Some(renderer) = self.renderer.clone() else {
+            return;
+        };
+        let track = match self.db.track(track_id) {
+            Ok(Some(t)) => t,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(target: "hocket::player", error = %e, "renderer failed: track");
+                return;
+            }
+        };
+        if !crate::downloads::receivers::learn(&mut self.renderer_formats, &renderer, &track) {
+            return;
+        }
+        tracing::info!(
+            target: "hocket::player",
+            receiver = %renderer.name,
+            suffix = ?track.suffix,
+            hi_res = crate::downloads::receivers::hi_res(&track),
+            "receiver can't play this format: transcoding it there from now on"
+        );
+        if let Err(e) = self.db.saved_state_set(
+            crate::downloads::receivers::STATE_KEY,
+            &self.renderer_formats,
+            self.clock.as_ref(),
+        ) {
+            tracing::warn!(target: "hocket::player", error = %e, "save renderer formats");
+        }
     }
 
     pub(crate) fn refresh_next(&mut self) {
@@ -1109,7 +1146,7 @@ impl Actor {
                 volume: p.volume,
                 muted: p.muted,
             }),
-            renderer: self.renderer.clone(),
+            renderer: self.renderer.as_ref().map(|r| r.name.clone()),
         };
         self.engine_input(input);
     }

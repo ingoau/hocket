@@ -34,6 +34,7 @@
 //! `<cache_dir>/stream/<server_id>/<track_id>[.<profile key>].<random>.<suffix>`
 //! (partial entries are sparse files of the stream's full length).
 
+pub mod receivers;
 pub mod spans;
 mod stream_cache;
 
@@ -1496,18 +1497,22 @@ impl Downloads {
     /// Resolve a track for a remote renderer (a Cast device), which fetches
     /// it itself: always the server's stream URL, never a download, the
     /// stream cache or a `hocket-stream://` handle it can't open. Formats
-    /// the renderer can't play, and transcodes to a format it can't, become
-    /// mp3; the network's transcoding profile still applies otherwise.
+    /// the renderer can't play (no Cast receiver's, or this one's:
+    /// `cannot_play`, see [`receivers`]), and transcodes to a format it
+    /// can't, become mp3; the network's transcoding profile still applies
+    /// otherwise.
     pub fn resolve_remote(
         &self,
         api: &dyn SubsonicApi,
         key: &str,
         track: &api::Track,
+        cannot_play: bool,
     ) -> DbResult<MediaSource> {
         let gain_db = self.gain(&track.server_id, &track.id)?.unwrap_or(0.0);
         let profile = remote_profile(
             self.effective_profile(track.suffix.as_deref()),
             track.suffix.as_deref(),
+            cannot_play,
         );
         let transcoded = profile
             .as_ref()
@@ -1652,19 +1657,24 @@ const REMOTE_FORMATS: &[&str] = &["mp3", "aac", "m4a", "flac", "opus", "ogg", "o
 const REMOTE_ARTWORK_SIZE: u32 = 800;
 /// What a remote renderer transcodes to when it can't play the original.
 const REMOTE_TRANSCODE_FORMAT: &str = "mp3";
+/// The bitrate (kbps) of that transcode, unless the profile caps it lower.
+const REMOTE_TRANSCODE_BIT_RATE: u32 = 320;
 
 /// `profile` (this device's) adjusted for a remote renderer: the original
-/// is transcoded when the renderer can't play its `suffix`, and a format the
-/// renderer can't play becomes mp3.
+/// is transcoded (to mp3 at up to 320 kbps) when the renderer can't play
+/// its `suffix` (`cannot_play`: this receiver can't, whatever others do),
+/// and a format the renderer can't play becomes mp3.
 fn remote_profile(
     profile: Option<TranscodingProfile>,
     suffix: Option<&str>,
+    cannot_play: bool,
 ) -> Option<TranscodingProfile> {
-    let undecodable = suffix.is_some_and(|s| {
-        REMOTE_CANNOT_DECODE
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(s))
-    });
+    let undecodable = cannot_play
+        || suffix.is_some_and(|s| {
+            REMOTE_CANNOT_DECODE
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(s))
+        });
     let mut profile = match profile {
         Some(p) => p,
         None if undecodable => TranscodingProfile {
@@ -1683,6 +1693,12 @@ fn remote_profile(
             profile.format = Some(REMOTE_TRANSCODE_FORMAT.into())
         }
         _ => {}
+    }
+    // Forced, not chosen: as good as the receiver takes (the server's
+    // default bitrate for mp3 is often lower).
+    if undecodable && profile.format.as_deref() == Some(REMOTE_TRANSCODE_FORMAT) {
+        let cap = profile.max_bit_rate.unwrap_or(REMOTE_TRANSCODE_BIT_RATE);
+        profile.max_bit_rate = Some(cap.min(REMOTE_TRANSCODE_BIT_RATE));
     }
     Some(profile)
 }
@@ -2346,21 +2362,27 @@ mod tests {
 
     #[test]
     fn remote_profile_transcodes_what_a_cast_receiver_cannot_play() {
-        assert_eq!(remote_profile(None, Some("flac")), None);
-        let p = remote_profile(None, Some("ape")).unwrap();
+        assert_eq!(remote_profile(None, Some("flac"), false), None);
+        let p = remote_profile(None, Some("ape"), false).unwrap();
         assert_eq!(p.format.as_deref(), Some("mp3"));
+        assert_eq!(p.max_bit_rate, Some(320));
+        let p = remote_profile(None, Some("flac"), true).unwrap();
+        assert_eq!(p.format.as_deref(), Some("mp3"), "this receiver can't");
+        assert_eq!(p.max_bit_rate, Some(320));
         let cellular = TranscodingProfile {
             format: Some("opus".into()),
             max_bit_rate: Some(96),
             cannot_decode: vec![],
         };
-        let p = remote_profile(Some(cellular.clone()), Some("flac")).unwrap();
+        let p = remote_profile(Some(cellular.clone()), Some("flac"), false).unwrap();
         assert_eq!(p, cellular, "a format the receiver plays stays");
+        let p = remote_profile(Some(cellular.clone()), Some("flac"), true).unwrap();
+        assert_eq!(p, cellular, "already transcoded to something it plays");
         let weird = TranscodingProfile {
             format: Some("wma".into()),
             ..cellular
         };
-        let p = remote_profile(Some(weird), Some("flac")).unwrap();
+        let p = remote_profile(Some(weird), Some("flac"), false).unwrap();
         assert_eq!(p.format.as_deref(), Some("mp3"));
         assert_eq!(p.max_bit_rate, Some(96));
         let capped = TranscodingProfile {
@@ -2368,12 +2390,15 @@ mod tests {
             max_bit_rate: Some(192),
             cannot_decode: vec![],
         };
-        let p = remote_profile(Some(capped), Some("flac")).unwrap();
+        let p = remote_profile(Some(capped.clone()), Some("flac"), false).unwrap();
         assert_eq!(
             p.format.as_deref(),
             Some("mp3"),
             "a bare cap names its format"
         );
+        assert_eq!(p.max_bit_rate, Some(192));
+        let p = remote_profile(Some(capped), Some("flac"), true).unwrap();
+        assert_eq!(p.max_bit_rate, Some(192), "a lower cap stays");
     }
 
     #[tokio::test]
@@ -2391,7 +2416,7 @@ mod tests {
             .unwrap()
             .url
             .starts_with("file://"));
-        let s = f.dl.resolve_remote(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve_remote(&f.server, "k1", &track, false).unwrap();
         assert!(
             s.url.starts_with("https://srv.fake/rest/stream?id=t0"),
             "{}",
