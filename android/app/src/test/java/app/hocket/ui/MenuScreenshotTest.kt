@@ -159,6 +159,9 @@ class MenuScreenshotTest {
             compose.onNodeWithTag("picker.menu.addCopy").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             shot(dir, "$prefix-08-add-to-playlist-pending")
+            // The picker is a sub-page: back returns to the menu, then back again closes the sheet.
+            compose.onNodeWithTag("songMenu.picker.back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
             dismissSheet()
         }
         step {

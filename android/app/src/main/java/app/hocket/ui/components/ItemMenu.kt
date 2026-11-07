@@ -433,7 +433,8 @@ fun MenuSheet(
 
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                 val height = restHeight[0]
-                if (source != NestedScrollSource.UserInput || !canExpandNow || height <= 0) return Offset.Zero
+                // A sub-page has no rest to open and the menu is not on view: drags there are the page's own.
+                if (source != NestedScrollSource.UserInput || page != MenuPage.Main || !canExpandNow || height <= 0) return Offset.Zero
                 val at = shown()
                 val dy = available.y
                 if (!((dy < 0f && at < 1f) || (dy > 0f && at > 0f))) return Offset.Zero
@@ -556,7 +557,7 @@ fun MenuSheet(
         // the rest, cancelling slides the sub-page back. A back key (no gesture) just goes.
         // Back during a slide in already goes back; once back is let go the page is the menu, so a
         // second back (even mid-slide) is the sheet's own and closes it.
-        PredictiveBackHandler(enabled = page == MenuPage.Share || page == MenuPage.Snooze || page == MenuPage.Playlist || page == MenuPage.Sleep) { events ->
+        PredictiveBackHandler(enabled = page != MenuPage.Main && page != MenuPage.Sharing) { events ->
             val from = page
             try {
                 events.collect { e ->
@@ -959,14 +960,15 @@ private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onCho
 /**
  * The sleep timer as a sub-page: each duration (a check on the one running), end of track and, when
  * one is set, Stop. A choice sets (or, on Stop, clears) the timer and closes the menu — like Snooze,
- * the countdown keeps showing on the row that opened the sub-page. Null from [onChoose] is back;
- * a timer with no end and not stop-at-end-of-track is "stop now". Tags: `[tag].sleep`.
+ * the countdown keeps showing on the row that opened the sub-page. A timer with no end and not
+ * stop-at-end-of-track is "stop now". Tags: `[tag].sleep`.
  */
 @Composable
-private fun SleepMenuPage(tag: String, timer: SleepTimer?, onBack: () -> Unit, onChoose: (SleepTimer?) -> Unit) {
+private fun SleepMenuPage(tag: String, timer: SleepTimer?, onBack: () -> Unit, onChoose: (SleepTimer) -> Unit) {
     val minutes = listOf(15, 30, 45, 60, 90)
-    val now = remember { System.currentTimeMillis().toDouble() }
-    val remaining = timer?.endsAt?.let { it - now }
+    // The clock is read as the page renders, not remembered from the open: the check keeps up with a
+    // page that idles, and each row sets its timer from the moment of the tap.
+    val remaining = timer?.endsAt?.let { it - System.currentTimeMillis().toDouble() }
     val activeMinutes = if (timer?.stopAtEndOfTrack == true || remaining == null) null else minutes.firstOrNull { it * 60_000.0 >= remaining }
     val check: @Composable () -> Unit = { Icon(HocketIcons.Filled.Check, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary) }
     val rows = minutes.size + 1 + if (timer == null) 0 else 1
@@ -974,7 +976,7 @@ private fun SleepMenuPage(tag: String, timer: SleepTimer?, onBack: () -> Unit, o
         minutes.forEachIndexed { i, m ->
             MenuRow(AnnotatedString(stringResource(R.string.sleep_minutes, m)), HocketIcons.Filled.Bedtime, connectedShape(i, rows), tag = "$tag.sleep.$m",
                 trailing = if (activeMinutes == m) { { check() } } else null,
-            ) { onChoose(SleepTimer(now + m * 60_000.0, false)) }
+            ) { onChoose(SleepTimer(System.currentTimeMillis().toDouble() + m * 60_000.0, false)) }
         }
         MenuRow(AnnotatedString(stringResource(R.string.sleep_end_of_track)), HocketIcons.Filled.MusicNote, connectedShape(minutes.size, rows), tag = "$tag.sleep.endOfTrack",
             trailing = if (timer?.stopAtEndOfTrack == true) { { check() } } else null,
