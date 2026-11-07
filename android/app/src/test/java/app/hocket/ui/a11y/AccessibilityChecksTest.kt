@@ -229,19 +229,30 @@ class AccessibilityChecksTest {
         compose.onNodeWithTag("songMenu.action.addToPlaylist").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("picker.done").fetchSemanticsNodes().isNotEmpty() && compose.onAllNodesWithTag("picker.list").fetchSemanticsNodes().isNotEmpty() }
         check("add to playlist")
-        back()
-        expanded()
-        // The sleep timer is an entry in the track menu.
-        compose.onNodeWithTag("player.more").performSemanticsAction(SemanticsActions.OnClick)
+        // Back returns to the menu; the sleep timer is one of its entries, itself a sub-page now.
+        sheetBack()
         compose.waitForIdle()
         compose.onNodeWithTag("player.sleep").performSemanticsAction(SemanticsActions.OnClick)
-        compose.waitForIdle()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("songMenu.sleep.endOfTrack").fetchSemanticsNodes().isNotEmpty() }
         check("sleep timer")
-        back()
+        sheetBack() // back to the menu
+        sheetBack() // on the menu itself: the sheet's own back closes it
         expanded()
         compose.onNodeWithTag("player.connect").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         check("connect picker")
+    }
+
+    /** Back to the top sheet window (the menu and its sub-pages live there, their own back handling first). */
+    private fun sheetBack() {
+        val global = Class.forName("android.view.WindowManagerGlobal").getMethod("getInstance").invoke(null)
+        val field = global.javaClass.getDeclaredField("mViews").apply { isAccessible = true }
+        (field.get(global) as List<android.view.View>).filter { it !== compose.activity.window.decorView }.lastOrNull()?.let { v ->
+            val down = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK)
+            val up = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK)
+            compose.runOnUiThread { v.dispatchKeyEvent(down); v.dispatchKeyEvent(up) }
+        }
+        compose.waitForIdle()
     }
 
     @Test

@@ -81,6 +81,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.hocket.R
 import app.hocket.core.ArtworkSizes
@@ -133,6 +134,30 @@ private data class PickerData(val trackIds: List<String>, val subject: PickerSub
  */
 @Composable
 fun PlaylistPicker(target: ActionTarget, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("picker")) {
+        PlaylistPickerBody(target, onDismiss, modifier = Modifier.fillMaxHeight().imePadding()) {
+            Text(stringResource(R.string.action_add_to_playlist), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+        }
+    }
+}
+
+/**
+ * The add to playlist picker's content ([PlaylistPicker]'s, and the song menu's sub-page's): what
+ * Done applies then goes away through [onClose]. [listHeight] caps the list (a sub-menu scrolls in
+ * place); with null it takes the column's remaining height (the full-height sheet). [navigationBarPad]
+ * adds the navigation bars' padding to the summary bar (the menu's column already carries it).
+ * [title] replaces the sheet's "Add to playlist" headline; a sub-menu passes none, its header
+ * gives the title. Tags: `picker.*` (the same either way).
+ */
+@Composable
+fun PlaylistPickerBody(
+    target: ActionTarget,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    listHeight: Dp? = null,
+    navigationBarPad: Boolean = true,
+    title: (@Composable () -> Unit)? = null,
+) {
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycleCompat()
     val serverId = server?.id ?: return
@@ -170,98 +195,96 @@ fun PlaylistPicker(target: ActionTarget, onDismiss: () -> Unit) {
         val ids = data?.trackIds ?: return
         apply()
         client.dispatch(Commands.createPlaylist(serverId, name.trim(), ids))
-        onDismiss()
+        onClose()
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("picker")) {
-        Column(Modifier.fillMaxHeight().imePadding()) {
-            Column(Modifier.padding(start = 20.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(stringResource(R.string.action_add_to_playlist), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                data?.subject?.let { s ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Artwork(s.coverArt, ArtworkSizes.THUMB, null, Modifier.size(24.dp), RoundedCornerShape(7.dp))
-                        Text(
-                            buildAnnotatedString {
-                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)) { append(s.title) }
-                                s.detail?.let { append(stringResource(R.string.dot_separator)); append(it) }
-                            },
-                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag("picker.subject"),
-                        )
-                    }
+    Column(modifier) {
+        Column(Modifier.padding(start = 20.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            title?.invoke()
+            data?.subject?.let { s ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Artwork(s.coverArt, ArtworkSizes.THUMB, null, Modifier.size(24.dp), RoundedCornerShape(7.dp))
+                    Text(
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)) { append(s.title) }
+                            s.detail?.let { append(stringResource(R.string.dot_separator)); append(it) }
+                        },
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("picker.subject"),
+                    )
                 }
             }
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text(stringResource(R.string.picker_search)) },
-                leadingIcon = { Icon(HocketIcons.Filled.Search, null) },
-                trailingIcon = if (query.isNotEmpty()) { { IconButton(onClick = { query = "" }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.search_clear)) } } } else null,
-                singleLine = true,
-                shape = RoundedCornerShape(26.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = menuRowColor(), unfocusedContainerColor = menuRowColor(), unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 10.dp).testTag("picker.search"),
-            )
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                val d = data
-                val e = edits
-                if (d == null || e == null) {
-                    LoadingIndicator(Modifier.align(Alignment.Center))
-                } else {
-                    val sections = pickerSections(d.playlists, pinnedIds, query)
-                    LazyColumn(Modifier.fillMaxWidth().testTag("picker.list"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
-                        item(key = "new") {
-                            NewPlaylistButton(query.trim()) { if (query.isNotBlank()) create(query) else naming = true }
+        }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text(stringResource(R.string.picker_search)) },
+            leadingIcon = { Icon(HocketIcons.Filled.Search, null) },
+            trailingIcon = if (query.isNotEmpty()) { { IconButton(onClick = { query = "" }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.search_clear)) } } } else null,
+            singleLine = true,
+            shape = RoundedCornerShape(26.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = menuRowColor(), unfocusedContainerColor = menuRowColor(), unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 10.dp).testTag("picker.search"),
+        )
+        Box(Modifier.fillMaxWidth().let { if (listHeight == null) it.weight(1f) else it.heightIn(max = listHeight) }) {
+            val d = data
+            val e = edits
+            if (d == null || e == null) {
+                LoadingIndicator(Modifier.align(Alignment.Center))
+            } else {
+                val sections = pickerSections(d.playlists, pinnedIds, query)
+                LazyColumn(Modifier.fillMaxWidth().testTag("picker.list"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
+                    item(key = "new") {
+                        NewPlaylistButton(query.trim()) { if (query.isNotBlank()) create(query) else naming = true }
+                    }
+                    if (query.isNotBlank() && sections.isEmpty()) item(key = "empty") {
+                        Surface(shape = RoundedCornerShape(20.dp), color = menuRowColor(), modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
+                            Text(stringResource(R.string.picker_no_match, query.trim()), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(20.dp).testTag("picker.empty"))
                         }
-                        if (query.isNotBlank() && sections.isEmpty()) item(key = "empty") {
-                            Surface(shape = RoundedCornerShape(20.dp), color = menuRowColor(), modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
-                                Text(stringResource(R.string.picker_no_match, query.trim()), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(20.dp).testTag("picker.empty"))
-                            }
-                        }
-                        sections.forEach { section ->
-                            item(key = "h.${section.group}") { GroupLabel(section.group) }
-                            itemsIndexed(section.playlists, key = { _, p -> "${section.group}.${p.id}" }) { i, p ->
-                                PickerRowItem(
-                                    playlist = p,
-                                    row = e.row(p),
-                                    shape = connectedShape(i, section.playlists.size),
-                                    onTap = {
-                                        when (val r = e.tap(p.id)) {
-                                            is PickerTap.Changed -> edits = r.edits
-                                            PickerTap.AskWhichCopies -> asking = p
-                                        }
-                                    },
-                                    onAddCopy = { edits = e.addCopy(p.id) },
-                                    onOpen = navigator?.openPlaylist?.let { open -> { onDismiss(); open(p.id) } },
-                                    modifier = Modifier.padding(bottom = 2.dp),
-                                )
-                            }
+                    }
+                    sections.forEach { section ->
+                        item(key = "h.${section.group}") { GroupLabel(section.group) }
+                        itemsIndexed(section.playlists, key = { _, p -> "${section.group}.${p.id}" }) { i, p ->
+                            PickerRowItem(
+                                playlist = p,
+                                row = e.row(p),
+                                shape = connectedShape(i, section.playlists.size),
+                                onTap = {
+                                    when (val r = e.tap(p.id)) {
+                                        is PickerTap.Changed -> edits = r.edits
+                                        PickerTap.AskWhichCopies -> asking = p
+                                    }
+                                },
+                                onAddCopy = { edits = e.addCopy(p.id) },
+                                onOpen = navigator?.openPlaylist?.let { open -> { onClose(); open(p.id) } },
+                                modifier = Modifier.padding(bottom = 2.dp),
+                            )
                         }
                     }
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 24.dp, end = 16.dp, top = 14.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                val e = edits
-                val ids = data?.playlists?.map { it.id }.orEmpty()
-                val summary = if (e == null) "" else {
-                    val (adding, removing) = e.pending(ids)
-                    when {
-                        adding > 0 || removing > 0 -> listOfNotNull(
-                            adding.takeIf { it > 0 }?.let { stringResource(R.string.picker_adding_count, it) },
-                            removing.takeIf { it > 0 }?.let { stringResource(R.string.picker_removing_count, it) },
-                        ).joinToString(stringResource(R.string.dot_separator))
-                        e.inCount(ids) > 0 -> pluralStringResource(R.plurals.picker_in_playlists, e.inCount(ids), e.inCount(ids))
-                        else -> stringResource(R.string.picker_not_in_any)
-                    }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(Modifier.fillMaxWidth().then(if (navigationBarPad) Modifier.navigationBarsPadding() else Modifier).padding(start = 24.dp, end = 16.dp, top = 14.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            val e = edits
+            val ids = data?.playlists?.map { it.id }.orEmpty()
+            val summary = if (e == null) "" else {
+                val (adding, removing) = e.pending(ids)
+                when {
+                    adding > 0 || removing > 0 -> listOfNotNull(
+                        adding.takeIf { it > 0 }?.let { stringResource(R.string.picker_adding_count, it) },
+                        removing.takeIf { it > 0 }?.let { stringResource(R.string.picker_removing_count, it) },
+                    ).joinToString(stringResource(R.string.dot_separator))
+                    e.inCount(ids) > 0 -> pluralStringResource(R.plurals.picker_in_playlists, e.inCount(ids), e.inCount(ids))
+                    else -> stringResource(R.string.picker_not_in_any)
                 }
-                Text(summary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }.testTag("picker.summary"))
-                Button(onClick = { apply(); onDismiss() }, enabled = e != null, modifier = Modifier.heightIn(min = 52.dp).widthIn(min = 116.dp).testTag("picker.done")) {
-                    Text(stringResource(R.string.picker_done), style = MaterialTheme.typography.titleSmall)
-                }
+            }
+            Text(summary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }.testTag("picker.summary"))
+            Button(onClick = { apply(); onClose() }, enabled = e != null, modifier = Modifier.heightIn(min = 52.dp).widthIn(min = 116.dp).testTag("picker.done")) {
+                Text(stringResource(R.string.picker_done), style = MaterialTheme.typography.titleSmall)
             }
         }
     }

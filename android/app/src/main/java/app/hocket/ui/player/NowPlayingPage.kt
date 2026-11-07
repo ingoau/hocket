@@ -210,7 +210,6 @@ internal fun FullPlayer(
     /** The device picker brought up by a swipe, following the finger (null when opened otherwise). */
     var handoffPull by remember { mutableStateOf<app.hocket.ui.components.SheetPull?>(null) }
     var queues by remember { mutableStateOf(false) }
-    var sleepSheet by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
     var artists by remember { mutableStateOf(false) }
     var lyricsTiming by remember { mutableStateOf(false) }
@@ -236,7 +235,7 @@ internal fun FullPlayer(
                     supporting = resources.getString(R.string.lyrics_offset_value, doc.offsetMs), testTag = "player.lyricsTiming")
             }
             songMenu.open(it, extras = listOfNotNull(timing, app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
-                onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")), pull = pull)
+                page = app.hocket.ui.components.MenuPage.Sleep, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")), pull = pull)
         } ?: false
     }
     // `swipe.playerUp` set to the device picker or the song menu: the swipe brings it up as a sheet
@@ -361,7 +360,6 @@ internal fun FullPlayer(
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false; handoffPull?.dismiss(); handoffPull = null }, pull = handoffPull)
     if (queues) QueuesSheet(onDismiss = { queues = false })
-    if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
     if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })
     if (info) SongInfoSheet(onDismiss = { info = false }, onOpenAlbum = { info = false; onOpenAlbum(it) }, onOpenArtist = { info = false; onOpenArtist(it) })
     if (artists && track != null) ArtistsSheet(track, onDismiss = { artists = false }, onOpenAlbum = { artists = false; onOpenAlbum(it) }, onOpenArtist = { artists = false; onOpenArtist(it) })

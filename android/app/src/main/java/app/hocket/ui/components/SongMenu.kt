@@ -28,21 +28,24 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.LocalDetailNavigator
 
 /**
- * A row a context adds to the song menu (the playlist's "Remove from Late night", the player's sleep
- * timer). Extras always sit in one place: the short list's last rows, or (destructive ones) the
- * menu's last. [replaces] names a registry action the extra stands in for (the playlist's remove,
- * which knows the entry's position), so the menu does not list both.
+ * A row a context adds to the song menu (the player's sleep timer, a playlist's remove). Extras
+ * always sit in one place: the short list's last rows, or (destructive ones) the menu's last.
+ * [replaces] names a registry action the extra stands in for (the playlist's remove, which knows
+ * the entry's position), so the menu does not list both. [page] opens a sub-page of the menu in
+ * place (the player's sleep timer); the [onClick] then serves no purpose.
  */
 @Immutable
 class SongMenuExtra(
     val label: String,
     val icon: ImageVector,
-    val onClick: () -> Unit,
+    val onClick: (() -> Unit)? = null,
     val supporting: String? = null,
     val destructive: Boolean = false,
     val highlighted: Boolean = false,
     val testTag: String? = null,
     val replaces: String? = null,
+    /** A menu sub-page to open in place (the player's sleep timer); [onClick] is ignored then. */
+    val page: MenuPage? = null,
 )
 
 /**
@@ -103,7 +106,7 @@ fun rememberSongMenu(): SongMenuController {
  * Hosts [controller]'s sheet ([MenuSheet] for one song). The registry's actions are fetched before
  * the sheet is shown, so it opens at its final height instead of growing (and re-anchoring) under
  * the finger. [navigator] performs "Go to album / artist" (the shell's collapses the player as it
- * navigates). Add to playlist and Song info open their own sheets here, after the menu has gone.
+ * navigates). Song info opens its own sheet here, after the menu has gone.
  */
 @Composable
 fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
@@ -118,7 +121,6 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
             controller.shown = request to actions
         }
     }
-    var pickerFor by remember { mutableStateOf<ActionTarget?>(null) }
     var infoFor by remember { mutableStateOf<TrackSummary?>(null) }
     controller.shown?.let { (request, actions) ->
         val track = request.track
@@ -144,7 +146,6 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
             MenuSheet(
                 subject, request.target, actions,
                 onDismiss = { controller.close() },
-                onAddToPlaylist = { pickerFor = request.target },
                 extras = request.extras,
                 onGoToAlbum = track.albumId?.let { id -> navigator?.let { { it.openAlbum(id) } } },
                 onGoToArtist = track.artistId?.let { id -> navigator?.let { { it.openArtist(id) } } },
@@ -153,7 +154,6 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
             )
         }
     }
-    pickerFor?.let { t -> PlaylistPicker(target = t, onDismiss = { pickerFor = null }) }
     infoFor?.let { t ->
         ModalBottomSheet(onDismissRequest = { infoFor = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("songMenu.infoSheet")) {
             app.hocket.ui.player.PlayerAbout(
