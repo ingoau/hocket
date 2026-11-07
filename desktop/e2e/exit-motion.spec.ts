@@ -1,6 +1,7 @@
-// Closed surfaces animate out: a dialog, menu, popover, toast or the fullscreen
-// player stays mounted for one exit animation, inert and untouchable, then
-// unmounts (lib/presence.ts). Under reduced motion it goes at once. The exits
+// Closed surfaces animate out: a dialog, popover, drop-down, toast or the
+// fullscreen player stays mounted for one exit animation, inert and
+// untouchable, then unmounts (lib/presence.ts). Context menus are the
+// exception and go at once, as does everything under reduced motion. The exits
 // are slowed here so the closing state is observable.
 import type { Locator, Page } from "@playwright/test";
 import { completeSetup, expect, playFirstAlbum, test } from "./fixtures";
@@ -28,7 +29,7 @@ async function expectExiting(el: Locator): Promise<void> {
 }
 
 test.describe("exit animations", () => {
-  test("menus, dialogs, the palette, popovers, toasts and the fullscreen player leave through an exit animation", async ({ hocket }) => {
+  test("dialogs, the palette, popovers, drop-downs, toasts and the fullscreen player leave through an exit animation; context menus go at once", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     await playFirstAlbum(page);
@@ -44,22 +45,24 @@ test.describe("exit animations", () => {
     await expect.poll(() => exitState(toast)).toEqual({ closing: true, inert: true, animating: true });
     await expect(page.locator('[data-testid="toast"].closing')).toHaveCount(0);
 
-    // Context menu: Escape starts the exit; it is inert at once and then gone.
+    // Context menus are the exception: like a native desktop menu they open and close at once,
+    // with no motion either way (menus.css), so Escape removes it well inside the stretched exit.
     await page.getByTestId("track-row").first().click({ button: "right" });
     const menu = page.getByTestId("context-menu");
     await expect(menu).toBeVisible();
+    expect(await menu.evaluate((n) => n.getAnimations().length)).toBe(0);
     await page.keyboard.press("Escape");
-    await expectExiting(menu);
+    await expect(menu).toHaveCount(0, { timeout: 500 });
 
-    // With its Add to playlist submenu open, the two leave together.
+    // With its Add to playlist submenu open, the two go together, just as quickly.
     await page.getByTestId("track-row").first().click({ button: "right" });
     await menu.locator('[data-action="addToPlaylist"]').hover();
     const sub = page.getByTestId("playlist-submenu");
     await expect(page.getByTestId("playlist-search")).toBeFocused();
+    expect(await sub.evaluate((n) => n.getAnimations().length)).toBe(0);
     await page.keyboard.press("Tab");
-    await expect.poll(() => exitState(sub)).toEqual({ closing: true, inert: true, animating: true });
-    await expectExiting(menu);
-    await expect(sub).toHaveCount(0);
+    await expect(menu).toHaveCount(0, { timeout: 500 });
+    await expect(sub).toHaveCount(0, { timeout: 500 });
 
     // Dialog: the sheet and its scrim leave together; the shell is live again from the first frame.
     // (The toast's Undo above stopped playback, so this is Song info from the menu.)
