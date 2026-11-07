@@ -140,7 +140,6 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
                         onClick = { remove(); client.clearSelection() }, destructive = true, testTag = "selectionMenu.removeFromPlaylist", replaces = ActionIds.REMOVE_FROM_PLAYLIST)
                 }),
                 onDismiss = { songsMenu = null },
-                onAddToPlaylist = { playlistPicker = true },
                 onRan = { client.clearSelection() },
                 tag = "selectionMenu",
             )
