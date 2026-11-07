@@ -82,9 +82,9 @@ val LocalOpenConnectSettings = staticCompositionLocalOf<(() -> Unit)?> { null }
  * device playing (this phone's own volume, its music volume, while it plays or nobody does); then
  * this phone's connected outputs (speaker, earphones; [AudioOutputs]) as a segmented group, the one
  * playing filled, switchable either way, with a link to Bluetooth settings for connecting another;
- * then this phone's Cast receivers ([CastDevices], when the build has Cast), the one it plays through
- * filled (tapping it again stops casting); then the other Hocket devices, naming the receiver one of
- * them plays through. The gear by the title opens Connect & devices settings
+ * then the other Hocket devices, naming the receiver one of them plays through; then this phone's
+ * Cast receivers ([CastDevices], when the build has Cast), the one it plays through filled (tapping
+ * it again stops casting). The gear by the title opens Connect & devices settings
  * ([onOpenSettings]).
  */
 @Composable
@@ -155,6 +155,27 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                     }
                 }
             }
+            GroupLabel(stringResource(R.string.handoff_other_devices), Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
+            if (targets.isEmpty()) {
+                Segment(0, 1) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(stringResource(R.string.empty_devices_title), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.empty_devices_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            } else SegmentedGroup {
+                targets.forEachIndexed { i, d ->
+                    val renderer = transport.renderer?.takeIf { d.playing && transport.lease.owner == d.id }
+                    val state = when { renderer != null -> stringResource(R.string.handoff_playing_on, renderer); d.playing -> stringResource(R.string.handoff_playing); d.ready -> stringResource(R.string.handoff_ready); else -> stringResource(R.string.handoff_preparing) }
+                    DeviceRow(i, targets.size, d.name, state, deviceRowIcon(d.platform), d.playing,
+                        onClick = { client.dispatch(Commands.handoffTo(d.id)); onDismiss() }, modifier = Modifier.testTag("handoff.device.${d.id}"),
+                        trailing = when {
+                            d.playing -> null
+                            !d.ready -> ({ LoadingIndicator(Modifier.size(32.dp)) })
+                            else -> ({ Text(stringResource(R.string.handoff_last_seen, formatAgoPhrase(d.lastSeen)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) })
+                        })
+                }
+            }
             if (cast.available && self != null) {
                 // This phone's Cast receivers: playback stays this phone's (its queue, its lease), heard there.
                 val elsewhere = !self.playing && devices.any { it.playing && !it.isSelf }
@@ -181,27 +202,6 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                             modifier = Modifier.testTag("handoff.cast.${d.id}"),
                             trailing = if (connecting) ({ LoadingIndicator(Modifier.size(32.dp)) }) else null)
                     }
-                }
-            }
-            GroupLabel(stringResource(R.string.handoff_other_devices), Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
-            if (targets.isEmpty()) {
-                Segment(0, 1) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(stringResource(R.string.empty_devices_title), style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(R.string.empty_devices_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            } else SegmentedGroup {
-                targets.forEachIndexed { i, d ->
-                    val renderer = transport.renderer?.takeIf { d.playing && transport.lease.owner == d.id }
-                    val state = when { renderer != null -> stringResource(R.string.handoff_playing_on, renderer); d.playing -> stringResource(R.string.handoff_playing); d.ready -> stringResource(R.string.handoff_ready); else -> stringResource(R.string.handoff_preparing) }
-                    DeviceRow(i, targets.size, d.name, state, deviceRowIcon(d.platform), d.playing,
-                        onClick = { client.dispatch(Commands.handoffTo(d.id)); onDismiss() }, modifier = Modifier.testTag("handoff.device.${d.id}"),
-                        trailing = when {
-                            d.playing -> null
-                            !d.ready -> ({ LoadingIndicator(Modifier.size(32.dp)) })
-                            else -> ({ Text(stringResource(R.string.handoff_last_seen, formatAgoPhrase(d.lastSeen)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) })
-                        })
                 }
             }
         }
