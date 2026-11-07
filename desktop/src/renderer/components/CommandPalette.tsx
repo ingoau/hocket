@@ -1,5 +1,5 @@
 // Ctrl/Cmd+K: library results and actions in one list, results first.
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActionDescriptor, ActionTarget, SearchResults } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -45,7 +45,9 @@ export function CommandPalette() {
   const { value: shown, closing, motion, exitProps } = usePresence<true, HTMLDivElement>(open || undefined);
   useReturnFocus(open);
 
-  useEffect(() => {
+  // A layout effect, so the reset lands before the palette is painted: a passive effect can run
+  // after the first keys typed into the freshly shown input and wipe them.
+  useLayoutEffect(() => {
     if (!open) return;
     setQuery("");
     setActive(0);

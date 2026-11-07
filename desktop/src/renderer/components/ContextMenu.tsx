@@ -8,8 +8,9 @@
 // and the stars, Home/End jump, Enter/Space run, → (or Enter) opens the submenu, a letter jumps to
 // the next item starting with it, a shortcut shown in the menu runs on the menu's item, Escape/Tab
 // close and focus returns to whatever opened it. The mouse's back button leaves the submenu, else
-// closes the menu. A submenu slides out from the menu's edge on the side it opens, and back in when
-// it closes; the pointer can cross other rows on its way to it without losing it.
+// closes the menu. A submenu opens beside the menu's edge, on whichever side it fits; the pointer
+// can cross other rows on its way to it without losing it. Like a native desktop menu, the menu and
+// its submenus appear and go at once, with no motion (menus.css).
 // Pointer: like a native menu, the right button can be held, dragged onto an item and released to
 // run it; released where it was pressed, the menu stays open for a click.
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
@@ -131,7 +132,7 @@ export function ContextMenu() {
   const platform = useApp((s) => s.meta?.platform ?? "linux");
   const keymap = useKeymap();
   const ref = useRef<HTMLDivElement>(null);
-  // The closed menu stays mounted, inert, while its exit plays. Everything
+  // The menu has no exit animation (menus.css), so a closed one unmounts at once. Everything
   // below that positions, focuses or listens is keyed on the live state.
   const { value: menu, motion, exitProps } = usePresence(live, ref);
   const [pos, setPos] = useState({ x: 0, y: 0 });
@@ -144,8 +145,8 @@ export function ContextMenu() {
   const opens = useRef(0);
   const subOpen = useRef(false);
   subOpen.current = !!sub;
-  // The submenu slides out on its own when it closes back to the menu (and with the menu when that
-  // closes); a hover onto another submenu's row swaps it at once.
+  // The submenu goes on its own when it closes back to the menu, and with the menu when that closes;
+  // a hover onto another submenu's row swaps it.
   // Once the menu is gone, so is the submenu, at once: nothing of it is left to show at the next open.
   const subPresence = usePresence<typeof sub, HTMLDivElement>(sub, undefined, { instant: !menu });
   const shownSub = subPresence.value;
@@ -168,7 +169,7 @@ export function ContextMenu() {
 
   useLayoutEffect(() => {
     if (!live || !ref.current) return;
-    // Layout size, not getBoundingClientRect(): the menu opens scaled down by its entrance animation.
+    // Layout size, not getBoundingClientRect(): placement ignores any transform on the menu.
     const r = { width: ref.current.offsetWidth, height: ref.current.offsetHeight };
     const x = Math.min(live.x, window.innerWidth - r.width - 6);
     const y = Math.min(live.y, window.innerHeight - r.height - 6);
