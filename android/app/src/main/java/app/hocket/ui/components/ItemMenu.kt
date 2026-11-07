@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -122,6 +123,7 @@ import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.QueryResult
+import app.hocket.core.api.SleepTimer
 import app.hocket.share.ShareActions
 import app.hocket.share.ShareChoice
 import app.hocket.share.ShareRequest
@@ -314,8 +316,10 @@ fun connectedShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 6.dp):
  * the star row for songs, a short connected list ending in "More"), and grows to the rest when More,
  * the handle or an upward drag asks; "Show less" shrinks it again. Toggles (love, rating, download,
  * pin) apply in place; every other row closes the sheet with its hide animation, its action or
- * navigation starting at once behind it. [onRan] follows any action that ran (a selection clears).
- * [extraTop] sits under the header (a Library pin's controls). Tags: `[tag]`, `[tag].header`,
+ * navigation starting at once behind it. Add to playlist, Share, Snooze and (a context's extras,
+ * [SongMenuExtra.page]) the player's sleep timer open as sub-pages of the sheet instead, back or
+ * Done bringing the menu back or closing it. [onRan] follows any action that ran (a selection
+ * clears). [extraTop] sits under the header (a Library pin's controls). Tags: `[tag]`, `[tag].header`,
  * `[tag].action.<id>`, `[tag].download`, `[tag].pin`, `[tag].info`, `[tag].more`, `rating`.
  */
 @Composable
@@ -324,7 +328,6 @@ fun MenuSheet(
     target: ActionTarget,
     actions: List<ActionDescriptor>,
     onDismiss: () -> Unit,
-    onAddToPlaylist: () -> Unit,
     extras: List<SongMenuExtra> = emptyList(),
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: (() -> Unit)? = null,
@@ -344,6 +347,8 @@ fun MenuSheet(
     val snoozeItems by client.snoozes.collectAsStateWithLifecycle()
     val snoozed = subject.trackId?.let { id -> snoozeItems.any { it.trackId == id } }
     val snoozeUntil = subject.trackId?.let { id -> snoozeItems.firstOrNull { it.trackId == id }?.until }
+    // The sleep timer (the player's extra row and its sub-page; nothing else on the menu sees it).
+    val sleepTimer by client.sleepTimer.collectAsStateWithLifecycle()
     val sheetState = rememberPulledSheetState(pull)
     val scope = rememberCoroutineScope()
     /** Hides the sheet, then runs [after] (which may open what follows) and reports it gone. */
@@ -428,7 +433,8 @@ fun MenuSheet(
 
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                 val height = restHeight[0]
-                if (source != NestedScrollSource.UserInput || !canExpandNow || height <= 0) return Offset.Zero
+                // A sub-page has no rest to open and the menu is not on view: drags there are the page's own.
+                if (source != NestedScrollSource.UserInput || page != MenuPage.Main || !canExpandNow || height <= 0) return Offset.Zero
                 val at = shown()
                 val dy = available.y
                 if (!((dy < 0f && at < 1f) || (dy > 0f && at > 0f))) return Offset.Zero
@@ -480,7 +486,7 @@ fun MenuSheet(
                     trailing = if (a.id == ActionIds.ADD_TO_PLAYLIST || a.id == ActionIds.SNOOZE) { { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) } } else null,
                 ) {
                     when (a.id) {
-                        ActionIds.ADD_TO_PLAYLIST -> hideThen(onAddToPlaylist)
+                        ActionIds.ADD_TO_PLAYLIST -> goTo(MenuPage.Playlist)
                         ActionIds.SNOOZE -> goTo(MenuPage.Snooze)
                         else -> runAndClose(a)
                     }
@@ -530,7 +536,9 @@ fun MenuSheet(
             MenuEntry.Genius -> MenuRow(AnnotatedString(stringResource(R.string.menu_open_genius)), HocketIcons.Filled.Lyrics, shape, tag = "$tag.genius") { hideThen { ShareActions.openGenius(context, subject) } }
             is MenuEntry.Extra -> {
                 val e = entry.extra
-                MenuRow(AnnotatedString(e.label), e.icon, shape, supporting = e.supporting, destructive = e.destructive, highlighted = e.highlighted, tag = e.testTag) { hideThen(e.onClick) }
+                MenuRow(AnnotatedString(e.label), e.icon, shape, supporting = e.supporting, destructive = e.destructive, highlighted = e.highlighted, tag = e.testTag) {
+                    if (e.page != null) goTo(e.page) else hideThen { e.onClick?.invoke() }
+                }
             }
         }
     }
@@ -549,7 +557,7 @@ fun MenuSheet(
         // the rest, cancelling slides the sub-page back. A back key (no gesture) just goes.
         // Back during a slide in already goes back; once back is let go the page is the menu, so a
         // second back (even mid-slide) is the sheet's own and closes it.
-        PredictiveBackHandler(enabled = page == MenuPage.Share || page == MenuPage.Snooze) { events ->
+        PredictiveBackHandler(enabled = page != MenuPage.Main && page != MenuPage.Sharing) { events ->
             val from = page
             try {
                 events.collect { e ->
@@ -596,6 +604,10 @@ fun MenuSheet(
                     val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
                     if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
                 }
+            }
+            MenuPage.Playlist -> PlaylistMenuPage(tag, target, onBack = { goTo(MenuPage.Main) }, onClose = { hideThen(onRan) })
+            MenuPage.Sleep -> SleepMenuPage(tag, sleepTimer, onBack = { goTo(MenuPage.Main) }) { timer ->
+                hideThen { client.dispatch(Commands.setSleepTimer(timer)) }
             }
             MenuPage.Main -> Column {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
@@ -660,8 +672,8 @@ fun MenuSheet(
     }
 }
 
-/** What the sheet shows under its header: the menu, or one of its sub-pages. */
-private enum class MenuPage { Main, Share, Snooze, Sharing }
+/** What the sheet shows under its header: the menu, or one of its sub-pages. Public for [SongMenuExtra.page]. */
+enum class MenuPage { Main, Share, Snooze, Sharing, Playlist, Sleep }
 
 /** Material's predictive back easing: the gesture's progress as the sheet follows it. */
 private val PredictiveBackEasing = CubicBezierEasing(0.1f, 0.1f, 0f, 1f)
@@ -946,20 +958,63 @@ private fun SharePage(choices: app.hocket.share.ShareChoices, tag: String, onCho
 }
 
 /**
- * A sub-page of the menu (Share, Snooze): a back arrow and the row's name as its title, then its
- * own connected list. Tags: `[tag].back`, `[tag].title`.
+ * The sleep timer as a sub-page: each duration (a check on the one running), end of track and, when
+ * one is set, Stop. A choice sets (or, on Stop, clears) the timer and closes the menu — like Snooze,
+ * the countdown keeps showing on the row that opened the sub-page. A timer with no end and not
+ * stop-at-end-of-track is "stop now". Tags: `[tag].sleep`.
  */
 @Composable
-private fun SubPage(title: String, tag: String, onBack: () -> Unit, rows: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun SleepMenuPage(tag: String, timer: SleepTimer?, onBack: () -> Unit, onChoose: (SleepTimer) -> Unit) {
+    val minutes = listOf(15, 30, 45, 60, 90)
+    // The clock is read as the page renders, not remembered from the open: the check keeps up with a
+    // page that idles, and each row sets its timer from the moment of the tap.
+    val remaining = timer?.endsAt?.let { it - System.currentTimeMillis().toDouble() }
+    val activeMinutes = if (timer?.stopAtEndOfTrack == true || remaining == null) null else minutes.firstOrNull { it * 60_000.0 >= remaining }
+    val check: @Composable () -> Unit = { Icon(HocketIcons.Filled.Check, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary) }
+    val rows = minutes.size + 1 + if (timer == null) 0 else 1
+    SubPage(stringResource(R.string.sleep_title), "$tag.sleep", onBack) {
+        minutes.forEachIndexed { i, m ->
+            MenuRow(AnnotatedString(stringResource(R.string.sleep_minutes, m)), HocketIcons.Filled.Bedtime, connectedShape(i, rows), tag = "$tag.sleep.$m",
+                trailing = if (activeMinutes == m) { { check() } } else null,
+            ) { onChoose(SleepTimer(System.currentTimeMillis().toDouble() + m * 60_000.0, false)) }
+        }
+        MenuRow(AnnotatedString(stringResource(R.string.sleep_end_of_track)), HocketIcons.Filled.MusicNote, connectedShape(minutes.size, rows), tag = "$tag.sleep.endOfTrack",
+            trailing = if (timer?.stopAtEndOfTrack == true) { { check() } } else null,
+        ) { onChoose(SleepTimer(null, true)) }
+        if (timer != null) MenuRow(AnnotatedString(stringResource(R.string.sleep_stop)), HocketIcons.Filled.Stop, connectedShape(minutes.size + 1, rows),
+            destructive = true, tag = "$tag.sleep.stop") { onChoose(SleepTimer(null, false)) }
+    }
+}
+
+/**
+ * Add to playlist as a sub-page: the picker sheet's own content ([PlaylistPickerBody], its headline
+ * given way for the sub-page header, its list capped so the sheet stays menu-sized). Back returns
+ * to the menu; Done or a created playlist closes it.
+ */
+@Composable
+private fun PlaylistMenuPage(tag: String, target: ActionTarget, onBack: () -> Unit, onClose: () -> Unit) {
+    SubPage(stringResource(R.string.action_add_to_playlist), "$tag.picker", onBack, horizontal = 0.dp) {
+        PlaylistPickerBody(target, onClose, modifier = Modifier.imePadding(), listHeight = 420.dp, navigationBarPad = false)
+    }
+}
+
+/**
+ * A sub-page of the menu (Share, Snooze): a back arrow and the row's name as its title, then its
+ * own connected list. [horizontal] insets the list (the header keeps the usual inset): the add to
+ * playlist page passes 0 to hold the picker, which indents itself like it does on its own sheet.
+ * Tags: `[tag].back`, `[tag].title`.
+ */
+@Composable
+private fun SubPage(title: String, tag: String, onBack: () -> Unit, horizontal: Dp = 16.dp, rows: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp).testTag("$tag.back")) {
                 Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
             Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(start = 8.dp).semantics { heading() }.testTag("$tag.title"))
         }
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) { rows() }
+        Column(Modifier.fillMaxWidth().padding(start = horizontal, end = horizontal), verticalArrangement = Arrangement.spacedBy(2.dp)) { rows() }
     }
 }
 
