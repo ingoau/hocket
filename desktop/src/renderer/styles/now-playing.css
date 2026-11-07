@@ -148,7 +148,7 @@
 .np-volume-pop { transform-origin: 90% 100%; flex-wrap: wrap; row-gap: 2px; }
 /* Another device plays: the popover names it. */
 .np-volume-device { flex-basis: 100%; padding: 2px 8px 0; font-size: 12px; color: rgba(255, 255, 255, 0.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.np-volume-pop.fade-in { animation: menu-in var(--dur-spring) var(--spring-fast); }
+.np-volume-pop.fade-in { animation: menu-in var(--dur-short) var(--ease-emphasized-decel); }
 .np-volume-pop.closing { animation: menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 
 /* Views */

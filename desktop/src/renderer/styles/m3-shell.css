@@ -82,7 +82,7 @@
   top: calc(100% + 6px); left: 0; right: 0; width: auto; border: 0; border-radius: var(--shape-md) var(--shape-md) var(--pane-radius) var(--pane-radius);
   box-shadow: var(--shadow-2), var(--shadow); padding: 8px; transform-origin: top center;
 }
-.search-popover.fade-in { animation: sheet-drop var(--dur-spring) var(--spring-fast); }
+.search-popover.fade-in { animation: sheet-drop var(--dur-short) var(--ease-emphasized-decel); }
 @keyframes sheet-drop { from { opacity: 0; transform: translateY(-6px) scaleY(0.9); } to { opacity: 1; transform: none; } }
 .search-popover.closing { animation: sheet-lift var(--dur-short) var(--ease-emphasized-accel) forwards; }
 @keyframes sheet-lift { to { opacity: 0; transform: translateY(-6px) scaleY(0.9); } }
@@ -309,7 +309,7 @@
 }
 .lyrics-options-pop.below { transform-origin: top right; }
 .lyrics-options-pop.above { transform-origin: bottom right; }
-.lyrics-options-pop.fade-in { animation: menu-in var(--dur-spring) var(--spring-fast); }
+.lyrics-options-pop.fade-in { animation: menu-in var(--dur-short) var(--ease-emphasized-decel); }
 .lyrics-options-pop.closing { animation: menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 .lo-head { padding: 0 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
 .lo-title { font-weight: 800; }
@@ -362,7 +362,7 @@
   position: fixed; z-index: 90; overflow-y: auto; padding: 8px; border-radius: var(--shape-lg); background: var(--surface-tonal); color: var(--fg);
   box-shadow: var(--shadow-2), var(--shadow); transform-origin: top left;
 }
-.qs-popover.fade-in { animation: menu-in var(--dur-spring) var(--spring-fast); }
+.qs-popover.fade-in { animation: menu-in var(--dur-short) var(--ease-emphasized-decel); }
 .qs-popover.closing { animation: menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 .qs-current { display: flex; align-items: center; gap: 12px; padding: 8px 12px 10px; color: var(--accent-text); }
 .qs-current .qs-name { color: var(--fg); }
@@ -419,7 +419,7 @@
 
 /* ---- Menus -------------------------------------------------------------- */
 .menu { border: 0; border-radius: var(--shape-lg); padding: 8px; min-width: 220px; box-shadow: var(--shadow-2), var(--shadow); max-height: calc(100vh - 12px); overflow-y: auto; }
-.menu.fade-in { animation: menu-in var(--dur-spring) var(--spring-fast); }
+.menu.fade-in { animation: menu-in var(--dur-short) var(--ease-emphasized-decel); }
 @keyframes menu-in { from { opacity: 0; transform: scale(0.9, 0.8); } to { opacity: 1; transform: none; } }
 .menu.closing { animation: menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 @keyframes menu-out { to { opacity: 0; transform: scale(0.95, 0.9); } }

@@ -1,6 +1,6 @@
 // A context menu's list submenu (Share, Snooze): beside the menu, one row per choice, each closing
 // the menu and running. The Add to playlist submenu (PlaylistSubmenu) has its own search and rows
-// but places, animates and goes back the same way.
+// but places and goes back the same way.
 //
 // Keyboard: ↑↓ move (wrapping), Home/End jump, a letter jumps to the next row starting with it,
 // Enter/Space run, ← or Escape go back to the menu, Tab closes both. The mouse's back button goes
@@ -40,7 +40,7 @@ export function useFlyoutPlace(ref: React.RefObject<HTMLElement | null>, anchor:
   const [place, setPlace] = useState<FlyoutPlace | undefined>(undefined);
   useLayoutEffect(() => {
     if (!ready || place || !ref.current) return;
-    // Layout size, not getBoundingClientRect(): the entrance animation scales it.
+    // Layout size, not getBoundingClientRect(): placement ignores any transform on it.
     setPlace(placeFlyout(anchor, ref.current.offsetWidth, ref.current.offsetHeight, window.innerWidth, window.innerHeight));
   }, [ready, place, anchor, ref]);
   return place;

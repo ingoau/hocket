@@ -38,7 +38,7 @@ interface Props {
   onBack: () => void;
   /** Close the menu and the submenu, then run [then] (opening a dialog, say). */
   onClose: (then?: () => void) => void;
-  /** On its own, the picker carries its own exit animation (lib/presence). */
+  /** On its own, the picker carries its own presence (lib/presence). */
   exitProps?: ExitProps<HTMLDivElement>;
 }
 

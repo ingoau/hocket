@@ -670,7 +670,7 @@ button.qrow { width: 100%; }
 /* Menus: a tonal, generously rounded surface; the highlighted item is an
    opaque tonal pill (--state-selected), never a tint stacked on the tint. */
 .menu { position: fixed; z-index: 100; min-width: 200px; max-width: 320px; background: var(--surface-tonal); border: 1px solid var(--border); border-radius: var(--shape-md); box-shadow: var(--shadow); padding: 6px; transform-origin: top left; }
-.menu.fade-in { animation: pop-in var(--dur-spring) var(--spring-fast); }
+.menu.fade-in { animation: pop-in var(--dur-short) var(--ease-emphasized-decel); }
 .menu .mi { display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 10px; border-radius: var(--shape-sm); color: var(--fg); white-space: nowrap; }
 .menu .mi:hover, .menu .mi.active { background: var(--state-selected); color: var(--fg); }
 .menu .mi.disabled { color: var(--fg-faint); pointer-events: none; }
@@ -860,7 +860,7 @@ button.qrow { width: 100%; }
    from the first frame: its inert follows the store, not this animation). */
 .fullscreen.closing { animation: fade-out var(--dur-exit) var(--ease-emphasized-accel) forwards; }
 @keyframes fade-out { to { opacity: 0; transform: translateY(6px); } }
-.popover.fade-in, .search-popover.fade-in { animation: pop-in var(--dur-spring) var(--spring-fast); }
+.popover.fade-in, .search-popover.fade-in { animation: pop-in var(--dur-short) var(--ease-emphasized-decel); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   /* No spatial feedback either: hover lifts and press squeezes become plain colour changes. */
