@@ -247,7 +247,8 @@ private fun ServerSummary(server: ServerInfo, sync: app.hocket.core.api.SyncProg
     val caps = server.capabilities
     val host = server.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
     Column(Modifier.fillMaxWidth().widthIn(max = 480.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(stringResource(R.string.setup_caps_version, caps.serverVersion ?: "?"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold,
+        // The headline keeps to the release ("0.64.0"); a build hash ("(1072e9f7)") only wrapped it onto a second line.
+        Text(stringResource(R.string.setup_caps_version, caps.serverVersion?.substringBefore(" (") ?: "?"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold,
             color = if (caps.meetsFloor) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
         Text(stringResource(R.string.setup_who, server.username, host), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
         if (!caps.meetsFloor) {

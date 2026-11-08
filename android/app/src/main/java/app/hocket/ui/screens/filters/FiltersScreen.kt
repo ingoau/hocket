@@ -87,7 +87,7 @@ fun FiltersScreen(nav: NavHostController) {
             return@Scaffold
         }
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = maxWidthListPadding(maxWidth, padding.calculateTopPadding(), BottomContentInset)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = maxWidthListPadding(maxWidth, padding.calculateTopPadding(), BottomContentInset + FabRoom)) {
                 itemsIndexed(filters, key = { _, f -> f.id }) { i, f ->
                     val local = preview(f)
                     SegmentedListItem(
@@ -130,3 +130,6 @@ private fun uses(node: app.hocket.core.api.FilterNode, test: (app.hocket.core.ap
     is app.hocket.core.api.FilterNode.All -> node.data.any { uses(it, test) }
     is app.hocket.core.api.FilterNode.Any -> node.data.any { uses(it, test) }
 }
+
+/** Room under the last filter for the "New filter" button (a medium extended FAB is 80dp), so it never covers a row's play and menu buttons. */
+private val FabRoom = 80.dp

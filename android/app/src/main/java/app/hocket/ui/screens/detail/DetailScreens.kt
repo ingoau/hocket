@@ -353,9 +353,10 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
                 list?.let { pluralStringResource(R.plurals.album_tracks_count, it.size, it.size, formatDurationWords(it.sumOf { t -> t.durationMs.toLong() })) },
                 a.year?.takeIf { it > 0u }?.let { stringResource(R.string.album_released, it.toInt()) },
                 a.created?.let { stringResource(R.string.album_added, date.format(java.util.Date(it.toLong()))) },
-                pluralStringResource(R.plurals.album_plays, a.playCount.toInt(), a.playCount.toInt()),
+                a.playCount.takeIf { it > 0u }?.let { pluralStringResource(R.plurals.album_plays, it.toInt(), it.toInt()) },
             )
-            Text(facts.joinToString(dot), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.contentMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp))
+            // Non-breaking spaces inside each fact so a narrow screen wraps between facts, never strands "plays" on its own line.
+            Text(facts.joinToString(dot) { it.replace(' ', '\u00A0') }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.contentMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp))
         }
         if (more.isNotEmpty() && a.artistId != null) {
             item(key = "h.more") {
@@ -365,7 +366,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
             }
             item(key = "more") {
                 ReleaseShelf(more, onOpen = { nav.navigate(Route.Album(it.id)) }, onPlay = { m -> client.dispatch(Commands.playContext(Commands.albumContext(m.serverId, m.id, m.name))) }, modifier = Modifier.padding(top = 4.dp)) { m ->
-                    listOfNotNull(m.year?.takeIf { it > 0u }?.toString(), stringResource(R.string.saved_tracks, m.songCount.toInt())).joinToString(dot)
+                    listOfNotNull(m.year?.takeIf { it > 0u }?.toString(), pluralStringResource(R.plurals.saved_tracks, m.songCount.toInt(), m.songCount.toInt())).joinToString(dot)
                 }
             }
         }
@@ -499,7 +500,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     androidx.activity.compose.BackHandler(enabled = view != null) { view = null }
     val openAlbum = { al: Album -> nav.navigate(Route.Album(al.id)) }
     val playAlbum = { al: Album -> client.dispatch(Commands.playContext(Commands.albumContext(al.serverId, al.id, al.name))) }
-    val releaseMeta = @Composable { al: Album -> listOfNotNull(al.year?.takeIf { it > 0u }?.toString(), stringResource(R.string.saved_tracks, al.songCount.toInt())).joinToString(dot) }
+    val releaseMeta = @Composable { al: Album -> listOfNotNull(al.year?.takeIf { it > 0u }?.toString(), pluralStringResource(R.plurals.saved_tracks, al.songCount.toInt(), al.songCount.toInt())).joinToString(dot) }
     // Featured on names whose album it is.
     val featuredMeta = { al: Album -> listOfNotNull(al.artist, al.year?.takeIf { it > 0u }?.toString()).joinToString(dot) }
     val playTop = { i: Int -> top?.let { list -> client.dispatch(Commands.playTracks(list[i].serverId, list.map { it.id }, i, ar.name)) } }
@@ -534,7 +535,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
         }
         null -> DetailScaffold(nav, embedded, ar.name, ar.coverArt, roundArtwork = true, shareKey = shareKey,
             barActions = { DetailLoveButton(ar.loved, onToggle = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) },
-            below = { HeroLine(counts.ifEmpty { if (ar.albumCount == 0u && ar.songCount > 0u) stringResource(R.string.saved_tracks, ar.songCount.toInt()) else stringResource(R.string.library_count_albums, ar.albumCount.toInt()) }, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall) },
+            below = { HeroLine(counts.ifEmpty { if (ar.albumCount == 0u && ar.songCount > 0u) pluralStringResource(R.plurals.saved_tracks, ar.songCount.toInt(), ar.songCount.toInt()) else pluralStringResource(R.plurals.library_count_albums, ar.albumCount.toInt(), ar.albumCount.toInt()) }, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall) },
             heroActions = {
                 HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
                 HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })
@@ -870,7 +871,7 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
         DetailBarButton(if (pinned) HocketIcons.Filled.PushPin else HocketIcons.Outlined.PushPin, stringResource(if (pinned) R.string.library_pin_remove else R.string.library_pin_add),
             onClick = { app.hocket.ui.screens.library.LibraryPins.toggle(client, app.hocket.ui.screens.library.PinKind.Genre, name) }, enabled = pinned || app.hocket.ui.screens.library.LibraryPins.canPin(allPins), modifier = Modifier.testTag("genre.pin"))
     }, below = {
-        tr?.let { HeroLine(stringResource(R.string.library_count_songs, it.size), Modifier.padding(top = 8.dp)) }
+        tr?.let { HeroLine(pluralStringResource(R.plurals.library_count_songs, it.size, it.size), Modifier.padding(top = 8.dp)) }
     }, heroActions = {
         HeroPlayButton(onClick = { client.dispatch(Commands.playContext(context)) })
         HeroShuffleButton(onClick = { client.dispatch(Commands.playContext(context, shuffle = true)) })

@@ -79,6 +79,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -283,7 +284,7 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
                 Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = app.hocket.ui.nav.BottomOverlayInset + 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     val p = preview
                     Column(Modifier.padding(horizontal = 4.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
-                        Text(stringResource(R.string.filter_count, p?.count?.toInt() ?: 0), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        Text(pluralStringResource(R.plurals.filter_count, p?.count?.toInt() ?: 0, p?.count?.toInt() ?: 0), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                         val cap = p?.capability
                         if (cap != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Icon(if (cap.serverExpressible) HocketIcons.Filled.Check else HocketIcons.Filled.Info, null, Modifier.size(16.dp), tint = if (cap.serverExpressible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
