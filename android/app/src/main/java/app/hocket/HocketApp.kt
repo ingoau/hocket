@@ -73,6 +73,9 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         // Bound only while UI is visible (never from here): an idle service can then stop, and the
         // process can go after the task is removed. Media3 keeps it alive while playing.
         ProcessLifecycleOwner.get().lifecycle.addObserver(ForegroundBinder(connection))
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
+            override fun onStop(owner: androidx.lifecycle.LifecycleOwner) = HocketBackupAgent.dataChanged(this@HocketApp)
+        })
         scope.launch(Dispatchers.Default) { prefs.shortcuts.distinctUntilChanged().collect { AppShortcuts.publish(this@HocketApp, it) } }
         followReportUploads()
     }

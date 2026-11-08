@@ -356,7 +356,7 @@ object CoreHost {
 
     /**
      * A stable per-install id, generated once and persisted in a prefs file that is excluded from
-     * backup and device transfer (`backup_rules.xml`), so a restored install gets a fresh id and two
+     * backup and device transfer (`HocketBackupAgent`'s `BackupSet`, `backup_rules.xml`), so a restored install gets a fresh id and two
      * devices never share one in Connect leases and elections.
      */
     fun deviceId(context: Context): String {
