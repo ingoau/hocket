@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
-    <!-- Same exclusions for cloud backup and device-to-device transfer; see backup_rules.xml. Cloud
-         backup is key/value through HocketBackupAgent, so these apply only if a full-data backup runs. -->
+    <!-- Same exclusions for cloud backup and device-to-device transfer; see backup_rules.xml. Both are
+         key/value through HocketBackupAgent now, so these apply only if the app goes back to full backups. -->
     <cloud-backup>
         <exclude domain="file" path="hocket/cache" />
         <exclude domain="file" path="hocket/downloads" />

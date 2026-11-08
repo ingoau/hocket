@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Only full-data backups read this (adb backup, device transfer before Android 12): cloud
-         backup is key/value through HocketBackupAgent, which names what it carries (BackupSet), because
-         Auto Backup kills the process afterwards, mid-playback. The exclusions stay for those paths.
+    <!-- Only a full-data backup reads this, and with HocketBackupAgent declared (no fullBackupOnly)
+         none runs: cloud backup and device transfer are key/value and carry only BackupSet, because Auto
+         Backup kills the process afterwards, mid-playback. The exclusions stay as a guard in case it
+         ever goes back to full backups.
          Backed up: app-only preferences (DataStore). Excluded: the library mirror (a cache, and
          large enough to blow the auto-backup quota and lose everything else), its backups, the
          downloads and stream cache, the device id (must be unique per install: Connect leases and

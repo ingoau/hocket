@@ -45,5 +45,5 @@ object BackupSet {
     val sharedPrefs = listOf("hocket.shell", "hocket-list-sort", "hocket-recent-searches", "hocket-permissions", "pebble")
 
     /** Paths under `filesDir`: the app's DataStore preferences (`AppPrefs.kt`). */
-    val files = listOf("datastore/hocket-app.preferences_pb")
+    val files = listOf("datastore/$APP_PREFS_DATASTORE.preferences_pb")
 }

@@ -19,7 +19,10 @@ import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "hocket-app")
+/** The app preferences' DataStore name; [BackupSet] backs up its file. */
+internal const val APP_PREFS_DATASTORE = "hocket-app"
+
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = APP_PREFS_DATASTORE)
 
 /** Where the bottom bar's items are kept: ordered ids, empty = the default bar. */
 interface NavBarPrefs {
