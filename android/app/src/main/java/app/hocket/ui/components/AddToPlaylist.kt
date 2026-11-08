@@ -143,13 +143,12 @@ fun PlaylistPicker(target: ActionTarget, onDismiss: () -> Unit) {
 
 /**
  * The add to playlist picker's content ([PlaylistPicker]'s, and the song menu's sub-page's): what
- * Done applies then goes away through [onClose]. [listHeight] caps the list (a sub-menu scrolls in
- * place); with null it takes the column's remaining height (the full-height sheet). [navigationBarPad]
+ * Done applies then goes away through [onClose]. [listHeight] fixes the list's height (a sub-menu
+ * scrolls in place, and stays one size whether loading or holding a few playlists or many); with null it takes the column's remaining height (the full-height sheet). [navigationBarPad]
  * adds the navigation bars' padding to the summary bar (the menu's column already carries it).
  * [title] replaces the sheet's "Add to playlist" headline; a sub-menu passes none, its header
  * gives the title. [showSubject] shows what is being added under the headline (a sub-menu's own
- * header already does). With [listHeight], the list holds that height while it loads, so the
- * sheet doesn't grow when the playlists arrive. Tags: `picker.*` (the same either way).
+ * header already does). Tags: `picker.*` (the same either way).
  */
 @Composable
 fun PlaylistPickerBody(
@@ -230,7 +229,7 @@ fun PlaylistPickerBody(
             colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = menuRowColor(), unfocusedContainerColor = menuRowColor(), unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 10.dp).testTag("picker.search"),
         )
-        Box(Modifier.fillMaxWidth().let { if (listHeight == null) it.weight(1f) else if (edits == null) it.height(listHeight) else it.heightIn(max = listHeight) }) {
+        Box(Modifier.fillMaxWidth().let { if (listHeight == null) it.weight(1f) else it.height(listHeight) }) {
             val d = data
             val e = edits
             if (d == null || e == null) {
