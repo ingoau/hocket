@@ -536,7 +536,9 @@ fun MenuSheet(
             MenuEntry.Genius -> MenuRow(AnnotatedString(stringResource(R.string.menu_open_genius)), HocketIcons.Filled.Lyrics, shape, tag = "$tag.genius") { hideThen { ShareActions.openGenius(context, subject) } }
             is MenuEntry.Extra -> {
                 val e = entry.extra
-                MenuRow(AnnotatedString(e.label), e.icon, shape, supporting = e.supporting, destructive = e.destructive, highlighted = e.highlighted, tag = e.testTag) {
+                MenuRow(AnnotatedString(e.label), e.icon, shape, supporting = e.supporting, destructive = e.destructive, highlighted = e.highlighted, tag = e.testTag,
+                    trailing = if (e.page != null) { { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) } } else null,
+                ) {
                     if (e.page != null) goTo(e.page) else hideThen { e.onClick?.invoke() }
                 }
             }
@@ -988,13 +990,14 @@ private fun SleepMenuPage(tag: String, timer: SleepTimer?, onBack: () -> Unit, o
 
 /**
  * Add to playlist as a sub-page: the picker sheet's own content ([PlaylistPickerBody], its headline
- * given way for the sub-page header, its list capped so the sheet stays menu-sized). Back returns
+ * given way for the sub-page header, and its subject line too: the menu's header already names the
+ * song; its list one fixed height so the sheet stays menu-sized and still). Back returns
  * to the menu; Done or a created playlist closes it.
  */
 @Composable
 private fun PlaylistMenuPage(tag: String, target: ActionTarget, onBack: () -> Unit, onClose: () -> Unit) {
     SubPage(stringResource(R.string.action_add_to_playlist), "$tag.picker", onBack, horizontal = 0.dp) {
-        PlaylistPickerBody(target, onClose, modifier = Modifier.imePadding(), listHeight = 420.dp, navigationBarPad = false)
+        PlaylistPickerBody(target, onClose, modifier = Modifier.imePadding(), listHeight = 420.dp, navigationBarPad = false, showSubject = false)
     }
 }
 
