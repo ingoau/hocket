@@ -21,7 +21,7 @@ class CastKindTest {
         assertEquals(Kind.Chromecast, kind("Chromecast", video = true))
         assertEquals(Kind.Chromecast, kind("Chromecast Audio"))
         assertEquals(Kind.Chromecast, kind("Chromecast Ultra", video = true))
-        assertEquals(Kind.ChromecastGoogleTv, kind("Chromecast with Google TV", video = true))
+        assertEquals(Kind.ChromecastGoogleTv, kind("Chromecast HD", video = true))
         assertEquals(Kind.ChromecastGoogleTv, kind("Google TV Streamer", video = true))
         assertEquals(Kind.WifiPoint, kind("Google Nest Wifi point"))
     }

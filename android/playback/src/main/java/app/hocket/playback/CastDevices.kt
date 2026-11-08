@@ -49,7 +49,8 @@ object CastDevices {
                     "nest audio" in m -> NestAudio
                     "home max" in m -> HomeMax
                     "wifi point" in m || "wi-fi point" in m -> WifiPoint
-                    "google tv streamer" in m || ("chromecast" in m && "google tv" in m) -> ChromecastGoogleTv
+                    // The 4K Chromecast with Google TV says just "Chromecast", like the older pucks.
+                    "google tv" in m || "chromecast hd" in m -> ChromecastGoogleTv
                     "chromecast" in m -> Chromecast
                     video -> Tv
                     audio -> Speaker
