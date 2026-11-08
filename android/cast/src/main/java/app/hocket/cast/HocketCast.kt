@@ -12,6 +12,7 @@ import app.hocket.playback.PlaybackLog
 import app.hocket.playback.RendererBackend
 import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
+import com.google.android.gms.cast.CastDevice
 import com.google.android.gms.cast.CastMediaControlIntent
 import com.google.android.gms.cast.CastStatusCodes
 import com.google.android.gms.cast.framework.CastContext
@@ -203,13 +204,16 @@ object HocketCast : CastProvider {
             CastDevices.publish(
                 CastDevices.State(
                     available = true,
-                    devices = receivers.map { CastDevices.Device(it.id, it.name, it.description) },
-                    active = selected?.let { CastDevices.Device(it.id, it.name, it.description) }
-                        ?: s?.castDevice?.let { d -> CastDevices.Device(d.deviceId, d.friendlyName ?: "", null) },
+                    devices = receivers.map(::device),
+                    active = selected?.let(::device)
+                        ?: s?.castDevice?.let { d -> CastDevices.Device(d.deviceId, d.friendlyName ?: "", null, kindOf(d)) },
                     connecting = connecting,
                 ),
             )
         }
+
+        private fun device(route: MediaRouter.RouteInfo) =
+            CastDevices.Device(route.id, route.name, route.description, kindOf(CastDevice.getFromBundle(route.extras)))
 
         override fun select(id: String) {
             val route = router.routes.firstOrNull { it.id == id } ?: return
@@ -291,3 +295,13 @@ class CastOptions : OptionsProvider {
 
     override fun getAdditionalSessionProviders(context: Context): List<SessionProvider>? = null
 }
+
+/** What [device] is, from its model and capabilities; unknown when the route carries none. */
+internal fun kindOf(device: CastDevice?): CastDevices.Kind = device?.let {
+    CastDevices.Kind.of(
+        it.modelName,
+        group = it.hasCapability(CastDevice.CAPABILITY_MULTIZONE_GROUP),
+        video = it.hasCapability(CastDevice.CAPABILITY_VIDEO_OUT),
+        audio = it.hasCapability(CastDevice.CAPABILITY_AUDIO_OUT),
+    )
+} ?: CastDevices.Kind.Unknown

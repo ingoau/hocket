@@ -26,7 +26,39 @@ import kotlinx.coroutines.flow.asStateFlow
  * reads [state] and calls [select], [stop] and [scan]. Main thread only.
  */
 object CastDevices {
-    data class Device(val id: String, val name: String, val description: String? = null)
+    data class Device(val id: String, val name: String, val description: String? = null, val kind: Kind = Kind.Unknown)
+
+    /** What a receiver is, for its icon: the Google devices by model, others by what they can do. */
+    enum class Kind {
+        Group, NestMini, HomeMini, NestAudio, HomeMax, NestHub, NestHubMax, Chromecast, ChromecastGoogleTv, WifiPoint,
+        Tv, Speaker, Unknown;
+
+        companion object {
+            /**
+             * From the receiver's model name ("Google Nest Mini", "Chromecast") and capabilities: a
+             * speaker group, video out (a TV, or a display), audio out.
+             */
+            fun of(model: String?, group: Boolean, video: Boolean, audio: Boolean): Kind {
+                val m = model.orEmpty().lowercase()
+                return when {
+                    group || "cast group" in m -> Group
+                    "hub max" in m -> NestHubMax
+                    "nest hub" in m || "home hub" in m -> NestHub
+                    "nest mini" in m -> NestMini
+                    "home mini" in m -> HomeMini
+                    "nest audio" in m -> NestAudio
+                    "home max" in m -> HomeMax
+                    "wifi point" in m || "wi-fi point" in m -> WifiPoint
+                    // The 4K Chromecast with Google TV says just "Chromecast", like the older pucks.
+                    "google tv" in m || "chromecast hd" in m -> ChromecastGoogleTv
+                    "chromecast" in m -> Chromecast
+                    video -> Tv
+                    audio -> Speaker
+                    else -> Unknown
+                }
+            }
+        }
+    }
 
     data class State(
         /** A provider is installed and working (Google Play services present). */

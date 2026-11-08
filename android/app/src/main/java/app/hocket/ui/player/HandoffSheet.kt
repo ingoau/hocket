@@ -189,7 +189,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                         // Filled while this phone plays through it (not when another device took over).
                         val on = castingTo?.id == d.id && self.playing
                         val connecting = cast.connecting == d.id
-                        DeviceRow(i, cast.devices.size, d.name, if (on) stringResource(R.string.handoff_playing) else d.description, HocketIcons.Filled.Cast, on,
+                        DeviceRow(i, cast.devices.size, d.name, if (on) stringResource(R.string.handoff_playing) else d.description, castIcon(d.kind, filled = false), on,
                             onClick = {
                                 if (on) CastDevices.stop() else {
                                     // Another device plays: it comes to this phone once the session is
