@@ -224,7 +224,10 @@ fun SearchScreen(nav: NavHostController) {
             ScrollToTopOnReselect(listState)
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = maxWidthListPadding(maxWidth, bottom = BottomContentInset)) {
-                    if (kind != SearchKind.Lyrics && empty && server == null && !pendingRemote) item { EmptyState(stringResource(R.string.empty_search_none, query), stringResource(R.string.search_none_body)) }
+                    val serverEmpty = server != null && server.tracks.isEmpty() && server.albums.isEmpty() && server.artists.isEmpty()
+                    // Nothing here and nothing on the server: one clear "No results", not a lone server footnote.
+                    val nothing = kind != SearchKind.Lyrics && empty && !pendingRemote && (server == null || serverEmpty)
+                    if (nothing) item { EmptyState(stringResource(R.string.empty_search_none, query), stringResource(R.string.search_none_body)) }
                     if (show(SearchKind.Songs)) {
                         val shown = if (kind == SearchKind.All) results.tracks.take(SONG_PREVIEW) else results.tracks
                         val more = kind == SearchKind.All && results.tracks.size > SONG_PREVIEW
@@ -282,14 +285,14 @@ fun SearchScreen(nav: NavHostController) {
                         item(key = "h.playlists") { SearchSectionLabel(stringResource(R.string.search_playlists), top = 16.dp) }
                         itemsIndexed(results.playlists, key = { _, p -> "p" + p.id }) { i, p -> PlaylistRow(p, onClick = { rememberQuery(); nav.navigate(Route.Playlist(p.id)) }, segment = i to results.playlists.size, modifier = Modifier.segmentItem(i)) }
                     }
-                    if (kind != SearchKind.Lyrics) item(key = "server") {
+                    if (kind != SearchKind.Lyrics && !(nothing && serverEmpty)) item(key = "server") {
                         HorizontalDivider(Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
                         Row(Modifier.padding(horizontal = 16.dp).heightIn(min = 44.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             Text(stringResource(R.string.search_from_server), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
                             if (pendingRemote) LoadingIndicator(Modifier.size(28.dp))
                         }
                         if (pendingRemote) Text(stringResource(R.string.search_server_pending), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
-                        else if (server != null && server.tracks.isEmpty() && server.albums.isEmpty() && server.artists.isEmpty()) Text(stringResource(R.string.search_server_none), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
+                        else if (serverEmpty) Text(stringResource(R.string.search_server_none), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
                     }
                     if (kind != SearchKind.Lyrics) server?.let { r ->
                         val tracks = if (kind == SearchKind.All || kind == SearchKind.Songs) r.tracks else emptyList()

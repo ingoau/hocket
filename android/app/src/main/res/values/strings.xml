@@ -91,7 +91,7 @@
     <string name="empty_home_body">Open the Library and play something.</string>
     <string name="empty_devices_title">No other devices</string>
     <string name="empty_devices_body">Open Hocket on another device on this network or through the same coordinator.</string>
-    <string name="empty_recent_offline">Nothing to resume yet. Go online to pick up where your other devices left off.</string>
+    <string name="empty_recent_offline">Nothing to resume yet. Connect to your other devices to pick up where they left off.</string>
 
     <!-- Server setup -->
     <string name="setup_title">Connect to Navidrome</string>
@@ -133,8 +133,14 @@
     <string name="library_playlists">Playlists</string>
     <string name="library_songs">Songs</string>
     <string name="library_genres">Genres</string>
-    <string name="library_count_albums">%1$d albums</string>
-    <string name="library_count_songs">%1$d songs</string>
+    <plurals name="library_count_albums">
+        <item quantity="one">%1$d album</item>
+        <item quantity="other">%1$d albums</item>
+    </plurals>
+    <plurals name="library_count_songs">
+        <item quantity="one">%1$d song</item>
+        <item quantity="other">%1$d songs</item>
+    </plurals>
     <string name="library_count_artists">%1$d artists</string>
     <string name="sort_default">Default</string>
     <string name="sort_title">Title</string>
@@ -328,8 +334,14 @@
     <string name="handoff_last_seen">Seen %1$s</string>
     <string name="handoff_hint">Long-press the Connect button to take over playback here.</string>
     <string name="connection_local">Not connected</string>
-    <string name="connection_lan">On this network · %1$d devices</string>
-    <string name="connection_coordinator">Over the internet · %1$d devices</string>
+    <plurals name="connection_lan">
+        <item quantity="one">On this network · %1$d device</item>
+        <item quantity="other">On this network · %1$d devices</item>
+    </plurals>
+    <plurals name="connection_coordinator">
+        <item quantity="one">Over the internet · %1$d device</item>
+        <item quantity="other">Over the internet · %1$d devices</item>
+    </plurals>
 
     <!-- Queue -->
     <string name="queue_history">Played</string>
@@ -397,7 +409,10 @@
     <string name="saved_restore">Restore</string>
     <string name="saved_pin">Pin</string>
     <string name="saved_unpin">Unpin</string>
-    <string name="saved_tracks">%1$d tracks</string>
+    <plurals name="saved_tracks">
+        <item quantity="one">%1$d track</item>
+        <item quantity="other">%1$d tracks</item>
+    </plurals>
     <string name="saved_played">Played %1$s</string>
     <string name="saved_cap">Show up to %1$d recent queues</string>
 
@@ -451,6 +466,7 @@
     <!-- Downloads -->
     <string name="downloads_title">Downloads</string>
     <string name="downloads_storage">%1$s of downloads · %2$s cache · %3$s free</string>
+    <string name="downloads_storage_no_free">%1$s of downloads · %2$s cache</string>
     <string name="downloads_warn">Downloads are past your %1$s limit.</string>
     <string name="downloads_progress">%1$d of %2$d</string>
     <string name="downloads_transcoded">Transcoded</string>
@@ -570,7 +586,10 @@
     <string name="filter_value_low">From</string>
     <string name="filter_value_high">To</string>
     <string name="filter_days">Days</string>
-    <string name="filter_count">%1$d matching tracks</string>
+    <plurals name="filter_count">
+        <item quantity="one">%1$d matching track</item>
+        <item quantity="other">%1$d matching tracks</item>
+    </plurals>
     <string name="filter_server_ok">Can be a smart playlist</string>
     <string name="filter_local_only">Local only because of %1$s</string>
     <string name="filter_play">Play</string>
@@ -954,7 +973,7 @@
     <!-- Stream cache (Downloads & storage) -->
     <string name="settings_cache_usage">Stream cache</string>
     <string name="settings_cache_in_use">In use</string>
-    <string name="settings_cache_usage_body">%1$s complete · %2$s partial · of %3$s</string>
+    <string name="settings_cache_usage_body">%1$s complete · %2$s partial · %3$s limit</string>
     <string name="settings_cache_budget">Cache size</string>
     <string name="settings_cache_budget_auto">Automatic (currently %1$s)</string>
     <string name="settings_cache_budget_auto_short">Automatic</string>

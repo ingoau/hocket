@@ -86,6 +86,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import app.hocket.ui.components.adaptiveColumns
 import app.hocket.ui.components.contentMaxWidth
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -549,10 +550,10 @@ private data class CellText(val title: String, val subtitle: String)
 @Composable
 private fun cellText(item: HomeItem): CellText = when (item) {
     is HomeItem.AlbumItem -> CellText(item.album.name, item.album.artist ?: stringResource(R.string.unknown_artist))
-    is HomeItem.ArtistItem -> CellText(item.artist.name, stringResource(R.string.library_count_albums, item.artist.albumCount.toInt()))
+    is HomeItem.ArtistItem -> CellText(item.artist.name, pluralStringResource(R.plurals.library_count_albums, item.artist.albumCount.toInt(), item.artist.albumCount.toInt()))
     is HomeItem.TrackItem -> CellText(item.track.title, item.track.artist ?: stringResource(R.string.unknown_artist))
     is HomeItem.FilterItem -> CellText(item.filter.name, stringResource(R.string.kind_filter))
-    is HomeItem.QueueItem -> CellText(item.queue.label, stringResource(R.string.saved_tracks, item.queue.trackCount.toInt()))
+    is HomeItem.QueueItem -> CellText(item.queue.label, pluralStringResource(R.plurals.saved_tracks, item.queue.trackCount.toInt(), item.queue.trackCount.toInt()))
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)

@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -141,7 +142,7 @@ private fun PlayingQueueCard(label: String?, count: Int, index: Int, onRename: (
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(label ?: stringResource(R.string.player_mode_queue), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(if (count == 0) stringResource(R.string.queue_empty_meta) else stringResource(R.string.saved_tracks, count), style = MaterialTheme.typography.bodyMedium, color = onCardSoft, maxLines = 1)
+                    Text(if (count == 0) stringResource(R.string.queue_empty_meta) else pluralStringResource(R.plurals.saved_tracks, count, count), style = MaterialTheme.typography.bodyMedium, color = onCardSoft, maxLines = 1)
                     if (index > 0) Text(stringResource(R.string.queue_where, index, count, formatClock(position)), style = MaterialTheme.typography.bodySmall, color = onCardSoft, maxLines = 1)
                     else if (count == 0) Text(stringResource(R.string.queue_empty_hint), style = MaterialTheme.typography.bodySmall, color = onCardSoft, maxLines = 1)
                 }
@@ -183,7 +184,7 @@ private fun SavedQueueRow(sq: SavedQueue, index: Int, count: Int, onRename: () -
             colors = segmentedListColors(),
             modifier = Modifier.testTag("savedQueue.${sq.id}"),
             supportingContent = {
-                Text(stringResource(R.string.saved_tracks, sq.trackCount.toInt()) + stringResource(R.string.dot_separator) + stringResource(R.string.saved_played, formatAgoPhrase(sq.lastInteractedAt)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(pluralStringResource(R.plurals.saved_tracks, sq.trackCount.toInt(), sq.trackCount.toInt()) + stringResource(R.string.dot_separator) + stringResource(R.string.saved_played, formatAgoPhrase(sq.lastInteractedAt)), maxLines = 1, overflow = TextOverflow.Ellipsis)
             },
             trailingContent = {
                 Row {

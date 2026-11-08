@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
@@ -288,6 +289,8 @@ fun TrackRow(
                         Text(subtitle ?: artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
+                // A gap so a long, ellipsised title never runs straight into the badge or duration.
+                Spacer(Modifier.width(12.dp))
                 if (!showSubtitle) OfflineBadge(track.offline, describe = false)
                 if (track.loved) {
                     Icon(HocketIcons.Filled.Favorite, null, tint = if (segment != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
@@ -369,13 +372,29 @@ fun AlbumCard(
 }
 
 /**
- * The two text lines under a grid or carousel cell: a title of up to two lines (always two lines
- * tall, so cells in a row and their loading skeletons line up) and a one-line subtitle.
+ * The two text lines under a grid or carousel cell: a title of up to two lines and a one-line
+ * subtitle. The cell is always as tall as a two-line title, so cells in a row and their loading
+ * skeletons line up, but the subtitle sits right under a one-line title and the spare line goes
+ * below it, so an artist never drifts down toward the next row's cover.
  */
 @Composable
 fun GridCellText(title: String, subtitle: String, titleLines: Int = 2) {
-    Text(title, style = GridTitleStyle, minLines = titleLines, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
-    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    androidx.compose.ui.layout.Layout(content = {
+        Text(title, style = GridTitleStyle, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // Never placed: only measured for the height a full-height title takes.
+        Text("", style = GridTitleStyle, minLines = titleLines, maxLines = titleLines)
+    }) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0, maxHeight = androidx.compose.ui.unit.Constraints.Infinity)
+        val titleP = measurables[0].measure(loose)
+        val subtitleP = measurables[1].measure(loose)
+        val reserved = measurables[2].measure(loose)
+        val width = maxOf(titleP.width, subtitleP.width).coerceIn(constraints.minWidth, constraints.maxWidth)
+        layout(width, maxOf(reserved.height, titleP.height) + subtitleP.height) {
+            titleP.placeRelative(0, 0)
+            subtitleP.placeRelative(0, titleP.height)
+        }
+    }
 }
 
 internal val GridTitleStyle: androidx.compose.ui.text.TextStyle
@@ -408,7 +427,7 @@ fun ArtistCard(
             }
             Spacer(Modifier.height(8.dp))
             Text(artist.name, style = GridTitleStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-            Text(stringResource(R.string.library_count_albums, artist.albumCount.toInt()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text(pluralStringResource(R.plurals.library_count_albums, artist.albumCount.toInt(), artist.albumCount.toInt()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         }
     }
@@ -425,7 +444,7 @@ fun ArtistRow(artist: Artist, onClick: () -> Unit, modifier: Modifier = Modifier
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(artist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(stringResource(R.string.library_count_albums, artist.albumCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(pluralStringResource(R.plurals.library_count_albums, artist.albumCount.toInt(), artist.albumCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (selected) Icon(HocketIcons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
             else if (segment != null) Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -449,7 +468,7 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Mo
                 Text(playlist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OfflineBadge(playlist.offline, describe = false)
-                    Text(stringResource(R.string.library_count_songs, playlist.songCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(pluralStringResource(R.plurals.library_count_songs, playlist.songCount.toInt(), playlist.songCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (playlist.isSmart) Badge(stringResource(R.string.badge_smart))
                 }
             }
@@ -466,7 +485,7 @@ fun GenreRow(genre: Genre, onClick: () -> Unit, modifier: Modifier = Modifier) {
         Row(Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(genre.name, style = MaterialTheme.typography.bodyLarge)
-                Text(stringResource(R.string.library_count_songs, genre.songCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(pluralStringResource(R.plurals.library_count_songs, genre.songCount.toInt(), genre.songCount.toInt()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

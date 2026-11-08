@@ -160,8 +160,8 @@ private fun eyebrowOf(slide: SpotlightSlide): String = when {
 /** "Halden Fields · 2025 · 23 plays"; "… · Track 4 of 10" to resume; an artist's albums; a playlist's songs. */
 @Composable
 private fun subtitleOf(slide: SpotlightSlide): String {
-    slide.artist?.let { return stringResource(R.string.library_count_albums, it.albumCount.toInt()) }
-    slide.playlist?.let { p -> return listOfNotNull(p.owner?.takeIf { !p.isMine }, stringResource(R.string.library_count_songs, p.songCount.toInt())).joinToString(" · ") }
+    slide.artist?.let { return pluralStringResource(R.plurals.library_count_albums, it.albumCount.toInt(), it.albumCount.toInt()) }
+    slide.playlist?.let { p -> return listOfNotNull(p.owner?.takeIf { !p.isMine }, pluralStringResource(R.plurals.library_count_songs, p.songCount.toInt(), p.songCount.toInt())).joinToString(" · ") }
     val a = slide.album ?: return ""
     val artist = a.artist ?: stringResource(R.string.unknown_artist)
     val resume = slide.resume

@@ -96,7 +96,9 @@ fun DownloadsScreen(nav: NavHostController) {
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(stringResource(R.string.downloads_title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
-                subtitle = { Text(stringResource(R.string.downloads_storage, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes), storage.freeBytes?.let { formatBytes(it) } ?: "?")) },
+                subtitle = { Text(storage.freeBytes?.let { stringResource(R.string.downloads_storage, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes), formatBytes(it)) }
+                    // Free space unknown: leave it out rather than show "? free".
+                    ?: stringResource(R.string.downloads_storage_no_free, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes))) },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 actions = { AccountButton() },
                 scrollBehavior = scroll,
