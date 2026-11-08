@@ -21,7 +21,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.RecentSearchPrefs
 import app.hocket.core.ArtworkSizes
 import app.hocket.ui.components.ArtworkPathCache
+import app.hocket.playback.CastDevices
 import app.hocket.ui.player.HandoffSheet
+import androidx.compose.ui.test.performSemanticsAction
 import app.hocket.ui.player.PlayerAbout
 import app.hocket.ui.player.QueuesSheet
 import app.hocket.ui.screens.detail.AlbumDetailScreen
@@ -72,6 +74,40 @@ class RedesignScreenshotTest {
     fun playOn() = capture("light-play-on", sheet = true) {
         // The sheet is a window of its own: the activity behind it needs a size to capture.
         androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { HandoffSheet(onDismiss = {}, onOpenSettings = {}) }
+    }
+
+    /** Cast receivers of each kind, the Nest Mini playing, in the sheet and on the player's device button. */
+    private fun fakeCast() = CastDevices.Kind.entries.map { k ->
+        CastDevices.Device("cast.$k", castNames.getValue(k), kind = k)
+    }.let { devices -> CastDevices.publish(CastDevices.State(available = true, devices = devices, active = devices.first { it.kind == CastDevices.Kind.NestMini })) }
+
+    private val castNames = mapOf(
+        CastDevices.Kind.Group to "Downstairs", CastDevices.Kind.NestMini to "Kitchen", CastDevices.Kind.HomeMini to "Bedroom",
+        CastDevices.Kind.NestAudio to "Study", CastDevices.Kind.HomeMax to "Lounge speaker", CastDevices.Kind.NestHub to "Kitchen display",
+        CastDevices.Kind.NestHubMax to "Hallway display", CastDevices.Kind.Chromecast to "Spare room", CastDevices.Kind.ChromecastGoogleTv to "Living room",
+        CastDevices.Kind.WifiPoint to "Wifi point", CastDevices.Kind.Tv to "BRAVIA", CastDevices.Kind.Speaker to "JBL Link", CastDevices.Kind.Unknown to "Receiver",
+    )
+
+    @org.junit.After fun resetCast() = CastDevices.publish(CastDevices.State())
+
+    @Test @Config(qualifiers = "+notnight")
+    fun playOnCast() {
+        fakeCast()
+        capture("light-play-on-cast", sheet = true, after = { compose.onAllNodes(hasScrollAction())[0].performTouchInput { swipeUp() }; settle() }) {
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { HandoffSheet(onDismiss = {}, onOpenSettings = {}) }
+        }
+    }
+
+    @Test @Config(qualifiers = "+notnight")
+    fun playerCasting() {
+        fakeCast()
+        val core = TestCore(startPlaying = true)
+        capture("light-player-casting", core, after = {
+            compose.waitUntil(5_000) { compose.onAllNodesWithTag("miniPlayer").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.Expand)
+            compose.waitUntil(5_000) { compose.onAllNodesWithTag("player.playPause").fetchSemanticsNodes().isNotEmpty() }
+            repeat(3) { settle() }
+        }) { app.hocket.ui.nav.AppRoot(core.client) }
     }
 
     @Test @Config(qualifiers = "+notnight") fun settingsLight() = capture("light-settings") { SettingsScreen(rememberNavController()) }

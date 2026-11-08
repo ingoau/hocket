@@ -1172,7 +1172,9 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val context = LocalContext.current
     DisposableEffect(context) { AudioOutputs.start(context); onDispose { } }
     val output by AudioOutputs.outputs.collectAsStateWithLifecycle()
-    val icon = if (casting) HocketIcons.Filled.Cast else remote?.let { deviceIcon(it.platform) } ?: outputButtonIcon(output.current)
+    val cast by CastDevices.state.collectAsStateWithLifecycle()
+    // Casting from here: what the receiver is; the device playing casts: we can't tell, so Cast.
+    val icon = if (casting) castIcon(cast.active?.kind.takeIf { remote == null }, filled = true) else remote?.let { deviceIcon(it.platform) } ?: outputButtonIcon(output.current)
     Box(
         Modifier
             .size(48.dp)

@@ -47,6 +47,9 @@ const SYMBOLS = {
   BugReport: "bug_report", Code: "code", ContentCopy: "content_copy",
   Bluetooth: "bluetooth", Headphones: "headphones", Usb: "usb",
   Earbuds: "earbuds", DirectionsCar: "directions_car", Hearing: "hearing", Tv: "tv",
+  SpeakerGroup: "speaker_group", NestMini: "nest_mini", HomeMini: "home_mini", NestAudio: "nest_audio", HomeMax: "home_max",
+  NestDisplay: "nest_display", NestDisplayMax: "nest_display_max", Chromecast2: "chromecast_2", ChromecastDevice: "chromecast_device",
+  NestWifiPoint: "nest_wifi_point",
   OpenInNew: "open_in_new", Laptop: "laptop_windows", DesktopWindows: "desktop_windows", Warning: "warning", Equalizer: "equalizer",
 };
 
@@ -70,6 +73,9 @@ const GROUPS = [
     "OpenInFull", "CloseFullscreen", "Menu", "MenuOpen",
     // What this phone plays out of: the connect button and the Connect sheet.
     "Earbuds", "DirectionsCar", "Hearing", "Tv",
+    // Cast receivers by kind: the connect button and the Connect sheet.
+    "SpeakerGroup", "NestMini", "HomeMini", "NestAudio", "HomeMax", "NestDisplay", "NestDisplayMax", "Chromecast2",
+    "ChromecastDevice", "NestWifiPoint",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",
@@ -78,6 +84,10 @@ const GROUPS = [
     "ContentCopy", "Speaker", "Lyrics", "Dns", "Devices", "BatterySaver", "Tune", "Sync",
     "Inventory2",
     "Earbuds", "DirectionsCar", "Hearing", "Tv",
+    "Cast",
+    // Cast receivers by kind: the connect button and the Connect sheet.
+    "SpeakerGroup", "NestMini", "HomeMini", "NestAudio", "HomeMax", "NestDisplay", "NestDisplayMax", "Chromecast2",
+    "ChromecastDevice", "NestWifiPoint",
   ] },
   { path: ["AutoMirrored", "Filled"], fill: true, mirror: true, names: [
     "ArrowBack", "Logout", "PlaylistAdd", "PlaylistPlay", "QueueMusic", "Redo", "Undo",
