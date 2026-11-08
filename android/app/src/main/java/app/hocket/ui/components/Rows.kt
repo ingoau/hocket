@@ -391,8 +391,8 @@ fun GridCellText(title: String, subtitle: String, titleLines: Int = 2) {
         val reserved = measurables[2].measure(loose)
         val width = maxOf(titleP.width, subtitleP.width).coerceIn(constraints.minWidth, constraints.maxWidth)
         layout(width, maxOf(reserved.height, titleP.height) + subtitleP.height) {
-            titleP.place(0, 0)
-            subtitleP.place(0, titleP.height)
+            titleP.placeRelative(0, 0)
+            subtitleP.placeRelative(0, titleP.height)
         }
     }
 }
