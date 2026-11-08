@@ -144,7 +144,8 @@ fun PlaylistPicker(target: ActionTarget, onDismiss: () -> Unit) {
 /**
  * The add to playlist picker's content ([PlaylistPicker]'s, and the song menu's sub-page's): what
  * Done applies then goes away through [onClose]. [listHeight] fixes the list's height (a sub-menu
- * scrolls in place, and stays one size whether loading or holding a few playlists or many); with null it takes the column's remaining height (the full-height sheet). [navigationBarPad]
+ * scrolls in place, one size whether loading or holding few playlists or many); with null it takes
+ * the column's remaining height (the full-height sheet). [navigationBarPad]
  * adds the navigation bars' padding to the summary bar (the menu's column already carries it).
  * [title] replaces the sheet's "Add to playlist" headline; a sub-menu passes none, its header
  * gives the title. [showSubject] shows what is being added under the headline (a sub-menu's own

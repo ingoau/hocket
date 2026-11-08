@@ -991,7 +991,7 @@ private fun SleepMenuPage(tag: String, timer: SleepTimer?, onBack: () -> Unit, o
 /**
  * Add to playlist as a sub-page: the picker sheet's own content ([PlaylistPickerBody], its headline
  * given way for the sub-page header, and its subject line too: the menu's header already names the
- * song; its list capped so the sheet stays menu-sized). Back returns
+ * song; its list one fixed height so the sheet stays menu-sized and still). Back returns
  * to the menu; Done or a created playlist closes it.
  */
 @Composable
