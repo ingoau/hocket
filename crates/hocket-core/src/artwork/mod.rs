@@ -49,6 +49,12 @@ const EDGE_ROW_FLAT: f64 = 0.95;
 /// ...as long as this share of the strip above is that colour too: a border or a backdrop (a
 /// cream frame round a photo, a caption on it), not a hairline or a fringe under busy art.
 const EDGE_ROW_BACKING: f64 = 0.5;
+/// The outermost row of the cover as it came in (about 5 px of a 1200 px original) counts as a
+/// solid strip with this share of it one colour ([FLAT_TOL])...
+const SOLID_SHARE: f64 = 0.98;
+/// ...and its neighbours this close in luma (mean step, sRGB levels): JPEG noise, not a texture
+/// running to the edge (a ceiling tile steps a few levels from pixel to pixel all the way out).
+const SOLID_GRAIN: f64 = 2.5;
 /// The share of the edge strip in one colour above which the artwork carries on in that colour
 /// with a crisp edge (no fade, no blur). Between FLAT_MIN and this the edge is plain but not
 /// uniform (low-contrast texture: dark ground, grain, a gradient), and a crisp cut into one flat
@@ -134,7 +140,16 @@ pub fn layout(
     let top = img.median(0..TOP_ROWS);
     let decide = |img: &Img, side: Side, faces: &[FaceRect]| {
         let grain = grain(rgba, w, h, side);
-        edge(img, grain, faces, square, request.preference, request.theme)
+        let solid = solid_row(rgba, w, h, side);
+        edge(
+            img,
+            grain,
+            solid,
+            faces,
+            square,
+            request.preference,
+            request.theme,
+        )
     };
     ArtworkLayout {
         bottom: decide(&img, Side::Bottom, &faces),
@@ -166,16 +181,7 @@ fn grain(rgba: &[u8], w: usize, h: usize, side: Side) -> f64 {
         Side::Right | Side::Left => (h, w),
     };
     let depth = (across * (EDGE_ROWS + 1) / N).max(2).min(across);
-    let luma = |i: usize, d: usize| {
-        let (x, y) = match side {
-            Side::Bottom => (i, h - 1 - d),
-            Side::Top => (i, d),
-            Side::Right => (w - 1 - d, i),
-            Side::Left => (d, i),
-        };
-        let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
-        (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) * p[3] as f32 / 255.0
-    };
+    let luma = |i: usize, d: usize| luma(edge_px(rgba, w, h, side, i, d));
     let (mut sum, mut n) = (0.0f64, 0usize);
     let mut step = |a: f32, b: f32| {
         let d = (a - b).abs();
@@ -196,6 +202,55 @@ fn grain(rgba: &[u8], w: usize, h: usize, side: Side) -> f64 {
         prev = row;
     }
     sum / n.max(1) as f64
+}
+
+/// The pixel `d` rows in from `side`, `i` along it.
+fn edge_px(rgba: &[u8], w: usize, h: usize, side: Side, i: usize, d: usize) -> &[u8] {
+    let (x, y) = match side {
+        Side::Bottom => (i, h - 1 - d),
+        Side::Top => (i, d),
+        Side::Right => (w - 1 - d, i),
+        Side::Left => (d, i),
+    };
+    &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4]
+}
+
+/// A pixel's luma in sRGB levels (0..255), transparency over black.
+fn luma(p: &[u8]) -> f32 {
+    (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) * p[3] as f32 / 255.0
+}
+
+/// The outermost row along `side` at the resolution the cover came in, when it is one solid colour
+/// ([SOLID_SHARE], [SOLID_GRAIN]): that colour (OKLab) and the row's grain. A cover that ends in a
+/// strip of one colour (a margin under a patterned band) carries on in it, whatever the texture
+/// further in; resampling to [N] would blend the strip with what is above it.
+fn solid_row(rgba: &[u8], w: usize, h: usize, side: Side) -> Option<([f32; 3], f64)> {
+    let len = match side {
+        Side::Bottom | Side::Top => w,
+        Side::Right | Side::Left => h,
+    };
+    if len < 2 {
+        return None;
+    }
+    let px = |i: usize| edge_px(rgba, w, h, side, i, 0);
+    let lab: Vec<[f32; 3]> = (0..len)
+        .map(|i| {
+            let p = px(i);
+            let a = p[3] as f32 / 255.0;
+            oklab_of_linear([0, 1, 2].map(|k| srgb_to_linear(p[k] as f32 / 255.0) * a))
+        })
+        .collect();
+    let colour = median_lab(lab.clone());
+    let share = lab
+        .iter()
+        .filter(|c| dist_flat(**c, colour) <= FLAT_TOL)
+        .count() as f64
+        / len as f64;
+    let grain = (1..len)
+        .map(|i| (luma(px(i)) - luma(px(i - 1))).abs() as f64)
+        .sum::<f64>()
+        / (len - 1) as f64;
+    (share >= SOLID_SHARE && grain <= SOLID_GRAIN).then_some((colour, grain))
 }
 
 /// [`layout`] over JSON, for the FFI crates: the request in, the layout out.
@@ -245,6 +300,7 @@ pub(crate) fn card_edge(reason: &str) -> ArtworkEdge {
 fn edge(
     img: &Img,
     grain: f64,
+    solid: Option<([f32; 3], f64)>,
     faces: &[FaceRect],
     square: bool,
     preference: ImmersiveArtwork,
@@ -259,7 +315,13 @@ fn edge(
     // (or a backdrop with a caption on it) is most of the strip.
     let last_row_flat = img.share_within(N - 1..N, last_median, FLAT_TOL) >= EDGE_ROW_FLAT
         && img.share_within(strip.clone(), last_median, FLAT_TOL) >= EDGE_ROW_BACKING;
-    let median = if last_row_flat {
+    // A solid outer row (see [solid_row]) backed by its colour in the strip above: a margin, a
+    // border or a backdrop, however textured the strip is (a pattern on the band, a caption).
+    let solid =
+        solid.filter(|(c, _)| img.share_within(strip.clone(), *c, FLAT_TOL) >= EDGE_ROW_BACKING);
+    let median = if let Some((c, _)) = solid {
+        c
+    } else if last_row_flat {
         last_median
     } else {
         img.median(strip.clone())
@@ -288,7 +350,8 @@ fn edge(
         rough,
         marks,
         busy,
-        grain,
+        // What the apps draw over the extension: a solid row's own, not the texture above it.
+        grain: solid.map_or(grain, |(_, g)| g),
         faces: face_count,
         ..Default::default()
     };
@@ -299,6 +362,7 @@ fn edge(
     let (style, reason): (ArtworkStyle, &str) = match preference {
         ImmersiveArtwork::Never => (ArtworkStyle::Card, "card:never"),
         _ if !square => (ArtworkStyle::Card, "card:notSquare"),
+        _ if solid.is_some() => (ArtworkStyle::Extend, "extend:flat"),
         // The art ends in one colour (a plain background, a border, a band, a backdrop, with or
         // without a caption or sticker on it): carry that colour on, never reflect it. Before the
         // mirror, so the choice doesn't hang on whether small text near the edge was seen.

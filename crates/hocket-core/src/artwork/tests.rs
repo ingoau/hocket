@@ -635,3 +635,41 @@ fn a_border_with_a_caption_on_it_carries_on_flat() {
     let l = c.auto();
     assert_eq!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
 }
+
+#[test]
+fn a_solid_margin_under_a_patterned_band_carries_on_flat() {
+    // Perfect Pinterest Garden (Porter Robinson): art over a crimson band tiled with small pink
+    // crosses, a caption on it, and a margin of plain crimson along the bottom. The pattern reads
+    // as grain and the caption as marks, but the cover ends in one colour: carry it on.
+    let crimson = [183, 5, 53];
+    let mut c = noise();
+    c.fill(0, S - 80, S, 80, crimson);
+    for y in (S - 78..S - 4).step_by(6) {
+        for x in (1..S).step_by(6) {
+            c.fill(x + 1, y, 1, 3, [205, 60, 90]);
+            c.fill(x, y + 1, 3, 1, [205, 60, 90]);
+        }
+    }
+    c.caption(20, S - 40, [255; 3]);
+    let l = c.auto();
+    assert_eq!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+    // The margin's own grain (none), not the pattern's, goes over the extension.
+    assert!(l.bottom.metrics.grain < 0.5, "{:?}", l.bottom.metrics);
+}
+
+#[test]
+fn a_texture_running_to_the_edge_is_not_a_solid_margin() {
+    // A crimson band with a fine, low-contrast texture all the way to the edge: one colour to
+    // the eye's tolerance, but no plain row to carry on.
+    let mut c = noise();
+    c.fill(0, S - 80, S, 80, [183, 5, 53]);
+    for y in 0..80 {
+        for x in 0..S {
+            if (x + y) % 3 == 0 {
+                c.set(x, S - 1 - y, [191, 14, 62]);
+            }
+        }
+    }
+    let l = c.auto();
+    assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+}
