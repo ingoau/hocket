@@ -52,9 +52,12 @@ const EDGE_ROW_BACKING: f64 = 0.5;
 /// The outermost row of the cover as it came in (about 5 px of a 1200 px original) counts as a
 /// solid strip with this share of it one colour ([FLAT_TOL])...
 const SOLID_SHARE: f64 = 0.98;
-/// ...and its neighbours this close in luma (mean step, sRGB levels): JPEG noise, not a texture
-/// running to the edge (a ceiling tile steps a few levels from pixel to pixel all the way out).
-const SOLID_GRAIN: f64 = 2.5;
+/// ...and the row no grainier along its length than a crisp edge may be ([GRAIN_MAX])...
+/// ...and the next row in this close to it (mean luma step, sRGB levels, leaving out a shape's
+/// edges as [grain] does): a texture of lines along the edge (streaks, scanlines) has a smooth
+/// outer row but steps from one row to the next. Twice [GRAIN_MAX], as [grain] averages the steps
+/// along and across, and so already lets such lines this soft carry on crisp.
+const SOLID_ACROSS: f64 = 2.0 * GRAIN_MAX;
 /// The share of the edge strip in one colour above which the artwork carries on in that colour
 /// with a crisp edge (no fade, no blur). Between FLAT_MIN and this the edge is plain but not
 /// uniform (low-contrast texture: dark ground, grain, a gradient), and a crisp cut into one flat
@@ -221,7 +224,7 @@ fn luma(p: &[u8]) -> f32 {
 }
 
 /// The outermost row along `side` at the resolution the cover came in, when it is one solid colour
-/// ([SOLID_SHARE], [SOLID_GRAIN]): that colour (OKLab) and the row's grain. A cover that ends in a
+/// ([SOLID_SHARE], [GRAIN_MAX], [SOLID_ACROSS]): that colour (OKLab) and the row's grain. A cover that ends in a
 /// strip of one colour (a margin under a patterned band) carries on in it, whatever the texture
 /// further in; resampling to [N] would blend the strip with what is above it.
 fn solid_row(rgba: &[u8], w: usize, h: usize, side: Side) -> Option<([f32; 3], f64)> {
@@ -229,7 +232,11 @@ fn solid_row(rgba: &[u8], w: usize, h: usize, side: Side) -> Option<([f32; 3], f
         Side::Bottom | Side::Top => w,
         Side::Right | Side::Left => h,
     };
-    if len < 2 {
+    let across_len = match side {
+        Side::Bottom | Side::Top => h,
+        Side::Right | Side::Left => w,
+    };
+    if len < 2 || across_len < 2 {
         return None;
     }
     let px = |i: usize| edge_px(rgba, w, h, side, i, 0);
@@ -250,7 +257,14 @@ fn solid_row(rgba: &[u8], w: usize, h: usize, side: Side) -> Option<([f32; 3], f
         .map(|i| (luma(px(i)) - luma(px(i - 1))).abs() as f64)
         .sum::<f64>()
         / (len - 1) as f64;
-    (share >= SOLID_SHARE && grain <= SOLID_GRAIN).then_some((colour, grain))
+    let steps: Vec<f64> = (0..len)
+        .map(|i| (luma(px(i)) - luma(edge_px(rgba, w, h, side, i, 1))).abs())
+        .filter(|d| *d < GRAIN_EDGE)
+        .map(f64::from)
+        .collect();
+    let across = steps.iter().sum::<f64>() / steps.len().max(1) as f64;
+    (share >= SOLID_SHARE && grain <= GRAIN_MAX && across <= SOLID_ACROSS)
+        .then_some((colour, grain))
 }
 
 /// [`layout`] over JSON, for the FFI crates: the request in, the layout out.

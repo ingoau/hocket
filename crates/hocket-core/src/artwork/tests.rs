@@ -673,3 +673,36 @@ fn a_texture_running_to_the_edge_is_not_a_solid_margin() {
     let l = c.auto();
     assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
 }
+
+#[test]
+fn lines_along_the_edge_are_not_a_solid_margin() {
+    // Soft streaks parallel to the edge, all the way out: the outer row is smooth along its
+    // length, but the texture steps from row to row and would stop dead at a crisp cut.
+    let mut c = Canvas::new(S, S, [120; 3]);
+    for y in 0..S {
+        let v = 120 + ((y * 5) % 9) as u8;
+        c.fill(0, y, S, 1, [v; 3]);
+    }
+    let l = c.auto();
+    assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+}
+
+#[test]
+fn a_soft_noise_to_the_edge_is_not_a_solid_margin() {
+    // A few levels of noise on grey everywhere: one colour to the eye's tolerance, smooth enough
+    // to pass for JPEG noise in a looser test, but grainier than a crisp edge may be.
+    let mut c = Canvas::new(S, S, [120; 3]);
+    for y in 0..S {
+        for x in 0..S {
+            // A hash, so neighbours are independent: steps of about 2.3 levels both ways.
+            let mut v = (x as u32)
+                .wrapping_mul(374_761_393)
+                .wrapping_add((y as u32).wrapping_mul(668_265_263));
+            v = (v ^ (v >> 13)).wrapping_mul(1_274_126_177);
+            let v = 120 + ((v ^ (v >> 16)) % 7) as u8;
+            c.set(x, y, [v; 3]);
+        }
+    }
+    let l = c.auto();
+    assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+}
