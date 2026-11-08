@@ -9,7 +9,7 @@ import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from "nod
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
 import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
@@ -24,6 +24,8 @@ export interface IpcDeps {
   windows: Windows;
   artwork: ArtworkRegistry;
   meta: () => Omit<AppMeta, "windowKind">;
+  /** Waits for the credential store to open. */
+  credentialStorage: () => Promise<CredentialStorage>;
   /** Observers of commands on their way to the core (credential capture, mirrored settings). */
   onCommand: (command: Command) => void;
   onVisibilityReport: (visible: boolean) => void;
@@ -183,6 +185,8 @@ export function installIpc(deps: IpcDeps): void {
     const kind = win && windows.mini && win.id === windows.mini.id ? "mini" : "main";
     return { ...deps.meta(), windowKind: kind };
   });
+
+  ipcMain.handle(IPC.credentialStorage, (e): Promise<CredentialStorage> | undefined => (isOurs(windows, e.sender) ? deps.credentialStorage() : undefined));
 
   ipcMain.on(IPC.windowControl, (e, control: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);

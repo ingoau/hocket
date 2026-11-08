@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
-import type { AppMeta, AppPrefs, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/bridge-types";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
@@ -90,6 +90,7 @@ export interface PlaylistPickerState {
 
 export interface UiState {
   meta: AppMeta | undefined;
+  credentialStorage: CredentialStorage | undefined;
   windowState: WindowState;
   route: Route;
   history: Route[];
@@ -183,6 +184,7 @@ function loadPanels(): PanelState {
 export const useApp = create<AppStore>((set, get) => ({
   ...initialCoreState,
   meta: undefined,
+  credentialStorage: undefined,
   windowState: { maximized: false, fullscreen: false, focused: true, visible: true, alwaysOnTop: false },
   route: { view: "home" },
   history: [],
@@ -435,6 +437,7 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
   });
   const offState = b.window.onState((st) => useApp.getState().setWindowState(st));
   void b.meta().then((m) => useApp.getState().setMeta(m));
+  void b.credentialStorage().then((credentialStorage) => useApp.setState({ credentialStorage }));
   void b.prefs.get().then((prefs) => useApp.setState({ prefs }));
   void b.window.getState().then((st) => st && useApp.getState().setWindowState(st));
   const onVis = () => {

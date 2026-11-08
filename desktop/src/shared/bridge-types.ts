@@ -13,14 +13,15 @@ export interface AppMeta {
   deviceName: string;
   dataDir: string;
   cacheDir: string;
-  /**
-   * Where server passwords go: "os" = encrypted by the OS keystore and
-   * replayed on the next start; "volatile" = kept in memory for this session
-   * only (no usable keystore, e.g. Linux without a keyring), so the user
-   * signs in again after a restart.
-   */
-  credentialStorage: "os" | "volatile";
 }
+
+/**
+ * Where server passwords go: "os" = encrypted by the OS keystore and
+ * replayed on the next start; "volatile" = kept in memory for this session
+ * only (no usable keystore, e.g. Linux without a keyring), so the user
+ * signs in again after a restart.
+ */
+export type CredentialStorage = "os" | "volatile";
 
 export interface WindowState {
   maximized: boolean;
@@ -120,6 +121,8 @@ export interface HocketBridge {
   query(query: Query): Promise<QueryResult>;
   onEvent(listener: (event: Event) => void): () => void;
   meta(): Promise<AppMeta>;
+  /** Resolves once main has opened the OS keystore, which may wait on a Keychain prompt. */
+  credentialStorage(): Promise<CredentialStorage>;
   window: {
     minimize(): void;
     maximize(): void;
@@ -233,6 +236,7 @@ export const IPC = {
   query: "hocket:query",
   event: "hocket:event",
   meta: "hocket:meta",
+  credentialStorage: "hocket:credential-storage",
   windowControl: "hocket:window:control",
   windowState: "hocket:window:state",
   windowStateChanged: "hocket:window:state-changed",

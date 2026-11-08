@@ -100,7 +100,12 @@ async function main(): Promise<void> {
     devlog.append("error", "main", `${origin}: ${err.stack ?? String(err)}`);
     devlog.flush();
   });
-  const credentials = await ServerCredentialStore.open(userData);
+  // Opening the store asks the OS keystore (a Keychain prompt, a locked keyring), so it must not
+  // hold up the window or the core: anything that needs it waits on this promise instead.
+  // Callbacks chained on it run in order, so commands still reach it in the order they were sent.
+  const credentialsOpen = ServerCredentialStore.open(userData);
+  let credentials: ServerCredentialStore | undefined;
+  void credentialsOpen.then((c) => (credentials = c));
   mkdirSync(cacheDir, { recursive: true });
   const artwork = new ArtworkRegistry(realpathSync(cacheDir));
 
@@ -151,7 +156,7 @@ async function main(): Promise<void> {
     core,
     windows,
     artwork,
-    credentials,
+    credentials: { passwordFor: (url, username) => credentials?.passwordFor(url, username) },
     artworkLayout: classify,
     devlog,
     diagnosticsDir: join(logDir, "diagnostics"),
@@ -159,7 +164,7 @@ async function main(): Promise<void> {
     diagnosticsExtra: () => ({
       core: core.kind === "native" ? `native addon ${native?.module.coreVersion() ?? "?"} (${native?.path ?? "?"})` : "fake core",
       "media session": mediaSession.status,
-      credentials: credentials.storageKind,
+      credentials: credentials?.storageKind ?? "still opening",
       windows: windows
         .all()
         .filter((w) => !w.isDestroyed())
@@ -172,6 +177,7 @@ async function main(): Promise<void> {
       "data dir": dataDir,
       "log dir": logDir,
     }),
+    credentialStorage: async () => (await credentialsOpen).storageKind,
     meta: () => ({
       version: app.getVersion(),
       platform,
@@ -180,10 +186,9 @@ async function main(): Promise<void> {
       deviceName: config.deviceName,
       dataDir,
       cacheDir,
-      credentialStorage: credentials.storageKind,
     }),
     onCommand: (command: Command) => {
-      credentials.intercept(command);
+      void credentialsOpen.then((c) => c.intercept(command));
     },
     prefs: {
       get: () => ({ closeToTray: store.get("closeToTray") ?? true }),
@@ -238,12 +243,17 @@ async function main(): Promise<void> {
       // renderer, whether the core answers with `snapshot` or a second
       // `started`) must not add the server again.
       replayed = true;
-      for (const cmd of credentials.replayCommands()) core.dispatch(cmd);
+      void credentialsOpen.then((c) => {
+        for (const cmd of c.replayCommands()) core.dispatch(cmd);
+      });
       applySettingsFromSnapshot(snapshot.settings);
       applyBattery();
       pushNetwork(net.isOnline());
     }
-    if (event.type === "serversChanged") credentials.retainOnly(event.data.servers);
+    if (event.type === "serversChanged") {
+      const servers = event.data.servers;
+      void credentialsOpen.then((c) => c.retainOnly(servers));
+    }
     if (event.type === "settingChanged") applySettingsFromSnapshot([event.data.setting]);
   });
   let lastPlaying = false;

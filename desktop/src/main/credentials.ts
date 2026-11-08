@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { safeStorage } from "electron";
 import type { Command } from "@core/api";
+import type { CredentialStorage } from "@shared/bridge-types";
 
 interface StoredCredential {
   url: string;
@@ -30,7 +31,7 @@ interface KnownCredential {
   blob?: string;
 }
 
-export type CredentialStorage = "os" | "volatile";
+export type { CredentialStorage };
 
 /** The subset of `safeStorage` the store uses; injectable for tests. */
 export interface SafeStorageLike {
@@ -49,7 +50,12 @@ export interface CredentialStoreOptions {
 
 /** Whether `storage` really encrypts with an OS-held key on this platform. */
 export async function encryptionUsable(storage: SafeStorageLike, platform: NodeJS.Platform, allowInsecure = false): Promise<boolean> {
-  if (!(await storage.isAsyncEncryptionAvailable())) return false;
+  try {
+    if (!(await storage.isAsyncEncryptionAvailable())) return false;
+  } catch (err) {
+    console.error("[credentials] couldn't reach the OS keystore", err);
+    return false;
+  }
   if (platform !== "linux" || allowInsecure) return true;
   const backend = storage.getSelectedStorageBackend?.();
   return backend !== "basic_text" && backend !== "unknown";
@@ -126,6 +132,8 @@ export class ServerCredentialStore {
     this.volatile.delete(key);
     const entry: KnownCredential = { url, username, name, password };
     this.known.set(key, entry);
+    // Off disk now, not once the new blob lands: a quit in between must not replay the old password.
+    if (hadBlob) this.flush();
     try {
       entry.blob = (await this.storage.encryptStringAsync(password)).toString("base64");
     } catch (err) {

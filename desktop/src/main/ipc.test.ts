@@ -62,6 +62,7 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
     windows: { all: () => [{ webContents: { id: 1 } }], mini: undefined, main: undefined, stateOf: () => ({}), broadcastState: vi.fn(), openMini: vi.fn(), closeMini: vi.fn(), showMain: vi.fn() } as never,
     artwork: artwork as never,
     meta: () => ({}) as never,
+    credentialStorage: async () => "os",
     onCommand,
     onVisibilityReport: vi.fn(),
     onNetworkReport: vi.fn(),

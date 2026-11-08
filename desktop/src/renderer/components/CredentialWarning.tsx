@@ -5,7 +5,7 @@ import { useApp } from "../store/app";
 import { Icon } from "./Icon";
 
 export function CredentialWarning() {
-  const storage = useApp((s) => s.meta?.credentialStorage);
+  const storage = useApp((s) => s.credentialStorage);
   if (storage !== "volatile") return null;
   return <div className="credential-warning" role="alert" data-testid="credential-warning"><Icon name="key" size={20} /><span>{t("settings.credentialsVolatile")}</span></div>;
 }

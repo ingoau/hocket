@@ -85,6 +85,8 @@ describe("ServerCredentialStore", () => {
     const pending = store.remember("https://a.example", "alice", "new");
     expect(store.passwordFor("https://a.example", "alice")).toBe("new");
     expect(store.replayCommands()).toHaveLength(1);
+    // The old blob is off disk before the new one lands.
+    expect(onDisk(dir)).toEqual([]);
     await pending;
     expect(onDisk(dir).map((e) => e.blob)).toEqual([b64("enc:new")]);
   });
