@@ -175,6 +175,65 @@ async fn finishing_the_album_clears_the_point() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn playing_something_else_after_the_album_ended_does_not_revive_it() {
+    let t = synced("ended").await;
+    let sid = t.server_id.clone();
+    t.run(Command::SetAutoplay { enabled: false }).await;
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            start_index: Some(3),
+            save_outgoing: true,
+            ..album(&sid, "al0", false)
+        },
+    })
+    .await;
+    t.run_for(400.0).await;
+    t.run(Command::SeekTo {
+        position_ms: 170_000,
+    })
+    .await;
+    t.run(Command::Pause).await;
+    assert!(
+        point(&t, "al0").await.is_some(),
+        "before the last five seconds"
+    );
+    t.run(Command::SeekTo {
+        position_ms: 176_000,
+    })
+    .await;
+    assert!(
+        point(&t, "al0").await.is_none(),
+        "the last five seconds count as finished"
+    );
+    t.run(Command::Play).await;
+    t.run_for(10_000.0).await;
+    assert!(point(&t, "al0").await.is_none(), "the album ended");
+
+    // The queue stays on the ended track; leaving it must not save its end as a point.
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            context: QueueContext {
+                server_id: sid.clone(),
+                kind: ContextKind::Playlist { id: "p0".into() },
+                label: String::new(),
+                sort: SortOrder::Default,
+                tracks: vec!["t4".into(), "t5".into()],
+            },
+            start_index: Some(0),
+            shuffle: false,
+            save_outgoing: true,
+            start_position_ms: None,
+        },
+    })
+    .await;
+    t.run_for(3_000.0).await;
+    assert!(
+        point(&t, "al0").await.is_none(),
+        "switching away kept it finished"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_keeps_the_position_it_paused_on() {
     let t = synced("stop").await;
     let sid = t.server_id.clone();

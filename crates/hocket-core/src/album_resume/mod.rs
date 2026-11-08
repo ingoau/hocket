@@ -14,6 +14,9 @@ pub const TTL_MS: EpochMs = 30.0 * 24.0 * 3600.0 * 1000.0;
 /// Position changes smaller than this are not written again while playback runs.
 pub const POSITION_QUANTUM_MS: Ms = 5_000;
 
+/// Within this much of the album's end, the album counts as finished.
+pub const FINISH_BUFFER_MS: Ms = 5_000;
+
 /// Bound on the synced set (live records and tombstones together).
 const MAX_ENTRIES: usize = 400;
 
@@ -55,7 +58,8 @@ pub enum Decision {
 }
 
 /// Resume is recorded only for an album started in its own order, once playback has moved
-/// past the first track and until the album finishes. The first track clears any record (Play
+/// past the first track and until the album finishes (or is within [`FINISH_BUFFER_MS`] of
+/// its end). The first track clears any record (Play
 /// and Start over both land there). Shuffle, playlists and anything that is not this album
 /// leave the map alone. With the feature off, clears still apply and new positions are not
 /// stored.
@@ -77,6 +81,16 @@ pub fn decide(snap: &Snapshot, now: EpochMs, enabled: bool) -> Decision {
     };
     // Still on the first track: nothing to resume, and a restart drops the old point.
     if index == 0 {
+        return Decision::Clear { album_id };
+    }
+    // The last track's final seconds count as finishing the album. The queue stays on the
+    // ended track, so a later sample (switching away, a restored queue) would otherwise save
+    // the very end as a fresh point and revive the album everywhere.
+    if snap.track_count > 0
+        && index + 1 >= snap.track_count
+        && snap.duration_ms > 0
+        && snap.position_ms.saturating_add(FINISH_BUFFER_MS) >= snap.duration_ms
+    {
         return Decision::Clear { album_id };
     }
     if !enabled {
@@ -373,6 +387,39 @@ mod tests {
             decide(&snap(Some("al"), Some(3), 8), 1.0, false),
             Decision::Ignore
         ));
+    }
+
+    #[test]
+    fn the_last_seconds_of_the_last_track_count_as_finished() {
+        let at = |index: u32, position_ms: Ms| {
+            let mut s = snap(Some("al"), Some(index), 8);
+            s.position_ms = position_ms;
+            decide(&s, 1.0, true)
+        };
+        assert!(
+            matches!(at(7, 180_000), Decision::Clear { .. }),
+            "at the end"
+        );
+        assert!(
+            matches!(at(7, 180_000 - FINISH_BUFFER_MS), Decision::Clear { .. }),
+            "inside the buffer"
+        );
+        assert!(
+            matches!(at(7, 180_000 - FINISH_BUFFER_MS - 1), Decision::Save(_)),
+            "just before the buffer"
+        );
+        assert!(
+            matches!(at(6, 180_000), Decision::Save(_)),
+            "only the last track"
+        );
+        // Unknown duration or track count: no way to tell, keep the point.
+        let mut unknown = snap(Some("al"), Some(7), 8);
+        unknown.position_ms = 180_000;
+        unknown.duration_ms = 0;
+        assert!(matches!(decide(&unknown, 1.0, true), Decision::Save(_)));
+        let mut uncounted = snap(Some("al"), Some(7), 0);
+        uncounted.position_ms = 180_000;
+        assert!(matches!(decide(&uncounted, 1.0, true), Decision::Save(_)));
     }
 
     #[test]
