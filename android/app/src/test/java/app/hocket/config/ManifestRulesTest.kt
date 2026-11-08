@@ -58,6 +58,23 @@ class ManifestRulesTest {
         }
     }
 
+    @Test
+    fun cloudBackupIsKeyValueSoItNeverKillsPlayback() {
+        // Auto Backup kills the process after backing it up, playing or not; a key/value agent doesn't.
+        val app = parse("android/app/src/main/AndroidManifest.xml").getElementsByTagName("application").item(0) as Element
+        assertEquals("app.hocket.HocketBackupAgent", app.getAttribute("android:backupAgent"))
+        assertFalse("fullBackupOnly turns Auto Backup back on", app.getAttribute("android:fullBackupOnly") == "true")
+    }
+
+    @Test
+    fun theBackupAgentCarriesNothingTheDeviceMustKeep() {
+        val carried = app.hocket.BackupSet.sharedPrefs.map { "sharedpref:$it.xml" } + app.hocket.BackupSet.files.map { "file:$it" }
+        val leaked = carried.filter { item -> mustExclude.any { item == it || item.startsWith("$it/") } }
+        assertTrue("HocketBackupAgent must not carry $leaked", leaked.isEmpty())
+        // Not the core's tree at all: its mirror, logs, downloads and backups live under it.
+        assertTrue(app.hocket.BackupSet.files.none { it.startsWith("hocket/") })
+    }
+
     private fun elements(path: String, tag: String): List<Element> =
         parse(path).getElementsByTagName(tag).let { list -> (0 until list.length).map { list.item(it) as Element } }
 
