@@ -25,7 +25,13 @@ class FakeImage {
 
 const images = new Map<string, FakeImage>();
 const dialogs = { showOpenDialog: vi.fn() };
-const clipboardMock = { readImage: vi.fn(() => new FakeImage(0, 0)) };
+/** Clipboard entries: MIME type to bytes. Empty means the clipboard holds nothing. */
+type ClipItem = Record<string, string>;
+const clipboardMock = {
+  read: vi.fn(async (): Promise<{ types: string[]; getType(t: string): Promise<Blob> }[]> => []),
+};
+const clipboardHolds = (...items: ClipItem[]) =>
+  clipboardMock.read.mockResolvedValueOnce(items.map((it) => ({ types: Object.keys(it), getType: async (t: string) => new Blob([it[t]!]) })));
 const fsMock = {
   writeFile: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
   readFile: vi.fn<(path: string) => Promise<Buffer>>(async (path) => Buffer.from(path)),
@@ -136,7 +142,10 @@ describe("report ipc", () => {
   it("pastes the clipboard's image, and nothing when it holds none", async () => {
     const { call } = setup();
     expect(await call(IPC.reportPasteScreenshot)).toBeUndefined();
-    clipboardMock.readImage.mockReturnValueOnce(new FakeImage(2560, 1440));
+    clipboardHolds({ "text/plain": "no picture here" });
+    expect(await call(IPC.reportPasteScreenshot)).toBeUndefined();
+    images.set("clipboard png", new FakeImage(2560, 1440));
+    clipboardHolds({ "text/plain": "caption" }, { "text/html": "<img>", "image/png": "clipboard png" });
     const s = (await call(IPC.reportPasteScreenshot)) as { name: string };
     expect(s.name).toBe("Pasted image");
     expect(String(fsMock.writeFile.mock.calls[0]![1])).toBe("jpeg 2000x1125 q85");

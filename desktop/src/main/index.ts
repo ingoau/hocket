@@ -100,7 +100,7 @@ async function main(): Promise<void> {
     devlog.append("error", "main", `${origin}: ${err.stack ?? String(err)}`);
     devlog.flush();
   });
-  const credentials = new ServerCredentialStore(userData);
+  const credentials = await ServerCredentialStore.open(userData);
   mkdirSync(cacheDir, { recursive: true });
   const artwork = new ArtworkRegistry(realpathSync(cacheDir));
 
