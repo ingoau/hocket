@@ -234,17 +234,19 @@ impl AnalysisStore {
         Ok(PutOutcome::Stored)
     }
 
-    /// Whether a usable record with a beat grid exists for the file
-    /// `fingerprint` describes (the worker skips those tracks).
-    pub fn has_beat_record(
+    /// Whether the worker can leave this track alone: a usable record for
+    /// the file `fingerprint` describes has a beat grid, or is the worker's
+    /// own (a track without beats is not analysed again every pass).
+    pub fn covers(
         &self,
         server: &str,
         track_id: &str,
         fingerprint: &SourceFingerprint,
     ) -> anyhow::Result<bool> {
-        Ok(self
-            .get(server, track_id)?
-            .is_some_and(|r| has_beats(&r) && is_usable(&r, fingerprint)))
+        Ok(self.get(server, track_id)?.is_some_and(|r| {
+            is_usable(&r, fingerprint)
+                && (has_beats(&r) || r.produced_by == AnalysisProducer::Worker)
+        }))
     }
 
     pub fn counts(&self, server: Option<&str>) -> anyhow::Result<StoreCounts> {
@@ -354,9 +356,11 @@ mod tests {
         let mut other = rec(AnalysisProducer::Device, false, 0.0);
         other.source = fp(2000.0);
         assert_eq!(put(other), PutOutcome::Stored);
-        assert!(s
-            .has_beat_record("srv", "t1", &fp(1000.0))
-            .is_ok_and(|b| !b));
+        assert!(!s.covers("srv", "t1", &fp(1000.0)).unwrap());
+        assert!(
+            !s.covers("srv", "t1", &fp(2000.0)).unwrap(),
+            "loudness-only"
+        );
         assert_eq!(
             s.counts(None).unwrap(),
             StoreCounts {
@@ -381,10 +385,14 @@ mod tests {
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].track_id, "t2");
         assert!(s.get_many("c", &ids).unwrap().is_empty());
-        assert!(s.has_beat_record("a", "t1", &fp(1000.0)).unwrap());
-        assert!(!s.has_beat_record("b", "t1", &fp(1000.0)).unwrap());
+        assert!(s.covers("a", "t1", &fp(1000.0)).unwrap());
+        assert!(!s.covers("b", "t1", &fp(1000.0)).unwrap());
+        // the worker's own record covers its track even without beats
+        s.put("b", "t3", rec(AnalysisProducer::Worker, false, 1.0), 1)
+            .unwrap();
+        assert!(s.covers("b", "t3", &fp(1000.0)).unwrap());
         assert_eq!(s.counts(Some("a")).unwrap().with_beats, 1);
-        assert_eq!(s.counts(None).unwrap().records, 2);
+        assert_eq!(s.counts(None).unwrap().records, 3);
     }
 
     #[test]

@@ -308,8 +308,8 @@ async fn a_good_credential_is_admitted_and_the_room_persists_only_then() {
     let stored = std::fs::read_to_string(
         std::fs::read_dir(dir.path())
             .unwrap()
-            .next()
-            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_name().to_string_lossy().ends_with(".json"))
             .unwrap()
             .path(),
     )

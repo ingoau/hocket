@@ -2,7 +2,7 @@
 //! worker*). Off unless `--analysis-server` is given. With its own non-admin
 //! Navidrome account it walks the whole library (`search3` with an empty
 //! query, page by page), skips every track that already has a usable record
-//! with a beat grid, and for the rest downloads the original file
+//! with a beat grid (or its own record), and for the rest downloads the original file
 //! (`download`) to a temporary file, analyses it, stores the record
 //! (produced by `Worker`, fingerprinted from the song's metadata) and
 //! deletes the file. One track at a time on one thread at a lowered
@@ -248,7 +248,7 @@ impl Worker {
         if self.failed.contains(&(t.id.clone(), fp_key(&fp))) {
             return false;
         }
-        match self.store.has_beat_record(&self.server_key, &t.id, &fp) {
+        match self.store.covers(&self.server_key, &t.id, &fp) {
             Ok(has) => !has,
             Err(e) => {
                 warn!(error = %e, "analysis store read failed");
