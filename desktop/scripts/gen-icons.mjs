@@ -37,6 +37,8 @@ const MAP = {
   phone: "phone_android", laptop: "laptop_windows", sidePanel: "view_sidebar", dropDown: "arrow_drop_down", openInFull: "open_in_full", closeFullscreen: "close_fullscreen",
   // Edit pins: a chip that says a pin opens when clicked.
   arrowOutward: "arrow_outward",
+  // The sidebar: its collapse toggle (top bar) and Your library's sort button.
+  sidebarClose: "left_panel_close", sidebarOpen: "left_panel_open", sort: "sort",
   // Settings sections, setup and stats (m3-pages).
   visibility: "visibility", visibilityOff: "visibility_off",
   tune: "tune", equalizer: "graphic_eq", transcode: "swap_horiz", connectCast: "cast", palette: "palette", keyboard: "keyboard", backup: "backup", customise: "dashboard_customize", headphones: "headphones", schedule: "schedule", dns: "dns", key: "key",

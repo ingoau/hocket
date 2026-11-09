@@ -24,7 +24,7 @@ export interface ActionContext {
 /** Ids the renderer executes itself (they need UI); everything else is RunAction. */
 const RENDERER_HANDLED = new Set([
   "openCommandPalette", "findInList", "toggleQueuePanel", "toggleLyrics", "toggleFullscreen", "toggleMiniPlayer",
-  "navigateRecent", "ui.back", "ui.forward", "ui.escape", "selectAll", "remove", "handoff", "sleepTimer", "copyDiagnostics",
+  "navigateRecent", "ui.back", "ui.forward", "ui.toggleSidebar", "ui.escape", "selectAll", "remove", "handoff", "sleepTimer", "copyDiagnostics",
   "goToAlbum", "goToArtist", "ui.info", "addToPlaylist", "ui.newPlaylist", "removeFromPlaylist", "ui.renamePlaylist",
   "deletePlaylist", "unpin", "saveQueueAsPlaylist", "ui.developerDiagnostics", "openStash",
 ]);
@@ -85,6 +85,9 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       return;
     case "ui.forward":
       app.forward();
+      return;
+    case "ui.toggleSidebar":
+      app.setPanels({ sidebarCollapsed: !app.panels.sidebarCollapsed });
       return;
     case "ui.escape":
       if (app.contextMenu) app.closeContextMenu();

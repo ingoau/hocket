@@ -26,7 +26,7 @@ export const MATERIAL: Record<string, string> = {
   picture_in_picture_alt: "mini", lyrics: "lyrics", bedtime: "sleep", bedtime_off: "sleep", cast: "devices",
   play_circle: "resume", close: "close", bug_report: "bug", home: "home", music_note: "song", category: "genre",
   insights: "stats", settings: "settings", filter_alt: "filter", info: "info", library_music: "library",
-  stash: "stash", inventory_2: "stash", headphones: "headphones",
+  stash: "stash", inventory_2: "stash", headphones: "headphones", left_panel_close: "sidebarClose", left_panel_open: "sidebarOpen",
 };
 
 export interface IconProps {

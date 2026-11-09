@@ -4,7 +4,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSP
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
-import { useApp } from "./store/app";
+import { SIDEBAR_RAIL, useApp } from "./store/app";
 import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
 import { Sidebar } from "./components/Sidebar";
@@ -80,7 +80,7 @@ export function App() {
         <ReportUploadBar />
         <TopBar />
       </header>
-        <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
+        <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarCollapsed ? SIDEBAR_RAIL : panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
         <Sidebar />
         <main className="content" id="main" tabIndex={-1} data-testid="content">
           {/* Edit pins opens at the content's leading edge, beside the sidebar it edits. */}

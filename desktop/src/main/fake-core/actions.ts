@@ -93,6 +93,7 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "remove", label: "Remove from playlist or queue", icon: "remove", category: "edit", targets: ["none"], surfaces: [], defaultShortcut: "Delete" },
   { id: "ui.back", label: "Back", icon: "back", category: "view", targets: ["none"], surfaces: [], defaultShortcut: "Alt+ArrowLeft" },
   { id: "ui.forward", label: "Forward", icon: "forward", category: "view", targets: ["none"], surfaces: [], defaultShortcut: "Alt+ArrowRight" },
+  { id: "ui.toggleSidebar", label: "Collapse or expand the sidebar", icon: "left_panel_close", category: "view", targets: ["none"], surfaces: [], defaultShortcut: "Mod+B" },
   { id: "ui.escape", label: "Close / clear selection", icon: "close", category: "app", targets: ["none"], surfaces: [], defaultShortcut: "Escape" },
 
   // Sidebar items (choose-and-order)
