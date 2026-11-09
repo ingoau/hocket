@@ -137,10 +137,15 @@ impl Actor {
         if self.analysis.worker.is_none() {
             self.analysis.worker = worker::spawn(self.tx.clone());
         }
-        match &self.analysis.worker {
+        let sent = match &self.analysis.worker {
             Some(w) => w.send(job).is_ok(),
             None => false,
+        };
+        if !sent && self.analysis.worker.take().is_some() {
+            // The thread is gone: start a new one next time.
+            tracing::warn!(target: "hocket::automix", "analysis worker stopped");
         }
+        sent
     }
 
     #[cfg(not(feature = "automix-analysis"))]
@@ -221,7 +226,12 @@ mod worker {
             .spawn(move || {
                 let mut analyser: Option<Analyser> = None;
                 for job in rx {
-                    let result = analyse(&mut analyser, &job);
+                    // A panicking analyser must still answer, or the actor
+                    // stays busy with this job for good; it starts afresh.
+                    let result = guarded(|| analyse(&mut analyser, &job));
+                    if result.is_err() {
+                        analyser = None;
+                    }
                     let msg = ActorMsg::Internal(Internal::AnalysisDone {
                         server_id: job.server_id,
                         track_id: job.track_id,
@@ -238,6 +248,28 @@ mod worker {
                 tracing::warn!(target: "hocket::automix", error = %e, "analysis worker");
                 None
             }
+        }
+    }
+
+    /// `f`, with a panic turned into an error.
+    fn guarded(f: impl FnOnce() -> super::AnalysisResult) -> super::AnalysisResult {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| {
+            let what = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            tracing::warn!(target: "hocket::automix", panic = %what, "analyser panicked");
+            Err(format!("analyser panicked: {what}"))
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn a_panic_is_an_error() {
+            let r = super::guarded(|| panic!("boom"));
+            assert_eq!(r.unwrap_err(), "analyser panicked: boom");
         }
     }
 
