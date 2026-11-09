@@ -573,14 +573,16 @@ Client (`core/handlers/analysis_share.rs`):
   the worker's) onto `PriorityQueue`, but only when the socket's server key
   is the worker's (`--verify-url` if set, else `--analysis-server`). Only
   ids are taken (non-empty, ≤ 256 bytes), deduplicated, at most 256 queued
-  (the oldest dropped: clients are untrusted), and ids the worker failed to
-  analyse in this process are not queued again. The push is a short lock
-  and a `Notify`, never a wait on the worker. The worker drains the queue
-  oldest first before each library track and wakes for it while it waits
-  between passes: each id's metadata comes from `getSong` (unknown ids are
-  dropped), the usual checks apply (covered meanwhile, too long, too large,
-  failed before), and a failed download leaves the rest for the next
-  drain. The library walk skips what was analysed meanwhile.
+  (the oldest dropped: clients are untrusted), and ids the worker failed on
+  or won't analyse in this process (bad file, too long or large, unknown to
+  the server) are not queued again. The push is a short lock and a
+  `Notify`, never a wait on the worker. The worker drains the queue oldest
+  first before each library track and wakes for it while it waits between
+  passes: each id's metadata comes from `getSong`, the usual checks apply
+  (covered meanwhile, too long, too large, failed before), and the pause
+  follows each track it analyses. A lookup or download the server fails
+  (network, auth) leaves the rest for the next drain. The library walk
+  skips what was analysed meanwhile.
 - Cost ≈ 30 s of one core and ~480 MB peak RSS per track: a first pass
   over 10 000 tracks takes about three days (measured on an 8-core x86
   host against a remote Navidrome: ~150 tracks an hour, downloads included). `/health` shows `analysis`:

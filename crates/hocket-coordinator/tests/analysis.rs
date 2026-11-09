@@ -629,6 +629,7 @@ async fn fetch_misses_on_the_workers_server_are_queued_for_it() {
 
 #[tokio::test]
 async fn the_worker_analyses_what_clients_asked_for_first() {
+    use hocket_core::subsonic::SubsonicError;
     let fake = Arc::new(FakeServer::new("srv", "worker"));
     for id in ["a", "b", "c"] {
         wav_song(&fake, id);
@@ -655,6 +656,14 @@ async fn the_worker_analyses_what_clients_asked_for_first() {
     assert!(store.get(&key, "a").unwrap().is_none());
     assert_eq!(fake.calls_to("search3"), 0);
     assert_eq!(fake.calls_to("download"), 1);
+
+    // a lookup the server fails keeps the queue; an unknown id isn't queued again
+    queue.push(&key, ["a"]);
+    fake.fail_next(SubsonicError::Network("down".into()), 1);
+    assert_eq!(worker.drain_priority(&cancel).await, 0);
+    assert_eq!(queue.len(), 1, "kept for later");
+    assert_eq!(queue.pop().as_deref(), Some("a"));
+    assert_eq!(queue.push(&key, ["nope"]), 0);
 
     // the walk doesn't analyse it again
     let library = worker.walk().await.unwrap();

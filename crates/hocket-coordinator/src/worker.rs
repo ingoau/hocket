@@ -219,8 +219,9 @@ pub struct PriorityQueue {
 #[derive(Default)]
 struct PriorityInner {
     queue: VecDeque<String>,
-    /// Ids the worker could not analyse: not queued again (the library walk
-    /// retries them when the file changes).
+    /// Ids the worker could not or will not analyse (bad file, too long or
+    /// large, unknown to the server): not queued again (the library walk
+    /// retries a bad file when it changes).
     failed: HashSet<String>,
 }
 
@@ -275,6 +276,15 @@ impl PriorityQueue {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Put an id back at the head (its lookup failed for want of the
+    /// server); dropped if the queue filled up meanwhile.
+    fn requeue(&self, id: String) {
+        let mut inner = self.inner.lock();
+        if inner.queue.len() < PRIORITY_MAX && !inner.queue.contains(&id) {
+            inner.queue.push_front(id);
+        }
     }
 
     fn mark_failed(&self, id: &str) {
@@ -408,11 +418,15 @@ impl Worker {
         }
     }
 
+    /// Whether the worker would ever analyse this track (length and size).
+    fn analysable(&self, t: &Track) -> bool {
+        t.duration_ms > 0
+            && t.duration_ms <= WORKER_MAX_DURATION_MS
+            && !t.size_bytes.is_some_and(|b| b > self.max_file_bytes as f64)
+    }
+
     fn wanted(&self, t: &Track) -> bool {
-        if t.duration_ms == 0
-            || t.duration_ms > WORKER_MAX_DURATION_MS
-            || t.size_bytes.is_some_and(|b| b > self.max_file_bytes as f64)
-        {
+        if !self.analysable(t) {
             return false;
         }
         let fp = fingerprint_of(t);
@@ -572,23 +586,44 @@ impl Worker {
     }
 
     /// Analyse what clients asked for and missed, oldest first, until the
-    /// queue is empty, a download fails or `cancel`. Each id's metadata
-    /// comes from `getSong`; ids the server doesn't know, and tracks that
-    /// are covered meanwhile or not wanted (too long, too large, failed
-    /// before), are dropped. Returns how many were analysed.
+    /// queue is empty, a lookup or download fails for want of the server, or
+    /// `cancel`. Each id's metadata comes from `getSong`. Ids the server
+    /// doesn't know and tracks the worker never analyses (too long, too
+    /// large) are dropped and not queued again; tracks covered meanwhile or
+    /// failed before are dropped. Pauses `--analysis-pause-secs` after each
+    /// track analysed. Returns how many were analysed.
     pub async fn drain_priority(&mut self, cancel: &CancellationToken) -> usize {
+        use hocket_core::subsonic::SubsonicError;
         let mut analysed = 0;
         while !cancel.is_cancelled() {
             let Some(id) = self.priority.pop() else { break };
             let song = match self.api.song(&id).await {
                 Ok(song) if !song.is_dir => song,
-                Ok(_) => continue,
-                Err(e) => {
-                    debug!(track = %id, error = %e, "priority track lookup failed");
+                Ok(_) => {
+                    self.priority.mark_failed(&id);
                     continue;
+                }
+                Err(
+                    e @ (SubsonicError::NotFound(_)
+                    | SubsonicError::Forbidden(_)
+                    | SubsonicError::Protocol(_)),
+                ) => {
+                    debug!(track = %id, error = %e, "priority track unknown");
+                    self.priority.mark_failed(&id);
+                    continue;
+                }
+                Err(e) => {
+                    // The server is in trouble: leave the queue for later.
+                    debug!(track = %id, error = %e, "priority track lookup failed");
+                    self.priority.requeue(id);
+                    break;
                 }
             };
             let track = track_from_child("", &song);
+            if !self.analysable(&track) {
+                self.priority.mark_failed(&track.id);
+                continue;
+            }
             if !self.wanted(&track) {
                 continue;
             }
@@ -599,7 +634,9 @@ impl Worker {
                 // The server is likely in trouble: leave the rest for later.
                 Outcome::TransportFailed(_) => break,
             }
-            if !self.priority.is_empty() && !self.pause.is_zero() {
+            // Clients don't get to skip the pause, before the next queued
+            // track or the walk's next one.
+            if !self.pause.is_zero() {
                 self.set_state("waiting");
                 tokio::select! {
                     _ = tokio::time::sleep(self.pause) => {}
