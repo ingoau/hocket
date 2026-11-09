@@ -40,7 +40,9 @@ if (process.env.HOCKET_USER_DATA) app.setPath("userData", userData);
 
 protocol.registerSchemesAsPrivileged([
   { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false } },
-  { scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  // corsEnabled: the renderer reads artwork pixels (fluid background, accent picker) through
+  // crossOrigin <img>s, and Chromium 156 refuses cross-origin requests to a scheme without it.
+  { scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
 if (!app.requestSingleInstanceLock()) {
@@ -381,7 +383,12 @@ function installProtocols(appRoot: string, artwork: ArtworkRegistry): void {
     if (url.host !== ART_HOST) return new Response("forbidden", { status: 403 });
     const file = await artwork.resolve(url.pathname.replace(/^\/+/, ""));
     if (!file) return new Response("not found", { status: 404 });
-    return net.fetch(pathToFileURL(file).toString(), { headers: { "Cache-Control": "max-age=3600" } });
+    const res = await net.fetch(pathToFileURL(file).toString());
+    // Any origin may read it: a token only exists once main handed it to one of our windows.
+    const headers = new Headers(res.headers);
+    headers.set("Cache-Control", "max-age=3600");
+    headers.set("Access-Control-Allow-Origin", "*");
+    return new Response(res.body, { status: res.status, headers });
   });
 }
 
