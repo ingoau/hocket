@@ -4,7 +4,7 @@
 
 use crate::api::*;
 use crate::automix::{
-    late_edit_fade, plan_transition, should_mix, store, MixContext, MixTrack, PlanInput, PlanTrack,
+    is_usable, late_edit_fade, plan_transition, should_mix, store, MixContext, MixTrack, PlanInput, PlanTrack,
     LOCK_IN_MS,
 };
 use crate::core::actor::Actor;
@@ -63,6 +63,14 @@ impl Actor {
         let Some(server_id) = self.server_id() else {
             return false;
         };
+        // A record for another file (or analysis version) is no use here and
+        // must not replace a usable one.
+        if let Ok(Some(track)) = self.db.track(&track_id) {
+            if !is_usable(&record, &store::fingerprint_of(&track)) {
+                tracing::debug!(target: "hocket::automix", track = %track_id, "analysis record not for this file: dropped");
+                return false;
+            }
+        }
         let now = self.now();
         match store::put(&self.db, &server_id, &track_id, record, now) {
             Ok(true) => {

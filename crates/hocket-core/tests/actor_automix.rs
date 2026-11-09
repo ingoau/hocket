@@ -435,3 +435,37 @@ async fn a_late_edit_the_pair_rules_refuse_still_fades() {
     assert_eq!(plan.tail_start_ms, committed);
     assert_eq!(plan.tail_len_ms, 3_000);
 }
+
+/// A record that doesn't match the track's file is dropped, and never
+/// replaces a usable one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_record_for_another_file_is_not_stored() {
+    let t = synced_core("fp").await;
+    store_audible_end(&t, "t0", 180_000).await;
+    let track = t.open_db().track("t0").unwrap().unwrap();
+    let mut other = fingerprint_of(&track);
+    other.duration_ms += 30_000;
+    let record = AnalysisRecord {
+        version: ANALYSIS_VERSION,
+        analyser: "test".into(),
+        produced_by: AnalysisProducer::Worker,
+        source: other,
+        duration_ms: track.duration_ms + 30_000,
+        audible_end_ms: 150_000,
+        ..Default::default()
+    };
+    t.run(Command::StoreAnalysisRecord {
+        track_id: "t0".into(),
+        record: Box::new(record),
+    })
+    .await;
+    match t
+        .query(Query::TrackAnalysis {
+            track_id: "t0".into(),
+        })
+        .await
+    {
+        QueryResult::Analysis(Some(r)) => assert_eq!(r.audible_end_ms, 180_000),
+        other => panic!("{other:?}"),
+    }
+}
