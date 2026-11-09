@@ -7,6 +7,7 @@ import { extractAccent } from "./accent";
 import { resolveArtwork } from "../components/Artwork";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { accentTokens, type ThemeName } from "./contrast";
+import { bridge } from "../core/bridge";
 
 export function useTheme() {
   const theme = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
@@ -22,6 +23,8 @@ export function useTheme() {
       const name: ThemeName = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
       document.documentElement.setAttribute("data-theme", name);
       setResolved(name);
+      // The window's ground and Windows' caption buttons follow (and the next launch starts in it).
+      bridge().window.setTheme(name);
     };
     apply();
     mq.addEventListener("change", apply);

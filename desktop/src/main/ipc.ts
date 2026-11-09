@@ -529,5 +529,7 @@ function applyWindowControl(windows: Windows, win: BrowserWindow, control: unkno
     windows.broadcastState();
   } else if ("fullscreen" in control) {
     win.setFullScreen(!!control.fullscreen);
+  } else if ("theme" in control && (control.theme === "light" || control.theme === "dark")) {
+    windows.setTheme(control.theme);
   }
 }

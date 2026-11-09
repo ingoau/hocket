@@ -133,6 +133,8 @@ export interface HocketBridge {
     openMiniPlayer(): void;
     closeMiniPlayer(): void;
     showMain(): void;
+    /** The resolved theme, for the window chrome main draws (and the next launch's first paint). */
+    setTheme(theme: WindowTheme): void;
     getState(): Promise<WindowState>;
     onState(listener: (state: WindowState) => void): () => void;
     /** Report page visibility so main can forward SetVisibility with focus. */
@@ -282,4 +284,8 @@ export type WindowControl =
   | "closeMiniPlayer"
   | "showMain"
   | { alwaysOnTop: boolean }
-  | { fullscreen: boolean };
+  | { fullscreen: boolean }
+  /** The renderer's resolved theme: the window's background and (Windows) caption buttons follow it. */
+  | { theme: WindowTheme };
+
+export type WindowTheme = "light" | "dark";
