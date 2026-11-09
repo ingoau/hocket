@@ -116,11 +116,7 @@ impl Actor {
 
     /// The follow-up's source, with its AutoMix fields (`locked`: see
     /// [`Self::with_mix`]).
-    fn next_source(
-        &self,
-        upcoming: &[QueueItem],
-        locked: Option<Ms>,
-    ) -> Option<MediaSource> {
+    fn next_source(&self, upcoming: &[QueueItem], locked: Option<Ms>) -> Option<MediaSource> {
         let item = upcoming.first()?;
         let track = self.track_or_bare(&item.track_id)?;
         let source = self.media_source_for(&item.key, &track)?;

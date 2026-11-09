@@ -159,7 +159,8 @@ async fn next_during_a_transition_completes_it() {
     assert_eq!(t.current_track_id().await.as_deref(), Some("t4"));
     let log = t.backend.log();
     assert!(
-        log.iter().any(|c| matches!(c, ScriptedCall::CompleteTransition)),
+        log.iter()
+            .any(|c| matches!(c, ScriptedCall::CompleteTransition)),
         "{log:?}"
     );
     assert_eq!(loads(&t), 0, "no load (before: {loads_before})");
@@ -266,7 +267,10 @@ async fn a_seek_cancels_the_transition() {
     play(&t, &["t0", "t4", "t1"]).await;
     t.run_for(194_700.0 - 500.0).await;
     assert!(transition_started(&t));
-    t.run(Command::SeekTo { position_ms: 100_000 }).await;
+    t.run(Command::SeekTo {
+        position_ms: 100_000,
+    })
+    .await;
     t.run_for(5_000.0).await;
     assert!(!t.backend.is_mixing());
     assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
@@ -292,7 +296,7 @@ async fn a_stored_record_shapes_the_plan() {
     };
     t.run(Command::StoreAnalysisRecord {
         track_id: "t0".into(),
-        record: record.clone(),
+        record: Box::new(record),
     })
     .await;
     match t

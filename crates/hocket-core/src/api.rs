@@ -2863,7 +2863,7 @@ pub enum Command {
     /// best record known for the track.
     StoreAnalysisRecord {
         track_id: TrackId,
-        record: AnalysisRecord,
+        record: Box<AnalysisRecord>,
     },
 
     // -- from the platform ------------------------------------------------

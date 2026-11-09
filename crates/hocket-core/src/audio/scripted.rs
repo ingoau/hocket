@@ -153,9 +153,9 @@ struct State {
 
 impl State {
     fn next_fails(&self) -> bool {
-        self.next
-            .as_ref()
-            .is_some_and(|n| self.failing.contains(&n.key) || self.failing_tracks.contains(&n.track.id))
+        self.next.as_ref().is_some_and(|n| {
+            self.failing.contains(&n.key) || self.failing_tracks.contains(&n.track.id)
+        })
     }
 
     /// Hand over from the current item to `next` at virtual time `at`, with

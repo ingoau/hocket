@@ -4,8 +4,8 @@
 
 use crate::api::*;
 use crate::automix::{
-    late_edit_fade, plan_transition, should_mix, store, MixContext, MixTrack, PlanInput,
-    PlanTrack, LOCK_IN_MS,
+    late_edit_fade, plan_transition, should_mix, store, MixContext, MixTrack, PlanInput, PlanTrack,
+    LOCK_IN_MS,
 };
 use crate::core::actor::Actor;
 use crate::settings::keys;
@@ -199,7 +199,12 @@ impl Actor {
             return source;
         }
         let next_facts = self.mix_facts(next);
-        if let Some(current) = self.playback.track.as_ref().filter(|_| self.playback.loaded) {
+        if let Some(current) = self
+            .playback
+            .track
+            .as_ref()
+            .filter(|_| self.playback.loaded)
+        {
             let current = self.mix_facts(current);
             source.mix_in = match locked {
                 Some(tail_start) => {

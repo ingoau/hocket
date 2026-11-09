@@ -141,15 +141,36 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let t = track("t1", 200_000);
         assert_eq!(best_for(&db, &t).unwrap(), None);
-        assert!(put(&db, "srv", "t1", rec(AnalysisProducer::Device, false, 200_000), 1.0).unwrap());
+        assert!(put(
+            &db,
+            "srv",
+            "t1",
+            rec(AnalysisProducer::Device, false, 200_000),
+            1.0
+        )
+        .unwrap());
         assert_eq!(
             best_for(&db, &t).unwrap().unwrap().produced_by,
             AnalysisProducer::Device
         );
         // Beats beat a loudness-only record...
-        assert!(put(&db, "srv", "t1", rec(AnalysisProducer::Desktop, true, 200_000), 2.0).unwrap());
+        assert!(put(
+            &db,
+            "srv",
+            "t1",
+            rec(AnalysisProducer::Desktop, true, 200_000),
+            2.0
+        )
+        .unwrap());
         // ... and a loudness-only one never replaces them.
-        assert!(!put(&db, "srv", "t1", rec(AnalysisProducer::Worker, false, 200_000), 3.0).unwrap());
+        assert!(!put(
+            &db,
+            "srv",
+            "t1",
+            rec(AnalysisProducer::Worker, false, 200_000),
+            3.0
+        )
+        .unwrap());
         let best = get(&db, "srv", "t1").unwrap().unwrap();
         assert_eq!(best.produced_by, AnalysisProducer::Desktop);
         assert_eq!(best.beats_ms, vec![500, 1000]);
@@ -161,11 +182,25 @@ mod tests {
     #[test]
     fn a_record_for_another_file_is_replaced_and_never_used() {
         let db = Db::open_in_memory().unwrap();
-        assert!(put(&db, "srv", "t1", rec(AnalysisProducer::Worker, true, 100_000), 1.0).unwrap());
+        assert!(put(
+            &db,
+            "srv",
+            "t1",
+            rec(AnalysisProducer::Worker, true, 100_000),
+            1.0
+        )
+        .unwrap());
         // The file changed (another duration): the stored record no longer applies.
         let t = track("t1", 200_000);
         assert_eq!(best_for(&db, &t).unwrap(), None);
-        assert!(put(&db, "srv", "t1", rec(AnalysisProducer::Device, false, 200_000), 2.0).unwrap());
+        assert!(put(
+            &db,
+            "srv",
+            "t1",
+            rec(AnalysisProducer::Device, false, 200_000),
+            2.0
+        )
+        .unwrap());
         assert!(best_for(&db, &t).unwrap().is_some());
         // Another analysis version is stored but not usable.
         let mut old = rec(AnalysisProducer::Worker, true, 200_000);
