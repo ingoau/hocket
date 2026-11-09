@@ -1,0 +1,16 @@
+[package]
+name = "hocket-mixlab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AutoMix lab: analyse files, plan and render transitions, corpus statistics."
+publish = false
+
+[dependencies]
+hocket-core = { workspace = true, features = ["automix-analysis"] }
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true

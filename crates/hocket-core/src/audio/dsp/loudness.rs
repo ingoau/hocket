@@ -281,17 +281,17 @@ pub fn album_gain_db(tracks: &[(Option<f64>, u64)]) -> Option<f64> {
 
 /// Decode a local file and measure it (feature `native-audio`). This is what
 /// the downloads subsystem calls when a transcode dropped the tags.
-#[cfg(feature = "native-audio")]
+#[cfg(feature = "decode")]
 pub fn compute_replaygain(
     path: &std::path::Path,
-) -> Result<ReplayGain, crate::audio::native::decoder::DecodeError> {
+) -> Result<ReplayGain, crate::audio::decoder::DecodeError> {
     let mut meter: Option<LoudnessMeter> = None;
-    crate::audio::native::decoder::decode_file(path, |spec, pcm| {
+    crate::audio::decoder::decode_file(path, |spec, pcm| {
         let m = meter
             .get_or_insert_with(|| LoudnessMeter::new(f64::from(spec.sample_rate), spec.channels));
         m.push(pcm);
     })?;
-    let m = meter.ok_or(crate::audio::native::decoder::DecodeError::NoAudio)?;
+    let m = meter.ok_or(crate::audio::decoder::DecodeError::NoAudio)?;
     Ok(Loudness {
         lufs: m.integrated_lufs(),
         sample_peak: m.sample_peak(),

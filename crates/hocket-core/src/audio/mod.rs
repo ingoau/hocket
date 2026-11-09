@@ -26,6 +26,8 @@ pub mod padding;
 pub mod scripted;
 pub mod sleep;
 
+#[cfg(feature = "decode")]
+pub mod decoder;
 #[cfg(feature = "native-audio")]
 pub mod native;
 

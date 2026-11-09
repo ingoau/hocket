@@ -22,10 +22,8 @@ use parking_lot::Mutex;
 
 use crate::api::{AudioSettings, BackendReport, MediaSource, OutputDevice, QueueKey};
 use crate::audio::backend::{clamp_volume, BackendError, PlaybackBackend, ReportSink};
+use crate::audio::decoder::{open_file, open_media_source, DecodeError, DecodeHandle, Spec};
 use crate::audio::dsp::{DspChain, DspSettings, SmoothGain};
-use crate::audio::native::decoder::{
-    open_file, open_media_source, DecodeError, DecodeHandle, Spec,
-};
 use crate::audio::native::http::{HttpSource, RangeFetcher};
 use crate::audio::native::output::{
     list_output_devices, open_output, probe_format, DeviceWatcher, OutputConfig, OutputRing,
@@ -1409,7 +1407,7 @@ impl PlaybackBackend for NativeBackend {
 mod tests {
     use super::*;
     use crate::api::TrackSummary;
-    use crate::audio::native::decoder::tests::write_test_wav;
+    use crate::audio::decoder::tests::write_test_wav;
     use crate::audio::native::http::MemoryFetcher;
     use crate::core::default_audio_settings;
 

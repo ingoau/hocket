@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/hocket-core",
+  "crates/hocket-mixlab",
   "crates/hocket-coordinator",
   "crates/hocket-android",
   "crates/hocket-node",
@@ -45,6 +46,11 @@ mdns-sd = "0.13"
 symphonia = { version = "0.5", features = ["all"] }
 cpal = "0.15"
 rubato = "0.16"
+# AutoMix beat tracking (Beat This!, pure-Rust rten inference). Pinned exactly: the
+# embedded model files in hocket-core/models/ come from the same upstream revision.
+beat-this = { version = "=1.1.0", default-features = false }
+rten = { version = "=0.24.0", default-features = false }
+rten-tensor = "=0.24.0"
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["trace"] }
 clap = { version = "4", features = ["derive"] }
@@ -60,4 +66,22 @@ playwire = "1.0.0"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+opt-level = 3
+
+# Beat inference is ~100x slower unoptimised; keep debug builds and `cargo test` usable.
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-base]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
+opt-level = 3
+[profile.dev.package.beat-this]
+opt-level = 3
+[profile.dev.package.rustfft]
 opt-level = 3

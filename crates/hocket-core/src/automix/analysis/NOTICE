@@ -1,0 +1,46 @@
+Third-party notices for hocket-core's AutoMix analysis (feature `automix-analysis`)
+==================================================================================
+
+The beat and downbeat tracker is "Beat This!" (Foscarin, Schlüter, Widmer,
+ISMIR 2024; https://github.com/CPJKU/beat_this), run through its Rust port
+beat-this-rs (https://github.com/danigb/beat-this-rs, crate `beat-this` 1.1.0).
+
+models/mel_spectrogram.onnx and models/beat_this_small.onnx are copied
+unchanged from beat-this-rs at revision 1ae768e78f1ad83b0ed3886241dc29ffde853c40
+(the commit crate 1.1.0 was published from). They are converted from the
+"small1" Beat This! checkpoint and embedded into the binary.
+
+  sha256 a5f8d39d989f31859454ba27afe61c5317ca95e4d9373e6853e5361b8937172f  beat_this_small.onnx
+  sha256 fdd59e65c515331308e4c8841edf99972deca646bdf6197744c2a5b7755e3de9  mel_spectrogram.onnx
+
+Both projects are under the MIT License; beat-this-rs's licence text, which
+retains both copyright notices, follows.
+
+----------------------------------------------------------------------------
+MIT License
+
+beat-this-rs is a Rust port of "Beat This!" by the Institute of Computational
+Perception, JKU Linz, Austria (https://github.com/CPJKU/beat_this), which is
+itself distributed under the MIT License. Both copyright notices are retained
+below under the same MIT terms.
+
+Copyright (c) 2025 danigb (Rust port)
+Copyright (c) 2024 Institute of Computational Perception, JKU Linz, Austria ("Beat This!" original work)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

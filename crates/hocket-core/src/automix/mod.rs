@@ -12,7 +12,10 @@
 //! - [`render`]: the outgoing tail ([`render::render_tail`]) and [`render::IncomingShaper`].
 //! - [`stretch`]: the time-stretcher behind the tail's tempo ramp.
 //! - [`store`]: the local table of records (the one module here with I/O: the client db).
+//! - `analysis` (feature `automix-analysis`): decoding + Beat This! + loudness → full records.
 
+#[cfg(feature = "automix-analysis")]
+pub mod analysis;
 pub mod loudness;
 pub mod plan;
 pub mod record;

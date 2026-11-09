@@ -13,13 +13,13 @@
 //! source's queue the moment the current one ends, and the encoder padding
 //! has already been trimmed by the decoder.
 
-pub mod decoder;
 pub mod engine;
 pub mod http;
 pub mod output;
 pub mod resample;
 pub mod ring;
 
+pub use crate::audio::decoder;
 pub use engine::{NativeBackend, NativeConfig};
 pub use http::{MemoryFetcher, RangeFetcher, ReqwestFetcher};
 pub use output::{list_output_devices, OutputConfig};
