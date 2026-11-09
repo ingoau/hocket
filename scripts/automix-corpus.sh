@@ -29,7 +29,7 @@ out="$root/automix-corpus"
 mkdir -p "$out"
 COUNT="${1:-100}" OUT="$out" PAIRS="$root/crates/hocket-core/src/automix/corpus/pairs.txt" \
   exec python3 -I - <<'PY'
-import hashlib, json, os, random, secrets, sys, urllib.parse, urllib.request
+import hashlib, json, os, random, re, secrets, sys, urllib.parse, urllib.request
 
 base = os.environ["HOCKET_TEST_URL"].rstrip("/")
 user, password = os.environ["HOCKET_TEST_USER"], os.environ["HOCKET_TEST_PASS"]
@@ -106,16 +106,32 @@ while len(chosen) < count:
 
 keep = ("id", "title", "artist", "album", "albumId", "genre", "track", "discNumber",
         "duration", "suffix", "size", "bitRate", "year", "why")
+def file_name(song):
+    """The server's id and suffix, made safe for a path: anything but
+    [A-Za-z0-9_-] in the id becomes `_` plus a hash of the id (so ids
+    differing only there stay apart); the suffix keeps only alphanumerics."""
+    sid = str(song["id"])
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", sid)[:100]
+    if safe != sid or not safe:
+        safe = f"{safe}-{hashlib.sha256(sid.encode()).hexdigest()[:12]}"
+    suffix = re.sub(r"[^A-Za-z0-9]", "", str(song.get("suffix") or ""))[:8] or "bin"
+    return f"{safe}.{suffix}"
+
 meta = []
 for i, s in enumerate(chosen.values(), 1):
-    path = os.path.join(out, f"{s['id']}.{s.get('suffix', 'bin')}")
+    path = os.path.join(out, file_name(s))
     if not os.path.exists(path):
         print(f"[{i}/{len(chosen)}] {s.get('artist', '?')} - {s.get('title', '?')}", flush=True)
         tmp = path + ".part"
-        with fetch(url("download", id=s["id"]), 300) as r, open(tmp, "wb") as f:
-            while chunk := r.read(1 << 20):
-                f.write(chunk)
-        os.replace(tmp, path)
+        try:
+            with fetch(url("download", id=s["id"]), 300) as r, open(tmp, "wb") as f:
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+            os.replace(tmp, path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
     meta.append({k: s[k] for k in keep if k in s} | {"file": os.path.basename(path)})
 with open(os.path.join(out, "tracks.json"), "w") as f:
     json.dump(meta, f, indent=1, ensure_ascii=False)
