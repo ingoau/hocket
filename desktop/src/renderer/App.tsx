@@ -4,7 +4,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSP
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
-import { useApp } from "./store/app";
+import { SIDEBAR_RAIL, useApp } from "./store/app";
 import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
 import { Sidebar } from "./components/Sidebar";
@@ -61,6 +61,7 @@ export function App() {
     useApp.getState().setFullscreen(false);
   };
   useTheme();
+  useWindowChrome(fullscreen);
   useGlobalKeyboard(true);
   useDeepLinks();
   useQueueDropReveal();
@@ -72,7 +73,7 @@ export function App() {
     document.getElementById("main")?.focus();
   };
   return (
-    <div className={`app ${narrow ? "narrow" : ""}`} data-testid="app">
+    <div className={`app ${narrow ? "narrow" : ""} ${fullscreen ? "player-open" : ""}`} data-testid="app">
       <header className="app-header" inert={modal}>
         <a href="#main" className="skip-link" onClick={skip} data-testid="skip-link">{t("a11y.skipToContent")}</a>
         {coreKind === "fake" ? <div className="dev-banner" data-testid="dev-banner">{t("app.devBanner")}</div> : null}
@@ -80,7 +81,7 @@ export function App() {
         <ReportUploadBar />
         <TopBar />
       </header>
-        <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
+        <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarCollapsed ? SIDEBAR_RAIL : panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
         <Sidebar />
         <main className="content" id="main" tabIndex={-1} data-testid="content">
           {/* Edit pins opens at the content's leading edge, beside the sidebar it edits. */}
@@ -100,6 +101,20 @@ export function App() {
       <Toasts />
     </div>
   );
+}
+
+/**
+ * The window chrome around the app: the platform on the root (Windows keeps the fullscreen player's
+ * buttons clear of its caption buttons), and main told when the fullscreen player covers the window.
+ */
+function useWindowChrome(playerOpen: boolean): void {
+  const platform = useApp((s) => s.meta?.platform);
+  useEffect(() => {
+    if (platform) document.documentElement.dataset.platform = platform;
+  }, [platform]);
+  useEffect(() => {
+    bridge().window.setPlayerOpen(playerOpen);
+  }, [playerOpen]);
 }
 
 /**

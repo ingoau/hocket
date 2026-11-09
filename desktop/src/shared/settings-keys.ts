@@ -47,4 +47,4 @@ export const SK = {
   playbackTransitions: "playback.transitions",
 } as const;
 
-export const DEFAULT_ACCENT = "#6f5cff";
+export const DEFAULT_ACCENT = "#8f80f5";

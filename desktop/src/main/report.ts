@@ -6,12 +6,13 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
-import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, type NativeImage } from "electron";
+import { BrowserWindow, clipboard, ipcMain, nativeImage, type NativeImage } from "electron";
 import type { ReportAttachment } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import type { PickedRecording, StagedScreenshot, UndecodedImage } from "@shared/bridge-types";
 import { IPC, REPORT_MAX_SCREENSHOTS } from "@shared/bridge-types";
 import { t } from "@shared/strings";
+import { showOpenDialog } from "./file-dialog";
 
 /** Longest side of a staged screenshot. */
 export const SCREENSHOT_MAX_SIDE = 2000;
@@ -109,7 +110,7 @@ export function installReportIpc(deps: ReportIpcDeps): void {
     if (!win || !isOurs(e.sender)) throw new Error("rejected");
     const max = typeof room === "number" && Number.isInteger(room) ? Math.max(0, Math.min(REPORT_MAX_SCREENSHOTS, room)) : 0;
     if (max === 0) return [];
-    const r = await dialog.showOpenDialog(win, {
+    const r = await showOpenDialog(win, {
       title: t("report.pickScreenshots"),
       filters: [{ name: t("report.imageFilter"), extensions: SCREENSHOT_EXTENSIONS }],
       properties: ["openFile", "multiSelections"],
@@ -135,10 +136,19 @@ export function installReportIpc(deps: ReportIpcDeps): void {
     return out;
   });
 
+  /** The first PNG or JPEG on the clipboard, if any. */
+  async function readClipboardImage(): Promise<NativeImage | undefined> {
+    for (const item of await clipboard.read()) {
+      const mime = item.types.find((type) => type === "image/png" || type === "image/jpeg");
+      if (mime) return nativeImage.createFromBuffer(Buffer.from(await (await item.getType(mime)).arrayBuffer()));
+    }
+    return undefined;
+  }
+
   ipcMain.handle(IPC.reportPasteScreenshot, async (e): Promise<StagedScreenshot | undefined> => {
     if (!isOurs(e.sender)) throw new Error("rejected");
-    const img = clipboard.readImage();
-    return img.isEmpty() ? undefined : stage(img, t("report.pastedName"));
+    const img = await readClipboardImage();
+    return img === undefined || img.isEmpty() ? undefined : stage(img, t("report.pastedName"));
   });
 
   ipcMain.handle(IPC.reportStageImage, async (e, bytes: unknown, name: unknown): Promise<StagedScreenshot | undefined> => {
@@ -150,7 +160,7 @@ export function installReportIpc(deps: ReportIpcDeps): void {
   ipcMain.handle(IPC.reportPickRecording, async (e): Promise<PickedRecording | undefined> => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || !isOurs(e.sender)) throw new Error("rejected");
-    const r = await dialog.showOpenDialog(win, {
+    const r = await showOpenDialog(win, {
       title: t("report.pickRecording"),
       filters: [{ name: t("report.videoFilter"), extensions: RECORDING_EXTENSIONS }],
       properties: ["openFile"],

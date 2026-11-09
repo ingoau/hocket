@@ -14,8 +14,9 @@ export interface AppFixture {
 /** Launch the built app with the fake core against `userData` (a spec may launch several instances in turn). */
 export async function launchFake(userData: string, extraEnv: Record<string, string> = {}): Promise<{ app: ElectronApplication; page: Page }> {
   const root = resolve(__dirname, "..");
+  // No GPU here: since Chromium ~139 WebGL only falls back to SwiftShader when asked to.
   const app = await electron.launch({
-    args: [root, "--no-sandbox", "--disable-gpu"],
+    args: [root, "--no-sandbox", "--disable-gpu", "--enable-unsafe-swiftshader"],
     env: { ...process.env, HOCKET_FAKE_CORE: "1", HOCKET_USER_DATA: userData, HOCKET_FAKE_TIMESCALE: "8", HOCKET_DEVICE_NAME: "e2e-desktop", ELECTRON_ENABLE_LOGGING: "1", ...extraEnv },
   });
   const page = await app.firstWindow();

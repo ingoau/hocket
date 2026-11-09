@@ -1,14 +1,21 @@
-// Icons are Material Symbols (rounded; Apache-2.0), generated into
-// material-icons.ts by scripts/gen-icons.mjs: one name → glyph map, keyed by
-// the short names the renderer uses, plus the Material Symbols names the
-// action registry emits in `ActionDescriptor.icon`. Each glyph has an
-// outlined and a filled variant: outlined by default (transport glyphs are
+// Icons are Phosphor (MIT, phosphoricons.com), generated into icons.ts by
+// scripts/gen-icons.mjs: one name → glyph map, keyed by the short names the
+// renderer uses, plus the Material Symbols names the action registry emits in
+// `ActionDescriptor.icon` (mapped below). Each glyph has an outlined (Regular)
+// and a filled (Fill) variant: outlined by default (transport glyphs are
 // filled), `filled` picks explicitly (a loved heart, a set star). Nothing in
 // the UI draws an icon from a unicode glyph; anything unknown renders as a
 // music note so a new registry icon is visible (and `icon.test.ts` fails)
 // rather than blank.
 import type { CSSProperties } from "react";
-import { MATERIAL_ICONS } from "./material-icons";
+import { ICONS, ICON_SIZE, ICON_TRIM } from "./icons";
+
+/**
+ * The part of Phosphor's 256 box drawn: a little of its margin trimmed, so a glyph sits at the same
+ * optical size as Geist's text beside it (and its 16-unit stroke reads at 14–24px). The generator
+ * fits every glyph inside it.
+ */
+const VIEW_BOX = `${ICON_TRIM} ${ICON_TRIM} ${ICON_SIZE - 2 * ICON_TRIM} ${ICON_SIZE - 2 * ICON_TRIM}`;
 
 /** Solid shapes read better filled; everything else defaults to outlined. */
 const FILLED_BY_DEFAULT = new Set(["play", "pause", "stop", "next", "previous", "rewind", "forward"]);
@@ -20,13 +27,13 @@ export const MATERIAL: Record<string, string> = {
   playlist_add: "playLater", remove_from_queue: "remove", delete: "trash", shuffle: "shuffle", shuffle_on: "shuffle",
   repeat: "repeat", all_inclusive: "autoplay", clear_all: "trash", playlist_remove: "remove", playlist_add_check: "playlistAdd",
   history: "restore", push_pin: "pin", keep_off: "pinOff", delete_forever: "trash", star_rate: "star", star_outline: "starOff",
-  star: "star", favorite: "heart", heart_minus: "heartOff", download: "download", download_done: "download", file_download_off: "downloadOff",
+  star: "star", favorite: "heart", heart_minus: "heartOff", download: "download", download_done: "downloadOff", file_download_off: "downloadOff",
   album: "album", artist: "artist", person: "artist", undo: "undo", redo: "redo", select_all: "selectAll",
   keyboard_command_key: "command", search: "search", queue_music: "queue", fullscreen: "fullscreen", fullscreen_exit: "fullscreenExit",
   picture_in_picture_alt: "mini", lyrics: "lyrics", bedtime: "sleep", bedtime_off: "sleep", cast: "devices",
   play_circle: "resume", close: "close", bug_report: "bug", home: "home", music_note: "song", category: "genre",
   insights: "stats", settings: "settings", filter_alt: "filter", info: "info", library_music: "library",
-  stash: "stash", inventory_2: "stash", headphones: "headphones",
+  stash: "stash", inventory_2: "stash", headphones: "headphones", left_panel_close: "sidebarClose", left_panel_open: "sidebarOpen",
 };
 
 export interface IconProps {
@@ -41,25 +48,25 @@ export interface IconProps {
 
 /** Resolves a renderer or Material name to the renderer name that has a glyph. */
 export function iconName(name: string): string {
-  return MATERIAL_ICONS[name] ? name : (MATERIAL[name] ?? "music");
+  return ICONS[name] ? name : (MATERIAL[name] ?? "music");
 }
 
 const escapeText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export function Icon({ name, size = 16, className, style, title, filled }: IconProps) {
   const n = iconName(name);
-  const [outline, solid] = MATERIAL_ICONS[n] ?? MATERIAL_ICONS.music ?? [""];
+  const [outline, solid] = ICONS[n] ?? ICONS.music ?? [""];
   const fill = filled ?? FILLED_BY_DEFAULT.has(n);
   const body = fill ? (solid ?? outline) : outline;
   return (
-    <svg className={`icon ${className ?? ""}`} width={size} height={size} viewBox="0 0 24 24" style={style} aria-hidden={title ? undefined : true} role={title ? "img" : undefined} aria-label={title} data-icon={n}
+    <svg className={`icon ${className ?? ""}`} width={size} height={size} viewBox={VIEW_BOX} style={style} aria-hidden={title ? undefined : true} role={title ? "img" : undefined} aria-label={title} data-icon={n}
       dangerouslySetInnerHTML={{ __html: (title ? `<title>${escapeText(title)}</title>` : "") + body }} />
   );
 }
 
 export function hasIcon(name: string): boolean {
-  return name in MATERIAL_ICONS || name in MATERIAL;
+  return name in ICONS || name in MATERIAL;
 }
 
 /** Every name the renderer can draw (for tests). */
-export const ICON_NAMES: readonly string[] = Object.keys(MATERIAL_ICONS);
+export const ICON_NAMES: readonly string[] = Object.keys(ICONS);

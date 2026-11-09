@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
-import type { AppMeta, AppPrefs, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/bridge-types";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
@@ -38,6 +38,8 @@ export interface PanelState {
   rightView: SideView;
   rightWidth: number;
   sidebarWidth: number;
+  /** The sidebar folded to a rail of icons and covers (the top bar's first button, Mod+B). */
+  sidebarCollapsed: boolean;
 }
 
 /** A menu item the renderer runs itself (a pin's "When clicked" choice, moving a Home section). */
@@ -90,6 +92,7 @@ export interface PlaylistPickerState {
 
 export interface UiState {
   meta: AppMeta | undefined;
+  credentialStorage: CredentialStorage | undefined;
   windowState: WindowState;
   route: Route;
   history: Route[];
@@ -166,7 +169,12 @@ export interface AppStore extends CoreState, UiState {
   runAction(actionId: string, target?: ActionTarget): void;
 }
 
-const defaultPanels: PanelState = { rightOpen: true, rightView: "overview", rightWidth: 360, sidebarWidth: 220 };
+/** The sidebar's resize range, and the rail's width when it is collapsed (or the window narrow). */
+export const SIDEBAR_MIN = 200;
+export const SIDEBAR_MAX = 420;
+export const SIDEBAR_RAIL = 72;
+
+const defaultPanels: PanelState = { rightOpen: true, rightView: "overview", rightWidth: 360, sidebarWidth: 280, sidebarCollapsed: false };
 
 /** The remembered panels, minus anything an older build stored (the queue/lyrics split). */
 function loadPanels(): PanelState {
@@ -175,7 +183,8 @@ function loadPanels(): PanelState {
   if (typeof saved.rightOpen === "boolean") panels.rightOpen = saved.rightOpen;
   // Saved widths are clamped to what the resize handles allow (an older build, a hand-edited file).
   if (typeof saved.rightWidth === "number") panels.rightWidth = Math.max(300, Math.min(560, saved.rightWidth));
-  if (typeof saved.sidebarWidth === "number") panels.sidebarWidth = Math.max(160, Math.min(360, saved.sidebarWidth));
+  if (typeof saved.sidebarWidth === "number") panels.sidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, saved.sidebarWidth));
+  if (typeof saved.sidebarCollapsed === "boolean") panels.sidebarCollapsed = saved.sidebarCollapsed;
   if (SIDE_VIEWS.includes(saved.rightView as SideView)) panels.rightView = saved.rightView as SideView;
   return panels;
 }
@@ -183,6 +192,7 @@ function loadPanels(): PanelState {
 export const useApp = create<AppStore>((set, get) => ({
   ...initialCoreState,
   meta: undefined,
+  credentialStorage: undefined,
   windowState: { maximized: false, fullscreen: false, focused: true, visible: true, alwaysOnTop: false },
   route: { view: "home" },
   history: [],
@@ -435,6 +445,7 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
   });
   const offState = b.window.onState((st) => useApp.getState().setWindowState(st));
   void b.meta().then((m) => useApp.getState().setMeta(m));
+  void b.credentialStorage().then((credentialStorage) => useApp.setState({ credentialStorage }));
   void b.prefs.get().then((prefs) => useApp.setState({ prefs }));
   void b.window.getState().then((st) => st && useApp.getState().setWindowState(st));
   const onVis = () => {

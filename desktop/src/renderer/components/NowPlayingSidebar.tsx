@@ -355,16 +355,46 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
   // Re-renders only when the current line changes, and follows playback only while it plays.
   const active = usePositionValue(stamp, durationMs, offset, lineAt, !covered);
   const reduced = usePrefersReducedMotion();
-  // Before the first line: the first two, still to come.
-  const shown = active < 0 ? [undefined, 0, 1] : [active - 1, active, active + 1];
+  // The whole song in a fixed window: the current line (before the first, the first) held at its
+  // middle, the lines above and below fading out (lyrics-peek's mask), gliding as it moves on.
+  const centre = Math.max(0, active);
+  const view = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLOListElement>(null);
+  const [shift, setShift] = useState(0);
+  // The first placement for a song (a mount, a new track, lyrics arriving mid-song) jumps straight
+  // there; only the moves after it glide.
+  const [glide, setGlide] = useState(false);
+  const placedFor = useRef<unknown>(null);
+  useLayoutEffect(() => {
+    const v = view.current;
+    const ol = list.current;
+    if (!v || !ol) return;
+    const place = () => {
+      const li = ol.children[centre] as HTMLElement | undefined;
+      if (li) setShift(Math.round(v.clientHeight / 2 - (li.offsetTop + li.offsetHeight / 2)));
+    };
+    place();
+    if (placedFor.current !== lines) {
+      placedFor.current = lines;
+      setGlide(false);
+      requestAnimationFrame(() => requestAnimationFrame(() => setGlide(true)));
+    }
+    // The card resizing, the lines rewrapping (the current one grows) and the font arriving all move the middle.
+    const ro = new ResizeObserver(place);
+    ro.observe(v);
+    ro.observe(ol);
+    void document.fonts.ready.then(place);
+    return () => ro.disconnect();
+  }, [centre, active, lines]);
   return (
-    <ol className={`lyrics-peek synced ${reduced ? "" : "moving"}`} aria-label={t("lyrics.title")} data-active={active}>
-      {shown.map((i, slot) => {
-        const line = i !== undefined && i >= 0 ? lines[i] : undefined;
-        const current = slot === 1 && active >= 0;
-        return <li key={i ?? `none-${slot}`} className={`peek-line ${current ? "current" : ""}`} aria-current={current ? "true" : undefined}>{line?.text ?? " "}</li>;
-      })}
-    </ol>
+    <div ref={view} className={`lyrics-peek-view ${glide && !reduced ? "moving" : ""}`}>
+      <ol ref={list} className="lyrics-peek synced" aria-label={t("lyrics.title")} data-active={active} style={{ transform: `translateY(${shift}px)` }}>
+        {lines.map((line, i) => {
+          const current = i === active;
+          return <li key={i} className={`peek-line ${current ? "current" : ""}`} aria-current={current ? "true" : undefined}>{line.text}</li>;
+        })}
+      </ol>
+    </div>
   );
 }
 

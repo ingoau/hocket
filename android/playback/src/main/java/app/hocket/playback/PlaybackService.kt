@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import androidx.core.content.ContextCompat
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaLibraryService
 import app.hocket.core.CoreHandle
@@ -62,6 +63,8 @@ import kotlinx.coroutines.launch
 class PlaybackService : MediaLibraryService() {
     companion object {
         const val IDLE_TIMEOUT_MS = 5 * 60_000L
+        /** The service starting itself so a resumption outlives the binding that asked for it. */
+        const val ACTION_RESUME = "app.hocket.playback.RESUME"
         const val ACTION_BIND_CORE = "app.hocket.playback.BIND_CORE"
         const val EXTRA_BIND_TOKEN = "app.hocket.playback.BIND_TOKEN"
         /** Library changes arrive in bursts (a sync); browsers hear about them once they settle. */
@@ -119,7 +122,7 @@ class PlaybackService : MediaLibraryService() {
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         val browser = LibraryBrowser(this, { core }, { serverId }, scope)
         val player = CoreSessionPlayer(Looper.getMainLooper(), ::dispatch, media = browser, artwork = { t -> t.coverArt?.let { ArtworkProvider.uri(this, it) } })
-        bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope, ExternalControl(this))
+        bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope, ExternalControl(this), ::holdForResumption)
         addSession(bridge.session)
         network = NetworkMonitor(this, ::dispatch, onConnectivity = { online -> main.post { backend.onConnectivityChanged(online) } })
         battery = BatterySaverMonitor(this, ::dispatch)
@@ -299,8 +302,34 @@ class PlaybackService : MediaLibraryService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         PlaybackLog.i("start command #$startId: ${PlaybackLog.intent(intent)}")
         val result = super.onStartCommand(intent, flags, startId)
-        if (intent?.action == Intent.ACTION_MEDIA_BUTTON) foregroundHold.hold()
+        if (intent?.action == Intent.ACTION_MEDIA_BUTTON || intent?.action == ACTION_RESUME) {
+            foregroundHold.hold()
+            // Started now, so unbinding no longer ends the service: if nothing comes of the
+            // request, the idle stop does.
+            if (boundClients == 0) scheduleIdleStop()
+        }
         return result
+    }
+
+    /**
+     * A controller asked to resume while nothing was loaded. A service that is only bound (System
+     * UI's resumption card, a Media3 controller) is destroyed the moment that controller unbinds,
+     * which cancels the resumption before the core has answered. Starting it, in the foreground as
+     * Media3 would once playback begins, keeps it until the play has happened (or the idle stop).
+     */
+    private fun holdForResumption() {
+        if (isPlaybackOngoing) return
+        // A stop between this start and its onStartCommand would break the foreground promise;
+        // onStartCommand schedules the idle stop again.
+        idleJob?.cancel()
+        val intent = Intent(this, PlaybackService::class.java).setAction(ACTION_RESUME)
+        try {
+            ContextCompat.startForegroundService(this, intent)
+        } catch (e: IllegalStateException) {
+            // Not allowed to start in the foreground from here: a plain start still keeps it alive.
+            PlaybackLog.w("resumption: could not start in the foreground: ${e.message}")
+            try { startService(intent) } catch (e: IllegalStateException) { PlaybackLog.w("resumption: could not start the service: ${e.message}") }
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = bridge.session

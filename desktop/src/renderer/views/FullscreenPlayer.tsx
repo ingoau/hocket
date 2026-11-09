@@ -2,7 +2,7 @@
 //
 // On the blurred, artwork-coloured background (FluidBackground): the artwork,
 // a controls card (title, artist, love / add to playlist / More, the
-// rating, the wavy seek bar and the transport), the collapse and window
+// rating, the seek bar and the transport), the collapse and window
 // fullscreen buttons top right, and a pill bottom right with the Connect
 // device and the Lyrics / Queue / About toggles (choosing the one that is on
 // goes back to the artwork alone), then the sleep timer and volume.
@@ -40,7 +40,7 @@ import { bridge } from "../core/bridge";
 import { FluidBackground } from "../components/FluidBackground";
 import { Artwork, useArtwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
-import { WavySeek } from "../components/WavySeek";
+import { Seek } from "../components/Seek";
 import { QueuePanel } from "../components/QueuePanel";
 import { LyricsPane } from "../components/NowPlayingSidebar";
 import { AboutSong } from "../components/AboutSong";
@@ -360,6 +360,8 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       })}
       <div className="np-fade" aria-hidden="true" />
 
+      {/* The window's drag strip while the player covers the top bar (the buttons stay clickable). */}
+      <div className="np-drag" aria-hidden="true" />
       <header className="np-head np-chrome">
         <button type="button" className="np-icon-btn np-round" aria-pressed={windowFullscreen} aria-label={t("player.windowFullscreen")} title={windowFullscreen ? t("player.exitWindowFullscreen") : t("player.windowFullscreen")} onClick={toggleWindowFullscreen} data-testid="fs-window-fullscreen"><Icon name={windowFullscreen ? "fullscreenExit" : "fullscreen"} size={22} /></button>
         <button ref={closeRef} type="button" className="np-icon-btn np-round" aria-label={t("fullscreen.exit")} title={t("fullscreen.exit")} onClick={() => setFullscreen(false)} data-testid="fullscreen-exit"><Icon name="closeFullscreen" size={22} /></button>
@@ -394,12 +396,12 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
             </div>
             {track && showRating ? <div className="np-stars" data-testid="np-stars"><Stars value={track.rating} size={20} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /></div> : null}
 
-            <WavySeek durationMs={track?.durationMs} playing={playing && !transport.buffering} />
+            <Seek durationMs={track?.durationMs} />
 
             <div className="np-transport">
               <button type="button" className={`np-tonal np-flank ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="fs-shuffle"><Icon name="shuffle" size={22} filled={queue.shuffle} /></button>
               <button type="button" className="np-skip" aria-label={t("player.previous")} title={t("player.previous")} onClick={() => d({ type: "previous" })} data-testid="fs-previous"><Icon name="previous" size={36} filled /></button>
-              <button type="button" className={`np-play ${playing ? "playing" : "paused"}`} aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="fs-play-pause">
+              <button type="button" className="np-play" aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="fs-play-pause">
                 {transport.buffering ? <Icon name="spinner" className="spin" size={34} /> : <Icon name={playing ? "pause" : "play"} size={40} filled />}
               </button>
               <button type="button" className="np-skip" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="fs-next"><Icon name="next" size={36} filled /></button>

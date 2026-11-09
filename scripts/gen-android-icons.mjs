@@ -1,8 +1,8 @@
 // Generates android/app/src/main/java/app/hocket/ui/icons/HocketIcons.kt: the
 // Material Symbols (rounded) glyphs the Android app uses, as Compose
-// ImageVectors, from the same Iconify dataset desktop's icons come from
-// (@iconify-json/material-symbols, Apache-2.0; a desktop dev dependency, so run
-// `pnpm install` in desktop/ first). Only the icons listed here are emitted, so
+// ImageVectors, from the Iconify dataset (@iconify-json/material-symbols,
+// Apache-2.0; kept as a desktop dev dependency for this script alone, the
+// desktop itself draws Phosphor, so run `pnpm install` in desktop/ first). Only the icons listed here are emitted, so
 // the app doesn't ship the whole set.
 //
 //   node scripts/gen-android-icons.mjs

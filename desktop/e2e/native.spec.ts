@@ -18,7 +18,7 @@ async function launch(userData: string): Promise<{ app: ElectronApplication; pag
   // the fixed-key basic_text backend, which the app refuses to persist with;
   // opt in explicitly so the credential replay after restart is exercised.
   Object.assign(env, { HOCKET_USER_DATA: userData, HOCKET_DEVICE_NAME: "e2e-native", HOCKET_LOG: "warn", ELECTRON_ENABLE_LOGGING: "1", HOCKET_INSECURE_CREDENTIAL_STORE: "1" });
-  const app = await electron.launch({ args: [root, "--no-sandbox", "--disable-gpu"], env });
+  const app = await electron.launch({ args: [root, "--no-sandbox", "--disable-gpu", "--enable-unsafe-swiftshader"], env });
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
   return { app, page };

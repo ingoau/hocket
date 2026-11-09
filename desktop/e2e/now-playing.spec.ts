@@ -536,20 +536,6 @@ test.describe("the side panel overview from the keyboard", () => {
   });
 });
 
-test.describe("the player bar's wave", () => {
-  test("moves while the window has focus, and holds still under the battery saver", async ({ hocket }) => {
-    const { page } = hocket;
-    await completeSetup(page);
-    await playFirstAlbum(page);
-    const wave = page.getByTestId("seek-slider");
-    await expect(wave).toHaveAttribute("data-wave", "moving");
-    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "battery.level", value: JSON.stringify("light") } }));
-    await expect(wave).toHaveAttribute("data-wave", "still");
-    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "battery.level", value: JSON.stringify("off") } }));
-    await expect(wave).toHaveAttribute("data-wave", "moving");
-  });
-});
-
 test.describe("the player bar at middling widths", () => {
   test("the song, the transport and the buttons never overlap, with another device's name showing too", async ({ hocket }) => {
     const { app, page } = hocket;
@@ -745,6 +731,8 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     let worst = "";
     const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line, .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)");
     for (const el of Array.from(texts)) {
+      // The lyrics card holds the current line at its middle; the lines either side fade out by design.
+      if (el.matches(".peek-line:not(.current)") && el.closest(".lyrics-peek-view")) continue;
       const r = el.getBoundingClientRect();
       if (!r.width || !r.height) continue;
       const fg = parse(getComputedStyle(el).color);

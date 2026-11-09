@@ -10,7 +10,6 @@
 .menu.cm .cm-preview-bar { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 42%, transparent); pointer-events: none; z-index: 0; }
 .menu.cm .mi.cm-preview > :not(.cm-preview-bar) { position: relative; z-index: 1; }
 .menu.cm .mi:hover, .menu.cm .mi.active { border-radius: 9px; }
-.menu.cm .mi:active { border-radius: var(--shape-xs); }
 .menu.cm .sep { flex: 0 0 auto; margin: 4px 6px; }
 .menu.cm .menu-heading { padding: 6px 8px 2px; }
 .cm-lead { width: 14px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; color: var(--accent-text); }
@@ -131,7 +130,7 @@
 
 /* Play on: grouped rows (rounded as a group), the playing one on the accent. */
 .connect-group { display: flex; flex-direction: column; gap: 2px; }
-.connect-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg-sunken); border-radius: 4px; cursor: pointer; }
+.connect-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg-sunken); border-radius: 4px; }
 .connect-group > li:first-child .connect-row { border-top-left-radius: var(--shape-lg); border-top-right-radius: var(--shape-lg); }
 .connect-group > li:last-child .connect-row { border-bottom-left-radius: var(--shape-lg); border-bottom-right-radius: var(--shape-lg); }
 .connect-row:hover { background: var(--bg-hover); }
@@ -177,7 +176,7 @@
 .si-rating .stars svg { width: 22px; height: 22px; }
 /* The section chips stay in reach as the page scrolls. */
 .si-tabs { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0; background: var(--bg-elev); }
-.si-tab { height: 36px; padding: 0 16px; border-radius: var(--shape-sm); border: 1px solid var(--border-strong, var(--border)); background: transparent; color: var(--fg); font: inherit; font-size: var(--fs-md); font-weight: 600; cursor: pointer; transition: background-color var(--dur-short) var(--ease-emphasized); }
+.si-tab { height: 36px; padding: 0 16px; border-radius: var(--shape-sm); border: 1px solid var(--border-strong, var(--border)); background: transparent; color: var(--fg); font: inherit; font-size: var(--fs-md); font-weight: 600; transition: background-color var(--dur-short) var(--ease-emphasized); }
 .si-tab:hover { background: var(--bg-hover); }
 .si-tab.on { background: var(--state-selected); border-color: transparent; }
 .si-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
@@ -209,7 +208,7 @@
 .si-around-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
 .si-around-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .si-similar { display: flex; flex-direction: column; gap: 2px; }
-.si-similar-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 14px; padding: 8px; border-radius: var(--shape-md); cursor: pointer; }
+.si-similar-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 14px; padding: 8px; border-radius: var(--shape-md); }
 .si-similar-row:hover { background: var(--bg-hover); }
 .si-similar-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .si-similar-row .art { width: 44px; height: 44px; border-radius: var(--shape-sm); flex: 0 0 auto; }

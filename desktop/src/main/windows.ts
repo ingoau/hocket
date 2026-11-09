@@ -1,12 +1,28 @@
 // Window management: the main window, the always-on-top mini player and a
 // persistent hidden anchor window (Windows SMTC is tied to an HWND; the main
 // window is destroyed on close-to-tray, this one never is).
-import { BrowserWindow, app, screen } from "electron";
+import { BrowserWindow, app, nativeTheme, screen } from "electron";
 import { join } from "node:path";
 import { APP_SCHEME, DEV_SERVER_URL } from "@shared/constants";
-import type { WindowKind, WindowState } from "@shared/bridge-types";
+import type { ThemeChoice, WindowKind, WindowState, WindowTheme } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 import type { StoreFile } from "./store-file";
+
+/**
+ * The window's ground (global.css --bg) and ink (--fg) per theme: the first paint before the
+ * renderer has drawn, and Windows' caption buttons, which sit on the top bar.
+ */
+export const WINDOW_CHROME: Record<WindowTheme, { ground: string; ink: string }> = {
+  dark: { ground: "#1b1730", ink: "#ece9ff" },
+  light: { ground: "#eceaf4", ink: "#1b1730" },
+};
+/**
+ * Windows' caption buttons over the fullscreen player: white on the dark ground. Opaque, as Electron
+ * documents no alpha for the overlay's colour, and white symbols need a dark backing whatever the artwork.
+ */
+const PLAYER_OVERLAY = { color: "#1b1730", symbolColor: "#ffffff" };
+/** The top bar's height (m3-shell.css --topbar-h): Windows' caption buttons fill it. */
+const TOPBAR_HEIGHT = 56;
 
 /** How long after its renderer is gone a window is loaded again. */
 const RELOAD_AFTER_CRASH_MS = 250;
@@ -27,8 +43,15 @@ export class Windows {
   quitting = false;
   private readonly preload: string;
 
+  /** The fullscreen player is open over the main window. */
+  private playerOpen = false;
+
   constructor(private readonly opts: WindowsOptions) {
     this.preload = join(opts.appRoot, "out", "preload", "index.cjs");
+    // Following the system: its switch recolours the chrome too.
+    nativeTheme.on("updated", () => {
+      if ((this.opts.store.get("windowTheme") ?? "system") === "system") this.applyChrome();
+    });
   }
 
   private baseWebPreferences() {
@@ -110,6 +133,15 @@ export class Windows {
     }
     const saved = this.opts.store.get("mainBounds");
     const bounds = saved && this.boundsOnScreen(saved) ? saved : { width: 1280, height: 820, x: undefined, y: undefined, maximized: false };
+    // A new main window starts with no player over it.
+    this.playerOpen = false;
+    const chrome = WINDOW_CHROME[this.theme()];
+    // One title bar, the app's own top bar: macOS keeps its inset traffic lights, Windows draws its
+    // caption buttons over the top bar (snap layouts and all), Linux has no frame and our buttons.
+    const frame =
+      process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 14 } }
+      : process.platform === "win32" ? { titleBarStyle: "hidden" as const, titleBarOverlay: { color: chrome.ground, symbolColor: chrome.ink, height: TOPBAR_HEIGHT } }
+      : { frame: false };
     const win = new BrowserWindow({
       width: bounds.width,
       height: bounds.height,
@@ -119,10 +151,9 @@ export class Windows {
       minHeight: 600,
       show: false,
       title: "Hocket",
-      backgroundColor: "#121214",
+      backgroundColor: chrome.ground,
       autoHideMenuBar: true,
-      titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
-      trafficLightPosition: process.platform === "darwin" ? { x: 14, y: 14 } : undefined,
+      ...frame,
       webPreferences: this.baseWebPreferences(),
     });
     this.main = win;
@@ -198,7 +229,7 @@ export class Windows {
       resizable: true,
       fullscreenable: false,
       title: "Hocket mini player",
-      backgroundColor: "#121214",
+      backgroundColor: WINDOW_CHROME[this.theme()].ground,
       webPreferences: this.baseWebPreferences(),
     });
     win.setAlwaysOnTop(true, "floating");
@@ -229,6 +260,33 @@ export class Windows {
 
   stateOf(win: BrowserWindow): WindowState {
     return { maximized: win.isMaximized(), fullscreen: win.isFullScreen(), focused: win.isFocused(), visible: win.isVisible() && !win.isMinimized(), alwaysOnTop: win.isAlwaysOnTop() };
+  }
+
+  /** The theme the window is drawn in: the setting the renderer last reported, the system's when it follows it. */
+  private theme(): WindowTheme {
+    const choice = this.opts.store.get("windowTheme") ?? "system";
+    return choice === "system" ? (nativeTheme.shouldUseDarkColors ? "dark" : "light") : choice;
+  }
+
+  /** The theme setting changed (or was first read): the window's ground and caption buttons follow, now and next launch. */
+  setTheme(choice: ThemeChoice): void {
+    if (this.opts.store.get("windowTheme") !== choice) this.opts.store.set("windowTheme", choice);
+    this.applyChrome();
+  }
+
+  /** The fullscreen player opened or closed: Windows' caption buttons sit over it while it is open. */
+  setPlayerOpen(open: boolean): void {
+    if (this.playerOpen === open) return;
+    this.playerOpen = open;
+    this.applyChrome();
+  }
+
+  private applyChrome(): void {
+    const chrome = WINDOW_CHROME[this.theme()];
+    for (const win of [this.main, this.mini]) if (win && !win.isDestroyed()) win.setBackgroundColor(chrome.ground);
+    const win = this.main;
+    if (process.platform !== "win32" || !win || win.isDestroyed()) return;
+    win.setTitleBarOverlay({ ...(this.playerOpen ? PLAYER_OVERLAY : { color: chrome.ground, symbolColor: chrome.ink }), height: TOPBAR_HEIGHT });
   }
 
   broadcastState(): void {

@@ -10,7 +10,7 @@ import { executeAction } from "../store/actions";
 import { Icon } from "./Icon";
 import { useConnectSyncing } from "../lib/connect-sync";
 
-/** A device kind's icon (Material Symbols Rounded). */
+/** A device kind's icon. */
 export function deviceIcon(platform: Platform | undefined): string {
   switch (platform) {
     case "android":

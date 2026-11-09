@@ -59,9 +59,10 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
   const artwork = { register: vi.fn(async (p: string) => (p.startsWith("/cache/") ? "a".repeat(32) : undefined)), resolve: vi.fn() };
   installIpc({
     core: { kind: "fake", dispatch, query, onEvent: (l) => { eventListeners.push(l); return () => undefined; }, shutdown: async () => undefined },
-    windows: { all: () => [{ webContents: { id: 1 } }], mini: undefined, main: undefined, stateOf: () => ({}), broadcastState: vi.fn(), openMini: vi.fn(), closeMini: vi.fn(), showMain: vi.fn() } as never,
+    windows: { all: () => [{ webContents: { id: 1 } }], mini: undefined, main: undefined, stateOf: () => ({}), broadcastState: vi.fn(), openMini: vi.fn(), closeMini: vi.fn(), showMain: vi.fn(), setTheme: windowChrome.setTheme, setPlayerOpen: windowChrome.setPlayerOpen } as never,
     artwork: artwork as never,
     meta: () => ({}) as never,
+    credentialStorage: async () => "os",
     onCommand,
     onVisibilityReport: vi.fn(),
     onNetworkReport: vi.fn(),
@@ -74,6 +75,8 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
   });
   return { dispatch, query, onCommand, artwork, passwordFor, emit };
 }
+
+const windowChrome = { setTheme: vi.fn(), setPlayerOpen: vi.fn() };
 
 describe("ipc", () => {
   afterEach(() => {
@@ -144,7 +147,8 @@ describe("ipc", () => {
     expect(fsMock.writeFile).toHaveBeenCalledTimes(1);
     await expect(handlers.get(IPC.dialogSaveText)!(ours, { title: "Save", text: 5 })).rejects.toThrow("rejected");
     await expect(handlers.get(IPC.dialogSaveText)!(ours, { title: "Save", text: "x", defaultPath: "../../etc/passwd" })).resolves.toBeUndefined();
-    expect(dialogs.showSaveDialog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ defaultPath: undefined }));
+    // The renderer's path is dropped: the dialog starts in the folder last saved to.
+    expect(dialogs.showSaveDialog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ defaultPath: "/home/u" }));
     dialogs.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/home/u/in.json"] });
     fsMock.readFile.mockResolvedValue("content");
     expect(await handlers.get(IPC.dialogOpenText)!(ours, { title: "Open" })).toEqual({ path: "/home/u/in.json", text: "content" });
@@ -172,6 +176,16 @@ describe("ipc", () => {
     expect(() => on(ours, { alwaysOnTop: 1 })).not.toThrow();
     expect(() => on(ours, "nope")).not.toThrow();
     expect(() => on(ours, 42)).not.toThrow();
+  });
+
+  it("takes the theme and the player's state for the window chrome from the main window only", () => {
+    setup();
+    const on = listeners.get(IPC.windowControl)!;
+    // The sender here is not the main window (the mini player, say): nothing changes.
+    on(ours, { theme: "dark" });
+    on(ours, { playerOpen: true });
+    expect(windowChrome.setTheme).not.toHaveBeenCalled();
+    expect(windowChrome.setPlayerOpen).not.toHaveBeenCalled();
   });
 
   it("config export resolves keystore references after a warning and writes with a dialog-chosen path", async () => {

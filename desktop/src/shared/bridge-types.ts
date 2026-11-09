@@ -13,14 +13,15 @@ export interface AppMeta {
   deviceName: string;
   dataDir: string;
   cacheDir: string;
-  /**
-   * Where server passwords go: "os" = encrypted by the OS keystore and
-   * replayed on the next start; "volatile" = kept in memory for this session
-   * only (no usable keystore, e.g. Linux without a keyring), so the user
-   * signs in again after a restart.
-   */
-  credentialStorage: "os" | "volatile";
 }
+
+/**
+ * Where server passwords go: "os" = encrypted by the OS keystore and
+ * replayed on the next start; "volatile" = kept in memory for this session
+ * only (no usable keystore, e.g. Linux without a keyring), so the user
+ * signs in again after a restart.
+ */
+export type CredentialStorage = "os" | "volatile";
 
 export interface WindowState {
   maximized: boolean;
@@ -120,6 +121,8 @@ export interface HocketBridge {
   query(query: Query): Promise<QueryResult>;
   onEvent(listener: (event: Event) => void): () => void;
   meta(): Promise<AppMeta>;
+  /** Resolves once main has opened the OS keystore, which may wait on a Keychain prompt. */
+  credentialStorage(): Promise<CredentialStorage>;
   window: {
     minimize(): void;
     maximize(): void;
@@ -130,6 +133,10 @@ export interface HocketBridge {
     openMiniPlayer(): void;
     closeMiniPlayer(): void;
     showMain(): void;
+    /** The theme setting, for the window chrome main draws (and the next launch's first paint). Main window only. */
+    setTheme(theme: ThemeChoice): void;
+    /** The fullscreen player is open over the window: Windows' caption buttons go over it. Main window only. */
+    setPlayerOpen(open: boolean): void;
     getState(): Promise<WindowState>;
     onState(listener: (state: WindowState) => void): () => void;
     /** Report page visibility so main can forward SetVisibility with focus. */
@@ -233,6 +240,7 @@ export const IPC = {
   query: "hocket:query",
   event: "hocket:event",
   meta: "hocket:meta",
+  credentialStorage: "hocket:credential-storage",
   windowControl: "hocket:window:control",
   windowState: "hocket:window:state",
   windowStateChanged: "hocket:window:state-changed",
@@ -278,4 +286,13 @@ export type WindowControl =
   | "closeMiniPlayer"
   | "showMain"
   | { alwaysOnTop: boolean }
-  | { fullscreen: boolean };
+  | { fullscreen: boolean }
+  /** The theme setting: the window's background and (Windows) caption buttons follow it. */
+  | { theme: ThemeChoice }
+  /** The fullscreen player opened or closed over the main window. */
+  | { playerOpen: boolean };
+
+/** A theme as resolved, light or dark. */
+export type WindowTheme = "light" | "dark";
+/** The theme setting: a theme, or the system's. */
+export type ThemeChoice = WindowTheme | "system";

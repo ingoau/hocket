@@ -24,7 +24,7 @@
 .m3-slider-handle { position: absolute; top: 50%; left: var(--x); width: var(--hw); height: var(--handle-h); border-radius: var(--hw); background: var(--handle); transform: translate(-50%, -50%); pointer-events: none; transition: width var(--dur-short) var(--ease-emphasized), height var(--dur-spring) var(--spring-fast); }
 .m3-slider:hover .m3-slider-handle { height: calc(var(--handle-h) + 4px); }
 .m3-slider:has(.m3-slider-input:active) .m3-slider-handle { width: max(2px, calc(var(--hw) - 2px)); }
-.m3-slider > .m3-slider-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; -webkit-appearance: none; appearance: none; background: none; }
+.m3-slider > .m3-slider-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; -webkit-appearance: none; appearance: none; background: none; }
 .m3-slider-input::-webkit-slider-runnable-track { height: 100%; background: none; border: 0; }
 .m3-slider-input::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: var(--hw); height: var(--handle-h); background: none; border: 0; }
 .m3-slider:has(.m3-slider-input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 4px; border-radius: var(--shape-sm); }
@@ -56,7 +56,7 @@
    Off: an outlined track with a small handle. On: a filled track with a
    white handle carrying a check. The handle grows while pressed. */
 .m3-switch { position: relative; display: inline-flex; flex: 0 0 auto; width: 52px; height: 32px; vertical-align: middle; }
-.m3-switch > .m3-switch-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+.m3-switch > .m3-switch-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; z-index: 1; }
 .m3-switch-track { position: absolute; inset: 0; border-radius: var(--shape-full); background: var(--bg-sunken); box-shadow: inset 0 0 0 2px var(--fg-muted); transition: background-color var(--dur-short) var(--ease-emphasized), box-shadow var(--dur-short) var(--ease-emphasized); }
 .m3-switch-handle { position: absolute; top: 50%; left: 16px; width: 16px; height: 16px; border-radius: 50%; background: var(--fg-muted); display: grid; place-items: center; color: var(--accent-text); transform: translate(-50%, -50%); transition: left var(--dur-spring) var(--spring-fast), width var(--dur-spring) var(--spring-fast), height var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized); }
 .m3-switch-handle .icon { width: 16px; height: 16px; }
@@ -82,7 +82,7 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; }
   -webkit-appearance: none; appearance: none; font: inherit; color: var(--fg);
   display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; max-width: 100%;
   height: var(--field-h); padding: 0 8px 0 16px; border: 0; border-radius: var(--shape-full);
-  background: var(--bg-sunken); box-shadow: inset 0 0 0 1px var(--border); cursor: pointer; text-align: left;
+  background: var(--bg-sunken); box-shadow: inset 0 0 0 1px var(--border); text-align: left;
   transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized), box-shadow var(--dur-short) var(--ease-emphasized);
 }
 .m3-select:hover { box-shadow: inset 0 0 0 1px var(--border-strong); background: color-mix(in srgb, var(--fg) 4%, var(--bg-sunken)); }
@@ -96,7 +96,7 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; }
 @keyframes m3-menu-in { from { transform: scaleY(0.85); } }
 .m3-menu.closing { animation: m3-menu-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 @keyframes m3-menu-out { to { opacity: 0; transform: scaleY(0.9); } }
-.m3-option { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 16px 0 8px; border-radius: var(--shape-md); cursor: pointer; white-space: nowrap; transition: border-radius var(--dur-spring) var(--spring-fast); }
+.m3-option { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 16px 0 8px; border-radius: var(--shape-md); white-space: nowrap; transition: border-radius var(--dur-spring) var(--spring-fast); }
 .m3-option-check { display: inline-flex; width: 18px; flex: 0 0 auto; color: var(--accent-text); }
 .m3-option.active { background: var(--bg-hover); }
 .m3-option.selected { background: var(--state-selected); font-weight: 600; border-radius: var(--shape-full); }
@@ -105,9 +105,9 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; }
 /* ---- Number and colour inputs --------------------------------------------- */
 input.input[type="number"] { -moz-appearance: textfield; font-variant-numeric: tabular-nums; }
 input.input[type="number"]::-webkit-inner-spin-button, input.input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-input.input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: pointer; border-radius: var(--shape-xs); }
+input.input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.7; border-radius: var(--shape-xs); }
 input.input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
-input[type="color"] { -webkit-appearance: none; appearance: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--border-strong); transition: border-radius var(--dur-spring) var(--spring-fast); }
+input[type="color"] { -webkit-appearance: none; appearance: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: none; box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--border-strong); transition: border-radius var(--dur-spring) var(--spring-fast); }
 input[type="color"]:hover { border-radius: var(--shape-md); }
 input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 input[type="color"]::-webkit-color-swatch { border: 0; border-radius: inherit; }
