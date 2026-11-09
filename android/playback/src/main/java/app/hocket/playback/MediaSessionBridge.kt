@@ -72,6 +72,12 @@ class MediaSessionBridge(
     private val browser: LibraryBrowser,
     private val scope: CoroutineScope,
     private val control: ExternalControl,
+    /**
+     * A play request is waiting on [onPlaybackResumption]. The service has to outlive the
+     * controller that asked: System UI's resumption card binds, sends play and unbinds within a
+     * second, and a core that is still starting takes longer than that to name the resume item.
+     */
+    private val onResumeRequested: () -> Unit = {},
 ) {
     companion object {
         const val CMD_LOVE = "app.hocket.LOVE"
@@ -183,6 +189,7 @@ class MediaSessionBridge(
                 // The resume item plays as `MediaSessionAction.Play` ([LibraryBrowser.playNow]): the core
                 // carries on with its own session. Nothing loaded: an empty list, and the play that
                 // follows is still the core's to judge.
+                if (isForPlayback) onResumeRequested()
                 return async {
                     val item = this@MediaSessionBridge.browser.resumeItem()
                     val position = if (item == null) 0L else this@MediaSessionBridge.browser.resumePositionMs()
