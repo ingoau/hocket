@@ -316,6 +316,9 @@ class PlaybackService : MediaLibraryService() {
      */
     private fun holdForResumption() {
         if (isPlaybackOngoing) return
+        // A stop between this start and its onStartCommand would break the foreground promise;
+        // onStartCommand schedules the idle stop again.
+        idleJob?.cancel()
         val intent = Intent(this, PlaybackService::class.java).setAction(ACTION_RESUME)
         try {
             ContextCompat.startForegroundService(this, intent)
