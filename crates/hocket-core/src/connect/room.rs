@@ -80,7 +80,7 @@ pub struct RoomConfig {
     /// coordinator keeps `Open` (its credential check is `verify`).
     pub lan_auth: LanAuth,
     /// The host keeps AutoMix analysis records (the hosted coordinator with
-    /// its store): `Welcome.analysisStore`.
+    /// its store): `Welcome.analysis_store`.
     pub analysis_store: bool,
 }
 

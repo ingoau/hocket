@@ -5411,6 +5411,94 @@ mod tests {
             .any(|(_, m)| matches!(m, Msg::TransportRequest { .. })));
     }
 
+    /// A coordinator that keeps analysis records says so in its Welcome; only
+    /// then do fetches and uploads go out, and answers come back as outputs.
+    /// Losing the connection withdraws it.
+    #[test]
+    fn analysis_messages_flow_only_to_a_coordinator_with_a_store() {
+        use crate::connect::wire::AnalysisEntry;
+        let (mut e, _) = engine("a");
+        let fetch = || Input::FetchAnalysis {
+            track_ids: vec!["t1".into()],
+        };
+        // Nothing is attached: dropped.
+        assert!(wire_outs(&e.handle(fetch())).is_empty());
+        e.handle(Input::SetCoordinatorUrl(Some("wss://c/".into())));
+        e.handle(Input::Connected {
+            peer: "up".into(),
+            url: "wss://c/".into(),
+        });
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::Welcome {
+                session_clock_ms: 10_000.0,
+                accepted_protocol: PROTOCOL,
+                replica: None,
+                members: vec![],
+                analysis_store: true,
+                extra: Default::default(),
+            }),
+        });
+        assert!(outs.contains(&Output::AnalysisStore(true)));
+        let w = wire_outs(&e.handle(fetch()));
+        assert!(
+            matches!(&w[..], [(p, Msg::AnalysisFetch { track_ids })] if p == "up" && track_ids == &["t1".to_string()])
+        );
+        let record = crate::api::AnalysisRecord {
+            version: crate::automix::ANALYSIS_VERSION,
+            analyser: "loudness".into(),
+            produced_by: crate::api::AnalysisProducer::Device,
+            source: crate::api::SourceFingerprint {
+                duration_ms: 1_000,
+                size_bytes: None,
+                suffix: None,
+                transcoded: false,
+            },
+            duration_ms: 1_000,
+            integrated_lufs: None,
+            audible_start_ms: 0,
+            audible_end_ms: 1_000,
+            head: Default::default(),
+            tail: Default::default(),
+            bpm: None,
+            beats_ms: vec![],
+            downbeats_ms: vec![],
+            beat_confidence: 0.0,
+            created_at: 0.0,
+        };
+        let entry = AnalysisEntry {
+            track_id: "t1".into(),
+            record,
+        };
+        let w = wire_outs(&e.handle(Input::UploadAnalysis {
+            records: vec![entry.clone()],
+        }));
+        assert!(matches!(&w[..], [(_, Msg::AnalysisUpload { records })] if records.len() == 1));
+        let outs = e.handle(Input::WireIn {
+            peer: "up".into(),
+            msg: WireMessage::new(Msg::AnalysisRecords {
+                records: vec![entry.clone()],
+            }),
+        });
+        assert!(outs.contains(&Output::AnalysisRecords(vec![entry])));
+        // The connection drops: withdrawn, and fetches stop.
+        let outs = e.handle(Input::Disconnected { peer: "up".into() });
+        assert!(outs.contains(&Output::AnalysisStore(false)));
+        assert!(wire_outs(&e.handle(fetch())).is_empty());
+    }
+
+    /// A coordinator without a store (or an older one) leaves it off.
+    #[test]
+    fn a_coordinator_without_a_store_gets_no_analysis_messages() {
+        let (mut e, _) = engine("a");
+        let outs = attach(&mut e, None, vec![]);
+        assert!(!outs.iter().any(|o| matches!(o, Output::AnalysisStore(_))));
+        let outs = e.handle(Input::FetchAnalysis {
+            track_ids: vec!["t1".into()],
+        });
+        assert!(wire_outs(&outs).is_empty());
+    }
+
     fn attach(
         e: &mut Engine,
         replica: Option<ReplicaState>,

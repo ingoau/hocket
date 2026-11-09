@@ -42,7 +42,7 @@ use crate::api::{
 /// any LAN host); 3 = the flat queue model (one list with a pointer, no
 /// queue modes, keyed moves, the "Next in queue" group). Version 2 peers
 /// reduce ops differently and can't share a session with this one.
-/// (AutoMix's analysis messages and `Welcome.analysisStore` were added
+/// (AutoMix's analysis messages and `Welcome.analysis_store` were added
 /// without a bump: they are optional, and peers ignore what they don't know.)
 pub const PROTOCOL: u32 = 3;
 /// Hard floor. The handshake refuses anything older.
@@ -1201,7 +1201,7 @@ pub enum Msg {
     },
 
     // -- AutoMix analysis (hosted coordinator only) -----------------------
-    /// → coordinator, only when its `Welcome` said `analysisStore`. Asks for
+    /// → coordinator, only when its `Welcome` said `analysis_store`. Asks for
     /// the records it has for these tracks of the room's server (at most
     /// [`ANALYSIS_FETCH_MAX`]). Answered with one [`Msg::AnalysisRecords`].
     AnalysisFetch {
@@ -1212,7 +1212,7 @@ pub enum Msg {
     AnalysisRecords {
         records: Vec<AnalysisEntry>,
     },
-    /// → coordinator, only when its `Welcome` said `analysisStore`. Records
+    /// → coordinator, only when its `Welcome` said `analysis_store`. Records
     /// this device produced (at most [`ANALYSIS_BATCH_MAX`]). Each replaces
     /// the stored one only when preferred. No answer.
     AnalysisUpload {
@@ -1468,6 +1468,58 @@ mod tests {
 
     /// `libraryEdited` round-trips, a build without it ignores it, and a
     /// newer sender's extra fields (or a minimal one's missing lists) still decode.
+    #[test]
+    fn analysis_messages_round_trip_and_welcome_defaults_to_no_store() {
+        let record: crate::api::AnalysisRecord = serde_json::from_value(serde_json::json!({
+            "version": 1, "analyser": "loudness", "producedBy": "device",
+            "source": {"durationMs": 1000, "sizeBytes": null, "suffix": null, "transcoded": false},
+            "durationMs": 1000, "integratedLufs": -9.5, "audibleStartMs": 0, "audibleEndMs": 1000,
+            "head": {"startMs": 0, "hopMs": 100, "lufs": [-10.0]},
+            "tail": {"startMs": 900, "hopMs": 100, "lufs": [-11.0]},
+            "bpm": null, "beatsMs": [], "downbeatsMs": [], "beatConfidence": 0.0, "createdAt": 5.0
+        }))
+        .unwrap();
+        let entry = AnalysisEntry {
+            track_id: "t1".into(),
+            record,
+        };
+        for msg in [
+            Msg::AnalysisFetch {
+                track_ids: vec!["t1".into(), "t2".into()],
+            },
+            Msg::AnalysisRecords {
+                records: vec![entry.clone()],
+            },
+            Msg::AnalysisUpload {
+                records: vec![entry],
+            },
+        ] {
+            let text = WireMessage::new(msg.clone()).encode().unwrap();
+            assert!(
+                text.contains(&format!(r#""type":"{}""#, msg.name())),
+                "{text}"
+            );
+            assert_eq!(WireMessage::decode(&text).unwrap().msg, msg);
+        }
+        // A Welcome from a build without the store field reads as "no store".
+        let old = r#"{"protocolVersion":3,"msg":{"type":"welcome","data":{"session_clock_ms":1.0,"accepted_protocol":3,"replica":null,"members":[]}}}"#;
+        assert!(matches!(
+            WireMessage::decode(old).unwrap().msg,
+            Msg::Welcome {
+                analysis_store: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            server_key(" HTTPS://Music.Example/ "),
+            "https://music.example"
+        );
+        assert_eq!(
+            scope_key("https://music.example/", "u"),
+            "https://music.example|u"
+        );
+    }
+
     #[test]
     fn library_edited_round_trips_and_is_unknown_to_older_builds() {
         use crate::api::{LibraryItemKind, LibraryItemState};

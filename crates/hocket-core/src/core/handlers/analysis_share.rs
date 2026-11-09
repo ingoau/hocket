@@ -1,6 +1,6 @@
 //! AutoMix records shared through the hosted coordinator (`docs/automix.md`
 //! → *Sharing records*). When the coordinator we are attached to says it
-//! keeps records (`Welcome.analysisStore`), the tracks around the current
+//! keeps records (`Welcome.analysis_store`), the tracks around the current
 //! one that lack a full record are fetched in one batch at a time, and the
 //! answers land in the local store like any other record (which replans the
 //! follow-up). Records this device produced (desktop analysis, a platform's
