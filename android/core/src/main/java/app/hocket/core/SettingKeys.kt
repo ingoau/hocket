@@ -14,6 +14,8 @@ object SettingKeys {
     const val PLAYBACK_RESUME_ALBUMS = "playback.resumeAlbums"
     const val AUTOPLAY_SETTINGS = "autoplay.settings"
     const val AUDIO_SETTINGS = "audio.settings"
+    /** Off / Crossfade / AutoMix and the crossfade length (a `TransitionSettings`, synced). */
+    const val PLAYBACK_TRANSITIONS = "playback.transitions"
     const val TRANSCODING_PROFILES = "transcoding.profiles"
     const val LYRICS_EXTERNAL_ENABLED = "lyrics.external.enabled"
     const val LYRICS_EXTERNAL_PROVIDER = "lyrics.external.provider"
