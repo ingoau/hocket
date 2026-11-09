@@ -177,16 +177,18 @@ impl Actor {
     }
 
     /// The tail start the plan into the next track is committed to, once the
-    /// current position is within [`LOCK_IN_MS`] of it: the committed plan's,
-    /// else the loaded source's `mix_out_ms`.
+    /// current position is within [`LOCK_IN_MS`] of it. Only a plan already
+    /// handed to the backend (the preloaded follow-up's `mix_in`) commits:
+    /// with none yet (right after a handover onto a short track) the next
+    /// plan is a full one from the loaded source's `mix_out_ms`, not a
+    /// late-edit fade.
     pub(crate) fn locked_tail_start(&self) -> Option<Ms> {
         let tail_start = self
             .playback
             .next
             .as_ref()
             .and_then(|n| n.mix_in.as_ref())
-            .map(|p| p.tail_start_ms)
-            .or(self.playback.mix_out_ms)?;
+            .map(|p| p.tail_start_ms)?;
         let pos = self.playback.position_now(self.now());
         (pos.saturating_add(LOCK_IN_MS) >= tail_start).then_some(tail_start)
     }

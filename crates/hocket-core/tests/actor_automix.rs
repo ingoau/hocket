@@ -349,3 +349,40 @@ async fn a_skipped_mix_joins_from_the_start() {
         "B was never placed past its start: {stamps:?}"
     );
 }
+
+/// Stores a record for `id` whose audio ends `audible_end_ms` in.
+async fn store_audible_end(t: &TestCore, id: &str, audible_end_ms: Ms) {
+    let track = t.open_db().track(id).unwrap().unwrap();
+    let record = AnalysisRecord {
+        version: ANALYSIS_VERSION,
+        analyser: "test".into(),
+        produced_by: AnalysisProducer::Device,
+        source: fingerprint_of(&track),
+        duration_ms: track.duration_ms,
+        audible_end_ms,
+        ..Default::default()
+    };
+    t.run(Command::StoreAnalysisRecord {
+        track_id: id.into(),
+        record: Box::new(record),
+    })
+    .await;
+}
+
+/// Right after a handover onto a track whose tail start is near, no plan
+/// into the track after has been handed to the backend yet: it gets a full
+/// plan, not a late-edit fade.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_short_track_after_a_handover_gets_a_full_plan() {
+    let t = synced_core("short").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    store_audible_end(&t, "t4", 30_000).await;
+    play(&t, &["t0", "t4", "t1"]).await;
+    t.run_for(194_000.0 + 3_500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t4"));
+    let next = t.backend.next_source().expect("t1 preloaded");
+    assert_eq!(next.track.id, "t1");
+    let plan = next.mix_in.expect("t4 → t1 is mixed");
+    assert_eq!(plan.tail_len_ms, 6_000, "a full plan: {plan:?}");
+    assert_eq!(plan.tail_start_ms, 24_000);
+}
