@@ -23,7 +23,7 @@ mod model;
 use std::collections::VecDeque;
 use std::path::Path;
 
-pub use grid::{bar_consistency, beat_steadiness, bpm, confidence};
+pub use grid::{beat_steadiness, bpm, build_grid, confidence, refine_peak, BeatGrid};
 
 use beat_this::{BeatStream, BeatThis};
 
@@ -74,6 +74,16 @@ impl Analyser {
         path: &Path,
         produced_by: AnalysisProducer,
     ) -> Result<AnalysisRecord, AnalysisError> {
+        Ok(self.analyse_file_raw(path, produced_by)?.0)
+    }
+
+    /// [`Self::analyse_file`], also returning the tracker's refined output
+    /// (so a tool can rebuild the grid with [`apply_grid`] without the model).
+    pub fn analyse_file_raw(
+        &mut self,
+        path: &Path,
+        produced_by: AnalysisProducer,
+    ) -> Result<(AnalysisRecord, RawBeats), AnalysisError> {
         let mut acc: Option<Accumulator<'_>> = None;
         let mut failed: Option<AnalysisError> = None;
         let bt = &mut self.bt;
@@ -126,8 +136,27 @@ impl Analyser {
         for chunk in pcm.chunks(channels.max(1) * 8192) {
             acc.push(chunk)?;
         }
-        acc.finish(source, produced_by, created_at)
+        Ok(acc.finish(source, produced_by, created_at)?.0)
     }
+}
+
+/// The beat tracker's output, peaks refined to sub-frame times (seconds).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RawBeats {
+    pub beats_s: Vec<f64>,
+    pub downbeats_s: Vec<f64>,
+}
+
+/// Set `record`'s grid, tempo and confidence from the tracker's output (and
+/// mark it a full record).
+pub fn apply_grid(record: &mut AnalysisRecord, raw: &RawBeats) {
+    let grid = build_grid(&raw.beats_s, &raw.downbeats_s);
+    record.bpm = bpm(&grid.beats_ms);
+    record.beat_confidence = confidence(&grid, (record.audible_start_ms, record.audible_end_ms));
+    record.beats_ms = grid.beats_ms;
+    record.downbeats_ms = grid.downbeats_ms;
+    record.analyser = ANALYSER.into();
+    *record = compact(std::mem::take(record));
 }
 
 /// Analyse one file with a fresh single-threaded [`Analyser`].
@@ -198,7 +227,7 @@ impl<'a> Accumulator<'a> {
         mut source: SourceFingerprint,
         produced_by: AnalysisProducer,
         created_at: EpochMs,
-    ) -> Result<AnalysisRecord, AnalysisError> {
+    ) -> Result<(AnalysisRecord, RawBeats), AnalysisError> {
         if self.frames == 0 {
             return Err(AnalysisError::NoAudio);
         }
@@ -223,21 +252,15 @@ impl<'a> Accumulator<'a> {
         record.integrated_lufs = self.meter.integrated_lufs().map(|v| v as f32);
 
         let beats = self.beats.finish().map_err(model_err)?;
-        let to_ms = |s: &f32| (f64::from(*s) * 1000.0).round().max(0.0) as Ms;
-        record.beats_ms = beats.beats.iter().map(to_ms).collect();
-        record.downbeats_ms = beats.downbeats.iter().map(to_ms).collect();
-        record.beats_ms.sort_unstable();
-        record.beats_ms.dedup();
-        record.downbeats_ms.sort_unstable();
-        record.downbeats_ms.dedup();
-        record.bpm = bpm(&record.beats_ms);
-        record.beat_confidence = confidence(
-            &record.beats_ms,
-            &record.downbeats_ms,
-            (record.audible_start_ms, record.audible_end_ms),
-        );
-        record.analyser = ANALYSER.into();
-        Ok(compact(record))
+        let refined = |t: &[f32], logits: &[f32]| -> Vec<f64> {
+            t.iter().map(|&x| refine_peak(x, logits)).collect()
+        };
+        let raw = RawBeats {
+            beats_s: refined(&beats.beats, &beats.beat_logits),
+            downbeats_s: refined(&beats.downbeats, &beats.downbeat_logits),
+        };
+        apply_grid(&mut record, &raw);
+        Ok((record, raw))
     }
 }
 

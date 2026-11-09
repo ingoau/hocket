@@ -32,15 +32,22 @@ src/automix/
   stretch.rs    time-stretch wrapper used by render_tail
   loudness.rs   loudness envelope + silence edges from PCM (pure, no decoding)
   analysis/     feature "automix-analysis": decode + Beat This! + loudness -> AnalysisRecord
+    mod.rs      Analyser (analyse_file / analyse_pcm), streaming accumulator
+    grid.rs     bpm and beat_confidence from the tracker's beats/downbeats
+    model.rs    the embedded ONNX models run by rten
+    models/     mel_spectrogram.onnx + beat_this_small.onnx (see NOTICE)
+    NOTICE      provenance and MIT notices of Beat This! and beat-this-rs
+  corpus/       pairs.txt, records/, plans/: the planner's snapshot test data
   store.rs      local SQLite table of records (core db migrations)
 ```
 
 - Everything outside `analysis/` is pure Rust over PCM buffers and plain data,
   compiles on every target (Android included) and has no I/O.
 - `analysis/` needs decoding (Symphonia) and the beat model. It sits behind a
-  cargo feature `automix-analysis` (implies `native-audio`'s Symphonia
-  dependency, not cpal), enabled by `hocket-node` and `hocket-coordinator`,
-  never by `hocket-android`.
+  cargo feature `automix-analysis` (implies the feature `decode`: Symphonia
+  and `audio::decoder`, no cpal/ALSA; `native-audio` implies `decode` too),
+  enabled by `hocket-node` and `hocket-coordinator`, never by
+  `hocket-android`.
 - Decoding is per platform: Symphonia on desktop and the coordinator,
   MediaCodec on Android. Analysis functions take PCM.
 

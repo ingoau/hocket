@@ -21,7 +21,7 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
 use hocket_core::api::{AnalysisProducer, AnalysisRecord, TransitionKind, TransitionMode};
-use hocket_core::automix::analysis::Analyser;
+use hocket_core::automix::analysis::{apply_grid, Analyser, RawBeats};
 use hocket_core::automix::plan::{Grid, Region};
 use hocket_core::automix::{
     plan_transition, PlanInput, PlanTrack, TransitionPlan, TransitionSettings, ANALYSIS_VERSION,
@@ -240,6 +240,12 @@ fn find_track(dir: &Path, id: &str) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("track {id} not in {}", dir.display()))
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Cached {
+    record: AnalysisRecord,
+    raw: RawBeats,
+}
+
 fn cache_path(file: &Path) -> PathBuf {
     let mut s = file.as_os_str().to_owned();
     s.push(".automix.json");
@@ -262,26 +268,38 @@ impl Lab {
     }
 
     /// The record of `file`, from `<file>.automix.json` when it is current.
+    /// The record of `file`. The cache next to it (`<file>.automix.json`)
+    /// keeps the record and the tracker's raw output; the grid is rebuilt
+    /// from the raw output every time, so grid post-processing changes need
+    /// no re-analysis.
     fn record(&mut self, file: &Path) -> Result<AnalysisRecord> {
         let cache = cache_path(file);
         if let Ok(text) = std::fs::read_to_string(&cache) {
-            if let Ok(r) = serde_json::from_str::<AnalysisRecord>(&text) {
-                if r.version == ANALYSIS_VERSION
-                    && r.analyser == hocket_core::automix::analysis::ANALYSER
-                {
-                    return Ok(r);
+            if let Ok(mut c) = serde_json::from_str::<Cached>(&text) {
+                if c.record.version == ANALYSIS_VERSION {
+                    apply_grid(&mut c.record, &c.raw);
+                    return Ok(c.record);
                 }
             }
         }
+        if self.analyser.is_none() {
+            self.analyser = Some(Analyser::new(self.threads)?);
+        }
         let t = Instant::now();
-        let r = self.analyse(file)?;
+        let (record, raw) = self
+            .analyser
+            .as_mut()
+            .expect("set")
+            .analyse_file_raw(file, AnalysisProducer::Desktop)
+            .with_context(|| file.display().to_string())?;
         eprintln!(
             "  analysed {} in {:.1} s",
             file.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
             t.elapsed().as_secs_f64()
         );
-        std::fs::write(&cache, serde_json::to_string_pretty(&r)?)?;
-        Ok(r)
+        let c = Cached { record, raw };
+        std::fs::write(&cache, serde_json::to_string(&c)?)?;
+        Ok(c.record)
     }
 
     fn plan(
