@@ -3,8 +3,8 @@
 //! that decodes and renders a tail ahead of time.
 //!
 //! ```text
-//!  tail job (thread): A from tail_start − preroll ─► A's DSP (a clone) ─► resample ─► render_tail
-//!  engine, at A's tail start:  rendered tail ─┐
+//!  tail job (thread): A from tail_start − preroll ─► A's DSP (a clone, no AGC) ─► resample ─► render_tail
+//!  engine, at A's tail start:  rendered tail × A's AGC gain ─┐
 //!                              live A (10 ms) ─┼─► sum ─► limiter ─► volume ─► ring
 //!  B ─► B's DSP ─► resample ─► IncomingShaper ─┘
 //! ```
@@ -97,7 +97,7 @@ impl Transition {
 pub struct TailJob {
     pub source: MediaSource,
     pub plan: TransitionPlan,
-    /// A clone of A's chain (settings, ReplayGain, AGC state).
+    /// A clone of A's chain (settings, ReplayGain); its normaliser is left out.
     pub dsp: DspChain,
     pub gapless: bool,
     pub out_rate: u32,
@@ -153,8 +153,15 @@ pub fn render_tail_job(job: TailJob) -> Result<Vec<f32>, String> {
     drop(handle);
 
     let mut dsp = job.dsp;
+    // Without the normaliser: its gain here would be a guess (the chain was
+    // cloned up to a minute early), so the engine applies live A's gain at
+    // the switch and holds it over the tail (a fade isn't for the AGC to
+    // chase). Only filter memory is reset; the rest of the chain is A's.
+    let mut settings = dsp.settings().clone();
+    settings.normalisation = false;
+    dsp.set_settings(settings);
     dsp.set_format(f64::from(spec.sample_rate), spec.channels);
-    dsp.reset();
+    dsp.reset_filters();
     dsp.process(&mut pcm);
     let out_ch = job.out_channels.max(1);
     let mut mapped = Vec::with_capacity(pcm.len() / spec.channels.max(1) * out_ch);

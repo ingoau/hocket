@@ -1242,7 +1242,7 @@ impl Engine {
     /// frames past the switch, crossfaded into the tail), B becomes the
     /// current source with its own DSP chain, and the mix begins.
     fn begin_transition(&mut self, mut live: Vec<f32>, out_ch: usize) {
-        let TailState::Ready(tail) = std::mem::replace(&mut self.tail, TailState::None) else {
+        let TailState::Ready(mut tail) = std::mem::replace(&mut self.tail, TailState::None) else {
             return;
         };
         let (Some(mut a), Some(b)) = (self.current.take(), self.next.take()) else {
@@ -1253,8 +1253,17 @@ impl Engine {
         let mut b_dsp = self.dsp.clone();
         b_dsp.set_format(f64::from(b.spec.sample_rate), b.spec.channels);
         b_dsp.begin_track_gain_db(b.media.gain_db);
-        b_dsp.reset();
+        // As at a gapless join, the normaliser carries on at its gain; only
+        // A's filter memory is dropped (B enters on its own).
+        b_dsp.reset_filters();
         let mut a_dsp = std::mem::replace(&mut self.dsp, b_dsp);
+        // The tail was rendered without the normaliser: hold live A's gain
+        // over it, so the level carries on from the switch.
+        let held_db = a_dsp.normaliser_gain_db();
+        if held_db != 0.0 {
+            let g = 10f64.powf(held_db / 20.0) as f32;
+            tail.pcm.iter_mut().for_each(|v| *v *= g);
+        }
         let rate = self.out_rate;
         let xfade = ms_to_frames(f64::from(SWITCH_XFADE_MS), rate);
         while live.len() / out_ch < xfade {
@@ -2820,5 +2829,41 @@ mod tests {
             key: "b.wav".into(),
             position_ms: 0
         }));
+    }
+
+    /// Peak of `x` (48 kHz) between `from` and `to` ms.
+    fn peak(x: &[f32], from: usize, to: usize) -> f32 {
+        x[from * 48..to * 48]
+            .iter()
+            .fold(0.0f32, |m, v| m.max(v.abs()))
+    }
+
+    /// With Normalisation on, the tail carries on at live A's AGC gain: no
+    /// level jump at the switch.
+    #[test]
+    fn the_tail_keeps_the_normaliser_gain() {
+        let rig = rig();
+        let audio = AudioSettings {
+            normalisation: true,
+            ..default_audio_settings()
+        };
+        rig.backend.set_audio_settings(&audio).unwrap();
+        let a = rig.sine("a.wav", 48_000, 3_000, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_500, 660.0);
+        b.mix_in = Some(fade_plan(2_000, 800, 500, 600));
+        rig.start(a, b);
+        rig.wait_for(
+            Duration::from_secs(15),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(rig.count(is_started), 1, "{:?}", rig.reports.lock());
+        let x = rig.played();
+        let before = peak(&x, 1_950, 1_990);
+        let after = peak(&x, 2_015, 2_055);
+        assert!(before < 0.35, "the AGC turned A down: {before}");
+        assert!(
+            (after / before - 1.0).abs() < 0.06,
+            "level jump at the switch: {before} → {after}"
+        );
     }
 }
