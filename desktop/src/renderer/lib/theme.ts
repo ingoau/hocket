@@ -23,8 +23,9 @@ export function useTheme() {
       const name: ThemeName = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
       document.documentElement.setAttribute("data-theme", name);
       setResolved(name);
-      // The window's ground and Windows' caption buttons follow (and the next launch starts in it).
-      bridge().window.setTheme(name);
+      // The main window's ground and Windows' caption buttons follow (and the next launch starts in
+      // it); the mini player has its own frameless window and leaves them be.
+      if (new URLSearchParams(window.location.search).get("window") !== "mini") bridge().window.setTheme(name);
     };
     apply();
     mq.addEventListener("change", apply);
