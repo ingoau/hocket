@@ -201,9 +201,18 @@ pub fn scope_key(server_url: &str, username: &str) -> String {
 }
 
 /// A Navidrome server's URL normalised the way [`scope_key`] does it: what
-/// the coordinator's analysis store keys records on.
+/// the coordinator's analysis store keys records on. Surrounding blanks and
+/// trailing slashes go and the scheme and host are lowercased; the path keeps
+/// its case (a reverse proxy may tell `/Music` from `/music`).
 pub fn server_key(server_url: &str) -> String {
-    server_url.trim().trim_end_matches('/').to_ascii_lowercase()
+    let url = server_url.trim().trim_end_matches('/');
+    // The authority ends at the first `/`, `?` or `#` after `scheme://`.
+    let authority_start = url.find("://").map_or(0, |i| i + 3);
+    let authority_end = url[authority_start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| authority_start + i);
+    let (head, path) = url.split_at(authority_end);
+    format!("{}{path}", head.to_ascii_lowercase())
 }
 
 /// Most track ids one [`Msg::AnalysisFetch`] may name; the coordinator drops
@@ -1203,7 +1212,9 @@ pub enum Msg {
     // -- AutoMix analysis (hosted coordinator only) -----------------------
     /// → coordinator, only when its `Welcome` said `analysis_store`. Asks for
     /// the records it has for these tracks of the room's server (at most
-    /// [`ANALYSIS_FETCH_MAX`]). Answered with one [`Msg::AnalysisRecords`].
+    /// [`ANALYSIS_FETCH_MAX`]). Answered with one or more
+    /// [`Msg::AnalysisRecords`] (the answer is split to keep frames small;
+    /// one empty one when nothing was found).
     AnalysisFetch {
         track_ids: Vec<TrackId>,
     },
@@ -1746,6 +1757,12 @@ mod tests {
             scope_key(" https://music.example ", "bob"),
             scope_key("https://music.example/", "bob")
         );
+        assert_eq!(
+            server_key("HTTPS://Music.Example:4533/Navi/Drome/"),
+            "https://music.example:4533/Navi/Drome"
+        );
+        assert_eq!(server_key("Music.Example/Path"), "music.example/Path");
+        assert_eq!(server_key("http://HOST?X=Y"), "http://host?X=Y");
     }
 
     fn sq(id: &str, at: f64, pinned: bool) -> SavedQueue {
