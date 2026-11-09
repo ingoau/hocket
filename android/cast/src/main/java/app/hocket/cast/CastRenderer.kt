@@ -201,6 +201,8 @@ internal class CastRenderer(
             // Previews play on the phone (PlaybackService routes them to ExoBackend).
             is BackendCommand.PreviewLoad, BackendCommand.PreviewPlay, BackendCommand.PreviewPause,
             is BackendCommand.PreviewSeek, BackendCommand.PreviewStop -> Unit
+            // The receiver never mixes (Cast is a no-mix rule).
+            BackendCommand.CompleteTransition -> Unit
         }
     }
 

@@ -500,6 +500,8 @@ class ExoBackend(
             BackendCommand.PreviewPause -> previewPlayer?.pause()
             is BackendCommand.PreviewSeek -> previewPlayer?.seekTo(command.data.position_ms.toLong())
             BackendCommand.PreviewStop -> stopPreviewPlayer()
+            // AutoMix rendering on Android comes later: no transition ever runs here yet.
+            BackendCommand.CompleteTransition -> Unit
         }
     }
 
