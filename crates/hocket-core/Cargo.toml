@@ -8,7 +8,9 @@ description = "Hocket shared core: session document, queue reducer, Connect prot
 [features]
 default = ["mdns"]
 # Symphonia decoding + cpal output. Used by desktop and the coordinator never needs it.
-native-audio = ["decode", "dep:cpal", "dep:rubato"]
+native-audio = ["decode", "resample", "dep:cpal"]
+# Windowed-sinc sample-rate conversion (rubato), pure Rust. Native audio, and Android's AutoMix tails.
+resample = ["dep:rubato"]
 # Symphonia file decoding without an audio output (no cpal, no ALSA).
 decode = ["dep:symphonia"]
 # AutoMix analysis: decoding + Beat This! beat/downbeat tracking + loudness -> AnalysisRecord.

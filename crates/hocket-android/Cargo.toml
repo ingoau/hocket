@@ -19,7 +19,9 @@ default = []
 bindgen = ["uniffi/cli"]
 
 [dependencies]
-hocket-core = { workspace = true, default-features = false, features = ["mdns"] }
+hocket-core = { workspace = true, default-features = false, features = ["mdns", "resample"] }
+# Direct JNI for the per-buffer DSP calls of the ExoPlayer AudioProcessor (src/dsp.rs).
+jni = "0.21"
 uniffi.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

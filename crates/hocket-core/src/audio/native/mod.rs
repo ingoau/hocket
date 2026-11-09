@@ -17,10 +17,10 @@ pub mod engine;
 pub mod http;
 mod mix;
 pub mod output;
-pub mod resample;
 pub mod ring;
 
 pub use crate::audio::decoder;
+pub use crate::audio::resample;
 pub use engine::{NativeBackend, NativeConfig};
 pub use http::{MemoryFetcher, RangeFetcher, ReqwestFetcher};
 pub use output::{list_output_devices, OutputConfig};
