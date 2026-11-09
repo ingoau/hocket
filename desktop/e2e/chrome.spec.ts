@@ -46,7 +46,7 @@ test.describe("window chrome", () => {
     expect(nav["font-size"]).toBe("13px");
     expect(nav["font-family"]!.startsWith('Geist, system-ui') || nav["font-family"]!.startsWith('"Geist", system-ui')).toBe(true);
     // The bundled face, not a fallback.
-    expect(await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check('13px "Geist"'); })).toBe(true);
+    expect(await page.evaluate(async () => { await document.fonts.ready; return Array.from(document.fonts as unknown as Iterable<FontFace>).some((f) => f.family.replace(/"/g, "") === "Geist" && f.status === "loaded"); })).toBe(true);
     const btn = await styleOf("play-pause", ["cursor", "user-select", "text-decoration-line"]);
     expect(btn.cursor).toBe("default");
     expect(btn["user-select"]).toBe("none");

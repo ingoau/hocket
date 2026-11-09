@@ -204,9 +204,10 @@
 /* Synced: the whole song in a fixed window, the current line held at its middle and the lines
    either side fading out; the list glides as the line moves on (not with reduced motion). */
 .lyrics-peek-view {
-  position: relative; height: 148px; overflow: hidden; margin: 0 -2px; padding: 0 2px;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 34%, #000 66%, transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 34%, #000 66%, transparent 100%);
+  /* The clear band in the middle (168 - 2 × 44 = 80px) holds a current line wrapped to three. */
+  position: relative; height: 168px; overflow: hidden; margin: 0 -2px; padding: 0 2px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 44px, #000 calc(100% - 44px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 44px, #000 calc(100% - 44px), transparent 100%);
 }
 .lyrics-peek-view .lyrics-peek { will-change: transform; }
 .lyrics-peek-view.moving .lyrics-peek { transition: transform 450ms var(--ease-emphasized-decel); }

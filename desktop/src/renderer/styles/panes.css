@@ -47,7 +47,8 @@
 .window-controls .btn { border-radius: var(--shape-sm); }
 
 /* ---- Sidebar ---------------------------------------------------------------- */
-.sidebar-scroll { padding: 8px 6px 8px 8px; scrollbar-gutter: stable; }
+/* The bottom padding clears the fade into the foot, so the last row sits fully above it at the end. */
+.sidebar-scroll { padding: 8px 6px 28px 8px; scrollbar-gutter: stable; }
 /* The list scrolls under a soft fade into the foot (Settings), not a hard cut. */
 .sidebar-foot { position: relative; padding: 4px 8px 8px; background: var(--bg-elev); border-radius: 0 0 var(--pane-radius) var(--pane-radius); }
 .sidebar-foot::before {
@@ -120,7 +121,7 @@
 /* One gutter (--rail-pad) on every side of the pane, every item the full width inside it, so the
    pills, icons and covers share one centre line. */
 .sidebar.rail { --rail-pad: 8px; --rail-thumb: 40px; }
-.sidebar.rail .sidebar-scroll { padding: var(--rail-pad); scrollbar-width: none; scrollbar-gutter: auto; }
+.sidebar.rail .sidebar-scroll { padding: var(--rail-pad) var(--rail-pad) 28px; scrollbar-width: none; scrollbar-gutter: auto; }
 .sidebar.rail .sidebar-scroll::-webkit-scrollbar { display: none; }
 .sidebar.rail .sidebar-foot { padding: 0 var(--rail-pad) var(--rail-pad); }
 .sidebar.rail .nav-item { justify-content: center; padding: 0; width: 100%; height: 44px; gap: 0; }
@@ -178,6 +179,7 @@
 }
 
 @media (forced-colors: active) {
+  .sidebar-foot::before, .side-lib-head::after { display: none; }
   .side-lib-chip { border: 1px solid ButtonText; }
   .side-lib-chip.on { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
   .sidebar, .content, .side-pane { border: 1px solid CanvasText; }

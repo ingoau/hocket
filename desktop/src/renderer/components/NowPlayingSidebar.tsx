@@ -361,19 +361,33 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
   const view = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLOListElement>(null);
   const [shift, setShift] = useState(0);
+  // The first placement for a song (a mount, a new track, lyrics arriving mid-song) jumps straight
+  // there; only the moves after it glide.
+  const [glide, setGlide] = useState(false);
+  const placedFor = useRef<unknown>(null);
   useLayoutEffect(() => {
     const v = view.current;
-    const li = list.current?.children[centre] as HTMLElement | undefined;
-    if (!v || !li) return;
-    const place = () => setShift(Math.round(v.clientHeight / 2 - (li.offsetTop + li.offsetHeight / 2)));
+    const ol = list.current;
+    if (!v || !ol) return;
+    const place = () => {
+      const li = ol.children[centre] as HTMLElement | undefined;
+      if (li) setShift(Math.round(v.clientHeight / 2 - (li.offsetTop + li.offsetHeight / 2)));
+    };
     place();
-    // The card resizing (the panel's width rewraps the lines) moves the middle too.
+    if (placedFor.current !== lines) {
+      placedFor.current = lines;
+      setGlide(false);
+      requestAnimationFrame(() => requestAnimationFrame(() => setGlide(true)));
+    }
+    // The card resizing, the lines rewrapping (the current one grows) and the font arriving all move the middle.
     const ro = new ResizeObserver(place);
     ro.observe(v);
+    ro.observe(ol);
+    void document.fonts.ready.then(place);
     return () => ro.disconnect();
-  }, [centre, lines]);
+  }, [centre, active, lines]);
   return (
-    <div ref={view} className={`lyrics-peek-view ${reduced ? "" : "moving"}`}>
+    <div ref={view} className={`lyrics-peek-view ${glide && !reduced ? "moving" : ""}`}>
       <ol ref={list} className="lyrics-peek synced" aria-label={t("lyrics.title")} data-active={active} style={{ transform: `translateY(${shift}px)` }}>
         {lines.map((line, i) => {
           const current = i === active;
