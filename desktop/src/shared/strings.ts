@@ -979,7 +979,7 @@ const STRINGS = {
   "config.importServers": "The file also carries {n} server password(s); those servers will be added and signed in.",
   "config.importInvalid": "That file isn't a Hocket configuration export.",
   "settings.about": "Hocket {version}",
-  "settings.licence": "Licensed under the GNU Affero General Public License v3.0. The lyric renderer (AMLL) is AGPL-3.0; Kawarp is MIT; playwire is MIT OR Apache-2.0; Symphonia is MPL-2.0.",
+  "settings.licence": "Licensed under the GNU Affero General Public License v3.0. The lyric renderer (AMLL) is AGPL-3.0; Kawarp is MIT; playwire is MIT OR Apache-2.0; Symphonia is MPL-2.0; the icons are Phosphor (MIT); the fonts are Geist and Unbounded (SIL OFL 1.1).",
   "settings.licenceOpen": "View licence",
   "settings.sourceOpen": "Source code",
   "settings.autoplayChain": "Autoplay sources (in order)",

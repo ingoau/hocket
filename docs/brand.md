@@ -108,6 +108,11 @@ For outside the app (a website, a README, a store listing): the app icon (the ti
 - **Numbers** in times and counts use `font-variant-numeric: tabular-nums`, not a mono face; Geist Mono isn't bundled.
 - **Android** keeps the platform's type.
 
+## Icons  
+*Status: decided (desktop)*
+
+**Phosphor** (MIT), Regular weight for outlined glyphs and Fill for filled ones (the transport, a loved heart, a set star), generated from `@iconify-json/ph` by `desktop/scripts/gen-icons.mjs` into `desktop/src/renderer/components/icons.ts`. Drawn with a little of Phosphor's margin trimmed so they sit at Geist's optical size. Android keeps Material Symbols.
+
 ## Not done yet
 
 - **Outlined SVGs.** The word mark and both lockups should ship as outlined paths beside `desktop/build/icon.svg`, so no surface has to load Unbounded just to draw the name. Until then, anywhere that sets it as live text has to bundle the font (both apps do).
