@@ -228,7 +228,12 @@ nothing. Every overlap is limited to half of each track's audible span.
      midpoint downbeat; handover at that midpoint. A high shelf (5 kHz, to
      −12 dB) cuts A from the handover to the end.
    - otherwise a beat-aligned `Fade` of 4 bars of A (2 if gap > 12 %, 1 if
-     > 20 %), B's first downbeat on A's.
+     > 20 %), B's first downbeat on A's. Two phase-3 tunings from the
+     corpus stats: here the gap is counted modulo an octave (half/double
+     time lines up on every beat of the slower track), and bars are added
+     until the fade lasts ≥ 4 s (a 1-bar fade at 128 BPM is a near-cut
+     under 2 s; on random corpus pairs ~60 % of beat-aligned fades were
+     1 bar before).
    - With `fixed_tail_start_ms`, the overlap (or the ramp) starts at the first
      downbeat at or after it; A plays unaltered up to there.
 4. Rescue: if no candidate fits (A too short, overlap would cut > 20 s of
@@ -262,6 +267,52 @@ The planner is deterministic: same inputs → same plan on every device.
 - Rates: the tail is rendered at the output rate the backend will mix at
   (desktop: device rate after resampling; Android: B's sample rate).
 
+## Analysis (analysis/)
+
+- **Tracker**: Beat This! (CPJKU, ISMIR 2024) through its Rust port, crate
+  `beat-this` **=1.1.0** (github.com/danigb/beat-this-rs, rev `1ae768e`),
+  `default-features = false` (no Symphonia 0.6, no CLI), inference on
+  `rten` **=0.24.0** (pure Rust: no ONNX Runtime, no system libraries). The
+  published crate ships no models; `mel_spectrogram.onnx` (270 KB) and the
+  small checkpoint `beat_this_small.onnx` (10.6 MB) are copied from that
+  revision into `analysis/models/` and embedded with `include_bytes!`, so
+  analysis works offline. `analysis/NOTICE` carries both MIT notices and
+  the files' SHA-256. Our own `rten` model wrapper (`model.rs`) loads them
+  from memory and takes a thread count (beat-this's loads only from paths).
+- **API**: `Analyser::new(threads)` (0: rten's shared pool; background work
+  passes 1) then `analyse_file(path, producer)` or `analyse_pcm(pcm,
+  channels, rate, source, producer, created_at)`; `analysis::analyse_file`
+  is the one-shot form. Both stream: decode chunks are downmixed into the
+  tracker's stream while a whole-track `LoudnessMeter` runs and 60 s of
+  head and tail PCM are kept for `loudness::loudness_record`. So
+  `integrated_lufs` of a full record is the whole track's. `source` is the
+  file's (decoded duration, size, extension, `transcoded: false`); callers
+  replace it with the library's fingerprint when they analysed a
+  transcode. `analyser` is `"beat-this-small/1.1.0"`.
+- **Grid** (`grid.rs`). The tracker's "minimal" output (peaks on 50 fps
+  frames) is tidied before it goes in the record:
+  1. each peak is refined to sub-frame time by a parabola through the
+     logits (20 ms steps are a 1 % bar-length error, 150 ms over 8 bars);
+  2. a beat splitting one interval in two is dropped, gaps of 2–4 local
+     intervals are filled evenly; longer gaps start a new segment;
+  3. downbeats are regularised: the metre is 3 or 4, whichever more raw
+     downbeat spacings (in beats) are multiples of; each beat's bar phase is
+     the vote of the raw downbeats within ±8 bars of the same segment; the
+     record's downbeats are the beats on that phase.
+  `bpm` is 60 000 / the median 8-beat span ÷ 8. `beat_confidence` =
+  steadiness × agreement × (0.5 + 0.5 × coverage): the share of beat
+  intervals within 8 % of the median of their ±8 neighbours, the share of
+  the tracker's raw downbeats the regular grid keeps, and the beats' share
+  of the audible span. `apply_grid(record, raw)` rebuilds a record's grid
+  from the refined tracker output (`RawBeats`), which the mixlab caches.
+- **Cost** (i7-8650U, 8 threads, host heavily loaded by other jobs):
+  a 3:54 FLAC takes ~27 s CPU single-threaded (35 s wall); peak RSS
+  ~480 MB with one thread (rten's working buffers for the 30 s chunks the
+  model runs on; independent of track length beyond the mel spectrogram,
+  ~1.5 MB/min). Embedding costs ~15 MB of binary (10.8 MB of models, ~4 MB
+  of rten/rustfft code) in whatever links a caller; the desktop addon only
+  grows once phase 3b calls it (today +42 KB).
+
 ## Platforms
 
 - **Desktop** (`audio/native/engine.rs`): when the current source reaches
@@ -284,9 +335,38 @@ The planner is deterministic: same inputs → same plan on every device.
 
 ## Harness
 
-`hocket-mixlab` (bin in hocket-core behind `automix-analysis`): analyse files,
-plan a pair, render the transition (last 30 s of A blended into the first
-30 s of B) to WAV plus the plan as JSON. Corpus: tracks fetched from the test
-Navidrome server into a gitignored `automix-corpus/`; only the pair list and
-reference plans are committed. A stats mode replays random pairs and prints
-the distribution of transition kinds and overlap lengths.
+`hocket-mixlab` (its own workspace crate, `crates/hocket-mixlab`, so clap
+and friends stay out of hocket-core; depends on hocket-core with
+`automix-analysis`). Run with `cargo run -p hocket-mixlab --release -- …`:
+
+- `analyse <files..> [--out dir] [--timing] [--cache]`: full records as
+  JSON (`--cache`: fill the record cache next to each file instead).
+- `pair <a> <b> [--mode crossfade|automix] [--crossfade s] [--out dir]`:
+  analyse both (cached as `<file>.automix.json`: the record plus the
+  tracker's raw output, so grid changes need no re-analysis), plan, and
+  render 30 s of A before the overlap through 30 s of B after it to a
+  32-bit float WAV with `render_tail` + `IncomingShaper` + the chain's
+  `SoftLimiter` (B linearly resampled to A's rate if they differ), plus the
+  plan JSON. Every render is checked: no non-finite samples, peak below
+  0 dBFS, tail and total lengths exact.
+- `batch <pairs.txt> [--corpus dir] [--out dir] [--no-render]
+  [--reference dir]`: `pair` for each `<idA> <idB> [label]` line;
+  `--reference src/automix/corpus` rewrites the committed records and
+  reference plans.
+- `stats <dir> [--pairs N] [--seed S] [--check]`: plan N random pairs of
+  the directory's tracks and print the share of each kind, overlap /
+  cut-from-A / skipped-B-intro / stretch quantiles and overlaps in bars;
+  `--check` renders every pair in memory and checks it.
+
+Corpus: `scripts/automix-corpus.sh [count]` downloads original files
+(Subsonic `download`) from the test Navidrome server
+(`~/.config/hocket/test-server.env`) into the gitignored
+`automix-corpus/`: up to 3 tracks per genre, two runs of consecutive album
+tracks, the tracks in the pair list, random songs to fill, and a
+`tracks.json` of their metadata. Committed under
+`crates/hocket-core/src/automix/corpus/`: `pairs.txt` (track ids and the
+case each pair covers), `records/<id>.json` (no audio) and
+`plans/<a>_<b>.json`. `tests/automix_corpus.rs` re-plans every pair from
+the records and compares with the reference plans; after an intended
+planner change, `HOCKET_BLESS=1 cargo test -p hocket-core --test
+automix_corpus` rewrites them.

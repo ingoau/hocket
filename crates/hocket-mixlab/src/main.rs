@@ -108,6 +108,9 @@ enum Cmd {
         /// Render every pair in memory and check levels, NaNs and lengths.
         #[arg(long)]
         check: bool,
+        /// Print one line per pair.
+        #[arg(long)]
+        list: bool,
     },
 }
 
@@ -201,7 +204,8 @@ fn main() -> Result<()> {
             seed,
             mode,
             check,
-        } => lab.stats(&dir, pairs, seed, &mode.settings(6.0), check)?,
+            list,
+        } => lab.stats(&dir, pairs, seed, &mode.settings(6.0), check, list)?,
     }
     Ok(())
 }
@@ -358,6 +362,7 @@ impl Lab {
         seed: u64,
         settings: &TransitionSettings,
         check: bool,
+        list: bool,
     ) -> Result<()> {
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -426,6 +431,20 @@ impl Lab {
             let skip_b = plan.incoming_from_ms.saturating_sub(rb.audible_start_ms) as f64 / 1000.0;
             let ratio = plan.tempo.map(|t| t.ratio_end as f64).unwrap_or(1.0);
             let kind = format!("{:?}", plan.kind);
+            if list {
+                let stem = |p: &Path| {
+                    p.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?")
+                        .to_string()
+                };
+                println!(
+                    "{} {} {}",
+                    stem(&files[i]),
+                    stem(&files[j]),
+                    describe(&plan, ra, rb)
+                );
+            }
             if let Some(g) = Grid::of(ra, Region::Tail(ra.audible_end_ms)) {
                 let bars = (overlap * 1000.0 / g.bar_ms).round();
                 *bars_hist

@@ -57,6 +57,9 @@ pub const BASS_SWAP_DB: f32 = -26.0;
 /// High-shelf cut on the outgoing tail after the handover.
 pub const HIGH_CUT_HZ: f32 = 5_000.0;
 pub const HIGH_CUT_DB: f32 = -12.0;
+/// Beat-aligned fades are at least this long (whole bars of A added until
+/// they are): a 1-bar fade at 128 BPM is under 2 s, a near-cut.
+pub const MIN_ALIGNED_FADE_MS: f64 = 4_000.0;
 /// Late-edit fades are at least this long.
 pub const LATE_EDIT_MIN_MS: u32 = 2_000;
 
@@ -337,6 +340,15 @@ pub fn bar_length(downbeats: &[Ms]) -> Option<f64> {
     (m > 0.0).then_some(m)
 }
 
+/// Relative tempo gap between two tempos, half and double time counting as
+/// the same tempo.
+pub fn tempo_gap(a_bpm: f64, b_bpm: f64) -> f64 {
+    [0.5, 1.0, 2.0]
+        .iter()
+        .map(|f| (b_bpm * f / a_bpm - 1.0).abs())
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// Tempo from a bar length and the beats in a bar.
 pub fn tempo_bpm(bar_ms: f64, beats_per_bar: u32) -> f64 {
     60_000.0 * beats_per_bar as f64 / bar_ms
@@ -463,13 +475,19 @@ pub fn beat_plan(
             .iter()
             .find_map(|&bars| blend(input, da, db, k, bars, fixed, a_end))
     } else {
-        let bars = if gap > 0.20 {
+        // Half or double time lines up on every beat of the slower track, so
+        // the fade's length goes by the gap counted modulo an octave.
+        let gap = tempo_gap(ga.bpm, gb.bpm);
+        let mut bars = if gap > 0.20 {
             1
         } else if gap > 0.12 {
             2
         } else {
             4
         };
+        while (bars as f64) * ga.bar_ms < MIN_ALIGNED_FADE_MS {
+            bars += 1;
+        }
         aligned_fade(input, da, db, k, bars, fixed, a_end)
     }?;
     // Never skip more than MAX_CUT_MS of audible A.
@@ -873,7 +891,9 @@ mod tests {
     fn wide_gaps_fade_on_the_beat() {
         let s = settings(TransitionMode::AutoMix);
         let a = beats(DUR, 120.0, 4, 250.0);
-        for (bpm_b, bars) in [(132.0, 4u32), (138.0, 2), (150.0, 1)] {
+        // 150 BPM is a 1-bar gap, lengthened to 4 s; 236 BPM is double
+        // time of 118, a 4-bar gap.
+        for (bpm_b, bars) in [(132.0, 4u32), (138.0, 2), (150.0, 2), (236.0, 4)] {
             let b = beats(DUR, bpm_b, 4, 600.0);
             let p = plan(&input(&s, Some(&a), Some(&b), None));
             assert_eq!(p.kind, TransitionKind::Fade, "{bpm_b}");
@@ -882,6 +902,13 @@ mod tests {
             assert_eq!(p.incoming_from_ms, b.downbeats_ms[0]);
             assert!(p.bass_swap.is_none());
         }
+    }
+
+    #[test]
+    fn tempo_gap_counts_octaves() {
+        assert!((tempo_gap(120.0, 132.0) - 0.1).abs() < 1e-9);
+        assert!((tempo_gap(120.0, 236.0) - 1.0 / 60.0).abs() < 1e-9);
+        assert!((tempo_gap(140.0, 72.0) - (144.0 / 140.0 - 1.0)).abs() < 1e-9);
     }
 
     #[test]
