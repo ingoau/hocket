@@ -1,8 +1,8 @@
 // Settings search: typing filters to matching settings, picking one opens its
 // section with the setting highlighted and focused; Escape and the clear button
 // empty the field; Mod+F focuses it on Settings; every setting in the index has
-// its anchor on its section's page.
-import { completeSetup, expect, test } from "./fixtures";
+// its anchor on its section's page; Transitions shows the crossfade length only for Crossfade.
+import { chooseOption, completeSetup, expect, test } from "./fixtures";
 import { SETTINGS_INDEX } from "../src/renderer/lib/settings-index";
 
 test.describe("settings search", () => {
@@ -44,6 +44,22 @@ test.describe("settings search", () => {
     await field.press("Enter");
     await expect(page.getByTestId("settings-nav-audio")).toHaveAttribute("aria-current", "page");
     await expect(page.locator("#setting-gapless [role=switch], #setting-gapless input").first()).toBeFocused();
+  });
+
+  test("Transitions: found by \"automix\"; the crossfade length shows only for Crossfade", async ({ hocket }) => {
+    const { page } = hocket;
+    const field = page.getByTestId("settings-search");
+    await field.fill("automix");
+    await field.press("Enter");
+    await expect(page.getByTestId("settings-nav-audio")).toHaveAttribute("aria-current", "page");
+    const mode = page.getByTestId("setting-transitions");
+    await expect(mode).toBeFocused();
+    await expect(page.getByTestId("setting-crossfadeSeconds")).toHaveCount(0);
+    await chooseOption(mode, "crossfade");
+    await expect(page.getByTestId("setting-crossfadeSeconds")).toBeVisible();
+    await chooseOption(mode, "autoMix");
+    await expect(page.getByTestId("setting-crossfadeSeconds")).toHaveCount(0);
+    await expect(page.locator("#setting-transitions")).toContainText("never within albums");
   });
 
   test("shows an empty state, and the clear button resets", async ({ hocket }) => {

@@ -43,6 +43,8 @@ export const SK = {
   sleepDefaultMinutes: "sleep.defaultMinutes",
   scrobbleEnabled: "scrobble.enabled",
   searchIncludeServer: "search.includeServer",
+  /** Off / Crossfade / AutoMix and the crossfade length, a TransitionSettings. Synced; read with Query transitions, set with SetTransitionSettings. */
+  playbackTransitions: "playback.transitions",
 } as const;
 
 export const DEFAULT_ACCENT = "#6f5cff";

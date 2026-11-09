@@ -22,6 +22,11 @@ describe("settings search", () => {
     expect(ids("keys")).toContain("section:shortcuts");
   });
 
+  it("finds Transitions by the words for mixing", () => {
+    for (const q of ["crossfade", "transition", "automix", "mix", "dj", "blend"]) expect(ids(q)).toContain("transitions");
+    expect(ids("gapless")).toEqual(["gapless"]);
+  });
+
   it("puts a label that starts with the query first, and a section before its settings", () => {
     expect(ids("lyrics")[0]).toBe("section:lyrics");
     expect(ids("stream cache")[0]).toBe("cacheUsage");
