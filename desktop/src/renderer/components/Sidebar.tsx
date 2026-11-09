@@ -55,7 +55,8 @@ export function Sidebar() {
   const library = useLibraryEntries();
   const libView = useLibraryView(rail);
   const shown = useMemo(() => shownLibrary(library, pinnedKeys, libView, rail), [library, pinnedKeys, libView, rail]);
-  const scroller = useRef<HTMLDivElement>(null);
+  // State, not a ref: Your library's virtualiser needs the element once it exists.
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   // A pin or a Your library row that is open is the highlight; its list page's place isn't as well.
   // Open from elsewhere (not listed, or filtered out), the place is.
   const libraryOpen = !!route.id && shown.some((e) => e.kind === route.view && e.id === route.id);
@@ -69,7 +70,7 @@ export function Sidebar() {
 
   return (
     <nav className={`sidebar ${rail ? "rail" : ""}`} aria-label={t("nav.library")} data-testid="sidebar" data-rail={rail || undefined}>
-      <div ref={scroller} className="sidebar-scroll" onContextMenu={(e) => { if (!e.defaultPrevented && pins?.length && (e.target === e.currentTarget || (e.target as Element).closest(".sidebar-pins"))) openItemsMenu(e, [editPinsItem()]); }}>
+      <div ref={setScroller} className="sidebar-scroll" onContextMenu={(e) => { if (!e.defaultPrevented && pins?.length && (e.target === e.currentTarget || (e.target as Element).closest(".sidebar-pins"))) openItemsMenu(e, [editPinsItem()]); }}>
         <div className="sidebar-places">
           {items.map((it) => (
             <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} title={it.label} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>

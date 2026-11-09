@@ -5,8 +5,8 @@
 // virtualised against the sidebar's scroller, so a library of thousands of playlists draws (and
 // fetches the artwork of) only what is on screen. lib/sidebar-library.ts has the rules for what is
 // listed and in what order.
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { ActionTarget } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -14,7 +14,6 @@ import { useQuery } from "../store/queries";
 import { executeAction } from "../store/actions";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
-import { useRoving } from "../lib/roving";
 import { libraryDragProps } from "../lib/queue-drag";
 import { NARROW, useMediaQuery } from "../lib/media";
 import { LIBRARY_KINDS, LIBRARY_SORTS, collectLibrary, entryKey, parseLibraryView, viewLibrary, type CurrentContext, type LibraryEntry, type LibraryKind, type LibrarySort, type LibraryView } from "../lib/sidebar-library";
@@ -34,29 +33,47 @@ const targetOf = (e: LibraryEntry): ActionTarget =>
   e.kind === "album" ? { type: "albums", data: { ids: [e.id] } } : e.kind === "artist" ? { type: "artists", data: { ids: [e.id] } } : { type: "playlists", data: { ids: [e.id] } };
 
 /**
- * Artists' pictures, by id, for the ones the history names (it carries only album covers). Kept for
- * the session: a new artist is fetched once, the ones already known never again, so a change of
- * song doesn't refetch (or blank) the covers.
+ * Artists' pictures, for the ones the history names (it carries only album covers), keyed by server
+ * and artist. An answer is kept until the library changes (then fetched again, the old picture shown
+ * meanwhile); a failure isn't kept, so the next look tries again. One fetch per artist at a time,
+ * and each one that lands tells every mounted list (StrictMode's second mount and a list whose ids
+ * moved on included).
  */
-const artistCovers = new Map<string, string | null>();
-const artistPending = new Set<string>();
+const artistCovers = new Map<string, { cover: string | null; version: number }>();
+const artistFetches = new Set<string>();
+const artistListeners = new Set<() => void>();
 
-function useArtistCovers(ids: readonly string[]): ReadonlyMap<string, string | null> {
-  const [, setVersion] = useState(0);
+function fetchArtistCover(key: string, id: string, version: number): void {
+  if (artistFetches.has(key)) return;
+  artistFetches.add(key);
+  void bridge().query({ type: "artist", data: { id } })
+    .then((r) => { if (r.type === "artistDetail") artistCovers.set(key, { cover: r.data?.coverArt ?? null, version }); })
+    .catch(() => undefined)
+    .finally(() => {
+      artistFetches.delete(key);
+      for (const l of artistListeners) l();
+    });
+}
+
+/** The pictures of [ids] on [serverId] (a lookup), and a tick that moves whenever one arrives. */
+function useArtistCovers(serverId: string, ids: readonly string[]): [(id: string) => string | undefined, number] {
+  const [tick, setTick] = useState(0);
+  const libraryVersion = useApp((s) => s.libraryVersion);
+  useEffect(() => {
+    const listener = () => setTick((n) => n + 1);
+    artistListeners.add(listener);
+    return () => { artistListeners.delete(listener); };
+  }, []);
   const key = ids.join(",");
   useEffect(() => {
-    const missing = ids.filter((id) => !artistCovers.has(id) && !artistPending.has(id));
-    if (!missing.length) return;
-    let live = true;
-    for (const id of missing) artistPending.add(id);
-    void Promise.all(missing.map((id) => bridge().query({ type: "artist", data: { id } })
-      .then((r) => { artistCovers.set(id, r.type === "artistDetail" ? r.data?.coverArt ?? null : null); })
-      .catch(() => { artistCovers.set(id, null); })
-      .finally(() => artistPending.delete(id))))
-      .then(() => { if (live) setVersion((v) => v + 1); });
-    return () => { live = false; };
-  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return artistCovers;
+    if (!serverId) return;
+    for (const id of ids) {
+      const k = `${serverId}:${id}`;
+      if (artistCovers.get(k)?.version !== libraryVersion) fetchArtistCover(k, id, libraryVersion);
+    }
+  }, [serverId, key, libraryVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  const lookup = useCallback((id: string) => artistCovers.get(`${serverId}:${id}`)?.cover ?? undefined, [serverId]);
+  return [lookup, tick];
 }
 
 /** The library's items, as the sidebar lists them before its view (kind, sort, filter) applies. */
@@ -78,11 +95,13 @@ export function useLibraryEntries(): LibraryEntry[] {
   const current = useMemo<CurrentContext | undefined>(() => (context ? { kind: context.kind, label: context.label, coverArt: cover, at: startedAt } : undefined), [contextKey, context?.label, cover, startedAt]); // eslint-disable-line react-hooks/exhaustive-deps
   const entries = useMemo(() => collectLibrary(playlists ?? [], queues, history ?? [], current), [playlists, queues, history, current]);
   const artistIds = useMemo(() => entries.filter((e) => e.kind === "artist" && !e.coverArt).map((e) => e.id), [entries]);
-  const covers = useArtistCovers(artistIds);
-  const known = artistIds.filter((id) => covers.get(id)).length;
+  const [coverOf, tick] = useArtistCovers(serverId, artistIds);
   return useMemo(
-    () => (known ? entries.map((e) => (e.kind === "artist" && !e.coverArt && covers.get(e.id) ? { ...e, coverArt: covers.get(e.id) ?? undefined } : e)) : entries),
-    [entries, covers, known],
+    () => entries.map((e) => {
+      const c = e.kind === "artist" && !e.coverArt ? coverOf(e.id) : undefined;
+      return c ? { ...e, coverArt: c } : e;
+    }),
+    [entries, coverOf, tick], // eslint-disable-line react-hooks/exhaustive-deps
   );
 }
 
@@ -124,7 +143,7 @@ export function shownLibrary(entries: readonly LibraryEntry[], pinned: ReadonlyS
 }
 
 /** [shown]: the rows (shownLibrary); [scroller]: the sidebar's scrolling column, which the rows are virtualised against. */
-export function SidebarLibrary({ rail, shown, lib, scroller }: { rail: boolean; shown: LibraryEntry[]; lib: LibraryViewState; scroller: RefObject<HTMLDivElement | null> }) {
+export function SidebarLibrary({ rail, shown, lib, scroller }: { rail: boolean; shown: LibraryEntry[]; lib: LibraryViewState; scroller: HTMLDivElement | null }) {
   const routeKey = useApp((s) => (s.route.id ? `${s.route.view}:${s.route.id}` : ""));
   const playingKey = useApp((s) => {
     const k = s.session?.context?.kind;
@@ -136,28 +155,61 @@ export function SidebarLibrary({ rail, shown, lib, scroller }: { rail: boolean; 
   const field = useRef<HTMLInputElement>(null);
   const searchBtn = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLUListElement>(null);
-  const roving = useRoving(list);
   const rowH = rail ? (narrow ? NARROW_RAIL_ROW_H : RAIL_ROW_H) : ROW_H;
 
   // Where the list starts in the scroller's content: the places, pins and this header sit above it.
   const [margin, setMargin] = useState(0);
   const measure = useCallback(() => {
-    const el = scroller.current;
+    const el = scroller;
     const ul = list.current;
     if (!el || !ul) return;
     const m = Math.max(0, Math.round(ul.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop));
     setMargin((cur) => (cur === m ? cur : m));
   }, [scroller]);
   useLayoutEffect(measure);
+  // The places, the pins and this section resizing (pins resolving, the filter opening) move the list.
   useEffect(() => {
-    const el = scroller.current;
+    const el = scroller;
     if (!el) return;
     const ro = new ResizeObserver(measure);
     for (const child of Array.from(el.children)) ro.observe(child);
     return () => ro.disconnect();
   }, [scroller, measure]);
-  const virt = useVirtualizer({ count: shown.length, getScrollElement: () => scroller.current, estimateSize: () => rowH, overscan: 8, scrollMargin: margin });
+  // Keyboard: one tab stop, the active row (by key, so it survives a re-sort and scrolling), which is
+  // always drawn; arrows, Home and End move it, scrolling it into view before it takes focus.
+  const [activeKey, setActiveKey] = useState<string | undefined>(undefined);
+  const found = activeKey ? shown.findIndex((e) => entryKey(e) === activeKey) : -1;
+  const activeIndex = found >= 0 ? found : 0;
+  const activeRef = useRef(activeIndex);
+  activeRef.current = activeIndex;
+  const rangeExtractor = useCallback((range: Range) => {
+    const base = defaultRangeExtractor(range);
+    const f = activeRef.current;
+    return f < range.count && !base.includes(f) ? [...base, f].sort((a, b) => a - b) : base;
+  }, []);
+  const virt = useVirtualizer({ count: shown.length, getScrollElement: () => scroller, estimateSize: () => rowH, overscan: 8, scrollMargin: margin, rangeExtractor });
   useEffect(() => virt.measure(), [rowH, virt]);
+  const pendingFocus = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const i = pendingFocus.current;
+    if (i === undefined) return;
+    const el = list.current?.querySelector<HTMLElement>(`li[data-index="${i}"] > a`);
+    if (!el) return;
+    pendingFocus.current = undefined;
+    el.focus({ preventScroll: true });
+  });
+  const onListKey = (e: React.KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !shown.length) return;
+    const last = shown.length - 1;
+    const to = e.key === "ArrowDown" ? Math.min(last, activeIndex + 1) : e.key === "ArrowUp" ? Math.max(0, activeIndex - 1) : e.key === "Home" ? 0 : e.key === "End" ? last : undefined;
+    if (to === undefined) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveKey(entryKey(shown[to]!));
+    pendingFocus.current = to;
+    virt.scrollToIndex(to);
+  };
+  const onRowFocus = useCallback((key: string) => setActiveKey(key), []);
 
   useEffect(() => { if (searching) field.current?.focus(); }, [searching]);
   // Closing the filter hands focus back to its toggle (it would otherwise fall to the page).
@@ -199,12 +251,12 @@ export function SidebarLibrary({ rail, shown, lib, scroller }: { rail: boolean; 
         </div>
       )}
       {shown.length ? (
-        <ul ref={list} className="plain-list side-lib-list" aria-labelledby="side-lib-title" style={{ height: virt.getTotalSize(), position: "relative" }} {...roving}>
+        <ul ref={list} className="plain-list side-lib-list" aria-labelledby="side-lib-title" style={{ height: virt.getTotalSize(), position: "relative" }} onKeyDown={onListKey}>
           {virt.getVirtualItems().map((v) => {
             const e = shown[v.index]!;
             const key = entryKey(e);
             return (
-              <LibraryRow key={key} entry={e} rail={rail} top={v.start - margin} height={rowH} active={key === routeKey} playing={key === playingKey} isPlaying={key === playingKey && isPlaying} />
+              <LibraryRow key={key} entry={e} index={v.index} count={shown.length} tabStop={v.index === activeIndex} onFocusRow={onRowFocus} rail={rail} top={v.start - margin} height={rowH} active={key === routeKey} playing={key === playingKey} isPlaying={key === playingKey && isPlaying} />
             );
           })}
         </ul>
@@ -216,15 +268,15 @@ export function SidebarLibrary({ rail, shown, lib, scroller }: { rail: boolean; 
 }
 
 /** One row: memoised, so a change of route or song redraws only the rows it touches. */
-const LibraryRow = memo(function LibraryRow({ entry: e, rail, top, height, active, playing, isPlaying }: { entry: LibraryEntry; rail: boolean; top: number; height: number; active: boolean; playing: boolean; isPlaying: boolean }) {
+const LibraryRow = memo(function LibraryRow({ entry: e, index, count, tabStop, onFocusRow, rail, top, height, active, playing, isPlaying }: { entry: LibraryEntry; index: number; count: number; tabStop: boolean; onFocusRow: (key: string) => void; rail: boolean; top: number; height: number; active: boolean; playing: boolean; isPlaying: boolean }) {
   const navigate = useApp((s) => s.navigate);
   const key = entryKey(e);
   const kind = t(`library.kind.${e.kind}` as never);
   const sub = e.owner ? `${kind} · ${e.owner}` : kind;
   const target = useMemo(() => targetOf(e), [e]);
   return (
-    <li style={{ position: "absolute", top: 0, left: 0, right: 0, height, transform: `translateY(${top}px)` }}>
-      <a href="#" data-roving className={`nav-item lib-item ${active ? "active" : ""} ${playing ? "playing" : ""}`} aria-current={active ? "page" : undefined}
+    <li data-index={index} aria-setsize={count} aria-posinset={index + 1} style={{ position: "absolute", top: 0, left: 0, right: 0, height, transform: `translateY(${top}px)` }}>
+      <a href="#" tabIndex={tabStop ? 0 : -1} onFocus={() => onFocusRow(key)} className={`nav-item lib-item ${active ? "active" : ""} ${playing ? "playing" : ""}`} aria-current={active ? "page" : undefined}
         title={rail ? `${e.title} · ${sub}` : undefined}
         onClick={(ev) => { ev.preventDefault(); navigate({ view: e.kind, id: e.id }); }}
         onContextMenu={(ev) => void openContextMenu(ev, target)}

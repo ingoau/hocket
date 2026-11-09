@@ -16,8 +16,11 @@ export const WINDOW_CHROME: Record<WindowTheme, { ground: string; ink: string }>
   dark: { ground: "#1b1730", ink: "#ece9ff" },
   light: { ground: "#eceaf4", ink: "#1b1730" },
 };
-/** Windows' caption buttons over the fullscreen player: white on a light dark wash, whatever the artwork. */
-const PLAYER_OVERLAY = { color: "#00000033", symbolColor: "#ffffff" };
+/**
+ * Windows' caption buttons over the fullscreen player: white on the dark ground. Opaque, as Electron
+ * documents no alpha for the overlay's colour, and white symbols need a dark backing whatever the artwork.
+ */
+const PLAYER_OVERLAY = { color: "#1b1730", symbolColor: "#ffffff" };
 /** The top bar's height (m3-shell.css --topbar-h): Windows' caption buttons fill it. */
 const TOPBAR_HEIGHT = 56;
 

@@ -81,6 +81,30 @@ test.describe("Your library in the sidebar", () => {
   });
 });
 
+test.describe("Your library from the keyboard", () => {
+  test("one tab stop; arrows, Home and End move along the whole list, drawn or not", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playAlbum(page, "al-1");
+    const rows = page.getByTestId("sidebar-library-item");
+    await expect(rows.first()).toBeVisible();
+    // A single tab stop in the list.
+    expect(await rows.evaluateAll((els) => els.filter((el) => (el as HTMLElement).tabIndex === 0).length)).toBe(1);
+    await rows.first().focus();
+    const focused = () => page.evaluate(() => {
+      const li = document.activeElement?.closest("li");
+      return { pos: Number(li?.getAttribute("aria-posinset")), size: Number(li?.getAttribute("aria-setsize")), entry: document.activeElement?.getAttribute("data-entry") };
+    });
+    expect((await focused()).pos).toBe(1);
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(async () => (await focused()).pos).toBe(2);
+    await page.keyboard.press("End");
+    await expect.poll(async () => { const f = await focused(); return f.pos === f.size && f.size > 1; }).toBe(true);
+    await page.keyboard.press("Home");
+    await expect.poll(async () => (await focused()).pos).toBe(1);
+  });
+});
+
 test.describe("the collapsed sidebar", () => {
   test("the top bar's toggle and Mod+B fold it to a rail and back, remembered", async ({ hocket }) => {
     const { page } = hocket;
