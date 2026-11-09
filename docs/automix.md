@@ -78,9 +78,15 @@ struct AnalysisRecord {
     beat_confidence: f32,         // 0..1; planner gates on it
     created_at: f64,              // epoch ms
 }
-struct SourceFingerprint { duration_ms: u32, size_bytes: Option<u64>, suffix: Option<String>, transcoded: bool }
+struct SourceFingerprint { duration_ms: u32, size_bytes: Option<f64>, suffix: Option<String>, transcoded: bool }
 struct LoudnessCurve { start_ms: u32, hop_ms: u32, lufs: Vec<f32> }
 ```
+
+`size_bytes` is `f64` like `Track::size_bytes` (no 64-bit integers cross the
+FFI). Curves are K-weighted (BS.1770), 3 s windows centred on points 100 ms
+apart, floored at −70 LUFS. A loudness-only record's `integrated_lufs` is
+measured over its head and tail windows together (an approximation of the
+whole track); `automix::loudness::loudness_record` builds one from PCM.
 
 - A record is usable for a track when `version` matches and its fingerprint
   matches the track's (duration within 1 s; size and suffix when both known).
@@ -88,6 +94,8 @@ struct LoudnessCurve { start_ms: u32, hop_ms: u32, lufs: Vec<f32> }
   beats over loudness-only, then Worker over Desktop over Device, then newer.
 - Loudness-only records (`beats_ms` empty) are valid and drive the smart plain
   fade.
+- `automix::record::compact` tidies a record before storing or sending it
+  (sorted beats, downbeats ⊂ beats, curve values to 0.1 LU).
 
 ### TransitionPlan
 
@@ -107,9 +115,21 @@ struct TransitionPlan {
     tempo: Option<TempoRamp>,     // outgoing stretch: ratio 1.0 -> ratio_end over ramp_ms from tail start
     bass_swap: Option<ShelfMove>, // low shelf (~100 Hz) automation, see render.rs
     high_cut: Option<ShelfMove>,  // high shelf automation on the outgoing tail
-    incoming_gain_db: f32,        // extra gain on B during the overlap (ducking), usually 0
+    incoming_gain_db: f32,        // extra gain on B at the overlap start, easing to 0 dB by its end; usually 0
 }
+enum TransitionKind { Fade, Blend, TempoBlend }
+enum FadeCurve { EqualPower, Linear }          // out side runs 1 -> 0, in side 0 -> 1
+struct TempoRamp { ratio_end: f32, ramp_ms: u32 } // ratio = speed (source ms per output ms)
+struct ShelfMove { freq_hz: f32, from_db: f32, to_db: f32, start_ms: u32, len_ms: u32 }
 ```
+
+- The overlap is `incoming_at_ms..tail_len_ms` (output time); both fade
+  curves run over it.
+- `ShelfMove` times are output time from the tail start; the gain moves
+  linearly in dB. The incoming side of `bass_swap` runs it mirrored (B's low
+  shelf sits at `to_db` until the move, then rises to `from_db`).
+- `tail_source_ms` is the exact integral of the tempo ramp over
+  `tail_len_ms` (`automix::stretch::source_ms`), so planner and renderer agree.
 
 `MediaSource` gains:
 
@@ -156,6 +176,14 @@ struct TransitionPlan {
   Podcast / Spoken word, Live (genre, or "live" release type / album title
   marker), Soundtrack / Score; repeat-one; sleep timer end-of-track; Cast
   renderer active; bit-perfect/exclusive output; mode Off.
+  - Genres match whole words, case-insensitively, over the genre string
+    (so "Hardcore" isn't "score"). Release types come from the album's
+    OpenSubsonic `release_types` (`live`, `soundtrack`, `spokenword`,
+    `audiobook`, `audio drama`, `interview`).
+  - The library has no gapless tag (`iTunPGAP`) yet: `MixTrack::gapless` is
+    `None` until it does. The gapless *join* is judged from both records: A
+    audible to within 50 ms of its end and B from within 50 ms of its start,
+    both at that edge within 10 LU of their integrated loudness.
 - Scrobbling, played-ms, sleep timer, Connect stamps and media session all key
   off `TransitionedToNext` as today, so they switch at the handover.
 - Connect handoff during a transition: the target starts B at B's position,
@@ -163,29 +191,44 @@ struct TransitionPlan {
 
 ## Planner (plan.rs)
 
-Inputs: both records (optional), both tracks' metadata, mode, crossfade
-seconds, `fixed_tail_start_ms`.
+Inputs: both records (optional, already checked usable), both tracks'
+durations, mode, crossfade seconds, `fixed_tail_start_ms`. Mode Off plans
+nothing. Every overlap is limited to half of each track's audible span.
 
 1. **Crossfade mode**, or AutoMix with no usable records: `Fade`, overlap =
    crossfade seconds (AutoMix default 6 s), placed so the fade ends at A's
    `audible_end_ms` when known, else at its end; B from its
    `audible_start_ms` when known. Equal-power curves.
-2. **AutoMix with loudness-only records**: smart `Fade`. Mix-out where A's tail
-   loudness drops 6 LU below its sustained level (or the fade-out begins);
-   overlap 4–10 s by how long A's fade is; never cut more than 20 s of
-   audible A.
-3. **AutoMix with beats on both** (confidence ≥ 0.5, ≥ 8 downbeats, steady
-   grid):
-   - tempo gap ≤ 8 % and both 4/4 → `TempoBlend` (`Blend` when gap ≤ 1 %):
-     overlap 8 bars (16 when both tails/heads are low-energy), tail start on a
-     downbeat that leaves the overlap ending before A's audible end, B entering
-     on its first downbeat at or after `audible_start_ms`. Tempo ramp over the
-     4 bars before the overlap. Bass swap at the overlap midpoint (low shelf
-     −26 dB over 1 bar). Handover at the bass swap.
-   - otherwise a beat-aligned `Fade` of 4 bars (2 if gap > 12 %, 1 if
-     > 20 %).
+2. **AutoMix with a record for A but no beat grid on both** (loudness-only,
+   or beats failing the gate below): smart `Fade`. Mix-out where A's tail
+   loudness drops 6 LU below its sustained level (the median of the tail
+   curve before the last 20 s) for good; overlap 4–10 s by how long A's fade
+   is; never cut more than 20 s of audible A.
+3. **AutoMix with beats on both** (confidence ≥ 0.5, ≥ 8 downbeats in A's
+   last / B's first minute, steady grid: ≥ 85 % of bars within 4 % of the
+   median bar; beats per bar is the mode of beats between downbeats, covering
+   ≥ 80 % of bars):
+   - tempo gap ≤ 8 % and both 4/4 → `Blend` when the drift over the overlap
+     would be ≤ 25 ms unstretched, else `TempoBlend` (deviation: the spec said
+     `Blend` at gap ≤ 1 %, but 1 % over 8 bars at 120 BPM is 160 ms of
+     flamming): overlap 8 bars (16 when both A's last and B's first 30 s sit
+     ≥ 4 LU below their integrated loudness), tail start on a downbeat that
+     leaves the overlap ending at or before A's audible end, B entering on its
+     first downbeat at or after `audible_start_ms`. `TempoBlend` ramps the
+     ratio over the 4 bars before the overlap (the tail starts 4 bars
+     earlier), the ratio being A's bar over B's bar across the overlap.
+     Bass swap (low shelf 100 Hz to −26 dB) over the bar before the overlap's
+     midpoint downbeat; handover at that midpoint. A high shelf (5 kHz, to
+     −12 dB) cuts A from the handover to the end.
+   - otherwise a beat-aligned `Fade` of 4 bars of A (2 if gap > 12 %, 1 if
+     > 20 %), B's first downbeat on A's.
+   - With `fixed_tail_start_ms`, the overlap (or the ramp) starts at the first
+     downbeat at or after it; A plays unaltered up to there.
 4. Rescue: if no candidate fits (A too short, overlap would cut > 20 s of
    audible A), plain 6 s `Fade`.
+
+`late_edit_fade` builds the lock-in replacement plan: `Fade` from the
+committed `tail_start_ms`, overlap max(2 s, crossfade / 2).
 
 The planner is deterministic: same inputs → same plan on every device.
 
@@ -200,6 +243,15 @@ The planner is deterministic: same inputs → same plan on every device.
   to B's frames from its first played sample: `in_curve`, `incoming_gain_db`
   and the incoming side of the bass swap (B's low shelf rises as A's falls).
 - Mixing is a sum followed by the existing limiter.
+- Filter coefficients move every 32 frames of the absolute timeline and gains
+  are per frame, so `IncomingShaper` output doesn't depend on block size.
+- Time-stretch (`stretch.rs`) is a pure-Rust WSOLA (40 ms Hann windows, 50 %
+  overlap, ±8 ms similarity search). `signalsmith-stretch` was tried and
+  rejected: its wrapper runs `bindgen` at build time, which needs libclang on
+  every build host (absent on the dev host; would be needed in CI and the
+  Android cross build) and links a C++ STL into the Android cdylib. For
+  ±8 % over a few bars WSOLA is good enough; revisit if the mixlab says
+  otherwise.
 - Rates: the tail is rendered at the output rate the backend will mix at
   (desktop: device rate after resampling; Android: B's sample rate).
 
