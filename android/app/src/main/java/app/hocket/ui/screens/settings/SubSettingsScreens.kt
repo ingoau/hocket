@@ -172,7 +172,7 @@ private fun TransitionRows(client: app.hocket.core.client.CoreClient) {
     ChoiceRow(modes, isSelected = { value.mode == it }, onSelect = { set(value.copy(mode = it)) }, modifier = Modifier.padding(horizontal = 16.dp))
     if (value.mode == TransitionMode.Crossfade) {
         val seconds = value.crossfadeSeconds.roundToInt().coerceIn(1, 12)
-        var dragged by remember(seconds) { mutableStateOf(seconds.toFloat()) }
+        var dragged by remember(seconds) { androidx.compose.runtime.mutableFloatStateOf(seconds.toFloat()) }
         val label = stringResource(R.string.settings_crossfade_seconds)
         val valueText = stringResource(R.string.settings_crossfade_seconds_value, dragged.roundToInt())
         SettingRow(label, valueText)
