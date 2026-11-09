@@ -219,7 +219,8 @@ nothing. Every overlap is limited to half of each track's audible span.
      would be ≤ 25 ms unstretched, else `TempoBlend` (deviation: the spec said
      `Blend` at gap ≤ 1 %, but 1 % over 8 bars at 120 BPM is 160 ms of
      flamming): overlap 8 bars (16 when both A's last and B's first 30 s sit
-     ≥ 4 LU below their integrated loudness), tail start on a downbeat that
+     ≥ 4 LU below their integrated loudness and 16 bars of A last ≤ 32 s;
+     phase-3 tuning: at 90 BPM 16 bars were 43 s plus the ramp), tail start on a downbeat that
      leaves the overlap ending at or before A's audible end, B entering on its
      first downbeat at or after `audible_start_ms`. `TempoBlend` ramps the
      ratio over the 4 bars before the overlap (the tail starts 4 bars

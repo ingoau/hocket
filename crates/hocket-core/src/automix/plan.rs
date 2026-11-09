@@ -57,6 +57,8 @@ pub const BASS_SWAP_DB: f32 = -26.0;
 /// High-shelf cut on the outgoing tail after the handover.
 pub const HIGH_CUT_HZ: f32 = 5_000.0;
 pub const HIGH_CUT_DB: f32 = -12.0;
+/// Longest overlap a 16-bar blend may take.
+pub const MAX_LONG_BLEND_MS: f64 = 32_000.0;
 /// Beat-aligned fades are at least this long (whole bars of A added until
 /// they are): a 1-bar fade at 128 BPM is under 2 s, a near-cut.
 pub const MIN_ALIGNED_FADE_MS: f64 = 4_000.0;
@@ -469,7 +471,9 @@ pub fn beat_plan(
     let fixed = input.fixed_tail_start_ms;
 
     let plan = if ga.is_four_four() && gb.is_four_four() && gap <= MAX_STRETCH_GAP {
-        let long = both_low_energy(ra, a_end, rb, b_start);
+        // 16 bars only while they stay within 32 s (≥ 120 BPM in 4/4): at
+        // 90 BPM they are 43 s, plus the ramp a minute of A.
+        let long = both_low_energy(ra, a_end, rb, b_start) && 16.0 * ga.bar_ms <= MAX_LONG_BLEND_MS;
         let options: &[usize] = if long { &[16, 8] } else { &[8] };
         options
             .iter()
