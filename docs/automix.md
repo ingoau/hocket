@@ -368,15 +368,77 @@ The planner is deterministic: same inputs → same plan on every device.
     `store_analysis_record`, which replans the follow-up. One at a time,
     each track tried once per session. `on_analysis_produced` uploads the
     record (see *Sharing records*).
-- **Android** (`ExoBackend.kt`): A's `MediaItem` carries
-  `ClippingConfiguration(endPositionMs = mix_out_ms)`. A Kotlin
-  `AudioProcessor` wraps the Rust DSP chain (EQ, ReplayGain incl. boost,
-  limiter) via JNI and, at B's first frame, sums the pre-rendered tail with
-  `IncomingShaper`-processed B. The tail is decoded with
-  `MediaExtractor`/`MediaCodec` and rendered by `render_tail` through the FFI.
-  Android also computes loudness-only records from decoded heads/tails and
-  hands them to the core (`Command::StoreAnalysisRecord`, which also
-  uploads them).
+- **Android** (`ExoBackend.kt`, `MixProcessor.kt`, `PcmDecoder.kt`,
+  `LoudnessRecorder.kt`; Rust side `crates/hocket-android/src/dsp.rs`):
+  - **DSP**: a Media3 `BaseAudioProcessor` in the main player's
+    `DefaultAudioSink` (PCM path only: 16-bit or float in, the same out; no
+    float output, no offload) runs hocket-core's `DspChain` per buffer
+    through **direct JNI** (`NativeDsp`: opaque handles, in place on a direct
+    `ByteBuffer` of floats). UniFFI is used only for the one-shot calls
+    (tail render, loudness record, record usability), with PCM as LE `f32`
+    bytes. The chain applies the source's `gain_db` (boost included), the
+    in-app EQ and normalisation from `AudioSettings` (live, from
+    `AudioSettingsChanged`), and the limiter; `player.volume` is only the
+    master/sleep-fade volume.
+  - **Item boundaries**: at a gapless join the sink drains the processors
+    (`queueEndOfStream`) and flushes them with the new stream's
+    `StreamMetadata` (timeline + period → the item's media id, and its
+    start position); a seek flushes without an end of stream first. So the
+    first frame after such a flush is the item's first frame, sample-exact,
+    and the track gain snaps there. No frame counting against durations.
+  - **Clipping**: an item with `mix_out_ms` gets
+    `ClippingConfiguration(endPositionMs)`; the processor also drops frames
+    past the clip end (ExoPlayer clips by whole decoder buffers).
+  - **Tail**: when the next source carries `mix_in`, the transition is armed
+    (same pair and plan keep a rendered tail; the newest `set_next` wins
+    before the tail starts). Once A is within 60 s of `tail_start_ms` one
+    background thread decodes A from `tail_start_ms` (200 ms preroll
+    dropped by timestamp, `tail_source_ms` long) with
+    `MediaExtractor`/`MediaCodec` — `hocket-stream://` through the core's
+    stream reader as a `MediaDataSource`, `file:` from disk, else HTTP with
+    the source's headers — probes B's rate and channels from its container,
+    and calls `automix_prepare_tail`: a `DspChain` like A's (A's gain, the
+    EQ), channel map, **rubato** resampling to B's rate (the desktop
+    resampler, moved to `audio::resample` behind the feature `resample`,
+    which `hocket-android` enables; pure Rust), then `render_tail`.
+  - **Mixing**: at B's first frame after a contiguous join, if the armed
+    pair matches and the tail is at B's format, the processor outputs the
+    tail's first `incoming_at_ms` at once, then B (its first
+    `incoming_from_ms` dropped, through the chain and `IncomingShaper`) plus
+    the rest of the tail, through the limiter. The output thus runs
+    `incoming_at_ms − incoming_from_ms` ahead of B's input, and ExoPlayer's
+    position for B is the output time since the tail start.
+  - **Reports**: `TransitionStarted` when ExoPlayer moves on to B (the tail is
+    heard); the handover (`Ended(A)`, `TransitionedToNext(B)`,
+    `Position(B, p)`) when B's ExoPlayer position reaches `handover_ms`
+    (checked every 40 ms). Until then reports name A at `tail_start_ms` +
+    the tail played (at the tail's average speed) and A stays in the
+    playlist; after it B's position is ExoPlayer's + `incoming_from_ms −
+    incoming_at_ms` until the next seek.
+  - Seek before the handover goes back to A (B stays next, the tail stays
+    armed unless the target is past the tail start); after it B seeks.
+    `complete_transition` hands over and seeks B to its position, which
+    drops the tail queued in the sink. A `set_next` during the overlap is
+    held until the handover. Pause/play pause both (one output).
+  - **Fallback**: a tail not ready (or failed, or at another format than B
+    turned out to have) when B's first frame arrives → B starts unmixed at
+    A's clip point, logged. A's audio after `mix_out_ms` is then lost.
+  - **Loudness-only records**: with the mode on AutoMix, on each window
+    change the first of current / next / next-next (from the queue) with no
+    usable record (`Query::TrackAnalysis`, version and duration checked in
+    Rust) whose file is on the device (a `file:` URL or a core stream the
+    core has whole; nothing is fetched for analysis) gets its first and
+    last 60 s decoded with `MediaCodec` on one lowest-priority thread,
+    `automix_loudness_record` (producer Device, fingerprint: the library
+    duration, size and suffix unknown) and `Command::StoreAnalysisRecord`.
+    One at a time, each track tried once per process.
+  - **Limitations**: the switch from live A to the tail is not crossfaded
+    (desktop crossfades 10 ms), and MediaCodec doesn't trim encoder delay,
+    so the tail can start a few tens of ms off A's clip point; B's format is
+    taken from its container (an HE-AAC stream whose decoder doubles the
+    rate falls back to a cut).
+  - **Settings**: Audio → Transitions (Off / Crossfade / AutoMix, crossfade
+    length while Crossfade is picked), in settings search.
 - **Coordinator**: see *Sharing records* and *Coordinator worker*.
 
 ## Sharing records

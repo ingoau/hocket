@@ -77,8 +77,11 @@ the one core for the process through `CoreHost`:
   and the service never stops itself under a player that is buffering or recovering
   (`ExoBackend.isBusy`). `PreBuffer` prepares a
   second silent ExoPlayer at the requested position (`PreBufferReady` when READY); `DiscardPreBuffer`
-  releases it. `gain_db` is applied as `10^(gain/20) * masterVolume` clamped to 1.0 — Media3 has no
-  gain stage, so positive gain is an approximation (documented in `ExoBackend`).
+  releases it. `gain_db` (boost included), the in-app EQ and the limiter run in the core's DSP
+  chain inside the main player's audio sink (`MixProcessor`, direct JNI into `libhocket_android`,
+  `crates/hocket-android/src/dsp.rs`), switching gain at a gapless join's first sample;
+  `player.volume` is only the master volume. AutoMix transitions mix in the same processor (see
+  `docs/automix.md` → Platforms → Android).
 - Core streams: `CoreHost.start` sends `SetBackendCapabilities{core_stream}` ahead of `Start` on
   every core start (the core does not persist it), so the native core hands ExoPlayer
   `hocket-stream://<token>` sources instead of server URLs. `HocketStreamDataSource`
