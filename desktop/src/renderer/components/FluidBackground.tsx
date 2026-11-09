@@ -30,7 +30,9 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
   const still = useApp((s) => saverHas(s.batterySaver, "stillBackground"));
   const animatedSetting = useSetting(SK.displayAnimatedBackground, true);
   const reducedMotion = usePrefersReducedMotion();
-  const animated = animatedSetting && !still && !reducedMotion;
+  // No WebGL (no GPU, or a blocklisted one: Chromium no longer falls back to software): the still.
+  const [noWebgl, setNoWebgl] = useState(false);
+  const animated = animatedSetting && !still && !reducedMotion && !noWebgl;
   const url = useArtwork(coverArt, animated ? 300 : 64);
   const canvas = useRef<HTMLCanvasElement>(null);
   const kawarp = useRef<Kawarp | undefined>(undefined);
@@ -62,6 +64,7 @@ export function FluidBackground({ coverArt }: { coverArt: string | undefined }) 
       });
     } catch (err) {
       console.warn("[background] WebGL unavailable, falling back to a still", err);
+      setNoWebgl(true);
       return;
     }
     kawarp.current = k;

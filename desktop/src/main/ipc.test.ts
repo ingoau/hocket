@@ -62,6 +62,7 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
     windows: { all: () => [{ webContents: { id: 1 } }], mini: undefined, main: undefined, stateOf: () => ({}), broadcastState: vi.fn(), openMini: vi.fn(), closeMini: vi.fn(), showMain: vi.fn() } as never,
     artwork: artwork as never,
     meta: () => ({}) as never,
+    credentialStorage: async () => "os",
     onCommand,
     onVisibilityReport: vi.fn(),
     onNetworkReport: vi.fn(),
@@ -144,7 +145,8 @@ describe("ipc", () => {
     expect(fsMock.writeFile).toHaveBeenCalledTimes(1);
     await expect(handlers.get(IPC.dialogSaveText)!(ours, { title: "Save", text: 5 })).rejects.toThrow("rejected");
     await expect(handlers.get(IPC.dialogSaveText)!(ours, { title: "Save", text: "x", defaultPath: "../../etc/passwd" })).resolves.toBeUndefined();
-    expect(dialogs.showSaveDialog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ defaultPath: undefined }));
+    // The renderer's path is dropped: the dialog starts in the folder last saved to.
+    expect(dialogs.showSaveDialog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ defaultPath: "/home/u" }));
     dialogs.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/home/u/in.json"] });
     fsMock.readFile.mockResolvedValue("content");
     expect(await handlers.get(IPC.dialogOpenText)!(ours, { title: "Open" })).toEqual({ path: "/home/u/in.json", text: "content" });

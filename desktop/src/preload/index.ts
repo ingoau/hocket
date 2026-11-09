@@ -3,7 +3,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
 import type { RoomDiagnosticsStatus } from "@core/api";
-import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, StagedScreenshot, UndecodedImage, WindowControl, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, StagedScreenshot, UndecodedImage, WindowControl, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -28,6 +28,9 @@ const bridge: HocketBridge = {
   },
   meta(): Promise<AppMeta> {
     return ipcRenderer.invoke(IPC.meta) as Promise<AppMeta>;
+  },
+  credentialStorage(): Promise<CredentialStorage> {
+    return ipcRenderer.invoke(IPC.credentialStorage) as Promise<CredentialStorage>;
   },
   window: {
     minimize: () => ipcRenderer.send(IPC.windowControl, "minimize" satisfies WindowControl),

@@ -9,11 +9,12 @@ import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from "nod
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import type { AppMeta, AppPrefs, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
 import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
+import { showOpenDialog, showSaveDialog } from "./file-dialog";
 import type { DevLog, DiagnosticsBundle } from "./devlog";
 import { installReportIpc } from "./report";
 import type { Windows } from "./windows";
@@ -23,6 +24,8 @@ export interface IpcDeps {
   windows: Windows;
   artwork: ArtworkRegistry;
   meta: () => Omit<AppMeta, "windowKind">;
+  /** Waits for the credential store to open. */
+  credentialStorage: () => Promise<CredentialStorage>;
   /** Observers of commands on their way to the core (credential capture, mirrored settings). */
   onCommand: (command: Command) => void;
   onVisibilityReport: (visible: boolean) => void;
@@ -153,7 +156,7 @@ export function installIpc(deps: IpcDeps): void {
         new ShareMenu({ filePaths: [shared] }).popup({ window: win });
         return "shared";
       }
-      const saved = await dialog.showSaveDialog(win, { title: t("menu.shareFileDialog"), defaultPath: result.data.fileName });
+      const saved = await showSaveDialog(win, { title: t("menu.shareFileDialog"), defaultPath: result.data.fileName });
       if (saved.canceled || !saved.filePath) return "cancelled";
       const again = await realpath(path);
       if (!(await pathWithin(roots, again))) return "failed";
@@ -182,6 +185,8 @@ export function installIpc(deps: IpcDeps): void {
     const kind = win && windows.mini && win.id === windows.mini.id ? "mini" : "main";
     return { ...deps.meta(), windowKind: kind };
   });
+
+  ipcMain.handle(IPC.credentialStorage, (e): Promise<CredentialStorage> | undefined => (isOurs(windows, e.sender) ? deps.credentialStorage() : undefined));
 
   ipcMain.on(IPC.windowControl, (e, control: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
@@ -219,7 +224,7 @@ export function installIpc(deps: IpcDeps): void {
     const win = BrowserWindow.fromWebContents(e.sender);
     const req = saveRequest(raw);
     if (!win || !isOurs(windows, e.sender) || !req) return undefined;
-    const r = await dialog.showSaveDialog(win, { title: req.title, defaultPath: req.defaultPath, filters: req.filters });
+    const r = await showSaveDialog(win, { title: req.title, defaultPath: req.defaultPath, filters: req.filters });
     if (r.canceled || !r.filePath) return undefined;
     allowedExportPaths.add(r.filePath);
     return r.filePath;
@@ -230,7 +235,7 @@ export function installIpc(deps: IpcDeps): void {
     const req = saveRequest(raw);
     const text = isObject(raw) ? raw.text : undefined;
     if (!win || !isOurs(windows, e.sender) || !req || typeof text !== "string" || text.length > MAX_TEXT_FILE) throw new Error("rejected");
-    const r = await dialog.showSaveDialog(win, { title: req.title, defaultPath: req.defaultPath, filters: req.filters });
+    const r = await showSaveDialog(win, { title: req.title, defaultPath: req.defaultPath, filters: req.filters });
     if (r.canceled || !r.filePath) return undefined;
     await writeFile(r.filePath, text, "utf8");
     return r.filePath;
@@ -240,7 +245,7 @@ export function installIpc(deps: IpcDeps): void {
     const win = BrowserWindow.fromWebContents(e.sender);
     const req = openRequest(raw);
     if (!win || !isOurs(windows, e.sender) || !req) throw new Error("rejected");
-    const r = await dialog.showOpenDialog(win, { title: req.title, filters: req.filters, properties: ["openFile"] });
+    const r = await showOpenDialog(win, { title: req.title, filters: req.filters, properties: ["openFile"] });
     const path = r.filePaths[0];
     if (r.canceled || !path) return undefined;
     return { path, text: await readFile(path, "utf8") };
@@ -275,7 +280,7 @@ export function installIpc(deps: IpcDeps): void {
       console.error("[ipc] config export: not a config document", err);
       throw new Error("rejected");
     }
-    const r = await dialog.showSaveDialog(win, { title: t("dialog.exportConfig"), defaultPath: "hocket-config.json", filters: [{ name: "JSON", extensions: ["json"] }] });
+    const r = await showSaveDialog(win, { title: t("dialog.exportConfig"), defaultPath: "hocket-config.json", filters: [{ name: "JSON", extensions: ["json"] }] });
     if (r.canceled || !r.filePath) return undefined;
     await writeFile(r.filePath, text, { encoding: "utf8", mode: 0o600 });
     return r.filePath;
@@ -284,7 +289,7 @@ export function installIpc(deps: IpcDeps): void {
   ipcMain.handle(IPC.configImport, async (e): Promise<boolean> => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || !isOurs(windows, e.sender)) throw new Error("rejected");
-    const r = await dialog.showOpenDialog(win, { title: t("dialog.importConfig"), filters: [{ name: "JSON", extensions: ["json"] }], properties: ["openFile"] });
+    const r = await showOpenDialog(win, { title: t("dialog.importConfig"), filters: [{ name: "JSON", extensions: ["json"] }], properties: ["openFile"] });
     const path = r.filePaths[0];
     if (r.canceled || !path) return false;
     let servers: ReturnType<typeof extractSecrets>["servers"];
@@ -323,7 +328,7 @@ export function installIpc(deps: IpcDeps): void {
   });
 
   ipcMain.on(IPC.clipboardWrite, (e, text: unknown) => {
-    if (isOurs(windows, e.sender) && typeof text === "string") clipboard.writeText(text);
+    if (isOurs(windows, e.sender) && typeof text === "string") clipboard.writeText(text).catch((err: unknown) => console.warn("[ipc] couldn't write the clipboard", err));
   });
 
   installDiagnosticsIpc(deps);
@@ -440,7 +445,7 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || !isOurs(windows, e.sender)) throw new Error("rejected");
     const bundle = await build(allDevices(options));
-    const r = await dialog.showSaveDialog(win, { title: t("developer.saveTitle"), defaultPath: bundle.fileName, filters: [{ name: t("developer.fileFilter"), extensions: ["txt"] }] });
+    const r = await showSaveDialog(win, { title: t("developer.saveTitle"), defaultPath: bundle.fileName, filters: [{ name: t("developer.fileFilter"), extensions: ["txt"] }] });
     if (r.canceled || !r.filePath) return undefined;
     await writeFile(r.filePath, bundle.text, "utf8");
     return r.filePath;
@@ -448,7 +453,7 @@ function installDiagnosticsIpc(deps: IpcDeps): void {
 
   ipcMain.handle(IPC.diagnosticsCopy, async (e, options: unknown) => {
     if (!isOurs(windows, e.sender)) throw new Error("rejected");
-    clipboard.writeText((await build(allDevices(options))).text);
+    await clipboard.writeText((await build(allDevices(options))).text);
   });
 
   ipcMain.handle(IPC.diagnosticsReveal, async (e, options: unknown) => {

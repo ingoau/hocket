@@ -95,7 +95,7 @@ test("Save to Coordinator: offered via the coordinator only; the dialog stages f
     await page.getByTestId("report-note").fill("Queue jumped back two songs after unlocking");
     await page.getByTestId("report-add-screenshot").click();
     await expect(page.getByTestId("report-screenshot")).toHaveCount(1);
-    await app.evaluate(({ clipboard, nativeImage }, b64) => clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(b64, "base64"))), PNG.toString("base64"));
+    await app.evaluate(({ clipboard, ClipboardItem }, b64) => clipboard.write([new ClipboardItem({ "image/png": new Blob([Buffer.from(b64, "base64")], { type: "image/png" }) })]), PNG.toString("base64"));
     await page.getByTestId("report-note").focus();
     await page.keyboard.press(`${mod}+V`);
     await expect(page.getByTestId("report-screenshot")).toHaveCount(2);

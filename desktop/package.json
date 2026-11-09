@@ -42,11 +42,11 @@
     "@iconify-json/material-symbols": "^1.2.93",
     "@napi-rs/cli": "^3.3.1",
     "@playwright/test": "^1.55.0",
-    "@types/node": "^22.18.0",
+    "@types/node": "^24.0.0",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.3",
-    "electron": "^38.1.2",
+    "electron": "^45.2.3",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.25.10",
     "eslint": "^9.36.0",
@@ -60,7 +60,6 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "electron",
       "esbuild"
     ]
   }
