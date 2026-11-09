@@ -26,8 +26,9 @@ async function populate(page: Page): Promise<void> {
 }
 
 test.describe("axe: no violations anywhere", () => {
-  // Each scan covers the sidebar's Your library too (a few dozen rows), about a fifth more to check.
-  test.setTimeout(360_000);
+  // Each scan covers the sidebar's Your library too, and the library views test runs some fifty
+  // scans: on a loaded machine that takes six minutes and more.
+  test.setTimeout(480_000);
 
   test("setup screen, light and dark", async ({ hocket }) => {
     const { page } = hocket;
