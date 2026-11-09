@@ -41,8 +41,9 @@ use crate::connect::replica::ReplicaExt;
 use crate::connect::room::{LanAuth, Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
 use crate::connect::wire::{
-    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, PlaylistEdit, RefuseReason,
-    RejectReason, ReplicaState, TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
+    merge_saved_queues, merge_settings, AnalysisEntry, Credential, LastStamp, Msg, PlaylistEdit,
+    RefuseReason, RejectReason, ReplicaState, TransportCommand, WireMessage, PROTOCOL,
+    PROTOCOL_MIN,
 };
 use crate::connect::{
     apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp,
@@ -376,6 +377,19 @@ pub enum Input {
         declined: Option<String>,
     },
 
+    // -- AutoMix analysis ----------------------------------------------------
+    /// Ask the coordinator for these tracks' records (dropped unless
+    /// [`Output::AnalysisStore`] last said `true`). Answered with
+    /// [`Output::AnalysisRecords`].
+    FetchAnalysis {
+        track_ids: Vec<TrackId>,
+    },
+    /// Share records this device produced with the coordinator (dropped
+    /// unless [`Output::AnalysisStore`] last said `true`).
+    UploadAnalysis {
+        records: Vec<AnalysisEntry>,
+    },
+
     Tick,
 }
 
@@ -529,6 +543,11 @@ pub enum Output {
     DiagnosticsReply(ReplyPart),
     /// Our embedded room's replica changed (persist if you like).
     ReplicaChanged(ReplicaState),
+    /// Whether the room we are attached to is a coordinator with an
+    /// analysis store (sent on every change).
+    AnalysisStore(bool),
+    /// The coordinator's answer to [`Input::FetchAnalysis`].
+    AnalysisRecords(Vec<AnalysisEntry>),
     Log {
         level: &'static str,
         message: String,
@@ -793,6 +812,8 @@ pub struct Engine {
     from_room: VecDeque<WireMessage>,
     /// Parts of diagnostics answers still to send, one per tick.
     diagnostics_out: VecDeque<Msg>,
+    /// The coordinator we are attached to keeps AutoMix analysis records.
+    analysis_store: bool,
     out: Vec<Output>,
 }
 
@@ -918,6 +939,7 @@ impl Engine {
             to_room: VecDeque::new(),
             from_room: VecDeque::new(),
             diagnostics_out: VecDeque::new(),
+            analysis_store: false,
             out: vec![],
         };
         e.attach_loopback();
@@ -1532,6 +1554,16 @@ impl Engine {
                 text,
                 declined,
             } => self.answer_diagnostics(request_id, to, text, declined),
+            Input::FetchAnalysis { track_ids } => {
+                if self.analysis_store && !track_ids.is_empty() {
+                    self.upstream_send(Msg::AnalysisFetch { track_ids });
+                }
+            }
+            Input::UploadAnalysis { records } => {
+                if self.analysis_store && !records.is_empty() {
+                    self.upstream_send(Msg::AnalysisUpload { records });
+                }
+            }
             Input::Tick => self.on_tick(),
         }
         self.drain_loops();
@@ -2105,6 +2137,7 @@ impl Engine {
 
     /// Leave the remote (if any) and return to our own room.
     fn drop_remote(&mut self, error: Option<String>) {
+        self.set_analysis_store(false);
         let was_attached = self.is_connected();
         if let Some(r) = self.remote.take() {
             match r.state {
@@ -2176,7 +2209,15 @@ impl Engine {
         self.emit_connection();
     }
 
+    fn set_analysis_store(&mut self, on: bool) {
+        if self.analysis_store != on {
+            self.analysis_store = on;
+            self.out.push(Output::AnalysisStore(on));
+        }
+    }
+
     fn on_upstream_lost(&mut self, error: Option<String>) {
+        self.set_analysis_store(false);
         let now = self.now_local_ms();
         let Some(r) = &self.remote else { return };
         let attempt = match &r.state {
@@ -2567,8 +2608,28 @@ impl Engine {
                 session_clock_ms,
                 replica,
                 members,
+                analysis_store,
                 ..
-            } => self.on_welcome(session_clock_ms, replica, members, !from_loopback),
+            } => {
+                self.on_welcome(session_clock_ms, replica, members, !from_loopback);
+                if !from_loopback {
+                    // Only a coordinator's word counts: a LAN leader never keeps records.
+                    let hosted = matches!(
+                        &self.remote,
+                        Some(Remote {
+                            tier: ConnectionTier::Coordinator,
+                            state: RemoteState::Attached { .. },
+                            ..
+                        })
+                    );
+                    self.set_analysis_store(analysis_store && hosted);
+                }
+            }
+            Msg::AnalysisRecords { records } if !from_loopback => {
+                if self.analysis_store && !records.is_empty() {
+                    self.out.push(Output::AnalysisRecords(records));
+                }
+            }
             Msg::Refuse { .. } | Msg::Bye { .. } if from_loopback => {
                 self.log("warn", "own room refused the loopback; re-attaching");
                 self.attach_loopback();
@@ -3008,6 +3069,9 @@ impl Engine {
             | Msg::Cadence { .. }
             | Msg::HandoffRelease { .. }
             | Msg::ScrobbleDedupeQuery { .. }
+            | Msg::AnalysisFetch { .. }
+            | Msg::AnalysisRecords { .. }
+            | Msg::AnalysisUpload { .. }
             | Msg::Unknown => {}
             Msg::ScrobbleSubmitted { .. } if from_loopback => {}
             Msg::ScrobbleSubmitted {
@@ -5187,6 +5251,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: None,
                 members: vec![],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -5363,6 +5428,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica,
                 members,
+                analysis_store: false,
                 extra: Default::default(),
             }),
         })
@@ -5475,6 +5541,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: Some(replica_with(room_doc)),
                 members: vec![dev("c")],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -5559,6 +5626,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: Some(replica_with(room_doc)),
                 members: vec![],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -5996,6 +6064,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: Some(rep),
                 members: vec![dev("b")],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -6090,6 +6159,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: Some(rep),
                 members: vec![],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -7292,6 +7362,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: None,
                 members: vec![],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -7539,6 +7610,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: None,
                 members: vec![],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -7579,6 +7651,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: None,
                 members: vec![],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -7811,6 +7884,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: Some(replica_with(room_doc.clone())),
                 members: vec![dev("a")],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -7860,6 +7934,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: Some(replica_with(room_doc)),
                 members: vec![],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });
@@ -7957,6 +8032,7 @@ mod tests {
                 accepted_protocol: PROTOCOL,
                 replica: Some(replica_with(room_doc)),
                 members: vec![],
+                analysis_store: false,
                 extra: Default::default(),
             }),
         });

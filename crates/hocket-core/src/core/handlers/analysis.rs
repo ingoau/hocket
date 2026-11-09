@@ -7,7 +7,7 @@
 //!
 //! Only builds with the feature `automix-analysis` analyse (the desktop
 //! addon); elsewhere the tick is a no-op. The coordinator's core never runs
-//! it (its own worker is separate, phase 4).
+//! it (its own worker is `hocket_coordinator::analysis`).
 
 use std::collections::HashSet;
 
@@ -39,6 +39,7 @@ impl Actor {
             return;
         }
         self.analysis.last_check_ms = now;
+        self.analysis_share_tick(now);
         self.start_next_analysis();
     }
 
@@ -176,15 +177,15 @@ impl Actor {
         self.start_next_analysis();
     }
 
-    /// A record this device produced was stored. The seam for sharing it:
-    /// phase 4 uploads it to the coordinator (`AnalysisUpload`).
+    /// A record this device produced was stored: share it through the
+    /// coordinator (`AnalysisUpload`).
     pub(crate) fn on_analysis_produced(
         &mut self,
-        _server_id: &str,
+        server_id: &str,
         track_id: &TrackId,
-        _record: &AnalysisRecord,
+        record: &AnalysisRecord,
     ) {
-        tracing::debug!(target: "hocket::automix", track = %track_id, "desktop record ready to share");
+        self.share_analysis_record(server_id, track_id, record);
     }
 }
 

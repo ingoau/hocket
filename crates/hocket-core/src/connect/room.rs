@@ -79,6 +79,9 @@ pub struct RoomConfig {
     /// LAN peer authentication. The engine sets `Key`/`Closed`; the hosted
     /// coordinator keeps `Open` (its credential check is `verify`).
     pub lan_auth: LanAuth,
+    /// The host keeps AutoMix analysis records (the hosted coordinator with
+    /// its store): `Welcome.analysisStore`.
+    pub analysis_store: bool,
 }
 
 impl RoomConfig {
@@ -89,6 +92,7 @@ impl RoomConfig {
             max_members: 32,
             session_id: None,
             lan_auth: LanAuth::Open,
+            analysis_store: false,
         }
     }
 
@@ -1039,6 +1043,7 @@ impl Room {
                 accepted_protocol: protocol,
                 replica,
                 members: members_before,
+                analysis_store: self.cfg.analysis_store,
                 extra: Default::default(),
             },
         );
@@ -1098,6 +1103,9 @@ impl Room {
             | Msg::Proof { .. }
             | Msg::Welcome { .. }
             | Msg::Refuse { .. }
+            | Msg::AnalysisFetch { .. }
+            | Msg::AnalysisRecords { .. }
+            | Msg::AnalysisUpload { .. }
             | Msg::Unknown => {}
             Msg::Bye { .. } => {
                 self.out.push(RoomOutput::Close(peer.to_string()));

@@ -52,11 +52,16 @@ impl Actor {
         }
     }
 
-    /// `Command::StoreAnalysisRecord`: keep it if it is the best known, and
-    /// replan the follow-up when it is about a track around the current one.
-    pub(crate) fn store_analysis_record(&mut self, track_id: TrackId, record: AnalysisRecord) {
+    /// `Command::StoreAnalysisRecord` (and fetched records): keep it if it
+    /// is the best known, and replan the follow-up when it is about a track
+    /// around the current one. Returns whether it was stored.
+    pub(crate) fn store_analysis_record(
+        &mut self,
+        track_id: TrackId,
+        record: AnalysisRecord,
+    ) -> bool {
         let Some(server_id) = self.server_id() else {
-            return;
+            return false;
         };
         let now = self.now();
         match store::put(&self.db, &server_id, &track_id, record, now) {
@@ -70,9 +75,13 @@ impl Actor {
                 if near {
                     self.replan_next();
                 }
+                true
             }
-            Ok(false) => {}
-            Err(e) => self.error(ErrorKind::Storage, "analysis record", Some(e.to_string())),
+            Ok(false) => false,
+            Err(e) => {
+                self.error(ErrorKind::Storage, "analysis record", Some(e.to_string()));
+                false
+            }
         }
     }
 

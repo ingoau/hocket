@@ -146,6 +146,8 @@ pub(crate) struct Actor {
     pub prefetch: super::handlers::prefetch::PrefetchState,
     /// AutoMix analysis on a miss (desktop).
     pub(crate) analysis: super::handlers::analysis::AnalysisState,
+    /// AutoMix records fetched from and uploaded to the coordinator.
+    pub(crate) share: super::handlers::analysis_share::ShareState,
     /// The album primer (first seconds of a track the user is about to play).
     pub prime: super::handlers::prime::PrimeState,
     /// Stream-cache bookkeeping (offline skips, budget checks).
@@ -468,6 +470,7 @@ impl Actor {
             renderer_formats,
             prefetch: Default::default(),
             analysis: Default::default(),
+            share: Default::default(),
             prime: Default::default(),
             cache: Default::default(),
             caches,

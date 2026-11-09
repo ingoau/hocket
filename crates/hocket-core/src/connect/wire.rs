@@ -28,10 +28,10 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    AlbumResumeEntry, AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
-    LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey,
-    RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, Snooze, StashEntry,
-    TrackId, TransportLease, UndoEntry,
+    AlbumResumeEntry, AnalysisRecord, AutoplayProvider, Command, DeviceId, DeviceInfo,
+    DeviceVolume, EpochMs, LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId,
+    PositionStamp, QueueKey, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting,
+    Snooze, StashEntry, TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -42,6 +42,8 @@ use crate::api::{
 /// any LAN host); 3 = the flat queue model (one list with a pointer, no
 /// queue modes, keyed moves, the "Next in queue" group). Version 2 peers
 /// reduce ops differently and can't share a session with this one.
+/// (AutoMix's analysis messages and `Welcome.analysisStore` were added
+/// without a bump: they are optional, and peers ignore what they don't know.)
 pub const PROTOCOL: u32 = 3;
 /// Hard floor. The handshake refuses anything older.
 pub const PROTOCOL_MIN: u32 = 3;
@@ -195,8 +197,29 @@ impl Credential {
 /// Session scope key: the Navidrome identity a session belongs to. Every
 /// device derives it the same way so rooms key on it.
 pub fn scope_key(server_url: &str, username: &str) -> String {
-    let url = server_url.trim().trim_end_matches('/').to_ascii_lowercase();
-    format!("{url}|{username}")
+    format!("{}|{username}", server_key(server_url))
+}
+
+/// A Navidrome server's URL normalised the way [`scope_key`] does it: what
+/// the coordinator's analysis store keys records on.
+pub fn server_key(server_url: &str) -> String {
+    server_url.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+/// Most track ids one [`Msg::AnalysisFetch`] may name; the coordinator drops
+/// the rest.
+pub const ANALYSIS_FETCH_MAX: usize = 64;
+/// Most records one [`Msg::AnalysisUpload`] (or [`Msg::AnalysisRecords`])
+/// carries; the coordinator drops the rest of an upload.
+pub const ANALYSIS_BATCH_MAX: usize = 16;
+
+/// One track's analysis record on the wire.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisEntry {
+    pub track_id: TrackId,
+    pub record: AnalysisRecord,
 }
 
 /// The replica a room holds. See `docs/design.md`, "Resume and recovery".
@@ -852,6 +875,11 @@ pub enum Msg {
         replica: Option<ReplicaState>,
         /// Currently connected devices, excluding the joiner.
         members: Vec<DeviceInfo>,
+        /// The hosted coordinator keeps AutoMix analysis records for this
+        /// server: [`Msg::AnalysisFetch`] and [`Msg::AnalysisUpload`] are
+        /// worth sending. Never set by a LAN room.
+        #[serde(default)]
+        analysis_store: bool,
         #[typeshare(skip)]
         #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
         extra: Extra,
@@ -1172,6 +1200,25 @@ pub enum Msg {
         report_grant: Option<ReportGrant>,
     },
 
+    // -- AutoMix analysis (hosted coordinator only) -----------------------
+    /// → coordinator, only when its `Welcome` said `analysisStore`. Asks for
+    /// the records it has for these tracks of the room's server (at most
+    /// [`ANALYSIS_FETCH_MAX`]). Answered with one [`Msg::AnalysisRecords`].
+    AnalysisFetch {
+        track_ids: Vec<TrackId>,
+    },
+    /// → client. The usable records the coordinator has among those asked
+    /// for; tracks it has nothing for are left out.
+    AnalysisRecords {
+        records: Vec<AnalysisEntry>,
+    },
+    /// → coordinator, only when its `Welcome` said `analysisStore`. Records
+    /// this device produced (at most [`ANALYSIS_BATCH_MAX`]). Each replaces
+    /// the stored one only when preferred. No answer.
+    AnalysisUpload {
+        records: Vec<AnalysisEntry>,
+    },
+
     /// Anything this build does not know. Ignored.
     #[serde(other)]
     Unknown,
@@ -1224,6 +1271,9 @@ impl Msg {
         "libraryEdited",
         "diagnosticsRequest",
         "diagnosticsReply",
+        "analysisFetch",
+        "analysisRecords",
+        "analysisUpload",
         "unknown",
     ];
 
@@ -1278,6 +1328,9 @@ impl Msg {
             Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
             Msg::DiagnosticsReply { .. } => "diagnosticsReply",
+            Msg::AnalysisFetch { .. } => "analysisFetch",
+            Msg::AnalysisRecords { .. } => "analysisRecords",
+            Msg::AnalysisUpload { .. } => "analysisUpload",
             Msg::Unknown => "unknown",
         }
     }
