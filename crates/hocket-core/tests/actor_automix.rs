@@ -386,3 +386,52 @@ async fn a_short_track_after_a_handover_gets_a_full_plan() {
     assert_eq!(plan.tail_len_ms, 6_000, "a full plan: {plan:?}");
     assert_eq!(plan.tail_start_ms, 24_000);
 }
+
+/// After lock-in a context rule (here the sleep timer's end-of-track) still
+/// drops the committed plan: A plays out and nothing is mixed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_context_rule_after_lock_in_drops_the_plan() {
+    let t = synced_core("ctx").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t0", "t4", "t1"]).await;
+    let committed = t.backend.current_source().unwrap().mix_out_ms.unwrap();
+    t.run_for(f64::from(committed) - 20_000.0).await;
+    t.run(Command::SetSleepTimer {
+        timer: Some(SleepTimer {
+            ends_at: None,
+            stop_at_end_of_track: true,
+        }),
+    })
+    .await;
+    t.run_for(200.0).await;
+    if let Some(next) = t.backend.next_source() {
+        assert!(next.mix_in.is_none(), "{next:?}");
+    }
+    t.run_for(25_000.0).await;
+    assert!(!transition_started(&t));
+}
+
+/// After lock-in a new follow-up the pair rules would not mix (here the next
+/// track of the same album) still gets the late-edit fade: the current
+/// source may already be clipped at the committed tail start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_edit_the_pair_rules_refuse_still_fades() {
+    let t = synced_core("latealb").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t0", "t4", "t2"]).await;
+    let committed = t.backend.current_source().unwrap().mix_out_ms.unwrap();
+    t.run_for(f64::from(committed) - 20_000.0).await;
+    t.run(Command::PlayNext {
+        server_id: t.server_id.clone(),
+        track_ids: vec!["t1".into()],
+        keys: vec![],
+    })
+    .await;
+    t.run_for(200.0).await;
+    let next = t.backend.next_source().unwrap();
+    assert_eq!(next.track.id, "t1");
+    let plan = next.mix_in.expect("the edit wins: still faded");
+    assert_eq!(plan.kind, TransitionKind::Fade);
+    assert_eq!(plan.tail_start_ms, committed);
+    assert_eq!(plan.tail_len_ms, 3_000);
+}

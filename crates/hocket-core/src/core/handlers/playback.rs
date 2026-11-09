@@ -240,8 +240,9 @@ impl Actor {
         };
         let locked = self.locked_tail_start();
         if next_key == self.playback.next_doc_key && same_track {
-            // A committed plan stays (unless transitions were turned off).
-            let keep = locked.is_some() && self.transition_settings().mode.is_on();
+            // A committed plan stays, unless a context rule (Off, sleep
+            // end-of-track, Cast, exclusive output) now refuses mixing.
+            let keep = locked.is_some() && self.mix_context_allows();
             if !replan || keep {
                 return;
             }

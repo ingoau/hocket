@@ -138,7 +138,14 @@ impl Actor {
             .with_release_types(&b.release_types)
             .with_record(b.record.as_ref());
         let decision = should_mix(&ma, &mb, &self.mix_context());
-        if !decision.is_mix() {
+        // After lock-in the current source may already be clipped at the
+        // committed tail start (Android): a new follow-up the pair rules
+        // refuse still gets the late-edit fade (the edit wins). A context
+        // rule (Off, repeat-one, sleep end-of-track, Cast, exclusive output)
+        // drops the plan; the backend then plays A out unclipped.
+        let late_pair_refusal =
+            late && matches!(decision, crate::automix::MixDecision::NoMix(r) if !r.is_context());
+        if !decision.is_mix() && !late_pair_refusal {
             tracing::debug!(target: "hocket::automix", from = %a.track.id, to = %b.track.id, ?decision, "not mixed");
             return None;
         }
@@ -229,6 +236,12 @@ impl Actor {
                 .map(|p| p.tail_start_ms)
         });
         source
+    }
+
+    /// No context rule (the setting, repeat-one, sleep end-of-track, Cast,
+    /// exclusive output) refuses mixing right now.
+    pub(crate) fn mix_context_allows(&self) -> bool {
+        self.mix_context().refusal().is_none()
     }
 
     /// The plan into the follow-up must be worked out again (the setting

@@ -175,6 +175,16 @@ struct ShelfMove { freq_hz: f32, from_db: f32, to_db: f32, start_ms: u32, len_ms
   committed. A later change to what plays next produces a new plan of kind
   `Fade` with `tail_start_ms` kept (Android may already be clipped) and a short
   overlap (max(2 s, crossfade_seconds/2)).
+  - Only a plan already handed to the backend (the preloaded follow-up's
+    `mix_in`) is committed. Right after a handover onto a short track the
+    plan into the track after is a full one from the source's `mix_out_ms`.
+  - The edit wins over the pair rules: a new follow-up that `should_mix`
+    refuses for the pair (album sequence, gapless, genre, release) still gets
+    the late-edit fade, since A may already be clipped there.
+  - A context rule (mode Off, repeat-one, sleep end-of-track, Cast, exclusive
+    output) drops the plan even after lock-in, and no plan is sent. A backend
+    that clipped A at `mix_out_ms` plays A out unclipped when the follow-up
+    arrives without `mix_in` (Android un-clips itself).
 - **Next before handover** → `backend.complete_transition()`; the core then
   treats B as current. **Next after handover** is an ordinary skip.
 - `should_mix` returns false (→ `mix_in: None`) for: same album in track order

@@ -105,26 +105,47 @@ impl MixDecision {
     }
 }
 
+impl MixContext {
+    /// The context rule that refuses any mix right now, if one does.
+    pub fn refusal(&self) -> Option<NoMixReason> {
+        use NoMixReason::*;
+        if !self.mode.is_on() {
+            Some(ModeOff)
+        } else if self.repeat_one {
+            Some(RepeatOne)
+        } else if self.sleep_end_of_track {
+            Some(SleepEndOfTrack)
+        } else if self.cast_active {
+            Some(CastActive)
+        } else if self.exclusive_output {
+            Some(ExclusiveOutput)
+        } else {
+            None
+        }
+    }
+}
+
+impl NoMixReason {
+    /// A rule about the playback context (the setting, repeat, the sleep
+    /// timer, the output), not about the pair of tracks. After lock-in such a
+    /// rule still drops the plan; a pair rule doesn't (the edit wins).
+    pub fn is_context(self) -> bool {
+        use NoMixReason::*;
+        matches!(
+            self,
+            ModeOff | RepeatOne | SleepEndOfTrack | CastActive | ExclusiveOutput
+        )
+    }
+}
+
 /// Whether `a` (outgoing) → `b` (incoming) may be mixed. The first rule that
 /// matches wins, in the order: playback context, album sequence, gapless,
 /// genre, release.
 pub fn should_mix(a: &MixTrack<'_>, b: &MixTrack<'_>, ctx: &MixContext) -> MixDecision {
     use NoMixReason::*;
     let no = MixDecision::NoMix;
-    if !ctx.mode.is_on() {
-        return no(ModeOff);
-    }
-    if ctx.repeat_one {
-        return no(RepeatOne);
-    }
-    if ctx.sleep_end_of_track {
-        return no(SleepEndOfTrack);
-    }
-    if ctx.cast_active {
-        return no(CastActive);
-    }
-    if ctx.exclusive_output {
-        return no(ExclusiveOutput);
+    if let Some(reason) = ctx.refusal() {
+        return no(reason);
     }
     if is_album_sequence(a, b) {
         return no(AlbumSequence);
