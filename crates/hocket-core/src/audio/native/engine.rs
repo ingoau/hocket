@@ -253,6 +253,8 @@ struct Engine {
     error_flag: Arc<AtomicBool>,
     /// AutoMix: the tail for current → next, and the transition playing.
     tail: TailState,
+    /// Stops the render job of the tail in `tail` when it is dropped.
+    tail_cancel: Arc<AtomicBool>,
     /// Bumped whenever a tail is dropped, so a late render is ignored.
     tail_id: u64,
     transition: Option<Transition>,
@@ -374,6 +376,7 @@ impl Engine {
             last_position_report: Instant::now(),
             error_flag: Arc::new(AtomicBool::new(false)),
             tail: TailState::None,
+            tail_cancel: Arc::new(AtomicBool::new(false)),
             tail_id: 0,
             transition: None,
             mix_skipped: false,
@@ -1079,6 +1082,9 @@ impl Engine {
     fn drop_tail(&mut self) {
         self.tail = TailState::None;
         self.tail_id += 1;
+        // A render still running stops early rather than decode up to
+        // a minute of audio for nothing.
+        self.tail_cancel.store(true, Ordering::Release);
     }
 
     /// The follow-up's plan, when a transition into it may still happen.
@@ -1191,6 +1197,7 @@ impl Engine {
         let cur = self.current.as_ref().expect("checked");
         self.tail_id += 1;
         let id = self.tail_id;
+        self.tail_cancel = Arc::new(AtomicBool::new(false));
         self.tail = TailState::Rendering {
             next_generation: self.next_generation,
             plan: plan.clone(),
@@ -1206,6 +1213,7 @@ impl Engine {
             out_channels: self.out_channels,
             fetcher: self.fetcher.clone(),
             runtime: self.runtime.clone(),
+            cancel: self.tail_cancel.clone(),
         };
         let tx = self.tx.clone();
         let spawned = thread::Builder::new()
@@ -3029,5 +3037,27 @@ mod tests {
         let x = rig.played();
         let ms = x.len() as f64 / 48.0;
         assert!((ms - 2_200.0).abs() < 15.0, "played {ms} ms");
+    }
+
+    /// Dropping a tail that is still rendering stops its job.
+    #[test]
+    fn a_dropped_tail_stops_rendering() {
+        let rig = rig();
+        // The test build waits 3 s before rendering "slow-tail" sources.
+        let a = rig.sine("slow-tail-cancel.wav", 48_000, 1_500, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_500, 660.0);
+        b.mix_in = Some(fade_plan(700, 500, 100, 300));
+        let running = || {
+            super::super::mix::RUNNING_TAILS
+                .lock()
+                .iter()
+                .any(|k| k == "slow-tail-cancel.wav")
+        };
+        rig.backend.load(a, Some(b), 0, false).unwrap();
+        thread::sleep(Duration::from_millis(500));
+        assert!(running());
+        rig.backend.set_next(None).unwrap();
+        thread::sleep(Duration::from_millis(500));
+        assert!(!running());
     }
 }

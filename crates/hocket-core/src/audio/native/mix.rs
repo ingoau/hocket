@@ -9,6 +9,7 @@
 //!  B ─► B's DSP ─► resample ─► IncomingShaper ─┘
 //! ```
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -104,14 +105,45 @@ pub struct TailJob {
     pub out_channels: usize,
     pub fetcher: Arc<dyn RangeFetcher>,
     pub runtime: tokio::runtime::Handle,
+    /// Set when the engine drops this tail: the job stops early.
+    pub cancel: Arc<AtomicBool>,
 }
+
+/// Keys of the tail jobs running, for tests.
+#[cfg(test)]
+pub static RUNNING_TAILS: parking_lot::Mutex<Vec<QueueKey>> = parking_lot::Mutex::new(Vec::new());
+
+const CANCELLED: &str = "cancelled";
 
 /// Decode A from `tail_start_ms` (plus preroll) on its own handle, run it
 /// through A's DSP and a resampler to the output rate, and render the tail.
 pub fn render_tail_job(job: TailJob) -> Result<Vec<f32>, String> {
     #[cfg(test)]
+    {
+        RUNNING_TAILS.lock().push(job.source.key.clone());
+        let key = job.source.key.clone();
+        let result = render(job);
+        let mut running = RUNNING_TAILS.lock();
+        if let Some(i) = running.iter().position(|k| *k == key) {
+            running.remove(i);
+        }
+        result
+    }
+    #[cfg(not(test))]
+    render(job)
+}
+
+fn render(job: TailJob) -> Result<Vec<f32>, String> {
+    let cancelled = || job.cancel.load(Ordering::Acquire);
+    #[cfg(test)]
     if job.source.key.starts_with("slow-tail") {
-        thread::sleep(Duration::from_secs(3));
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            if cancelled() {
+                return Err(CANCELLED.into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
     let plan = &job.plan;
     let start_ms = plan.tail_start_ms.saturating_sub(TAIL_PREROLL_MS);
@@ -134,6 +166,9 @@ pub fn render_tail_job(job: TailJob) -> Result<Vec<f32>, String> {
     let deadline = Instant::now() + TAIL_DECODE_TIMEOUT;
     let mut got = 0u64;
     while got < want {
+        if cancelled() {
+            return Err(CANCELLED.into());
+        }
         let (n, _) = handle.queue.pop((want - got).min(8192) as usize, &mut pcm);
         got += n as u64;
         if n > 0 {
@@ -151,6 +186,9 @@ pub fn render_tail_job(job: TailJob) -> Result<Vec<f32>, String> {
         thread::sleep(Duration::from_millis(2));
     }
     drop(handle);
+    if cancelled() {
+        return Err(CANCELLED.into());
+    }
 
     let mut dsp = job.dsp;
     // Without the normaliser: its gain here would be a guess (the chain was
