@@ -461,7 +461,8 @@ Client (`core/handlers/analysis_share.rs`):
   fingerprint) for the life of the process; the pass carries on. A failed
   library walk is retried after 10 minutes.
 - Cost ≈ 30 s of one core and ~480 MB peak RSS per track: a first pass
-  over 10 000 tracks takes about four days. `/health` shows `analysis`:
+  over 10 000 tracks takes about three days (measured on an 8-core x86
+  host against a remote Navidrome: ~150 tracks an hour, downloads included). `/health` shows `analysis`:
   `{state, passes, libraryTracks, remaining, analysed, failed, perHour}`;
   a progress line is logged at info every 5 minutes and at the end of each
   pass.

@@ -323,7 +323,10 @@ impl Worker {
                 }
             }
         }
-        self.update(|s| s.passes += 1);
+        let cancelled = cancel.is_cancelled();
+        if !cancelled {
+            self.update(|s| s.passes += 1);
+        }
         let counts = self
             .store
             .counts(Some(&self.server_key))
@@ -334,7 +337,12 @@ impl Worker {
             failed = stats.failed,
             stored = counts.records,
             with_beats = counts.with_beats,
-            "analysis pass finished"
+            "{}",
+            if cancelled {
+                "analysis pass stopped"
+            } else {
+                "analysis pass finished"
+            }
         );
         Ok(stats)
     }
