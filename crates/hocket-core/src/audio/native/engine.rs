@@ -1484,7 +1484,11 @@ impl Engine {
         };
         tracing::debug!(target: "hocket::audio::native", reason = why, "AutoMix: transition cut short");
         if t.handed_over {
+            // B's decoded frames not yet mixed go with the transition: take
+            // B up from where the listener is, flushed and ramped in.
+            let p = self.current_position();
             self.transition = None;
+            self.seek(p);
             return;
         }
         let p = self.hand_over(None, false);
@@ -2904,6 +2908,43 @@ mod tests {
         assert!(
             (after / before - 1.0).abs() < 0.06,
             "level jump at the switch: {before} → {after}"
+        );
+    }
+
+    /// Completing a transition after its handover takes B up from where the
+    /// listener is (a fresh position, no frames lost).
+    #[test]
+    fn complete_after_the_handover_carries_on_from_b_heard() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 3_000, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 3_000, 660.0);
+        b.mix_in = Some(fade_plan(800, 1_500, 200, 400));
+        rig.start(a, b);
+        rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"),
+        );
+        thread::sleep(Duration::from_millis(300));
+        rig.take();
+        rig.backend.complete_transition().unwrap();
+        let reports = rig.wait_for(
+            Duration::from_millis(500),
+            |r| matches!(r, BackendReport::Position { key, .. } if key == "b.wav"),
+        );
+        match &reports[0] {
+            // ~700 ms into the tail, B entered at 200 ms.
+            BackendReport::Position { key, position_ms } if key == "b.wav" => {
+                assert!((350..=700).contains(position_ms), "{position_ms}")
+            }
+            r => panic!("expected B's position, got {r:?}"),
+        }
+        rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(
+            rig.count(|r| matches!(r, BackendReport::TransitionedToNext { .. })),
+            0
         );
     }
 }
