@@ -618,10 +618,16 @@ impl Engine {
     }
 
     fn promote_next(&mut self) {
-        let Some(next) = self.next.take() else { return };
+        let Some(mut next) = self.next.take() else { return };
         self.next_key = None;
         self.drop_tail();
         self.mix_skipped = false;
+        // A gapless join starts B at 0, but a tail made ready may have moved
+        // it to its entry point (the mix then didn't happen: exclusive output
+        // turned on, the plan dropped).
+        if next.start_frame != 0 || next.pushed_frames != 0 {
+            next.rewind(0);
+        }
         let key = next.key().clone();
         self.dsp
             .set_format(f64::from(next.spec.sample_rate), next.spec.channels);
@@ -2996,5 +3002,32 @@ mod tests {
         rig.wait_for(Duration::from_secs(10), is_started);
         rig.wait_for(Duration::from_secs(10), buffering(true));
         rig.wait_for(Duration::from_secs(10), buffering(false));
+    }
+
+    /// A follow-up the tail had moved to its entry point plays from its
+    /// start when the mix doesn't happen after all.
+    #[test]
+    fn a_gapless_join_after_a_dropped_mix_starts_b_at_zero() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 1_200, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_000, 660.0);
+        let mut plan = fade_plan(600, 400, 100, 200);
+        plan.incoming_from_ms = 500;
+        b.mix_in = Some(plan);
+        rig.backend.load(a, Some(b), 0, false).unwrap();
+        // The tail renders and B moves to 500 ms; then exclusive output
+        // rules the mix out.
+        thread::sleep(Duration::from_millis(1_500));
+        rig.backend.set_exclusive(true).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        rig.backend.play().unwrap();
+        rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(rig.count(is_started), 0);
+        let x = rig.played();
+        let ms = x.len() as f64 / 48.0;
+        assert!((ms - 2_200.0).abs() < 15.0, "played {ms} ms");
     }
 }
