@@ -188,7 +188,7 @@ fn main() -> Result<()> {
                         let r = lab.record(f)?;
                         std::fs::write(
                             dir.join("records").join(format!("{id}.json")),
-                            serde_json::to_string_pretty(&r)? + "\n",
+                            serde_json::to_string(&r)? + "\n",
                         )?;
                     }
                     std::fs::write(
