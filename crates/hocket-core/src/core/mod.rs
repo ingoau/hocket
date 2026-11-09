@@ -219,6 +219,12 @@ pub enum Internal {
         generation: u64,
         outcome: handlers::prefetch::PrefetchOutcome,
     },
+    /// The AutoMix analysis worker finished a track.
+    AnalysisDone {
+        server_id: String,
+        track_id: TrackId,
+        result: handlers::analysis::AnalysisResult,
+    },
     /// The report upload's background task moved on.
     ReportUpload(handlers::reports::UploadMsg),
     /// Test hook: hold this report grant as if the coordinator had sent it.

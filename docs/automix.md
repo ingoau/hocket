@@ -327,11 +327,47 @@ The planner is deterministic: same inputs → same plan on every device.
 
 ## Platforms
 
-- **Desktop** (`audio/native/engine.rs`): when the current source reaches
-  `tail_start_ms` with a plan pending, decode A's tail on the side (a second
-  decode handle seeked to `tail_start_ms`) ahead of time, render it after
-  DSP + resampling, then at `tail_start_ms` switch output to tail + shaped B.
-  Each source keeps its own DSP chain and resampler.
+- **Desktop** (`audio/native/engine.rs`, `audio/native/mix.rs`):
+  - Once current and follow-up are both loaded, the follow-up carries
+    `mix_in` and A is within 60 s of `tail_start_ms`, a side thread opens A
+    again (its own decode handle, from `tail_start_ms` − 200 ms of preroll),
+    runs it through a clone of A's DSP chain and a fresh resampler to the
+    device rate and channels, drops the preroll and calls `render_tail`.
+    When the tail is ready, B's decoder is moved to `incoming_from_ms`.
+  - The switch is sample-exact: when A's converted output reaches the
+    output frame of `tail_start_ms`, live A stops; its next 10 ms are
+    crossfaded into the tail's first frames (filter state and sub-sample
+    offsets never click). B becomes the current source with its own DSP
+    chain (a clone of A's with B's format and gain) and resampler, shaped
+    by `IncomingShaper` from `incoming_at_ms`. The sum goes through the
+    chain's `SoftLimiter` (−1 dB knee), then volume, into the ring.
+  - `TransitionStarted` and the handover reports are sent when those
+    output frames are heard (ring and pending output accounted for), with
+    B's handover position from the plan. Position/Playing/Paused reports
+    name A until the handover.
+  - Fallback: if the tail isn't ready when A reaches the switch point (or
+    rendering failed, or A is already past it), the plan is dropped for
+    this follow-up, logged, and A plays to its end with B following from
+    its start gaplessly; playback never waits for a tail.
+  - Seek before the handover puts A back as current and B back as the
+    follow-up (the tail is kept, so a seek before the tail start mixes
+    again); after it, the tail is dropped and B seeks. `complete_transition`
+    and an output reopen (device change, exclusive rate switch, stream
+    error) hand over at once and play B alone from its heard position. A
+    `set_next` during the overlap is held until the handover; a `set_next`
+    with the same source keeps the rendered tail. Exclusive output never
+    mixes. If B's decoder starves during the overlap the mix waits for it.
+  - Analysis on a miss (`core/handlers/analysis.rs`, feature
+    `automix-analysis`, not in the coordinator's core): with the mode on
+    AutoMix, every 2 s the actor picks the first of current / next /
+    next-next with no usable record (or only a phone's loudness-only one)
+    whose whole file is on disk (download, else a complete stream-cache
+    entry), and hands it to one worker thread holding one `Analyser::new(1)`.
+    The record's `source` is replaced by the library fingerprint
+    (`transcoded` set for transcoded files) and stored through
+    `store_analysis_record`, which replans the follow-up. One at a time,
+    each track tried once per session. `on_analysis_produced` is the seam
+    for uploading to the coordinator.
 - **Android** (`ExoBackend.kt`): A's `MediaItem` carries
   `ClippingConfiguration(endPositionMs = mix_out_ms)`. A Kotlin
   `AudioProcessor` wraps the Rust DSP chain (EQ, ReplayGain incl. boost,

@@ -2,6 +2,7 @@
 //! of the one actor; the split is only for readability.
 
 pub(crate) mod album_resume;
+pub(crate) mod analysis;
 pub(crate) mod cache;
 pub(crate) mod command;
 pub(crate) mod connect;
