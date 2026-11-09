@@ -495,3 +495,85 @@ async fn the_worker_walks_the_library_and_stores_what_it_analysed() {
     let stats = worker.pass(&cancel).await.unwrap();
     assert_eq!((stats.library, stats.todo), (3, 0));
 }
+
+fn wav_song(fake: &FakeServer, id: &str) {
+    let wav = click_wav(3.0);
+    let mut song = FakeServer::song(id, id, "al1", "ar1", 3.0);
+    song.suffix = Some("wav".into());
+    song.size = Some(wav.len() as f64);
+    fake.add_song(song);
+    fake.set_media(id, wav);
+}
+
+#[tokio::test]
+async fn failed_downloads_are_retried_and_end_the_pass_when_they_pile_up() {
+    use hocket_core::subsonic::SubsonicError;
+    let fake = Arc::new(FakeServer::new("srv", "worker"));
+    for id in ["a", "b", "c", "d"] {
+        wav_song(&fake, id);
+    }
+    let store = Arc::new(AnalysisStore::in_memory().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let status = Arc::new(parking_lot::Mutex::new(None));
+    let server = "https://music.example/";
+    let mut worker = Worker::new(
+        fake.clone(),
+        store.clone(),
+        server,
+        Duration::ZERO,
+        tmp.path().to_path_buf(),
+        status,
+    );
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let library = worker.walk().await.unwrap();
+    assert_eq!(library.len(), 4);
+
+    // one failed download: skipped this pass, not remembered
+    fake.fail_next(SubsonicError::Network("reset".into()), 1);
+    let stats = worker.analyse_library(&library, &cancel).await.unwrap();
+    assert_eq!((stats.analysed, stats.failed), (3, 1));
+    let stats = worker.pass(&cancel).await.unwrap();
+    assert_eq!((stats.todo, stats.analysed), (1, 1), "tried again");
+
+    // the server goes away: the pass ends after a few in a row, and nothing
+    // is remembered
+    let key = server_key(server);
+    for id in ["a", "b", "c", "d"] {
+        let mut r = store.get(&key, id).unwrap().unwrap();
+        r.source.size_bytes = Some(1.0); // another file: wanted again
+        store.put(&key, id, r, 2).unwrap();
+    }
+    let downloads = fake.calls_to("download");
+    fake.fail_next(SubsonicError::Network("down".into()), 3);
+    let err = worker.analyse_library(&library, &cancel).await.unwrap_err();
+    assert!(err.to_string().contains("in a row"), "{err}");
+    assert_eq!(fake.calls_to("download"), downloads + 3);
+    let stats = worker.pass(&cancel).await.unwrap();
+    assert_eq!((stats.todo, stats.analysed), (4, 4));
+}
+
+#[tokio::test]
+async fn the_worker_leaves_long_and_large_files_alone() {
+    let fake = Arc::new(FakeServer::new("srv", "worker"));
+    wav_song(&fake, "ok");
+    let mut long = FakeServer::song("long", "Long", "al1", "ar1", 91.0 * 60.0);
+    long.size = Some(1000.0);
+    fake.add_song(long);
+    let mut large = FakeServer::song("large", "Large", "al1", "ar1", 300.0);
+    large.size = Some(2_000_000.0);
+    fake.add_song(large);
+    let store = Arc::new(AnalysisStore::in_memory().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let mut worker = Worker::new(
+        fake.clone(),
+        store,
+        "https://music.example/",
+        Duration::ZERO,
+        tmp.path().to_path_buf(),
+        Arc::new(parking_lot::Mutex::new(None)),
+    )
+    .with_max_file_bytes(1_000_000);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let stats = worker.pass(&cancel).await.unwrap();
+    assert_eq!((stats.library, stats.todo, stats.analysed), (3, 1, 1));
+}

@@ -9,6 +9,16 @@
 //! priority, with a pause between tracks; the library is walked again every
 //! `--analysis-rescan-hours`. Progress is logged and shown in `/health`.
 //!
+//! Tracks over [`WORKER_MAX_DURATION_MS`] or `--analysis-max-file-mb` are
+//! left alone (memory: the analyser holds the whole track's spectrogram). A
+//! file that can't be decoded or analysed isn't tried again until it
+//! changes; a failed download is tried again next pass, and
+//! [`TRANSPORT_FAILURES_TO_ABORT`] in a row end the pass (retried after
+//! [`RETRY_AFTER_FAILED_WALK`]).
+//!
+//! Records are keyed by `--verify-url` when it is set (that's what clients'
+//! records are keyed by), otherwise by `--analysis-server`.
+//!
 //! The password comes from `--analysis-password-file` or
 //! `HOCKET_ANALYSIS_PASSWORD` and is never logged.
 
@@ -25,10 +35,11 @@ use hocket_core::api::{AnalysisProducer, SourceFingerprint, Track};
 use hocket_core::automix::analysis::Analyser;
 use hocket_core::automix::record::compact;
 use hocket_core::automix::store::fingerprint_of;
+use hocket_core::connect::wire::server_key;
 use hocket_core::subsonic::convert::track_from_child;
 use hocket_core::subsonic::{Search3Page, SubsonicApi};
 
-use crate::analysis::{AnalysisStore, PutOutcome, MAX_DURATION_MS};
+use crate::analysis::{AnalysisStore, PutOutcome};
 
 /// Songs per `search3` page (Navidrome's cap).
 pub const PAGE_SIZE: u32 = 500;
@@ -36,13 +47,21 @@ pub const PAGE_SIZE: u32 = 500;
 const RETRY_AFTER_FAILED_WALK: Duration = Duration::from_secs(600);
 /// A progress line at most this often (and after every pass).
 const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(300);
+/// Longest track the worker analyses (~135 MB of spectrogram; uploads may
+/// be longer, see [`crate::analysis::MAX_DURATION_MS`]).
+pub const WORKER_MAX_DURATION_MS: u32 = 90 * 60_000;
+/// Default `--analysis-max-file-mb`.
+pub const DEFAULT_MAX_FILE_MB: u64 = 500;
+/// Failed downloads (or store writes) in a row that end a pass.
+pub const TRANSPORT_FAILURES_TO_ABORT: u32 = 3;
 /// The environment variable the password may come from.
 pub const PASSWORD_ENV: &str = "HOCKET_ANALYSIS_PASSWORD";
 
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct WorkerArgs {
-    /// Run the AutoMix analysis worker against this Navidrome server: the URL
-    /// your clients use (records are keyed by it). Off when not given.
+    /// Run the AutoMix analysis worker against this Navidrome server. Off when
+    /// not given. Records are keyed by `--verify-url` when set, otherwise by
+    /// this URL, so it must be the one your clients use.
     #[arg(long, value_name = "URL")]
     pub analysis_server: Option<String>,
     /// The worker's Navidrome account (create a dedicated non-admin user).
@@ -60,14 +79,30 @@ pub struct WorkerArgs {
     /// Walk the library again this many hours after a pass ends.
     #[arg(long, default_value_t = 6)]
     pub analysis_rescan_hours: u64,
+    /// Skip files larger than this many MiB.
+    #[arg(long, default_value_t = DEFAULT_MAX_FILE_MB)]
+    pub analysis_max_file_mb: u64,
 }
 
 impl WorkerArgs {
     /// The worker's settings, or `None` when it is off. Reads the password.
-    pub fn resolve(&self, tmp_dir: PathBuf) -> anyhow::Result<Option<WorkerSettings>> {
+    /// With `verify_url` (`--verify-url`) the worker's records are keyed by
+    /// it, as every client's are.
+    pub fn resolve(
+        &self,
+        tmp_dir: PathBuf,
+        verify_url: Option<&str>,
+    ) -> anyhow::Result<Option<WorkerSettings>> {
         let Some(server) = self.analysis_server.clone() else {
             return Ok(None);
         };
+        let key_url = verify_url.unwrap_or(&server).to_string();
+        if server_key(&key_url) != server_key(&server) {
+            warn!(
+                "--analysis-server differs from --verify-url: the worker's records are keyed by \
+                 --verify-url (what clients' records are keyed by); make sure both name the same server"
+            );
+        }
         let user = self
             .analysis_user
             .clone()
@@ -93,6 +128,8 @@ impl WorkerArgs {
             nice: self.analysis_nice,
             pause: Duration::from_secs(self.analysis_pause_secs),
             rescan: Duration::from_secs(self.analysis_rescan_hours.max(1) * 3600),
+            max_file_bytes: self.analysis_max_file_mb.saturating_mul(1 << 20),
+            key_url,
             tmp_dir,
         }))
     }
@@ -107,6 +144,9 @@ pub struct WorkerSettings {
     pub nice: i32,
     pub pause: Duration,
     pub rescan: Duration,
+    pub max_file_bytes: u64,
+    /// The URL the store keys this server's records by.
+    pub key_url: String,
     /// Downloads go here; emptied when the worker starts.
     pub tmp_dir: PathBuf,
 }
@@ -171,13 +211,16 @@ pub struct Worker {
     tmp_dir: PathBuf,
     status: Arc<Mutex<Option<WorkerStatus>>>,
     analyser: Option<Analyser>,
-    /// Files that failed, by (track id, fingerprint): retried only when the file changes.
+    max_file_bytes: u64,
+    /// Files that could not be decoded or analysed, by (track id,
+    /// fingerprint): retried only when the file changes.
     failed: HashSet<(String, String)>,
     busy: Duration,
     last_progress: Instant,
 }
 
 impl Worker {
+    /// `server_url` is what the store keys records by (see the module docs).
     pub fn new(
         api: Arc<dyn SubsonicApi>,
         store: Arc<AnalysisStore>,
@@ -193,15 +236,22 @@ impl Worker {
         Worker {
             api,
             store,
-            server_key: hocket_core::connect::wire::server_key(server_url),
+            server_key: server_key(server_url),
             pause,
             tmp_dir,
             status,
             analyser: None,
+            max_file_bytes: DEFAULT_MAX_FILE_MB << 20,
             failed: HashSet::new(),
             busy: Duration::ZERO,
             last_progress: Instant::now(),
         }
+    }
+
+    /// Skip files larger than this (default [`DEFAULT_MAX_FILE_MB`] MiB).
+    pub fn with_max_file_bytes(mut self, bytes: u64) -> Worker {
+        self.max_file_bytes = bytes;
+        self
     }
 
     fn set_state(&self, state: &str) {
@@ -241,7 +291,10 @@ impl Worker {
     }
 
     fn wanted(&self, t: &Track) -> bool {
-        if t.duration_ms == 0 || t.duration_ms > MAX_DURATION_MS {
+        if t.duration_ms == 0
+            || t.duration_ms > WORKER_MAX_DURATION_MS
+            || t.size_bytes.is_some_and(|b| b > self.max_file_bytes as f64)
+        {
             return false;
         }
         let fp = fingerprint_of(t);
@@ -262,6 +315,15 @@ impl Worker {
     pub async fn pass(&mut self, cancel: &CancellationToken) -> anyhow::Result<PassStats> {
         self.set_state("walking");
         let library = self.walk().await?;
+        self.analyse_library(&library, cancel).await
+    }
+
+    /// The analysing part of a [`Worker::pass`], over a walked `library`.
+    pub async fn analyse_library(
+        &mut self,
+        library: &[Track],
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<PassStats> {
         let todo: Vec<Track> = library.iter().filter(|t| self.wanted(t)).cloned().collect();
         let mut stats = PassStats {
             library: library.len(),
@@ -277,6 +339,7 @@ impl Worker {
             to_analyse = todo.len(),
             "analysis pass started"
         );
+        let mut transport_failures = 0;
         for (i, track) in todo.iter().enumerate() {
             if cancel.is_cancelled() {
                 break;
@@ -285,15 +348,27 @@ impl Worker {
             let started = Instant::now();
             match self.analyse_one(track).await {
                 Ok(()) => {
+                    transport_failures = 0;
                     stats.analysed += 1;
                     self.update(|s| s.analysed += 1);
                 }
-                Err(e) => {
+                Err(OneError::File(e)) => {
+                    transport_failures = 0;
                     stats.failed += 1;
                     self.failed
                         .insert((track.id.clone(), fp_key(&fingerprint_of(track))));
                     self.update(|s| s.failed += 1);
                     warn!(track = %track.id, title = %track.title, error = %e, "analysis failed");
+                }
+                Err(OneError::Transport(e)) => {
+                    // Not remembered: tried again next pass.
+                    transport_failures += 1;
+                    stats.failed += 1;
+                    self.update(|s| s.failed += 1);
+                    warn!(track = %track.id, title = %track.title, error = %e, "analysis download failed");
+                    if transport_failures >= TRANSPORT_FAILURES_TO_ABORT {
+                        anyhow::bail!("{transport_failures} downloads in a row failed; last: {e}");
+                    }
                 }
             }
             self.busy += started.elapsed();
@@ -348,17 +423,20 @@ impl Worker {
     }
 
     /// Download, analyse, store, delete.
-    async fn analyse_one(&mut self, track: &Track) -> anyhow::Result<()> {
+    async fn analyse_one(&mut self, track: &Track) -> Result<(), OneError> {
         let path = self.tmp_dir.join(temp_name(track));
         let result = self.download_and_analyse(track, &path).await;
         let _ = tokio::fs::remove_file(&path).await;
         let record = result?;
-        let outcome = self.store.put(
-            &self.server_key,
-            &track.id,
-            record,
-            hocket_core::util::now_ms() as u64,
-        )?;
+        let outcome = self
+            .store
+            .put(
+                &self.server_key,
+                &track.id,
+                record,
+                hocket_core::util::now_ms() as u64,
+            )
+            .map_err(|e| OneError::Transport(anyhow::anyhow!("store: {e}")))?;
         debug!(track = %track.id, stored = outcome == PutOutcome::Stored, "analysed");
         Ok(())
     }
@@ -367,27 +445,41 @@ impl Worker {
         &mut self,
         track: &Track,
         path: &Path,
-    ) -> anyhow::Result<hocket_core::api::AnalysisRecord> {
+    ) -> Result<hocket_core::api::AnalysisRecord, OneError> {
         let url = self.api.download_url(&track.id);
         self.api
             .download_to_file(url, path)
             .await
-            .map_err(|e| anyhow::anyhow!("download: {e}"))?;
+            .map_err(|e| OneError::Transport(anyhow::anyhow!("download: {e}")))?;
+        // The song's size was checked before; the server may have lied.
+        let len = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| OneError::Transport(anyhow::anyhow!("download: {e}")))?
+            .len();
+        if len > self.max_file_bytes {
+            return Err(OneError::File(anyhow::anyhow!(
+                "file of {len} bytes is too large"
+            )));
+        }
         if self.analyser.is_none() {
-            self.analyser = Some(Analyser::new(1).map_err(|e| anyhow::anyhow!("{e}"))?);
+            // Not the file's fault: the pass ends and is tried again later.
+            self.analyser = Some(
+                Analyser::new(1)
+                    .map_err(|e| OneError::Transport(anyhow::anyhow!("analyser: {e}")))?,
+            );
         }
         let analyser = self.analyser.as_mut().expect("just set");
         // Blocking on purpose: the worker's runtime is its own, on its own
         // (niced) thread, and does nothing else meanwhile.
         let mut record = analyser
             .analyse_file(path, AnalysisProducer::Worker)
-            .map_err(|e| anyhow::anyhow!("analyse: {e}"))?;
+            .map_err(|e| OneError::File(anyhow::anyhow!("analyse: {e}")))?;
         record.source = fingerprint_of(track);
         Ok(compact(record))
     }
 
     /// Passes until cancelled: a pass, then a wait of `rescan` (or a retry
-    /// after a failed walk).
+    /// after a failed walk or a pass ended by failed downloads).
     pub async fn run(mut self, rescan: Duration, cancel: CancellationToken) {
         clear_dir(&self.tmp_dir);
         while !cancel.is_cancelled() {
@@ -398,7 +490,7 @@ impl Worker {
                 }
                 Err(e) => {
                     self.set_state("failing");
-                    warn!(error = %e, "analysis library walk failed; retrying later");
+                    warn!(error = %e, "analysis pass failed; retrying later");
                     RETRY_AFTER_FAILED_WALK
                 }
             };
@@ -422,6 +514,7 @@ pub fn spawn(
     let api = settings.client()?;
     info!(
         server = %settings.server,
+        key = %server_key(&settings.key_url),
         user = %settings.user,
         nice = settings.nice,
         pause_s = settings.pause.as_secs(),
@@ -445,11 +538,12 @@ pub fn spawn(
             let worker = Worker::new(
                 api,
                 store,
-                &settings.server,
+                &settings.key_url,
                 settings.pause,
                 settings.tmp_dir.clone(),
                 status,
-            );
+            )
+            .with_max_file_bytes(settings.max_file_bytes);
             rt.block_on(worker.run(settings.rescan, cancel));
         })?)
 }
@@ -498,6 +592,44 @@ fn temp_name(track: &Track) -> String {
     format!("{hash}.{suffix}")
 }
 
+/// Why one track was not analysed.
+enum OneError {
+    /// The file can't be decoded or analysed (or is too large): not tried
+    /// again until it changes.
+    File(anyhow::Error),
+    /// The download or the store failed: tried again next pass.
+    Transport(anyhow::Error),
+}
+
 fn fp_key(fp: &SourceFingerprint) -> String {
     format!("{}:{:?}:{:?}", fp.duration_ms, fp.size_bytes, fp.suffix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_are_keyed_by_the_verify_url_when_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let pw = dir.path().join("pw");
+        std::fs::write(&pw, "secret\n").unwrap();
+        let args = WorkerArgs {
+            analysis_server: Some("http://navidrome:4533".into()),
+            analysis_user: Some("worker".into()),
+            analysis_password_file: Some(pw),
+            analysis_max_file_mb: 10,
+            ..Default::default()
+        };
+        let tmp = dir.path().join("tmp");
+        let s = args.resolve(tmp.clone(), None).unwrap().unwrap();
+        assert_eq!(s.key_url, "http://navidrome:4533");
+        assert_eq!(s.max_file_bytes, 10 << 20);
+        let s = args
+            .resolve(tmp, Some("https://music.example"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.key_url, "https://music.example");
+        assert_eq!(s.server, "http://navidrome:4533", "still fetched from here");
+    }
 }

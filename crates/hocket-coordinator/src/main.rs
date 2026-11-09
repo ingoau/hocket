@@ -33,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
         None => std::env::temp_dir().join(format!("hocket-analysis-{}", std::process::id())),
     };
     let cancel = tokio_util::sync::CancellationToken::new();
-    let worker = match (args.worker.resolve(tmp_dir)?, app.analysis_store()) {
+    let worker = match (
+        args.worker.resolve(tmp_dir, args.verify_url.as_deref())?,
+        app.analysis_store(),
+    ) {
         (Some(settings), Some(store)) => Some(worker::spawn(
             settings,
             store.clone(),
