@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BLACK, THEME_COLOURS, WHITE, accentTokens, bestTextOn, brightestPixel, composite, contrast, mix, parseColor, scrimAlpha, themeSurfaces, toHex, type Rgb, type ThemeName } from "./contrast";
+import { DEFAULT_ACCENT } from "@shared/settings-keys";
+import { BLACK, THEME_COLOURS, WHITE, accentTokens, heroWash, bestTextOn, brightestPixel, composite, contrast, mix, parseColor, scrimAlpha, themeSurfaces, toHex, type Rgb, type ThemeName } from "./contrast";
 
 const P = (s: string) => parseColor(s) as Rgb;
 const css = readFileSync(fileURLToPath(new URL("../styles/global.css", import.meta.url)), "utf8");
@@ -89,7 +90,7 @@ describe("theme tokens in global.css", () => {
     });
 
     it(`${theme}: the stylesheet's default accent tokens are what accentTokens computes`, () => {
-      const tk = accentTokens(c.accent ?? "#6f5cff", theme);
+      const tk = accentTokens(c.accent ?? DEFAULT_ACCENT, theme);
       expect({ text: c["accent-text"], inverse: c["accent-inverse"], tint: c["accent-tint"], ring: c["focus-ring"] }).toEqual({ text: tk.accentText, inverse: tk.accentInverse, tint: tk.accentTint, ring: tk.focusRing });
     });
   }
@@ -142,5 +143,19 @@ describe("fullscreen scrim", () => {
   it("finds the brightest pixel of RGBA data", () => {
     const px = new Uint8ClampedArray([10, 10, 10, 255, 250, 240, 10, 255, 0, 0, 255, 255]);
     expect(brightestPixel(px)).toEqual({ r: 250, g: 240, b: 10 });
+  });
+});
+
+describe("detail page header wash", () => {
+  it("keeps white and 80% white text at 4.5:1 for any artwork accent", () => {
+    for (const raw of ACCENTS) {
+      const wash = P(heroWash(raw));
+      expect(contrast(WHITE, wash), raw).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(composite(WHITE, 0.8, wash), wash), `${raw} at 80%`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("leaves a dark accent as it is", () => {
+    expect(heroWash("#1d3a52")).toBe("#1d3a52");
   });
 });

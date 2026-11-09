@@ -66,7 +66,7 @@
 .np-text { flex: 1; min-width: 0; text-align: left; }
 .np-text .t1 { margin: 0; font-size: 26px; line-height: 1.2; font-weight: 800; letter-spacing: -0.015em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .np-text .t2 { font-size: 16px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
-.np-link { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; border-radius: 4px; }
+.np-link { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; border-radius: 4px; }
 .np-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .np-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .np-stars { display: flex; margin: -2px 0 0 -2px; }
@@ -77,8 +77,6 @@
 .np-icon-btn, .np-skip, .np-play, .np-tonal, .np-mode, .np-thumb, .np-art-button, .np .connect-pill, .np .autoplay-pill, .np .qs-button, .np .about-chip {
   transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), border-radius var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), width var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)), background-color var(--spring-effects-ms, 150ms) var(--spring-effects, var(--ease)), color var(--spring-effects-ms, 150ms) var(--spring-effects, var(--ease)), opacity 300ms var(--ease-emphasized-decel);
 }
-.np-icon-btn:active, .np-skip:active, .np-tonal:active, .np-mode:active, .np-thumb:active, .np .connect-pill:active { transform: scale(0.9); border-radius: var(--shape-md); }
-.np-art-button:active { transform: scale(0.985); }
 .np-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 22px; border: 0; background: transparent; color: var(--fg); padding: 0; }
 .np-icon-btn.sm { width: 36px; height: 36px; border-radius: 18px; }
 .np-icon-btn:hover { background: rgba(255, 255, 255, 0.12); }
@@ -88,39 +86,38 @@
 .np-actions .np-icon-btn.np-round { width: 40px; height: 40px; border-radius: 20px; }
 .np-icon-btn.heart.on { color: #ff9aae; }
 
-/* Wavy seek bar (WavySeek.tsx draws the wave; the geometry lives there). */
+/* Seek bar (Seek.tsx): a straight track, the played part filled to a round thumb that grows while
+   hovered, held or focused. --seek-h and --thumb size it (the player bar's is smaller). */
 .np-seek { flex: 0 0 auto; display: flex; flex-direction: column; gap: 0; }
-.np-seek-bar { position: relative; height: 40px; touch-action: none; border-radius: 12px; }
+.np-seek-bar { --seek-h: 6px; --thumb: 16px; position: relative; height: 32px; touch-action: none; border-radius: 12px; }
 .np-seek-bar[aria-disabled="true"] { opacity: 0.6; }
 .np-seek-bar:focus-visible { outline-offset: 2px; border-radius: 12px; }
-.np-seek-bar svg { display: block; overflow: visible; }
-.np-seek-bar .played { fill: none; stroke: #fff; stroke-width: 6px; stroke-linecap: round; stroke-linejoin: round; }
-.np-seek-bar .rest { stroke: rgba(255, 255, 255, 0.28); stroke-width: 6px; stroke-linecap: round; }
-.np-seek-bar .stop { fill: #fff; }
-/* The thumb stretches (a spring) while hovered and more while held. */
-.np-seek-bar .thumb { fill: #fff; transform-box: fill-box; transform-origin: center; transition: transform var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); }
-.np-seek-bar:hover .thumb { transform: scaleY(1.12); }
-.np-seek-bar.dragging .thumb { transform: scale(0.7, 1.25); }
-.np-seek-bar .hover-time, .np-seek-bar .value-bubble { position: absolute; bottom: 42px; transform: translateX(-50%); padding: 4px 10px; border-radius: 14px; font-size: var(--fs-sm); font-weight: 600; pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.np-seek-bar .rest { position: absolute; left: 0; right: 0; top: 50%; height: var(--seek-h); transform: translateY(-50%); border-radius: var(--seek-h); overflow: hidden; background: rgba(255, 255, 255, 0.28); }
+.np-seek-bar .played { height: 100%; background: #fff; }
+.np-seek-bar .thumb {
+  position: absolute; top: 50%; width: var(--thumb); height: var(--thumb); border-radius: 50%; background: #fff; pointer-events: none;
+  transform: translate(-50%, -50%) scale(0); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); transition: transform var(--dur-short) var(--ease-emphasized);
+}
+.np-seek-bar:is(:hover, .dragging, :focus-visible) .thumb { transform: translate(-50%, -50%) scale(1); }
+.np-seek-bar .hover-time, .np-seek-bar .value-bubble { position: absolute; bottom: 34px; transform: translateX(-50%); padding: 4px 10px; border-radius: 14px; font-size: var(--fs-sm); font-weight: 600; pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .np-seek-bar .hover-time { background: rgba(16, 16, 20, 0.88); color: #fff; }
 /* The value indicator: a filled pill that pops up over the thumb. */
 .np-seek-bar .value-bubble { background: #fff; color: #121214; animation: np-bubble var(--spring-fast-ms, 200ms) var(--spring-fast, var(--ease)); transform-origin: 50% 100%; }
 @keyframes np-bubble { from { transform: translateX(-50%) scale(0.4); opacity: 0; } }
-.np-seek-times { display: flex; justify-content: space-between; font-size: var(--fs-sm); color: var(--fg-muted); font-variant-numeric: tabular-nums; margin-top: -4px; }
-/* Transport: the play button morphs between a pill (paused) and a rounded square (playing). */
+.np-seek-times { display: flex; justify-content: space-between; font-size: var(--fs-sm); color: var(--fg-muted); font-variant-numeric: tabular-nums; margin-top: -2px; }
+/* Transport: a round white play button between the skips. */
 .np-transport { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; margin-top: 2px; }
-/* Shuffle and repeat flank the transport: quiet circles that fill (and square off) when on. */
+/* Shuffle and repeat flank the transport: quiet circles that fill when on. */
 .np-tonal { display: inline-flex; align-items: center; justify-content: center; border: 0; padding: 0; color: var(--fg); }
 .np-tonal.np-flank { width: 48px; height: 48px; border-radius: 24px; background: transparent; }
 .np-tonal.np-flank:hover { background: rgba(255, 255, 255, 0.14); }
-.np-tonal.np-flank.on { background: rgba(255, 255, 255, 0.92); color: #121214; border-radius: var(--shape-md); }
+.np-tonal.np-flank.on { background: rgba(255, 255, 255, 0.92); color: #121214; }
 .np-skip { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border-radius: 28px; border: 0; background: transparent; color: var(--fg); padding: 0; }
-.np-skip:hover { background: rgba(255, 255, 255, 0.12); border-radius: var(--shape-lg); }
+.np-skip:hover { background: rgba(255, 255, 255, 0.12); }
 .np-play { display: inline-flex; align-items: center; justify-content: center; height: 80px; border: 0; padding: 0; background: #fff; color: #121214; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
-.np-play.paused { width: 104px; border-radius: 40px; }
-.np-play.playing { width: 80px; border-radius: var(--shape-xl); }
+.np-play { width: 80px; border-radius: 50%; transition: transform var(--dur-short) var(--ease-emphasized); }
+.np-play:hover { transform: scale(1.04); }
 .np-play:hover { background: #f1f1f4; }
-.np-play:active { transform: scale(0.92); border-radius: var(--shape-lg); }
 .np-play:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
 .np-play .spin { animation: spin 1.2s linear infinite; }
 
@@ -165,7 +162,6 @@
 .np .autoplay-pill { height: 40px; background: rgba(255, 255, 255, 0.14); color: var(--fg); }
 .np .autoplay-pill:hover { background: rgba(255, 255, 255, 0.22); filter: none; }
 .np .autoplay-pill.on { background: rgba(255, 255, 255, 0.94); color: #121214; }
-.np .autoplay-pill:active { transform: scale(0.95); border-radius: var(--shape-sm); }
 .fullscreen .lyrics-options-pop { background: rgba(24, 24, 28, 0.9); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --state-selected: rgba(255, 255, 255, 0.14); --accent-text: #fff; --border: rgba(255, 255, 255, 0.15); --focus-ring: #fff; }
 .fullscreen .lyrics-options-pop .lyrics-size .btn.on { background: #fff; color: #121214; }
 .fullscreen .qs-popover { background: rgba(24, 24, 28, 0.9); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); color: #fff; --fg: #fff; --fg-muted: rgba(255, 255, 255, 0.8); --state-selected: rgba(255, 255, 255, 0.14); --accent-text: #fff; --border: rgba(255, 255, 255, 0.15); }
@@ -308,9 +304,8 @@
 :is(.np[data-light], .np .light-glass) .connect-pill.remote { background: var(--accent); color: var(--accent-fg); }
 :is(.np[data-light], .np .light-glass) .np-mode.on, :is(.np[data-light], .np .light-glass) .np-tonal.np-flank.on, :is(.np[data-light], .np .light-glass) .autoplay-pill.on { background: rgba(28, 27, 31, 0.92); color: #fff; }
 :is(.np[data-light], .np .light-glass) .np-mode.on:hover { background: #1c1b1f; }
-:is(.np[data-light], .np .light-glass) .np-seek-bar .played, :is(.np[data-light], .np .light-glass) .np-seek-bar .stop, :is(.np[data-light], .np .light-glass) .np-seek-bar .thumb { stroke: #1c1b1f; fill: #1c1b1f; }
-:is(.np[data-light], .np .light-glass) .np-seek-bar .played { fill: none; }
-:is(.np[data-light], .np .light-glass) .np-seek-bar .rest { stroke: rgba(0, 0, 0, 0.24); }
+:is(.np[data-light], .np .light-glass) .np-seek-bar :is(.played, .thumb) { background: #1c1b1f; }
+:is(.np[data-light], .np .light-glass) .np-seek-bar .rest { background: rgba(0, 0, 0, 0.24); }
 :is(.np[data-light], .np .light-glass) .np-seek-bar .value-bubble { background: #1c1b1f; color: #fff; }
 :is(.np[data-light], .np .light-glass) .m3-slider { --active: #1c1b1f; --handle: #1c1b1f; --stop: #1c1b1f; --inactive: rgba(0, 0, 0, 0.24); }
 :is(.np[data-light], .np .light-glass) .np-volume-pop .m3-slider { --active: #fff; --handle: #fff; --stop: #fff; --inactive: rgba(255, 255, 255, 0.28); }
@@ -332,9 +327,9 @@
   .np-play, .np-tonal, .np-mode, .np-icon-btn, .np-skip, .np-controls, .np-pill { border: 1px solid ButtonText; }
   .np-play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; }
   .np-tonal.on, .np-mode.on { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
-  .np-seek-bar .played { stroke: Highlight; }
-  .np-seek-bar .rest { stroke: GrayText; }
-  .np-seek-bar .thumb, .np-seek-bar .stop { fill: CanvasText; }
+  .np-seek-bar .played { forced-color-adjust: none; background: Highlight; }
+  .np-seek-bar .rest { forced-color-adjust: none; background: GrayText; }
+  .np-seek-bar .thumb { forced-color-adjust: none; background: CanvasText; }
   .np-seek-bar .value-bubble { forced-color-adjust: none; background: Canvas; color: CanvasText; border: 1px solid CanvasText; }
   .np .queue-section { background: Canvas; }
 }

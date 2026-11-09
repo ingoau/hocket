@@ -1,4 +1,5 @@
-/* Hocket desktop: design tokens and base styles. Dense, keyboard-first, native-feeling. */
+/* Hocket desktop: design tokens and base styles. Dense, keyboard-first, native-feeling: rounded
+   panes floating on a deep violet ground (the brand's tile colours), docs/design.md "Desktop layout". */
 :root {
   --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -18,27 +19,28 @@
      on every surface and tint, --accent-fg 4.5:1 on --accent, --focus-ring
      3:1, and --accent-tint keeps muted text at 4.5:1 on the tints. These are
      the values for the default accent. */
-  --accent: #6f5cff;
-  --accent-fg: #ffffff;
+  --accent: #8f80f5;
+  --accent-fg: #000000;
   --accent-soft: color-mix(in srgb, var(--accent-tint) 18%, transparent);
   --accent-ring: var(--focus-ring);
   --ease: cubic-bezier(0.2, 0, 0, 1);
-  /* Material 3 Expressive shape scale: big, soft corners on containers, full
-     pills on controls. --radius / --radius-sm stay for the player bar. */
-  --shape-xs: 6px;
-  --shape-sm: 10px;
-  --shape-md: 14px;
-  --shape-lg: 20px;
-  --shape-xl: 28px;
+  /* Shape scale: modest corners (the panes 12px, cards and tiles 8px), full
+     pills only on chips, the search field and round buttons. Nothing changes
+     shape when pressed. --radius / --radius-sm stay for the player bar. */
+  --shape-xs: 4px;
+  --shape-sm: 6px;
+  --shape-md: 8px;
+  --shape-lg: 10px;
+  --shape-xl: 12px;
   --shape-full: 999px;
-  /* Motion: emphasised easings for fades and colour, springs (sampled damped
-     oscillators, a little overshoot) for anything spatial — size, shape,
+  /* Motion: quiet. Emphasised easings for fades and colour; the "springs" are
+     plain decelerating curves (no overshoot) for anything spatial — size,
      position. The reduced-motion block at the end turns all of it off. */
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
   --ease-emphasized-accel: cubic-bezier(0.3, 0, 0.8, 0.15);
-  --spring-fast: linear(0, 0.1 6%, 0.308 11%, 0.531 17%, 0.723 22%, 0.864 28%, 0.957 33%, 1.009 39%, 1.033 44%, 1.038 50%, 1.034 56%, 1.026 61%, 1.018 67%, 1.01 72%, 1.005 78%, 1.002 83%, 1 89%, 1);
-  --spring-bouncy: linear(0, 0.087 5%, 0.285 9%, 0.52 14%, 0.739 18%, 0.913 23%, 1.033 27%, 1.101 32%, 1.125 36%, 1.12 41%, 1.098 45%, 1.069 50%, 1.04 55%, 1.016 59%, 0.999 64%, 0.989 68%, 0.985 73%, 0.984 77%, 0.987 82%, 0.99 86%, 0.994 91%, 0.997 95%, 1);
+  --spring-fast: cubic-bezier(0.2, 0, 0, 1);
+  --spring-bouncy: cubic-bezier(0.2, 0, 0, 1);
   --dur-short: 150ms;
   --dur-spring: 350ms;
   --dur-spring-long: 500ms;
@@ -76,58 +78,60 @@
 
 :root, :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f4f6;
+  /* The ground the panes float on, the panes, and wells inside them (fields, placeholders). */
+  --bg: #eceaf4;
   --bg-elev: #ffffff;
-  --bg-sunken: #ebebef;
+  --bg-sunken: #e4e1ee;
   --bg-hover: rgba(0, 0, 0, 0.05);
   --bg-active: rgba(0, 0, 0, 0.09);
   /* Text colours reach 4.5:1 on every surface, hovered and pressed ones
      included (contrast.test.ts parses this block and the dark one). */
-  --fg: #1b1b1f;
-  --fg-muted: #51515a;
-  --fg-faint: #5b5b64;
+  --fg: #1b1730;
+  --fg-muted: #4e4867;
+  --fg-faint: #57516f;
   /* The side panel's lyrics around the current line: lighter than muted text, still 4.5:1 on the pane. */
-  --lyrics-muted: #707078;
+  --lyrics-muted: #6c6684;
   --border: rgba(0, 0, 0, 0.11);
   --border-strong: rgba(0, 0, 0, 0.22);
   --danger: #a1231c;
   --danger-fg: #ffffff;
   --warn: #7a4d00;
-  --ok: #17683a;
+  --ok: #135f34;
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.1);
   --selection: color-mix(in srgb, var(--accent-tint) 22%, transparent);
   /* The selection tint composited onto the elevated surface (opaque), so it can sit on a tonal surface without stacking tints. */
   --state-selected: color-mix(in srgb, var(--accent-tint) 22%, var(--bg-elev));
-  --accent-text: #5649bc;
-  --accent-inverse: #8271fe;
-  --accent-tint: #8777fd;
-  --focus-ring: #6f5cff;
+  --accent-text: #574e96;
+  --accent-inverse: #8f80f5;
+  --accent-tint: #8f80f5;
+  --focus-ring: #7f71d9;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #121214;
-  --bg-elev: #1c1c20;
-  --bg-sunken: #0d0d0f;
+  /* The brand tile's violet: the ground (its gradient's bottom stop), the panes, and wells. */
+  --bg: #1b1730;
+  --bg-elev: #241f3d;
+  --bg-sunken: #16132a;
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-active: rgba(255, 255, 255, 0.11);
-  --fg: #ececf1;
-  --fg-muted: #acacb5;
-  --fg-faint: #9f9fa8;
-  --lyrics-muted: #92929a;
+  --fg: #ece9ff;
+  --fg-muted: #b5aed8;
+  --fg-faint: #aaa3cf;
+  --lyrics-muted: #958eb9;
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.2);
-  --danger: #ff7a7a;
+  --danger: #ff8f8f;
   --danger-fg: #000000;
   --warn: #f0b04a;
   --ok: #4ccb84;
   --shadow: 0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.4);
   --selection: color-mix(in srgb, var(--accent-tint) 30%, transparent);
   --state-selected: color-mix(in srgb, var(--accent-tint) 30%, var(--bg-elev));
-  --accent-text: #9f93fa;
-  --accent-inverse: #6453e3;
-  --accent-tint: #6f5cff;
-  --focus-ring: #6f5cff;
+  --accent-text: #a99df8;
+  --accent-inverse: #685cb2;
+  --accent-tint: #7a6dd2;
+  --focus-ring: #8f80f5;
 }
 
 * { box-sizing: border-box; }
@@ -222,10 +226,8 @@ main:focus-visible { outline: none; }
     border-radius var(--dur-spring) var(--spring-fast),
     transform var(--dur-spring) var(--spring-bouncy);
 }
-.btn:where(:not(.player *, .fullscreen *)):active { transform: scale(0.95); border-radius: var(--shape-sm); transition-duration: 80ms, 80ms, 80ms, 80ms, 120ms, 120ms; }
 .btn:where(:not(.icon, .player *, .fullscreen *)) { height: var(--btn-h); }
 .btn.sm:where(:not(.icon, .player *, .fullscreen *)) { height: var(--btn-h-sm); padding: 0 12px; font-size: var(--fs-md); }
-.btn.sm:where(:not(.player *, .fullscreen *)):active { border-radius: var(--shape-xs); }
 .btn.primary:where(:not(.player *, .fullscreen *)) { box-shadow: var(--shadow-1); }
 .btn.primary:where(:not(.player *, .fullscreen *)):hover { box-shadow: var(--shadow-2); }
 /* Filled tonal: the secondary action next to a primary one (Shuffle beside Play). */
@@ -234,7 +236,6 @@ main:focus-visible { outline: none; }
 .btn.tonal:active { background: var(--selection); }
 /* Icon buttons: a circular state layer; a toggle that is on fills tonally. */
 .btn.icon:where(:not(.player *, .fullscreen *)) { padding: 0; border-radius: 50%; }
-.btn.icon:where(:not(.player *, .fullscreen *)):active { border-radius: var(--shape-sm); }
 .btn.icon:where(.on, [aria-pressed="true"]):where(:not(.heart, .player *, .fullscreen *)) { background: var(--accent-soft); color: var(--accent-text); }
 .btn.icon:where(.on, [aria-pressed="true"]):where(:not(.heart, .player *, .fullscreen *)):hover { background: var(--selection); }
 /* A toggle that is on reads as a rounded square, like M3's selected icon-button shape. */
@@ -331,7 +332,7 @@ h3 { font-size: var(--fs-lg); }
 }
 .nav-item + .nav-item { margin-top: 1px; }
 .nav-item:hover { background: var(--bg-hover); color: var(--fg); }
-.nav-item:active { background: var(--bg-active); color: var(--fg); transform: scale(0.97); border-radius: var(--shape-md); transition-duration: 80ms, 80ms, 120ms, 120ms; }
+.nav-item:active { background: var(--bg-active); color: var(--fg); }
 .nav-item.active { background: var(--accent-soft); color: var(--fg); font-weight: 600; }
 .nav-item.active:hover { background: var(--selection); }
 .nav-item.active:active { background: var(--selection); }
@@ -363,7 +364,7 @@ h3 { font-size: var(--fs-lg); }
 .search-recent-head { display: flex; align-items: center; gap: 10px; padding: 4px 4px 6px 12px; font-size: var(--fs-sm); }
 .search-recent-title { font-size: 14px; font-weight: 700; color: var(--fg); }
 .search-recent-icon { color: var(--fg-muted); }
-.search-recent-forget { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--fg-muted); cursor: pointer; opacity: 0; }
+.search-recent-forget { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--fg-muted); opacity: 0; }
 .search-recent-forget:hover { background: var(--bg-hover); color: var(--fg); }
 .result-row:hover .search-recent-forget, .result-row.active .search-recent-forget { opacity: 1; }
 .result-row .art { width: 26px; height: 26px; border-radius: var(--shape-xs); flex: 0 0 auto; }
@@ -405,7 +406,6 @@ h3 { font-size: var(--fs-lg); }
 .tile-main { display: flex; flex-direction: column; gap: 8px; padding: 0; min-width: 0; width: 100%; border-radius: var(--shape-md); }
 .tile-main:focus-visible { outline-offset: 2px; border-radius: var(--shape-md); }
 .tile:hover { background: var(--bg-hover); }
-.tile:has(.tile-main:active) { transform: scale(0.97); transition-duration: 80ms, 120ms; }
 .tile.selected { background: var(--selection); }
 /* The keyboard cursor shows only while the grid has focus. */
 [role="grid"]:focus-within .tile.focused { box-shadow: inset 0 0 0 2px var(--accent-ring); }
@@ -427,7 +427,6 @@ h3 { font-size: var(--fs-lg); }
 .tile:hover .play, .tile:focus-within .play { opacity: 1; transform: none; }
 /* The play button morphs from a rounded square to a circle under the pointer. */
 .tile .play:hover { border-radius: 50%; }
-.tile .play:active { transform: scale(0.9); transition-duration: 80ms, 100ms, 120ms; }
 
 /* Table */
 .table { display: flex; flex-direction: column; min-height: 0; flex: 1; --table-inset: 0px; }
@@ -450,7 +449,7 @@ h3 { font-size: var(--fs-lg); }
 .tr.playing .td.title { color: var(--accent-text); font-weight: 500; }
 .tr.snoozed { opacity: 0.45; }
 .snoozed-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.snoozed-row { position: relative; left: auto; right: auto; width: 100%; display: flex; gap: 12px; align-items: center; text-align: start; background: transparent; border: 0; color: inherit; cursor: pointer; }
+.snoozed-row { position: relative; left: auto; right: auto; width: 100%; display: flex; gap: 12px; align-items: center; text-align: start; background: transparent; border: 0; color: inherit; }
 .snoozed-row .grow { display: flex; flex-direction: column; min-width: 0; }
 .tr .td { padding: 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr .td.num, .table-head .th.num { text-align: right; justify-content: flex-end; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
@@ -470,7 +469,6 @@ h3 { font-size: var(--fs-lg); }
 .tr .art { width: 22px; height: 22px; border-radius: var(--shape-xs); vertical-align: middle; margin-right: 8px; }
 .stars { display: inline-flex; gap: 1px; color: var(--fg-faint); }
 .stars .star { display: inline-flex; padding: 0; line-height: 0; border-radius: var(--shape-xs); transition: transform var(--dur-spring) var(--spring-bouncy); }
-.stars .star:active { transform: scale(0.8); transition-duration: 80ms; }
 .stars .star.on { color: var(--accent-text); }
 .stars:hover .star { color: var(--fg-faint); }
 .stars .star:hover, .stars .star:hover ~ .star.hovered { color: var(--accent-text); }
@@ -506,33 +504,33 @@ h3 { font-size: var(--fs-lg); }
 /* The centre grows with the bar up to 520px (a flexible track, so the song's side keeps its share). */
 .player .center { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; width: 100%; max-width: 520px; justify-self: center; }
 .transport { display: flex; align-items: center; gap: 8px; }
-.player .btn {
-  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized),
-    border-radius var(--dur-spring) var(--spring-fast), width var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
-}
+.player .btn { transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), transform var(--dur-short) var(--ease-emphasized); }
 .player .btn.icon { width: 40px; height: 40px; border-radius: 20px; color: var(--fg); }
 .player .btn.icon:hover { background: var(--bg-hover); }
-.player .btn.icon:active { background: var(--bg-active); border-radius: var(--shape-sm); transform: scale(0.94); transition-duration: 80ms, 80ms, 120ms, 120ms, 120ms; }
-.player .btn.icon.toggle.on { background: var(--selection); color: var(--accent-text); border-radius: var(--shape-md); }
+.player .btn.icon:active { background: var(--bg-active); }
+.player .btn.icon.toggle.on { color: var(--accent-text); }
+/* An "on" toggle: the accent glyph with a dot under it. */
+.player .btn.icon.toggle.on::after { content: ""; position: absolute; bottom: 3px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: currentColor; }
+.player .btn.icon.toggle { position: relative; }
 .player .btn.icon.toggle.on:hover { background: var(--state-selected); }
 .player .btn.icon.on:not(.toggle) { color: var(--accent-text); }
-.transport .btn.play { width: 52px; height: 40px; background: var(--accent); color: var(--accent-fg); box-shadow: var(--shadow-1); }
-.transport .btn.play.paused { border-radius: 20px; }
-.transport .btn.play.playing { border-radius: var(--shape-md); }
-.transport .btn.play:hover { background: var(--accent); filter: brightness(1.08); box-shadow: var(--shadow-2); }
-.transport .btn.play:active { background: var(--accent); border-radius: var(--shape-sm); }
+/* Play / pause: a round button in the ink colour, the one solid thing in the bar. */
+.transport .btn.play { width: 40px; height: 40px; border-radius: 50%; background: var(--fg); color: var(--bg); margin: 0 4px; }
+.transport .btn.play:hover { background: var(--fg); transform: scale(1.05); }
+.transport .btn.play:active { background: var(--accent); }
 .transport .btn.play .spin { animation: spin 1.2s linear infinite; }
 .player .bar-seek { width: 100%; }
-/* The bar's wave (WavySeek variant "bar"; now-playing.css has the wave's own rules): the elapsed
+/* The bar's seek (Seek variant "bar"; now-playing.css has the track's own rules): the elapsed
    time and the duration either side, in the theme's colours. */
 .np-seek.bar-seek { flex-direction: row; align-items: center; gap: 10px; width: 100%; }
 .bar-seek .time { flex: 0 0 auto; min-width: 36px; font-size: var(--fs-xs); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .bar-seek .time:first-child { text-align: right; }
-.bar-seek .np-seek-bar { flex: 1 1 auto; min-width: 0; height: 24px; border-radius: var(--shape-xs); }
-.bar-seek .np-seek-bar .played { stroke: var(--accent); stroke-width: 4px; }
-.bar-seek .np-seek-bar .rest { stroke: var(--border-strong); stroke-width: 4px; }
-.bar-seek .np-seek-bar .stop, .bar-seek .np-seek-bar .thumb { fill: var(--accent); }
-.bar-seek .np-seek-bar .hover-time, .bar-seek .np-seek-bar .value-bubble { bottom: 26px; padding: 2px 8px; font-size: var(--fs-xs); }
+.bar-seek .np-seek-bar { flex: 1 1 auto; min-width: 0; height: 20px; --seek-h: 4px; --thumb: 12px; border-radius: var(--shape-xs); }
+.bar-seek .np-seek-bar .rest { background: color-mix(in srgb, var(--fg) 18%, transparent); }
+.bar-seek .np-seek-bar .played { background: var(--fg); }
+.bar-seek .np-seek-bar:is(:hover, .dragging, :focus-visible) .played { background: var(--accent); }
+.bar-seek .np-seek-bar .thumb { background: var(--fg); }
+.bar-seek .np-seek-bar .hover-time, .bar-seek .np-seek-bar .value-bubble { bottom: 22px; padding: 2px 8px; font-size: var(--fs-xs); }
 .bar-seek .np-seek-bar .hover-time { background: var(--fg); color: var(--bg); }
 .bar-seek .np-seek-bar .value-bubble { background: var(--accent); color: var(--accent-fg); }
 
@@ -553,7 +551,6 @@ h3 { font-size: var(--fs-lg); }
   transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
 }
 .connect-pill:hover { background: var(--bg-hover); }
-.connect-pill:active { transform: scale(0.95); border-radius: var(--shape-md); transition-duration: 80ms, 80ms, 120ms, 120ms; }
 .connect-pill.remote { background: var(--accent); color: var(--accent-fg); padding: 0 18px 0 14px; box-shadow: var(--shadow-1); }
 .connect-pill.remote:hover { background: var(--accent); filter: brightness(1.08); }
 .connect-pill .connect-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
@@ -780,7 +777,6 @@ button.qrow { width: 100%; }
   transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
 }
 .view-tabs .tab:hover { background: var(--bg-hover); color: var(--fg); }
-.view-tabs .tab:active { transform: scale(0.95); transition-duration: 80ms, 80ms, 120ms, 120ms; }
 .view-tabs .tab.active, .view-tabs .tab.active:hover { background: var(--state-selected); color: var(--fg); font-weight: 700; }
 .view-tabs .tab.active:first-child { border-radius: var(--shape-full) var(--shape-sm) var(--shape-sm) var(--shape-full); }
 .view-tabs .tab.active:last-child { border-radius: var(--shape-sm) var(--shape-full) var(--shape-full) var(--shape-sm); }
@@ -843,7 +839,6 @@ button.qrow { width: 100%; }
   transition: background-color var(--dur-short) var(--ease-emphasized), border-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
 }
 .genre-tile:hover { border-color: var(--border-strong); background: var(--bg-hover); border-radius: var(--shape-xl); }
-.genre-tile:active { transform: scale(0.97); transition-duration: 80ms, 80ms, 120ms, 120ms; }
 
 /* Downloads */
 .filter-builder { display: grid; grid-template-columns: minmax(420px, 1fr) 300px; gap: 20px; }
@@ -851,7 +846,7 @@ button.qrow { width: 100%; }
 .window-controls { display: flex; gap: 0; margin-left: 4px; }
 .window-controls .btn { width: 36px; height: 28px; border-radius: 0; }
 /* Native window controls stay square and still: no pill, no press squeeze. */
-.window-controls .btn:active, .window-controls .btn.icon:active { border-radius: 0; transform: none; }
+.window-controls .btn:active, .window-controls .btn.icon:active { transform: none; }
 .window-controls .btn.close:hover { background: var(--danger); color: #fff; }
 
 .fade-in { animation: fade var(--dur-short) var(--ease-emphasized-decel); }
@@ -899,9 +894,10 @@ button.qrow { width: 100%; }
   .seek .bar .track, .progress { border: 1px solid CanvasText; }
   .seek .bar .fill, .progress > div, .bars div:not(:has(> span)), .bars span { forced-color-adjust: none; background: Highlight; }
   .seek .bar .knob { forced-color-adjust: none; background: CanvasText; opacity: 1; }
-  /* The bar's wave: the played part in Highlight, the thumb in CanvasText. */
-  .bar-seek .np-seek-bar .played { forced-color-adjust: none; stroke: Highlight; }
-  .bar-seek .np-seek-bar .thumb, .bar-seek .np-seek-bar .stop { forced-color-adjust: none; fill: CanvasText; }
+  /* The bar's seek: the played part in Highlight, the thumb in CanvasText. */
+  .bar-seek .np-seek-bar .played { forced-color-adjust: none; background: Highlight; }
+  .bar-seek .np-seek-bar .rest { forced-color-adjust: none; background: GrayText; }
+  .bar-seek .np-seek-bar .thumb { forced-color-adjust: none; background: CanvasText; }
   .stars .star.on svg, .heart.on svg { fill: CanvasText; }
   .tile .play { forced-color-adjust: none; background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
   /* Toasts are drawn inverted (--fg on --bg); in the system palette they are plain Canvas text. */
@@ -926,7 +922,6 @@ button.qrow { width: 100%; }
   .sidebar > .resize-handle { display: none; }
   .right-panel.drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(340px, calc(100% - 52px)); z-index: 20; box-shadow: var(--shadow); border-radius: var(--shape-lg) 0 0 var(--shape-lg); overflow: hidden; }
   .sidebar .nav-item { height: 32px; }
-  .sidebar .nav-item:active { border-radius: var(--shape-sm); }
   .right-panel.drawer > .resize-handle { display: none; }
   /* The drawer withdraws to the right edge (a clip, so nothing overflows the window). */
   .right-panel.drawer.closing { animation: drawer-out var(--dur-exit) var(--ease-emphasized-accel) forwards; }

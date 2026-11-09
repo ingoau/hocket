@@ -1,0 +1,159 @@
+/* panes: the desktop's shell, loaded last (docs/design.md "Desktop layout").
+   The window is the brand's violet ground; the sidebar, the content and the
+   side panel are rounded panes floating on it with an 8px gutter, the top bar
+   and the player bar sit on the ground itself. Colours only come from the
+   theme tokens (global.css), so both themes and the artwork accent follow. */
+
+:root { --pane-gap: 8px; --pane-radius: 12px; --rail-w: 72px; }
+
+/* ---- Panes ---------------------------------------------------------------- */
+.app-body { padding: 0 var(--pane-gap) var(--pane-gap); }
+.content, .side-pane { box-shadow: none; }
+.sidebar {
+  background: var(--bg-elev); border-radius: var(--pane-radius); margin-right: var(--pane-gap); padding: 0; overflow: visible;
+}
+/* The splitter sits in the gutter between the sidebar and the content. */
+.sidebar > .resize-handle { right: calc(var(--pane-gap) / -2 - 3px); }
+.right-panel > .resize-handle { left: calc(var(--pane-gap) / -2 - 3px) !important; }
+
+/* A page settles in with a short fade up, not a spring. */
+.content > * { animation: page-enter var(--dur-spring) var(--ease-emphasized-decel); }
+@keyframes page-enter { from { transform: translateY(6px); } to { transform: none; } }
+
+/* ---- Top bar: on the ground, the search left of centre -------------------- */
+.topbar { height: var(--topbar-h); background: transparent; padding: 0 8px 0 10px; gap: 4px; }
+.topbar > .grow { display: block; flex: 1 1 auto; align-self: stretch; -webkit-app-region: drag; }
+.topbar .nav-buttons { gap: 2px; margin-right: 6px; }
+.topbar .nav-buttons .btn.icon { width: 36px; height: 36px; border-radius: 50%; color: var(--fg-muted); }
+.topbar .nav-buttons .btn.icon:hover:not(:disabled) { color: var(--fg); }
+/* Windows draws its caption buttons over the top bar's right end (titleBarOverlay). */
+.topbar.win { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px); }
+.search { width: 400px; max-width: 40vw; margin: 0; }
+.search .input {
+  height: 40px; padding-left: 42px; font-size: var(--fs-md); border-radius: var(--shape-full);
+  background: var(--bg-elev); border-color: transparent; box-shadow: none;
+}
+.search .input:hover { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.search .input:focus { box-shadow: inset 0 0 0 1px var(--border-strong); border-radius: var(--shape-full); }
+.search .input[aria-expanded="true"] { border-radius: 20px 20px var(--shape-md) var(--shape-md); }
+.search > .icon { left: 14px; width: 20px; height: 20px; }
+.search-popover { border-radius: var(--shape-md) var(--shape-md) var(--pane-radius) var(--pane-radius); }
+.window-controls .btn { border-radius: var(--shape-sm); }
+
+/* ---- Sidebar ---------------------------------------------------------------- */
+.sidebar-scroll { padding: 8px 6px 8px 8px; scrollbar-gutter: stable; }
+.sidebar-foot { padding: 4px 8px 8px; }
+.sidebar .nav-item { height: 36px; padding: 0 12px; gap: 14px; border-radius: var(--shape-md); font-weight: 600; color: var(--fg-muted); }
+.sidebar .nav-item + .nav-item { margin-top: 0; }
+.sidebar .nav-item:hover { color: var(--fg); background: var(--bg-hover); }
+.sidebar .nav-item.active, .sidebar .nav-item.active:hover { color: var(--fg); font-weight: 700; }
+.sidebar .nav-item.active::before { animation: none; border-radius: var(--shape-md); background: var(--bg-active); }
+.sidebar .nav-item.active .icon { transform: none; color: var(--fg); }
+.sidebar-places { display: flex; flex-direction: column; }
+
+/* Pins and Your library share a row: cover, title, a kind line. */
+.sidebar-pins-gap { height: 8px; }
+.sidebar .nav-item.pin-item, .sidebar .nav-item.lib-item { height: 56px; padding: 0 8px; gap: 12px; font-weight: 500; color: var(--fg); }
+.pin-thumb, .pin-thumb .art, .lib-thumb, .lib-thumb .art { width: 44px; height: 44px; }
+.pin-thumb .art, .lib-thumb .art { border-radius: var(--shape-sm); box-shadow: none; object-fit: cover; }
+.pin-thumb.artist .art, .lib-thumb.artist .art { border-radius: 50%; }
+.pin-thumb.playlist .art { border-radius: var(--shape-sm); }
+.pin-thumb.icon-thumb { border-radius: var(--shape-sm); clip-path: none; }
+.pin-kind { font-size: var(--fs-sm); color: var(--fg-muted); font-weight: 400; }
+.pin-title { font-weight: 500; }
+
+/* Your library: the header (title, filter, sort, New playlist) and the chips stick at the top. */
+.side-lib { margin-top: 8px; container-type: inline-size; }
+/* A narrow sidebar keeps the title whole: the sort shows just its icon. */
+@container (max-width: 300px) { .side-lib-sort > span { display: none; } .side-lib-sort { padding: 0 7px; } }
+.side-lib-head {
+  position: sticky; top: 0; z-index: 1; margin: 0 -6px 4px -8px; padding: 10px 6px 8px 8px;
+  background: var(--bg-elev); border-radius: var(--pane-radius) var(--pane-radius) 0 0;
+}
+.side-lib-titlebar { display: flex; align-items: center; gap: 2px; padding-left: 12px; min-height: 36px; }
+.side-lib-title { flex: 1 1 auto; margin: 0; font-size: var(--fs-lg); font-weight: 700; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-lib-titlebar .btn { color: var(--fg-muted); border: 0; background: transparent; }
+.side-lib-titlebar .btn:hover { color: var(--fg); background: var(--bg-hover); }
+.side-lib-titlebar .btn.icon { width: 32px; height: 32px; border-radius: 50%; }
+.side-lib-titlebar .btn.icon.on { color: var(--fg); background: var(--bg-active); }
+.side-lib-sort { height: 32px; padding: 0 8px 0 10px; gap: 6px; border-radius: var(--shape-full); font-size: var(--fs-sm); font-weight: 600; }
+.side-lib-filter { position: relative; display: flex; align-items: center; margin: 6px 4px 2px; }
+.side-lib-filter > .icon { position: absolute; left: 10px; color: var(--fg-muted); pointer-events: none; }
+.side-lib-filter .input { width: 100%; height: 32px; padding-left: 32px; border-radius: var(--shape-full); background: var(--bg-sunken); border-color: transparent; font-size: var(--fs-sm); }
+.side-lib-chips { display: flex; gap: 8px; padding: 8px 4px 2px; overflow-x: auto; scrollbar-width: none; }
+.side-lib-chip { flex: 0 0 auto; }
+.side-lib-chip {
+  height: 32px; padding: 0 14px; border: 0; border-radius: var(--shape-full); background: var(--bg-hover); color: var(--fg); font: inherit; font-size: var(--fs-sm); font-weight: 600;
+  transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized);
+}
+.side-lib-chip:hover { background: var(--bg-active); }
+.side-lib-chip.on { background: var(--fg); color: var(--bg-elev); }
+.side-lib-list { display: flex; flex-direction: column; }
+.lib-thumb { flex: 0 0 auto; display: grid; place-items: center; }
+.lib-text { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; gap: 2px; }
+.lib-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-sub { font-size: var(--fs-sm); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-item.playing .lib-title { color: var(--accent-text); font-weight: 600; }
+.lib-playing { flex: 0 0 auto; color: var(--accent-text); }
+.side-lib-empty { padding: 4px 12px 12px; margin: 0; }
+
+/* ---- The rail: collapsed, or a narrow window -------------------------------- */
+.sidebar.rail .sidebar-scroll { padding: 8px 4px; scrollbar-width: none; }
+.sidebar.rail .sidebar-scroll::-webkit-scrollbar { display: none; }
+.sidebar.rail .sidebar-foot { padding: 4px; }
+.sidebar.rail .nav-item { justify-content: center; padding: 0; }
+.sidebar.rail .nav-item > span:not(.pin-thumb, .lib-thumb), .sidebar.rail .nav-item > .icon:not(:first-child), .sidebar.rail .lib-playing {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.sidebar.rail .nav-item.pin-item, .sidebar.rail .nav-item.lib-item { height: 52px; }
+.sidebar.rail .nav-item.pin-item > .icon { display: none; }
+.sidebar.rail .sidebar-pins-empty { display: none; }
+.sidebar.rail .side-lib { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
+.sidebar.rail .sidebar-pins { padding-bottom: 4px; }
+/* The playing item keeps a mark in the rail: a ring around its cover. */
+.sidebar.rail .lib-item.playing .lib-thumb .art { box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--accent); }
+
+/* ---- Player bar on the ground ------------------------------------------------- */
+.player { background: transparent; }
+
+/* ---- Detail pages ------------------------------------------------------------- */
+/* The header meets the pane's own rounded top; no separate rounding of its own. */
+.detail-head { border-radius: 0; }
+.detail-head .art { border-radius: var(--shape-md); }
+/* Small: the cover on a wash of its colour (DetailHead, heroWash keeps white text at 4.5:1) that
+   carries on behind the actions and fades into the pane. */
+.detail-head.hero-small.washed { background: linear-gradient(180deg, var(--hero-wash) 0%, color-mix(in srgb, var(--hero-wash) 82%, #000) 100%); }
+.detail-head.hero-small.washed .hero-backdrop { display: none; }
+/* Light: a tint under the actions, light enough that muted text still reads at 4.5:1 on it. */
+.detail-actions.washed { padding-bottom: 20px; background: linear-gradient(180deg, color-mix(in srgb, var(--hero-wash) 22%, var(--bg-elev)) 0%, var(--bg-elev) 100%); }
+/* Dark: one continuous wash, darkening into the pane's own colour through the actions. */
+:root[data-theme="dark"] .detail-head.hero-small.washed { background: linear-gradient(180deg, var(--hero-wash) 0%, color-mix(in srgb, var(--hero-wash) 62%, var(--bg-elev)) 100%); }
+:root[data-theme="dark"] .detail-actions.washed { --fg-muted: var(--fg); background: linear-gradient(180deg, color-mix(in srgb, var(--hero-wash) 62%, var(--bg-elev)) 0%, var(--bg-elev) 100%); }
+.detail-actions .btn.fab { height: 48px; border-radius: var(--shape-full); box-shadow: none; }
+.detail-actions .btn.icon { width: 44px; height: 44px; background: transparent; color: var(--fg-muted); }
+.detail-actions .btn.icon:hover { background: var(--bg-hover); color: var(--fg); }
+.detail-actions .btn.icon:where(.on, [aria-pressed="true"]) { background: transparent; color: var(--accent-text); }
+
+/* ---- Tiles: flat cards, the artwork lifts a little on hover ---------------------- */
+.tile { border-radius: var(--shape-md); }
+.tile .art { border-radius: var(--shape-sm); }
+.tile .art.round { border-radius: 50%; }
+
+@media (max-width: 900px) {
+  /* A narrower rail at 200% zoom: the covers a little smaller. */
+  :root { --pane-gap: 6px; --rail-w: 60px; }
+  .sidebar.rail .pin-thumb, .sidebar.rail .pin-thumb .art, .sidebar.rail .lib-thumb, .sidebar.rail .lib-thumb .art { width: 38px; height: 38px; }
+  .sidebar.rail .nav-item.pin-item, .sidebar.rail .nav-item.lib-item { height: 46px; }
+  .app-body { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
+  .search { flex: 1 1 120px; width: auto; max-width: none; min-width: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content > * { animation: none; }
+}
+
+@media (forced-colors: active) {
+  .side-lib-chip { border: 1px solid ButtonText; }
+  .side-lib-chip.on { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .sidebar, .content, .side-pane { border: 1px solid CanvasText; }
+}

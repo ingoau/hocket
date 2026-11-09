@@ -2,7 +2,7 @@
 //
 // On the blurred, artwork-coloured background (FluidBackground): the artwork,
 // a controls card (title, artist, love / add to playlist / More, the
-// rating, the wavy seek bar and the transport), the collapse and window
+// rating, the seek bar and the transport), the collapse and window
 // fullscreen buttons top right, and a pill bottom right with the Connect
 // device and the Lyrics / Queue / About toggles (choosing the one that is on
 // goes back to the artwork alone), then the sleep timer and volume.
@@ -40,7 +40,7 @@ import { bridge } from "../core/bridge";
 import { FluidBackground } from "../components/FluidBackground";
 import { Artwork, useArtwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
-import { WavySeek } from "../components/WavySeek";
+import { Seek } from "../components/Seek";
 import { QueuePanel } from "../components/QueuePanel";
 import { LyricsPane } from "../components/NowPlayingSidebar";
 import { AboutSong } from "../components/AboutSong";
@@ -394,7 +394,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
             </div>
             {track && showRating ? <div className="np-stars" data-testid="np-stars"><Stars value={track.rating} size={20} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /></div> : null}
 
-            <WavySeek durationMs={track?.durationMs} playing={playing && !transport.buffering} />
+            <Seek durationMs={track?.durationMs} />
 
             <div className="np-transport">
               <button type="button" className={`np-tonal np-flank ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="fs-shuffle"><Icon name="shuffle" size={22} filled={queue.shuffle} /></button>

@@ -536,20 +536,6 @@ test.describe("the side panel overview from the keyboard", () => {
   });
 });
 
-test.describe("the player bar's wave", () => {
-  test("moves while the window has focus, and holds still under the battery saver", async ({ hocket }) => {
-    const { page } = hocket;
-    await completeSetup(page);
-    await playFirstAlbum(page);
-    const wave = page.getByTestId("seek-slider");
-    await expect(wave).toHaveAttribute("data-wave", "moving");
-    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "battery.level", value: JSON.stringify("light") } }));
-    await expect(wave).toHaveAttribute("data-wave", "still");
-    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "battery.level", value: JSON.stringify("off") } }));
-    await expect(wave).toHaveAttribute("data-wave", "moving");
-  });
-});
-
 test.describe("the player bar at middling widths", () => {
   test("the song, the transport and the buttons never overlap, with another device's name showing too", async ({ hocket }) => {
     const { app, page } = hocket;

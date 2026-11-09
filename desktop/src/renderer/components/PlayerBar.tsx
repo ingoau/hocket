@@ -1,7 +1,7 @@
 // Persistent player bar (docs/design.md, "Desktop layout"). Left: artwork,
 // title and artist, the rating (unless Settings turns it off), add to playlist
-// and More (which carries love). Centre: shuffle, previous, the expressive
-// play/pause, next, repeat, and the wavy seek bar. Right: the sleep and
+// and More (which carries love). Centre: shuffle, previous, the round
+// play/pause, next, repeat, and the seek bar. Right: the sleep and
 // battery badges, volume, then the side panel, lyrics and queue toggles, the
 // Connect pill (the device's name only while another device plays), the mini
 // player and the fullscreen player. Above it, the inline notice line. (Another
@@ -28,7 +28,7 @@ import { ArtistChooser } from "./ArtistChooser";
 import { useLyricsOptionsTrigger } from "./LyricsOptions";
 import { Stars } from "./Stars";
 import { Slider } from "./controls";
-import { WavySeek } from "./WavySeek";
+import { Seek } from "./Seek";
 import { ConnectPill } from "./ConnectPill";
 
 export function PlayerBar({ inert = false }: { inert?: boolean }) {
@@ -93,7 +93,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
           <button type="button" className="btn icon" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="next"><Icon name="next" size={24} filled /></button>
           <RepeatButton mode={repeat} />
         </div>
-        <WavySeek variant="bar" durationMs={track?.durationMs} playing={playing && !buffering && !fullscreen} />
+        <Seek variant="bar" durationMs={track?.durationMs} />
       </div>
 
       <div className="right">
@@ -136,7 +136,7 @@ export function SeekBar({ durationMs, compact = false }: { durationMs: number | 
   dragRef.current = drag;
   const dur = durationMs ?? 0;
   // The label and the slider's value change once a second: written then, not every frame
-  // (WavySeek does the same). Cleared when React may have rendered them afresh (below).
+  // (Seek does the same). Cleared when React may have rendered them afresh (below).
   const lastSecond = useRef<number | undefined>(undefined);
   const paint = () => {
     const shown = dragRef.current !== undefined ? dragRef.current * dur : extrapolate(stamp, Date.now(), offset, durationMs);

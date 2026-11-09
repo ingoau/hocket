@@ -1,4 +1,5 @@
-/* m3-shell: Material 3 Expressive pass (loaded after global.css, before now-playing.css).
+/* m3-shell (loaded after global.css, before now-playing.css; panes.css, loaded
+   last, sets the shell's final look: the panes, sidebar, top bar and rail).
    The app shell: floating panes, the navigation drawer/rail, the top bar and
    its search, the side panel, menus, the palette, dialogs, snackbars and the
    page-enter transition. Page contents live in m3-library.css / m3-pages.css.
@@ -51,7 +52,6 @@
 .nav-item .icon { opacity: 1; color: var(--fg-muted); transition: transform var(--dur-spring) var(--spring-bouncy), color var(--dur-short) var(--ease-emphasized); }
 .nav-item:hover .icon { color: var(--fg); }
 .nav-item.active .icon { color: var(--accent-text); transform: scale(1.08); }
-.nav-item:active .icon { transform: scale(0.9); }
 /* A slim scrollbar that only shows while the pointer is over the list. */
 .sidebar-scroll::-webkit-scrollbar { width: 8px; }
 .sidebar-scroll::-webkit-scrollbar-thumb { background: transparent; background-clip: padding-box; border: 2px solid transparent; }
@@ -95,7 +95,6 @@
 /* Window controls: round state layers; close turns into a danger pill. */
 .window-controls { gap: 2px; margin-left: 6px; }
 .window-controls .btn { width: 40px; height: 32px; border-radius: var(--shape-full); }
-.window-controls .btn:active, .window-controls .btn.icon:active { border-radius: var(--shape-sm); }
 .window-controls .btn.close:hover { background: var(--danger); color: var(--danger-fg); }
 
 /* Jobs popover: a rounded surface sheet under its button. */
@@ -185,7 +184,7 @@
   transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
 }
 .side-icon-btn:hover { background: var(--bg-hover); }
-.side-icon-btn:active { background: var(--bg-active); border-radius: var(--shape-sm); transform: scale(0.94); transition-duration: 80ms, 120ms, 120ms; }
+.side-icon-btn:active { background: var(--bg-active); }
 .side-card { flex: 0 0 auto; background: var(--surface-tonal-sunken); border-radius: var(--shape-lg); padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
 .side-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
 .side-card-title { margin: 0; font-size: var(--fs-lg); font-weight: 800; }
@@ -195,7 +194,6 @@
   transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
 }
 .side-card-link:hover { background: var(--state-selected); }
-.side-card-link:active { border-radius: var(--shape-sm); transform: scale(0.96); }
 .side-card-link:focus-visible { border-radius: var(--shape-full); }
 .side-card-empty { margin: 0; color: var(--fg-muted); }
 /* Lyrics peek: the previous and next lines muted, the current one large; lines glide as they change. */
@@ -274,7 +272,7 @@
 .queues-page .sq-row:first-child { border-top-left-radius: var(--shape-md); border-top-right-radius: var(--shape-md); }
 .queues-page .sq-row:last-child { border-bottom-left-radius: var(--shape-md); border-bottom-right-radius: var(--shape-md); }
 .queues-page .sq-row:hover { background: color-mix(in srgb, var(--fg) 5%, var(--surface-tonal-sunken)); }
-.sq-main { all: unset; box-sizing: border-box; flex: 1; min-width: 0; min-height: 52px; display: flex; flex-direction: column; justify-content: center; padding: 6px 4px 6px 14px; border-radius: inherit; cursor: pointer; }
+.sq-main { all: unset; box-sizing: border-box; flex: 1; min-width: 0; min-height: 52px; display: flex; flex-direction: column; justify-content: center; padding: 6px 4px 6px 14px; border-radius: inherit; }
 .sq-main.editing { cursor: auto; padding-left: 8px; gap: 1px; }
 .sq-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .sq-name { font-weight: 600; line-height: 20px; }
@@ -325,7 +323,6 @@
 .lo-btn { width: 36px; border-radius: 18px; }
 .lo-reset { padding: 0 12px; border-radius: var(--shape-full); background: transparent; color: var(--accent-text); }
 .lo-btn:hover, .lo-reset:hover { filter: brightness(0.96); }
-.lo-btn:active, .lo-reset:active { border-radius: var(--shape-sm); transform: scale(0.94); }
 .lyrics-options-pop .lyrics-size { gap: 4px; }
 /* Small / medium / large: a connected group of round toggles; the chosen one fills and squares off. */
 .lyrics-options-pop .lyrics-size .btn {
@@ -342,7 +339,6 @@
   transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
 }
 .qs-button:hover { background: var(--bg-hover); }
-.qs-button:active { border-radius: var(--shape-md); }
 .qs-button[aria-expanded="true"] { background: var(--state-selected); border-radius: var(--shape-md); }
 .qs-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qs-chevron { flex: 0 0 auto; transition: transform var(--dur-spring) var(--spring-fast); }
@@ -354,7 +350,6 @@
   transition: background-color var(--dur-short) var(--ease-emphasized), color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
 }
 .autoplay-pill:hover { filter: brightness(0.97); }
-.autoplay-pill:active { border-radius: var(--shape-sm); transform: scale(0.96); }
 .autoplay-pill.on { background: var(--accent); color: var(--accent-fg); }
 .autoplay-pill.on:hover { filter: brightness(1.08); }
 .queue-autoplay-note { display: flex; align-items: center; gap: 10px; padding: 12px 18px 24px; color: var(--fg-muted); font-size: var(--fs-md); }
@@ -407,7 +402,6 @@
   display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px 0 12px; border: 0; border-radius: var(--shape-full); background: var(--state-selected); color: var(--fg); font: inherit; font-weight: 700; -webkit-appearance: none; appearance: none;
   transition: border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy);
 }
-.about-chip:active { border-radius: var(--shape-sm); transform: scale(0.96); }
 .about-muted { color: var(--fg-muted); }
 .about-related .plain-list { display: flex; flex-direction: column; gap: 2px; }
 .about-song .related-row { display: flex; gap: 12px; padding: 6px 8px; align-items: center; border-radius: var(--shape-md); }
@@ -428,7 +422,6 @@
   transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
 }
 .menu .mi:hover, .menu .mi.active { border-radius: var(--shape-full); }
-.menu .mi:active { border-radius: var(--shape-xs); }
 .menu .sep { margin: 6px 12px; }
 
 /* ---- Command palette ----------------------------------------------------- */
@@ -458,7 +451,6 @@
   height: 40px; padding: 0 14px; border-radius: var(--shape-full);
   transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
 }
-.dialog .list .li:active { border-radius: var(--shape-sm); }
 .dialog .buttons { margin-top: 8px; }
 .dialog .buttons .btn { height: 40px; padding: 0 20px; }
 
@@ -524,12 +516,11 @@
 @keyframes stash-chip-out { from { max-width: 120px; } to { max-width: 0; opacity: 0; transform: scale(0.6); } }
 .stash-chip {
   -webkit-app-region: no-drag; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px 0 6px;
-  border: 0; border-radius: var(--shape-full); background: var(--bg-elev); color: var(--fg); font: inherit; font-weight: 600; cursor: pointer;
+  border: 0; border-radius: var(--shape-full); background: var(--bg-elev); color: var(--fg); font: inherit; font-weight: 600;
   box-shadow: var(--shadow-1); white-space: nowrap;
   transition: background-color var(--dur-short) var(--ease-emphasized), box-shadow var(--dur-short) var(--ease-emphasized), transform var(--dur-spring) var(--spring-bouncy);
 }
 .stash-chip:hover { box-shadow: var(--shadow-2); }
-.stash-chip:active { transform: scale(0.94); }
 .stash-chip.on { background: var(--accent); color: var(--accent-fg); }
 .stash-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .stash-fan { position: relative; width: 26px; height: 26px; flex: none; transition: width var(--dur-spring) var(--spring-fast); }

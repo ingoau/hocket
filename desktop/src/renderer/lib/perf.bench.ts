@@ -1,6 +1,5 @@
 import { bench, describe } from "vitest";
 import { evictPages, materializePages } from "./paged-window";
-import { wavePath, WAVE } from "../components/WavySeek";
 import { extrapolate } from "../store/position";
 
 const BENCH = { warmupTime: 200, time: 1000 };
@@ -71,22 +70,6 @@ describe("queue JSON (renderer analogue of QueueChanged)", () => {
 });
 
 describe("seek paint", () => {
-  bench(
-    "wavePath 400px (player bar)",
-    () => {
-      wavePath(3, 400, 20, WAVE.amplitude, 8, WAVE.wavelength);
-    },
-    BENCH,
-  );
-
-  bench(
-    "wavePath 1200px (fullscreen)",
-    () => {
-      wavePath(3, 1200, 20, WAVE.amplitude, 8, WAVE.wavelength);
-    },
-    BENCH,
-  );
-
   bench(
     "extrapolate",
     () => {

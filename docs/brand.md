@@ -57,7 +57,7 @@ The word mark adds two inks, chosen with the word mark rather than taken from ex
 - **Case** always lowercase in the word mark. In running text the name is still written *Hocket*.
 - **Colour** one colour: `#ECE9FF` on dark, `#1B1730` on light. Never the voice colours, never split by letter or syllable; the mark carries the colour.
 - **No effects** — no gradients, outlines, shadows, or baseline shifts.
-- **Why Unbounded:** its wide, round letters match the mark's heavy stroke and the tile's rounded corners, and it sits with the Material 3 Expressive shapes in the app. It's wide, so the lockup needs horizontal room.
+- **Why Unbounded:** its wide, round letters match the mark's heavy stroke and the tile's rounded corners, and it sits with the rounded shapes of both apps (Material 3 Expressive on Android, the desktop's panes). It's wide, so the lockup needs horizontal room.
 - **Licence** SIL Open Font License 1.1 (Google Fonts), so it can ship in both apps.
 - **Bundled** in both, as live text, until the outlined SVGs exist (see Not done yet). Each ships the whole variable font with its licence beside it:
   - Desktop: `desktop/src/renderer/assets/fonts/unbounded.ttf`, licence `unbounded-OFL.txt` in the same folder, loaded by the `@font-face` in `desktop/src/renderer/styles/m3-pages.css` (served from the app, so the CSP's `font-src 'self'` holds).
