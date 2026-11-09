@@ -396,6 +396,10 @@ The planner is deterministic: same inputs → same plan on every device.
     start position); a seek flushes without an end of stream first. So the
     first frame after such a flush is the item's first frame, sample-exact,
     and the track gain snaps there. No frame counting against durations.
+    Right after, the sink drains and flushes again for the same item (the
+    renderer's `handleDiscontinuity` at every stream change forces a timing
+    resync); a contiguous flush of the item already playing is the same
+    stream going on and must not end a mix.
   - **Clipping**: an item with `mix_out_ms` gets
     `ClippingConfiguration(endPositionMs)` (on `load` only when its `next`
     has `mix_in`); the processor also drops frames past the clip end
