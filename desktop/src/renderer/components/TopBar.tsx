@@ -1,4 +1,4 @@
-// Top bar: back/forward, window controls (Windows/Linux), search (local-first
+// Top bar: the sidebar toggle, back/forward, search, the stash, jobs and (Linux) window controls; search (local-first
 // with server results appended below a divider, container never shrinking),
 // and the job/problems indicator with its popover.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -13,6 +13,7 @@ import { Icon } from "./Icon";
 import { StashChip } from "./Stash";
 import { fmtRelative } from "../lib/format";
 import { usePresence } from "../lib/presence";
+import { NARROW, useMediaQuery } from "../lib/media";
 
 export function TopBar() {
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -20,18 +21,28 @@ export function TopBar() {
   const forward = useApp((s) => s.forward);
   const canBack = useApp((s) => s.history.length > 0);
   const canForward = useApp((s) => s.future.length > 0);
+  const collapsed = useApp((s) => s.panels.sidebarCollapsed);
+  const setPanels = useApp((s) => s.setPanels);
+  const narrow = useMediaQuery(NARROW);
   const win = useApp((s) => s.windowState);
+  // macOS draws its traffic lights, Windows its caption buttons (titleBarOverlay): only Linux's
+  // frameless window needs ours.
+  const ownControls = platform !== "macOs" && platform !== "windows";
+  const toggleLabel = collapsed ? t("a11y.expandSidebar") : t("a11y.collapseSidebar");
   return (
-    <div className={`topbar ${platform === "macOs" ? "mac" : ""}`} data-testid="topbar">
+    // The bar is the window's drag region (its empty stretch included); the system maximises on a double-click.
+    <div className={`topbar ${platform === "macOs" ? "mac" : ""} ${platform === "windows" ? "win" : ""}`} data-testid="topbar">
       <div className="nav-buttons">
+        {/* A narrow window is always a rail: nothing to toggle. */}
+        {narrow ? null : <button type="button" className="btn icon" aria-label={toggleLabel} title={toggleLabel} aria-expanded={!collapsed} onClick={() => setPanels({ sidebarCollapsed: !collapsed })} data-testid="sidebar-toggle"><Icon name={collapsed ? "sidebarOpen" : "sidebarClose"} /></button>}
         <button type="button" className="btn icon" aria-label={t("action.back")} disabled={!canBack} onClick={back}><Icon name="chevronLeft" /></button>
         <button type="button" className="btn icon" aria-label={t("action.forward")} disabled={!canForward} onClick={forward}><Icon name="chevronRight" /></button>
       </div>
-      <div className="grow" />
       <SearchBox />
+      <div className="grow" />
       <StashChip />
       <JobsIndicator />
-      {platform !== "macOs" ? (
+      {ownControls ? (
         <div className="window-controls">
           <button type="button" className="btn icon" aria-label={t("misc.minimize")} onClick={() => bridge().window.minimize()}><Icon name="minimize" size={14} /></button>
           <button type="button" className="btn icon" aria-label={win.maximized ? t("misc.restore") : t("misc.maximize")} onClick={() => (win.maximized ? bridge().window.unmaximize() : bridge().window.maximize())}><Icon name={win.maximized ? "restoreWin" : "maximize"} size={13} /></button>

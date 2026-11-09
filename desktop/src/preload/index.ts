@@ -3,7 +3,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
 import type { RoomDiagnosticsStatus } from "@core/api";
-import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, StagedScreenshot, UndecodedImage, WindowControl, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, StagedScreenshot, UndecodedImage, ThemeChoice, WindowControl, WindowState } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -42,6 +42,8 @@ const bridge: HocketBridge = {
     openMiniPlayer: () => ipcRenderer.send(IPC.windowControl, "openMiniPlayer" satisfies WindowControl),
     closeMiniPlayer: () => ipcRenderer.send(IPC.windowControl, "closeMiniPlayer" satisfies WindowControl),
     showMain: () => ipcRenderer.send(IPC.windowControl, "showMain" satisfies WindowControl),
+    setTheme: (theme: ThemeChoice) => ipcRenderer.send(IPC.windowControl, { theme } satisfies WindowControl),
+    setPlayerOpen: (open: boolean) => ipcRenderer.send(IPC.windowControl, { playerOpen: open } satisfies WindowControl),
     getState: () => ipcRenderer.invoke(IPC.windowState) as Promise<WindowState>,
     onState: (listener) => subscribe<WindowState>(IPC.windowStateChanged, listener),
     reportVisibility: (visible: boolean) => ipcRenderer.send(IPC.visibility, visible),

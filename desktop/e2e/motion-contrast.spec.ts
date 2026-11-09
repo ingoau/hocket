@@ -22,7 +22,8 @@ async function runningAnimations(page: Page, within?: string): Promise<number> {
 }
 
 test.describe("motion, contrast and zoom", () => {
-  test.setTimeout(180_000);
+  // The accent sweep scans every theme with the sidebar's Your library in it.
+  test.setTimeout(300_000);
 
   test("reduced motion: lyrics are a statically highlighted list, the fullscreen background a still, nothing animates", async ({ hocket }) => {
     const { page } = hocket;
@@ -236,13 +237,13 @@ test.describe("motion, contrast and zoom", () => {
     expect(ring.style).not.toBe("none");
     expect(Number.parseFloat(ring.width)).toBeGreaterThanOrEqual(2);
     expect(ring.color).toBe(system.highlight);
-    // The seek bar's played wave and a pressed toggle.
-    expect(await page.locator(".player .np-seek-bar .played").evaluate((el) => getComputedStyle(el).stroke)).toBe(system.highlight);
+    // The seek bar's played part and a pressed toggle.
+    expect(await page.locator(".player .np-seek-bar .played").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(system.highlight);
     await page.getByTestId("shuffle").click();
     await expect(page.getByTestId("shuffle")).toHaveAttribute("aria-pressed", "true");
     expect(await page.getByTestId("shuffle").evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("solid");
-    // Current nav item (Albums is a place in the Library).
-    expect(await page.getByTestId("nav-library").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(system.highlight);
+    // The current sidebar item: the album just played, in Your library.
+    expect(await page.locator('[data-testid="sidebar-library-item"][aria-current="page"]').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(system.highlight);
     // Fullscreen: no artwork background behind system-coloured text, plain lyrics.
     await page.getByTestId("toggle-fullscreen").click();
     const fs = page.getByTestId("fullscreen-player");

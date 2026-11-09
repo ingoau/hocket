@@ -7,6 +7,7 @@ import { extractAccent } from "./accent";
 import { resolveArtwork } from "../components/Artwork";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { accentTokens, type ThemeName } from "./contrast";
+import { bridge } from "../core/bridge";
 
 export function useTheme() {
   const theme = useSetting<"system" | "light" | "dark">(SK.displayTheme, "system");
@@ -27,6 +28,13 @@ export function useTheme() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [theme]);
+  // The theme setting goes to main for the window's ground and Windows' caption buttons (and the
+  // next launch's first paint), once the settings have arrived: before that the setting reads as its
+  // fallback. Only the main window reports it; the mini player has its own frameless window.
+  const ready = useApp((s) => s.ready);
+  useEffect(() => {
+    if (ready && new URLSearchParams(window.location.search).get("window") !== "mini") bridge().window.setTheme(theme);
+  }, [ready, theme]);
   useEffect(() => {
     if (!dynamic || !cover) {
       setAccent(undefined);

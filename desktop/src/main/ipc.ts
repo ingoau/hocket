@@ -529,5 +529,12 @@ function applyWindowControl(windows: Windows, win: BrowserWindow, control: unkno
     windows.broadcastState();
   } else if ("fullscreen" in control) {
     win.setFullScreen(!!control.fullscreen);
+  } else if (win !== windows.main) {
+    // The rest is the main window's chrome: only the main window reports it (not the mini player).
+    return;
+  } else if ("theme" in control && (control.theme === "light" || control.theme === "dark" || control.theme === "system")) {
+    windows.setTheme(control.theme);
+  } else if ("playerOpen" in control) {
+    windows.setPlayerOpen(!!control.playerOpen);
   }
 }

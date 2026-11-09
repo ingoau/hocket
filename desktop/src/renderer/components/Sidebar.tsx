@@ -1,22 +1,30 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import { NAV_VIEWS, sidebarPlaces } from "@shared/keymap";
 import { executeAction } from "../store/actions";
-import { useApp, type ViewName } from "../store/app";
+import { SIDEBAR_MAX, SIDEBAR_MIN, useApp, type ViewName } from "../store/app";
 import { useActions } from "../store/queries";
 import { openContextMenu } from "./ContextMenu";
 import { Icon } from "./Icon";
 import { openItemsMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
-import { useResolvedPins, performPin, type ResolvedPin } from "../lib/use-pins";
+import { usePins, useResolvedPins, performPin, type ResolvedPin } from "../lib/use-pins";
 import { editPinsItem, pinMenuItems } from "../lib/pin-menus";
 import { pinTap } from "../lib/library-pins";
 import { isSidebarItemActive } from "../lib/sidebar-active";
+import { NARROW, useMediaQuery } from "../lib/media";
+import { SidebarLibrary, shownLibrary, useLibraryEntries, useLibraryView } from "./SidebarLibrary";
 
+const clampWidth = (w: number) => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
+
+// The sidebar, one scrolling column: the places (the customisable sidebar actions), the pins, then
+// Your library (SidebarLibrary). Settings stays at the foot. Collapsed (the top bar's first button,
+// Mod+B), or in a narrow window, it is a rail: icons and covers, the names as tooltips.
 export function Sidebar() {
   const route = useApp((s) => s.route);
   const navigate = useApp((s) => s.navigate);
   const pins = useResolvedPins();
+  const narrow = useMediaQuery(NARROW);
   const panels = useApp((s) => s.panels);
   const setPanels = useApp((s) => s.setPanels);
   const navActions = useActions("sidebar", { type: "none" });
@@ -26,7 +34,7 @@ export function Sidebar() {
 
   useEffect(() => {
     if (!dragging) return;
-    const move = (e: MouseEvent) => setPanels({ sidebarWidth: Math.max(160, Math.min(360, startW.current + e.clientX - startX.current)) });
+    const move = (e: MouseEvent) => setPanels({ sidebarWidth: clampWidth(startW.current + e.clientX - startX.current) });
     const up = () => setDragging(false);
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -40,7 +48,19 @@ export function Sidebar() {
   const fallbackIcon: Record<string, string> = { navigateHome: "home", navigateLibrary: "library", navigateAlbums: "album", navigateArtists: "artist", navigatePlaylists: "playlist", navigateTracks: "song", navigateGenres: "genre", navigateDownloads: "download", navigateFilters: "filter", navigateStats: "stats", navigateRecent: "restore", navigateSettings: "settings" };
   const items = sidebarPlaces(navActions.length ? navActions.map((a) => ({ id: a.id, label: a.label, icon: a.icon })) : fallback.map((id) => ({ id, label: t(`nav.${NAV_VIEWS[id] ?? "home"}` as never), icon: fallbackIcon[id] ?? "music" })))
     .map((it) => ({ ...it, view: it.view as ViewName | undefined }));
-  const pinnedOpen = (pins ?? []).some((rp) => isPinActive(rp));
+  const rail = narrow || panels.sidebarCollapsed;
+  // What Your library leaves out: the pins straight from the setting, so nothing doubles up while they resolve.
+  const rawPins = usePins();
+  const pinnedKeys = useMemo(() => new Set(rawPins.map((p) => `${p.kind}:${p.id}`)), [rawPins]);
+  const library = useLibraryEntries();
+  const libView = useLibraryView(rail);
+  const shown = useMemo(() => shownLibrary(library, pinnedKeys, libView, rail), [library, pinnedKeys, libView, rail]);
+  // State, not a ref: Your library's virtualiser needs the element once it exists.
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  // A pin or a Your library row that is open is the highlight; its list page's place isn't as well.
+  // Open from elsewhere (not listed, or filtered out), the place is.
+  const libraryOpen = !!route.id && shown.some((e) => e.kind === route.view && e.id === route.id);
+  const pinnedOpen = (pins ?? []).some((rp) => isPinActive(rp)) || libraryOpen;
   const itemViews = items.map((it) => it.view);
   const isActive = (v: ViewName | undefined) => isSidebarItemActive(v, route, itemViews, pinnedOpen);
   function isPinActive(rp: ResolvedPin): boolean {
@@ -49,21 +69,22 @@ export function Sidebar() {
   }
 
   return (
-    <nav className="sidebar" aria-label={t("nav.library")} data-testid="sidebar">
-      <div className="sidebar-scroll" onContextMenu={(e) => { if (!e.defaultPrevented && pins?.length && (e.target === e.currentTarget || (e.target as Element).closest(".sidebar-pins"))) openItemsMenu(e, [editPinsItem()]); }}>
-        <div className="section-title">{t("nav.library")}</div>
-        {items.map((it) => (
-          <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} title={it.label} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>
-            <Icon name={it.icon} size={18} filled={isActive(it.view)} />
-            <span>{it.label}</span>
-          </a>
-        ))}
+    <nav className={`sidebar ${rail ? "rail" : ""}`} aria-label={t("nav.library")} data-testid="sidebar" data-rail={rail || undefined}>
+      <div ref={setScroller} className="sidebar-scroll" onContextMenu={(e) => { if (!e.defaultPrevented && pins?.length && (e.target === e.currentTarget || (e.target as Element).closest(".sidebar-pins"))) openItemsMenu(e, [editPinsItem()]); }}>
+        <div className="sidebar-places">
+          {items.map((it) => (
+            <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} title={it.label} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>
+              <Icon name={it.icon} size={18} filled={isActive(it.view)} />
+              <span>{it.label}</span>
+            </a>
+          ))}
+        </div>
         {/* No visible "Pinned" title (the pins' thumbnails say it); a gap, and the name for screen readers.
             Right-clicking around and below the pins (not on one: that has its own menu) offers Edit pins. */}
         <div className="sidebar-pins" data-testid="sidebar-pins">
           <div className="sidebar-pins-gap" role="presentation" />
           <div className="sr-only">{t("library.pinned")}</div>
-          {pins && !pins.length ? <p className="sidebar-pins-empty small muted">{t("library.pinsEmpty")}</p> : null}
+          {pins && !pins.length && !rail ? <p className="sidebar-pins-empty small muted">{t("library.pinsEmpty")}</p> : null}
           {(pins ?? []).map((rp) => {
             const active = isPinActive(rp);
             // A song always plays; the rest do what their pin says.
@@ -92,6 +113,7 @@ export function Sidebar() {
             );
           })}
         </div>
+        <SidebarLibrary rail={rail} shown={shown} lib={libView} scroller={scroller} />
       </div>
       {/* Pinned below the scrolling list, like a native source list's footer. */}
       <div className="sidebar-foot">
@@ -100,9 +122,9 @@ export function Sidebar() {
           <span>{t("nav.settings")}</span>
         </a>
       </div>
-      <div className={`resize-handle ${dragging ? "dragging" : ""}`} onMouseDown={(e) => { e.preventDefault(); startX.current = e.clientX; startW.current = panels.sidebarWidth; setDragging(true); }} role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidebar")} aria-valuenow={panels.sidebarWidth} aria-valuemin={160} aria-valuemax={360} tabIndex={0}
-        onKeyDown={(e) => { const d = e.key === "ArrowRight" ? 16 : e.key === "ArrowLeft" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ sidebarWidth: Math.max(160, Math.min(360, panels.sidebarWidth + d)) }); }}
-        data-testid="sidebar-resize" />
+      {rail ? null : <div className={`resize-handle ${dragging ? "dragging" : ""}`} onMouseDown={(e) => { e.preventDefault(); startX.current = e.clientX; startW.current = panels.sidebarWidth; setDragging(true); }} role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidebar")} aria-valuenow={panels.sidebarWidth} aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} tabIndex={0}
+        onKeyDown={(e) => { const d = e.key === "ArrowRight" ? 16 : e.key === "ArrowLeft" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ sidebarWidth: clampWidth(panels.sidebarWidth + d) }); }}
+        data-testid="sidebar-resize" />}
     </nav>
   );
 }

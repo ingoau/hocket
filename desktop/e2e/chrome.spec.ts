@@ -1,8 +1,11 @@
 // Desktop feel: the content pane is laid out from the sidebar width (dragging
-// the splitter moves it), chrome is not selectable, nothing is underlined or
-// pointer-cursored, the UI font is the 13px system stack, and focus rings
+// the splitter in the gutter between the two panes moves it; the toggle folds the sidebar to a rail), chrome is not selectable, nothing is underlined or
+// pointer-cursored, the UI font is 13px Geist (bundled), and focus rings
 // appear only for keyboard focus.
 import { completeSetup, expect, test, openPlace } from "./fixtures";
+
+/** The gutter between the sidebar pane and the content pane (panes.css --pane-gap). */
+const GAP = 8;
 
 test.describe("window chrome", () => {
   test("dragging the sidebar splitter moves the content pane and persists", async ({ hocket }) => {
@@ -13,7 +16,7 @@ test.describe("window chrome", () => {
     const sidebar = page.getByTestId("sidebar");
     const before = (await content.boundingBox())!;
     const sb = (await sidebar.boundingBox())!;
-    expect(Math.round(before.x)).toBe(Math.round(sb.x + sb.width));
+    expect(Math.round(before.x)).toBe(Math.round(sb.x + sb.width + GAP));
     const h = (await handle.boundingBox())!;
     await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
     await page.mouse.down();
@@ -22,9 +25,9 @@ test.describe("window chrome", () => {
     const after = (await content.boundingBox())!;
     const sbAfter = (await sidebar.boundingBox())!;
     expect(after.x - before.x).toBeGreaterThan(60);
-    expect(Math.round(after.x)).toBe(Math.round(sbAfter.x + sbAfter.width));
+    expect(Math.round(after.x)).toBe(Math.round(sbAfter.x + sbAfter.width + GAP));
     expect(after.width).toBeLessThan(before.width);
-    await expect(handle).toHaveAttribute("aria-valuenow", String(Math.round(sbAfter.width)));
+    await expect(handle).toHaveAttribute("aria-valuenow", String(Math.round(sbAfter.width + GAP)));
     // Remembered per device.
     await page.reload();
     await expect(page.getByTestId("app")).toBeVisible();
@@ -32,7 +35,7 @@ test.describe("window chrome", () => {
     expect(Math.round((await content.boundingBox())!.x)).toBe(Math.round(after.x));
   });
 
-  test("chrome is native-feeling: no underlines, no text selection, default cursor, system 13px font, keyboard-only focus rings", async ({ hocket }) => {
+  test("chrome is native-feeling: no underlines, no text selection, default cursor, 13px Geist, keyboard-only focus rings", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     const styleOf = (testId: string, props: string[]) => page.getByTestId(testId).first().evaluate((el, ps) => { const cs = getComputedStyle(el); return Object.fromEntries(ps.map((p) => [p, cs.getPropertyValue(p)])); }, props);
@@ -41,7 +44,9 @@ test.describe("window chrome", () => {
     expect(nav.cursor).toBe("default");
     expect(nav["user-select"]).toBe("none");
     expect(nav["font-size"]).toBe("13px");
-    expect(nav["font-family"]!.startsWith("system-ui")).toBe(true);
+    expect(nav["font-family"]!.startsWith('Geist, system-ui') || nav["font-family"]!.startsWith('"Geist", system-ui')).toBe(true);
+    // The bundled face, not a fallback.
+    expect(await page.evaluate(async () => { await document.fonts.ready; return Array.from(document.fonts as unknown as Iterable<FontFace>).some((f) => f.family.replace(/"/g, "") === "Geist" && f.status === "loaded"); })).toBe(true);
     const btn = await styleOf("play-pause", ["cursor", "user-select", "text-decoration-line"]);
     expect(btn.cursor).toBe("default");
     expect(btn["user-select"]).toBe("none");

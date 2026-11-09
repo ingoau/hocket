@@ -59,7 +59,7 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
   const artwork = { register: vi.fn(async (p: string) => (p.startsWith("/cache/") ? "a".repeat(32) : undefined)), resolve: vi.fn() };
   installIpc({
     core: { kind: "fake", dispatch, query, onEvent: (l) => { eventListeners.push(l); return () => undefined; }, shutdown: async () => undefined },
-    windows: { all: () => [{ webContents: { id: 1 } }], mini: undefined, main: undefined, stateOf: () => ({}), broadcastState: vi.fn(), openMini: vi.fn(), closeMini: vi.fn(), showMain: vi.fn() } as never,
+    windows: { all: () => [{ webContents: { id: 1 } }], mini: undefined, main: undefined, stateOf: () => ({}), broadcastState: vi.fn(), openMini: vi.fn(), closeMini: vi.fn(), showMain: vi.fn(), setTheme: windowChrome.setTheme, setPlayerOpen: windowChrome.setPlayerOpen } as never,
     artwork: artwork as never,
     meta: () => ({}) as never,
     credentialStorage: async () => "os",
@@ -75,6 +75,8 @@ function setup(coreOverrides: Partial<{ dispatch: (c: Command) => void; query: (
   });
   return { dispatch, query, onCommand, artwork, passwordFor, emit };
 }
+
+const windowChrome = { setTheme: vi.fn(), setPlayerOpen: vi.fn() };
 
 describe("ipc", () => {
   afterEach(() => {
@@ -174,6 +176,16 @@ describe("ipc", () => {
     expect(() => on(ours, { alwaysOnTop: 1 })).not.toThrow();
     expect(() => on(ours, "nope")).not.toThrow();
     expect(() => on(ours, 42)).not.toThrow();
+  });
+
+  it("takes the theme and the player's state for the window chrome from the main window only", () => {
+    setup();
+    const on = listeners.get(IPC.windowControl)!;
+    // The sender here is not the main window (the mini player, say): nothing changes.
+    on(ours, { theme: "dark" });
+    on(ours, { playerOpen: true });
+    expect(windowChrome.setTheme).not.toHaveBeenCalled();
+    expect(windowChrome.setPlayerOpen).not.toHaveBeenCalled();
   });
 
   it("config export resolves keystore references after a warning and writes with a dialog-chosen path", async () => {

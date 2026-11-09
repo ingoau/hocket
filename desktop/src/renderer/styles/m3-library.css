@@ -63,7 +63,6 @@
   transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
 }
 .group-song-main:hover { background: var(--accent-soft); border-radius: var(--shape-lg); }
-.group-song-main:active { border-radius: var(--shape-sm); }
 .group-song-main .art { width: 44px; height: 44px; border-radius: var(--shape-sm); flex: 0 0 auto; }
 .group-song-main .text { display: flex; flex-direction: column; min-width: 0; }
 .group-song-main .t1, .group-song-main .t2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -117,26 +116,22 @@
   border-radius: var(--shape-lg);
   transition: border-radius var(--dur-spring-long) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy), box-shadow var(--dur-short) var(--ease-emphasized), clip-path var(--dur-spring-long) var(--spring-fast);
 }
-/* Hover: the art rounds into a squircle and lifts on a bouncy spring. */
-.tile:hover .art:not(.round) { border-radius: 36px; }
-.tile:hover .art { transform: translateY(-3px) scale(1.02); box-shadow: var(--shadow-2); }
-/* Selected: the art settles back toward a squarer shape, like a selected control. */
-.tile.selected .art:not(.round) { border-radius: var(--shape-md); }
+/* Hover: the art lifts a little. */
+.tile:hover .art { transform: translateY(-2px); box-shadow: var(--shadow-2); }
 .tile .t1 { font-weight: 600; font-size: var(--fs-md); margin-top: 2px; }
 .tile .t2 { margin-top: -6px; }
 .tile-main .t2 { margin-top: -6px; }
-/* Artists: a scalloped cookie that loosens into a softer 12-scallop one under the pointer. */
-.tile .art.round, .detail-head .art.round { border-radius: 0; clip-path: var(--lib-cookie-9); box-shadow: none; }
-.tile:hover .art.round { clip-path: var(--lib-cookie-12); box-shadow: none; transform: scale(1.03) rotate(0deg); }
+/* Artists: round. */
+.tile .art.round, .detail-head .art.round { border-radius: 50%; clip-path: none; box-shadow: none; }
+.tile:hover .art.round { box-shadow: none; }
 
-/* The play FAB: a big squircle on the art's corner that morphs to a circle when pointed at. */
+/* The play button: a circle on the art's corner, rising in when the tile is pointed at. */
 .tile .play {
-  width: 48px; height: 48px; right: 18px; top: calc(100cqw - 50px); border-radius: 16px;
+  width: 48px; height: 48px; right: 18px; top: calc(100cqw - 50px); border-radius: 50%;
   transform: scale(0.5) translateY(8px);
 }
 .tile:hover .play, .tile:focus-within .play { transform: none; }
-.tile .play:hover { border-radius: 50%; box-shadow: var(--shadow); }
-.tile .play:active { border-radius: var(--shape-sm); transform: scale(0.9); }
+.tile .play:hover { box-shadow: var(--shadow); }
 .tile-badge { top: 14px !important; left: 14px !important; padding: 5px; }
 
 /* ---- Home: carousels under expressive section headings ------------------- */
@@ -144,10 +139,8 @@
 .home-section:last-child { margin-bottom: 8px; }
 .section-icon {
   display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; flex: 0 0 auto;
-  clip-path: var(--lib-cookie-9); background: var(--selection); color: var(--accent-text);
-  transition: clip-path var(--dur-spring-long) var(--spring-fast), transform var(--dur-spring-long) var(--spring-bouncy);
+  border-radius: 50%; background: var(--selection); color: var(--accent-text);
 }
-:is(.home-section, section):hover > .section-heading .section-icon { clip-path: var(--lib-cookie-12); transform: rotate(20deg); }
 .home-section .scroller {
   gap: 6px; padding: 6px 4px 12px; margin: -6px -4px 0; scroll-snap-type: x proximity; scroll-padding-inline: 4px;
 }
@@ -188,7 +181,9 @@
 .detail-head.hero-small .hero-backdrop img { filter: blur(64px) saturate(1.2) brightness(0.78); transform: scale(1.3); }
 .detail-head.hero-small .hero-backdrop::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(14, 10, 24, 0.1) 0%, rgba(14, 10, 24, 0.42) 100%); }
 .detail-head.hero-small .art.pending { box-shadow: none; }
-.detail-head.hero-none { background-image: linear-gradient(150deg, color-mix(in srgb, var(--accent) 80%, #fff) 0%, var(--accent) 45%, color-mix(in srgb, var(--accent) 40%, #000) 100%); }
+/* No artwork: the accent, deepened toward black far enough that white text (and the eyebrow chip's
+   16% white) holds 4.5:1 whatever the accent, white included. */
+.detail-head.hero-none { background-image: linear-gradient(150deg, color-mix(in srgb, var(--accent) 34%, #000) 0%, color-mix(in srgb, var(--accent) 24%, #000) 100%); }
 .detail-head.hero-none .art.placeholder { display: grid; place-items: center; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24); color: #fff; }
 /* Large: the cover across the top, fading into the page; the title sits on the fade in the page's own colours. */
 .detail-head.hero-large { min-height: 470px; border-radius: 0; background: var(--bg-elev); color: var(--fg); padding-bottom: 0; }
@@ -203,10 +198,8 @@
 /* Play and Resume share a width, so the row doesn't shift when an album can be continued. */
 .detail-actions .btn.album-play { min-width: 148px; justify-content: center; }
 .track-resume-ring { width: 16px; height: 16px; display: block; }
-.detail-actions .btn.fab:active { border-radius: var(--shape-md); }
 .detail-actions .btn.icon { width: 56px; height: 56px; border-radius: var(--shape-full); background: var(--state-selected); color: var(--fg); transition: border-radius var(--dur-spring) var(--spring-fast), background-color var(--dur-short) var(--ease-emphasized); }
 .detail-actions .btn.icon:hover { background: color-mix(in srgb, var(--fg) 8%, var(--state-selected)); }
-.detail-actions .btn.icon:active { border-radius: var(--shape-md); }
 .detail-actions .btn.icon svg { width: 24px; height: 24px; }
 .detail-actions .btn.icon:where(.on, [aria-pressed="true"]) { border-radius: var(--shape-lg); background: var(--accent); color: var(--accent-fg); }
 .detail-actions .spacer { flex: 1 1 auto; }
@@ -234,7 +227,6 @@
 .table-head .th.sorted { color: var(--fg); }
 .table-head .th.sorted .th-btn { background: var(--state-selected); color: var(--fg); }
 .table-head .th.sortable .th-btn { transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast); }
-.table-head .th.sortable .th-btn:active { border-radius: var(--shape-sm); }
 .tr {
   font-size: 14px; border-radius: var(--shape-md);
   transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast);
@@ -258,15 +250,12 @@
   padding: 18px 16px 16px 20px; border: 0; border-radius: var(--shape-xl); background: var(--bg-sunken);
 }
 .genre-tile:hover { background: var(--accent-soft); border-radius: var(--shape-lg); }
-.genre-tile:active { border-radius: var(--shape-md); }
 .genre-tile .genre-name { font-size: var(--fs-lg); font-weight: 750; letter-spacing: -0.01em; line-height: 1.2; overflow-wrap: anywhere; }
 /* Decorative only: a flex item below the text, so it never sits behind it. */
 .genre-tile::after {
   content: ""; flex: 0 0 auto; align-self: flex-end; margin-top: auto; width: 44px; height: 44px;
-  clip-path: var(--lib-cookie-9); background: hsl(var(--genre-hue, 250) 62% 58%);
-  transition: transform var(--dur-spring-long) var(--spring-bouncy), clip-path var(--dur-spring-long) var(--spring-fast);
+  border-radius: 50%; background: hsl(var(--genre-hue, 250) 62% 58%);
 }
-.genre-tile:hover::after { transform: rotate(40deg) scale(1.15); clip-path: var(--lib-cookie-12); }
 
 /* ---- Empty states: one glyph in a tonal cookie ---------------------------- */
 .empty { gap: 12px; font-size: var(--fs-lg); max-width: 520px; margin: 0 auto; }
@@ -339,7 +328,7 @@
 .search-header { align-items: baseline; gap: 12px; }
 .search-header h1 { font-size: 32px; line-height: 40px; font-weight: 800; letter-spacing: -0.02em; }
 .search-header > .muted { font-size: var(--fs-lg); }
-.search-kind { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: var(--shape-sm); border: 1px solid var(--border-strong, var(--border)); background: transparent; color: var(--fg); font: inherit; font-size: var(--fs-md); font-weight: 600; cursor: pointer; transition: background-color var(--dur-short) var(--ease-emphasized); }
+.search-kind { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: var(--shape-sm); border: 1px solid var(--border-strong, var(--border)); background: transparent; color: var(--fg); font: inherit; font-size: var(--fs-md); font-weight: 600; transition: background-color var(--dur-short) var(--ease-emphasized); }
 .search-kind:hover:not(:disabled) { background: var(--bg-hover); }
 .search-kind:disabled { opacity: 0.45; cursor: default; }
 .search-kind.on { background: var(--state-selected); border-color: transparent; color: var(--fg); }
@@ -349,7 +338,7 @@
 .search-nothing, .search-asking, .search-lyrics-note { margin: 0; }
 .search-lyrics-note { padding: 0 var(--page-pad) 12px; }
 .lyric-hits { display: flex; flex-direction: column; gap: 2px; }
-.lyric-hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 12px; border: 0; border-radius: var(--shape-md); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.lyric-hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 12px; border: 0; border-radius: var(--shape-md); background: transparent; color: inherit; font: inherit; }
 .lyric-hit:hover { background: var(--bg-hover); }
 .lyric-hit:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .lyric-hit-title { font-weight: 600; }
@@ -372,7 +361,7 @@
 .top-song-placeholder { height: 60px; background: var(--surface-tonal-sunken, var(--bg-hover)); }
 .top-song-placeholder:hover { background: var(--surface-tonal-sunken, var(--bg-hover)); }
 .top-song.playing { background: var(--accent-soft); }
-.top-song-main { all: unset; box-sizing: border-box; flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 8px; border-radius: inherit; cursor: pointer; }
+.top-song-main { all: unset; box-sizing: border-box; flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 8px; border-radius: inherit; }
 .top-song-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .top-song-art { position: relative; flex: 0 0 auto; width: 44px; height: 44px; }
 .top-song-art .art { width: 44px; height: 44px; border-radius: var(--shape-sm); display: block; }

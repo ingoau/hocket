@@ -26,7 +26,9 @@ async function populate(page: Page): Promise<void> {
 }
 
 test.describe("axe: no violations anywhere", () => {
-  test.setTimeout(240_000);
+  // Each scan covers the sidebar's Your library too, and the library views test runs some fifty
+  // scans: on a loaded machine that takes six minutes and more.
+  test.setTimeout(480_000);
 
   test("setup screen, light and dark", async ({ hocket }) => {
     const { page } = hocket;
@@ -284,6 +286,8 @@ test.describe("axe: no violations anywhere", () => {
       // The Unpinned toast with its Undo, and a tile picked up.
       await panel.getByTestId("edit-pin-unpin").last().click();
       await expect(page.getByTestId("toast").first()).toBeVisible();
+      // The pointer resting on it holds the toast (and its Undo) through the scans.
+      await page.getByTestId("toast").first().hover();
       const handle = panel.getByTestId("edit-pin-handle").first();
       await handle.focus();
       await page.keyboard.press("Space");

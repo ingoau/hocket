@@ -1,4 +1,4 @@
-// Screenshots of the redesigned screens (Queues, Play on, Settings, the
+// Screenshots of the redesigned screens (Home and the sidebar, Queues, Play on, Settings, the
 // detail pages, Search, Setup, Downloads, Stats, Filters, Song info) for
 // reviewing by eye against the final designs. Not an assertion test: it runs
 // only with an output folder. HOCKET_SCREENSHOT_ONLY limits which shots are
@@ -77,6 +77,19 @@ test("redesigned screens", async () => {
       await resizeWindow(app, page, 1456, 912);
       await playAlbum(page, 3, "Late night drive");
       await playAlbum(page, 0, "Road trip");
+
+      // Home, with the sidebar's Your library (what was just played on top), then the sidebar
+      // narrowed to albums, and collapsed to its rail.
+      await page.getByTestId("nav-home").click();
+      await expect(page.getByTestId("sidebar-library-item").first()).toBeVisible();
+      await shot("home");
+      await page.getByTestId("side-lib-chip-album").click();
+      await shot("sidebar-albums");
+      await page.getByTestId("side-lib-chip-album").click();
+      await page.getByTestId("sidebar-toggle").click();
+      await expect(page.getByTestId("sidebar")).toHaveAttribute("data-rail", "true");
+      await shot("sidebar-collapsed");
+      await page.getByTestId("sidebar-toggle").click();
 
       // Queues: the side panel's queue name opens the page.
       await page.getByTestId("toggle-queue").click();

@@ -45,4 +45,4 @@ export const SK = {
   searchIncludeServer: "search.includeServer",
 } as const;
 
-export const DEFAULT_ACCENT = "#6f5cff";
+export const DEFAULT_ACCENT = "#8f80f5";

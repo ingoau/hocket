@@ -44,6 +44,7 @@ export const DEFAULT_KEYMAP: DefaultBinding[] = [
   { actionId: "openStash", shortcut: "Mod+Shift+S", labelId: "action.openStash", category: "view" },
   { actionId: "ui.back", shortcut: "Alt+ArrowLeft", labelId: "action.back", category: "view" },
   { actionId: "ui.forward", shortcut: "Alt+ArrowRight", labelId: "action.forward", category: "view" },
+  { actionId: "ui.toggleSidebar", shortcut: "Mod+B", labelId: "action.toggleSidebar", category: "view" },
   // Only while developer mode is on (Settings → Advanced).
   { actionId: "ui.developerDiagnostics", shortcut: "Mod+Shift+D", labelId: "action.developerDiagnostics", category: "app" },
 ];

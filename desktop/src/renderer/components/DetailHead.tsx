@@ -1,11 +1,14 @@
 // The header of the album, artist and playlist pages. Artwork is never
 // stretched past its own pixels: a cover big enough to fill the header edge to
-// edge is shown that way (Large); a smaller one sits at its size over a
-// blurred wash of itself (Small); with none, an accent gradient (None).
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+// edge is shown that way (Large, the immersive one); a smaller one sits at its
+// size on a wash of its own colour that fades into the page under the actions
+// (Small); with none, an accent gradient (None).
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ARTWORK_SIZES } from "@shared/constants";
 import { resolveArtwork } from "./Artwork";
 import { Icon } from "./Icon";
+import { extractAccent } from "../lib/accent";
+import { heroWash } from "../lib/contrast";
 
 export type HeroMode = "large" | "small" | "none";
 
@@ -49,9 +52,19 @@ export function DetailHead({ coverArt, round = false, icon = "music", onContextM
   }, []);
   useLayoutEffect(() => setNatural(undefined), [url]);
   const mode = heroMode(natural, url, width, LARGE_HERO_HEIGHT, window.devicePixelRatio || 1);
+  // The wash: the cover's accent, darkened until white text holds on it (the blurred cover shows until then).
+  const [wash, setWash] = useState<{ url: string; colour: string } | undefined>(undefined);
+  useEffect(() => {
+    if (!url) return;
+    let alive = true;
+    void extractAccent(url).then((c) => { if (alive && c) setWash({ url, colour: heroWash(c) }); });
+    return () => { alive = false; };
+  }, [url]);
+  const washed = mode === "small" && wash && wash.url === url ? wash.colour : undefined;
+  const washStyle = washed ? ({ "--hero-wash": washed } as CSSProperties) : undefined;
   return (
     <>
-    <div ref={ref} className={`detail-head hero-${mode}`} data-hero={mode} onContextMenu={onContextMenu} data-testid={testId}>
+    <div ref={ref} className={`detail-head hero-${mode} ${washed ? "washed" : ""}`} style={washStyle} data-hero={mode} onContextMenu={onContextMenu} data-testid={testId}>
       {url ? (
         <div className="hero-backdrop" aria-hidden="true">
           <img src={url} alt="" draggable={false} onLoad={(e) => setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })} />
@@ -61,7 +74,7 @@ export function DetailHead({ coverArt, round = false, icon = "music", onContextM
       {mode === "none" ? <div className={`art placeholder${round ? " round" : ""}`} aria-hidden="true"><Icon name={icon} size={64} /></div> : null}
       <div className="meta">{children}</div>
     </div>
-    {actions ? <div className="detail-actions">{actions}</div> : null}
+    {actions ? <div className={`detail-actions ${washed ? "washed" : ""}`} style={washStyle}>{actions}</div> : null}
     </>
   );
 }

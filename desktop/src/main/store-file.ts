@@ -8,6 +8,8 @@ export interface MainState {
   mainBounds?: { x: number; y: number; width: number; height: number; maximized: boolean };
   miniBounds?: { x: number; y: number };
   closeToTray?: boolean;
+  /** The theme setting as the renderer last reported it: the next launch paints its window in it from the start. */
+  windowTheme?: "light" | "dark" | "system";
 }
 
 export class StoreFile {
