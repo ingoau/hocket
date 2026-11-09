@@ -16,13 +16,18 @@
 //! [`TRANSPORT_FAILURES_TO_ABORT`] in a row end the pass (retried after
 //! [`RETRY_AFTER_FAILED_WALK`]).
 //!
+//! Tracks a client asked the store for and missed (`AnalysisFetch`) are
+//! pushed onto a bounded [`PriorityQueue`] that the worker drains before
+//! each library track and while it waits between passes; it looks their
+//! metadata up with `getSong`, so it needn't have walked them yet.
+//!
 //! Records are keyed by `--verify-url` when it is set (that's what clients'
 //! records are keyed by), otherwise by `--analysis-server`.
 //!
 //! The password comes from `--analysis-password-file` or
 //! `HOCKET_ANALYSIS_PASSWORD` and is never logged.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -54,6 +59,10 @@ pub const WORKER_MAX_DURATION_MS: u32 = 90 * 60_000;
 pub const DEFAULT_MAX_FILE_MB: u64 = 500;
 /// Failed downloads (or store writes) in a row that end a pass.
 pub const TRANSPORT_FAILURES_TO_ABORT: u32 = 3;
+/// Track ids the priority queue holds; past it the oldest are dropped.
+pub const PRIORITY_MAX: usize = 256;
+/// Longest track id the priority queue takes (ids are the client's word).
+pub const PRIORITY_ID_MAX_LEN: usize = 256;
 /// The environment variable the password may come from.
 pub const PASSWORD_ENV: &str = "HOCKET_ANALYSIS_PASSWORD";
 
@@ -191,6 +200,103 @@ pub struct WorkerStatus {
     pub failed: u64,
     /// Tracks analysed per hour over this process's analysing time.
     pub per_hour: f64,
+    /// Tracks clients asked for that wait in the priority queue.
+    pub priority_queue: u64,
+}
+
+/// Tracks clients asked for and the store missed, analysed before the rest
+/// of the library. Shared by the coordinator's sockets (which push, never
+/// waiting on the worker) and the worker (which pops). Only ids are taken
+/// from a request, deduplicated, at most [`PRIORITY_MAX`] (oldest dropped),
+/// and only for the server the worker analyses.
+pub struct PriorityQueue {
+    /// The store's key for the worker's server.
+    server_key: String,
+    inner: Mutex<PriorityInner>,
+    wake: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+struct PriorityInner {
+    queue: VecDeque<String>,
+    /// Ids the worker could not or will not analyse (bad file, too long or
+    /// large, unknown to the server): not queued again (the library walk
+    /// retries a bad file when it changes).
+    failed: HashSet<String>,
+}
+
+impl PriorityQueue {
+    /// A queue for the server the store keys by `server_url`.
+    pub fn new(server_url: &str) -> PriorityQueue {
+        PriorityQueue {
+            server_key: server_key(server_url),
+            inner: Mutex::new(PriorityInner::default()),
+            wake: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// Queue these ids if `server` (a store key) is the worker's; wakes the
+    /// worker. Never blocks beyond a short lock. Returns how many were added.
+    pub fn push<'a>(&self, server: &str, ids: impl IntoIterator<Item = &'a str>) -> usize {
+        if server != self.server_key {
+            return 0;
+        }
+        let mut added = 0;
+        {
+            let mut inner = self.inner.lock();
+            for id in ids {
+                if id.is_empty()
+                    || id.len() > PRIORITY_ID_MAX_LEN
+                    || inner.failed.contains(id)
+                    || inner.queue.iter().any(|q| q == id)
+                {
+                    continue;
+                }
+                if inner.queue.len() >= PRIORITY_MAX {
+                    inner.queue.pop_front();
+                }
+                inner.queue.push_back(id.to_string());
+                added += 1;
+            }
+        }
+        if added > 0 {
+            self.wake.notify_one();
+        }
+        added
+    }
+
+    /// The oldest queued id.
+    pub fn pop(&self) -> Option<String> {
+        self.inner.lock().queue.pop_front()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Put an id back at the head (its lookup failed for want of the
+    /// server); dropped if the queue filled up meanwhile.
+    fn requeue(&self, id: String) {
+        let mut inner = self.inner.lock();
+        if inner.queue.len() < PRIORITY_MAX && !inner.queue.contains(&id) {
+            inner.queue.push_front(id);
+        }
+    }
+
+    fn mark_failed(&self, id: &str) {
+        let mut inner = self.inner.lock();
+        inner.failed.insert(id.to_string());
+        inner.queue.retain(|q| q != id);
+    }
+
+    /// Resolves once something was pushed since the last time it resolved.
+    async fn pushed(&self) {
+        self.wake.notified().await
+    }
 }
 
 /// One pass's outcome.
@@ -217,6 +323,16 @@ pub struct Worker {
     failed: HashSet<(String, String)>,
     busy: Duration,
     last_progress: Instant,
+    priority: Arc<PriorityQueue>,
+}
+
+/// What became of one track.
+enum Outcome {
+    Analysed,
+    /// Bad file: remembered.
+    Failed,
+    /// Download or store failed: not remembered.
+    TransportFailed(anyhow::Error),
 }
 
 impl Worker {
@@ -245,7 +361,19 @@ impl Worker {
             failed: HashSet::new(),
             busy: Duration::ZERO,
             last_progress: Instant::now(),
+            priority: Arc::new(PriorityQueue::new(server_url)),
         }
+    }
+
+    /// Share this priority queue (the coordinator pushes onto it).
+    pub fn with_priority(mut self, priority: Arc<PriorityQueue>) -> Worker {
+        self.priority = priority;
+        self
+    }
+
+    /// The worker's priority queue.
+    pub fn priority(&self) -> Arc<PriorityQueue> {
+        self.priority.clone()
     }
 
     /// Skip files larger than this (default [`DEFAULT_MAX_FILE_MB`] MiB).
@@ -290,11 +418,15 @@ impl Worker {
         }
     }
 
+    /// Whether the worker would ever analyse this track (length and size).
+    fn analysable(&self, t: &Track) -> bool {
+        t.duration_ms > 0
+            && t.duration_ms <= WORKER_MAX_DURATION_MS
+            && !t.size_bytes.is_some_and(|b| b > self.max_file_bytes as f64)
+    }
+
     fn wanted(&self, t: &Track) -> bool {
-        if t.duration_ms == 0
-            || t.duration_ms > WORKER_MAX_DURATION_MS
-            || t.size_bytes.is_some_and(|b| b > self.max_file_bytes as f64)
-        {
+        if !self.analysable(t) {
             return false;
         }
         let fp = fingerprint_of(t);
@@ -344,42 +476,36 @@ impl Worker {
             if cancel.is_cancelled() {
                 break;
             }
-            self.set_state("analysing");
-            let started = Instant::now();
-            match self.analyse_one(track).await {
-                Ok(()) => {
+            // What clients are waiting for comes first.
+            self.drain_priority(cancel).await;
+            if cancel.is_cancelled() {
+                break;
+            }
+            let remaining = todo.len() - i - 1;
+            // Analysed meanwhile (asked for by a client, or uploaded).
+            if !self.wanted(track) {
+                self.update(|s| s.remaining = remaining as u64);
+                continue;
+            }
+            match self.analyse_counted(track).await {
+                Outcome::Analysed => {
                     transport_failures = 0;
                     stats.analysed += 1;
-                    self.update(|s| s.analysed += 1);
                 }
-                Err(OneError::File(e)) => {
+                Outcome::Failed => {
                     transport_failures = 0;
                     stats.failed += 1;
-                    self.failed
-                        .insert((track.id.clone(), fp_key(&fingerprint_of(track))));
-                    self.update(|s| s.failed += 1);
-                    warn!(track = %track.id, title = %track.title, error = %e, "analysis failed");
                 }
-                Err(OneError::Transport(e)) => {
-                    // Not remembered: tried again next pass.
+                Outcome::TransportFailed(e) => {
                     transport_failures += 1;
                     stats.failed += 1;
-                    self.update(|s| s.failed += 1);
-                    warn!(track = %track.id, title = %track.title, error = %e, "analysis download failed");
                     if transport_failures >= TRANSPORT_FAILURES_TO_ABORT {
                         anyhow::bail!("{transport_failures} downloads in a row failed; last: {e}");
                     }
                 }
             }
-            self.busy += started.elapsed();
-            let per_hour = self.status.lock().as_ref().map_or(0, |s| s.analysed) as f64
-                / self.busy.as_secs_f64().max(1.0)
-                * 3600.0;
-            let remaining = todo.len() - i - 1;
-            self.update(|s| {
-                s.remaining = remaining as u64;
-                s.per_hour = (per_hour * 10.0).round() / 10.0;
-            });
+            self.update(|s| s.remaining = remaining as u64);
+            let per_hour = self.per_hour();
             if self.last_progress.elapsed() >= PROGRESS_LOG_INTERVAL {
                 self.last_progress = Instant::now();
                 info!(
@@ -420,6 +546,124 @@ impl Worker {
             }
         );
         Ok(stats)
+    }
+
+    fn per_hour(&self) -> f64 {
+        self.status.lock().as_ref().map_or(0, |s| s.analysed) as f64
+            / self.busy.as_secs_f64().max(1.0)
+            * 3600.0
+    }
+
+    /// [`Worker::analyse_one`], counted in the status, logged, and a bad
+    /// file remembered.
+    async fn analyse_counted(&mut self, track: &Track) -> Outcome {
+        self.set_state("analysing");
+        let started = Instant::now();
+        let outcome = match self.analyse_one(track).await {
+            Ok(()) => {
+                self.update(|s| s.analysed += 1);
+                Outcome::Analysed
+            }
+            Err(OneError::File(e)) => {
+                self.failed
+                    .insert((track.id.clone(), fp_key(&fingerprint_of(track))));
+                self.priority.mark_failed(&track.id);
+                self.update(|s| s.failed += 1);
+                warn!(track = %track.id, title = %track.title, error = %e, "analysis failed");
+                Outcome::Failed
+            }
+            Err(OneError::Transport(e)) => {
+                // Not remembered: tried again next pass.
+                self.update(|s| s.failed += 1);
+                warn!(track = %track.id, title = %track.title, error = %e, "analysis download failed");
+                Outcome::TransportFailed(e)
+            }
+        };
+        self.busy += started.elapsed();
+        let per_hour = self.per_hour();
+        self.update(|s| s.per_hour = (per_hour * 10.0).round() / 10.0);
+        outcome
+    }
+
+    /// Analyse what clients asked for and missed, oldest first, until the
+    /// queue is empty, a lookup or download fails for want of the server, or
+    /// `cancel`. Each id's metadata comes from `getSong`. Ids the server
+    /// doesn't know and tracks the worker never analyses (too long, too
+    /// large) are dropped and not queued again; tracks covered meanwhile or
+    /// failed before are dropped. Pauses `--analysis-pause-secs` after each
+    /// track analysed. Returns how many were analysed.
+    pub async fn drain_priority(&mut self, cancel: &CancellationToken) -> usize {
+        use hocket_core::subsonic::SubsonicError;
+        let mut analysed = 0;
+        while !cancel.is_cancelled() {
+            let Some(id) = self.priority.pop() else { break };
+            let song = match self.api.song(&id).await {
+                Ok(song) if !song.is_dir => song,
+                Ok(_) => {
+                    self.priority.mark_failed(&id);
+                    continue;
+                }
+                Err(
+                    e @ (SubsonicError::NotFound(_)
+                    | SubsonicError::Forbidden(_)
+                    | SubsonicError::Protocol(_)),
+                ) => {
+                    debug!(track = %id, error = %e, "priority track unknown");
+                    self.priority.mark_failed(&id);
+                    continue;
+                }
+                Err(e) => {
+                    // The server is in trouble: leave the queue for later.
+                    debug!(track = %id, error = %e, "priority track lookup failed");
+                    self.priority.requeue(id);
+                    break;
+                }
+            };
+            let track = track_from_child("", &song);
+            if !self.analysable(&track) {
+                self.priority.mark_failed(&track.id);
+                continue;
+            }
+            if !self.wanted(&track) {
+                continue;
+            }
+            info!(track = %track.id, title = %track.title, "analysing a track a client asked for");
+            match self.analyse_counted(&track).await {
+                Outcome::Analysed => analysed += 1,
+                Outcome::Failed => {}
+                // The server is likely in trouble: leave the rest for later.
+                Outcome::TransportFailed(_) => break,
+            }
+            // Clients don't get to skip the pause, before the next queued
+            // track or the walk's next one.
+            if !self.pause.is_zero() {
+                self.set_state("waiting");
+                tokio::select! {
+                    _ = tokio::time::sleep(self.pause) => {}
+                    _ = cancel.cancelled() => break,
+                }
+            }
+        }
+        analysed
+    }
+
+    /// Wait `wait` (or until `cancel`), analysing what clients ask for
+    /// meanwhile.
+    async fn idle(&mut self, wait: Duration, cancel: &CancellationToken) {
+        let deadline = tokio::time::Instant::now() + wait;
+        let priority = self.priority.clone();
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => return,
+                _ = cancel.cancelled() => return,
+                _ = priority.pushed() => {}
+            }
+            let state = self.status.lock().as_ref().map(|s| s.state.clone());
+            self.drain_priority(cancel).await;
+            if let Some(state) = state {
+                self.set_state(&state);
+            }
+        }
     }
 
     /// Download, analyse, store, delete.
@@ -494,10 +738,7 @@ impl Worker {
                     RETRY_AFTER_FAILED_WALK
                 }
             };
-            tokio::select! {
-                _ = tokio::time::sleep(wait) => {}
-                _ = cancel.cancelled() => {}
-            }
+            self.idle(wait, &cancel).await;
         }
         clear_dir(&self.tmp_dir);
         info!("analysis worker stopped");
@@ -509,6 +750,7 @@ pub fn spawn(
     settings: WorkerSettings,
     store: Arc<AnalysisStore>,
     status: Arc<Mutex<Option<WorkerStatus>>>,
+    priority: Arc<PriorityQueue>,
     cancel: CancellationToken,
 ) -> anyhow::Result<std::thread::JoinHandle<()>> {
     let api = settings.client()?;
@@ -543,7 +785,8 @@ pub fn spawn(
                 settings.tmp_dir.clone(),
                 status,
             )
-            .with_max_file_bytes(settings.max_file_bytes);
+            .with_max_file_bytes(settings.max_file_bytes)
+            .with_priority(priority);
             rt.block_on(worker.run(settings.rescan, cancel));
         })?)
 }
@@ -631,5 +874,28 @@ mod tests {
             .unwrap();
         assert_eq!(s.key_url, "https://music.example");
         assert_eq!(s.server, "http://navidrome:4533", "still fetched from here");
+    }
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::*;
+
+    #[test]
+    fn the_priority_queue_is_bounded_deduplicated_and_for_one_server() {
+        let q = PriorityQueue::new("https://music.example");
+        let key = server_key("https://music.example");
+        assert_eq!(q.push("another", ["a"]), 0);
+        assert_eq!(
+            q.push(&key, ["a", "a", "", &"x".repeat(PRIORITY_ID_MAX_LEN + 1)]),
+            1
+        );
+        q.mark_failed("a");
+        assert!(q.is_empty(), "a failed track leaves the queue");
+        assert_eq!(q.push(&key, ["a"]), 0, "and isn't queued again");
+        let ids: Vec<String> = (0..PRIORITY_MAX + 10).map(|i| i.to_string()).collect();
+        q.push(&key, ids.iter().map(String::as_str));
+        assert_eq!(q.len(), PRIORITY_MAX);
+        assert_eq!(q.pop().as_deref(), Some("10"), "the oldest were dropped");
     }
 }

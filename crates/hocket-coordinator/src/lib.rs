@@ -489,6 +489,9 @@ pub struct App {
     analysis: Option<Arc<analysis::AnalysisStore>>,
     /// The analysis worker's progress, when it runs.
     worker_status: Arc<Mutex<Option<worker::WorkerStatus>>>,
+    /// Tracks clients missed in the store, for the worker to analyse first;
+    /// `None` without `--analysis-server`.
+    worker_priority: Option<Arc<worker::PriorityQueue>>,
     clock: Clock,
     started: Instant,
 }
@@ -529,6 +532,12 @@ impl App {
         if args.worker.analysis_server.is_some() && analysis.is_none() {
             anyhow::bail!("--analysis-server needs the analysis store: drop --no-analysis-store");
         }
+        // Keyed as the worker keys its records (see `WorkerArgs::resolve`).
+        let worker_priority = args.worker.analysis_server.as_deref().map(|server| {
+            Arc::new(worker::PriorityQueue::new(
+                args.verify_url.as_deref().unwrap_or(server),
+            ))
+        });
         Ok(Arc::new(App {
             args,
             rooms: Mutex::new(HashMap::new()),
@@ -543,6 +552,7 @@ impl App {
             reports,
             analysis,
             worker_status: Arc::new(Mutex::new(None)),
+            worker_priority,
             clock,
             started: Instant::now(),
         }))
@@ -567,7 +577,15 @@ impl App {
 
     /// The analysis worker's progress (`None` while it isn't running).
     pub fn worker_status(&self) -> Option<worker::WorkerStatus> {
-        self.worker_status.lock().clone()
+        let mut status = self.worker_status.lock().clone()?;
+        status.priority_queue = self.worker_priority.as_ref().map_or(0, |q| q.len()) as u64;
+        Some(status)
+    }
+
+    /// The tracks the analysis worker is to analyse first (with
+    /// `--analysis-server`).
+    pub fn worker_priority(&self) -> Option<Arc<worker::PriorityQueue>> {
+        self.worker_priority.clone()
     }
 
     /// Where the analysis worker reports its progress.
@@ -606,9 +624,29 @@ impl App {
         track_ids.truncate(ANALYSIS_FETCH_MAX);
         let mut seen = std::collections::HashSet::new();
         track_ids.retain(|id| seen.insert(id.clone()));
-        let found = tokio::task::spawn_blocking(move || store.get_many(&server, &track_ids)).await;
+        let asked = self.worker_priority.is_some().then(|| track_ids.clone());
+        let key = server.clone();
+        let found = tokio::task::spawn_blocking(move || store.get_many(&key, &track_ids)).await;
         let records = match found {
-            Ok(Ok(r)) => r,
+            Ok(Ok(r)) => {
+                // Misses go to the worker, if it analyses this server: no
+                // record, or one it would replace (no beat grid, not its own).
+                if let (Some(queue), Some(asked)) = (&self.worker_priority, asked) {
+                    let missed = asked.iter().filter(|id| {
+                        !r.iter()
+                            .any(|e| &e.track_id == *id && analysis::complete(&e.record))
+                    });
+                    let added = queue.push(&server, missed.map(String::as_str));
+                    if added > 0 {
+                        debug!(
+                            added,
+                            queued = queue.len(),
+                            "analysis misses queued for the worker"
+                        );
+                    }
+                }
+                r
+            }
             Ok(Err(e)) => {
                 warn!(error = %e, "analysis store read failed");
                 vec![]

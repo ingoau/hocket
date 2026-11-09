@@ -482,6 +482,9 @@ message types they don't know):
   most `ANALYSIS_BATCH_MAX` = 16 records and half the frame cap (4 MB) of
   JSON each, always at least one (possibly empty) frame.
   Only records of the coordinator's `ANALYSIS_VERSION`; misses are left out.
+  With the worker on, the ids that missed (no record, or one without a
+  beat grid that isn't the worker's) on the server it analyses go onto its
+  priority queue (see *Coordinator worker*); the answer doesn't wait.
 - `AnalysisUpload { records }` → coordinator (≤ 16; more are dropped). No
   answer.
 - The engine: `Input::FetchAnalysis` / `Input::UploadAnalysis` go upstream
@@ -528,6 +531,8 @@ Client (`core/handlers/analysis_share.rs`):
   (none usable, or only a phone's loudness-only one): one `AnalysisFetch`
   at a time, given up after 15 s. Each track asked is not asked again for
   30 minutes, answered or not (an unanswered fetch's tracks are freed).
+  A miss on the coordinator worker's server gets that track analysed next,
+  so the re-ask half an hour later usually finds it.
 - Answers go through `store_analysis_record` (local store + replan when
   near the current track). Fetched records are never uploaded.
 - Records this device produced — desktop analysis (`on_analysis_produced`)
@@ -563,10 +568,26 @@ Client (`core/handlers/analysis_share.rs`):
   pass carries on. A failed download (or store write) is not remembered:
   the track is tried again next pass, and three in a row end the pass. A
   failed library walk or pass is retried after 10 minutes.
+- **Priority queue**: `answer_analysis_fetch` pushes the ids an
+  `AnalysisFetch` missed (no record, or one without a beat grid that isn't
+  the worker's) onto `PriorityQueue`, but only when the socket's server key
+  is the worker's (`--verify-url` if set, else `--analysis-server`). Only
+  ids are taken (non-empty, ≤ 256 bytes), deduplicated, at most 256 queued
+  (the oldest dropped: clients are untrusted), and ids the worker failed on
+  or won't analyse in this process (bad file, too long or large, unknown to
+  the server) are not queued again. The push is a short lock and a
+  `Notify`, never a wait on the worker. The worker drains the queue oldest
+  first before each library track and wakes for it while it waits between
+  passes: each id's metadata comes from `getSong`, the usual checks apply
+  (covered meanwhile, too long, too large, failed before), and the pause
+  follows each track it analyses. A lookup or download the server fails
+  (network, auth) leaves the rest for the next drain. The library walk
+  skips what was analysed meanwhile.
 - Cost ≈ 30 s of one core and ~480 MB peak RSS per track: a first pass
   over 10 000 tracks takes about three days (measured on an 8-core x86
   host against a remote Navidrome: ~150 tracks an hour, downloads included). `/health` shows `analysis`:
-  `{state, passes, libraryTracks, remaining, analysed, failed, perHour}`;
+  `{state, passes, libraryTracks, remaining, analysed, failed, perHour,
+  priorityQueue}` (`priorityQueue`: ids waiting in the priority queue);
   a progress line is logged at info every 5 minutes and at the end of each
   pass.
 - Shutdown cancels between tracks; a track being analysed is not waited
