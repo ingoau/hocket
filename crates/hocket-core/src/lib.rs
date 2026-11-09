@@ -17,6 +17,7 @@ pub mod actions;
 pub mod album_resume;
 pub mod artwork;
 pub mod audio;
+pub mod automix;
 pub mod autoplay;
 pub mod cache;
 pub mod connect;

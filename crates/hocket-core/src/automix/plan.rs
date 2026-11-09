@@ -1,0 +1,1046 @@
+//! The planner: two tracks (their lengths and usable analysis records), the
+//! transition settings and an optional fixed tail start in, one
+//! [`TransitionPlan`] out. Deterministic: integer milliseconds and plain
+//! `f64` arithmetic, so every device computes the same plan.
+//!
+//! Cases (`docs/automix.md` → *Planner*):
+//!
+//! 1. Crossfade mode, or AutoMix without a record for A: a fixed equal-power
+//!    fade ending at A's audible end ([`fixed_fade`]).
+//! 2. AutoMix with a loudness-only record for A (or beats that don't pass
+//!    the gate): a fade placed where A's tail drops 6 LU below its sustained
+//!    level ([`smart_fade`]).
+//! 3. AutoMix with a trustworthy beat grid on both: `Blend`/`TempoBlend`
+//!    over 8 or 16 bars with a bass swap when both are 4/4 within 8 %, else a
+//!    beat-aligned `Fade` of 4/2/1 bars ([`beat_plan`]).
+//! 4. Rescue: whatever doesn't fit falls back to a plain 6 s fade.
+//!
+//! The caller has already decided to mix ([`super::rules::should_mix`]) and
+//! filtered records to usable ones ([`super::record::is_usable`]).
+
+use crate::api::{
+    AnalysisRecord, FadeCurve, LoudnessCurve, Ms, ShelfMove, TempoRamp, TransitionKind,
+    TransitionMode, TransitionPlan, TransitionSettings,
+};
+
+use super::record::{has_beats, LUFS_FLOOR};
+use super::stretch::source_ms;
+use super::AUTOMIX_DEFAULT_FADE_MS;
+
+/// Beat grids below this confidence are ignored.
+pub const MIN_BEAT_CONFIDENCE: f32 = 0.5;
+/// Downbeats a grid needs in the region that matters (A's last minute, B's first).
+pub const MIN_DOWNBEATS: usize = 8;
+/// The region of each track the grid is judged on.
+pub const GRID_REGION_MS: u32 = 60_000;
+/// A bar counts as steady when within this fraction of the median bar.
+pub const BAR_TOLERANCE: f64 = 0.04;
+/// Share of steady bars a grid needs.
+pub const MIN_STEADY_SHARE: f64 = 0.85;
+/// Largest tempo gap a blend stretches over.
+pub const MAX_STRETCH_GAP: f64 = 0.08;
+/// Accumulated drift over the overlap below which a blend needs no stretch.
+pub const MAX_UNSTRETCHED_DRIFT_MS: f64 = 25.0;
+/// Bars of tempo ramp before a `TempoBlend` overlap.
+pub const RAMP_BARS: usize = 4;
+/// Never skip more than this much audible A.
+pub const MAX_CUT_MS: u32 = 20_000;
+/// Smart fade: the overlap's range, and how far below the sustained level the fade-out starts.
+pub const SMART_MIN_OVERLAP_MS: u32 = 4_000;
+pub const SMART_MAX_OVERLAP_MS: u32 = 10_000;
+pub const SMART_DROP_LU: f32 = 6.0;
+/// The low-energy test for 16-bar blends: the ends sit this far below the track's integrated loudness.
+pub const LOW_ENERGY_LU: f32 = 4.0;
+/// Bass-swap shelf.
+pub const BASS_SWAP_HZ: f32 = 100.0;
+pub const BASS_SWAP_DB: f32 = -26.0;
+/// High-shelf cut on the outgoing tail after the handover.
+pub const HIGH_CUT_HZ: f32 = 5_000.0;
+pub const HIGH_CUT_DB: f32 = -12.0;
+/// Late-edit fades are at least this long.
+pub const LATE_EDIT_MIN_MS: u32 = 2_000;
+
+/// One side of a transition.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlanTrack<'a> {
+    pub duration_ms: Ms,
+    /// A usable record (already checked against the track's fingerprint).
+    pub record: Option<&'a AnalysisRecord>,
+}
+
+impl PlanTrack<'_> {
+    /// Last audible position (record) or the end.
+    fn audible_end(&self) -> Ms {
+        match self.record {
+            Some(r) if r.audible_end_ms > 0 => r.audible_end_ms.min(self.duration_ms),
+            _ => self.duration_ms,
+        }
+    }
+
+    /// First audible position (record) or 0.
+    fn audible_start(&self) -> Ms {
+        match self.record {
+            Some(r) => r.audible_start_ms.min(self.audible_end()),
+            None => 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PlanInput<'a> {
+    pub settings: &'a TransitionSettings,
+    /// Outgoing.
+    pub a: PlanTrack<'a>,
+    /// Incoming.
+    pub b: PlanTrack<'a>,
+    /// A tail start already committed (`MediaSource::mix_out_ms`): the plan keeps it.
+    pub fixed_tail_start_ms: Option<Ms>,
+}
+
+/// Plan the transition, `None` when the mode is Off.
+pub fn plan_transition(input: &PlanInput<'_>) -> Option<TransitionPlan> {
+    let plan = match input.settings.mode {
+        TransitionMode::Off => return None,
+        TransitionMode::Crossfade => fixed_fade(input, input.settings.crossfade_ms()),
+        TransitionMode::AutoMix => automix(input),
+    };
+    Some(plan)
+}
+
+fn automix(input: &PlanInput<'_>) -> TransitionPlan {
+    let Some(ra) = input.a.record else {
+        return fixed_fade(input, AUTOMIX_DEFAULT_FADE_MS);
+    };
+    if let Some(rb) = input.b.record {
+        if let (Some(ga), Some(gb)) = (
+            Grid::of(ra, Region::Tail(input.a.audible_end())),
+            Grid::of(rb, Region::Head(input.b.audible_start())),
+        ) {
+            if let Some(plan) = beat_plan(input, ra, rb, &ga, &gb) {
+                return plan;
+            }
+            return fixed_fade(input, AUTOMIX_DEFAULT_FADE_MS);
+        }
+    }
+    smart_fade(input, ra).unwrap_or_else(|| fixed_fade(input, AUTOMIX_DEFAULT_FADE_MS))
+}
+
+/// A plain `Fade` of `overlap_ms` starting at `tail_start` (B from its audible start).
+fn fade_at(input: &PlanInput<'_>, tail_start: Ms, overlap_ms: Ms) -> TransitionPlan {
+    let tail_start = tail_start.min(input.a.duration_ms);
+    let b_from = input.b.audible_start();
+    TransitionPlan {
+        kind: TransitionKind::Fade,
+        tail_start_ms: tail_start,
+        tail_source_ms: overlap_ms.min(input.a.duration_ms - tail_start),
+        tail_len_ms: overlap_ms,
+        incoming_at_ms: 0,
+        incoming_from_ms: b_from,
+        handover_ms: overlap_ms / 2,
+        out_curve: FadeCurve::EqualPower,
+        in_curve: FadeCurve::EqualPower,
+        tempo: None,
+        bass_swap: None,
+        high_cut: None,
+        incoming_gain_db: 0.0,
+    }
+}
+
+/// `overlap` limited to half of each track's audible span, so a short track
+/// is never all overlap.
+fn fit_overlap(input: &PlanInput<'_>, overlap: Ms) -> Ms {
+    let a_span = input.a.audible_end() - input.a.audible_start();
+    let b_span = input.b.duration_ms.saturating_sub(input.b.audible_start());
+    overlap.min(a_span / 2).min(b_span / 2)
+}
+
+/// Case 1 (and the rescue): an equal-power fade of `overlap_ms` ending at A's
+/// audible end, or starting at the fixed tail start.
+pub fn fixed_fade(input: &PlanInput<'_>, overlap_ms: Ms) -> TransitionPlan {
+    let overlap = fit_overlap(input, overlap_ms);
+    let end = input.a.audible_end();
+    match input.fixed_tail_start_ms {
+        Some(fixed) => {
+            // Fade over what's left of A (at most the fit), but at least a second.
+            let left = end.saturating_sub(fixed);
+            fade_at(input, fixed, overlap.min(left).max(1_000.min(overlap_ms)))
+        }
+        None => fade_at(input, end - overlap, overlap),
+    }
+}
+
+/// The plan for a change to what plays next after lock-in: a short `Fade`
+/// from the committed tail start (max(2 s, crossfade / 2)).
+pub fn late_edit_fade(
+    tail_start_ms: Ms,
+    a: PlanTrack<'_>,
+    b: PlanTrack<'_>,
+    settings: &TransitionSettings,
+) -> TransitionPlan {
+    let input = PlanInput {
+        settings,
+        a,
+        b,
+        fixed_tail_start_ms: Some(tail_start_ms),
+    };
+    let overlap = (settings.crossfade_ms() / 2).max(LATE_EDIT_MIN_MS);
+    let b_span = b.duration_ms.saturating_sub(b.audible_start());
+    fade_at(&input, tail_start_ms, overlap.min((b_span / 2).max(1)))
+}
+
+// ---------------------------------------------------------------------------
+// Case 2: loudness-placed fade
+// ---------------------------------------------------------------------------
+
+fn median(mut v: Vec<f32>) -> Option<f32> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(|a, b| a.total_cmp(b));
+    Some(v[v.len() / 2])
+}
+
+/// Points of `curve` at or before `end` as (time, lufs).
+fn points(curve: &LoudnessCurve, end: Ms) -> impl Iterator<Item = (Ms, f32)> + '_ {
+    curve
+        .lufs
+        .iter()
+        .enumerate()
+        .map(move |(i, &v)| (curve.start_ms + i as u32 * curve.hop_ms, v))
+        .filter(move |&(t, _)| t <= end)
+}
+
+/// Where A's tail falls `SMART_DROP_LU` below its sustained level for good
+/// (`None` when the curve says nothing).
+pub fn fade_out_start(curve: &LoudnessCurve, audible_end: Ms) -> Option<Ms> {
+    if curve.hop_ms == 0 {
+        return None;
+    }
+    let audible: Vec<(Ms, f32)> = points(curve, audible_end)
+        .filter(|&(_, v)| v > LUFS_FLOOR + 1.0)
+        .collect();
+    let body: Vec<f32> = audible
+        .iter()
+        .filter(|&&(t, _)| t + MAX_CUT_MS <= audible_end)
+        .map(|&(_, v)| v)
+        .collect();
+    let sustained = if body.len() >= 10 {
+        median(body)?
+    } else {
+        median(audible.iter().map(|&(_, v)| v).collect())?
+    };
+    let threshold = sustained - SMART_DROP_LU;
+    let last_loud = points(curve, audible_end)
+        .filter(|&(_, v)| v >= threshold)
+        .map(|(t, _)| t)
+        .last();
+    Some(match last_loud {
+        Some(t) => (t + curve.hop_ms).min(audible_end),
+        None => curve.start_ms.min(audible_end),
+    })
+}
+
+/// Case 2. `None` when A's curve can't place it.
+pub fn smart_fade(input: &PlanInput<'_>, ra: &AnalysisRecord) -> Option<TransitionPlan> {
+    let end = input.a.audible_end();
+    let fit = |overlap: Ms| fit_overlap(input, overlap);
+    if let Some(fixed) = input.fixed_tail_start_ms {
+        let overlap = end
+            .saturating_sub(fixed)
+            .clamp(SMART_MIN_OVERLAP_MS, SMART_MAX_OVERLAP_MS);
+        return Some(fade_at(input, fixed, fit(overlap)));
+    }
+    let mix_out = fade_out_start(&ra.tail, end)?;
+    let fade_len = end - mix_out.min(end);
+    let overlap = fit(fade_len.clamp(SMART_MIN_OVERLAP_MS, SMART_MAX_OVERLAP_MS));
+    let latest = end - overlap;
+    let earliest = latest.saturating_sub(MAX_CUT_MS);
+    let tail_start = mix_out.clamp(earliest, latest);
+    Some(fade_at(input, tail_start, overlap))
+}
+
+// ---------------------------------------------------------------------------
+// Beat grids
+// ---------------------------------------------------------------------------
+
+/// Which end of a track a grid is judged on.
+#[derive(Debug, Clone, Copy)]
+pub enum Region {
+    /// The minute before this position (A's audible end).
+    Tail(Ms),
+    /// The minute after this position (B's audible start).
+    Head(Ms),
+}
+
+impl Region {
+    fn range(self) -> (Ms, Ms) {
+        match self {
+            Region::Tail(end) => (end.saturating_sub(GRID_REGION_MS), end),
+            Region::Head(start) => (start, start.saturating_add(GRID_REGION_MS)),
+        }
+    }
+}
+
+/// A trustworthy beat grid near one end of a track.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Grid {
+    /// Median bar length (ms).
+    pub bar_ms: f64,
+    pub beats_per_bar: u32,
+    pub bpm: f64,
+}
+
+impl Grid {
+    /// The grid of `r` in `region`, `None` unless confident, dense and steady.
+    pub fn of(r: &AnalysisRecord, region: Region) -> Option<Grid> {
+        if !has_beats(r) || r.beat_confidence < MIN_BEAT_CONFIDENCE {
+            return None;
+        }
+        let (lo, hi) = region.range();
+        let downbeats: Vec<Ms> = r
+            .downbeats_ms
+            .iter()
+            .copied()
+            .filter(|&d| d >= lo && d <= hi)
+            .collect();
+        if downbeats.len() < MIN_DOWNBEATS {
+            return None;
+        }
+        let bar_ms = bar_length(&downbeats)?;
+        if grid_steadiness(&downbeats, bar_ms) < MIN_STEADY_SHARE {
+            return None;
+        }
+        let beats_per_bar = beats_per_bar(&r.beats_ms, &downbeats)?;
+        Some(Grid {
+            bar_ms,
+            beats_per_bar,
+            bpm: tempo_bpm(bar_ms, beats_per_bar),
+        })
+    }
+
+    pub fn is_four_four(&self) -> bool {
+        self.beats_per_bar == 4
+    }
+}
+
+/// Median interval between consecutive downbeats.
+pub fn bar_length(downbeats: &[Ms]) -> Option<f64> {
+    let mut iv: Vec<u32> = downbeats
+        .windows(2)
+        .map(|w| w[1].saturating_sub(w[0]))
+        .collect();
+    if iv.is_empty() {
+        return None;
+    }
+    iv.sort_unstable();
+    let m = iv[iv.len() / 2] as f64;
+    (m > 0.0).then_some(m)
+}
+
+/// Tempo from a bar length and the beats in a bar.
+pub fn tempo_bpm(bar_ms: f64, beats_per_bar: u32) -> f64 {
+    60_000.0 * beats_per_bar as f64 / bar_ms
+}
+
+/// Share of downbeat intervals within [`BAR_TOLERANCE`] of `bar_ms`.
+pub fn grid_steadiness(downbeats: &[Ms], bar_ms: f64) -> f64 {
+    let iv: Vec<f64> = downbeats
+        .windows(2)
+        .map(|w| w[1].saturating_sub(w[0]) as f64)
+        .collect();
+    if iv.is_empty() || bar_ms <= 0.0 {
+        return 0.0;
+    }
+    let steady = iv
+        .iter()
+        .filter(|&&x| ((x - bar_ms) / bar_ms).abs() <= BAR_TOLERANCE)
+        .count();
+    steady as f64 / iv.len() as f64
+}
+
+/// The usual number of beats between consecutive downbeats (the mode, which
+/// must cover at least 80 % of bars), `None` when bars disagree.
+pub fn beats_per_bar(beats: &[Ms], downbeats: &[Ms]) -> Option<u32> {
+    let mut counts = [0usize; 17];
+    let mut bars = 0usize;
+    for w in downbeats.windows(2) {
+        let lo = beats.partition_point(|&b| b < w[0]);
+        let hi = beats.partition_point(|&b| b < w[1]);
+        let n = (hi - lo).min(16);
+        counts[n] += 1;
+        bars += 1;
+    }
+    let (n, &c) = counts
+        .iter()
+        .enumerate()
+        .skip(1)
+        .max_by_key(|&(n, &c)| (c, usize::MAX - n))?;
+    (bars > 0 && c * 5 >= bars * 4).then_some(n as u32)
+}
+
+/// Index of the first downbeat at or after `ms`.
+pub fn downbeat_at_or_after(downbeats: &[Ms], ms: Ms) -> Option<usize> {
+    let i = downbeats.partition_point(|&d| d < ms);
+    (i < downbeats.len()).then_some(i)
+}
+
+/// Index of the downbeat nearest `ms` within `tolerance_ms`.
+pub fn downbeat_near(downbeats: &[Ms], ms: Ms, tolerance_ms: Ms) -> Option<usize> {
+    let i = downbeats.partition_point(|&d| d < ms);
+    [i.checked_sub(1), Some(i)]
+        .into_iter()
+        .flatten()
+        .filter(|&j| j < downbeats.len())
+        .min_by_key(|&j| downbeats[j].abs_diff(ms))
+        .filter(|&j| downbeats[j].abs_diff(ms) <= tolerance_ms)
+}
+
+/// Mean of `curve` over `[from, to]`, `None` without points there.
+fn mean_over(curve: &LoudnessCurve, from: Ms, to: Ms) -> Option<f32> {
+    let v: Vec<f32> = points(curve, to)
+        .filter(|&(t, _)| t >= from)
+        .map(|(_, v)| v)
+        .collect();
+    (!v.is_empty()).then(|| v.iter().sum::<f32>() / v.len() as f32)
+}
+
+/// Both A's last and B's first 30 s are quiet relative to each track.
+fn both_low_energy(ra: &AnalysisRecord, a_end: Ms, rb: &AnalysisRecord, b_start: Ms) -> bool {
+    let low = |r: &AnalysisRecord, curve: &LoudnessCurve, from: Ms, to: Ms| match (
+        r.integrated_lufs,
+        mean_over(curve, from, to),
+    ) {
+        (Some(i), Some(m)) => m <= i - LOW_ENERGY_LU,
+        _ => false,
+    };
+    low(ra, &ra.tail, a_end.saturating_sub(30_000), a_end)
+        && low(rb, &rb.head, b_start, b_start.saturating_add(30_000))
+}
+
+// ---------------------------------------------------------------------------
+// Case 3: beat-matched plans
+// ---------------------------------------------------------------------------
+
+/// Where an overlap of `bars` bars sits in A: the index of its first
+/// downbeat, keeping `pre` bars before it (the ramp) and ending at or before
+/// A's audible end. With a fixed tail start, the first downbeat at or after
+/// it plus `pre`; otherwise the latest that fits.
+fn place_in_a(da: &[Ms], fixed: Option<Ms>, end: Ms, bars: usize, pre: usize) -> Option<usize> {
+    let o = match fixed {
+        Some(f) => downbeat_at_or_after(da, f)? + pre,
+        None => {
+            let last_end = da.partition_point(|&d| d <= end).checked_sub(1)?;
+            let o = last_end.checked_sub(bars)?;
+            if o < pre {
+                return None;
+            }
+            o
+        }
+    };
+    (o + bars < da.len() && da[o + bars] <= end).then_some(o)
+}
+
+/// Case 3 (`None`: nothing fits; the caller rescues).
+pub fn beat_plan(
+    input: &PlanInput<'_>,
+    ra: &AnalysisRecord,
+    rb: &AnalysisRecord,
+    ga: &Grid,
+    gb: &Grid,
+) -> Option<TransitionPlan> {
+    let a_end = input.a.audible_end();
+    let b_start = input.b.audible_start();
+    let da = &ra.downbeats_ms;
+    let db = &rb.downbeats_ms;
+    let k = downbeat_at_or_after(db, b_start)?;
+    let gap = (gb.bpm / ga.bpm - 1.0).abs();
+    let fixed = input.fixed_tail_start_ms;
+
+    let plan = if ga.is_four_four() && gb.is_four_four() && gap <= MAX_STRETCH_GAP {
+        let long = both_low_energy(ra, a_end, rb, b_start);
+        let options: &[usize] = if long { &[16, 8] } else { &[8] };
+        options
+            .iter()
+            .find_map(|&bars| blend(input, da, db, k, bars, fixed, a_end))
+    } else {
+        let bars = if gap > 0.20 {
+            1
+        } else if gap > 0.12 {
+            2
+        } else {
+            4
+        };
+        aligned_fade(input, da, db, k, bars, fixed, a_end)
+    }?;
+    // Never skip more than MAX_CUT_MS of audible A.
+    let overlap_end_in_a = plan.tail_start_ms + plan.tail_source_ms;
+    (a_end.saturating_sub(overlap_end_in_a) <= MAX_CUT_MS).then_some(plan)
+}
+
+/// `Blend` or `TempoBlend` over `bars` bars.
+fn blend(
+    input: &PlanInput<'_>,
+    da: &[Ms],
+    db: &[Ms],
+    k: usize,
+    bars: usize,
+    fixed: Option<Ms>,
+    a_end: Ms,
+) -> Option<TransitionPlan> {
+    if k + bars >= db.len() {
+        return None;
+    }
+    let b_bar = (db[k + bars] - db[k]) as f64 / bars as f64;
+    // Decide stretch or not from an unramped placement first.
+    let o0 = place_in_a(da, fixed, a_end, bars, 0)?;
+    let a_bar0 = (da[o0 + bars] - da[o0]) as f64 / bars as f64;
+    let drift = (a_bar0 - b_bar).abs() * bars as f64;
+    let stretched = drift > MAX_UNSTRETCHED_DRIFT_MS;
+    let pre = if stretched { RAMP_BARS } else { 0 };
+    let o = if stretched {
+        place_in_a(da, fixed, a_end, bars, pre)?
+    } else {
+        o0
+    };
+    let tail_start = match fixed {
+        Some(f) => f,
+        None => da[o - pre],
+    };
+    let src_lead = (da[o] - tail_start) as f64;
+    let src_overlap = (da[o + bars] - da[o]) as f64;
+    let (tempo, incoming_at, overlap_out) = if stretched {
+        // The ratio is stored as f32: compute from the stored value so planner and renderer agree.
+        let r = ((src_overlap / bars as f64) / b_bar) as f32 as f64;
+        if (r - 1.0).abs() > MAX_STRETCH_GAP + 0.005 {
+            return None;
+        }
+        // Linear ramp 1 → r consuming exactly the lead-in: out = 2·src / (1 + r).
+        let ramp_ms = (2.0 * src_lead / (1.0 + r)).round() as Ms;
+        let tempo = TempoRamp {
+            ratio_end: r as f32,
+            ramp_ms,
+        };
+        (Some(tempo), ramp_ms, (src_overlap / r).round() as Ms)
+    } else {
+        (None, src_lead as Ms, src_overlap as Ms)
+    };
+    let tail_len = incoming_at + overlap_out;
+    let tail_source = (source_ms(tempo.as_ref(), tail_len as f64).round() as Ms)
+        .min(input.a.duration_ms - tail_start);
+    let bar_out = overlap_out / bars as Ms;
+    let mid = incoming_at + overlap_out / 2;
+    Some(TransitionPlan {
+        kind: if stretched {
+            TransitionKind::TempoBlend
+        } else {
+            TransitionKind::Blend
+        },
+        tail_start_ms: tail_start,
+        tail_source_ms: tail_source,
+        tail_len_ms: tail_len,
+        incoming_at_ms: incoming_at,
+        incoming_from_ms: db[k],
+        handover_ms: mid,
+        out_curve: FadeCurve::EqualPower,
+        in_curve: FadeCurve::EqualPower,
+        tempo,
+        // Over the bar before the midpoint downbeat: complete as B takes over.
+        bass_swap: Some(ShelfMove {
+            freq_hz: BASS_SWAP_HZ,
+            from_db: 0.0,
+            to_db: BASS_SWAP_DB,
+            start_ms: mid - bar_out,
+            len_ms: bar_out,
+        }),
+        high_cut: Some(ShelfMove {
+            freq_hz: HIGH_CUT_HZ,
+            from_db: 0.0,
+            to_db: HIGH_CUT_DB,
+            start_ms: mid,
+            len_ms: tail_len - mid,
+        }),
+        incoming_gain_db: 0.0,
+    })
+}
+
+/// A beat-aligned `Fade` of `bars` of A's bars: B's first downbeat lands on A's.
+fn aligned_fade(
+    input: &PlanInput<'_>,
+    da: &[Ms],
+    db: &[Ms],
+    k: usize,
+    bars: usize,
+    fixed: Option<Ms>,
+    a_end: Ms,
+) -> Option<TransitionPlan> {
+    let o = place_in_a(da, fixed, a_end, bars, 0)?;
+    let tail_start = fixed.unwrap_or(da[o]);
+    let incoming_at = da[o] - tail_start;
+    let overlap = da[o + bars] - da[o];
+    let tail_len = incoming_at + overlap;
+    Some(TransitionPlan {
+        kind: TransitionKind::Fade,
+        tail_start_ms: tail_start,
+        tail_source_ms: tail_len.min(input.a.duration_ms - tail_start),
+        tail_len_ms: tail_len,
+        incoming_at_ms: incoming_at,
+        incoming_from_ms: db[k],
+        handover_ms: incoming_at + overlap / 2,
+        out_curve: FadeCurve::EqualPower,
+        in_curve: FadeCurve::EqualPower,
+        tempo: None,
+        bass_swap: None,
+        high_cut: None,
+        incoming_gain_db: 0.0,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{AnalysisProducer, SourceFingerprint};
+    use crate::automix::ANALYSIS_VERSION;
+
+    const DUR: Ms = 240_000;
+
+    fn settings(mode: TransitionMode) -> TransitionSettings {
+        TransitionSettings {
+            mode,
+            crossfade_seconds: 6.0,
+        }
+    }
+
+    fn flat_curve(start_ms: Ms, len_ms: Ms, lufs: f32) -> LoudnessCurve {
+        LoudnessCurve {
+            start_ms,
+            hop_ms: 100,
+            lufs: vec![lufs; (len_ms / 100) as usize],
+        }
+    }
+
+    /// A loudness-only record: audible 500 ms .. DUR − 1 s, flat at −9 LUFS.
+    fn loud(duration: Ms) -> AnalysisRecord {
+        AnalysisRecord {
+            version: ANALYSIS_VERSION,
+            analyser: "loudness".into(),
+            produced_by: AnalysisProducer::Device,
+            source: SourceFingerprint {
+                duration_ms: duration,
+                ..Default::default()
+            },
+            duration_ms: duration,
+            integrated_lufs: Some(-9.0),
+            audible_start_ms: 500,
+            audible_end_ms: duration - 1_000,
+            head: flat_curve(0, 60_000.min(duration), -9.0),
+            tail: flat_curve(duration.saturating_sub(60_000), 60_000.min(duration), -9.0),
+            ..Default::default()
+        }
+    }
+
+    /// A record with a steady grid at `bpm`, `beats_per_bar` beats per bar, first beat at `first_ms`.
+    fn beats(duration: Ms, bpm: f64, beats_per_bar: usize, first_ms: f64) -> AnalysisRecord {
+        let mut r = loud(duration);
+        let beat = 60_000.0 / bpm;
+        let mut t = first_ms;
+        let mut i = 0;
+        while t < (duration - 1_000) as f64 {
+            let ms = t.round() as Ms;
+            r.beats_ms.push(ms);
+            if i % beats_per_bar == 0 {
+                r.downbeats_ms.push(ms);
+            }
+            t += beat;
+            i += 1;
+        }
+        r.bpm = Some(bpm as f32);
+        r.beat_confidence = 0.9;
+        r.analyser = "beat-this-small/test".into();
+        r
+    }
+
+    fn input<'a>(
+        s: &'a TransitionSettings,
+        a: Option<&'a AnalysisRecord>,
+        b: Option<&'a AnalysisRecord>,
+        fixed: Option<Ms>,
+    ) -> PlanInput<'a> {
+        PlanInput {
+            settings: s,
+            a: PlanTrack {
+                duration_ms: a.map(|r| r.duration_ms).unwrap_or(DUR),
+                record: a,
+            },
+            b: PlanTrack {
+                duration_ms: b.map(|r| r.duration_ms).unwrap_or(DUR),
+                record: b,
+            },
+            fixed_tail_start_ms: fixed,
+        }
+    }
+
+    /// Invariants every plan holds.
+    fn check(p: &TransitionPlan, i: &PlanInput<'_>) {
+        assert!(p.incoming_at_ms <= p.tail_len_ms, "{p:?}");
+        assert!(
+            p.handover_ms >= p.incoming_at_ms && p.handover_ms <= p.tail_len_ms,
+            "{p:?}"
+        );
+        assert!(
+            p.tail_start_ms + p.tail_source_ms <= i.a.duration_ms,
+            "{p:?}"
+        );
+        assert!(p.incoming_from_ms < i.b.duration_ms, "{p:?}");
+        if let Some(f) = i.fixed_tail_start_ms {
+            assert_eq!(p.tail_start_ms, f);
+        }
+        for mv in [p.bass_swap, p.high_cut].into_iter().flatten() {
+            assert!(mv.start_ms + mv.len_ms <= p.tail_len_ms, "{p:?}");
+        }
+    }
+
+    fn plan(i: &PlanInput<'_>) -> TransitionPlan {
+        let p = plan_transition(i).unwrap();
+        check(&p, i);
+        // Deterministic.
+        assert_eq!(plan_transition(i).unwrap(), p);
+        p
+    }
+
+    #[test]
+    fn off_plans_nothing() {
+        let s = settings(TransitionMode::Off);
+        assert_eq!(plan_transition(&input(&s, None, None, None)), None);
+    }
+
+    #[test]
+    fn crossfade_without_records_ends_at_the_end() {
+        let s = TransitionSettings {
+            mode: TransitionMode::Crossfade,
+            crossfade_seconds: 8.0,
+        };
+        let i = input(&s, None, None, None);
+        let p = plan(&i);
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_start_ms, DUR - 8_000);
+        assert_eq!(p.tail_len_ms, 8_000);
+        assert_eq!(p.tail_source_ms, 8_000);
+        assert_eq!(p.incoming_at_ms, 0);
+        assert_eq!(p.incoming_from_ms, 0);
+        assert_eq!(p.handover_ms, 4_000);
+        assert_eq!(p.out_curve, FadeCurve::EqualPower);
+    }
+
+    #[test]
+    fn crossfade_uses_audible_edges_and_ignores_beats() {
+        let s = settings(TransitionMode::Crossfade);
+        let (a, b) = (beats(DUR, 120.0, 4, 500.0), beats(DUR, 120.0, 4, 500.0));
+        let i = input(&s, Some(&a), Some(&b), None);
+        let p = plan(&i);
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_start_ms, DUR - 1_000 - 6_000);
+        assert_eq!(p.incoming_from_ms, 500);
+    }
+
+    #[test]
+    fn automix_without_records_is_a_six_second_fade() {
+        let s = TransitionSettings {
+            mode: TransitionMode::AutoMix,
+            crossfade_seconds: 11.0,
+        };
+        let i = input(&s, None, None, None);
+        let p = plan(&i);
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_len_ms, 6_000);
+        assert_eq!(p.tail_start_ms, DUR - 6_000);
+    }
+
+    #[test]
+    fn loudness_only_finds_the_fade_out() {
+        let s = settings(TransitionMode::AutoMix);
+        // A's tail: flat −9 LUFS, then from 12 s before the audible end it fades by 1 LU / s.
+        let mut a = loud(DUR);
+        let end = a.audible_end_ms;
+        let fade_from = end - 12_000;
+        for (i, v) in a.tail.lufs.iter_mut().enumerate() {
+            let t = a.tail.start_ms + i as Ms * 100;
+            if t > fade_from {
+                *v = -9.0 - (t - fade_from) as f32 / 1_000.0;
+            }
+        }
+        let b = loud(DUR);
+        let i = input(&s, Some(&a), Some(&b), None);
+        let p = plan(&i);
+        assert_eq!(p.kind, TransitionKind::Fade);
+        // −6 LU is reached 6 s into the fade: 6 s left, overlap 6 s, ending at the audible end.
+        assert!(
+            (fade_from + 5_900..=fade_from + 6_200).contains(&p.tail_start_ms),
+            "{p:?}"
+        );
+        assert!((5_800..=6_100).contains(&p.tail_len_ms), "{p:?}");
+        assert_eq!(p.incoming_from_ms, 500);
+
+        // A flat ending (no fade) gets the 4 s minimum at the audible end.
+        let flat = loud(DUR);
+        let p = plan(&input(&s, Some(&flat), Some(&b), None));
+        assert_eq!(p.tail_len_ms, 4_000);
+        assert_eq!(p.tail_start_ms, flat.audible_end_ms - 4_000);
+
+        // A long fade is capped at 10 s and never cuts more than 20 s of audible A.
+        let mut long = loud(DUR);
+        let lend = long.audible_end_ms;
+        for (i, v) in long.tail.lufs.iter_mut().enumerate() {
+            let t = long.tail.start_ms + i as Ms * 100;
+            if t > lend - 50_000 {
+                *v = -9.0 - (t - (lend - 50_000)) as f32 / 1_000.0;
+            }
+        }
+        let p = plan(&input(&s, Some(&long), Some(&b), None));
+        assert_eq!(p.tail_len_ms, 10_000);
+        assert!(
+            lend - (p.tail_start_ms + p.tail_len_ms) <= MAX_CUT_MS,
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn steady_close_tempos_tempo_blend() {
+        let s = settings(TransitionMode::AutoMix);
+        let a = beats(DUR, 120.0, 4, 250.0);
+        let b = beats(DUR, 124.0, 4, 800.0);
+        let i = input(&s, Some(&a), Some(&b), None);
+        let p = plan(&i);
+        assert_eq!(p.kind, TransitionKind::TempoBlend);
+        let t = p.tempo.unwrap();
+        assert!((t.ratio_end as f64 - 124.0 / 120.0).abs() < 0.002, "{t:?}");
+        // Tail starts on a downbeat of A, B enters on its first downbeat.
+        assert!(a.downbeats_ms.contains(&p.tail_start_ms));
+        assert_eq!(p.incoming_from_ms, b.downbeats_ms[0]);
+        // Ramp over 4 bars of A (2 s each), consumed exactly by incoming_at.
+        let ramp_src = source_ms(p.tempo.as_ref(), p.incoming_at_ms as f64);
+        assert!((ramp_src - 8_000.0).abs() < 2.0, "{ramp_src}");
+        // 8 bars of B's tempo: 8 × 4 × 60000/124 ms.
+        let want = 8.0 * 4.0 * 60_000.0 / 124.0;
+        assert!(
+            ((p.tail_len_ms - p.incoming_at_ms) as f64 - want).abs() < 3.0,
+            "{p:?}"
+        );
+        // Overlap ends on a downbeat of A, before its audible end and within a bar of it.
+        let end_in_a = p.tail_start_ms + p.tail_source_ms;
+        assert!(
+            a.downbeats_ms.iter().any(|&d| d.abs_diff(end_in_a) <= 2),
+            "{end_in_a}"
+        );
+        assert!(end_in_a <= a.audible_end_ms && a.audible_end_ms - end_in_a < 2_000);
+        // Bass swap completes at the handover, which is mid-overlap.
+        let swap = p.bass_swap.unwrap();
+        assert_eq!(swap.start_ms + swap.len_ms, p.handover_ms);
+        assert_eq!(swap.to_db, BASS_SWAP_DB);
+        assert_eq!(
+            p.handover_ms,
+            p.incoming_at_ms + (p.tail_len_ms - p.incoming_at_ms) / 2
+        );
+    }
+
+    #[test]
+    fn matching_tempos_blend_without_stretch() {
+        let s = settings(TransitionMode::AutoMix);
+        let a = beats(DUR, 120.0, 4, 250.0);
+        let b = beats(DUR, 120.0, 4, 1_000.0);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!(p.tempo, None);
+        assert_eq!(p.incoming_at_ms, 0);
+        assert_eq!(p.tail_len_ms, 16_000);
+        assert_eq!(p.tail_source_ms, 16_000);
+        assert!(p.bass_swap.is_some());
+    }
+
+    #[test]
+    fn quiet_ends_get_sixteen_bars() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 120.0, 4, 1_000.0);
+        // Ends at −9 LUFS in tracks integrating to −4: both well below their bodies.
+        a.integrated_lufs = Some(-4.0);
+        b.integrated_lufs = Some(-4.0);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!(p.tail_len_ms, 32_000);
+    }
+
+    #[test]
+    fn wide_gaps_fade_on_the_beat() {
+        let s = settings(TransitionMode::AutoMix);
+        let a = beats(DUR, 120.0, 4, 250.0);
+        for (bpm_b, bars) in [(132.0, 4u32), (138.0, 2), (150.0, 1)] {
+            let b = beats(DUR, bpm_b, 4, 600.0);
+            let p = plan(&input(&s, Some(&a), Some(&b), None));
+            assert_eq!(p.kind, TransitionKind::Fade, "{bpm_b}");
+            assert_eq!(p.tail_len_ms, bars * 2_000, "{bpm_b}");
+            assert!(a.downbeats_ms.contains(&p.tail_start_ms));
+            assert_eq!(p.incoming_from_ms, b.downbeats_ms[0]);
+            assert!(p.bass_swap.is_none());
+        }
+    }
+
+    #[test]
+    fn three_four_fades_on_the_beat() {
+        let s = settings(TransitionMode::AutoMix);
+        let a = beats(DUR, 120.0, 3, 250.0);
+        let b = beats(DUR, 121.0, 4, 600.0);
+        let ga = Grid::of(&a, Region::Tail(a.audible_end_ms)).unwrap();
+        assert_eq!(ga.beats_per_bar, 3);
+        assert!((ga.bpm - 120.0).abs() < 0.5);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_len_ms, 4 * 1_500);
+    }
+
+    #[test]
+    fn low_confidence_or_unsteady_falls_back_to_loudness() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        a.beat_confidence = 0.3;
+        let b = beats(DUR, 120.0, 4, 600.0);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_len_ms, SMART_MIN_OVERLAP_MS);
+
+        // Jittered downbeats: not steady.
+        let mut c = beats(DUR, 120.0, 4, 250.0);
+        for (i, d) in c.downbeats_ms.iter_mut().enumerate() {
+            *d += [0, 300, 0, 450, 120][i % 5];
+        }
+        assert!(Grid::of(&c, Region::Tail(c.audible_end_ms)).is_none());
+        let p = plan(&input(&s, Some(&c), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Fade);
+
+        // B loudness-only: A's loudness places the fade.
+        let lb = loud(DUR);
+        let p = plan(&input(&s, Some(&a), Some(&lb), None));
+        assert_eq!(p.kind, TransitionKind::Fade);
+    }
+
+    #[test]
+    fn short_tracks_are_safe() {
+        let s = settings(TransitionMode::AutoMix);
+        for dur in [3_000, 9_000, 20_000] {
+            let a = beats(dur, 120.0, 4, 100.0);
+            let b = beats(dur, 122.0, 4, 100.0);
+            let p = plan(&input(&s, Some(&a), Some(&b), None));
+            assert_eq!(p.kind, TransitionKind::Fade, "{dur}");
+            assert!(p.tail_len_ms <= dur / 2, "{dur}: {p:?}");
+            let p = plan(&input(&s, None, None, None));
+            assert!(p.tail_len_ms <= 6_000);
+        }
+    }
+
+    #[test]
+    fn fixed_tail_start_is_kept() {
+        let a = beats(DUR, 120.0, 4, 250.0);
+        let b = beats(DUR, 124.0, 4, 800.0);
+        let auto = settings(TransitionMode::AutoMix);
+        // The plan made with the predicted next track, then replanned with the same tail start.
+        let first = plan(&input(&auto, Some(&a), Some(&b), None));
+        let again = plan(&input(&auto, Some(&a), Some(&b), Some(first.tail_start_ms)));
+        assert_eq!(again, first);
+
+        // A different next track after commit: still from the committed start.
+        let c = beats(DUR, 120.0, 4, 300.0);
+        let p = plan(&input(&auto, Some(&a), Some(&c), Some(first.tail_start_ms)));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!(p.tempo, None);
+        assert_eq!(
+            p.incoming_at_ms, 0,
+            "a blend needs no ramp: it starts at once"
+        );
+
+        // Off a downbeat: the overlap begins at the next one.
+        let fixed = first.tail_start_ms + 700;
+        let p = plan(&input(&auto, Some(&a), Some(&c), Some(fixed)));
+        assert_eq!(p.incoming_at_ms, 1_300);
+
+        // Loudness-only and no-record cases keep it too.
+        let la = loud(DUR);
+        let p = plan(&input(&auto, Some(&la), None, Some(200_000)));
+        assert_eq!(p.tail_len_ms, 10_000);
+        let xf = settings(TransitionMode::Crossfade);
+        let p = plan(&input(&xf, None, None, Some(230_000)));
+        assert_eq!(p.tail_len_ms, 6_000);
+        // Too late for A's grid: a rescue fade, still at the fixed start.
+        let p = plan(&input(&auto, Some(&a), Some(&b), Some(DUR - 3_000)));
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert!(p.tail_len_ms >= 1_000);
+    }
+
+    #[test]
+    fn late_edit_is_a_short_fade_from_the_committed_start() {
+        let s = TransitionSettings {
+            mode: TransitionMode::AutoMix,
+            crossfade_seconds: 10.0,
+        };
+        let b = loud(DUR);
+        let p = late_edit_fade(
+            200_000,
+            PlanTrack {
+                duration_ms: DUR,
+                record: None,
+            },
+            PlanTrack {
+                duration_ms: DUR,
+                record: Some(&b),
+            },
+            &s,
+        );
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_start_ms, 200_000);
+        assert_eq!(p.tail_len_ms, 5_000);
+        assert_eq!(p.incoming_from_ms, 500);
+        let s = TransitionSettings {
+            crossfade_seconds: 1.0,
+            ..s
+        };
+        let p = late_edit_fade(
+            200_000,
+            PlanTrack {
+                duration_ms: DUR,
+                record: None,
+            },
+            PlanTrack {
+                duration_ms: DUR,
+                record: None,
+            },
+            &s,
+        );
+        assert_eq!(p.tail_len_ms, LATE_EDIT_MIN_MS);
+    }
+
+    #[test]
+    fn grid_helpers() {
+        let db = [0, 2_000, 4_000, 6_000, 8_010, 10_000];
+        assert_eq!(bar_length(&db), Some(2_000.0));
+        assert_eq!(grid_steadiness(&db, 2_000.0), 1.0);
+        assert_eq!(grid_steadiness(&[0, 2_000, 5_000], 2_000.0), 0.5);
+        let beats: Vec<Ms> = (0..20).map(|i| i * 500).collect();
+        assert_eq!(
+            beats_per_bar(&beats, &[0, 2_000, 4_000, 6_000, 8_000]),
+            Some(4)
+        );
+        assert_eq!(
+            beats_per_bar(&beats, &[0, 1_500, 3_000, 4_500, 6_000]),
+            Some(3)
+        );
+        // Bars that disagree have no meter.
+        assert_eq!(
+            beats_per_bar(&beats, &[0, 2_000, 3_500, 6_000, 7_000]),
+            None
+        );
+        assert!((tempo_bpm(2_000.0, 4) - 120.0).abs() < 1e-9);
+        assert_eq!(downbeat_at_or_after(&db, 2_001), Some(2));
+        assert_eq!(downbeat_at_or_after(&db, 10_001), None);
+        assert_eq!(downbeat_near(&db, 7_900, 200), Some(4));
+        assert_eq!(downbeat_near(&db, 7_000, 200), None);
+        assert_eq!(downbeat_near(&db, 1_950, 100), Some(1));
+    }
+}
