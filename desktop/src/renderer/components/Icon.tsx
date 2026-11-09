@@ -8,14 +8,14 @@
 // music note so a new registry icon is visible (and `icon.test.ts` fails)
 // rather than blank.
 import type { CSSProperties } from "react";
-import { ICONS, ICON_SIZE } from "./icons";
+import { ICONS, ICON_SIZE, ICON_TRIM } from "./icons";
 
 /**
  * The part of Phosphor's 256 box drawn: a little of its margin trimmed, so a glyph sits at the same
- * optical size as Geist's text beside it (and its 16-unit stroke reads at 14–24px).
+ * optical size as Geist's text beside it (and its 16-unit stroke reads at 14–24px). The generator
+ * fits every glyph inside it.
  */
-const TRIM = 10;
-const VIEW_BOX = `${TRIM} ${TRIM} ${ICON_SIZE - 2 * TRIM} ${ICON_SIZE - 2 * TRIM}`;
+const VIEW_BOX = `${ICON_TRIM} ${ICON_TRIM} ${ICON_SIZE - 2 * ICON_TRIM} ${ICON_SIZE - 2 * ICON_TRIM}`;
 
 /** Solid shapes read better filled; everything else defaults to outlined. */
 const FILLED_BY_DEFAULT = new Set(["play", "pause", "stop", "next", "previous", "rewind", "forward"]);
@@ -27,7 +27,7 @@ export const MATERIAL: Record<string, string> = {
   playlist_add: "playLater", remove_from_queue: "remove", delete: "trash", shuffle: "shuffle", shuffle_on: "shuffle",
   repeat: "repeat", all_inclusive: "autoplay", clear_all: "trash", playlist_remove: "remove", playlist_add_check: "playlistAdd",
   history: "restore", push_pin: "pin", keep_off: "pinOff", delete_forever: "trash", star_rate: "star", star_outline: "starOff",
-  star: "star", favorite: "heart", heart_minus: "heartOff", download: "download", download_done: "download", file_download_off: "downloadOff",
+  star: "star", favorite: "heart", heart_minus: "heartOff", download: "download", download_done: "downloadOff", file_download_off: "downloadOff",
   album: "album", artist: "artist", person: "artist", undo: "undo", redo: "redo", select_all: "selectAll",
   keyboard_command_key: "command", search: "search", queue_music: "queue", fullscreen: "fullscreen", fullscreen_exit: "fullscreenExit",
   picture_in_picture_alt: "mini", lyrics: "lyrics", bedtime: "sleep", bedtime_off: "sleep", cast: "devices",
