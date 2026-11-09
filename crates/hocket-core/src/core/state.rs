@@ -112,6 +112,21 @@ pub(crate) struct Playback {
     /// (`buffering`), the backend holds the old item paused, and
     /// `backend_key` is unset so the old item's reports are ignored.
     pub pending_load: Option<EpochMs>,
+    /// AutoMix: the loaded source's `mix_out_ms` (as handed to the backend).
+    pub mix_out_ms: Option<Ms>,
+    /// AutoMix: a transition into `next` the backend reported starting
+    /// (`TransitionStarted`) whose handover has not come yet.
+    pub transition: Option<ActiveTransition>,
+    /// Where the item adopted at the last boundary started: 0 after a gapless
+    /// join, B's position at the handover after a mix.
+    pub adopted_position_ms: Ms,
+}
+
+/// A transition the backend is playing (see `Playback::transition`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ActiveTransition {
+    pub from: QueueKey,
+    pub to: QueueKey,
 }
 
 impl Playback {

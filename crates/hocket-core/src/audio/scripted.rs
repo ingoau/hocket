@@ -7,6 +7,16 @@
 //! `TransitionedToNext` at item boundaries, `Ready`/`Playing`/`Paused` after
 //! loads. Durations come from `MediaSource.track.duration_ms`.
 //!
+//! AutoMix: a follow-up whose source carries `mix_in` is mixed into. When
+//! the current item reaches the plan's `tail_start_ms` the backend reports
+//! `TransitionStarted`; at the handover (`handover_ms` later) `Ended`,
+//! `TransitionedToNext` and `Position` with the incoming item's true
+//! position. `complete_transition` hands over at once; a seek before the
+//! handover cancels the mix (the follow-up stays preloaded, and is mixed
+//! into again only if the seek lands before the tail start); a `set_next`
+//! during a mix waits for the handover. A load or seek past the tail start
+//! joins that follow-up without a mix.
+//!
 //! Failures are scripted per key with [`ScriptedBackend::fail_key`]: a load of
 //! that key reports `Error{fatal: true}` instead of `Ready`, which is how the
 //! actor's "skip after consecutive failures" path is exercised. Every emitted
@@ -71,6 +81,7 @@ pub enum ScriptedCall {
         position_ms: u32,
     },
     PreviewStop,
+    CompleteTransition,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +142,58 @@ struct State {
     /// Lose the preloaded follow-up at the boundary: `Ended` and nothing
     /// after it (a `SetNext` the player had not applied yet).
     drop_next: bool,
+    /// The mix into `next` (its `mix_in`) has started: the tail plays.
+    mix_started: bool,
+    /// The current item went past the tail start without mixing (a load or
+    /// seek there): `next` follows gaplessly.
+    mix_skipped: bool,
+    /// A `set_next` that arrived during a mix, applied at the handover.
+    held_next: Option<Option<MediaSource>>,
+}
+
+impl State {
+    fn next_fails(&self) -> bool {
+        self.next.as_ref().is_some_and(|n| {
+            self.failing.contains(&n.key) || self.failing_tracks.contains(&n.track.id)
+        })
+    }
+
+    /// Hand over from the current item to `next` at virtual time `at`, with
+    /// the incoming item at `incoming_ms`.
+    fn hand_over(&mut self, at: f64, incoming_ms: u32, out: &mut Vec<BackendReport>) {
+        let Some(next) = self.next.take() else {
+            return;
+        };
+        if let Some(cur) = &self.current {
+            if !self.transition_only {
+                out.push(BackendReport::Ended {
+                    key: cur.source.key.clone(),
+                });
+            }
+        }
+        let key = next.key.clone();
+        let incoming_ms = incoming_ms.min(next.track.duration_ms);
+        self.current = Some(Item {
+            source: next,
+            position_ms: f64::from(incoming_ms),
+            anchor_ms: at,
+        });
+        out.push(BackendReport::TransitionedToNext { key: key.clone() });
+        out.push(BackendReport::Position {
+            key,
+            position_ms: incoming_ms,
+        });
+        self.last_position_report_ms = at;
+        self.reset_mix();
+        if let Some(held) = self.held_next.take() {
+            self.next = held;
+        }
+    }
+
+    fn reset_mix(&mut self) {
+        self.mix_started = false;
+        self.mix_skipped = false;
+    }
 }
 
 /// See the module docs.
@@ -196,6 +259,21 @@ impl ScriptedBackend {
     pub fn set_devices(&self, devices: Vec<OutputDevice>) {
         self.state.lock().devices = devices.clone();
         (self.sink)(BackendReport::OutputDevicesChanged { devices });
+    }
+
+    /// The source of the current item (with its AutoMix fields).
+    pub fn current_source(&self) -> Option<MediaSource> {
+        self.state.lock().current.as_ref().map(|c| c.source.clone())
+    }
+
+    /// The preloaded follow-up as last set (with its AutoMix fields).
+    pub fn next_source(&self) -> Option<MediaSource> {
+        self.state.lock().next.clone()
+    }
+
+    /// A mix into the follow-up is playing (its handover has not come).
+    pub fn is_mixing(&self) -> bool {
+        self.state.lock().mix_started
     }
 
     /// Every call made so far, oldest first.
@@ -322,6 +400,41 @@ impl ScriptedBackend {
             let Some(cur) = st.current.as_ref() else {
                 break;
             };
+            let plan = st
+                .next
+                .as_ref()
+                .filter(|_| !st.mix_skipped && !st.next_fails())
+                .and_then(|n| n.mix_in.clone());
+            if let Some(plan) = plan {
+                let tail_start = f64::from(plan.tail_start_ms);
+                if !st.mix_started {
+                    if cur.position_ms > tail_start {
+                        st.mix_skipped = true;
+                        continue;
+                    }
+                    let start_at = cur.anchor_ms + (tail_start - cur.position_ms);
+                    if now < start_at {
+                        break;
+                    }
+                    let to = st.next.as_ref().map(|n| n.key.clone()).unwrap_or_default();
+                    out.push(BackendReport::TransitionStarted {
+                        from: cur.source.key.clone(),
+                        to,
+                        tail_len_ms: plan.tail_len_ms,
+                        incoming_at_ms: plan.incoming_at_ms,
+                        handover_ms: plan.handover_ms,
+                    });
+                    st.mix_started = true;
+                    continue;
+                }
+                let handover_at = cur.anchor_ms
+                    + (tail_start + f64::from(plan.handover_ms) - cur.position_ms).max(0.0);
+                if now < handover_at {
+                    break;
+                }
+                st.hand_over(handover_at, plan.handover_position_ms(), &mut out);
+                continue;
+            }
             let end_at = cur.anchor_ms + (cur.duration() - cur.position_ms).max(0.0);
             if now < end_at {
                 break;
@@ -421,6 +534,12 @@ impl ScriptedBackend {
         (self.sink)(report);
     }
 
+    /// Send `report` as if the backend made it (a failure the script has no
+    /// other way to produce).
+    pub fn report(&self, report: BackendReport) {
+        self.emit(report);
+    }
+
     /// End the preview the way a player does: naturally, or because another
     /// app took the output (`interrupted` does not restore main playback).
     pub fn finish_preview(&self, interrupted: bool) {
@@ -465,6 +584,8 @@ impl PlaybackBackend for ScriptedBackend {
             anchor_ms: now,
         });
         st.next = next;
+        st.held_next = None;
+        st.reset_mix();
         st.playing = play;
         st.pending_ready = true;
         st.load_started_ms = now;
@@ -476,7 +597,12 @@ impl PlaybackBackend for ScriptedBackend {
         st.log.push(ScriptedCall::SetNext {
             next: next.as_ref().map(|n| n.key.clone()),
         });
+        if st.mix_started {
+            st.held_next = Some(next);
+            return Ok(());
+        }
         st.next = next;
+        st.mix_skipped = false;
         Ok(())
     }
 
@@ -541,6 +667,8 @@ impl PlaybackBackend for ScriptedBackend {
         st.log.push(ScriptedCall::Stop);
         st.current = None;
         st.next = None;
+        st.held_next = None;
+        st.reset_mix();
         st.pre_buffer = None;
         st.playing = false;
         st.pending_ready = false;
@@ -553,6 +681,12 @@ impl PlaybackBackend for ScriptedBackend {
         let report = {
             let mut st = self.state.lock();
             st.log.push(ScriptedCall::Seek { position_ms });
+            // A seek before the handover cancels the mix; whether it runs
+            // again depends on where the seek lands.
+            st.reset_mix();
+            if let Some(held) = st.held_next.take() {
+                st.next = held;
+            }
             let pending = st.pending_ready;
             let Some(cur) = st.current.as_mut() else {
                 return Ok(());
@@ -570,6 +704,33 @@ impl PlaybackBackend for ScriptedBackend {
             }
         };
         self.emit(report);
+        Ok(())
+    }
+
+    fn complete_transition(&self) -> Result<(), BackendError> {
+        let now = self.clock.now_ms();
+        let mut out = vec![];
+        {
+            let mut st = self.state.lock();
+            st.log.push(ScriptedCall::CompleteTransition);
+            if !st.mix_started {
+                return Ok(());
+            }
+            let Some(plan) = st.next.as_ref().and_then(|n| n.mix_in.clone()) else {
+                return Ok(());
+            };
+            let playing = st.playing;
+            let a_pos = st
+                .current
+                .as_ref()
+                .map(|c| c.position_at(now, playing))
+                .unwrap_or(0.0) as u32;
+            let incoming = plan.incoming_position_at(a_pos.saturating_sub(plan.tail_start_ms));
+            st.hand_over(now, incoming, &mut out);
+        }
+        for r in out {
+            self.emit(r);
+        }
         Ok(())
     }
 
@@ -791,6 +952,8 @@ mod tests {
             transcoded: false,
             local: false,
             artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         }
     }
 

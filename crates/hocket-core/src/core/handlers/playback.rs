@@ -76,12 +76,15 @@ impl Actor {
         Some(source)
     }
 
-    /// The item that follows the current one, for gapless preload
-    /// (offline: the next one that can play offline).
-    fn next_item(&self) -> Option<QueueItem> {
-        let doc = self.doc()?;
+    /// The first `n` items that will play after the current one: the first
+    /// is the gapless preload (offline: the next ones that can play offline),
+    /// and AutoMix plans the follow-up's own mix-out from the second.
+    pub(crate) fn upcoming_playable(&self, n: usize) -> Vec<QueueItem> {
+        let Some(doc) = self.doc() else {
+            return vec![];
+        };
         if doc.repeat == RepeatMode::One {
-            return None;
+            return vec![];
         }
         let offline = self.is_offline();
         // Repeat All wraps to the top: those entries are next too (#13).
@@ -93,20 +96,34 @@ impl Actor {
             .iter()
             .chain(wrapped)
             .filter(|i| !i.unavailable)
-            .find(|i| {
+            .filter(|i| {
                 !offline
                     || self
                         .track_or_bare(&i.track_id)
                         .is_some_and(|t| self.playable_offline(&t))
             })
+            .take(n)
             .cloned()
+            .collect()
     }
 
     /// Whether the backend gets the follow-up ahead of time: with gapless
-    /// on, and always on a remote renderer, whose own queue moves on to it
-    /// while this device sleeps.
-    fn preloads_next(&self) -> bool {
-        self.audio.gapless || self.renderer.is_some()
+    /// on, with transitions on (a mix needs it), and always on a remote
+    /// renderer, whose own queue moves on to it while this device sleeps.
+    pub(crate) fn preloads_next(&self) -> bool {
+        self.audio.gapless || self.renderer.is_some() || self.transition_settings().mode.is_on()
+    }
+
+    /// The follow-up's source, with its AutoMix fields (`locked`: see
+    /// [`Self::with_mix`]).
+    fn next_source(&self, upcoming: &[QueueItem], locked: Option<Ms>) -> Option<MediaSource> {
+        let item = upcoming.first()?;
+        let track = self.track_or_bare(&item.track_id)?;
+        let source = self.media_source_for(&item.key, &track)?;
+        let following = upcoming
+            .get(1)
+            .and_then(|i| self.track_or_bare(&i.track_id));
+        Some(self.with_mix(source, &track, following.as_ref(), locked))
     }
 
     /// Playback moves to a remote renderer (a Cast device), to another one,
@@ -189,9 +206,20 @@ impl Actor {
     }
 
     pub(crate) fn refresh_next(&mut self) {
+        self.refresh_next_with(false);
+    }
+
+    /// `replan`: rebuild the follow-up's AutoMix plan even when the
+    /// follow-up itself is unchanged (see [`Self::replan_next`]).
+    pub(crate) fn refresh_next_with(&mut self, replan: bool) {
         if self.playback.pending_load.is_some() {
             // The backend holds the item a burst skipped away from; the
             // deferred load hands over the follow-up with the item.
+            return;
+        }
+        if self.playback.transition.is_some() {
+            // The backend is mixing into the follow-up and ignores a new one
+            // until the handover, which rebuilds it for the item after.
             return;
         }
         if !self.preloads_next() {
@@ -200,22 +228,26 @@ impl Actor {
             let _ = self.backend.set_next(None);
             return;
         }
-        let next = self.next_item();
-        let next_key = next.as_ref().map(|i| i.key.clone());
+        let upcoming = self.upcoming_playable(2);
+        let next = upcoming.first();
+        let next_key = next.map(|i| i.key.clone());
         // A document an older peer edited keys upcoming context items by
         // index (`ctx-N`), and an edit ahead of one hands its key to another
         // track: the preload stays only if the track is the same too (#62).
-        let same_track = match (&next, &self.playback.next) {
+        let same_track = match (next, &self.playback.next) {
             (Some(i), Some(n)) => n.track.id == i.track_id,
             _ => false,
         };
+        let locked = self.locked_tail_start();
         if next_key == self.playback.next_doc_key && same_track {
-            return;
+            // A committed plan stays, unless a context rule (Off, sleep
+            // end-of-track, Cast, exclusive output) now refuses mixing.
+            let keep = locked.is_some() && self.mix_context_allows();
+            if !replan || keep {
+                return;
+            }
         }
-        let source = next.and_then(|i| {
-            let track = self.track_or_bare(&i.track_id)?;
-            self.media_source_for(&i.key, &track)
-        });
+        let source = self.next_source(&upcoming, locked);
         self.playback.next_doc_key = next_key;
         self.playback.next = source.clone();
         if let Err(e) = self.backend.set_next(source) {
@@ -310,28 +342,62 @@ impl Actor {
             position_ms
         };
         let now = self.now();
-        // Gapless: the backend already moved on to this track.
-        let transitioned = carried.is_none()
+        let is_next = carried.is_none()
             && position_ms == 0
             && self
                 .playback
                 .next
                 .as_ref()
-                .is_some_and(|n| n.track.id == item.track_id)
-            && self.playback.awaiting_transition;
+                .is_some_and(|n| n.track.id == item.track_id);
+        // Gapless (or at an AutoMix handover): the backend already moved on
+        // to this track.
+        let transitioned = is_next && self.playback.awaiting_transition;
+        // Next pressed while the backend mixes into this track: it completes
+        // the transition instead of loading it afresh.
+        let completes = is_next && !transitioned && self.playback.transition.is_some();
+        let transitioned = transitioned || completes;
         self.note_cache_signals(item, &track, transitioned, play);
         let (played_ms, started_at, scrobbled) = match carried {
             Some((p, s, sc)) => (p, s, sc),
             None => (0, self.session_now(), false),
         };
+        let mut position_ms = position_ms;
         if transitioned {
-            let backend_key = self.playback.next.as_ref().map(|n| n.key.clone());
+            let next = self.playback.next.take();
+            let backend_key = next.as_ref().map(|n| n.key.clone());
+            // Where the incoming track is: 0 after a gapless join; after a mix,
+            // already some way in (the backend's `Position` follows). A plan
+            // alone is no mix: the backend skips one it reached too late (a
+            // seek past the tail start, a late plan, a failed render) and
+            // joins from 0, so only a reported start counts.
+            let mixed = next.as_ref().is_some_and(|n| {
+                self.playback
+                    .transition
+                    .as_ref()
+                    .is_some_and(|t| t.to == n.key)
+            });
+            position_ms = match next.as_ref().and_then(|n| n.mix_in.as_ref()) {
+                Some(plan) if mixed && completes => {
+                    let a_pos = self.playback.position_now(now);
+                    plan.incoming_position_at(a_pos.saturating_sub(plan.tail_start_ms))
+                }
+                Some(plan) if mixed => plan.handover_position_ms(),
+                _ => 0,
+            };
+            if completes {
+                tracing::debug!(target: "hocket::player", key = %item.key, "next during a transition: completing it");
+                if let Err(e) = self.backend.complete_transition() {
+                    self.log("debug", format!("complete_transition: {e}"));
+                }
+            }
             self.playback.doc_key = Some(item.key.clone());
             self.playback.backend_key = backend_key;
             self.playback.track = Some(track.clone());
-            self.playback.position_ms = 0;
+            self.playback.position_ms = position_ms;
             self.playback.position_at = now;
-            self.playback.next = None;
+            self.playback.adopted_position_ms = position_ms;
+            self.playback.mix_out_ms = next.as_ref().and_then(|n| n.mix_out_ms);
+            self.playback.transition = None;
             self.playback.next_doc_key = None;
             self.playback.awaiting_transition = false;
             self.playback.adopted_at = Some(now);
@@ -349,6 +415,19 @@ impl Actor {
                 self.playback.loaded = false;
                 return;
             };
+            let upcoming = if self.preloads_next() {
+                self.upcoming_playable(2)
+            } else {
+                vec![]
+            };
+            // Loaded as current, a source never mixes in (a handoff starts
+            // the incoming track unmixed); its mix-out comes from what follows.
+            let mut source = source;
+            source.mix_in = None;
+            source.mix_out_ms = upcoming
+                .first()
+                .and_then(|i| self.track_or_bare(&i.track_id))
+                .and_then(|next| self.mix_out_for(&track, Some(&next)));
             self.playback.doc_key = Some(item.key.clone());
             self.playback.backend_key = Some(item.key.clone());
             self.playback.track = Some(track.clone());
@@ -357,14 +436,13 @@ impl Actor {
             self.playback.awaiting_transition = false;
             self.playback.adopted_at = None;
             self.playback.loaded = true;
+            self.playback.mix_out_ms = source.mix_out_ms;
+            self.playback.transition = None;
+            self.playback.adopted_position_ms = 0;
             self.playback.next = None;
             self.playback.next_doc_key = None;
-            let next = self.preloads_next().then(|| self.next_item()).flatten();
-            let next_source = next.as_ref().and_then(|i| {
-                let t = self.track_or_bare(&i.track_id)?;
-                self.media_source_for(&i.key, &t)
-            });
-            self.playback.next_doc_key = next.map(|i| i.key);
+            let next_source = self.next_source(&upcoming, None);
+            self.playback.next_doc_key = upcoming.first().map(|i| i.key.clone());
             self.playback.next = next_source.clone();
             if let Err(e) = self.backend.load(source, next_source, position_ms, play) {
                 self.error(ErrorKind::Playback, "load", Some(e.to_string()));
@@ -437,6 +515,7 @@ impl Actor {
         p.adopted_at = None;
         p.next = None;
         p.next_doc_key = None;
+        p.transition = None;
         if play {
             p.focus_suspended = false;
         }
@@ -849,6 +928,8 @@ impl Actor {
         self.playback.awaiting_transition = false;
         self.playback.adopted_at = None;
         self.playback.pending_load = None;
+        self.playback.transition = None;
+        self.playback.mix_out_ms = None;
     }
 
     /// Every tick: an item adopted at a gapless boundary that the backend
@@ -957,6 +1038,9 @@ impl Actor {
             return;
         }
         self.playback.buffering = false;
+        // A seek cancels a transition still before its handover: the backend
+        // drops the incoming side and the follow-up stays preloaded.
+        self.playback.transition = None;
         if let Err(e) = self.backend.seek(position_ms) {
             self.error(ErrorKind::Playback, "seek", Some(e.to_string()));
         }
@@ -1369,7 +1453,7 @@ impl Actor {
                 if self.playback.backend_key.as_ref() == Some(&key) {
                     self.playback.adopted_at = None;
                     self.playback.playing = true;
-                    self.playback.position_ms = 0;
+                    self.playback.position_ms = self.playback.adopted_position_ms;
                     self.playback.position_at = self.now();
                     self.refresh_next();
                     self.stamp();
@@ -1407,8 +1491,11 @@ impl Actor {
                 if is_next && !current(&key, self) {
                     // The preloaded follow-up failed. Forget it: it is resolved
                     // afresh (with the usual retry and skip) when it comes up.
+                    // A mix into it is over too: without this `refresh_next`
+                    // would wait for a handover that never comes.
                     self.playback.next = None;
                     self.playback.next_doc_key = None;
+                    self.playback.transition = None;
                     if !self.playback.awaiting_transition {
                         // The current item is still playing: leave it alone.
                         return;
@@ -1482,6 +1569,21 @@ impl Actor {
                         self.local_op(SessionOp::SkipUnavailable { key: doc_key });
                     }
                 }
+            }
+            BackendReport::TransitionStarted {
+                from,
+                to,
+                tail_len_ms,
+                handover_ms,
+                ..
+            } => {
+                let ours = current(&from, self)
+                    && self.playback.next.as_ref().is_some_and(|n| n.key == to);
+                if !ours {
+                    return;
+                }
+                tracing::debug!(target: "hocket::player", %from, %to, tail_len_ms, handover_ms, "transition started");
+                self.playback.transition = Some(crate::core::state::ActiveTransition { from, to });
             }
             BackendReport::PreBufferReady { key } => {
                 self.engine_input(Input::PreBufferReady { key });
@@ -1771,6 +1873,8 @@ impl Actor {
         self.emit(Event::SleepTimerChanged {
             timer: self.sleep.state(),
         });
+        // The end-of-track mode never mixes out of the track it stops after.
+        self.replan_next();
     }
 
     pub(crate) fn apply_sleep_action(&mut self, action: SleepAction) {

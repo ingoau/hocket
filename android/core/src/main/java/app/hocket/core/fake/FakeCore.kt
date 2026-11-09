@@ -105,6 +105,7 @@ class FakeCore(
     private val settings = LinkedHashMap<String, Setting>()
     private val defaults = HashMap<String, String>()
     private var audio = AudioSettings(ReplayGainMode.Auto, 0.0, false, EqSettings(false, 0.0, defaultBands(), null), true, null, false)
+    private var transitions = TransitionSettings(TransitionMode.Off, 6.0)
     private var sleepTimer: SleepTimer? = null
     private var network: NetworkState? = null
     private var powerSave = false
@@ -1137,6 +1138,8 @@ class FakeCore(
                 emitDevices(); emitQueue(); emitTransport()
             }
             Command.DismissResumeOffer -> { resumeOffer = null; emit(Event.ResumeOfferChanged(EventResumeOfferChangedInner(null))) }
+            is Command.SetTransitionSettings -> transitions = c.data.settings
+            is Command.StoreAnalysisRecord -> Unit
             is Command.SetSleepTimer -> { sleepTimer = c.data.timer; emit(Event.SleepTimerChanged(EventSleepTimerChangedInner(sleepTimer))) }
 
             is Command.BackendReport -> Unit
@@ -1778,6 +1781,8 @@ class FakeCore(
         Query.Settings -> QueryResult.Settings(settings.values.toList())
         is Query.Setting -> QueryResult.SettingDetail(settings[q.data.key])
         Query.AudioSettings -> QueryResult.Audio(audio)
+        Query.Transitions -> QueryResult.Transitions(transitions)
+        is Query.TrackAnalysis -> QueryResult.Analysis(null)
         Query.OutputDevices -> QueryResult.OutputDevices(listOf(OutputDevice("default", "Phone speaker", true)))
         Query.Connection -> QueryResult.Connection(connection)
         Query.Devices -> QueryResult.Devices(devices.toList())

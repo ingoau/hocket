@@ -1418,6 +1418,8 @@ impl Downloads {
                 transcoded: false,
                 local: true,
                 artwork_url: None,
+                mix_in: None,
+                mix_out_ms: None,
             });
         }
         let profile = self.effective_profile(track.suffix.as_deref());
@@ -1464,6 +1466,8 @@ impl Downloads {
                     transcoded,
                     local,
                     artwork_url: None,
+                    mix_in: None,
+                    mix_out_ms: None,
                 });
             }
         }
@@ -1478,6 +1482,8 @@ impl Downloads {
                 transcoded: profile.is_some(),
                 local: true,
                 artwork_url: None,
+                mix_in: None,
+                mix_out_ms: None,
             });
         }
         let opts = stream_options(profile.as_ref());
@@ -1491,6 +1497,8 @@ impl Downloads {
             transcoded,
             local: false,
             artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         })
     }
 
@@ -1536,6 +1544,8 @@ impl Downloads {
                 .cover_art
                 .as_deref()
                 .map(|id| api.cover_art_url(id, Some(REMOTE_ARTWORK_SIZE)).to_string()),
+            mix_in: None,
+            mix_out_ms: None,
         })
     }
 

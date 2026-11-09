@@ -238,10 +238,50 @@ pub fn remap_channels(input: &[f32], in_ch: usize, out_ch: usize, out: &mut Vec<
     }
 }
 
+/// Convert a whole interleaved buffer from `in_ch` channels at `in_rate` to
+/// `out_ch` channels at `out_rate` (one shot: `round(frames × ratio)` frames
+/// out, aligned with the input). Same rate and channels return a copy.
+pub fn convert(
+    input: &[f32],
+    in_ch: usize,
+    in_rate: u32,
+    out_ch: usize,
+    out_rate: u32,
+) -> Result<Vec<f32>, ResampleError> {
+    let in_ch = in_ch.max(1);
+    let out_ch = out_ch.max(1);
+    let mut mapped = Vec::with_capacity(input.len() / in_ch * out_ch);
+    remap_channels(input, in_ch, out_ch, &mut mapped);
+    if in_rate == out_rate || in_rate == 0 || out_rate == 0 {
+        return Ok(mapped);
+    }
+    let mut r = Resampler::new(in_rate, out_rate, out_ch)?;
+    let mut out = Vec::with_capacity(
+        ((mapped.len() / out_ch) as f64 * r.ratio()).ceil() as usize * out_ch + out_ch,
+    );
+    r.process(&mapped, &mut out)?;
+    r.flush(&mut out)?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::f64::consts::PI;
+
+    #[test]
+    fn convert_keeps_length_and_maps_channels() {
+        let mono: Vec<f32> = (0..44_100)
+            .map(|i| (2.0 * PI * 440.0 * i as f64 / 44_100.0).sin() as f32 * 0.5)
+            .collect();
+        let out = convert(&mono, 1, 44_100, 2, 48_000).unwrap();
+        assert_eq!(out.len(), 48_000 * 2);
+        let same = convert(&mono, 1, 44_100, 1, 44_100).unwrap();
+        assert_eq!(same, mono);
+        // The middle of the converted sine still peaks near 0.5.
+        let peak = out[20_000..80_000].iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!((peak - 0.5).abs() < 0.02, "peak {peak}");
+    }
 
     fn sine(freq: f64, rate: u32, frames: usize) -> Vec<f32> {
         (0..frames)

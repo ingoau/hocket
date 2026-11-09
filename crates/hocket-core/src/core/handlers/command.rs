@@ -322,6 +322,15 @@ impl Actor {
 
             // -- sleep timer --
             Command::SetSleepTimer { timer } => self.set_sleep_timer(timer),
+            Command::SetTransitionSettings { settings } => self.set_transition_settings(settings),
+            Command::StoreAnalysisRecord { track_id, record } => {
+                // A platform's own record (Android's loudness-only one): share it too.
+                if self.store_analysis_record(track_id.clone(), (*record).clone()) {
+                    if let Some(server_id) = self.server_id() {
+                        self.share_analysis_record(&server_id, &track_id, &record);
+                    }
+                }
+            }
 
             // -- from the platform --
             Command::BackendReport { report } => match &self.external {

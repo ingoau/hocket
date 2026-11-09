@@ -26,8 +26,12 @@ pub mod padding;
 pub mod scripted;
 pub mod sleep;
 
+#[cfg(feature = "decode")]
+pub mod decoder;
 #[cfg(feature = "native-audio")]
 pub mod native;
+#[cfg(feature = "resample")]
+pub mod resample;
 
 pub use backend::{BackendError, NullBackend, PlaybackBackend, ReportSink};
 pub use external::ExternalBackend;

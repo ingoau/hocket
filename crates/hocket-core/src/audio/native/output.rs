@@ -35,6 +35,27 @@ pub struct OutputConfig {
     pub sample_rate: Option<u32>,
     /// Force the null sink (tests, `--no-audio`).
     pub null_sink: bool,
+    /// Null sink only: keep a copy of everything it plays (tests).
+    pub tap: Option<OutputTap>,
+}
+
+/// A copy of what the null sink played, interleaved, silence on underrun
+/// included. Compared by identity so [`OutputConfig`] stays `Eq`.
+#[derive(Clone, Default)]
+pub struct OutputTap(pub Arc<Mutex<Vec<f32>>>);
+
+impl PartialEq for OutputTap {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for OutputTap {}
+
+impl std::fmt::Debug for OutputTap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OutputTap")
+    }
 }
 
 /// Ring plus the flush flag the callback honours.
@@ -202,6 +223,16 @@ fn find_device(host: &cpal::Host, id: Option<&str>) -> Result<cpal::Device, Outp
 
 /// Null sink at the given format: a thread pops samples at real-time rate.
 pub fn open_null(rate: u32, channels: usize, ring: Arc<OutputRing>) -> OutputStream {
+    open_null_tapped(rate, channels, ring, None)
+}
+
+/// [`open_null`] that also copies what it plays into `tap`.
+pub fn open_null_tapped(
+    rate: u32,
+    channels: usize,
+    ring: Arc<OutputRing>,
+    tap: Option<OutputTap>,
+) -> OutputStream {
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let thread = thread::Builder::new()
@@ -214,6 +245,9 @@ pub fn open_null(rate: u32, channels: usize, ring: Arc<OutputRing>) -> OutputStr
             let mut ticks: u64 = 0;
             while !stop2.load(Ordering::Acquire) {
                 ring.drain_into(&mut buf, channels);
+                if let Some(t) = &tap {
+                    t.0.lock().extend_from_slice(&buf);
+                }
                 ticks += 1;
                 let due = start + tick * ticks as u32;
                 let now = Instant::now();
@@ -244,7 +278,7 @@ pub fn open_output(
 ) -> Result<OutputStream, OutputError> {
     if config.null_sink {
         let (rate, channels) = (config.sample_rate.unwrap_or(48_000), 2);
-        return Ok(open_null(rate, channels, ring));
+        return Ok(open_null_tapped(rate, channels, ring, config.tap.clone()));
     }
     match open_cpal(config, ring.clone(), on_error) {
         Ok(s) => Ok(s),

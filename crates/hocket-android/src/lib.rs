@@ -254,10 +254,95 @@ pub fn artwork_layout(
     })
 }
 
+// -- AutoMix (src/dsp.rs) ----------------------------------------------------------------------
+//
+// One-shot calls for a background thread. PCM crosses as little-endian `f32` bytes (a Kotlin
+// `ByteArray`; a `Vec<f32>` would be a boxed `List<Float>`). The per-buffer calls are JNI.
+
+/// The rendered tail of a transition (`docs/automix.md`): `pcm` is A from `tail_start_ms`,
+/// `in_channels` at `in_rate`; it goes through a DSP chain like A's (`audio_settings_json`, an
+/// `AudioSettings`, and A's `gain_db`), is mapped to B's channels, resampled to B's rate and
+/// rendered with `render_tail`. Returns exactly `tail_len_ms` at `out_rate`, as LE `f32` bytes.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn automix_prepare_tail(
+    plan_json: String,
+    pcm: Vec<u8>,
+    in_channels: u32,
+    in_rate: u32,
+    out_channels: u32,
+    out_rate: u32,
+    audio_settings_json: Option<String>,
+    gain_db: f64,
+) -> Result<Vec<u8>, HocketError> {
+    let failed = |reason: String| HocketError::Failed { reason };
+    let plan = dsp::parse_plan(&plan_json).map_err(failed)?;
+    let audio = audio_settings_json
+        .as_deref()
+        .map(dsp::parse_audio_settings)
+        .transpose()
+        .map_err(failed)?;
+    let pcm = dsp::f32_from_le(&pcm);
+    let tail = dsp::prepare_tail(
+        &plan,
+        dsp::TailInput {
+            pcm: &pcm,
+            in_channels: in_channels as usize,
+            in_rate,
+            out_channels: out_channels as usize,
+            out_rate,
+            audio: audio.as_ref(),
+            gain_db,
+        },
+    )
+    .map_err(failed)?;
+    Ok(dsp::f32_to_le(&tail))
+}
+
+/// A loudness-only `AnalysisRecord` (JSON, producer Device) from a track's decoded head (from 0)
+/// and tail (from `tail_start_ms`), LE `f32` bytes, `channels` at `rate`.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn automix_loudness_record(
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    tail_start_ms: u32,
+    channels: u32,
+    rate: u32,
+    duration_ms: u32,
+    transcoded: bool,
+    created_at: f64,
+) -> Result<String, HocketError> {
+    let r = dsp::loudness_record(
+        &dsp::f32_from_le(&head),
+        &dsp::f32_from_le(&tail),
+        tail_start_ms,
+        channels as usize,
+        rate,
+        duration_ms,
+        transcoded,
+        created_at,
+    );
+    serde_json::to_string(&r).map_err(|e| HocketError::Failed {
+        reason: e.to_string(),
+    })
+}
+
+/// Whether a stored record (`Query::TrackAnalysis`) is usable for a track of `duration_ms`: the
+/// current analysis version and a matching duration. False for anything unparseable.
+#[uniffi::export]
+pub fn automix_record_usable(record_json: String, duration_ms: u32) -> bool {
+    serde_json::from_str(&record_json)
+        .map(|r| dsp::record_usable(&r, duration_ms))
+        .unwrap_or(false)
+}
+
 #[uniffi::export]
 pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+pub mod dsp;
 
 #[cfg(test)]
 mod fixtures;

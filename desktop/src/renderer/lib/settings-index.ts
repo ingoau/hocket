@@ -29,6 +29,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "replayGainPreamp", section: "audio", label: "settingsSearch.replayGainPreamp", keywords: "settingsSearch.kw.replayGain" },
   { id: "normalisation", section: "audio", label: "settings.normalisation", keywords: "settingsSearch.kw.normalisation" },
   { id: "gapless", section: "audio", label: "settings.gapless", keywords: "settingsSearch.kw.gapless" },
+  { id: "transitions", section: "audio", label: "settings.transitions", keywords: "settingsSearch.kw.transitions" },
   { id: "outputDevice", section: "audio", label: "settings.outputDevice", keywords: "settingsSearch.kw.outputDevice" },
   { id: "exclusive", section: "audio", label: "settings.exclusive", keywords: "settingsSearch.kw.exclusive" },
   { id: "eq", section: "audio", label: "settings.eq", keywords: "settingsSearch.kw.eq" },

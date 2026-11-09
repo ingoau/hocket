@@ -308,8 +308,15 @@ pub mod memory {
             format!("ws://mem:{port}/")
         }
 
+        /// [`MemoryNet::url_for`] as a hosted coordinator's address (`wss://`
+        /// passes the engine's coordinator URL check); it reaches the same port.
+        pub fn coordinator_url_for(port: u16) -> String {
+            format!("wss://mem:{port}/")
+        }
+
         fn port_of(url: &str) -> Option<u16> {
-            url.strip_prefix("ws://mem:")?
+            url.strip_prefix("ws://mem:")
+                .or_else(|| url.strip_prefix("wss://mem:"))?
                 .trim_end_matches('/')
                 .parse()
                 .ok()

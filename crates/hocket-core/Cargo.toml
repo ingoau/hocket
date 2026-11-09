@@ -8,7 +8,14 @@ description = "Hocket shared core: session document, queue reducer, Connect prot
 [features]
 default = ["mdns"]
 # Symphonia decoding + cpal output. Used by desktop and the coordinator never needs it.
-native-audio = ["dep:symphonia", "dep:cpal", "dep:rubato"]
+native-audio = ["decode", "resample", "dep:cpal"]
+# Windowed-sinc sample-rate conversion (rubato), pure Rust. Native audio, and Android's AutoMix tails.
+resample = ["dep:rubato"]
+# Symphonia file decoding without an audio output (no cpal, no ALSA).
+decode = ["dep:symphonia"]
+# AutoMix analysis: decoding + Beat This! beat/downbeat tracking + loudness -> AnalysisRecord.
+# Desktop (hocket-node) and the coordinator; never Android.
+automix-analysis = ["decode", "dep:beat-this", "dep:rten", "dep:rten-tensor"]
 # LAN discovery. Off on the headless coordinator.
 mdns = ["dep:mdns-sd"]
 # Deterministic simulation harness (virtual clock, in-memory network). Also used by the coordinator's tests.
@@ -46,6 +53,9 @@ symphonia = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
 rubato = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
+beat-this = { workspace = true, optional = true }
+rten = { workspace = true, optional = true }
+rten-tensor = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

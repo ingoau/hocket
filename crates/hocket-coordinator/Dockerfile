@@ -4,6 +4,9 @@
 #   docker run -p 7373:7373 -v hocket-data:/data hocket-coordinator
 # Reports (with --diagnostics-user) are kept in /data/reports; read them with:
 #   docker exec <container> hocket-coordinator --data-dir /data reports list
+# AutoMix records are kept in /data/automix.sqlite. The opt-in analysis worker
+# (--analysis-server/--analysis-user/--analysis-password-file, docs/automix.md
+# → Coordinator worker) downloads into /data/analysis-tmp.
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -19,6 +22,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --home /data --create-home hocket
 COPY --from=build /src/target/release/hocket-coordinator /usr/local/bin/hocket-coordinator
+# Attribution for the beat-tracking model built into the binary.
+COPY crates/hocket-core/src/automix/analysis/NOTICE /usr/share/doc/hocket-coordinator/NOTICE
 USER hocket
 VOLUME ["/data"]
 EXPOSE 7373

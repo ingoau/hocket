@@ -4,7 +4,8 @@
 // for sidebar / context menu / media session), keyboard shortcuts editor,
 // config backup, diagnostics, about.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting } from "@core/api";
+import type { ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
+import { TransitionModeValues } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
 import { useQuery } from "../store/queries";
@@ -24,6 +25,7 @@ import { Select, Slider, Switch } from "../components/controls";
 import { warnChoices } from "../lib/storage-warn";
 import { SettingsSearch, useSettingsJump } from "../components/SettingsSearch";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../lib/settings-index";
+import { CROSSFADE_MAX, CROSSFADE_MIN, DEFAULT_TRANSITIONS, isTransitionMode, withCrossfade, withMode } from "../lib/transitions";
 
 const SECTIONS = SETTINGS_SECTIONS;
 type Section = SettingsSection;
@@ -184,6 +186,40 @@ function General() {
   );
 }
 
+/**
+ * Off / Crossfade / AutoMix, and the crossfade length while Crossfade is picked. The core owns the
+ * value (`playback.transitions`, synced): read with the transitions query, refetched when that
+ * setting changes (here or from another device), written with setTransitionSettings. What was just
+ * picked shows straight away and gives way to the core's value once it arrives.
+ */
+function Transitions() {
+  const stored = useApp((s) => s.settings[SK.playbackTransitions]?.value);
+  const { data } = useQuery(() => ({ type: "transitions" }), "transitions", [stored], { static: true, keep: true });
+  const [picked, setPicked] = useState<TransitionSettings | undefined>(undefined);
+  useEffect(() => setPicked(undefined), [data]);
+  const value = picked ?? data ?? DEFAULT_TRANSITIONS;
+  const set = (next: TransitionSettings) => {
+    setPicked(next);
+    bridge().dispatch({ type: "setTransitionSettings", data: { settings: next } });
+  };
+  const seconds = value.crossfadeSeconds;
+  return (
+    <>
+      <Row anchor="transitions" title={t("settings.transitions")} desc={value.mode === "autoMix" ? t("settings.transitions.autoMixDesc") : undefined} settingKey={SK.playbackTransitions}>
+        <Select value={value.mode} aria-label={t("settings.transitions")} onChange={(e) => { if (isTransitionMode(e.target.value)) set(withMode(value, e.target.value)); }} data-testid="setting-transitions">
+          {TransitionModeValues.map((m: TransitionMode) => <option key={m} value={m}>{t(`settings.transitions.${m}`)}</option>)}
+        </Select>
+      </Row>
+      {value.mode === "crossfade" ? (
+        <Row anchor="crossfadeSeconds" title={t("settings.crossfadeSeconds")} settingKey={SK.playbackTransitions}>
+          <Slider min={CROSSFADE_MIN} max={CROSSFADE_MAX} step={1} value={seconds} bubble={t("settings.crossfadeSecondsValue", { n: seconds })} onChange={(v) => set(withCrossfade(value, v))} aria-label={t("settings.crossfadeSeconds")} aria-valuetext={t("settings.crossfadeSecondsValue", { n: seconds })} data-testid="setting-crossfadeSeconds" />
+          <span className="mono small" style={{ width: 36 }}>{t("settings.crossfadeSecondsValue", { n: seconds })}</span>
+        </Row>
+      ) : null}
+    </>
+  );
+}
+
 function Audio() {
   const audio = useApp((s) => s.audio);
   const devices = useApp((s) => s.outputDevices);
@@ -206,6 +242,7 @@ function Audio() {
       </Row>
       <Row anchor="normalisation" title={t("settings.normalisation")} settingKey="audio.replayGain"><Switch checked={audio.normalisation} onChange={(checked) => update({ normalisation: checked })} aria-label={t("settings.normalisation")} /></Row>
       <Row anchor="gapless" title={t("settings.gapless")} settingKey="audio.gapless"><Switch checked={audio.gapless} onChange={(checked) => update({ gapless: checked })} aria-label={t("settings.gapless")} /></Row>
+      <Transitions />
       <Row anchor="outputDevice" title={t("settings.outputDevice")} settingKey="audio.outputDevice">
         <Select value={audio.outputDevice ?? ""} aria-label={t("settings.outputDevice")} onChange={(e) => bridge().dispatch({ type: "setOutputDevice", data: { id: e.target.value || undefined } })} data-testid="setting-output">
           <option value="">{t("settings.outputDefault")}</option>

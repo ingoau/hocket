@@ -109,6 +109,16 @@ impl Normaliser {
         Some(-0.691 + 10.0 * mean.max(1e-30).log10())
     }
 
+    /// Clear the weighting filter and the hop in progress but keep the
+    /// gain and the loudness window: the signal goes on at the same level
+    /// (an AutoMix tail rendered from further on in the track, the next
+    /// track joining), only the filter memory would be stale.
+    pub fn reset_filter(&mut self) {
+        self.filter.reset();
+        self.current.fill(0.0);
+        self.current_frames = 0;
+    }
+
     pub fn reset(&mut self) {
         self.filter.reset();
         self.current.fill(0.0);
@@ -182,6 +192,22 @@ mod tests {
                 [s, s]
             })
             .collect()
+    }
+
+    #[test]
+    fn reset_filter_keeps_the_gain() {
+        let rate = 48_000.0;
+        let mut n = Normaliser::new(rate, 2);
+        n.set_enabled(true);
+        let mut quiet = stereo_sine(-30.0, rate, 20.0);
+        n.process(&mut quiet);
+        let gain = n.gain_db();
+        assert!(gain > 10.0, "{gain}");
+        n.reset_filter();
+        assert_eq!(n.gain_db(), gain);
+        assert!(n.short_term_lufs().is_some());
+        n.reset();
+        assert_eq!(n.gain_db(), 0.0);
     }
 
     #[test]

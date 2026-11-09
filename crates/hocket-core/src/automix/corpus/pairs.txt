@@ -1,0 +1,20 @@
+# AutoMix reference pairs: <outgoing id> <incoming id> <case>. Track ids on the
+# test Navidrome server; scripts/automix-corpus.sh fetches them. records/ and
+# plans/ are written by `hocket-mixlab batch ... --reference`, and
+# tests/automix_corpus.rs re-plans from the records (AutoMix, 6 s setting).
+2nC7rqbBGwNd5YmBj83gNf 6rkvoYBCA0YSXv6pyXF9S1 same album, tracks 2 -> 3 (rules say no mix; planner shown anyway)
+3In1VaP7EtbbWw03AuUeQI 1NzBC2wHEBWNNJnBS8vixR same album, tracks 2 -> 3, dubstep
+3BhzwgmWYNV0ZcZxZu8OeB 7Mz7yYVFx0HykEX5UTyvx9 same tempo (100 BPM): Blend
+3tj17AobQawsyqxRM15NRb 4fbhc5rAaFGNsjBtHlm5fp same tempo (80 BPM), hip-hop -> country: Blend
+5tR0eZKRpr98iARgnXQbV5 1gldpabfHMqvlStc3YzlTR close tempo 129 -> 135: TempoBlend
+2RlD1sxSAJsEWhpM7uoPhy 3BhzwgmWYNV0ZcZxZu8OeB close tempo 105 -> 100, 7 % stretch: TempoBlend
+3dq4G5ZmW4iXStRLdj4oCq 26oZnpgOAQ3hgMMy50yIGP quiet outro into quiet intro at 90 BPM (16 bars capped to 8)
+3O5uOe47vhr6r3dBgY7hMA 1PoYDJL1nGZHW6WSuVTJNE big tempo gap 128 -> 90
+3O5uOe47vhr6r3dBgY7hMA 5O5efOFkm1q47nCKpgAPjF double time: 128 -> 65 (an octave apart, 1.5 %)
+6hBRcrMfhdU4dNRTsthMQR 05AgtWgjnJPfSjmBd05OcE live recording -> a 3/4 track
+05AgtWgjnJPfSjmBd05OcE 05C53fash1baBrwICa2X1I 3/4 track out, 187 -> 72 BPM
+5O5efOFkm1q47nCKpgAPjF 02kysUxrOkF4vOeQj9hcaf quiet ballad outro (smart fade territory)
+2cwFUA8pZ8hmmtUuB6fXyG 02EttoWRiUSK7mRV9b6CPY skit without beats -> musical theatre
+1DMG2i8cK3Mmse824oMhUP 02kysUxrOkF4vOeQj9hcaf low-confidence grid (SOPHIE) out
+02EttoWRiUSK7mRV9b6CPY 50zDEvfjOlQn2jomn7Ga8j musical theatre, sung dialogue (same album, not consecutive)
+16OARk2ReAs7a18htkYeN5 0L4XZrjVDrsEhljQDX88xD comedy song -> fast track

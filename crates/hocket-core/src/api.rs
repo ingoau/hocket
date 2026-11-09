@@ -1565,6 +1565,17 @@ pub struct MediaSource {
     /// that shows it; only sources resolved for one carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artwork_url: Option<String>,
+    /// AutoMix (`docs/automix.md`): on a source given as the follow-up
+    /// (`set_next`, `load`'s `next`), how to enter it from the current one.
+    /// `None` is the gapless/cut join. Never set on a source loaded as current.
+    #[serde(default)]
+    pub mix_in: Option<TransitionPlan>,
+    /// AutoMix: the earliest position at which a transition out of this source
+    /// may begin, fixed when the source is first handed over. A following
+    /// `mix_in`'s `tail_start_ms` equals it whenever it is set. Backends that
+    /// commit early (Android's clipping) clip here.
+    #[serde(default)]
+    pub mix_out_ms: Option<Ms>,
 }
 
 /// A URL with its query string (where Subsonic carries the auth token) and
@@ -1586,6 +1597,8 @@ impl std::fmt::Debug for MediaSource {
             .field("mime_type", &self.mime_type)
             .field("gain_db", &self.gain_db)
             .field("transcoded", &self.transcoded)
+            .field("mix_in", &self.mix_in.as_ref().map(|p| p.kind))
+            .field("mix_out_ms", &self.mix_out_ms)
             .finish()
     }
 }
@@ -1646,6 +1659,10 @@ pub enum BackendCommand {
     },
     /// Unload the preview player. The main item is untouched.
     PreviewStop,
+    /// AutoMix: drop the rendered tail now and treat this instant as the
+    /// handover if it has not happened (Next pressed mid-transition). No-op
+    /// when no transition is running.
+    CompleteTransition,
 }
 
 /// What an external backend reports back.
@@ -1678,9 +1695,19 @@ pub enum BackendReport {
     Ended {
         key: QueueKey,
     },
-    /// Transitioned to the preloaded item (gapless).
+    /// Transitioned to the preloaded item (gapless, or at an AutoMix handover).
     TransitionedToNext {
         key: QueueKey,
+    },
+    /// AutoMix: the backend began playing the rendered tail of `from` per the
+    /// `mix_in` plan of `to`. `Ended(from)` and `TransitionedToNext(to)` follow
+    /// at the handover, `handover_ms` later.
+    TransitionStarted {
+        from: QueueKey,
+        to: QueueKey,
+        tail_len_ms: Ms,
+        incoming_at_ms: Ms,
+        handover_ms: Ms,
     },
     Error {
         key: QueueKey,
@@ -1737,6 +1764,194 @@ pub struct PreviewState {
     pub playing: bool,
     /// Wall-clock milliseconds when `position_ms` was sampled.
     pub taken_at: EpochMs,
+}
+
+// ---------------------------------------------------------------------------
+// AutoMix (transitions between tracks; `crate::automix`, docs/automix.md)
+// ---------------------------------------------------------------------------
+
+/// How consecutive tracks join. Synced across devices with the other playback settings.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TransitionMode {
+    /// Gapless where the files allow it, otherwise a cut. Never invents audio.
+    #[default]
+    Off,
+    /// A fixed-length equal-power fade of `crossfade_seconds`.
+    Crossfade,
+    /// Planned transitions from each track's analysis (beat-matched where it can).
+    AutoMix,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionSettings {
+    pub mode: TransitionMode,
+    /// Crossfade length, 1..=12 (clamped where used). Also the late-edit fade's basis in AutoMix.
+    pub crossfade_seconds: f64,
+}
+
+impl Default for TransitionSettings {
+    fn default() -> Self {
+        Self {
+            mode: TransitionMode::Off,
+            crossfade_seconds: 6.0,
+        }
+    }
+}
+
+/// Who computed an [`AnalysisRecord`]. Also its rank when two records compete
+/// (Worker over Desktop over Device).
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AnalysisProducer {
+    /// The coordinator's library worker.
+    Worker,
+    /// A desktop that analysed on a miss.
+    Desktop,
+    /// A phone (loudness-only records from decoded heads and tails).
+    #[default]
+    Device,
+}
+
+/// What was analysed. A record applies to a track only when this matches it
+/// (`crate::automix::record::fingerprint_matches`).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFingerprint {
+    pub duration_ms: Ms,
+    /// File size in bytes (`f64`: no 64-bit integers cross the FFI; exact below 2^53).
+    pub size_bytes: Option<f64>,
+    /// File suffix, lowercase (`flac`, `mp3`, ...).
+    pub suffix: Option<String>,
+    /// Analysed from a transcoded stream rather than the original file.
+    pub transcoded: bool,
+}
+
+/// Short-term loudness (K-weighted, 3 s windows centred on each point) sampled every `hop_ms`
+/// from `start_ms` (a track position). Values are LUFS, floored at −70.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LoudnessCurve {
+    pub start_ms: Ms,
+    pub hop_ms: Ms,
+    pub lufs: Vec<f32>,
+}
+
+/// One track's analysis: loudness envelope of head and tail, silence edges and (when a beat
+/// tracker ran) beats and downbeats. JSON, a few KB. Positions are milliseconds into the track.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisRecord {
+    /// `crate::automix::ANALYSIS_VERSION` at analysis time; other versions are ignored.
+    pub version: u32,
+    /// Algorithm label, e.g. `beat-this-small/0.1` or `loudness`.
+    pub analyser: String,
+    pub produced_by: AnalysisProducer,
+    pub source: SourceFingerprint,
+    pub duration_ms: Ms,
+    pub integrated_lufs: Option<f32>,
+    /// First sample above −60 dBFS.
+    pub audible_start_ms: Ms,
+    /// Last sample above −60 dBFS.
+    pub audible_end_ms: Ms,
+    /// Short-term loudness of the first ~60 s.
+    pub head: LoudnessCurve,
+    /// Short-term loudness of the last ~60 s.
+    pub tail: LoudnessCurve,
+    /// `None` without beat analysis or when it isn't trustworthy.
+    pub bpm: Option<f32>,
+    /// Empty for loudness-only records.
+    pub beats_ms: Vec<Ms>,
+    /// Subset of `beats_ms`.
+    pub downbeats_ms: Vec<Ms>,
+    /// 0..1; the planner only beat-matches at 0.5 and above.
+    pub beat_confidence: f32,
+    pub created_at: EpochMs,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TransitionKind {
+    /// Gain-only crossfade (fixed, loudness-placed or beat-aligned).
+    Fade,
+    /// Beat-aligned blend without stretching (tempos already match) and a bass swap.
+    Blend,
+    /// As `Blend`, with the outgoing tail time-stretched onto the incoming tempo.
+    TempoBlend,
+}
+
+/// Gain shape over the overlap. The outgoing side runs it from 1 down to 0, the incoming side
+/// from 0 up to 1.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FadeCurve {
+    /// `cos`/`sin` quarter wave: constant power for uncorrelated material.
+    EqualPower,
+    Linear,
+}
+
+/// Outgoing tail stretch: the playback ratio (source time per output time, i.e. speed) moves
+/// linearly from 1.0 at the tail start to `ratio_end` over `ramp_ms` of output time, then holds.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TempoRamp {
+    pub ratio_end: f32,
+    pub ramp_ms: Ms,
+}
+
+/// Shelving-filter automation. `start_ms` is output time from the tail start; the gain moves
+/// linearly in dB from `from_db` to `to_db` over `len_ms`. On the outgoing tail it runs as
+/// written; the incoming side of a bass swap runs it mirrored (`to_db` back up to `from_db`).
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShelfMove {
+    pub freq_hz: f32,
+    pub from_db: f32,
+    pub to_db: f32,
+    pub start_ms: Ms,
+    pub len_ms: Ms,
+}
+
+/// A planned transition from the current source (A) into the next (B). Computed by the core
+/// (`crate::automix::plan`), carried to the backend on B's source. `tail_start_ms` and
+/// `incoming_from_ms` are track positions; the other `*_ms` are output time from the tail start.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionPlan {
+    pub kind: TransitionKind,
+    /// A's position where normal playback stops and the rendered tail begins.
+    pub tail_start_ms: Ms,
+    /// How much of A (from `tail_start_ms`) the tail consumes.
+    pub tail_source_ms: Ms,
+    /// Rendered tail length in output time; the overlap ends with it.
+    pub tail_len_ms: Ms,
+    /// Where B's first sample plays; the overlap is `incoming_at_ms..tail_len_ms`.
+    pub incoming_at_ms: Ms,
+    /// B's position it starts from (leading silence / intro trim).
+    pub incoming_from_ms: Ms,
+    /// When B takes over as "now playing".
+    pub handover_ms: Ms,
+    pub out_curve: FadeCurve,
+    pub in_curve: FadeCurve,
+    pub tempo: Option<TempoRamp>,
+    /// Low shelf on A falling (and, mirrored, on B rising).
+    pub bass_swap: Option<ShelfMove>,
+    /// High shelf on A only.
+    pub high_cut: Option<ShelfMove>,
+    /// Extra gain on B at the start of the overlap, easing to 0 dB by its end. Usually 0.
+    pub incoming_gain_db: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -2637,6 +2852,20 @@ pub enum Command {
         timer: Option<SleepTimer>,
     },
 
+    // -- transitions (AutoMix) ---------------------------------------------
+    /// Off / Crossfade / AutoMix and the crossfade length. Synced
+    /// (`playback.transitions`).
+    SetTransitionSettings {
+        settings: TransitionSettings,
+    },
+    /// Keep an analysis record for a track of the current server (Android's
+    /// loudness-only records, a desktop's analysis). Kept only when it is the
+    /// best record known for the track.
+    StoreAnalysisRecord {
+        track_id: TrackId,
+        record: Box<AnalysisRecord>,
+    },
+
     // -- from the platform ------------------------------------------------
     /// Reports from an external playback backend.
     BackendReport {
@@ -2841,6 +3070,13 @@ pub enum Query {
         key: String,
     },
     AudioSettings,
+    /// AutoMix setting: `QueryResult::Transitions`.
+    Transitions,
+    /// The stored analysis record of a track of the current server (whether or
+    /// not it is usable for it): `QueryResult::Analysis`.
+    TrackAnalysis {
+        track_id: TrackId,
+    },
     OutputDevices,
     Connection,
     Devices,
@@ -3064,6 +3300,8 @@ pub enum QueryResult {
     Settings(Vec<Setting>),
     SettingDetail(Option<Setting>),
     Audio(AudioSettings),
+    Transitions(TransitionSettings),
+    Analysis(Option<AnalysisRecord>),
     OutputDevices(Vec<OutputDevice>),
     Connection(ConnectionState),
     Devices(Vec<DeviceInfo>),
@@ -3574,6 +3812,8 @@ mod redaction_tests {
             transcoded: false,
             local: false,
             artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         };
         let dbg = format!("{source:?}");
         assert!(dbg.contains("https://music.example/rest/stream"), "{dbg}");

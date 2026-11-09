@@ -56,6 +56,15 @@
 //! `<data-dir>/reports/` over the HTTP routes above, together with this
 //! process's log at that moment. Reports are capped by `--reports-quota-mb`
 //! (oldest finished ones go first) and purged by age every hour.
+//!
+//! AutoMix ([`analysis`], `docs/automix.md` → *Sharing records*): unless
+//! `--no-analysis-store`, the coordinator keeps the preferred analysis record
+//! per (server, track) in `<data-dir>/automix.sqlite`, says so in `Welcome`,
+//! and answers members' `AnalysisFetch` / takes their `AnalysisUpload`
+//! itself (never through the room). The opt-in [`worker`]
+//! (`--analysis-server`) is the one exception to holding no credential: it
+//! logs in with its own account's password to analyse the library, and its
+//! progress shows in `/health` under `analysis`.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -86,14 +95,17 @@ use hocket_core::connect::replica::{
 use hocket_core::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use hocket_core::connect::session_adapter::RealReducer;
 use hocket_core::connect::wire::{
-    scope_key, Credential, Msg, RefuseReason, ReplicaState, WireMessage,
+    scope_key, server_key, AnalysisEntry, Credential, Msg, RefuseReason, ReplicaState, WireMessage,
+    ANALYSIS_BATCH_MAX, ANALYSIS_FETCH_MAX,
 };
 use hocket_core::connect::PeerId;
 use hocket_core::util::WallClock;
 
 pub use hocket_core::connect::transport::MAX_FRAME_BYTES;
 
+pub mod analysis;
 pub mod reports;
+pub mod worker;
 
 /// Epoch milliseconds now; injectable so tests can move time (grant expiry,
 /// retention).
@@ -115,6 +127,9 @@ pub const VERIFY_BODY_CAP: usize = 64 * 1024;
 pub const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 /// Heartbeat-only changes are written at most this often per room.
 pub const TOUCH_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Analysis messages (fetches and uploads together) a socket may send per
+/// minute; the rest are dropped.
+pub const ANALYSIS_MESSAGES_PER_MINUTE: u32 = 60;
 /// Pause between the parts of the coordinator's diagnostics answer.
 pub const DIAGNOSTICS_PART_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -170,6 +185,24 @@ pub struct Args {
     /// deleted to make room.
     #[arg(long, default_value_t = 20480)]
     pub reports_quota_mb: u64,
+    /// Don't keep AutoMix analysis records (`<data-dir>/automix.sqlite`, in
+    /// memory without a data dir) for clients to share.
+    #[arg(long, default_value_t = false)]
+    pub no_analysis_store: bool,
+    /// Most AutoMix records kept per Navidrome server; the least recently
+    /// updated go first.
+    #[arg(long, default_value_t = 400_000)]
+    pub analysis_records_per_server: u64,
+    /// Cap on one Navidrome server's AutoMix records, in MiB (of JSON; a
+    /// typical record is ~10 KB).
+    #[arg(long, default_value_t = 2048)]
+    pub analysis_mb_per_server: u64,
+    /// Cap on all AutoMix records together, in MiB.
+    #[arg(long, default_value_t = 8192)]
+    pub analysis_quota_mb: u64,
+    /// The opt-in analysis worker (see `--analysis-server`).
+    #[command(flatten)]
+    pub worker: worker::WorkerArgs,
     /// Without a subcommand the coordinator serves.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -293,6 +326,11 @@ impl Args {
             diagnostics_users: vec![],
             no_reports: false,
             reports_quota_mb: 20480,
+            no_analysis_store: false,
+            analysis_records_per_server: 400_000,
+            analysis_mb_per_server: 2048,
+            analysis_quota_mb: 8192,
+            worker: worker::WorkerArgs::default(),
             command: None,
         }
     }
@@ -447,6 +485,10 @@ pub struct App {
     diagnostics_users: Vec<DiagnosticsUser>,
     /// Report storage and grants; `None` when reports are off.
     reports: Option<reports::Reports>,
+    /// AutoMix analysis records; `None` with `--no-analysis-store`.
+    analysis: Option<Arc<analysis::AnalysisStore>>,
+    /// The analysis worker's progress, when it runs.
+    worker_status: Arc<Mutex<Option<worker::WorkerStatus>>>,
     clock: Clock,
     started: Instant,
 }
@@ -473,6 +515,20 @@ impl App {
             }
             _ => None,
         };
+        let limits = analysis::StoreLimits {
+            records_per_server: args.analysis_records_per_server,
+            bytes_per_server: args.analysis_mb_per_server.saturating_mul(1 << 20),
+            bytes_total: args.analysis_quota_mb.saturating_mul(1 << 20),
+        };
+        let analysis = match (&args.data_dir, args.no_analysis_store) {
+            (_, true) => None,
+            (Some(dir), false) => Some(analysis::AnalysisStore::open(dir)?),
+            (None, false) => Some(analysis::AnalysisStore::in_memory()?),
+        }
+        .map(|s| Arc::new(s.with_limits(limits)));
+        if args.worker.analysis_server.is_some() && analysis.is_none() {
+            anyhow::bail!("--analysis-server needs the analysis store: drop --no-analysis-store");
+        }
         Ok(Arc::new(App {
             args,
             rooms: Mutex::new(HashMap::new()),
@@ -485,6 +541,8 @@ impl App {
             saves: Mutex::new(HashMap::new()),
             diagnostics_users,
             reports,
+            analysis,
+            worker_status: Arc::new(Mutex::new(None)),
             clock,
             started: Instant::now(),
         }))
@@ -500,6 +558,105 @@ impl App {
     /// Epoch milliseconds by this app's clock.
     pub fn now_ms(&self) -> u64 {
         (self.clock)()
+    }
+
+    /// The AutoMix analysis store, unless `--no-analysis-store`.
+    pub fn analysis_store(&self) -> Option<&Arc<analysis::AnalysisStore>> {
+        self.analysis.as_ref()
+    }
+
+    /// The analysis worker's progress (`None` while it isn't running).
+    pub fn worker_status(&self) -> Option<worker::WorkerStatus> {
+        self.worker_status.lock().clone()
+    }
+
+    /// Where the analysis worker reports its progress.
+    pub fn worker_status_slot(&self) -> Arc<Mutex<Option<worker::WorkerStatus>>> {
+        self.worker_status.clone()
+    }
+
+    /// The server key a socket's analysis messages read and write: the
+    /// server its credential was verified against (`--verify-url` when set),
+    /// or with `--no-verify` the server its `Hello` named.
+    fn analysis_server(
+        &self,
+        verified: Option<&(String, String)>,
+        hello: Option<&str>,
+    ) -> Option<String> {
+        if let Some(v) = &self.args.verify_url {
+            return (verified.is_some() || self.args.no_verify).then(|| server_key(v));
+        }
+        match verified {
+            Some((url, _)) => Some(server_key(url)),
+            None if self.args.no_verify => hello.map(server_key),
+            None => None,
+        }
+    }
+
+    /// Answer an `AnalysisFetch` (off the async threads).
+    async fn answer_analysis_fetch(
+        &self,
+        tx: &mpsc::UnboundedSender<Message>,
+        server: String,
+        mut track_ids: Vec<String>,
+    ) {
+        let Some(store) = self.analysis.clone() else {
+            return;
+        };
+        track_ids.truncate(ANALYSIS_FETCH_MAX);
+        let mut seen = std::collections::HashSet::new();
+        track_ids.retain(|id| seen.insert(id.clone()));
+        let found = tokio::task::spawn_blocking(move || store.get_many(&server, &track_ids)).await;
+        let records = match found {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                warn!(error = %e, "analysis store read failed");
+                vec![]
+            }
+            Err(e) => {
+                warn!(error = %e, "analysis store read task failed");
+                vec![]
+            }
+        };
+        for records in analysis_chunks(records) {
+            match WireMessage::new(Msg::AnalysisRecords { records }).encode() {
+                Ok(t) => {
+                    let _ = tx.send(Message::Text(t.into()));
+                }
+                Err(e) => warn!(error = %e, "unencodable analysis records"),
+            }
+        }
+    }
+
+    /// Store an `AnalysisUpload`'s valid, preferred records (made honest
+    /// first: see [`analysis::sanitize_upload`]).
+    async fn take_analysis_upload(&self, server: String, mut records: Vec<AnalysisEntry>) {
+        let Some(store) = self.analysis.clone() else {
+            return;
+        };
+        records.truncate(ANALYSIS_BATCH_MAX);
+        let now = self.now_ms();
+        let done = tokio::task::spawn_blocking(move || {
+            let (mut stored, mut refused) = (0, 0);
+            for mut e in records {
+                analysis::sanitize_upload(&mut e.record, now);
+                if let Err(why) = analysis::validate(&e.track_id, &e.record) {
+                    debug!(track = %e.track_id, why, "analysis upload refused");
+                    refused += 1;
+                    continue;
+                }
+                match store.put(&server, &e.track_id, e.record, now) {
+                    Ok(analysis::PutOutcome::Stored) => stored += 1,
+                    Ok(analysis::PutOutcome::Kept) => {}
+                    Err(err) => warn!(error = %err, "analysis store write failed"),
+                }
+            }
+            (stored, refused)
+        })
+        .await;
+        if let Ok((stored, refused)) = done {
+            debug!(stored, refused, "analysis upload");
+        }
     }
 
     /// Whether this coordinator keeps reports.
@@ -752,6 +909,7 @@ impl App {
         let mut cfg = RoomConfig::new(scope.to_string());
         cfg.verify = !self.args.no_verify;
         cfg.max_members = self.args.max_members;
+        cfg.analysis_store = self.analysis.is_some();
         // Debug, not info: anyone can name a scope in a Hello.
         debug!(scope, restored = replica.is_some(), "room opened");
         RoomState {
@@ -1000,11 +1158,15 @@ pub async fn verify_target(base: &str, allow_private: bool) -> anyhow::Result<Ve
 }
 
 async fn health(State(app): State<Arc<App>>) -> impl IntoResponse {
-    axum::Json(serde_json::json!({
+    let mut body = serde_json::json!({
         "status": "ok",
         "rooms": app.room_count(),
         "connections": app.connections.load(Ordering::Relaxed),
-    }))
+    });
+    if let Some(status) = app.worker_status() {
+        body["analysis"] = serde_json::to_value(status).unwrap_or_default();
+    }
+    axum::Json(body)
 }
 
 async fn ws_upgrade(
@@ -1054,6 +1216,10 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
     // The account this socket's credential was verified for.
     let mut identity: Option<(String, String)> = None;
     let mut last_diagnostics: Option<Instant> = None;
+    // What the Hello said: the device, and the server its credential named.
+    let mut hello_device: Option<String> = None;
+    let mut hello_server: Option<String> = None;
+    let mut analysis_budget = AnalysisBudget::default();
     loop {
         let limit = if scope.is_some() {
             READ_TIMEOUT
@@ -1090,7 +1256,17 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
             }
         };
         let current_scope = match (&scope, &msg.msg) {
-            (None, Msg::Hello { scope: s, .. }) => {
+            (
+                None,
+                Msg::Hello {
+                    scope: s,
+                    device,
+                    credential,
+                    ..
+                },
+            ) => {
+                hello_device = Some(device.id.clone());
+                hello_server = credential.as_ref().map(|c| c.server_url.clone());
                 let s = s.clone();
                 scope = Some(s.clone());
                 app.attach_sender(&s, &peer, tx.clone()).await;
@@ -1119,6 +1295,29 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
                 last_diagnostics = Some(Instant::now());
                 app.answer_diagnostics(&tx, request_id.clone(), from.clone(), identity.as_ref());
             }
+        }
+        if matches!(
+            msg.msg,
+            Msg::AnalysisFetch { .. } | Msg::AnalysisUpload { .. }
+        ) {
+            // The coordinator's own business: never relayed. Only for an admitted member.
+            let server = app.analysis_server(identity.as_ref(), hello_server.as_deref());
+            let member = hello_device
+                .as_deref()
+                .is_some_and(|d| app.has_member(&current_scope, d));
+            match (server, member, analysis_budget.take(Instant::now())) {
+                (Some(server), true, true) => match msg.msg {
+                    Msg::AnalysisFetch { track_ids } => {
+                        app.answer_analysis_fetch(&tx, server, track_ids).await
+                    }
+                    Msg::AnalysisUpload { records } => {
+                        app.take_analysis_upload(server, records).await
+                    }
+                    _ => {}
+                },
+                _ => debug!(peer, msg = msg.msg.name(), "analysis message dropped"),
+            }
+            continue;
         }
         let to_verify = app.drive(&current_scope, RoomInput::Message(peer.clone(), msg));
         for (p, credential) in to_verify {
@@ -1149,6 +1348,68 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
         writer.abort();
     }
     app.connections.fetch_sub(1, Ordering::Relaxed);
+}
+
+/// The JSON a batch of records may take in one `AnalysisRecords` frame:
+/// half the frame cap, leaving room for the envelope.
+const ANALYSIS_FRAME_BUDGET: usize = MAX_FRAME_BYTES / 2;
+
+/// `AnalysisRecords` batches: at most [`ANALYSIS_BATCH_MAX`] records and
+/// [`ANALYSIS_FRAME_BUDGET`] bytes each, at least one (empty when nothing was
+/// found). A record too large for a frame on its own is left out.
+fn analysis_chunks(records: Vec<AnalysisEntry>) -> Vec<Vec<AnalysisEntry>> {
+    let mut chunks: Vec<Vec<AnalysisEntry>> = vec![];
+    let mut current: Vec<AnalysisEntry> = vec![];
+    let mut bytes = 0;
+    for e in records {
+        let size = serde_json::to_vec(&e).map_or(usize::MAX, |j| j.len());
+        if size > ANALYSIS_FRAME_BUDGET {
+            warn!(track = %e.track_id, size, "analysis record too large to send");
+            continue;
+        }
+        if current.len() >= ANALYSIS_BATCH_MAX || bytes + size > ANALYSIS_FRAME_BUDGET {
+            chunks.push(std::mem::take(&mut current));
+            bytes = 0;
+        }
+        bytes += size;
+        current.push(e);
+    }
+    if !current.is_empty() || chunks.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// A socket's allowance of analysis messages: a bucket of
+/// [`ANALYSIS_MESSAGES_PER_MINUTE`] that refills over a minute.
+struct AnalysisBudget {
+    tokens: f64,
+    last: Option<Instant>,
+}
+
+impl Default for AnalysisBudget {
+    fn default() -> Self {
+        AnalysisBudget {
+            tokens: f64::from(ANALYSIS_MESSAGES_PER_MINUTE),
+            last: None,
+        }
+    }
+}
+
+impl AnalysisBudget {
+    fn take(&mut self, now: Instant) -> bool {
+        let cap = f64::from(ANALYSIS_MESSAGES_PER_MINUTE);
+        if let Some(last) = self.last {
+            self.tokens =
+                (self.tokens + now.duration_since(last).as_secs_f64() * cap / 60.0).min(cap);
+        }
+        self.last = Some(now);
+        if self.tokens < 1.0 {
+            return false;
+        }
+        self.tokens -= 1.0;
+        true
+    }
 }
 
 /// Build the router (tests mount it on an ephemeral port).
@@ -1237,6 +1498,60 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analysis_answers_are_chunked_by_count_and_size() {
+        use hocket_core::api::{
+            AnalysisProducer, AnalysisRecord, LoudnessCurve, SourceFingerprint,
+        };
+        let entry = |id: usize, beats: u32| AnalysisEntry {
+            track_id: format!("t{id}"),
+            record: AnalysisRecord {
+                version: 1,
+                analyser: "test".into(),
+                produced_by: AnalysisProducer::Desktop,
+                source: SourceFingerprint {
+                    duration_ms: 1,
+                    size_bytes: None,
+                    suffix: None,
+                    transcoded: false,
+                },
+                duration_ms: 1,
+                integrated_lufs: None,
+                audible_start_ms: 0,
+                audible_end_ms: 0,
+                head: LoudnessCurve::default(),
+                tail: LoudnessCurve::default(),
+                bpm: None,
+                beats_ms: (0..beats).map(|b| 10_000_000 + b).collect(),
+                downbeats_ms: vec![],
+                beat_confidence: 0.0,
+                created_at: 0.0,
+            },
+        };
+        assert_eq!(analysis_chunks(vec![]).len(), 1, "one empty answer");
+        let small: Vec<_> = (0..40).map(|i| entry(i, 10)).collect();
+        let sizes: Vec<usize> = analysis_chunks(small).iter().map(Vec::len).collect();
+        assert_eq!(sizes, vec![16, 16, 8]);
+        // ~750 KB each (what the old limits allowed): fewer per frame
+        let big: Vec<_> = (0..16).map(|i| entry(i, 85_000)).collect();
+        let chunks = analysis_chunks(big);
+        assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), 16);
+        for c in &chunks {
+            let frame = WireMessage::new(Msg::AnalysisRecords { records: c.clone() })
+                .encode()
+                .unwrap();
+            assert!(frame.len() < MAX_FRAME_BYTES, "{}", frame.len());
+        }
+        // one record over the budget is left out, the rest still go
+        let chunks = analysis_chunks(vec![entry(0, 10), entry(1, 600_000), entry(2, 10)]);
+        let ids: Vec<&str> = chunks
+            .iter()
+            .flatten()
+            .map(|e| e.track_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["t0", "t2"]);
+    }
 
     #[tokio::test]
     async fn verify_target_refuses_what_an_attacker_would_name() {

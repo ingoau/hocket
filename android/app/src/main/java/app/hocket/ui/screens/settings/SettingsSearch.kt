@@ -84,6 +84,7 @@ val SETTINGS_INDEX: List<SettingEntry> = listOf(
     SettingEntry("audio.preamp", SettingsCategory.Audio, R.string.settings_preamp, keywords = R.string.settings_search_kw_volume),
     SettingEntry("audio.normalisation", SettingsCategory.Audio, R.string.settings_normalisation, keywords = R.string.settings_search_kw_volume),
     SettingEntry("audio.gapless", SettingsCategory.Audio, R.string.settings_gapless, keywords = R.string.settings_search_kw_gapless),
+    SettingEntry("audio.transitions", SettingsCategory.Audio, R.string.settings_transitions, keywords = R.string.settings_search_kw_transitions),
     SettingEntry("audio.eq", SettingsCategory.Audio, R.string.settings_eq, keywords = R.string.settings_search_kw_eq),
     SettingEntry("audio.systemEq", SettingsCategory.Audio, R.string.settings_system_eq, R.string.settings_system_eq_body, R.string.settings_search_kw_eq),
     SettingEntry("audio.output", SettingsCategory.Audio, R.string.settings_output_device, keywords = R.string.settings_search_kw_output),

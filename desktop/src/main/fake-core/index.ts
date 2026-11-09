@@ -11,7 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState, LyricHit,
+  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -136,6 +136,7 @@ export class FakeCore implements CoreHandle {
   private connection: ConnectionState = { tier: "local", connected: false, coordinatorUrl: undefined, clockOffsetMs: 0, roundTripMs: undefined, peerCount: 0, error: undefined };
   private settings = new Map<string, Setting>();
   private audio: AudioSettings;
+  private transitions: TransitionSettings = { mode: "off", crossfadeSeconds: 6 };
   private outputDevices: OutputDevice[] = [
     { id: "default", name: "System default", isDefault: true },
     { id: "hdmi", name: "HDMI / DisplayPort", isDefault: false },
@@ -811,6 +812,11 @@ export class FakeCore implements CoreHandle {
         return;
       case "unsnooze":
         this.clearSnooze(cmd.data.track_ids);
+        return;
+      case "setTransitionSettings":
+        this.transitions = cmd.data.settings;
+        return;
+      case "storeAnalysisRecord":
         return;
       default: {
         const never: never = cmd;
@@ -2892,6 +2898,10 @@ export class FakeCore implements CoreHandle {
         return { type: "settingDetail", data: this.settings.get(q.data.key) };
       case "audioSettings":
         return { type: "audio", data: this.audio };
+      case "transitions":
+        return { type: "transitions", data: this.transitions };
+      case "trackAnalysis":
+        return { type: "analysis", data: undefined };
       case "outputDevices":
         return { type: "outputDevices", data: this.outputDevices };
       case "connection":

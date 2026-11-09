@@ -297,6 +297,25 @@ Desktop playback does not go through Web Audio. `decodeAudioData` holds the whol
 | Errors | Inline in the player bar, auto-skip after a couple of consecutive failures, detail logged to the problems list. A failed track never scrobbles and doesn't count as played. |
 
 
+## AutoMix  
+*Status: decided*
+
+Transitions between consecutive tracks, from a plain crossfade up to beat-matched blends in the manner of Apple Music's AutoMix. This reverses the earlier deferral of crossfade: it does invent audio that isn't in either file, so it is **opt-in**, with a three-way setting — **Off** (the default), **Crossfade** (a fixed-length equal-power fade, seconds set by the user) and **AutoMix** — synced across devices like the other playback settings. `docs/automix.md` is the implementation spec.
+
+| Concern | Decision |
+|---|---|
+| Where it mixes | On the playing device, always. Connect moves control, not audio, and offline playback must keep working; a server-side mix (Music Assistant's model) would give up both. |
+| When not to mix | The next track follows on the same album in track order; either track is tagged gapless (`iTunPGAP`) or the pair joins without a gap; Classical, Spoken word (audiobook, podcast), Live and Soundtrack/Score; repeat-one; the sleep timer's end-of-track mode; a Cast renderer or bit-perfect output. Gapless still applies to everything not mixed. |
+| Handover | Each transition has one handover point, usually mid-blend. `Ended` and `TransitionedToNext` fire there, so scrobbling, now-playing, lyrics and Connect stamps switch at the moment the incoming track takes over. The incoming track's reported position is its real position, already a few seconds in. The progress bar keeps the real file length and hands over early. |
+| Controls mid-blend | Next before the handover completes the transition at once; after it, it's an ordinary skip. Seek cancels the mix. Pause pauses both. A Connect handoff mid-blend starts the incoming track on the new device, unmixed. |
+| Late queue edits | The transition is committed about 30 s before the mix-out point. An edit to what plays next after that still wins and gets a plain fade; it is never silently pushed to the track after. |
+| Analysis | Beat This! (CPJKU, MIT code and weights) through `beat-this-rs` for beats and downbeats (its small checkpoint, embedded in the binary, run by the pure-Rust `rten`), plus a loudness envelope of each track's head and tail. One versioned record per track. Never computed on phones. |
+| Where analysis comes from | An opt-in worker in the coordinator, with its own non-admin Navidrome account, analyses the whole library once at low priority. Desktops analyse on a miss and upload. Phones only read; with no record they fall back to a loudness-based plain fade. |
+| Where analysis lives | The coordinator stores records in SQLite per Navidrome server, readable and writable by any verified user of that server. Devices keep a local copy so offline playback still mixes. This is the coordinator's first state that isn't per room, and the worker its first contact with audio; with the worker off it still never holds credentials. |
+| Tempo | Only the outgoing track is time-stretched, and only when the tempo gap is within 8%, ramping over the bars before the overlap. Pitch-preserving stretch was deferred as "not wanted" for playback speed; it is wanted here, over seconds rather than whole tracks. |
+| Android | Stays on ExoPlayer — audio focus, routing and offload-free power behaviour remain the platform's. A Rust DSP stage runs as a Media3 `AudioProcessor` (which also gives Android the in-app EQ and ReplayGain boost), and transitions mix a pre-rendered outgoing tail into the incoming track there. |
+
+
 ## OS media session  
 *Status: decided*
 
@@ -535,6 +554,7 @@ It's also arguably the more fitting licence for something whose whole shape is s
 | playwire | MIT OR Apache-2.0 | Permissive, no constraints. |
 | Symphonia | MPL-2.0 | GPL-compatible through MPL's secondary-licence clause. |
 | cpal, UniFFI, napi-rs | Unconfirmed, expected permissive | Check before shipping. |
+| Beat This! / `beat-this-rs` | MIT (code and model weights) | Keep both copyright notices. CPJKU note that some training data is copyrighted or under limited CC licences; that doesn't change the weights' licence. |
 
 > The alternative, recorded for the avoidance of doubt Staying GPLv3 would mean dropping AMLL and writing the desktop lyric renderer directly — less absurd than it sounds given a native Compose renderer is being built for Android anyway, but it throws away the single biggest shortcut in the plan. A third reading holds that the Rust core and coordinator, containing no AMLL code, stay separable under GPLv3; that's a judgement about what counts as one work and shouldn't be relied on without advice.
 
@@ -545,9 +565,8 @@ It's also arguably the more fitting licence for something whose whole shape is s
 | Item | Reason |
 |---|---|
 | Cast beyond the SDK | A Rust CastV2 renderer for every platform, without the proprietary SDK (see Cast); then DLNA or AirPlay behind the same renderer seam. Expiring share URLs in place of the account token. |
-| Crossfade | Worst value per unit of effort, and unlike gapless it invents audio that isn't in the file. |
 | findSonicPath | Sonic paths from one track to another are a genuinely novel queue-building idea, but not now. |
-| Playback speed | Pitch-preserving resampling is a real chunk of DSP work for a feature not wanted. |
+| Playback speed | Pitch-preserving resampling of whole tracks is a real chunk of DSP work for a feature not wanted. AutoMix stretches only short outgoing tails (see AutoMix). |
 | Tag editing | Out of scope — Subsonic can't write tags and Navidrome is scanner-driven. Playlists are the management surface. |
 | Multi-server UI | Framework now, interface later. |
 | Direct Last.fm / ListenBrainz | Navidrome already fronts these. |

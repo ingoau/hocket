@@ -28,10 +28,10 @@ use serde_json::Value;
 use typeshare::typeshare;
 
 use crate::api::{
-    AlbumResumeEntry, AutoplayProvider, Command, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
-    LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId, PositionStamp, QueueKey,
-    RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting, Snooze, StashEntry,
-    TrackId, TransportLease, UndoEntry,
+    AlbumResumeEntry, AnalysisRecord, AutoplayProvider, Command, DeviceId, DeviceInfo,
+    DeviceVolume, EpochMs, LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId,
+    PositionStamp, QueueKey, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting,
+    Snooze, StashEntry, TrackId, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -42,6 +42,8 @@ use crate::api::{
 /// any LAN host); 3 = the flat queue model (one list with a pointer, no
 /// queue modes, keyed moves, the "Next in queue" group). Version 2 peers
 /// reduce ops differently and can't share a session with this one.
+/// (AutoMix's analysis messages and `Welcome.analysis_store` were added
+/// without a bump: they are optional, and peers ignore what they don't know.)
 pub const PROTOCOL: u32 = 3;
 /// Hard floor. The handshake refuses anything older.
 pub const PROTOCOL_MIN: u32 = 3;
@@ -195,8 +197,38 @@ impl Credential {
 /// Session scope key: the Navidrome identity a session belongs to. Every
 /// device derives it the same way so rooms key on it.
 pub fn scope_key(server_url: &str, username: &str) -> String {
-    let url = server_url.trim().trim_end_matches('/').to_ascii_lowercase();
-    format!("{url}|{username}")
+    format!("{}|{username}", server_key(server_url))
+}
+
+/// A Navidrome server's URL normalised the way [`scope_key`] does it: what
+/// the coordinator's analysis store keys records on. Surrounding blanks and
+/// trailing slashes go and the scheme and host are lowercased; the path keeps
+/// its case (a reverse proxy may tell `/Music` from `/music`).
+pub fn server_key(server_url: &str) -> String {
+    let url = server_url.trim().trim_end_matches('/');
+    // The authority ends at the first `/`, `?` or `#` after `scheme://`.
+    let authority_start = url.find("://").map_or(0, |i| i + 3);
+    let authority_end = url[authority_start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| authority_start + i);
+    let (head, path) = url.split_at(authority_end);
+    format!("{}{path}", head.to_ascii_lowercase())
+}
+
+/// Most track ids one [`Msg::AnalysisFetch`] may name; the coordinator drops
+/// the rest.
+pub const ANALYSIS_FETCH_MAX: usize = 64;
+/// Most records one [`Msg::AnalysisUpload`] (or [`Msg::AnalysisRecords`])
+/// carries; the coordinator drops the rest of an upload.
+pub const ANALYSIS_BATCH_MAX: usize = 16;
+
+/// One track's analysis record on the wire.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisEntry {
+    pub track_id: TrackId,
+    pub record: AnalysisRecord,
 }
 
 /// The replica a room holds. See `docs/design.md`, "Resume and recovery".
@@ -852,6 +884,11 @@ pub enum Msg {
         replica: Option<ReplicaState>,
         /// Currently connected devices, excluding the joiner.
         members: Vec<DeviceInfo>,
+        /// The hosted coordinator keeps AutoMix analysis records for this
+        /// server: [`Msg::AnalysisFetch`] and [`Msg::AnalysisUpload`] are
+        /// worth sending. Never set by a LAN room.
+        #[serde(default)]
+        analysis_store: bool,
         #[typeshare(skip)]
         #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
         extra: Extra,
@@ -1172,6 +1209,27 @@ pub enum Msg {
         report_grant: Option<ReportGrant>,
     },
 
+    // -- AutoMix analysis (hosted coordinator only) -----------------------
+    /// → coordinator, only when its `Welcome` said `analysis_store`. Asks for
+    /// the records it has for these tracks of the room's server (at most
+    /// [`ANALYSIS_FETCH_MAX`]). Answered with one or more
+    /// [`Msg::AnalysisRecords`] (the answer is split to keep frames small;
+    /// one empty one when nothing was found).
+    AnalysisFetch {
+        track_ids: Vec<TrackId>,
+    },
+    /// → client. The usable records the coordinator has among those asked
+    /// for; tracks it has nothing for are left out.
+    AnalysisRecords {
+        records: Vec<AnalysisEntry>,
+    },
+    /// → coordinator, only when its `Welcome` said `analysis_store`. Records
+    /// this device produced (at most [`ANALYSIS_BATCH_MAX`]). Each replaces
+    /// the stored one only when preferred. No answer.
+    AnalysisUpload {
+        records: Vec<AnalysisEntry>,
+    },
+
     /// Anything this build does not know. Ignored.
     #[serde(other)]
     Unknown,
@@ -1224,6 +1282,9 @@ impl Msg {
         "libraryEdited",
         "diagnosticsRequest",
         "diagnosticsReply",
+        "analysisFetch",
+        "analysisRecords",
+        "analysisUpload",
         "unknown",
     ];
 
@@ -1278,6 +1339,9 @@ impl Msg {
             Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
             Msg::DiagnosticsReply { .. } => "diagnosticsReply",
+            Msg::AnalysisFetch { .. } => "analysisFetch",
+            Msg::AnalysisRecords { .. } => "analysisRecords",
+            Msg::AnalysisUpload { .. } => "analysisUpload",
             Msg::Unknown => "unknown",
         }
     }
@@ -1415,6 +1479,58 @@ mod tests {
 
     /// `libraryEdited` round-trips, a build without it ignores it, and a
     /// newer sender's extra fields (or a minimal one's missing lists) still decode.
+    #[test]
+    fn analysis_messages_round_trip_and_welcome_defaults_to_no_store() {
+        let record: crate::api::AnalysisRecord = serde_json::from_value(serde_json::json!({
+            "version": 1, "analyser": "loudness", "producedBy": "device",
+            "source": {"durationMs": 1000, "sizeBytes": null, "suffix": null, "transcoded": false},
+            "durationMs": 1000, "integratedLufs": -9.5, "audibleStartMs": 0, "audibleEndMs": 1000,
+            "head": {"startMs": 0, "hopMs": 100, "lufs": [-10.0]},
+            "tail": {"startMs": 900, "hopMs": 100, "lufs": [-11.0]},
+            "bpm": null, "beatsMs": [], "downbeatsMs": [], "beatConfidence": 0.0, "createdAt": 5.0
+        }))
+        .unwrap();
+        let entry = AnalysisEntry {
+            track_id: "t1".into(),
+            record,
+        };
+        for msg in [
+            Msg::AnalysisFetch {
+                track_ids: vec!["t1".into(), "t2".into()],
+            },
+            Msg::AnalysisRecords {
+                records: vec![entry.clone()],
+            },
+            Msg::AnalysisUpload {
+                records: vec![entry],
+            },
+        ] {
+            let text = WireMessage::new(msg.clone()).encode().unwrap();
+            assert!(
+                text.contains(&format!(r#""type":"{}""#, msg.name())),
+                "{text}"
+            );
+            assert_eq!(WireMessage::decode(&text).unwrap().msg, msg);
+        }
+        // A Welcome from a build without the store field reads as "no store".
+        let old = r#"{"protocolVersion":3,"msg":{"type":"welcome","data":{"session_clock_ms":1.0,"accepted_protocol":3,"replica":null,"members":[]}}}"#;
+        assert!(matches!(
+            WireMessage::decode(old).unwrap().msg,
+            Msg::Welcome {
+                analysis_store: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            server_key(" HTTPS://Music.Example/ "),
+            "https://music.example"
+        );
+        assert_eq!(
+            scope_key("https://music.example/", "u"),
+            "https://music.example|u"
+        );
+    }
+
     #[test]
     fn library_edited_round_trips_and_is_unknown_to_older_builds() {
         use crate::api::{LibraryItemKind, LibraryItemState};
@@ -1641,6 +1757,12 @@ mod tests {
             scope_key(" https://music.example ", "bob"),
             scope_key("https://music.example/", "bob")
         );
+        assert_eq!(
+            server_key("HTTPS://Music.Example:4533/Navi/Drome/"),
+            "https://music.example:4533/Navi/Drome"
+        );
+        assert_eq!(server_key("Music.Example/Path"), "music.example/Path");
+        assert_eq!(server_key("http://HOST?X=Y"), "http://host?X=Y");
     }
 
     fn sq(id: &str, at: f64, pinned: bool) -> SavedQueue {

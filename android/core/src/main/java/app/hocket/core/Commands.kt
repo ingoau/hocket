@@ -7,6 +7,7 @@ import app.hocket.core.api.*
  * `core.dispatch(Commands.playNext(serverId, ids))` rather than nesting `*Inner` payloads.
  */
 object Commands {
+    fun setTransitionSettings(settings: TransitionSettings) = Command.SetTransitionSettings(CommandSetTransitionSettingsInner(settings))
     /** The most rows one `Query.QueueRange` returns. */
     const val QUEUE_RANGE_MAX = 201
 

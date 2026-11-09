@@ -91,6 +91,9 @@ impl ExternalBackend {
                     }
                     true
                 }
+                BackendReport::TransitionStarted { from, to, .. } => {
+                    !st.retired.contains(from) && !st.retired.contains(to)
+                }
                 BackendReport::PreBufferReady { key } => st.pre_buffer.as_ref() == Some(key),
                 BackendReport::Ready { key, .. }
                 | BackendReport::Playing { key, .. }
@@ -210,6 +213,10 @@ impl PlaybackBackend for ExternalBackend {
         self.send(BackendCommand::Seek { position_ms })
     }
 
+    fn complete_transition(&self) -> Result<(), BackendError> {
+        self.send(BackendCommand::CompleteTransition)
+    }
+
     fn set_volume(&self, volume: f64) -> Result<(), BackendError> {
         self.send(BackendCommand::SetVolume {
             volume: clamp_volume(volume),
@@ -302,6 +309,8 @@ mod tests {
             transcoded: false,
             local: false,
             artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         }
     }
 

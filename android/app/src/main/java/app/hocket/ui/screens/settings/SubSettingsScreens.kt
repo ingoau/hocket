@@ -57,7 +57,12 @@ import kotlinx.serialization.builtins.MapSerializer
 import app.hocket.core.HocketJson
 import app.hocket.core.api.Command
 import app.hocket.core.api.EqBand
+import app.hocket.core.api.Query
+import app.hocket.core.api.QueryResult
 import app.hocket.core.api.ReplayGainMode
+import app.hocket.core.api.TransitionMode
+import app.hocket.core.api.TransitionSettings
+import kotlin.math.roundToInt
 import app.hocket.core.api.TranscodingProfile
 import app.hocket.core.fake.FakeCore
 import app.hocket.ui.LocalCoreClient
@@ -106,6 +111,7 @@ fun AudioSettingsScreen(nav: NavHostController) {
             label = preampLabel, valueText = preampValue, modifier = Modifier.padding(horizontal = 16.dp))
         SwitchRow(stringResource(R.string.settings_normalisation), audio.normalisation, { client.dispatch(Commands.setAudioSettings(audio.copy(normalisation = it))) }, tag = "audio.normalisation")
         SwitchRow(stringResource(R.string.settings_gapless), audio.gapless, { client.dispatch(Commands.setAudioSettings(audio.copy(gapless = it))) }, tag = "audio.gapless")
+        TransitionRows(client)
         SettingsSection(stringResource(R.string.settings_eq), tag = "audio.eq")
         SwitchRow(stringResource(R.string.settings_eq_enabled), audio.eq.enabled, { client.dispatch(Commands.setAudioSettings(audio.copy(eq = audio.eq.copy(enabled = it)))) })
         val eqPreampLabel = stringResource(R.string.settings_eq_preamp)
@@ -130,6 +136,51 @@ fun AudioSettingsScreen(nav: NavHostController) {
             val selectedOutput = audio.outputDevice ?: outputs.firstOrNull { it.isDefault }?.id
             ChoiceRow(outputs.map { it.id to it.name }, isSelected = { selectedOutput == it }, onSelect = { client.dispatch(Commands.setOutputDevice(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
         }
+    }
+}
+
+/**
+ * Off / Crossfade / AutoMix, and the crossfade length while Crossfade is picked (as on desktop). The
+ * core owns the value (`playback.transitions`, synced): read with `Query.Transitions`, read again
+ * when that setting changes (here or from another device), written with `SetTransitionSettings`.
+ * What was just picked shows straight away and gives way to the core's value once it arrives.
+ */
+@Composable
+private fun TransitionRows(client: app.hocket.core.client.CoreClient) {
+    val settings by client.settings.collectAsStateWithLifecycle()
+    val stored = settings[app.hocket.core.SettingKeys.PLAYBACK_TRANSITIONS]?.value
+    var core by remember { mutableStateOf<TransitionSettings?>(null) }
+    var picked by remember { mutableStateOf<TransitionSettings?>(null) }
+    LaunchedEffect(stored) {
+        (client.query(Query.Transitions) as? QueryResult.Transitions)?.let {
+            core = it.data
+            picked = null
+        }
+    }
+    val value = picked ?: core ?: TransitionSettings(TransitionMode.Off, 6.0)
+    fun set(next: TransitionSettings) {
+        picked = next
+        client.dispatch(Commands.setTransitionSettings(next))
+    }
+    val subtitle = if (value.mode == TransitionMode.AutoMix) stringResource(R.string.settings_transitions_automix_desc) else null
+    SettingRow(stringResource(R.string.settings_transitions), subtitle, tag = "audio.transitions")
+    val modes = listOf(
+        TransitionMode.Off to stringResource(R.string.settings_transitions_off),
+        TransitionMode.Crossfade to stringResource(R.string.settings_transitions_crossfade),
+        TransitionMode.AutoMix to stringResource(R.string.settings_transitions_automix),
+    )
+    ChoiceRow(modes, isSelected = { value.mode == it }, onSelect = { set(value.copy(mode = it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+    if (value.mode == TransitionMode.Crossfade) {
+        val seconds = value.crossfadeSeconds.roundToInt().coerceIn(1, 12)
+        var dragged by remember(seconds) { androidx.compose.runtime.mutableFloatStateOf(seconds.toFloat()) }
+        val label = stringResource(R.string.settings_crossfade_seconds)
+        val valueText = stringResource(R.string.settings_crossfade_seconds_value, dragged.roundToInt())
+        SettingRow(label, valueText)
+        LabelledSlider(
+            value = dragged, onValueChange = { dragged = it }, valueRange = 1f..12f, steps = 10,
+            onValueChangeFinished = { set(value.copy(crossfadeSeconds = dragged.roundToInt().toDouble())) },
+            label = label, valueText = valueText, modifier = Modifier.padding(horizontal = 16.dp),
+        )
     }
 }
 

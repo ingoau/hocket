@@ -769,7 +769,9 @@
             "mimeType": "audio/flac",
             "gainDb": -6.5,
             "transcoded": false,
-            "local": false
+            "local": false,
+            "mixIn": null,
+            "mixOutMs": null
           },
           "next": null,
           "position_ms": 0,

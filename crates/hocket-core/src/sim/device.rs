@@ -601,7 +601,9 @@ impl SimDevice {
             | Output::UndoEntryReceived { .. }
             | Output::DiagnosticsRequested { .. }
             | Output::DiagnosticsReply(_)
-            | Output::ReplicaChanged(_) => {}
+            | Output::ReplicaChanged(_)
+            | Output::AnalysisStore(_)
+            | Output::AnalysisRecords(_) => {}
             Output::Log { level, message } => self.note(format!("{level}: {message}")),
             Output::HeadphonePull { from, .. } => {
                 self.note(format!("headphones pulled from {from}"))

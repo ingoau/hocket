@@ -648,6 +648,7 @@
     <string name="settings_search_kw_widget">widget launcher home screen shortcuts</string>
     <string name="settings_search_kw_volume">volume loudness gain normalise normalize</string>
     <string name="settings_search_kw_gapless">gap silence transition</string>
+    <string name="settings_search_kw_transitions">crossfade transition automix auto mix dj blend fade beat match</string>
     <string name="settings_search_kw_eq">equaliser equalizer eq bass treble</string>
     <string name="settings_search_kw_output">speakers headphones bluetooth usb dac output</string>
     <string name="settings_search_kw_transcoding">transcode quality opus mp3 aac kbps data mobile wifi</string>
@@ -699,6 +700,13 @@
     <string name="settings_preamp">Preamp</string>
     <string name="settings_normalisation">Normalise loudness</string>
     <string name="settings_gapless">Gapless playback</string>
+    <string name="settings_transitions">Transitions</string>
+    <string name="settings_transitions_off">Off</string>
+    <string name="settings_transitions_crossfade">Crossfade</string>
+    <string name="settings_transitions_automix">AutoMix</string>
+    <string name="settings_transitions_automix_desc">Beat-matched mixes when tracks fit; never within albums or for classical, live, soundtracks or spoken word.</string>
+    <string name="settings_crossfade_seconds">Crossfade length</string>
+    <string name="settings_crossfade_seconds_value">%d s</string>
     <string name="settings_eq">Equalizer</string>
     <string name="settings_eq_enabled">Equalizer on</string>
     <string name="settings_eq_preamp">EQ preamp</string>

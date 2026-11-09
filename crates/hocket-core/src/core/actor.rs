@@ -144,6 +144,10 @@ pub(crate) struct Actor {
     pub renderer_formats: crate::downloads::receivers::Learned,
     /// Background prefetch of the next queue items (transport owner only).
     pub prefetch: super::handlers::prefetch::PrefetchState,
+    /// AutoMix analysis on a miss (desktop).
+    pub(crate) analysis: super::handlers::analysis::AnalysisState,
+    /// AutoMix records fetched from and uploaded to the coordinator.
+    pub(crate) share: super::handlers::analysis_share::ShareState,
     /// The album primer (first seconds of a track the user is about to play).
     pub prime: super::handlers::prime::PrimeState,
     /// Stream-cache bookkeeping (offline skips, budget checks).
@@ -465,6 +469,8 @@ impl Actor {
             renderer: None,
             renderer_formats,
             prefetch: Default::default(),
+            analysis: Default::default(),
+            share: Default::default(),
             prime: Default::default(),
             cache: Default::default(),
             caches,
@@ -721,6 +727,11 @@ impl Actor {
                 generation,
                 outcome,
             } => self.on_prefetch_done(track_id, generation, outcome),
+            Internal::AnalysisDone {
+                server_id,
+                track_id,
+                result,
+            } => self.on_analysis_done(server_id, track_id, result),
             Internal::SkipOffline { key } => self.on_skip_offline(key),
             Internal::ClearOfflineSkips => self.clear_offline_skips(),
             Internal::RetryOfflineClear => self.run_offline_clear(false),
@@ -1002,6 +1013,7 @@ impl Actor {
         }
         self.diagnostics_tick(now);
         self.prefetch_tick(now);
+        self.analysis_tick(now);
         self.flush_pending_load(false);
         self.playback_tick(now);
         self.remote_volume_tick(now);
@@ -1394,6 +1406,7 @@ fn native_backend(
             device_id: audio.output_device.clone(),
             sample_rate: None,
             null_sink: false,
+            tap: None,
         },
         audio: audio.clone(),
         watch_devices: true,

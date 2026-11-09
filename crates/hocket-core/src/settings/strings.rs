@@ -13,6 +13,7 @@ pub const TEXTS: &[SettingText] = &[
     t("queue.section", "Queue section", "Show the \"Next in queue\" group and the Add to queue action. Off, Play next puts songs straight after the current one."),
     t("queue.savedCap", "Saved queues to keep", "How many unpinned recent queues are shown. Zero shows only pinned queues."),
     t("playback.resumeAlbums", "Resume albums", "Offer to continue an album you started from the album and didn't finish, at the track and moment you left it. Off, Play always starts at the beginning. Turning it back on brings back albums left in the last 30 days."),
+    t("playback.transitions", "Transitions", "How one song joins the next: Off (gapless where the files allow it), Crossfade (a fade of the length you choose) or AutoMix (DJ-style transitions planned from each song's beats and loudness). Albums played in order, classical, live and spoken-word recordings are never mixed."),
     t("autoplay.settings", "Autoplay", "Provider order, seed window, sonic similarity threshold, exclusion window and optional saved filter."),
     t("autoplay.contextOverrides", "Autoplay per-context order", "Provider order overrides for album and artist contexts."),
     t("audio.settings", "Audio", "ReplayGain, equaliser, normalisation, gapless playback, output device and exclusive mode for this device."),

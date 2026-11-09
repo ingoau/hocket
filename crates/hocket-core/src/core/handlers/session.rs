@@ -560,6 +560,8 @@ impl Actor {
             }
             Output::DiagnosticsReply(part) => self.on_diagnostics_reply(part),
             Output::ReplicaChanged(_) => {}
+            Output::AnalysisStore(available) => self.on_analysis_store(available),
+            Output::AnalysisRecords(records) => self.on_analysis_records(records),
             Output::Log { level, message } => self.log(level, message),
         }
     }
