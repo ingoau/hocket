@@ -65,6 +65,9 @@ enum Cmd {
         /// Print time and size per file to stderr.
         #[arg(long)]
         timing: bool,
+        /// Use and fill the record cache next to each file (`<file>.automix.json`); print nothing.
+        #[arg(long)]
+        cache: bool,
     },
     /// Plan and render one transition.
     Pair {
@@ -115,8 +118,17 @@ fn main() -> Result<()> {
         analyser: None,
     };
     match cli.cmd {
-        Cmd::Analyse { files, out, timing } => {
+        Cmd::Analyse {
+            files,
+            out,
+            timing,
+            cache,
+        } => {
             for f in files {
+                if cache {
+                    lab.record(&f)?;
+                    continue;
+                }
                 let t = Instant::now();
                 let r = lab.analyse(&f)?;
                 if timing {

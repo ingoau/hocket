@@ -10,7 +10,7 @@ name = "hocket-coordinator"
 path = "src/main.rs"
 
 [dependencies]
-hocket-core = { workspace = true, default-features = false, features = ["sim"] }
+hocket-core = { workspace = true, default-features = false, features = ["sim", "automix-analysis"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["signal", "fs", "io-util"] }

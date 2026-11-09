@@ -16,7 +16,7 @@ default = ["media-session"]
 media-session = ["dep:playwire"]
 
 [dependencies]
-hocket-core = { workspace = true, features = ["native-audio", "mdns"] }
+hocket-core = { workspace = true, features = ["native-audio", "mdns", "automix-analysis"] }
 napi.workspace = true
 napi-derive.workspace = true
 serde.workspace = true
