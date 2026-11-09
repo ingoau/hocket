@@ -41,6 +41,8 @@ async fn main() -> anyhow::Result<()> {
             settings,
             store.clone(),
             app.worker_status_slot(),
+            app.worker_priority()
+                .expect("--analysis-server gives the app a priority queue"),
             cancel.clone(),
         )?),
         _ => None,

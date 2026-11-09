@@ -46,6 +46,12 @@ pub enum PutOutcome {
     Kept,
 }
 
+/// Whether a record (for the right file) leaves the worker nothing to do:
+/// it has a beat grid or is the worker's own.
+pub fn complete(r: &AnalysisRecord) -> bool {
+    has_beats(r) || r.produced_by == AnalysisProducer::Worker
+}
+
 /// Make a client's upload honest before it is validated: only this
 /// coordinator's own worker produces `Worker` records (an upload claiming it
 /// counts as `Desktop`), and nothing is created after `now_ms` (a record
@@ -453,10 +459,9 @@ impl AnalysisStore {
         track_id: &str,
         fingerprint: &SourceFingerprint,
     ) -> anyhow::Result<bool> {
-        Ok(self.get(server, track_id)?.is_some_and(|r| {
-            is_usable(&r, fingerprint)
-                && (has_beats(&r) || r.produced_by == AnalysisProducer::Worker)
-        }))
+        Ok(self
+            .get(server, track_id)?
+            .is_some_and(|r| is_usable(&r, fingerprint) && complete(&r)))
     }
 
     pub fn counts(&self, server: Option<&str>) -> anyhow::Result<StoreCounts> {

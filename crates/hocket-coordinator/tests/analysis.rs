@@ -577,3 +577,143 @@ async fn the_worker_leaves_long_and_large_files_alone() {
     let stats = worker.pass(&cancel).await.unwrap();
     assert_eq!((stats.library, stats.todo, stats.analysed), (3, 1, 1));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fetch_misses_on_the_workers_server_are_queued_for_it() {
+    let s1 = fake_subsonic().await;
+    let s2 = fake_subsonic().await;
+    let mut args = Args::for_tests();
+    args.worker.analysis_server = Some(format!("http://{s1}"));
+    let (app, url, _stop) = start(args).await;
+    let queue = app.worker_priority().expect("worker on");
+    *app.worker_status_slot().lock() = Some(Default::default());
+
+    let server1 = server_key(&format!("http://{s1}"));
+    let store = app.analysis_store().unwrap();
+    store
+        .put(
+            &server1,
+            "beats",
+            record(AnalysisProducer::Desktop, true),
+            1,
+        )
+        .unwrap();
+    store
+        .put(&server1, "loud", record(AnalysisProducer::Device, false), 1)
+        .unwrap();
+
+    let mut bob = Host::new("bob-phone", s1, "bob", &url);
+    let mut carol = Host::new("carol-phone", s2, "carol", &url);
+    for h in [&mut bob, &mut carol] {
+        h.run(1_000).await;
+        assert!(h.engine.is_connected());
+    }
+    // answered as before; the miss and the beat-less record are queued, once
+    let got = bob.fetch(&["beats", "loud", "none", "none"]).await;
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(queue.len(), 2);
+    bob.fetch(&["none"]).await;
+    assert_eq!(queue.len(), 2, "deduplicated");
+    assert_eq!(queue.pop().as_deref(), Some("loud"));
+    assert_eq!(queue.pop().as_deref(), Some("none"));
+
+    // another server's misses are not the worker's business
+    assert!(carol.fetch(&["elsewhere"]).await.is_empty());
+    assert!(queue.is_empty());
+
+    bob.fetch(&["x"]).await;
+    let status = app.worker_status().unwrap();
+    assert_eq!(status.priority_queue, 1);
+    assert_eq!(serde_json::to_value(&status).unwrap()["priorityQueue"], 1);
+}
+
+#[tokio::test]
+async fn the_worker_analyses_what_clients_asked_for_first() {
+    let fake = Arc::new(FakeServer::new("srv", "worker"));
+    for id in ["a", "b", "c"] {
+        wav_song(&fake, id);
+    }
+    let store = Arc::new(AnalysisStore::in_memory().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let server = "https://music.example/";
+    let key = server_key(server);
+    let mut worker = Worker::new(
+        fake.clone(),
+        store.clone(),
+        server,
+        Duration::ZERO,
+        tmp.path().to_path_buf(),
+        Arc::new(parking_lot::Mutex::new(None)),
+    );
+    let queue = worker.priority();
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    // looked up with getSong, not walked; an unknown id is dropped
+    assert_eq!(queue.push(&key, ["c", "nope"]), 2);
+    assert_eq!(worker.drain_priority(&cancel).await, 1);
+    assert!(store.get(&key, "c").unwrap().is_some());
+    assert!(store.get(&key, "a").unwrap().is_none());
+    assert_eq!(fake.calls_to("search3"), 0);
+    assert_eq!(fake.calls_to("download"), 1);
+
+    // the walk doesn't analyse it again
+    let library = worker.walk().await.unwrap();
+    queue.push(&key, ["b"]);
+    let stats = worker.analyse_library(&library, &cancel).await.unwrap();
+    assert_eq!(
+        (stats.todo, stats.analysed),
+        (2, 1),
+        "b went first, from the queue"
+    );
+    assert_eq!(fake.calls_to("download"), 3);
+    assert!(store.get(&key, "a").unwrap().is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queued_track_wakes_the_idle_worker() {
+    let fake = Arc::new(FakeServer::new("srv", "worker"));
+    wav_song(&fake, "a");
+    let store = Arc::new(AnalysisStore::in_memory().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let server = "https://music.example/";
+    let key = server_key(server);
+    let status = Arc::new(parking_lot::Mutex::new(None));
+    let worker = Worker::new(
+        fake.clone(),
+        store.clone(),
+        server,
+        Duration::ZERO,
+        tmp.path().join("dl"),
+        status.clone(),
+    );
+    let queue = worker.priority();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let run = tokio::spawn(worker.run(Duration::from_secs(3600), cancel.clone()));
+    let until = |what: &str, ok: &dyn Fn() -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !ok() {
+            assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    until("first pass", &|| {
+        status
+            .lock()
+            .as_ref()
+            .is_some_and(|s: &hocket_coordinator::worker::WorkerStatus| s.passes == 1)
+    });
+    // a song added after the walk, asked for by a client
+    wav_song(&fake, "new");
+    assert_eq!(queue.push(&key, ["new"]), 1);
+    until("analysed", &|| store.get(&key, "new").unwrap().is_some());
+    assert!(queue.is_empty());
+    until("waiting again", &|| {
+        status.lock().as_ref().unwrap().state == "waiting"
+    });
+    assert_eq!(status.lock().as_ref().unwrap().analysed, 2);
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(10), run)
+        .await
+        .unwrap()
+        .unwrap();
+}
