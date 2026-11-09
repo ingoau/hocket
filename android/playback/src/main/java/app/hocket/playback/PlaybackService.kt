@@ -166,13 +166,14 @@ class PlaybackService : MediaLibraryService() {
             }
             is Event.QueueChanged -> {
                 bridge.applyQueue(event.data.queue)
-                backend.onQueueChanged()
+                backend.onQueueChanged(event.data.queue)
             }
             is Event.ServersChanged -> serverId = event.data.servers.firstOrNull()?.id
             is Event.LibraryChanged -> scheduleLibraryNotify()
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.Started -> applySnapshot(event.data.snapshot)
             is Event.Snapshot -> applySnapshot(event.data.snapshot)
+            is Event.AudioSettingsChanged -> backend.onAudioSettings(event.data.settings)
             is Event.SettingChanged -> when (event.data.setting.key) {
                 SettingKeys.MEDIA_EXTERNAL_CONTROL -> bridge.setExternalControl(event.data.setting.value.trim() == "true")
             }
@@ -252,6 +253,8 @@ class PlaybackService : MediaLibraryService() {
         clockOffsetMs = snapshot.connection.clockOffsetMs
         serverId = snapshot.servers.firstOrNull()?.id
         bridge.applyQueue(snapshot.queue)
+        backend.onQueueChanged(snapshot.queue)
+        backend.onAudioSettings(snapshot.audio)
         ConnectRoutes.onDevices(snapshot.devices)
         ConnectRoutes.onTransport(snapshot.transport)
         applySession(snapshot.mediaSession)

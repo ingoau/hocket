@@ -1,11 +1,15 @@
 package app.hocket.playback
 
+import app.hocket.core.api.AudioSettings
+import app.hocket.core.api.EqSettings
 import app.hocket.core.api.Event
+import app.hocket.core.api.EventAudioSettingsChangedInner
 import app.hocket.core.api.EventJobsChangedInner
 import app.hocket.core.api.EventLyricsChangedInner
 import app.hocket.core.api.EventLogInner
 import app.hocket.core.api.EventTransportChangedInner
 import app.hocket.core.api.PositionStamp
+import app.hocket.core.api.ReplayGainMode
 import app.hocket.core.api.TransportLease
 import app.hocket.core.api.TransportState
 import org.junit.Assert.assertEquals
@@ -37,5 +41,11 @@ class ServiceEventGateTest {
         assertFalse(gate.admit(Event.JobsChanged(EventJobsChangedInner(emptyList()))))
         assertFalse(gate.admit(Event.Log(EventLogInner("warn", "hocket_core", "x"))))
         assertFalse(gate.admit(Event.LyricsChanged(EventLyricsChangedInner("t1", null))))
+    }
+
+    @Test
+    fun audioSettingsReachTheDspChain() {
+        val audio = AudioSettings(ReplayGainMode.Auto, 0.0, false, EqSettings(true, 0.0, emptyList()), true, null, false)
+        assertTrue(ServiceEventGate().admit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))))
     }
 }

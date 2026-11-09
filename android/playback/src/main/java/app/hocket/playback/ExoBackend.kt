@@ -2,6 +2,9 @@ package app.hocket.playback
 
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.os.Process
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -9,13 +12,18 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import app.hocket.core.Commands
 import app.hocket.core.CoreStreamException
 import app.hocket.core.CoreStreams
+import app.hocket.core.HocketJson
+import app.hocket.core.api.AudioSettings
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.BackendReport
 import app.hocket.core.api.BackendReportAudioFocusLostInner
@@ -30,9 +38,16 @@ import app.hocket.core.api.BackendReportPreviewProgressInner
 import app.hocket.core.api.BackendReportPreviewReadyInner
 import app.hocket.core.api.BackendReportReadyInner
 import app.hocket.core.api.BackendReportSystemVolumeInner
+import app.hocket.core.api.BackendReportTransitionStartedInner
 import app.hocket.core.api.BackendReportTransitionedToNextInner
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSource as CoreMediaSource
+import app.hocket.core.api.Query
+import app.hocket.core.api.QueryResult
+import app.hocket.core.api.QueueView
+import app.hocket.core.api.TransitionPlan
+import app.hocket.core.upcomingEntries
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +56,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -63,10 +79,20 @@ import kotlin.math.roundToInt
  * - `PreBuffer` uses a second, silent ExoPlayer prepared at the requested position; `DiscardPreBuffer`
  *   releases its media. A subsequent `Load` of the same key still goes through the main player: the
  *   OS/HTTP cache makes it start fast, which is the point of the pre-buffer.
- * - `gain_db` is applied as `player.volume = 10^(gain/20) * masterVolume`, clamped to 1.0. Media3 has
- *   no gain stage, so positive gain is an approximation (it cannot amplify) and ReplayGain-style
- *   attenuation is exact. `masterVolume` (`SetVolume`) is an amplitude gain: only the sleep fade
- *   once the core has the system volume below, else the user volume on a dB scale too.
+ * - `gain_db` (ReplayGain, boost included), the in-app EQ and the limiter run in the core's DSP chain
+ *   inside the player's audio sink ([MixProcessor], JNI), switching gain at the exact sample of a
+ *   gapless join. `player.volume` is only `masterVolume` (`SetVolume`, an amplitude gain: the sleep
+ *   fade once the core has the system volume below, else the user volume on a dB scale too).
+ *   Without the native library (JVM tests) the old approximation applies: `player.volume =
+ *   10^(gain/20) * masterVolume`, clamped to 1.0.
+ * - AutoMix (`docs/automix.md` → Android): an item with `mix_out_ms` is clipped there. When the next
+ *   source carries `mix_in`, A's tail is decoded ([PcmDecoder]) once A is within a minute of the
+ *   tail start, rendered at B's format in Rust and armed in [MixControl]; the processor sums it with
+ *   B at B's first frame. `TransitionStarted` is reported when ExoPlayer moves on to B (the tail is
+ *   heard), the handover (`Ended(A)`, `TransitionedToNext(B)`, `Position(B, p)`) when B's position
+ *   reaches `handover_ms`. Until then reports name A at its tail position; after it B's position is
+ *   mapped back by `incoming_from_ms − incoming_at_ms` (the processor plays the tail's lead-in ahead
+ *   of B) until the next seek. A tail that isn't ready at A's clip point means B starts unmixed.
  * - The phone's volume is the system music volume, with no second volume in the app: the player's
  *   device volume (the music stream) is reported as `SystemVolume` at start and on every change
  *   (keys, the system panel, another app, a headset), and `SetSystemVolume` sets it. A device whose
@@ -105,6 +131,11 @@ class ExoBackend(
     private val streams: () -> CoreStreams? = { CoreHost.current as? CoreStreams },
     /** Where [CoreStreams.streamLocal] (a blocking index lookup) runs. */
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** Core queries (AutoMix: the mode, stored records, sources); null when no core answers. */
+    private val query: suspend (Query) -> QueryResult? = { q -> CoreHost.current?.let { runCatching { it.query(q) }.getOrNull() } },
+    /** The per-buffer DSP; null (JVM tests) keeps the volume-based gain and never mixes. */
+    private val dsp: DspEngine? = NativeDsp.orNull,
+    private val ffi: AutomixFfi = AutomixFfi.Native,
 ) {
     /** What a player that stopped playing while it still has an item is reporting. */
     internal enum class Stall { Paused, Buffering, Nothing }
@@ -112,6 +143,10 @@ class ExoBackend(
     internal companion object {
         /** The native desktop engine's cadence (`audio/native/engine.rs`): receivers extrapolate between reports. */
         private const val POSITION_INTERVAL_MS = 1_000L
+        /** How often the handover is checked against B's position during an overlap. */
+        private const val HANDOVER_POLL_MS = 40L
+        /** A's tail is decoded and rendered once A is this close to its tail start. */
+        private const val PREPARE_AHEAD_MS = 60_000L
         private val RECOVERY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
         /** Outputs that count as headphones for headphone handoff. */
         private val HEADPHONE_KINDS = setOf(AudioOutputs.Kind.Bluetooth, AudioOutputs.Kind.Wired, AudioOutputs.Kind.Usb)
@@ -171,7 +206,32 @@ class ExoBackend(
         }
     }
 
-    val player: ExoPlayer = ExoPlayer.Builder(context)
+    private val main = Handler(Looper.getMainLooper())
+    private val mixControl = MixControl()
+
+    /** Which transition the playback thread started mixing; consumed at ExoPlayer's item transition. */
+    private var mixHeard: MixControl.Armed? = null
+    private val mixListener = object : MixListener {
+        override fun onMixStarted(armed: MixControl.Armed) {
+            main.post { mixHeard = armed }
+        }
+
+        override fun onMixSkipped(armed: MixControl.Armed, reason: String) {
+            PlaybackLog.i("AutoMix: ${armed.from} -> ${armed.to} plays unmixed: $reason")
+        }
+    }
+    private val processor: MixProcessor? = dsp?.let { MixProcessor(it, mixControl, mixListener) }
+
+    private fun renderersFactory() = object : DefaultRenderersFactory(context) {
+        override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink? {
+            val p = processor ?: return super.buildAudioSink(context, enableFloatOutput, enableAudioOutputPlaybackParams)
+            // PCM path only: no float output, no offload (both are off by default), so every buffer
+            // reaches the processor.
+            return DefaultAudioSink.Builder(context).setAudioProcessors(arrayOf(p)).build()
+        }
+    }
+
+    val player: ExoPlayer = ExoPlayer.Builder(context, renderersFactory())
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
         .setHandleAudioBecomingNoisy(true)
         .setWakeMode(C.WAKE_MODE_NETWORK)
@@ -243,8 +303,36 @@ class ExoBackend(
     private var localityJob: Job? = null
     /** The key of the last `Load`, so an error raised after the playlist emptied is still attributable. */
     private var lastLoadedKey: String? = null
-    /** Keys by media id, so reports name the queue key the core gave us. */
-    private fun currentKey(): String? = player.currentMediaItem?.mediaId
+    /** The sources in the playlist by key (AutoMix needs A's URL, gain and B's format). */
+    private val sources = HashMap<String, CoreMediaSource>()
+
+    /** A transition that is sounding (the tail started), until its handover. */
+    private class Running(val armed: MixControl.Armed) {
+        var handedOver = false
+        /** A `SetNext` that came during the overlap, applied at the handover (`next` may be null). */
+        var held: Held? = null
+    }
+
+    private class Held(val next: CoreMediaSource?)
+
+    private var running: Running? = null
+    private var handoverJob: Job? = null
+    private var tailJob: Job? = null
+    /** After a handover, B's true position is ExoPlayer's plus this, until the next seek. */
+    private var offsetKey: String? = null
+    private var offsetMs = 0L
+    private var queueView: QueueView? = null
+    private val tailDispatcher = Executors.newSingleThreadExecutor { r -> Thread(r, "automix-tail") }.asCoroutineDispatcher()
+    private val analysisDispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread({ Process.setThreadPriority(Process.THREAD_PRIORITY_LOWEST); r.run() }, "automix-analysis")
+    }.asCoroutineDispatcher()
+    private val loudness = LoudnessRecorder(scope, query, dispatch, streams, io, analysisDispatcher, ffi)
+
+    /**
+     * Keys by media id, so reports name the queue key the core gave us. During a transition's
+     * overlap, before the handover, that is still A, whatever ExoPlayer is on.
+     */
+    private fun currentKey(): String? = running?.takeIf { !it.handedOver }?.armed?.from ?: player.currentMediaItem?.mediaId
 
     /** The key an error report is attributed to; null when there is nothing to attribute it to (after `Stop`). */
     internal fun errorKey(): String? = currentKey() ?: lastLoadedKey
@@ -413,22 +501,31 @@ class ExoBackend(
         when (command) {
             is BackendCommand.Load -> {
                 val d = command.data
-                val sources = listOfNotNull(mediaSource(d.source), d.next?.let(::mediaSource))
+                resetTransition()
+                sources.clear()
+                val items = listOfNotNull(mediaSource(d.source), d.next?.let(::mediaSource))
                 lastLoadedKey = d.source.key
                 cancelRecovery()
-                player.setMediaSources(sources, 0, d.position_ms.toLong())
+                mixControl.items.keys.retainAll(sources.keys)
+                player.setMediaSources(items, 0, d.position_ms.toLong())
+                arm(d.source, d.next)
                 refreshLocality()
                 applyGain(d.source.gainDb)
                 player.playWhenReady = d.play
                 player.prepare()
+                analyseWindow()
             }
             is BackendCommand.SetNext -> {
                 // With no current item (after Stop) a follow-up would become the current item and
                 // later play under the wrong key; the next `Load` carries its own `next`.
                 if (player.mediaItemCount == 0) return
-                while (player.mediaItemCount > 1) player.removeMediaItem(player.mediaItemCount - 1)
-                command.data.next?.let { player.addMediaSource(mediaSource(it)) }
-                refreshLocality()
+                // During the overlap the newest follow-up waits for the handover; the transition
+                // that is sounding keeps its B.
+                running?.takeIf { !it.handedOver }?.let { r ->
+                    if (command.data.next?.key != r.armed.to) r.held = Held(command.data.next)
+                    return
+                }
+                applySetNext(command.data.next)
             }
             BackendCommand.Play -> {
                 if (player.playbackState == Player.STATE_IDLE) player.prepare()
@@ -440,10 +537,11 @@ class ExoBackend(
                 stopPositionLoop()
                 cancelRecovery()
                 lastLoadedKey = null
+                resetTransition()
                 player.stop()
                 player.clearMediaItems()
             }
-            is BackendCommand.Seek -> player.seekTo(command.data.position_ms.toLong())
+            is BackendCommand.Seek -> seek(command.data.position_ms.toLong())
             is BackendCommand.SetVolume -> {
                 masterVolume = command.data.volume.coerceIn(0.0, 1.0)
                 applyGain(currentGainDb)
@@ -482,7 +580,10 @@ class ExoBackend(
             is BackendCommand.SetGapless -> {
                 // ExoPlayer joins playlist items gaplessly whenever encoder delay/padding metadata allows;
                 // "off" is modelled by not preloading a follow-up (the core stops sending `next`).
-                if (!command.data.enabled) while (player.mediaItemCount > 1) player.removeMediaItem(player.mediaItemCount - 1)
+                if (!command.data.enabled && running == null) {
+                    while (player.mediaItemCount > player.currentMediaItemIndex + 1) player.removeMediaItem(player.mediaItemCount - 1)
+                    disarm()
+                }
             }
             is BackendCommand.PreviewLoad -> {
                 // Set before the preview player takes focus, so the main player's focus loss is
@@ -500,9 +601,39 @@ class ExoBackend(
             BackendCommand.PreviewPause -> previewPlayer?.pause()
             is BackendCommand.PreviewSeek -> previewPlayer?.seekTo(command.data.position_ms.toLong())
             BackendCommand.PreviewStop -> stopPreviewPlayer()
-            // AutoMix rendering on Android comes later: no transition ever runs here yet.
-            BackendCommand.CompleteTransition -> Unit
+            BackendCommand.CompleteTransition -> completeTransition()
         }
+    }
+
+    /**
+     * A seek cancels a transition. Before the handover A is "now playing": ExoPlayer goes back to
+     * A, B stays next and its tail stays armed (it mixes again from the tail start) unless the
+     * target is already past it. After it, B seeks and ExoPlayer's positions are true again.
+     */
+    private fun seek(positionMs: Long) {
+        val r = running
+        offsetKey = null
+        mixControl.cancelMix()
+        if (r != null && !r.handedOver) {
+            running = null
+            handoverJob?.cancel()
+            val index = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId == r.armed.from }
+            if (positionMs >= r.armed.tailStartMs && mixControl.armed === r.armed) disarm()
+            if (index != null) player.seekTo(index, positionMs) else player.seekTo(positionMs)
+            r.held?.let { applySetNext(it.next) }
+            applyGain(currentGainDb)
+            return
+        }
+        player.seekTo(positionMs)
+    }
+
+    private fun resetTransition() {
+        running = null
+        handoverJob?.cancel()
+        offsetKey = null
+        mixHeard = null
+        disarm()
+        mixControl.cancelMix()
     }
 
     private fun ensurePreviewPlayer(): ExoPlayer = previewPlayer ?: ExoPlayer.Builder(context)
@@ -573,8 +704,21 @@ class ExoBackend(
         previewJob = null
     }
 
-    /** Current position, or the pre-buffered one when the main player has nothing. */
-    fun position(): UInt = player.currentPosition.coerceAtLeast(0).toUInt()
+    /**
+     * The reported position: before a transition's handover A's (its tail start plus the tail
+     * played, at the tail's average speed); after it B's true position ([offsetMs]).
+     */
+    fun position(): UInt {
+        val exo = player.currentPosition.coerceAtLeast(0)
+        running?.takeIf { !it.handedOver }?.let { r ->
+            val a = r.armed
+            val played = exo.coerceAtMost(a.tailLenMs)
+            val source = if (a.tailLenMs > 0) played * a.tailSourceMs / a.tailLenMs else played
+            return (a.tailStartMs + source).toUInt()
+        }
+        if (offsetKey != null && offsetKey == player.currentMediaItem?.mediaId) return (exo + offsetMs).coerceAtLeast(0).toUInt()
+        return exo.toUInt()
+    }
 
     /**
      * ExoPlayer moved on to the preloaded follow-up by itself. Reports the played item's `Ended`
@@ -582,11 +726,165 @@ class ExoBackend(
      */
     internal fun onAutoTransition(mediaItem: MediaItem) {
         val played = if (player.currentMediaItemIndex > 0) player.getMediaItemAt(0).mediaId else null
+        val heard = mixHeard
+        mixHeard = null
+        offsetKey = null
+        if (heard != null && heard.to == mediaItem.mediaId && heard.from == played) {
+            startTransition(heard)
+            return
+        }
         if (player.currentMediaItemIndex > 0) player.removeMediaItem(0)
         applyGain(gainFor(mediaItem))
+        // The follow-up of the item now playing arrives with the core's next `SetNext`.
+        disarm()
+        analyseWindow()
         if (played != null && played != mediaItem.mediaId) report(BackendReport.Ended(BackendReportEndedInner(played)))
         report(BackendReport.TransitionedToNext(BackendReportTransitionedToNextInner(mediaItem.mediaId)))
         report(BackendReport.Position(BackendReportPositionInner(mediaItem.mediaId, 0u)))
+    }
+
+    // -- AutoMix ------------------------------------------------------------------------------
+
+    /** ExoPlayer moved on to B and the processor is mixing: the tail is heard. */
+    private fun startTransition(armed: MixControl.Armed) {
+        val r = Running(armed)
+        running = r
+        offsetKey = armed.to
+        offsetMs = armed.incomingFromMs - armed.incomingAtMs
+        applyGain(currentGainDb)
+        PlaybackLog.i("AutoMix: transition ${armed.from} -> ${armed.to} started")
+        report(
+            BackendReport.TransitionStarted(
+                BackendReportTransitionStartedInner(armed.from, armed.to, armed.tailLenMs.toUInt(), armed.incomingAtMs.toUInt(), armed.handoverMs.toUInt()),
+            ),
+        )
+        handoverJob?.cancel()
+        handoverJob = scope.launch {
+            while (isActive && running === r && !r.handedOver) {
+                if (player.currentMediaItem?.mediaId == armed.to && player.currentPosition >= armed.handoverMs) {
+                    handOver(reportPosition = true)
+                    break
+                }
+                delay(HANDOVER_POLL_MS)
+            }
+        }
+    }
+
+    /** The handover: `Ended(A)`, `TransitionedToNext(B)` (and B's position); A leaves the playlist. */
+    private fun handOver(reportPosition: Boolean) {
+        val r = running?.takeIf { !it.handedOver } ?: return
+        r.handedOver = true
+        running = null
+        handoverJob?.cancel()
+        val a = r.armed
+        val index = player.currentMediaItemIndex
+        (0 until index).firstOrNull { player.getMediaItemAt(it).mediaId == a.from }?.let(player::removeMediaItem)
+        if (mixControl.armed === a) mixControl.armed = null
+        report(BackendReport.Ended(BackendReportEndedInner(a.from)))
+        report(BackendReport.TransitionedToNext(BackendReportTransitionedToNextInner(a.to)))
+        if (reportPosition) report(BackendReport.Position(BackendReportPositionInner(a.to, position())))
+        r.held?.let { applySetNext(it.next) }
+        refreshLocality()
+        analyseWindow()
+    }
+
+    /**
+     * `complete_transition`: hand over now if that hasn't happened and play B alone from where it
+     * is (a seek drops the tail still queued in the sink).
+     */
+    private fun completeTransition() {
+        val r = running
+        if (r == null && offsetKey == null) {
+            mixControl.cancelMix()
+            return
+        }
+        if (r != null) handOver(reportPosition = false)
+        val p = position().toLong()
+        offsetKey = null
+        mixControl.cancelMix()
+        player.seekTo(player.currentMediaItemIndex, p)
+    }
+
+    /** `SetNext`: replace what follows the current item and arm its transition. */
+    private fun applySetNext(next: CoreMediaSource?) {
+        if (player.mediaItemCount == 0) return
+        while (player.mediaItemCount > player.currentMediaItemIndex + 1) player.removeMediaItem(player.mediaItemCount - 1)
+        next?.let { player.addMediaSource(mediaSource(it)) }
+        arm(player.currentMediaItem?.mediaId?.let(sources::get), next)
+        refreshLocality()
+        analyseWindow()
+    }
+
+    /**
+     * Arm the transition from [current] into [next] (its `mix_in`), keeping a tail already rendered
+     * for the same pair and plan; anything else disarms. The tail is rendered once A is within
+     * [PREPARE_AHEAD_MS] of the tail start.
+     */
+    private fun arm(current: CoreMediaSource?, next: CoreMediaSource?) {
+        val plan = next?.mixIn
+        if (current == null || next == null || plan == null || processor == null) {
+            disarm()
+            return
+        }
+        val json = HocketJson.json.encodeToString(TransitionPlan.serializer(), plan)
+        mixControl.armed?.let { if (it.from == current.key && it.to == next.key && it.planJson == json) return }
+        disarm()
+        val armed = MixControl.Armed(
+            from = current.key, to = next.key, planJson = json,
+            incomingAtMs = plan.incomingAtMs.toLong(), incomingFromMs = plan.incomingFromMs.toLong(),
+            tailLenMs = plan.tailLenMs.toLong(), handoverMs = plan.handoverMs.toLong(),
+            tailStartMs = plan.tailStartMs.toLong(), tailSourceMs = plan.tailSourceMs.toLong(),
+        )
+        mixControl.armed = armed
+        val settings = mixControl.audioSettingsJson
+        tailJob = scope.launch {
+            while (isActive) {
+                val onA = player.currentMediaItem?.mediaId == current.key
+                if (onA && player.currentPosition >= armed.tailStartMs - PREPARE_AHEAD_MS) break
+                delay(1_000)
+            }
+            val job = coroutineContext[Job]
+            val tail = withContext(tailDispatcher) { renderTail(current, next, armed, settings) { job?.isActive != true } }
+            if (tail != null && mixControl.armed === armed) armed.tail = tail
+        }
+    }
+
+    private fun disarm() {
+        tailJob?.cancel()
+        tailJob = null
+        mixControl.armed = null
+    }
+
+    /** Decode A's tail, then DSP, resample to B's format and render it in Rust. Null on failure (logged). */
+    private fun renderTail(a: CoreMediaSource, b: CoreMediaSource, armed: MixControl.Armed, settings: String?, cancelled: () -> Boolean): MixControl.Tail? = try {
+        val started = System.nanoTime()
+        val decoder = PcmDecoder(streams)
+        val pcm = decoder.decode(a.url, a.headers, armed.tailStartMs, armed.tailSourceMs + 50, cancelled)
+        val (rate, channels) = decoder.probe(b.url, b.headers)
+        val samples = ffi.prepareTail(armed.planJson, pcm, channels, rate, settings, a.gainDb)
+        PlaybackLog.i("AutoMix: tail ${a.key} -> ${b.key} ready (${pcm.durationMs} ms of A at ${pcm.rate} Hz -> ${armed.tailLenMs} ms at $rate Hz) in ${(System.nanoTime() - started) / 1_000_000} ms")
+        MixControl.Tail(samples, rate, channels)
+    } catch (e: InterruptedException) {
+        null
+    } catch (e: Throwable) {
+        PlaybackLog.w("AutoMix: tail ${a.key} -> ${b.key} failed: ${e.javaClass.simpleName}: ${e.message}")
+        null
+    }
+
+    /** The core's audio settings: the in-app EQ (and normalisation) for the DSP chain, live. */
+    fun onAudioSettings(settings: AudioSettings) {
+        mixControl.audioSettingsJson = HocketJson.json.encodeToString(AudioSettings.serializer(), settings)
+    }
+
+    /** Loudness-only records for the window (current, next, next-next) when AutoMix is on. */
+    private fun analyseWindow() {
+        if (dsp == null) return
+        val current = player.currentMediaItem?.mediaId?.let(sources::get)
+        val next = (player.currentMediaItemIndex + 1).takeIf { it < player.mediaItemCount }?.let { sources[player.getMediaItemAt(it).mediaId] }
+        val candidates = ArrayList<LoudnessRecorder.Candidate>()
+        listOfNotNull(current, next).forEach { candidates += LoudnessRecorder.Candidate(it.track.id, it.track.durationMs.toLong(), it) }
+        queueView?.upcomingEntries?.getOrNull(1)?.let { candidates += LoudnessRecorder.Candidate(it.track.id, it.track.durationMs.toLong(), null) }
+        loudness.onWindow(candidates.distinctBy { it.trackId })
     }
 
     private fun cancelRecovery() {
@@ -597,6 +895,10 @@ class ExoBackend(
     }
 
     fun release() {
+        resetTransition()
+        loudness.cancel()
+        tailDispatcher.close()
+        analysisDispatcher.close()
         stopPositionLoop()
         cancelRecovery()
         preBufferPlayer?.release()
@@ -674,7 +976,11 @@ class ExoBackend(
      * The core's queue changed, which it does whenever a queued track's cache state changes (the
      * burst fetch completed it, the budget evicted it): ask the core again what is local.
      */
-    fun onQueueChanged() = refreshLocality()
+    fun onQueueChanged(queue: QueueView? = null) {
+        if (queue != null) queueView = queue
+        refreshLocality()
+        analyseWindow()
+    }
 
     /** Whether playing [item] needs no network: a core stream by the core's latest answer, else the resolve-time flag. */
     private fun isLocal(item: MediaItem): Boolean {
@@ -719,7 +1025,8 @@ class ExoBackend(
 
     private fun applyGain(gainDb: Double) {
         currentGainDb = gainDb
-        val linear = 10.0.pow(gainDb / 20.0)
+        // The DSP chain applies the track gain (boost included) at the right sample.
+        val linear = if (processor != null) 1.0 else 10.0.pow(gainDb / 20.0)
         player.volume = (linear * masterVolume).coerceIn(0.0, 1.0).toFloat()
     }
 
@@ -733,12 +1040,18 @@ class ExoBackend(
             putDouble("gainDb", source.gainDb)
             putBoolean("local", local)
         }
-        val item = MediaItem.Builder()
+        sources[source.key] = source
+        mixControl.items[source.key] = MixControl.Item(source.gainDb, source.mixOutMs?.toLong())
+        val builder = MediaItem.Builder()
             .setMediaId(source.key)
             .setUri(Uri.parse(source.url))
             .setMimeType(source.mimeType)
             .setRequestMetadata(MediaItem.RequestMetadata.Builder().setExtras(extras).build())
-            .build()
+        // AutoMix commits early: the tail replaces everything from the mix-out point on.
+        if (processor != null) {
+            source.mixOutMs?.let { builder.setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setEndPositionMs(it.toLong()).build()) }
+        }
+        val item = builder.build()
         return mediaSourceFactory(source.headers).createMediaSource(item)
     }
 }
