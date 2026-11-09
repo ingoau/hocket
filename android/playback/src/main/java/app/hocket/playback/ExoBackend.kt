@@ -729,7 +729,9 @@ class ExoBackend(
         val heard = mixHeard
         mixHeard = null
         offsetKey = null
-        if (heard != null && heard.to == mediaItem.mediaId && heard.from == played) {
+        // The processor's post can land after a reset (a `Load`, a seek): only the transition still
+        // armed counts.
+        if (heard != null && heard === mixControl.armed && heard.to == mediaItem.mediaId && heard.from == played) {
             startTransition(heard)
             return
         }
@@ -836,7 +838,6 @@ class ExoBackend(
             tailStartMs = plan.tailStartMs.toLong(), tailSourceMs = plan.tailSourceMs.toLong(),
         )
         mixControl.armed = armed
-        val settings = mixControl.audioSettingsJson
         tailJob = scope.launch {
             while (isActive) {
                 val onA = player.currentMediaItem?.mediaId == current.key
@@ -844,7 +845,8 @@ class ExoBackend(
                 delay(1_000)
             }
             val job = coroutineContext[Job]
-            val tail = withContext(tailDispatcher) { renderTail(current, next, armed, settings) { job?.isActive != true } }
+            // The settings as they are now: an EQ change since arming applies to the tail too.
+            val tail = withContext(tailDispatcher) { renderTail(current, next, armed, mixControl.audioSettingsJson) { job?.isActive != true } }
             if (tail != null && mixControl.armed === armed) armed.tail = tail
         }
     }
