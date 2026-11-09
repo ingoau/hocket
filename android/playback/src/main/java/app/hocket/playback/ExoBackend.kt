@@ -53,9 +53,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Executors
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -92,7 +95,11 @@ import kotlin.math.roundToInt
  *   heard), the handover (`Ended(A)`, `TransitionedToNext(B)`, `Position(B, p)`) when B's position
  *   reaches `handover_ms`. Until then reports name A at its tail position; after it B's position is
  *   mapped back by `incoming_from_ms − incoming_at_ms` (the processor plays the tail's lead-in ahead
- *   of B) until the next seek. A tail that isn't ready at A's clip point means B starts unmixed.
+ *   of B) until the next seek. An item is clipped only while a transition out of it can still run:
+ *   when the core drops it (`SetNext` without `mix_in` or with none, gapless off) the item is
+ *   rebuilt without the clip at the same position, once a transition into it has stopped sounding;
+ *   the same happens [LATE_TAIL_MS] before the clip point when no tail is ready by then (a slow or
+ *   failed render), so A plays to its end and B joins gaplessly instead of A's end being lost.
  * - The phone's volume is the system music volume, with no second volume in the app: the player's
  *   device volume (the music stream) is reported as `SystemVolume` at start and on every change
  *   (keys, the system panel, another app, a headset), and `SetSystemVolume` sets it. A device whose
@@ -147,6 +154,11 @@ class ExoBackend(
         private const val HANDOVER_POLL_MS = 40L
         /** A's tail is decoded and rendered once A is this close to its tail start. */
         private const val PREPARE_AHEAD_MS = 60_000L
+        /**
+         * A clipped item whose tail isn't ready this long before its clip point is unclipped: the
+         * sink and the decoder run up to about a second ahead of what is heard.
+         */
+        internal const val LATE_TAIL_MS = 2_000L
         private val RECOVERY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
         /** Outputs that count as headphones for headphone handoff. */
         private val HEADPHONE_KINDS = setOf(AudioOutputs.Kind.Bluetooth, AudioOutputs.Kind.Wired, AudioOutputs.Kind.Usb)
@@ -322,6 +334,30 @@ class ExoBackend(
     private var offsetKey: String? = null
     private var offsetMs = 0L
     private var queueView: QueueView? = null
+    /** After a transition, ExoPlayer's position in B where the tail stops sounding. */
+    private var mixTailEndMs = 0L
+    /** The current item whose clip the core dropped; unclipped once nothing into it sounds ([guardClip]). */
+    private var unclipWanted: String? = null
+    private var guardJob: Job? = null
+
+    /**
+     * Bumped (main thread) whenever what a waiting AutoMix job watches may have changed: playing or
+     * not, a seek, another item, an arm, a tail ready. Jobs sleep on it rather than polling.
+     */
+    private val wake = MutableStateFlow(0L)
+
+    private fun poke() {
+        wake.value = wake.value + 1
+    }
+
+    /** Sleep until [poke]d after [seen], or [timeoutMs] (null: no timeout). */
+    private suspend fun awaitWake(seen: Long, timeoutMs: Long?) {
+        if (timeoutMs == null) wake.first { it != seen } else withTimeoutOrNull(timeoutMs.coerceAtLeast(1)) { wake.first { it != seen } }
+    }
+
+    /** Wall time for [mediaMs] of the current item while it plays; null while it doesn't (a change pokes). */
+    private fun playTimeFor(mediaMs: Long): Long? =
+        if (player.isPlaying) (mediaMs / player.playbackParameters.speed.coerceAtLeast(0.1f)).toLong().coerceAtLeast(1) else null
     private val tailDispatcher = Executors.newSingleThreadExecutor { r -> Thread(r, "automix-tail") }.asCoroutineDispatcher()
     private val analysisDispatcher = Executors.newSingleThreadExecutor { r ->
         Thread({ Process.setThreadPriority(Process.THREAD_PRIORITY_LOWEST); r.run() }, "automix-analysis")
@@ -360,6 +396,7 @@ class ExoBackend(
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                poke()
                 val key = currentKey() ?: return
                 if (isPlaying) {
                     effects.open(player.audioSessionId)
@@ -410,11 +447,13 @@ class ExoBackend(
             override fun onDeviceInfoChanged(deviceInfo: androidx.media3.common.DeviceInfo) = reportSystemVolume()
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                poke()
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) onAutoTransition(mediaItem)
                 refreshLocality()
             }
 
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                poke()
                 if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
                     currentKey()?.let { report(BackendReport.Position(BackendReportPositionInner(it, newPosition.positionMs.coerceAtLeast(0).toUInt()))) }
                 }
@@ -443,6 +482,8 @@ class ExoBackend(
         })
         // The core mirrors the music volume from here on.
         reportSystemVolume()
+        // Nothing is ever clipped without the processor.
+        if (processor != null) guardJob = scope.launch { guardClip() }
     }
 
     private fun scheduleRecovery(key: String, delayMs: Long) {
@@ -519,7 +560,8 @@ class ExoBackend(
                 val d = command.data
                 resetTransition()
                 sources.clear()
-                val items = listOfNotNull(mediaSource(d.source), d.next?.let(::mediaSource))
+                // Clipped only when a transition out of it is planned; a later plan finds it unclipped and plays gapless.
+                val items = listOfNotNull(mediaSource(d.source, clip = d.next?.mixIn != null), d.next?.let { mediaSource(it) })
                 lastLoadedKey = d.source.key
                 cancelRecovery()
                 mixControl.items.keys.retainAll(sources.keys)
@@ -599,6 +641,7 @@ class ExoBackend(
                 if (!command.data.enabled && running == null) {
                     while (player.mediaItemCount > player.currentMediaItemIndex + 1) player.removeMediaItem(player.mediaItemCount - 1)
                     disarm()
+                    dropClip()
                 }
             }
             is BackendCommand.PreviewLoad -> {
@@ -648,6 +691,7 @@ class ExoBackend(
         handoverJob?.cancel()
         offsetKey = null
         mixHeard = null
+        unclipWanted = null
         disarm()
         mixControl.cancelMix()
     }
@@ -769,6 +813,7 @@ class ExoBackend(
         running = r
         offsetKey = armed.to
         offsetMs = armed.incomingFromMs - armed.incomingAtMs
+        mixTailEndMs = armed.tailLenMs
         applyGain(currentGainDb)
         PlaybackLog.i("AutoMix: transition ${armed.from} -> ${armed.to} started")
         report(
@@ -804,6 +849,7 @@ class ExoBackend(
         r.held?.let { applySetNext(it.next) }
         refreshLocality()
         analyseWindow()
+        poke()
     }
 
     /**
@@ -835,15 +881,19 @@ class ExoBackend(
 
     /**
      * Arm the transition from [current] into [next] (its `mix_in`), keeping a tail already rendered
-     * for the same pair and plan; anything else disarms. The tail is rendered once A is within
-     * [PREPARE_AHEAD_MS] of the tail start.
+     * for the same pair and plan; anything else disarms, and a current item clipped for a transition
+     * that won't run anymore is unclipped ([dropClip]). Only a clipped item can mix (unclipped, its
+     * end would play twice). The tail is rendered once A is within [PREPARE_AHEAD_MS] of the tail
+     * start, waiting for the time left rather than polling (nothing while paused).
      */
     private fun arm(current: CoreMediaSource?, next: CoreMediaSource?) {
         val plan = next?.mixIn
-        if (current == null || next == null || plan == null || processor == null) {
+        if (current == null || next == null || plan == null || processor == null || mixControl.items[current.key]?.clipEndMs == null) {
             disarm()
+            dropClip()
             return
         }
+        unclipWanted = null
         val json = HocketJson.json.encodeToString(TransitionPlan.serializer(), plan)
         mixControl.armed?.let { if (it.from == current.key && it.to == next.key && it.planJson == json) return }
         disarm()
@@ -854,17 +904,93 @@ class ExoBackend(
             tailStartMs = plan.tailStartMs.toLong(), tailSourceMs = plan.tailSourceMs.toLong(),
         )
         mixControl.armed = armed
+        poke()
         tailJob = scope.launch {
-            while (isActive) {
+            val prepareAt = armed.tailStartMs - PREPARE_AHEAD_MS
+            while (true) {
+                val seen = wake.value
                 val onA = player.currentMediaItem?.mediaId == current.key
-                if (onA && player.currentPosition >= armed.tailStartMs - PREPARE_AHEAD_MS) break
-                delay(1_000)
+                val pos = player.currentPosition
+                if (onA && pos >= prepareAt) break
+                awaitWake(seen, if (onA) playTimeFor(prepareAt - pos) else null)
             }
             val job = coroutineContext[Job]
             // The settings as they are now: an EQ change since arming applies to the tail too.
             val tail = withContext(tailDispatcher) { renderTail(current, next, armed, mixControl.audioSettingsJson) { job?.isActive != true } }
-            if (tail != null && mixControl.armed === armed) armed.tail = tail
+            // A failed render leaves the tail missing: [guardClip] unclips A before its clip point.
+            if (tail != null && mixControl.armed === armed) {
+                armed.tail = tail
+                poke()
+            }
         }
+    }
+
+    /**
+     * The core dropped the transition out of the current item (no `mix_in` next, no next, gapless
+     * off): unclip the item, now or once a transition into it has stopped sounding.
+     */
+    private fun dropClip() {
+        val key = player.currentMediaItem?.mediaId ?: return
+        if (mixControl.items[key]?.clipEndMs == null) return
+        unclipWanted = key
+        guardStep()
+        poke()
+    }
+
+    /** Runs while the backend lives, asleep (on [wake]) unless the current item is clipped. */
+    private suspend fun guardClip() {
+        while (true) {
+            val seen = wake.value
+            awaitWake(seen, guardStep())
+        }
+    }
+
+    /**
+     * One look at the current item's clip; returns how long until the next look (null: when poked).
+     * The item is unclipped when the core dropped its transition ([unclipWanted]) and nothing into
+     * it sounds anymore, or when its position reaches [LATE_TAIL_MS] before the clip point without
+     * a ready tail (none planned, or a render that is late or failed).
+     */
+    private fun guardStep(): Long? {
+        // During an overlap ExoPlayer is on B, whose clip point is a track away; the handover pokes.
+        if (running != null) return null
+        val key = player.currentMediaItem?.mediaId ?: return null
+        if (unclipWanted != null && unclipWanted != key) unclipWanted = null
+        val clip = mixControl.items[key]?.clipEndMs ?: return null
+        if (unclipWanted == key) {
+            // The tail of the transition into this item is still summed in: unclipping now would cut it.
+            val exo = player.currentPosition
+            if (offsetKey == key && exo < mixTailEndMs) return playTimeFor(mixTailEndMs - exo)
+            unclipCurrent("its transition was dropped")
+            return null
+        }
+        val armed = mixControl.armed?.takeIf { it.from == key }
+        if (armed?.tail != null) return null
+        val left = clip - LATE_TAIL_MS - position().toLong()
+        if (left > 0) return playTimeFor(left)
+        if (armed != null) disarm()
+        unclipCurrent(if (armed != null) "tail not ready" else "no transition planned")
+        return null
+    }
+
+    /**
+     * Rebuild the current item without its clip, at the same position (B's real one after a mixed
+     * transition): ExoPlayer can't change a clip in place, so the item is replaced, which re-buffers
+     * it (from the cache or the file) — a short gap instead of losing everything after the clip.
+     */
+    private fun unclipCurrent(why: String) {
+        unclipWanted = null
+        val index = player.currentMediaItemIndex
+        val key = player.currentMediaItem?.mediaId ?: return
+        if (mixControl.items[key]?.clipEndMs == null) return
+        val source = sources[key] ?: return
+        val p = position().toLong()
+        PlaybackLog.i("AutoMix: $key plays to its end ($why), from $p ms")
+        offsetKey = null
+        player.addMediaSource(index + 1, mediaSource(source, clip = false))
+        player.removeMediaItem(index)
+        player.seekTo(index, p)
+        refreshLocality()
     }
 
     private fun disarm() {
@@ -913,6 +1039,7 @@ class ExoBackend(
     }
 
     fun release() {
+        guardJob?.cancel()
         resetTransition()
         loudness.cancel()
         tailDispatcher.close()
@@ -1052,23 +1179,23 @@ class ExoBackend(
         DefaultMediaSourceFactory(CoreStreamDataSourceFactory(context, streams, headers))
             .setLoadErrorHandlingPolicy(CoreStreamLoadErrorPolicy())
 
-    private fun mediaSource(source: CoreMediaSource): MediaSource {
+    /** [clip]: cut the item at its `mix_out_ms` (AutoMix, with the processor only). */
+    private fun mediaSource(source: CoreMediaSource, clip: Boolean = true): MediaSource {
         val local = source.local == true || source.url.startsWith("file:")
         val extras = android.os.Bundle().apply {
             putDouble("gainDb", source.gainDb)
             putBoolean("local", local)
         }
         sources[source.key] = source
-        mixControl.items[source.key] = MixControl.Item(source.gainDb, source.mixOutMs?.toLong())
+        val clipEndMs = source.mixOutMs?.toLong()?.takeIf { clip && processor != null }
+        mixControl.items[source.key] = MixControl.Item(source.gainDb, clipEndMs)
         val builder = MediaItem.Builder()
             .setMediaId(source.key)
             .setUri(Uri.parse(source.url))
             .setMimeType(source.mimeType)
             .setRequestMetadata(MediaItem.RequestMetadata.Builder().setExtras(extras).build())
         // AutoMix commits early: the tail replaces everything from the mix-out point on.
-        if (processor != null) {
-            source.mixOutMs?.let { builder.setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setEndPositionMs(it.toLong()).build()) }
-        }
+        clipEndMs?.let { builder.setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setEndPositionMs(it).build()) }
         val item = builder.build()
         return mediaSourceFactory(source.headers).createMediaSource(item)
     }
