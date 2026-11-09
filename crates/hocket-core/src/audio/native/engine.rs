@@ -1320,6 +1320,12 @@ impl Engine {
         let start = t.frame;
         let end = start + BLOCK;
         let b_need = end.saturating_sub(start.max(t.incoming_at));
+        // Buffering reports go out under the item the listener hears.
+        let heard_key = if t.handed_over {
+            t.to.clone()
+        } else {
+            t.from.clone()
+        };
         while t.incoming.len() / out_ch < b_need && !t.incoming_done {
             let cur = self.current.as_mut().expect("B is current");
             let before = t.incoming.len();
@@ -1342,12 +1348,27 @@ impl Engine {
                     return Step::Continue;
                 }
                 if !cur.handle.queue.is_eof() {
-                    // B is late: wait for it rather than drop its audio.
+                    // B is late: wait for it rather than drop its audio, and
+                    // say so, as the plain path does.
+                    let report = !cur.buffering;
+                    cur.buffering = true;
                     self.transition = Some(t);
+                    if report {
+                        self.report(BackendReport::Buffering {
+                            key: heard_key,
+                            buffering: true,
+                        });
+                    }
                     return Step::Wait;
                 }
                 flush_source(cur, &mut t.incoming);
                 t.incoming_done = true;
+            } else if cur.buffering {
+                cur.buffering = false;
+                self.report(BackendReport::Buffering {
+                    key: heard_key.clone(),
+                    buffering: false,
+                });
             }
             t.shaper.process(&mut t.incoming[before..]);
         }
@@ -2946,5 +2967,34 @@ mod tests {
             rig.count(|r| matches!(r, BackendReport::TransitionedToNext { .. })),
             0
         );
+    }
+
+    /// A follow-up that can't keep up during the overlap reports buffering
+    /// (under the item heard) and its end, as the plain path does.
+    #[test]
+    fn a_late_follow_up_reports_buffering_during_the_overlap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("slow.wav");
+        write_sine(&p, 48_000, 2_000, 660.0);
+        // ~0.2× real time.
+        let fetcher = MemoryFetcher {
+            chunk: 4096,
+            delay: Duration::from_millis(100),
+            ..MemoryFetcher::new(std::fs::read(&p).unwrap())
+        };
+        let rig = rig_with(Arc::new(fetcher));
+        let a = rig.sine("a.wav", 48_000, 2_000, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 2_000, 660.0);
+        b.url = "https://navidrome.example/rest/stream?id=slow&format=wav".into();
+        b.mix_in = Some(fade_plan(1_000, 1_500, 0, 1_200));
+        rig.start(a, b);
+        let buffering = |on: bool| {
+            move |r: &BackendReport| {
+                matches!(r, BackendReport::Buffering { key, buffering } if key == "a.wav" && *buffering == on)
+            }
+        };
+        rig.wait_for(Duration::from_secs(10), is_started);
+        rig.wait_for(Duration::from_secs(10), buffering(true));
+        rig.wait_for(Duration::from_secs(10), buffering(false));
     }
 }
