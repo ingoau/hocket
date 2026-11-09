@@ -306,13 +306,24 @@ The planner is deterministic: same inputs → same plan on every device.
   the tracker's raw downbeats the regular grid keeps, and the beats' share
   of the audible span. `apply_grid(record, raw)` rebuilds a record's grid
   from the refined tracker output (`RawBeats`), which the mixlab caches.
-- **Cost** (i7-8650U, 8 threads, host heavily loaded by other jobs):
-  a 3:54 FLAC takes ~27 s CPU single-threaded (35 s wall); peak RSS
-  ~480 MB with one thread (rten's working buffers for the 30 s chunks the
-  model runs on; independent of track length beyond the mel spectrogram,
-  ~1.5 MB/min). Embedding costs ~15 MB of binary (10.8 MB of models, ~4 MB
-  of rten/rustfft code) in whatever links a caller; the desktop addon only
-  grows once phase 3b calls it (today +42 KB).
+- **Cost** (mixlab release build, one inference thread, i7-8650U with the
+  host heavily loaded by other jobs, so read as upper bounds): ~0.11 s of
+  CPU per second of audio (a 3:54 FLAC: 27 s CPU, 35 s wall; 1:01: 9 s;
+  8:22: 54 s). Peak RSS ~470–485 MB whatever the length: rten's working
+  buffers for the 30 s chunks the model runs on, plus the mel spectrogram
+  (~1.5 MB/min). More threads (`Analyser::new(0)`) did not help on the
+  loaded host. Binary: ~15 MB more in whatever links a caller (10.8 MB of
+  models in `.rodata`, ~4 MB of rten/rustfft code); the desktop addon
+  grew only 42 KB so far because nothing in hocket-node calls analysis yet.
+- **Corpus results** (100 tracks, `stats --pairs 500 --seed 1`, AutoMix):
+  94 records with confidence ≥ 0.5 (median 0.82); A's tail grid passes the
+  planner's gate on 74, B's head on 62. Fade 91.8 % (overlap median 4.9 s,
+  p90 9.1 s), TempoBlend 8.0 % (median 19.5 s, max 32.8 s, stretch median
+  4.7 %, max 7.8 %), Blend 0.2 %. Beat-aligned fades by A's bars: 1: 20,
+  2: 162, 3: 87, 4: 54, more: 22. Before the grid tidying in `grid.rs`
+  only 9 of 38 tails passed the gate; before the 4 s fade minimum most
+  beat-aligned fades were a single bar. 80 rendered pairs: no non-finite
+  samples, peak ≤ −0.00 dBFS after the limiter, exact lengths.
 
 ## Platforms
 
