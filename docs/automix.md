@@ -397,8 +397,12 @@ The planner is deterministic: same inputs → same plan on every device.
     first frame after such a flush is the item's first frame, sample-exact,
     and the track gain snaps there. No frame counting against durations.
   - **Clipping**: an item with `mix_out_ms` gets
-    `ClippingConfiguration(endPositionMs)`; the processor also drops frames
-    past the clip end (ExoPlayer clips by whole decoder buffers).
+    `ClippingConfiguration(endPositionMs)` (on `load` only when its `next`
+    has `mix_in`); the processor also drops frames past the clip end
+    (ExoPlayer clips by whole decoder buffers). Only a clipped item arms a
+    transition (unclipped, A's end would play twice). With nothing to do (no
+    mix, no clip in the buffer, a `DspChain::is_bypassed` chain) a buffer
+    passes through untouched: no float conversion, no JNI.
   - **Tail**: when the next source carries `mix_in`, the transition is armed
     (same pair and plan keep a rendered tail; the newest `set_next` wins
     before the tail starts). Once A is within 60 s of `tail_start_ms` one
@@ -430,9 +434,21 @@ The planner is deterministic: same inputs → same plan on every device.
     `complete_transition` hands over and seeks B to its position, which
     drops the tail queued in the sink. A `set_next` during the overlap is
     held until the handover. Pause/play pause both (one output).
-  - **Fallback**: a tail not ready (or failed, or at another format than B
-    turned out to have) when B's first frame arrives → B starts unmixed at
-    A's clip point, logged. A's audio after `mix_out_ms` is then lost.
+  - **Fallback (unclip)**: ExoPlayer can't change a clip in place, so a
+    clipped current item is replaced by an unclipped copy at the same
+    position (a short re-buffer from the cache or file, instead of losing
+    A's end): when the core drops its transition (a `set_next` without
+    `mix_in` — mode Off, sleep at end of track — or with no next, gapless
+    off), once a transition into it has stopped sounding; and 2 s before
+    the clip point when no tail is ready (render late or failed), so A plays
+    to its end and B joins gaplessly. These waits (and the tail render's
+    60 s lead) sleep until the time left at the playback speed, or until
+    play state, a seek or the item changes; nothing runs while paused. A
+    tail at another format than B turned out to have → B starts unmixed at
+    A's clip point, logged (A's audio after `mix_out_ms` is then lost).
+  - **Error recovery** during or after a mixed transition hands over and
+    seeks B to its real position before re-preparing (the queued tail is
+    gone and ExoPlayer's position is offset).
   - **Loudness-only records**: with the mode on AutoMix, on each window
     change the first of current / next / next-next (from the queue) with no
     usable record (`Query::TrackAnalysis`, version and duration checked in
@@ -441,7 +457,8 @@ The planner is deterministic: same inputs → same plan on every device.
     last 60 s decoded with `MediaCodec` on one lowest-priority thread,
     `automix_loudness_record` (producer Device, fingerprint: the library
     duration, size and suffix unknown) and `Command::StoreAnalysisRecord`.
-    One at a time, each track tried once per process.
+    One at a time, each track tried once per process; a window change during
+    a pass runs (the newest) after it.
   - **Limitations**: the switch from live A to the tail is not crossfaded
     (desktop crossfades 10 ms), and MediaCodec doesn't trim encoder delay,
     so the tail can start a few tens of ms off A's clip point; B's format is
