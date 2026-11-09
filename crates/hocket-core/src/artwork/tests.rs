@@ -635,3 +635,86 @@ fn a_border_with_a_caption_on_it_carries_on_flat() {
     let l = c.auto();
     assert_eq!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
 }
+
+#[test]
+fn a_solid_margin_under_a_patterned_band_carries_on_flat() {
+    // Perfect Pinterest Garden (Porter Robinson): art over a crimson band tiled with small pink
+    // crosses, a caption on it, and a margin of plain crimson along the bottom. The pattern reads
+    // as grain and the caption as marks, but the cover ends in one colour: carry it on.
+    let crimson = [183, 5, 53];
+    let mut c = noise();
+    c.fill(0, S - 80, S, 80, crimson);
+    for y in (S - 78..S - 4).step_by(6) {
+        for x in (1..S).step_by(6) {
+            c.fill(x + 1, y, 1, 3, [205, 60, 90]);
+            c.fill(x, y + 1, 3, 1, [205, 60, 90]);
+        }
+    }
+    c.caption(20, S - 40, [255; 3]);
+    let l = c.auto();
+    assert_eq!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+    // The margin's own grain (none), not the pattern's, goes over the extension.
+    assert!(l.bottom.metrics.grain < 0.5, "{:?}", l.bottom.metrics);
+}
+
+#[test]
+fn a_texture_running_to_the_edge_is_not_a_solid_margin() {
+    // A crimson band with a fine, low-contrast texture all the way to the edge: one colour to
+    // the eye's tolerance, but no plain row to carry on.
+    let mut c = noise();
+    c.fill(0, S - 80, S, 80, [183, 5, 53]);
+    for y in 0..80 {
+        for x in 0..S {
+            if (x + y) % 3 == 0 {
+                c.set(x, S - 1 - y, [191, 14, 62]);
+            }
+        }
+    }
+    let l = c.auto();
+    assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+}
+
+#[test]
+fn lines_along_the_edge_are_not_a_solid_margin() {
+    // Soft stripes parallel to the edge, all the way out: the outer row (or rows, for stripes
+    // thicker than a pixel) is smooth, but the texture steps from row to row and would stop dead
+    // at a crisp cut. (Stripes 3 px thick are soft enough that the strip's own grain lets them
+    // carry on crisp already.)
+    for (thick, phase) in [(1, 0), (2, 0), (2, 1)] {
+        let mut c = Canvas::new(S, S, [120; 3]);
+        for y in 0..S {
+            let v = if ((y + phase) / thick) % 2 == 0 {
+                120
+            } else {
+                131
+            };
+            c.fill(0, y, S, 1, [v; 3]);
+        }
+        let l = c.auto();
+        assert_ne!(
+            l.bottom.reason, "extend:flat",
+            "{thick} px +{phase}: {:?}",
+            l.bottom
+        );
+    }
+}
+
+#[test]
+fn a_soft_noise_to_the_edge_is_not_a_solid_margin() {
+    // A few levels of noise on grey everywhere: one colour to the eye's tolerance, smooth enough
+    // to pass for JPEG noise in a looser test, but grainier than a crisp edge may be.
+    let mut c = Canvas::new(S, S, [120; 3]);
+    for y in 0..S {
+        for x in 0..S {
+            // A hash, so neighbours are independent: steps of about 2.3 levels both ways.
+            let mut v = (x as u32)
+                .wrapping_mul(374_761_393)
+                .wrapping_add((y as u32).wrapping_mul(668_265_263));
+            v = (v ^ (v >> 13)).wrapping_mul(1_274_126_177);
+            let v = 120 + ((v ^ (v >> 16)) % 7) as u8;
+            c.set(x, y, [v; 3]);
+        }
+    }
+    let l = c.auto();
+    assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
+}
