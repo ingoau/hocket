@@ -56,6 +56,15 @@
 //! `<data-dir>/reports/` over the HTTP routes above, together with this
 //! process's log at that moment. Reports are capped by `--reports-quota-mb`
 //! (oldest finished ones go first) and purged by age every hour.
+//!
+//! AutoMix ([`analysis`], `docs/automix.md` → *Sharing records*): unless
+//! `--no-analysis-store`, the coordinator keeps the preferred analysis record
+//! per (server, track) in `<data-dir>/automix.sqlite`, says so in `Welcome`,
+//! and answers members' `AnalysisFetch` / takes their `AnalysisUpload`
+//! itself (never through the room). The opt-in [`worker`]
+//! (`--analysis-server`) is the one exception to holding no credential: it
+//! logs in with its own account's password to analyse the library, and its
+//! progress shows in `/health` under `analysis`.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};

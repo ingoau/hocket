@@ -366,8 +366,8 @@ The planner is deterministic: same inputs → same plan on every device.
     The record's `source` is replaced by the library fingerprint
     (`transcoded` set for transcoded files) and stored through
     `store_analysis_record`, which replans the follow-up. One at a time,
-    each track tried once per session. `on_analysis_produced` is the seam
-    for uploading to the coordinator.
+    each track tried once per session. `on_analysis_produced` uploads the
+    record (see *Sharing records*).
 - **Android** (`ExoBackend.kt`): A's `MediaItem` carries
   `ClippingConfiguration(endPositionMs = mix_out_ms)`. A Kotlin
   `AudioProcessor` wraps the Rust DSP chain (EQ, ReplayGain incl. boost,
@@ -375,11 +375,126 @@ The planner is deterministic: same inputs → same plan on every device.
   `IncomingShaper`-processed B. The tail is decoded with
   `MediaExtractor`/`MediaCodec` and rendered by `render_tail` through the FFI.
   Android also computes loudness-only records from decoded heads/tails and
-  hands them to the core.
-- **Coordinator**: `AnalysisFetch`/`AnalysisRecords`/`AnalysisUpload` wire
-  messages; SQLite store at `<data>/automix.sqlite` keyed by (normalised
-  server URL, track id); optional worker (`--analysis-user`, password from
-  env/file) that walks the library and analyses originals at low priority.
+  hands them to the core (`Command::StoreAnalysisRecord`, which also
+  uploads them).
+- **Coordinator**: see *Sharing records* and *Coordinator worker*.
+
+## Sharing records
+
+Wire (`connect/wire.rs`, no protocol bump: all optional, and peers ignore
+message types they don't know):
+
+- `Welcome.analysis_store: bool` (`#[serde(default)]`): the hosted
+  coordinator keeps records (`RoomConfig::analysis_store`). LAN rooms never
+  set it, and the engine only believes it from the `Coordinator` tier.
+- `AnalysisFetch { track_ids }` → coordinator (≤ `ANALYSIS_FETCH_MAX` = 64
+  ids; more are dropped). Answered with `AnalysisRecords { records:
+  [AnalysisEntry { track_id, record }] }`, chunked by
+  `ANALYSIS_BATCH_MAX` = 16, always at least one (possibly empty) frame.
+  Only records of the coordinator's `ANALYSIS_VERSION`; misses are left out.
+- `AnalysisUpload { records }` → coordinator (≤ 16; more are dropped). No
+  answer.
+- The engine: `Input::FetchAnalysis` / `Input::UploadAnalysis` go upstream
+  only while the store is advertised; `Output::AnalysisStore(bool)` on
+  every change (false on any upstream loss); `Output::AnalysisRecords`.
+
+Coordinator (`hocket-coordinator/src/analysis.rs`):
+
+- `<data-dir>/automix.sqlite` (in memory without `--data-dir`; off with
+  `--no-analysis-store`), table `records(server, track_id, version,
+  has_beats, produced_by, json, updated_at)`, primary key (server, track
+  id). `server` is `wire::server_key` of the verified server: the
+  credential's `server_url` (or `--verify-url`; with `--no-verify`, the
+  Hello's), trimmed, without a trailing `/`, lowercased — the same
+  normalisation as `scope_key`. Every verified user of a server reads and
+  writes that server's records.
+- Analysis messages are the coordinator's own business: never passed to
+  the room, only from a socket whose device is an admitted member, at most
+  60 per minute per socket (the rest are dropped). Store work runs on the
+  blocking pool.
+- Uploads are validated (`analysis::validate`): version 1..=known, track
+  id 1..=256 bytes, duration 1 ms..6 h, ≤ 40 000 beats, downbeats ≤ beats,
+  ≤ 2 000 points per curve with a non-zero hop, positions within the
+  duration (+1 s), finite numbers, short text fields. Then `compact`.
+- An upload replaces the stored record only when it describes another file
+  (fingerprint mismatch) or is strictly preferred (`preference`: version,
+  beats, Worker > Desktop > Device, newer). An older version never
+  replaces a newer one.
+
+Client (`core/handlers/analysis_share.rs`):
+
+- With the store advertised for the current server and the mode on
+  AutoMix, every 2 s (and when the store appears or an answer arrives) the
+  actor asks for the current track and the next four that need a record
+  (none usable, or only a phone's loudness-only one): one `AnalysisFetch`
+  at a time, given up after 15 s. Each track asked is not asked again for
+  30 minutes, answered or not (an unanswered fetch's tracks are freed).
+- Answers go through `store_analysis_record` (local store + replan when
+  near the current track). Fetched records are never uploaded.
+- Records this device produced — desktop analysis (`on_analysis_produced`)
+  and anything a platform stores with `Command::StoreAnalysisRecord`
+  (Android's loudness-only records) — are queued (≤ 64, newest per track)
+  and uploaded in batches of 16 whenever the store is advertised; records
+  of another server are dropped at that point.
+- Offline nothing changes: planning reads only the local store.
+
+## Coordinator worker
+
+`hocket-coordinator/src/worker.rs`, off unless `--analysis-server` is set:
+
+| Flag | Default | |
+|---|---|---|
+| `--analysis-server URL` | off | The Navidrome URL **as your clients use it** (records are keyed by it). |
+| `--analysis-user NAME` | — | A dedicated non-admin Navidrome user. |
+| `--analysis-password-file PATH` | — | Its password (trailing newline trimmed); or env `HOCKET_ANALYSIS_PASSWORD`. Never logged. |
+| `--analysis-nice N` | 10 | Nice value of the worker thread (0–19, Linux; 0 leaves it). The inference pool inherits it. |
+| `--analysis-pause-secs S` | 2 | Pause between tracks. |
+| `--analysis-rescan-hours H` | 6 | Walk the library again this long after a pass ends. |
+
+- One thread with its own single-threaded Tokio runtime, one
+  `Analyser::new(1)`. A pass pages through `search3("")` (500 per page),
+  skips tracks with a usable record that has beats or is the worker's own,
+  and for each of the rest: `download` (the original) into
+  `<data-dir>/analysis-tmp/` (emptied at start and stop), `analyse_file(..,
+  Worker)`, `source` = the song's fingerprint, `compact`, store, delete the
+  file. A failure is logged at warn and remembered (by track and
+  fingerprint) for the life of the process; the pass carries on. A failed
+  library walk is retried after 10 minutes.
+- Cost ≈ 30 s of one core and ~480 MB peak RSS per track: a first pass
+  over 10 000 tracks takes about four days. `/health` shows `analysis`:
+  `{state, passes, libraryTracks, remaining, analysed, failed, perHour}`;
+  a progress line is logged at info every 5 minutes and at the end of each
+  pass.
+- Shutdown cancels between tracks; a track being analysed is not waited
+  for beyond 3 s.
+
+Deployment (compose, next to the existing coordinator service):
+
+```yaml
+services:
+  hocket-coordinator:
+    image: hocket-coordinator
+    command:
+      - --listen=0.0.0.0:7373
+      - --data-dir=/data
+      - --analysis-server=https://music.example.net
+      - --analysis-user=hocket-analysis
+      - --analysis-password-file=/run/secrets/hocket_analysis_password
+    volumes:
+      - hocket-data:/data
+    secrets:
+      - hocket_analysis_password
+    # one analysis at a time: ~1 core and ~0.5 GB on top of the relay
+    mem_limit: 1g
+secrets:
+  hocket_analysis_password:
+    file: ./analysis-password.txt
+volumes:
+  hocket-data:
+```
+
+Create the Navidrome user first (Settings → Users, not an admin; it needs
+access to every library the clients see).
 
 ## Harness
 

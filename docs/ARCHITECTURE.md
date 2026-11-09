@@ -154,6 +154,9 @@ cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --data-dir /var/lib/hoc
 cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --diagnostics-user 'me@https://music.example.net'
 # … with --data-dir as well, that account can save reports there (docs/reports.md); read them with
 cargo run -p hocket-coordinator -- --data-dir /var/lib/hocket reports list
+# … and analyse the library for AutoMix with a dedicated non-admin account (docs/automix.md → Coordinator worker)
+HOCKET_ANALYSIS_PASSWORD=… cargo run --release -p hocket-coordinator -- --data-dir /var/lib/hocket \
+  --analysis-server https://music.example.net --analysis-user hocket-analysis
 ```
 
 Linux builds of the core need `libasound2-dev` (cpal). The desktop app's OS media
