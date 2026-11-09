@@ -365,14 +365,23 @@ impl Actor {
             let next = self.playback.next.take();
             let backend_key = next.as_ref().map(|n| n.key.clone());
             // Where the incoming track is: 0 after a gapless join; after a mix,
-            // already some way in (the backend's `Position` follows).
+            // already some way in (the backend's `Position` follows). A plan
+            // alone is no mix: the backend skips one it reached too late (a
+            // seek past the tail start, a late plan, a failed render) and
+            // joins from 0, so only a reported start counts.
+            let mixed = next.as_ref().is_some_and(|n| {
+                self.playback
+                    .transition
+                    .as_ref()
+                    .is_some_and(|t| t.to == n.key)
+            });
             position_ms = match next.as_ref().and_then(|n| n.mix_in.as_ref()) {
-                Some(plan) if completes => {
+                Some(plan) if mixed && completes => {
                     let a_pos = self.playback.position_now(now);
                     plan.incoming_position_at(a_pos.saturating_sub(plan.tail_start_ms))
                 }
-                Some(plan) => plan.handover_position_ms(),
-                None => 0,
+                Some(plan) if mixed => plan.handover_position_ms(),
+                _ => 0,
             };
             if completes {
                 tracing::debug!(target: "hocket::player", key = %item.key, "next during a transition: completing it");

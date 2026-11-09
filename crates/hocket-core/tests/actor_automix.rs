@@ -313,3 +313,39 @@ async fn a_stored_record_shapes_the_plan() {
     let plan = t.backend.next_source().unwrap().mix_in.unwrap();
     assert_eq!(plan.tail_start_ms, 174_000, "fades out by the audible end");
 }
+
+/// Positions the core stamped (`TransportChanged`) since the last clear.
+fn stamped_positions(t: &TestCore) -> Vec<Ms> {
+    t.events
+        .all()
+        .iter()
+        .filter_map(|e| match e {
+            Event::TransportChanged { transport } => Some(transport.position.position_ms),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A follow-up with a plan that the backend joined gaplessly (the seek went
+/// past the tail start, so no mix started) starts at 0, not at the plan's
+/// handover position.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_skipped_mix_joins_from_the_start() {
+    let t = synced_core("skip").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t0", "t4", "t1"]).await;
+    assert!(t.backend.next_source().unwrap().mix_in.is_some());
+    t.run(Command::SeekTo {
+        position_ms: 197_000,
+    })
+    .await;
+    t.events.clear();
+    t.run_for(4_000.0).await;
+    assert!(!transition_started(&t));
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t4"));
+    let stamps = stamped_positions(&t);
+    assert!(
+        stamps.iter().all(|p| !(1_500..190_000).contains(p)),
+        "B was never placed past its start: {stamps:?}"
+    );
+}
