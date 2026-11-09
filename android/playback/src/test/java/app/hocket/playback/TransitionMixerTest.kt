@@ -138,6 +138,25 @@ class TransitionMixerTest {
     }
 
     @Test
+    fun theSinksResyncFlushAtBsStartKeepsTheMix() {
+        control.items["a"] = MixControl.Item(0.0, 1_000)
+        control.items["b"] = MixControl.Item(0.0, null)
+        arm(tail())
+        mixer.startItem("a", 0, contiguous = false)
+        feed(*ones(1_000))
+        // DefaultAudioSink at a gapless join: drain + flush for B's format, then drain + flush again
+        // for the timing resync the renderer's `handleDiscontinuity` asked for.
+        mixer.startItem("b", 0, contiguous = true)
+        mixer.startItem("b", 0, contiguous = true)
+        assertEquals(listOf("a->b"), started)
+        assertTrue(mixer.mixing)
+        val out = feed(*ones(200))
+        assertEquals(250, out.size)
+        assertEquals(0.25f, out[0], 1e-6f)
+        assertEquals(0.75f, out[100], 1e-6f)
+    }
+
+    @Test
     fun theLimiterRunsAfterTheSum() {
         control.items["b"] = MixControl.Item(0.0, null)
         arm(tail(value = 0.8f))

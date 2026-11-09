@@ -124,6 +124,15 @@ class TransitionMixer(
      * item's end without a seek (a gapless join), else a seek or a fresh start.
      */
     fun startItem(mediaId: String?, positionUs: Long, contiguous: Boolean) {
+        if (contiguous && mediaId != null && mediaId == item) {
+            // The same stream going on: the sink drains and flushes again to resync its timing,
+            // right after every stream change (the renderer's `handleDiscontinuity`) and before B's
+            // first frame. A new item here would end the mix before a frame of the tail is heard.
+            itemStartUs = positionUs.coerceAtLeast(0)
+            itemFrames = 0
+            applySettings()
+            return
+        }
         val previous = item
         endMix()
         item = mediaId
@@ -283,7 +292,8 @@ class TransitionMixer(
  * (`queueEndOfStream`) and flushes them with the new stream's [AudioProcessor.StreamMetadata],
  * whose timeline and period name the playlist item; a seek flushes without an end of stream first.
  * So the first frame after such a flush is the item's first frame, sample-exact, without counting
- * frames against durations.
+ * frames against durations. The sink then drains and flushes once more for the same item (a timing
+ * resync after every stream change); [TransitionMixer.startItem] lets that through as the same stream.
  */
 class MixProcessor(dsp: DspEngine, control: MixControl, listener: MixListener) : BaseAudioProcessor() {
     val mixer = TransitionMixer(dsp, control, listener)
