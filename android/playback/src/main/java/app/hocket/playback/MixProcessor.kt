@@ -331,6 +331,7 @@ class MixProcessor(dsp: DspEngine, control: MixControl, listener: MixListener) :
     }
 
     internal companion object {
-        fun toPcm16(x: Float): Short = (x * 32768f).coerceIn(-32768f, 32767f).toInt().toShort()
+        /** Rounded to the nearest step (a truncation would bias every sample towards zero); NaN is silence. */
+        fun toPcm16(x: Float): Short = Math.round(x * 32768f).coerceIn(-32768, 32767).toShort()
     }
 }

@@ -211,5 +211,11 @@ class TransitionMixerTest {
         assertEquals(32767.toShort(), MixProcessor.toPcm16(1.5f))
         assertEquals((-32768).toShort(), MixProcessor.toPcm16(-2f))
         assertEquals(16384.toShort(), MixProcessor.toPcm16(0.5f))
+        // Rounded, not truncated: a 16-bit sample survives the float round trip exactly, and a
+        // value just under a step lands on it.
+        assertEquals(1.toShort(), MixProcessor.toPcm16(0.9f / 32768f))
+        assertEquals((-1).toShort(), MixProcessor.toPcm16(-0.9f / 32768f))
+        for (v in listOf(-32768, -12345, -1, 0, 1, 12345, 32767)) assertEquals(v.toShort(), MixProcessor.toPcm16(v / 32768f))
+        assertEquals(0.toShort(), MixProcessor.toPcm16(Float.NaN))
     }
 }
