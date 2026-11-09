@@ -98,6 +98,16 @@ For outside the app (a website, a README, a store listing): the app icon (the ti
 - The icon alone is fine anywhere. The word mark alone is fine where the icon is already nearby, such as an About dialog with the icon above the name.
 
 
+## The UI face  
+*Status: decided (desktop)*
+
+**Geist** (Vercel, with basement.studio), for all of the desktop app's text but the word mark and the page titles set in it, in every window (main, mini player).
+
+- **Licence** SIL Open Font License 1.1, from the official `geist` npm package (1.9.2).
+- **Bundled** as the variable font, weights 100–900, served from the app (CSP `font-src 'self'`): `desktop/src/renderer/assets/fonts/geist.woff2`, licence `geist-OFL.txt` in the same folder, loaded by the `@font-face` in `desktop/src/renderer/styles/global.css`; `--font-ui` falls back to the platform's sans.
+- **Numbers** in times and counts use `font-variant-numeric: tabular-nums`, not a mono face; Geist Mono isn't bundled.
+- **Android** keeps the platform's type.
+
 ## Not done yet
 
 - **Outlined SVGs.** The word mark and both lockups should ship as outlined paths beside `desktop/build/icon.svg`, so no surface has to load Unbounded just to draw the name. Until then, anywhere that sets it as live text has to bundle the font (both apps do).

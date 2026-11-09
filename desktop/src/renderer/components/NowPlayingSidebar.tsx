@@ -355,16 +355,32 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
   // Re-renders only when the current line changes, and follows playback only while it plays.
   const active = usePositionValue(stamp, durationMs, offset, lineAt, !covered);
   const reduced = usePrefersReducedMotion();
-  // Before the first line: the first two, still to come.
-  const shown = active < 0 ? [undefined, 0, 1] : [active - 1, active, active + 1];
+  // The whole song in a fixed window: the current line (before the first, the first) held at its
+  // middle, the lines above and below fading out (lyrics-peek's mask), gliding as it moves on.
+  const centre = Math.max(0, active);
+  const view = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLOListElement>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    const v = view.current;
+    const li = list.current?.children[centre] as HTMLElement | undefined;
+    if (!v || !li) return;
+    const place = () => setShift(Math.round(v.clientHeight / 2 - (li.offsetTop + li.offsetHeight / 2)));
+    place();
+    // The card resizing (the panel's width rewraps the lines) moves the middle too.
+    const ro = new ResizeObserver(place);
+    ro.observe(v);
+    return () => ro.disconnect();
+  }, [centre, lines]);
   return (
-    <ol className={`lyrics-peek synced ${reduced ? "" : "moving"}`} aria-label={t("lyrics.title")} data-active={active}>
-      {shown.map((i, slot) => {
-        const line = i !== undefined && i >= 0 ? lines[i] : undefined;
-        const current = slot === 1 && active >= 0;
-        return <li key={i ?? `none-${slot}`} className={`peek-line ${current ? "current" : ""}`} aria-current={current ? "true" : undefined}>{line?.text ?? " "}</li>;
-      })}
-    </ol>
+    <div ref={view} className={`lyrics-peek-view ${reduced ? "" : "moving"}`}>
+      <ol ref={list} className="lyrics-peek synced" aria-label={t("lyrics.title")} data-active={active} style={{ transform: `translateY(${shift}px)` }}>
+        {lines.map((line, i) => {
+          const current = i === active;
+          return <li key={i} className={`peek-line ${current ? "current" : ""}`} aria-current={current ? "true" : undefined}>{line.text}</li>;
+        })}
+      </ol>
+    </div>
   );
 }
 

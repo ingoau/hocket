@@ -201,8 +201,16 @@
 .peek-line { font-size: var(--fs-lg); font-weight: 700; color: var(--fg-muted); line-height: 1.3; overflow-wrap: anywhere; }
 .lyrics-peek.synced .peek-line { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .lyrics-peek.synced .peek-line.current { font-size: 19px; font-weight: 800; color: var(--fg); -webkit-line-clamp: 3; }
-.lyrics-peek.moving .peek-line { transition: font-size var(--dur-spring) var(--spring-fast), color var(--dur-spring) var(--ease-emphasized); animation: peek-in var(--dur-spring-long) var(--spring-fast); }
-@keyframes peek-in { from { transform: translateY(10px); opacity: 0; } }
+/* Synced: the whole song in a fixed window, the current line held at its middle and the lines
+   either side fading out; the list glides as the line moves on (not with reduced motion). */
+.lyrics-peek-view {
+  position: relative; height: 148px; overflow: hidden; margin: 0 -2px; padding: 0 2px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 34%, #000 66%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 34%, #000 66%, transparent 100%);
+}
+.lyrics-peek-view .lyrics-peek { will-change: transform; }
+.lyrics-peek-view.moving .lyrics-peek { transition: transform 450ms var(--ease-emphasized-decel); }
+.lyrics-peek-view.moving .peek-line { transition: color var(--dur-spring) var(--ease-emphasized); }
 .upnext-list { display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; }
 .upnext-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 6px; border: 0; border-radius: var(--shape-md); background: transparent; color: inherit; font: inherit; text-align: left; -webkit-appearance: none; appearance: none; transition: background-color var(--dur-short) var(--ease-emphasized); }
 .upnext-row .t1, .upnext-row .t2 { display: block; }

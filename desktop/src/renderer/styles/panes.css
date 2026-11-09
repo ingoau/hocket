@@ -48,7 +48,12 @@
 
 /* ---- Sidebar ---------------------------------------------------------------- */
 .sidebar-scroll { padding: 8px 6px 8px 8px; scrollbar-gutter: stable; }
-.sidebar-foot { padding: 4px 8px 8px; }
+/* The list scrolls under a soft fade into the foot (Settings), not a hard cut. */
+.sidebar-foot { position: relative; padding: 4px 8px 8px; background: var(--bg-elev); border-radius: 0 0 var(--pane-radius) var(--pane-radius); }
+.sidebar-foot::before {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 28px; pointer-events: none;
+  background: linear-gradient(to top, var(--bg-elev), color-mix(in srgb, var(--bg-elev) 0%, transparent));
+}
 .sidebar .nav-item { height: 36px; padding: 0 12px; gap: 14px; border-radius: var(--shape-md); font-weight: 600; color: var(--fg-muted); }
 .sidebar .nav-item + .nav-item { margin-top: 0; }
 .sidebar .nav-item:hover { color: var(--fg); background: var(--bg-hover); }
@@ -76,6 +81,13 @@
   position: sticky; top: 0; z-index: 1; margin: 0 -6px 4px -8px; padding: 10px 6px 8px 8px;
   background: var(--bg-elev); border-radius: var(--pane-radius) var(--pane-radius) 0 0;
 }
+/* Once the header is stuck, the rows pass under a short fade below it. */
+.side-lib-head::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 20px; pointer-events: none; opacity: 0;
+  background: linear-gradient(to bottom, var(--bg-elev), color-mix(in srgb, var(--bg-elev) 0%, transparent));
+  transition: opacity var(--dur-short) var(--ease-emphasized);
+}
+.side-lib-head.stuck::after { opacity: 1; }
 .side-lib-titlebar { display: flex; align-items: center; gap: 2px; padding-left: 12px; min-height: 36px; }
 .side-lib-title { flex: 1 1 auto; margin: 0; font-size: var(--fs-lg); font-weight: 700; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-lib-titlebar .btn { color: var(--fg-muted); border: 0; background: transparent; }
@@ -105,10 +117,14 @@
 .side-lib-empty { padding: 4px 12px 12px; margin: 0; }
 
 /* ---- The rail: collapsed, or a narrow window -------------------------------- */
-.sidebar.rail .sidebar-scroll { padding: 8px 4px; scrollbar-width: none; }
+/* One gutter (--rail-pad) on every side of the pane, every item the full width inside it, so the
+   pills, icons and covers share one centre line. */
+.sidebar.rail { --rail-pad: 8px; --rail-thumb: 40px; }
+.sidebar.rail .sidebar-scroll { padding: var(--rail-pad); scrollbar-width: none; scrollbar-gutter: auto; }
 .sidebar.rail .sidebar-scroll::-webkit-scrollbar { display: none; }
-.sidebar.rail .sidebar-foot { padding: 4px; }
-.sidebar.rail .nav-item { justify-content: center; padding: 0; }
+.sidebar.rail .sidebar-foot { padding: 0 var(--rail-pad) var(--rail-pad); }
+.sidebar.rail .nav-item { justify-content: center; padding: 0; width: 100%; height: 44px; gap: 0; }
+.sidebar.rail :is(.pin-thumb, .pin-thumb .art, .lib-thumb, .lib-thumb .art) { width: var(--rail-thumb); height: var(--rail-thumb); }
 .sidebar.rail .nav-item > span:not(.pin-thumb, .lib-thumb), .sidebar.rail .nav-item > .icon:not(:first-child), .sidebar.rail .lib-playing {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
@@ -117,6 +133,7 @@
 .sidebar.rail .sidebar-pins-empty { display: none; }
 .sidebar.rail .side-lib { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
 .sidebar.rail .sidebar-pins { padding-bottom: 4px; }
+.sidebar.rail .sidebar-pins-gap { height: 4px; }
 /* The playing item keeps a mark in the rail: a ring around its cover. */
 .sidebar.rail .lib-item.playing .lib-thumb .art { box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--accent); }
 
@@ -149,7 +166,8 @@
 @media (max-width: 900px) {
   /* A narrower rail at 200% zoom: the covers a little smaller. */
   :root { --pane-gap: 6px; --rail-w: 60px; }
-  .sidebar.rail .pin-thumb, .sidebar.rail .pin-thumb .art, .sidebar.rail .lib-thumb, .sidebar.rail .lib-thumb .art { width: 38px; height: 38px; }
+  .sidebar.rail { --rail-pad: 6px; --rail-thumb: 36px; }
+  .sidebar.rail .nav-item { height: 40px; }
   .sidebar.rail .nav-item.pin-item, .sidebar.rail .nav-item.lib-item { height: 46px; }
   .app-body { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
   .search { flex: 1 1 120px; width: auto; max-width: none; min-width: 0; }

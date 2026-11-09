@@ -731,6 +731,8 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     let worst = "";
     const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line, .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)");
     for (const el of Array.from(texts)) {
+      // The lyrics card holds the current line at its middle; the lines either side fade out by design.
+      if (el.matches(".peek-line:not(.current)") && el.closest(".lyrics-peek-view")) continue;
       const r = el.getBoundingClientRect();
       if (!r.width || !r.height) continue;
       const fg = parse(getComputedStyle(el).color);

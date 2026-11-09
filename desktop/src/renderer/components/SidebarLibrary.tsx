@@ -175,6 +175,22 @@ export function SidebarLibrary({ rail, shown, lib, scroller }: { rail: boolean; 
     for (const child of Array.from(el.children)) ro.observe(child);
     return () => ro.disconnect();
   }, [scroller, measure]);
+  // The header is stuck once the scroller has passed its place (the list's start less its height):
+  // then the rows pass under a fade below it.
+  const head = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const el = scroller;
+    if (!el || rail) return;
+    const check = () => {
+      const h = head.current;
+      setStuck(!!h && el.scrollTop > margin - h.offsetHeight - 4);
+    };
+    check();
+    el.addEventListener("scroll", check, { passive: true });
+    return () => el.removeEventListener("scroll", check);
+  }, [scroller, margin, rail]);
+
   // Keyboard: one tab stop, the active row (by key, so it survives a re-sort and scrolling), which is
   // always drawn; arrows, Home and End move it, scrolling it into view before it takes focus.
   const [activeKey, setActiveKey] = useState<string | undefined>(undefined);
@@ -227,7 +243,7 @@ export function SidebarLibrary({ rail, shown, lib, scroller }: { rail: boolean; 
   return (
     <section className={`side-lib ${rail ? "rail" : ""}`} aria-labelledby="side-lib-title" data-testid="sidebar-library">
       {rail ? <h2 className="sr-only" id="side-lib-title">{t("library.yours")}</h2> : (
-        <div className="side-lib-head">
+        <div ref={head} className={`side-lib-head ${stuck ? "stuck" : ""}`}>
           <div className="side-lib-titlebar">
             <h2 className="side-lib-title" id="side-lib-title">{t("library.yours")}</h2>
             <button ref={searchBtn} type="button" className={`btn icon sm ${searching ? "on" : ""}`} aria-label={t("library.searchYours")} aria-pressed={searching} title={t("library.searchYours")} onClick={() => (searching ? closeSearch() : setSearching(true))} data-testid="side-lib-search"><Icon name="search" size={18} /></button>

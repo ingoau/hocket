@@ -1,6 +1,6 @@
 // Desktop feel: the content pane is laid out from the sidebar width (dragging
 // the splitter in the gutter between the two panes moves it; the toggle folds the sidebar to a rail), chrome is not selectable, nothing is underlined or
-// pointer-cursored, the UI font is the 13px system stack, and focus rings
+// pointer-cursored, the UI font is 13px Geist (bundled), and focus rings
 // appear only for keyboard focus.
 import { completeSetup, expect, test, openPlace } from "./fixtures";
 
@@ -35,7 +35,7 @@ test.describe("window chrome", () => {
     expect(Math.round((await content.boundingBox())!.x)).toBe(Math.round(after.x));
   });
 
-  test("chrome is native-feeling: no underlines, no text selection, default cursor, system 13px font, keyboard-only focus rings", async ({ hocket }) => {
+  test("chrome is native-feeling: no underlines, no text selection, default cursor, 13px Geist, keyboard-only focus rings", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     const styleOf = (testId: string, props: string[]) => page.getByTestId(testId).first().evaluate((el, ps) => { const cs = getComputedStyle(el); return Object.fromEntries(ps.map((p) => [p, cs.getPropertyValue(p)])); }, props);
@@ -44,7 +44,9 @@ test.describe("window chrome", () => {
     expect(nav.cursor).toBe("default");
     expect(nav["user-select"]).toBe("none");
     expect(nav["font-size"]).toBe("13px");
-    expect(nav["font-family"]!.startsWith("system-ui")).toBe(true);
+    expect(nav["font-family"]!.startsWith('Geist, system-ui') || nav["font-family"]!.startsWith('"Geist", system-ui')).toBe(true);
+    // The bundled face, not a fallback.
+    expect(await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check('13px "Geist"'); })).toBe(true);
     const btn = await styleOf("play-pause", ["cursor", "user-select", "text-decoration-line"]);
     expect(btn.cursor).toBe("default");
     expect(btn["user-select"]).toBe("none");

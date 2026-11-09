@@ -1,7 +1,18 @@
 /* Hocket desktop: design tokens and base styles. Dense, keyboard-first, native-feeling: rounded
    panes floating on a deep violet ground (the brand's tile colours), docs/design.md "Desktop layout". */
+/* The UI face: Geist (Vercel, SIL OFL 1.1), the variable font served from the app (CSP font-src
+   'self'), its licence beside it in assets/fonts. Every window loads this sheet. */
+@font-face {
+  font-family: "Geist";
+  src: url("../assets/fonts/geist.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
-  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Geist (bundled, docs/brand.md), then the platform's own sans. */
+  --font-ui: "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --fs-xs: 11px;
   --fs-sm: 12px;
