@@ -1996,6 +1996,7 @@ mod tests {
     use crate::api::TrackSummary;
     use crate::audio::decoder::tests::write_test_wav;
     use crate::audio::native::http::MemoryFetcher;
+    use crate::audio::native::output::OutputTap;
     use crate::core::default_audio_settings;
 
     type Reports = Arc<Mutex<Vec<BackendReport>>>;
@@ -2005,6 +2006,7 @@ mod tests {
         reports: Reports,
         _rt: tokio::runtime::Runtime,
         dir: tempfile::TempDir,
+        tap: OutputTap,
     }
 
     fn rig_with(fetcher: Arc<dyn RangeFetcher>) -> Rig {
@@ -2015,12 +2017,14 @@ mod tests {
             .unwrap();
         let reports: Reports = Default::default();
         let r2 = reports.clone();
+        let tap = OutputTap::default();
         let backend = NativeBackend::new(
             NativeConfig {
                 fetcher,
                 runtime: rt.handle().clone(),
                 output: OutputConfig {
                     null_sink: true,
+                    tap: Some(tap.clone()),
                     ..Default::default()
                 },
                 audio: default_audio_settings(),
@@ -2034,6 +2038,7 @@ mod tests {
             reports,
             _rt: rt,
             dir: tempfile::tempdir().unwrap(),
+            tap,
         }
     }
 
@@ -2381,5 +2386,439 @@ mod tests {
         assert!(local_path("https://x/y.mp3").is_none());
         assert_eq!(url_extension("https://x/y/z.MP3?x=1"), Some("mp3".into()));
         assert_eq!(url_extension("https://x/rest/stream?id=1"), None);
+    }
+
+    // -- AutoMix ----------------------------------------------------------
+
+    use crate::api::{FadeCurve, TransitionKind};
+
+    /// A stereo 16-bit sine, both channels alike.
+    fn write_sine(path: &std::path::Path, rate: u32, ms: u32, freq: f64) {
+        use std::io::Write;
+        let frames = rate * ms / 1000;
+        let data_len = frames * 4;
+        let mut body = Vec::with_capacity(44 + data_len as usize);
+        body.extend_from_slice(b"RIFF");
+        body.extend_from_slice(&(36 + data_len).to_le_bytes());
+        body.extend_from_slice(b"WAVEfmt ");
+        body.extend_from_slice(&16u32.to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&rate.to_le_bytes());
+        body.extend_from_slice(&(rate * 4).to_le_bytes());
+        body.extend_from_slice(&4u16.to_le_bytes());
+        body.extend_from_slice(&16u16.to_le_bytes());
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..frames {
+            let v = (0.4
+                * (2.0 * std::f64::consts::PI * freq * f64::from(i) / f64::from(rate)).sin()
+                * 32767.0) as i16;
+            body.extend_from_slice(&v.to_le_bytes());
+            body.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::File::create(path)
+            .unwrap()
+            .write_all(&body)
+            .unwrap();
+    }
+
+    fn fade_plan(
+        tail_start: u32,
+        tail_len: u32,
+        incoming_at: u32,
+        handover: u32,
+    ) -> TransitionPlan {
+        TransitionPlan {
+            kind: TransitionKind::Fade,
+            tail_start_ms: tail_start,
+            tail_source_ms: tail_len,
+            tail_len_ms: tail_len,
+            incoming_at_ms: incoming_at,
+            incoming_from_ms: 0,
+            handover_ms: handover,
+            out_curve: FadeCurve::EqualPower,
+            in_curve: FadeCurve::EqualPower,
+            tempo: None,
+            bass_swap: None,
+            high_cut: None,
+            incoming_gain_db: 0.0,
+        }
+    }
+
+    impl Rig {
+        fn sine(&self, name: &str, rate: u32, ms: u32, freq: f64) -> MediaSource {
+            let mut m = self.wav(name, rate, 1);
+            write_sine(&self.dir.path().join(name), rate, ms, freq);
+            m.track.duration_ms = ms;
+            m
+        }
+
+        /// The left channel of what the sink played, from the first to the
+        /// last audible sample.
+        fn played(&self) -> Vec<f32> {
+            // Reports go out as audio is queued: wait until the sink has
+            // played the ring out (300 ms of silence at the end).
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                thread::sleep(Duration::from_millis(50));
+                let t = self.tap.0.lock();
+                let quiet = 48 * 300 * 2;
+                if t.len() > quiet && t[t.len() - quiet..].iter().all(|v| v.abs() < 1e-3) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "the sink never went quiet");
+            }
+            let all = self.tap.0.lock().clone();
+            let left: Vec<f32> = all.chunks_exact(2).map(|f| f[0]).collect();
+            let first = left.iter().position(|v| v.abs() > 1e-3).unwrap_or(0);
+            let last = left.iter().rposition(|v| v.abs() > 1e-3).unwrap_or(0);
+            left[first..=last].to_vec()
+        }
+
+        /// Load paused and give the tail time to render (debug builds on a
+        /// loaded host are slow), then play.
+        fn start(&self, a: MediaSource, b: MediaSource) {
+            self.backend.load(a, Some(b), 0, false).unwrap();
+            thread::sleep(Duration::from_millis(1_500));
+            self.backend.play().unwrap();
+        }
+
+        fn count(&self, pred: impl Fn(&BackendReport) -> bool) -> usize {
+            self.reports.lock().iter().filter(|r| pred(r)).count()
+        }
+    }
+
+    fn pos_of(reports: &[BackendReport], pred: impl Fn(&BackendReport) -> bool) -> usize {
+        reports
+            .iter()
+            .position(pred)
+            .unwrap_or_else(|| panic!("missing in {reports:?}"))
+    }
+
+    /// No silence inside (5 ms windows all audible) and no click (no step
+    /// much larger than the sines' own).
+    fn assert_continuous(x: &[f32]) {
+        let start = 48 * 20; // past the 10 ms fade-in
+        for (i, w) in x[start..].chunks(240).enumerate() {
+            let peak = w.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            assert!(
+                peak > 0.05 || w.len() < 240,
+                "gap at {} ms",
+                (start + i * 240) / 48
+            );
+        }
+        let worst = x[start..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .enumerate()
+            .fold((0, 0.0f32), |m, (i, d)| if d > m.1 { (i, d) } else { m });
+        assert!(
+            worst.1 < 0.08,
+            "click of {} at {} ms",
+            worst.1,
+            (start + worst.0) / 48
+        );
+    }
+
+    fn is_started(r: &BackendReport) -> bool {
+        matches!(r, BackendReport::TransitionStarted { .. })
+    }
+
+    #[test]
+    fn mixes_into_the_follow_up_and_hands_over_at_the_plan_time() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 3_000, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 3_000, 660.0);
+        b.mix_in = Some(fade_plan(1_500, 1_000, 300, 600));
+        rig.start(a, b);
+        let reports = rig.wait_for(
+            Duration::from_secs(15),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        let started = pos_of(&reports, |r| {
+            *r == BackendReport::TransitionStarted {
+                from: "a.wav".into(),
+                to: "b.wav".into(),
+                tail_len_ms: 1_000,
+                incoming_at_ms: 300,
+                handover_ms: 600,
+            }
+        });
+        let ended_a = pos_of(
+            &reports,
+            |r| matches!(r, BackendReport::Ended { key } if key == "a.wav"),
+        );
+        let next = pos_of(
+            &reports,
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"),
+        );
+        assert!(started < ended_a && ended_a + 1 == next, "{reports:?}");
+        // B's true position at the handover: 600 − 300 ms in.
+        match &reports[next + 1] {
+            BackendReport::Position { key, position_ms } if key == "b.wav" => {
+                assert!((300..=330).contains(position_ms), "{position_ms}")
+            }
+            r => panic!("expected B's position, got {r:?}"),
+        }
+        // Positions of A before the handover never exceed the tail.
+        assert!(reports[..ended_a].iter().all(|r| match r {
+            BackendReport::Position { key, position_ms } if key == "a.wav" => *position_ms <= 2_500,
+            _ => true,
+        }));
+        assert!(!reports
+            .iter()
+            .any(|r| matches!(r, BackendReport::Error { .. })));
+        // 1.5 s of A, the 1 s tail, then B's remaining 2.3 s: 4.8 s, with
+        // no gap and no click at the switch, B's entry or the tail's end.
+        let x = rig.played();
+        let ms = x.len() as f64 / 48.0;
+        assert!((ms - 4_800.0).abs() < 15.0, "played {ms} ms");
+        assert_continuous(&x);
+    }
+
+    #[test]
+    fn mixes_across_sample_rates() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 44_100, 2_000, 441.0);
+        let mut b = rig.sine("b.wav", 44_100, 2_000, 660.0);
+        b.mix_in = Some(fade_plan(1_000, 800, 200, 400));
+        rig.start(a, b);
+        rig.wait_for(
+            Duration::from_secs(15),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(rig.count(is_started), 1, "{:?}", rig.reports.lock());
+        let x = rig.played();
+        // 1 s + 0.8 s + (2 − 0.6) s.
+        let ms = x.len() as f64 / 48.0;
+        assert!((ms - 3_200.0).abs() < 15.0, "played {ms} ms");
+        assert_continuous(&x);
+    }
+
+    #[test]
+    fn a_late_tail_falls_back_to_a_gapless_cut() {
+        let rig = rig();
+        // The test build sleeps 3 s before rendering "slow-tail" sources.
+        let a = rig.sine("slow-tail-a.wav", 48_000, 1_500, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_500, 660.0);
+        b.mix_in = Some(fade_plan(700, 500, 100, 300));
+        // Paused first: a load's ring flush lands at the sink's next tick and,
+        // on a loaded host, can eat the first frames pushed after it.
+        rig.backend.load(a, Some(b), 0, false).unwrap();
+        thread::sleep(Duration::from_millis(300));
+        rig.backend.play().unwrap();
+        let reports = rig.wait_for(
+            Duration::from_secs(15),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(rig.count(is_started), 0, "{reports:?}");
+        let next = pos_of(
+            &reports,
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"),
+        );
+        assert_eq!(
+            reports[next + 1],
+            BackendReport::Position {
+                key: "b.wav".into(),
+                position_ms: 0
+            }
+        );
+        let x = rig.played();
+        let ms = x.len() as f64 / 48.0;
+        assert!((ms - 3_000.0).abs() < 15.0, "played {ms} ms");
+        assert_continuous(&x);
+    }
+
+    #[test]
+    fn complete_transition_hands_over_at_once() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 3_000, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 3_000, 660.0);
+        b.mix_in = Some(fade_plan(800, 1_500, 200, 1_200));
+        rig.start(a, b);
+        rig.wait_for(Duration::from_secs(10), is_started);
+        thread::sleep(Duration::from_millis(400));
+        rig.backend.complete_transition().unwrap();
+        let reports = rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"),
+        );
+        let next = pos_of(
+            &reports,
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"),
+        );
+        assert!(
+            matches!(&reports[next - 1], BackendReport::Ended { key } if key == "a.wav"),
+            "{reports:?}"
+        );
+        thread::sleep(Duration::from_millis(50));
+        let reports = rig.reports.lock().clone();
+        match &reports[next + 1] {
+            // ~400 ms into the tail, B entered at 200 ms.
+            BackendReport::Position { key, position_ms } if key == "b.wav" => {
+                assert!((120..=400).contains(position_ms), "{position_ms}")
+            }
+            r => panic!("expected B's position, got {r:?}"),
+        }
+        rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(rig.count(is_started), 1);
+        assert_eq!(
+            rig.count(|r| matches!(r, BackendReport::TransitionedToNext { .. })),
+            1
+        );
+    }
+
+    #[test]
+    fn a_seek_cancels_the_transition_and_it_mixes_again() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 2_500, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_500, 660.0);
+        b.mix_in = Some(fade_plan(1_000, 1_000, 200, 800));
+        rig.start(a, b);
+        rig.wait_for(Duration::from_secs(10), is_started);
+        thread::sleep(Duration::from_millis(300));
+        rig.backend.seek(500).unwrap();
+        let reports = rig.wait_for(
+            Duration::from_secs(15),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        let seek = pos_of(&reports, |r| {
+            *r == BackendReport::Position {
+                key: "a.wav".into(),
+                position_ms: 500,
+            }
+        });
+        let ended_a = pos_of(
+            &reports,
+            |r| matches!(r, BackendReport::Ended { key } if key == "a.wav"),
+        );
+        assert!(seek < ended_a, "{reports:?}");
+        assert_eq!(rig.count(is_started), 2, "{reports:?}");
+        assert_eq!(
+            rig.count(|r| matches!(r, BackendReport::TransitionedToNext { .. })),
+            1
+        );
+    }
+
+    #[test]
+    fn pause_holds_both_and_resume_carries_on() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 2_500, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_500, 660.0);
+        b.mix_in = Some(fade_plan(1_000, 1_200, 100, 900));
+        rig.start(a, b);
+        rig.wait_for(Duration::from_secs(10), is_started);
+        thread::sleep(Duration::from_millis(200));
+        rig.take();
+        rig.backend.pause().unwrap();
+        let reports = rig.wait_for(Duration::from_secs(5), |r| {
+            matches!(r, BackendReport::Paused { .. })
+        });
+        match reports.last().unwrap() {
+            BackendReport::Paused { key, position_ms } => {
+                assert_eq!(key, "a.wav");
+                assert!((1_100..1_600).contains(position_ms), "{position_ms}");
+            }
+            _ => unreachable!(),
+        }
+        thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            rig.count(|r| matches!(r, BackendReport::TransitionedToNext { .. })),
+            0,
+            "paused before the handover"
+        );
+        rig.backend.play().unwrap();
+        rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(
+            rig.count(|r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav")),
+            1
+        );
+    }
+
+    #[test]
+    fn set_next_during_the_overlap_waits_for_the_handover() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 2_000, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_500, 660.0);
+        b.mix_in = Some(fade_plan(800, 1_000, 200, 800));
+        let c = rig.sine("c.wav", 48_000, 500, 550.0);
+        rig.start(a, b);
+        rig.wait_for(Duration::from_secs(10), is_started);
+        rig.backend.set_next(Some(c)).unwrap();
+        let reports = rig.wait_for(
+            Duration::from_secs(15),
+            |r| matches!(r, BackendReport::Ended { key } if key == "c.wav"),
+        );
+        let to_b = pos_of(
+            &reports,
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"),
+        );
+        let to_c = pos_of(
+            &reports,
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "c.wav"),
+        );
+        assert!(to_b < to_c, "{reports:?}");
+        let x = rig.played();
+        // 0.8 + 1.0 + (1.5 − 0.8) + 0.5 s.
+        let ms = x.len() as f64 / 48.0;
+        assert!((ms - 3_000.0).abs() < 15.0, "played {ms} ms");
+    }
+
+    #[test]
+    fn an_output_change_mid_transition_cuts_to_the_follow_up() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 3_000, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_500, 660.0);
+        b.mix_in = Some(fade_plan(800, 1_500, 200, 1_200));
+        rig.start(a, b);
+        rig.wait_for(Duration::from_secs(10), is_started);
+        thread::sleep(Duration::from_millis(300));
+        rig.backend.set_output_device(None).unwrap();
+        let reports = rig.wait_for(
+            Duration::from_millis(500),
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"),
+        );
+        let next = pos_of(
+            &reports,
+            |r| matches!(r, BackendReport::TransitionedToNext { key } if key == "b.wav"),
+        );
+        assert!(
+            matches!(&reports[next - 1], BackendReport::Ended { key } if key == "a.wav"),
+            "{reports:?}"
+        );
+        rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+    }
+
+    #[test]
+    fn exclusive_output_never_mixes() {
+        let rig = rig();
+        rig.backend.set_exclusive(true).unwrap();
+        let a = rig.sine("a.wav", 48_000, 1_200, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 800, 660.0);
+        b.mix_in = Some(fade_plan(500, 400, 100, 200));
+        // Paused first: a load's ring flush lands at the sink's next tick and,
+        // on a loaded host, can eat the first frames pushed after it.
+        rig.backend.load(a, Some(b), 0, false).unwrap();
+        thread::sleep(Duration::from_millis(300));
+        rig.backend.play().unwrap();
+        let reports = rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(rig.count(is_started), 0, "{reports:?}");
+        assert!(reports.contains(&BackendReport::Position {
+            key: "b.wav".into(),
+            position_ms: 0
+        }));
     }
 }
