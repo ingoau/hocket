@@ -5,7 +5,7 @@ use std::io::IsTerminal;
 use clap::Parser;
 use tracing::info;
 
-use hocket_coordinator::{reports, serve, App, Args, Command, ReportsCommand};
+use hocket_coordinator::{reports, serve, worker, App, Args, Command, ReportsCommand};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -27,6 +27,21 @@ async fn main() -> anyhow::Result<()> {
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,tower_http=warn".into());
     hocket_core::devlog::install(&filter, None, std::io::stderr().is_terminal());
     let app = App::new(args.clone())?;
+    // The opt-in analysis worker: its own thread, stopped with the server.
+    let tmp_dir = match &args.data_dir {
+        Some(dir) => dir.join("analysis-tmp"),
+        None => std::env::temp_dir().join(format!("hocket-analysis-{}", std::process::id())),
+    };
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let worker = match (args.worker.resolve(tmp_dir)?, app.analysis_store()) {
+        (Some(settings), Some(store)) => Some(worker::spawn(
+            settings,
+            store.clone(),
+            app.worker_status_slot(),
+            cancel.clone(),
+        )?),
+        _ => None,
+    };
     let shutdown = async {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
@@ -50,5 +65,16 @@ async fn main() -> anyhow::Result<()> {
     handle.await?;
     // Flush every open room's replica on the way out.
     app.flush_all();
+    if let Some(w) = worker {
+        // A track being analysed finishes on its own time; don't wait long for it.
+        cancel.cancel();
+        let joined = tokio::task::spawn_blocking(move || w.join());
+        if tokio::time::timeout(std::time::Duration::from_secs(3), joined)
+            .await
+            .is_err()
+        {
+            info!("analysis worker still busy; leaving it");
+        }
+    }
     Ok(())
 }
