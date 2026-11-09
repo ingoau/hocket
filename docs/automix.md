@@ -478,8 +478,9 @@ message types they don't know):
   set it, and the engine only believes it from the `Coordinator` tier.
 - `AnalysisFetch { track_ids }` → coordinator (≤ `ANALYSIS_FETCH_MAX` = 64
   ids; more are dropped). Answered with `AnalysisRecords { records:
-  [AnalysisEntry { track_id, record }] }`, chunked by
-  `ANALYSIS_BATCH_MAX` = 16, always at least one (possibly empty) frame.
+  [AnalysisEntry { track_id, record }] }`, in one or more frames of at
+  most `ANALYSIS_BATCH_MAX` = 16 records and half the frame cap (4 MB) of
+  JSON each, always at least one (possibly empty) frame.
   Only records of the coordinator's `ANALYSIS_VERSION`; misses are left out.
 - `AnalysisUpload { records }` → coordinator (≤ 16; more are dropped). No
   answer.
@@ -494,21 +495,30 @@ Coordinator (`hocket-coordinator/src/analysis.rs`):
   has_beats, produced_by, json, updated_at)`, primary key (server, track
   id). `server` is `wire::server_key` of the verified server: the
   credential's `server_url` (or `--verify-url`; with `--no-verify`, the
-  Hello's), trimmed, without a trailing `/`, lowercased — the same
-  normalisation as `scope_key`. Every verified user of a server reads and
+  Hello's), trimmed, without a trailing `/`, scheme and host lowercased
+  (the path keeps its case) — the same normalisation as `scope_key`. Every verified user of a server reads and
   writes that server's records.
 - Analysis messages are the coordinator's own business: never passed to
   the room, only from a socket whose device is an admitted member, at most
   60 per minute per socket (the rest are dropped). Store work runs on the
   blocking pool.
-- Uploads are validated (`analysis::validate`): version 1..=known, track
-  id 1..=256 bytes, duration 1 ms..6 h, ≤ 40 000 beats, downbeats ≤ beats,
-  ≤ 2 000 points per curve with a non-zero hop, positions within the
-  duration (+1 s), finite numbers, short text fields. Then `compact`.
-- An upload replaces the stored record only when it describes another file
-  (fingerprint mismatch) or is strictly preferred (`preference`: version,
-  beats, Worker > Desktop > Device, newer). An older version never
-  replaces a newer one.
+- Uploads are made honest (`analysis::sanitize_upload`: a claimed `Worker`
+  becomes `Desktop`, only the coordinator's worker writes `Worker`;
+  `created_at` is clamped to the coordinator's now), then validated
+  (`analysis::validate`): version 1..=known, track id 1..=256 bytes,
+  duration 1 ms..6 h, ≤ 40 000 beats, downbeats ≤ beats, ≤ 2 000 points per
+  curve with a non-zero hop, positions within the duration (+1 s), finite
+  numbers, short text fields, ≤ 256 KB of JSON. Then `compact`.
+- A record replaces the stored one when it is strictly preferred
+  (`preference`: version, beats, Worker > Desktop > Device, newer), or when
+  it describes another file (fingerprint mismatch) and is at least as good
+  on version, beats and producer, or is the worker's own. So a client with
+  a stale fingerprint can't wipe the worker's beat grid. An older version
+  never replaces a newer one.
+- Quota: at most `--analysis-records-per-server` (400 000) records and
+  `--analysis-mb-per-server` (2048 MiB of JSON) per server, and
+  `--analysis-quota-mb` (8192 MiB) in all. Past a cap the least recently
+  updated records are dropped, down to 90% of it.
 
 Client (`core/handlers/analysis_share.rs`):
 
@@ -533,22 +543,26 @@ Client (`core/handlers/analysis_share.rs`):
 
 | Flag | Default | |
 |---|---|---|
-| `--analysis-server URL` | off | The Navidrome URL **as your clients use it** (records are keyed by it). |
+| `--analysis-server URL` | off | The Navidrome URL the worker fetches from. Records are keyed by `--verify-url` when set (as clients' are), otherwise by this URL, which must then be the one **your clients use**. A warning is logged when the two name different hosts. |
 | `--analysis-user NAME` | — | A dedicated non-admin Navidrome user. |
 | `--analysis-password-file PATH` | — | Its password (trailing newline trimmed); or env `HOCKET_ANALYSIS_PASSWORD`. Never logged. |
 | `--analysis-nice N` | 10 | Nice value of the worker thread (0–19, Linux; 0 leaves it). The inference pool inherits it. |
 | `--analysis-pause-secs S` | 2 | Pause between tracks. |
 | `--analysis-rescan-hours H` | 6 | Walk the library again this long after a pass ends. |
+| `--analysis-max-file-mb M` | 500 | Skip files larger than this (checked on the song's size and again after download). |
 
 - One thread with its own single-threaded Tokio runtime, one
   `Analyser::new(1)`. A pass pages through `search3("")` (500 per page),
   skips tracks with a usable record that has beats or is the worker's own,
-  and for each of the rest: `download` (the original) into
+  tracks over 90 minutes (the analyser holds the whole track's spectrogram)
+  and files over `--analysis-max-file-mb`, and for each of the rest: `download` (the original) into
   `<data-dir>/analysis-tmp/` (emptied at start and stop), `analyse_file(..,
   Worker)`, `source` = the song's fingerprint, `compact`, store, delete the
-  file. A failure is logged at warn and remembered (by track and
-  fingerprint) for the life of the process; the pass carries on. A failed
-  library walk is retried after 10 minutes.
+  file. A file that can't be decoded or analysed is logged at warn and
+  remembered (by track and fingerprint) for the life of the process; the
+  pass carries on. A failed download (or store write) is not remembered:
+  the track is tried again next pass, and three in a row end the pass. A
+  failed library walk or pass is retried after 10 minutes.
 - Cost ≈ 30 s of one core and ~480 MB peak RSS per track: a first pass
   over 10 000 tracks takes about three days (measured on an 8-core x86
   host against a remote Navidrome: ~150 tracks an hour, downloads included). `/health` shows `analysis`:
