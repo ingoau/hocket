@@ -53,11 +53,16 @@ const EDGE_ROW_BACKING: f64 = 0.5;
 /// solid strip with this share of it one colour ([FLAT_TOL])...
 const SOLID_SHARE: f64 = 0.98;
 /// ...and the row no grainier along its length than a crisp edge may be ([GRAIN_MAX])...
-/// ...and the next row in this close to it (mean luma step, sRGB levels, leaving out a shape's
-/// edges as [grain] does): a texture of lines along the edge (streaks, scanlines) has a smooth
-/// outer row but steps from one row to the next. Twice [GRAIN_MAX], as [grain] averages the steps
-/// along and across, and so already lets such lines this soft carry on crisp.
+/// ...and the rows just inside it this close to one another (mean luma step from row to row over
+/// [SOLID_DEPTH] steps, sRGB levels, leaving out a shape's edges as [grain] does): a texture of
+/// lines along the edge (streaks, scanlines) has a smooth outer row but steps from one row to the
+/// next. Twice [GRAIN_MAX], as [grain] averages the steps along and across, and so already lets
+/// such lines this soft carry on crisp.
 const SOLID_ACROSS: f64 = 2.0 * GRAIN_MAX;
+/// How many row-to-row steps in [SOLID_ACROSS] looks at: deep enough that lines up to 3 px thick
+/// step within it (a band thicker than that is a solid strip of its own); shallow enough that a
+/// margin of a few original pixels under a pattern (~2 rows here) isn't judged by the pattern.
+const SOLID_DEPTH: usize = 4;
 /// The share of the edge strip in one colour above which the artwork carries on in that colour
 /// with a crisp edge (no fade, no blur). Between FLAT_MIN and this the edge is plain but not
 /// uniform (low-contrast texture: dark ground, grain, a gradient), and a crisp cut into one flat
@@ -236,7 +241,7 @@ fn solid_row(rgba: &[u8], w: usize, h: usize, side: Side) -> Option<([f32; 3], f
         Side::Bottom | Side::Top => h,
         Side::Right | Side::Left => w,
     };
-    if len < 2 || across_len < 2 {
+    if len < 2 || across_len <= SOLID_DEPTH {
         return None;
     }
     let px = |i: usize| edge_px(rgba, w, h, side, i, 0);
@@ -257,8 +262,12 @@ fn solid_row(rgba: &[u8], w: usize, h: usize, side: Side) -> Option<([f32; 3], f
         .map(|i| (luma(px(i)) - luma(px(i - 1))).abs() as f64)
         .sum::<f64>()
         / (len - 1) as f64;
-    let steps: Vec<f64> = (0..len)
-        .map(|i| (luma(px(i)) - luma(edge_px(rgba, w, h, side, i, 1))).abs())
+    let steps: Vec<f64> = (0..SOLID_DEPTH)
+        .flat_map(|d| (0..len).map(move |i| (d, i)))
+        .map(|(d, i)| {
+            (luma(edge_px(rgba, w, h, side, i, d)) - luma(edge_px(rgba, w, h, side, i, d + 1)))
+                .abs()
+        })
         .filter(|d| *d < GRAIN_EDGE)
         .map(f64::from)
         .collect();

@@ -676,15 +676,27 @@ fn a_texture_running_to_the_edge_is_not_a_solid_margin() {
 
 #[test]
 fn lines_along_the_edge_are_not_a_solid_margin() {
-    // Soft streaks parallel to the edge, all the way out: the outer row is smooth along its
-    // length, but the texture steps from row to row and would stop dead at a crisp cut.
-    let mut c = Canvas::new(S, S, [120; 3]);
-    for y in 0..S {
-        let v = 120 + ((y * 5) % 9) as u8;
-        c.fill(0, y, S, 1, [v; 3]);
+    // Soft stripes parallel to the edge, all the way out: the outer row (or rows, for stripes
+    // thicker than a pixel) is smooth, but the texture steps from row to row and would stop dead
+    // at a crisp cut. (Stripes 3 px thick are soft enough that the strip's own grain lets them
+    // carry on crisp already.)
+    for (thick, phase) in [(1, 0), (2, 0), (2, 1)] {
+        let mut c = Canvas::new(S, S, [120; 3]);
+        for y in 0..S {
+            let v = if ((y + phase) / thick) % 2 == 0 {
+                120
+            } else {
+                131
+            };
+            c.fill(0, y, S, 1, [v; 3]);
+        }
+        let l = c.auto();
+        assert_ne!(
+            l.bottom.reason, "extend:flat",
+            "{thick} px +{phase}: {:?}",
+            l.bottom
+        );
     }
-    let l = c.auto();
-    assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
 }
 
 #[test]
