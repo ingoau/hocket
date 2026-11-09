@@ -219,7 +219,13 @@ fn points(curve: &LoudnessCurve, end: Ms) -> impl Iterator<Item = (Ms, f32)> + '
         .lufs
         .iter()
         .enumerate()
-        .map(move |(i, &v)| (curve.start_ms + i as u32 * curve.hop_ms, v))
+        .map(move |(i, &v)| {
+            // A record is outside data: a huge hop or start must not overflow.
+            let step = u32::try_from(i)
+                .unwrap_or(u32::MAX)
+                .saturating_mul(curve.hop_ms);
+            (curve.start_ms.saturating_add(step), v)
+        })
         .filter(move |&(t, _)| t <= end)
 }
 
@@ -234,7 +240,7 @@ pub fn fade_out_start(curve: &LoudnessCurve, audible_end: Ms) -> Option<Ms> {
         .collect();
     let body: Vec<f32> = audible
         .iter()
-        .filter(|&&(t, _)| t + MAX_CUT_MS <= audible_end)
+        .filter(|&&(t, _)| t.saturating_add(MAX_CUT_MS) <= audible_end)
         .map(|&(_, v)| v)
         .collect();
     let sustained = if body.len() >= 10 {
@@ -248,7 +254,7 @@ pub fn fade_out_start(curve: &LoudnessCurve, audible_end: Ms) -> Option<Ms> {
         .map(|(t, _)| t)
         .last();
     Some(match last_loud {
-        Some(t) => (t + curve.hop_ms).min(audible_end),
+        Some(t) => t.saturating_add(curve.hop_ms).min(audible_end),
         None => curve.start_ms.min(audible_end),
     })
 }
@@ -941,6 +947,19 @@ mod tests {
             assert!(overlap < beat_len, "{p:?}");
             assert_eq!(p.kind, TransitionKind::Fade, "{p:?}");
         }
+    }
+
+    /// A record's curve is outside data: a hop that runs past `u32` doesn't
+    /// overflow.
+    #[test]
+    fn a_huge_hop_does_not_overflow() {
+        let curve = LoudnessCurve {
+            start_ms: u32::MAX - 10,
+            hop_ms: u32::MAX / 2,
+            lufs: vec![-9.0; 4],
+        };
+        assert_eq!(points(&curve, u32::MAX).count(), 4);
+        assert!(fade_out_start(&curve, u32::MAX).is_some());
     }
 
     #[test]

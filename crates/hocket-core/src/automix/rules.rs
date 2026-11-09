@@ -185,7 +185,8 @@ pub fn is_album_sequence(a: &MixTrack<'_>, b: &MixTrack<'_>) -> bool {
     };
     let ad = a.disc_number.unwrap_or(1);
     let bd = b.disc_number.unwrap_or(1);
-    (ad == bd && bt == at + 1) || (bd == ad + 1 && bt == 1)
+    // Tags are outside data: u32::MAX has no next.
+    (ad == bd && Some(bt) == at.checked_add(1)) || (Some(bd) == ad.checked_add(1) && bt == 1)
 }
 
 /// Tolerance for "no gap" at the join.
@@ -364,6 +365,9 @@ mod tests {
         let mut a = t("x", 1, 3);
         a.disc_number = None;
         assert_eq!(should_mix(&a, &t("x", 1, 4), &ctx()), seq);
+        // The largest numbers have no next (and don't overflow).
+        assert!(!is_album_sequence(&t("x", 1, u32::MAX), &t("x", 1, 0)));
+        assert!(!is_album_sequence(&t("x", u32::MAX, 3), &t("x", 0, 1)));
     }
 
     #[test]

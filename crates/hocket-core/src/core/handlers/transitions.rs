@@ -4,8 +4,8 @@
 
 use crate::api::*;
 use crate::automix::{
-    is_usable, late_edit_fade, plan_transition, should_mix, store, MixContext, MixTrack, PlanInput, PlanTrack,
-    LOCK_IN_MS,
+    is_usable, late_edit_fade, plan_transition, should_mix, store, MixContext, MixTrack, PlanInput,
+    PlanTrack, LOCK_IN_MS,
 };
 use crate::core::actor::Actor;
 use crate::settings::keys;
