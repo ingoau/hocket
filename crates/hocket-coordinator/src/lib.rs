@@ -189,6 +189,17 @@ pub struct Args {
     /// memory without a data dir) for clients to share.
     #[arg(long, default_value_t = false)]
     pub no_analysis_store: bool,
+    /// Most AutoMix records kept per Navidrome server; the least recently
+    /// updated go first.
+    #[arg(long, default_value_t = 400_000)]
+    pub analysis_records_per_server: u64,
+    /// Cap on one Navidrome server's AutoMix records, in MiB (of JSON; a
+    /// typical record is ~10 KB).
+    #[arg(long, default_value_t = 2048)]
+    pub analysis_mb_per_server: u64,
+    /// Cap on all AutoMix records together, in MiB.
+    #[arg(long, default_value_t = 8192)]
+    pub analysis_quota_mb: u64,
     /// The opt-in analysis worker (see `--analysis-server`).
     #[command(flatten)]
     pub worker: worker::WorkerArgs,
@@ -316,6 +327,9 @@ impl Args {
             no_reports: false,
             reports_quota_mb: 20480,
             no_analysis_store: false,
+            analysis_records_per_server: 400_000,
+            analysis_mb_per_server: 2048,
+            analysis_quota_mb: 8192,
             worker: worker::WorkerArgs::default(),
             command: None,
         }
@@ -501,11 +515,17 @@ impl App {
             }
             _ => None,
         };
+        let limits = analysis::StoreLimits {
+            records_per_server: args.analysis_records_per_server,
+            bytes_per_server: args.analysis_mb_per_server.saturating_mul(1 << 20),
+            bytes_total: args.analysis_quota_mb.saturating_mul(1 << 20),
+        };
         let analysis = match (&args.data_dir, args.no_analysis_store) {
             (_, true) => None,
-            (Some(dir), false) => Some(Arc::new(analysis::AnalysisStore::open(dir)?)),
-            (None, false) => Some(Arc::new(analysis::AnalysisStore::in_memory()?)),
-        };
+            (Some(dir), false) => Some(analysis::AnalysisStore::open(dir)?),
+            (None, false) => Some(analysis::AnalysisStore::in_memory()?),
+        }
+        .map(|s| Arc::new(s.with_limits(limits)));
         if args.worker.analysis_server.is_some() && analysis.is_none() {
             anyhow::bail!("--analysis-server needs the analysis store: drop --no-analysis-store");
         }
@@ -584,7 +604,8 @@ impl App {
             return;
         };
         track_ids.truncate(ANALYSIS_FETCH_MAX);
-        track_ids.dedup();
+        let mut seen = std::collections::HashSet::new();
+        track_ids.retain(|id| seen.insert(id.clone()));
         let found = tokio::task::spawn_blocking(move || store.get_many(&server, &track_ids)).await;
         let records = match found {
             Ok(Ok(r)) => r,
@@ -597,15 +618,7 @@ impl App {
                 vec![]
             }
         };
-        // Batches keep each frame well under the cap (a record is a few KB, at most ~0.5 MB).
-        let mut chunks: Vec<Vec<AnalysisEntry>> = records
-            .chunks(ANALYSIS_BATCH_MAX)
-            .map(|c| c.to_vec())
-            .collect();
-        if chunks.is_empty() {
-            chunks.push(vec![]);
-        }
-        for records in chunks {
+        for records in analysis_chunks(records) {
             match WireMessage::new(Msg::AnalysisRecords { records }).encode() {
                 Ok(t) => {
                     let _ = tx.send(Message::Text(t.into()));
@@ -615,7 +628,8 @@ impl App {
         }
     }
 
-    /// Store an `AnalysisUpload`'s valid, preferred records.
+    /// Store an `AnalysisUpload`'s valid, preferred records (made honest
+    /// first: see [`analysis::sanitize_upload`]).
     async fn take_analysis_upload(&self, server: String, mut records: Vec<AnalysisEntry>) {
         let Some(store) = self.analysis.clone() else {
             return;
@@ -624,7 +638,8 @@ impl App {
         let now = self.now_ms();
         let done = tokio::task::spawn_blocking(move || {
             let (mut stored, mut refused) = (0, 0);
-            for e in records {
+            for mut e in records {
+                analysis::sanitize_upload(&mut e.record, now);
                 if let Err(why) = analysis::validate(&e.track_id, &e.record) {
                     debug!(track = %e.track_id, why, "analysis upload refused");
                     refused += 1;
@@ -1335,6 +1350,36 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
     app.connections.fetch_sub(1, Ordering::Relaxed);
 }
 
+/// The JSON a batch of records may take in one `AnalysisRecords` frame:
+/// half the frame cap, leaving room for the envelope.
+const ANALYSIS_FRAME_BUDGET: usize = MAX_FRAME_BYTES / 2;
+
+/// `AnalysisRecords` batches: at most [`ANALYSIS_BATCH_MAX`] records and
+/// [`ANALYSIS_FRAME_BUDGET`] bytes each, at least one (empty when nothing was
+/// found). A record too large for a frame on its own is left out.
+fn analysis_chunks(records: Vec<AnalysisEntry>) -> Vec<Vec<AnalysisEntry>> {
+    let mut chunks: Vec<Vec<AnalysisEntry>> = vec![];
+    let mut current: Vec<AnalysisEntry> = vec![];
+    let mut bytes = 0;
+    for e in records {
+        let size = serde_json::to_vec(&e).map_or(usize::MAX, |j| j.len());
+        if size > ANALYSIS_FRAME_BUDGET {
+            warn!(track = %e.track_id, size, "analysis record too large to send");
+            continue;
+        }
+        if current.len() >= ANALYSIS_BATCH_MAX || bytes + size > ANALYSIS_FRAME_BUDGET {
+            chunks.push(std::mem::take(&mut current));
+            bytes = 0;
+        }
+        bytes += size;
+        current.push(e);
+    }
+    if !current.is_empty() || chunks.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 /// A socket's allowance of analysis messages: a bucket of
 /// [`ANALYSIS_MESSAGES_PER_MINUTE`] that refills over a minute.
 struct AnalysisBudget {
@@ -1453,6 +1498,60 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analysis_answers_are_chunked_by_count_and_size() {
+        use hocket_core::api::{
+            AnalysisProducer, AnalysisRecord, LoudnessCurve, SourceFingerprint,
+        };
+        let entry = |id: usize, beats: u32| AnalysisEntry {
+            track_id: format!("t{id}"),
+            record: AnalysisRecord {
+                version: 1,
+                analyser: "test".into(),
+                produced_by: AnalysisProducer::Desktop,
+                source: SourceFingerprint {
+                    duration_ms: 1,
+                    size_bytes: None,
+                    suffix: None,
+                    transcoded: false,
+                },
+                duration_ms: 1,
+                integrated_lufs: None,
+                audible_start_ms: 0,
+                audible_end_ms: 0,
+                head: LoudnessCurve::default(),
+                tail: LoudnessCurve::default(),
+                bpm: None,
+                beats_ms: (0..beats).map(|b| 10_000_000 + b).collect(),
+                downbeats_ms: vec![],
+                beat_confidence: 0.0,
+                created_at: 0.0,
+            },
+        };
+        assert_eq!(analysis_chunks(vec![]).len(), 1, "one empty answer");
+        let small: Vec<_> = (0..40).map(|i| entry(i, 10)).collect();
+        let sizes: Vec<usize> = analysis_chunks(small).iter().map(Vec::len).collect();
+        assert_eq!(sizes, vec![16, 16, 8]);
+        // ~750 KB each (what the old limits allowed): fewer per frame
+        let big: Vec<_> = (0..16).map(|i| entry(i, 85_000)).collect();
+        let chunks = analysis_chunks(big);
+        assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), 16);
+        for c in &chunks {
+            let frame = WireMessage::new(Msg::AnalysisRecords { records: c.clone() })
+                .encode()
+                .unwrap();
+            assert!(frame.len() < MAX_FRAME_BYTES, "{}", frame.len());
+        }
+        // one record over the budget is left out, the rest still go
+        let chunks = analysis_chunks(vec![entry(0, 10), entry(1, 600_000), entry(2, 10)]);
+        let ids: Vec<&str> = chunks
+            .iter()
+            .flatten()
+            .map(|e| e.track_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["t0", "t2"]);
+    }
 
     #[tokio::test]
     async fn verify_target_refuses_what_an_attacker_would_name() {
