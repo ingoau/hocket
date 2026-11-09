@@ -792,7 +792,15 @@ impl Engine {
                 self.exclusive = x;
                 self.maybe_switch_rate();
             }
-            Cmd::SetDsp(s) => self.dsp.set_settings(s),
+            Cmd::SetDsp(s) => {
+                if &s != self.dsp.settings() {
+                    self.dsp.set_settings(s);
+                    // A tail rendered (or rendering) with the old EQ and
+                    // gain would play them for up to its length: render
+                    // it again (a running transition keeps its own).
+                    self.drop_tail();
+                }
+            }
             Cmd::CompleteTransition => self.cut_transition("completed"),
             Cmd::TailRendered { id, result } => self.on_tail_rendered(id, result),
             Cmd::Loaded {
@@ -2861,6 +2869,38 @@ mod tests {
         let before = peak(&x, 1_950, 1_990);
         let after = peak(&x, 2_015, 2_055);
         assert!(before < 0.35, "the AGC turned A down: {before}");
+        assert!(
+            (after / before - 1.0).abs() < 0.06,
+            "level jump at the switch: {before} → {after}"
+        );
+    }
+
+    /// A settings change drops a tail rendered with the old ones: the tail
+    /// plays with the new EQ, at the level live A had.
+    #[test]
+    fn new_dsp_settings_render_the_tail_again() {
+        let rig = rig();
+        let a = rig.sine("a.wav", 48_000, 3_000, 441.0);
+        let mut b = rig.sine("b.wav", 48_000, 1_500, 660.0);
+        b.mix_in = Some(fade_plan(2_000, 800, 500, 600));
+        rig.backend.load(a, Some(b), 0, false).unwrap();
+        thread::sleep(Duration::from_millis(1_500));
+        let mut audio = default_audio_settings();
+        audio.eq = crate::audio::dsp::eq::flat();
+        audio.eq.enabled = true;
+        audio.eq.preamp_db = -6.0;
+        rig.backend.set_audio_settings(&audio).unwrap();
+        thread::sleep(Duration::from_millis(1_500));
+        rig.backend.play().unwrap();
+        rig.wait_for(
+            Duration::from_secs(15),
+            |r| matches!(r, BackendReport::Ended { key } if key == "b.wav"),
+        );
+        assert_eq!(rig.count(is_started), 1, "{:?}", rig.reports.lock());
+        let x = rig.played();
+        let before = peak(&x, 1_950, 1_990);
+        let after = peak(&x, 2_015, 2_055);
+        assert!(before < 0.25, "the EQ turned A down: {before}");
         assert!(
             (after / before - 1.0).abs() < 0.06,
             "level jump at the switch: {before} → {after}"
