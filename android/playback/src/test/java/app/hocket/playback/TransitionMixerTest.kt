@@ -1,6 +1,7 @@
 package app.hocket.playback
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
@@ -32,7 +33,10 @@ class TransitionMixerTest {
         override fun chainReset(handle: Long) {
             resets++
         }
+        var processed = 0
+        override fun chainIsBypassed(handle: Long) = gainDb == 0.0
         override fun chainProcess(handle: Long, buffer: ByteBuffer, samples: Int) {
+            processed += samples
             val g = 10.0.pow(gainDb / 20).toFloat()
             for (i in 0 until samples) buffer.putFloat(i * 4, buffer.getFloat(i * 4) * g)
         }
@@ -204,6 +208,23 @@ class TransitionMixerTest {
         control.audioSettingsJson = "{eq2}"
         feed(*ones(4))
         assertEquals(listOf("{eq}", "{eq2}"), dsp.settings)
+    }
+
+    @Test
+    fun aPassthroughChainSkipsTheBufferUntilAClipOrAMix() {
+        control.items["a"] = MixControl.Item(0.0, 100)
+        control.items["b"] = MixControl.Item(0.0, null)
+        mixer.startItem("a", 0, contiguous = false)
+        assertTrue("0 dB, nothing clipped yet: passed through", mixer.passThrough(60))
+        assertFalse("the clip end falls in this buffer", mixer.passThrough(60))
+        assertEquals("the passed-through frames still count towards the clip", 40, feed(*ones(60)).size)
+        arm(tail())
+        mixer.startItem("b", 0, contiguous = true)
+        assertFalse("a mix runs", mixer.passThrough(10))
+        control.items["c"] = MixControl.Item(-6.0, null)
+        mixer.startItem("c", 0, contiguous = false)
+        assertFalse("a gain to apply", mixer.passThrough(10))
+        assertEquals("only the frames before the clip went through the chain", 40, dsp.processed)
     }
 
     @Test

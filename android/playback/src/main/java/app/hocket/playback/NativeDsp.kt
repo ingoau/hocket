@@ -16,6 +16,8 @@ interface DspEngine {
     /** A new track starts at the next sample: its gain in dB (boost included), no ramp. */
     fun chainSetTrackGain(handle: Long, gainDb: Double)
     fun chainReset(handle: Long)
+    /** Whether [chainProcess] would leave samples untouched (0 dB, EQ and normalisation off). */
+    fun chainIsBypassed(handle: Long): Boolean
     fun chainProcess(handle: Long, buffer: ByteBuffer, samples: Int)
     /** `IncomingShaper` for a `TransitionPlan` JSON; 0 when the plan doesn't parse. */
     fun shaperNew(planJson: String, channels: Int, rate: Int): Long
@@ -48,6 +50,7 @@ object NativeDsp : DspEngine {
     external override fun chainSetAudioSettings(handle: Long, json: String): Boolean
     external override fun chainSetTrackGain(handle: Long, gainDb: Double)
     external override fun chainReset(handle: Long)
+    external override fun chainIsBypassed(handle: Long): Boolean
     external override fun chainProcess(handle: Long, buffer: ByteBuffer, samples: Int)
     external override fun shaperNew(planJson: String, channels: Int, rate: Int): Long
     external override fun shaperFree(handle: Long)

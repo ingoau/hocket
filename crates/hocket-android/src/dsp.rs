@@ -67,6 +67,12 @@ impl Chain {
     pub fn track_gain_db(&self) -> f64 {
         self.chain.track_gain_db()
     }
+
+    /// Whether [`Self::process`] leaves samples untouched (unity gain, EQ and normalisation
+    /// off): the processor then skips the buffer altogether.
+    pub fn is_bypassed(&self) -> bool {
+        self.chain.is_bypassed()
+    }
 }
 
 /// The limiter run after summing the tail and B (the chain's own, −1 dB knee).
@@ -312,6 +318,18 @@ mod jni_shims {
     }
 
     #[no_mangle]
+    pub extern "system" fn Java_app_hocket_playback_NativeDsp_chainIsBypassed(
+        _env: JNIEnv,
+        _this: JObject,
+        h: jlong,
+    ) -> jboolean {
+        guarded(JNI_FALSE, || match chain(h) {
+            Some(c) if c.is_bypassed() => JNI_TRUE,
+            _ => JNI_FALSE,
+        })
+    }
+
+    #[no_mangle]
     pub extern "system" fn Java_app_hocket_playback_NativeDsp_chainProcess(
         env: JNIEnv,
         _this: JObject,
@@ -443,6 +461,23 @@ mod tests {
 
     fn dc(frames: usize, channels: usize, v: f32) -> Vec<f32> {
         vec![v; frames * channels]
+    }
+
+    #[test]
+    fn chain_is_bypassed_only_when_it_changes_nothing() {
+        let mut c = Chain::new(48_000, 2);
+        assert!(c.is_bypassed(), "0 dB, EQ off: a passthrough");
+        let mut s = dc(64, 2, 0.123);
+        c.process(&mut s);
+        assert!(s.iter().all(|x| x.to_bits() == 0.123f32.to_bits()));
+        c.set_track_gain(-3.0);
+        assert!(!c.is_bypassed());
+        c.set_track_gain(0.0);
+        assert!(c.is_bypassed());
+        c.set_audio_settings(&audio(3.0));
+        assert!(!c.is_bypassed(), "the EQ is on");
+        c.set_audio_settings(&audio(0.0));
+        assert!(c.is_bypassed());
     }
 
     #[test]

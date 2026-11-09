@@ -165,15 +165,28 @@ class TransitionMixer(
         return work
     }
 
+    /**
+     * Whether the next [frames] input frames would come out unchanged: no mix running, none past the
+     * clip end, and a chain that is a passthrough (0 dB, EQ off). Then they are counted as played
+     * and the caller passes its input through as is (bit-exact, no conversion, no JNI); else
+     * nothing is consumed and the caller goes through [process].
+     */
+    fun passThrough(frames: Int): Boolean {
+        applySettings()
+        checkCancel()
+        if (mix != null || framesBeforeClip(frames) < frames) return false
+        if (chain != 0L && !dsp.chainIsBypassed(chain)) return false
+        itemFrames += frames
+        return true
+    }
+
     /** Process [frames] input frames from [work]; returns the frames written to [output]. */
     fun process(frames: Int): Int {
         val ch = channels.coerceAtLeast(1)
         applySettings()
-        if (control.cancelCount != seenCancels) {
-            seenCancels = control.cancelCount
-            endMix()
-        }
-        val n = keepBeforeClip(frames)
+        checkCancel()
+        val n = framesBeforeClip(frames)
+        itemFrames += frames
         val m = mix
         if (m == null) {
             if (chain != 0L && n > 0) dsp.chainProcess(chain, work, n * ch)
@@ -225,6 +238,12 @@ class TransitionMixer(
         dsp.shaperFree(m.shaper)
     }
 
+    private fun checkCancel() {
+        if (control.cancelCount == seenCancels) return
+        seenCancels = control.cancelCount
+        endMix()
+    }
+
     private fun applySettings() {
         val json = control.audioSettingsJson
         if (chain == 0L || json == settingsApplied) return
@@ -233,9 +252,8 @@ class TransitionMixer(
     }
 
     /** How many of the next [frames] input frames lie before the current item's clip end. */
-    private fun keepBeforeClip(frames: Int): Int {
+    private fun framesBeforeClip(frames: Int): Int {
         val first = itemFrames
-        itemFrames += frames
         val clipMs = item?.let { control.items[it]?.clipEndMs } ?: return frames
         if (rate <= 0 || itemStartUs >= clipMs * 1000) return frames
         val end = (clipMs * 1000 - itemStartUs) * rate / 1_000_000
@@ -301,6 +319,11 @@ class MixProcessor(dsp: DspEngine, control: MixControl, listener: MixListener) :
         val float = format.encoding == C.ENCODING_PCM_FLOAT
         val frames = inputBuffer.remaining() / format.bytesPerFrame
         if (frames == 0) return
+        if (mixer.passThrough(frames)) {
+            // Nothing to do (no mix, nothing clipped, a passthrough chain): the input as is.
+            replaceOutputBuffer(inputBuffer.remaining()).put(inputBuffer).flip()
+            return
+        }
         val samples = frames * format.channelCount
         val work = mixer.ensureWork(samples)
         val start = inputBuffer.position()
