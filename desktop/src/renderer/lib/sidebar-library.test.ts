@@ -57,9 +57,8 @@ describe("viewing the sidebar library", () => {
     expect(keys(viewLibrary(entries, new Set(), { sort: "recents" }))).toEqual(["artist:ar1", "album:a1", "album:a2", "playlist:p2", "playlist:p1"]);
   });
 
-  it("sorts by when it was added, and by name ignoring case", () => {
-    expect(keys(viewLibrary(entries, new Set(), { sort: "added" })).slice(0, 2)).toEqual(["artist:ar1", "album:a1"]);
-    expect(keys(viewLibrary(entries, new Set(), { sort: "added" })).slice(-2)).toEqual(["playlist:p2", "playlist:p1"]);
+  it("sorts by when it was added (dated first, the rest by their last play), and by name ignoring case", () => {
+    expect(keys(viewLibrary(entries, new Set(), { sort: "added" }))).toEqual(["playlist:p2", "playlist:p1", "artist:ar1", "album:a1", "album:a2"]);
     expect(viewLibrary(entries, new Set(), { sort: "alpha" }).map((e) => e.title)).toEqual(["copper Hours", "Late drive", "Marlowe Reed", "Sunday slow", "Tidewater"]);
   });
 

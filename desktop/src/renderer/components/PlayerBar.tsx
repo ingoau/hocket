@@ -89,7 +89,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
         <div className="transport">
           <button type="button" className={`btn icon toggle ${shuffle ? "on" : ""}`} aria-pressed={shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !shuffle } })} data-testid="shuffle"><Icon name="shuffle" size={20} /></button>
           <button type="button" className="btn icon" aria-label={t("player.previous")} title={t("player.previous")} onClick={() => d({ type: "previous" })} data-testid="previous"><Icon name="previous" size={24} filled /></button>
-          <button type="button" className={`btn icon play ${playing ? "playing" : "paused"}`} aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="play-pause">{buffering ? <Icon name="spinner" className="spin" size={22} /> : <Icon name={playing ? "pause" : "play"} size={24} filled />}</button>
+          <button type="button" className="btn icon play" aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="play-pause">{buffering ? <Icon name="spinner" className="spin" size={22} /> : <Icon name={playing ? "pause" : "play"} size={24} filled />}</button>
           <button type="button" className="btn icon" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="next"><Icon name="next" size={24} filled /></button>
           <RepeatButton mode={repeat} />
         </div>

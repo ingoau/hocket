@@ -265,7 +265,7 @@ function EqCanvas({ bands, onChange, disabled }: { bands: EqBand[]; onChange: (b
     if (!ctx) return;
     ctx.scale(dpr, dpr);
     const css = getComputedStyle(document.documentElement);
-    const accent = css.getPropertyValue("--accent").trim() || "#6f5cff";
+    const accent = css.getPropertyValue("--accent").trim() || DEFAULT_ACCENT;
     const faint = css.getPropertyValue("--fg-faint").trim() || "#888";
     ctx.clearRect(0, 0, w, h);
     ctx.strokeStyle = faint;

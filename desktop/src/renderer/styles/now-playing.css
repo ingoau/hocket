@@ -36,7 +36,12 @@
 .np[data-idle] .np-chrome { opacity: 0; pointer-events: none; transition: opacity 900ms var(--ease-emphasized); }
 .np[data-idle], .np[data-idle] * { cursor: none; }
 
-.np-head { position: absolute; z-index: 3; top: 20px; right: 24px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 48px; }
+.np-head { position: absolute; z-index: 3; top: 20px; right: 24px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 48px; -webkit-app-region: no-drag; }
+/* The player covers the top bar: its own strip along the top moves the window (the top bar's drag
+   region, hidden under it, is switched off: panes.css .player-open). */
+.np-drag { position: absolute; z-index: 2; top: 0; left: 0; right: 0; height: 40px; -webkit-app-region: drag; }
+/* Windows draws its caption buttons at the top right (titleBarOverlay): the player's buttons keep left of them. */
+:root[data-platform="windows"] .np-head { right: calc(24px + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)); }
 
 .np-stage { position: absolute; inset: 0; z-index: 1; }
 .np-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }

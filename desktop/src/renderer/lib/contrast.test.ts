@@ -147,11 +147,12 @@ describe("fullscreen scrim", () => {
 });
 
 describe("detail page header wash", () => {
-  it("keeps white and 80% white text at 4.5:1 for any artwork accent", () => {
+  it("keeps white, 80% white and the eyebrow chip's text at 4.5:1 for any artwork accent", () => {
     for (const raw of ACCENTS) {
       const wash = P(heroWash(raw));
       expect(contrast(WHITE, wash), raw).toBeGreaterThanOrEqual(4.5);
       expect(contrast(composite(WHITE, 0.8, wash), wash), `${raw} at 80%`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(WHITE, composite(WHITE, 0.16, wash)), `${raw} on the eyebrow chip`).toBeGreaterThanOrEqual(4.5);
     }
   });
 

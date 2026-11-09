@@ -859,7 +859,7 @@ button.qrow { width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   /* No spatial feedback either: hover lifts and press squeezes become plain colour changes. */
-  .btn:active, .nav-item:active, .tab:active, .tile:has(.tile-main:active), .tile .play, .tile .play:active, .tile:hover .art, .genre-tile:active, .stars .star:active { transform: none !important; }
+  .btn:active, .nav-item:active, .tab:active, .tile:has(.tile-main:active), .tile .play, .tile .play:active, .tile:hover .art, .genre-tile:active, .stars .star:active, .transport .btn.play:hover, .np-play:hover { transform: none !important; }
 }
 
 /* ---- Forced colours (Windows high contrast) ------------------------------
@@ -916,7 +916,8 @@ button.qrow { width: 100%; }
   :root { --page-gutter: 8px; --title-display: 32px; --title-section: 20px; }
   .app { grid-template-rows: auto minmax(0, 1fr) auto; }
   .app-body { grid-template-columns: 52px minmax(0, 1fr); position: relative; }
-  .sidebar .section-title, .sidebar .nav-item span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* The names go to tooltips and screen readers; the pins' and Your library's covers stay. */
+  .sidebar .section-title, .sidebar .nav-item span:not(.pin-thumb, .lib-thumb, .pin-thumb *, .lib-thumb *) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .sidebar .nav-item { justify-content: center; padding: 0; }
   .sidebar-scroll, .sidebar-foot { padding: 4px; }
   .sidebar > .resize-handle { display: none; }

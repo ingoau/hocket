@@ -32,6 +32,7 @@
 .m3-slider.disabled .m3-slider-input { cursor: default; }
 /* The value indicator: a filled pill popping up over the handle. */
 .m3-slider-bubble { position: absolute; bottom: calc(100% + 8px); left: 50%; min-width: 36px; padding: 6px 10px; border-radius: var(--shape-full); background: var(--fg); color: var(--bg); font-size: var(--fs-sm); font-weight: 600; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; transform: translateX(-50%) scale(0); transform-origin: 50% 100%; transition: transform var(--dur-spring) var(--spring-fast); }
+.m3-slider:has(.m3-slider-input:active) .m3-slider-bubble, .m3-slider:has(.m3-slider-input:focus-visible) .m3-slider-bubble { transform: translateX(-50%) scale(1); }
 /* Vertical: the same parts along the y axis, growing upwards (the native
    input runs bottom-to-top via its writing mode). */
 .m3-slider.vertical { --y: calc(var(--hw) / 2 + (100% - var(--hw)) * var(--f, 0)); flex: 0 0 auto; width: var(--handle-h); height: 132px; min-width: 0; }

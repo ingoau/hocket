@@ -8,12 +8,12 @@ import { openContextMenu } from "./ContextMenu";
 import { Icon } from "./Icon";
 import { openItemsMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
-import { useResolvedPins, performPin, type ResolvedPin } from "../lib/use-pins";
+import { usePins, useResolvedPins, performPin, type ResolvedPin } from "../lib/use-pins";
 import { editPinsItem, pinMenuItems } from "../lib/pin-menus";
 import { pinTap } from "../lib/library-pins";
 import { isSidebarItemActive } from "../lib/sidebar-active";
 import { NARROW, useMediaQuery } from "../lib/media";
-import { SidebarLibrary, useLibraryEntries } from "./SidebarLibrary";
+import { SidebarLibrary, shownLibrary, useLibraryEntries, useLibraryView } from "./SidebarLibrary";
 
 const clampWidth = (w: number) => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
 
@@ -50,10 +50,15 @@ export function Sidebar() {
     .map((it) => ({ ...it, view: it.view as ViewName | undefined }));
   const rail = narrow || panels.sidebarCollapsed;
   // What Your library leaves out: the pins straight from the setting, so nothing doubles up while they resolve.
-  const pinnedKeys = useMemo(() => new Set((pins ?? []).map((rp) => `${rp.pin.kind}:${rp.pin.id}`)), [pins]);
+  const rawPins = usePins();
+  const pinnedKeys = useMemo(() => new Set(rawPins.map((p) => `${p.kind}:${p.id}`)), [rawPins]);
   const library = useLibraryEntries();
-  // A pin or a Your library item that is open is the highlight; its list page's place isn't as well.
-  const libraryOpen = !!route.id && !pinnedKeys.has(`${route.view}:${route.id}`) && library.some((e) => e.kind === route.view && e.id === route.id);
+  const libView = useLibraryView(rail);
+  const shown = useMemo(() => shownLibrary(library, pinnedKeys, libView, rail), [library, pinnedKeys, libView, rail]);
+  const scroller = useRef<HTMLDivElement>(null);
+  // A pin or a Your library row that is open is the highlight; its list page's place isn't as well.
+  // Open from elsewhere (not listed, or filtered out), the place is.
+  const libraryOpen = !!route.id && shown.some((e) => e.kind === route.view && e.id === route.id);
   const pinnedOpen = (pins ?? []).some((rp) => isPinActive(rp)) || libraryOpen;
   const itemViews = items.map((it) => it.view);
   const isActive = (v: ViewName | undefined) => isSidebarItemActive(v, route, itemViews, pinnedOpen);
@@ -64,7 +69,7 @@ export function Sidebar() {
 
   return (
     <nav className={`sidebar ${rail ? "rail" : ""}`} aria-label={t("nav.library")} data-testid="sidebar" data-rail={rail || undefined}>
-      <div className="sidebar-scroll" onContextMenu={(e) => { if (!e.defaultPrevented && pins?.length && (e.target === e.currentTarget || (e.target as Element).closest(".sidebar-pins"))) openItemsMenu(e, [editPinsItem()]); }}>
+      <div ref={scroller} className="sidebar-scroll" onContextMenu={(e) => { if (!e.defaultPrevented && pins?.length && (e.target === e.currentTarget || (e.target as Element).closest(".sidebar-pins"))) openItemsMenu(e, [editPinsItem()]); }}>
         <div className="sidebar-places">
           {items.map((it) => (
             <a key={it.id} href="#" className={`nav-item ${isActive(it.view) ? "active" : ""}`} aria-current={isActive(it.view) ? "page" : undefined} title={it.label} onClick={(e) => { e.preventDefault(); if (it.view) navigate({ view: it.view }); else void executeAction(it.id); }} data-testid={`nav-${it.view ?? it.id}`}>
@@ -107,7 +112,7 @@ export function Sidebar() {
             );
           })}
         </div>
-        <SidebarLibrary rail={rail} pinned={pinnedKeys} entries={library} />
+        <SidebarLibrary rail={rail} shown={shown} lib={libView} scroller={scroller} />
       </div>
       {/* Pinned below the scrolling list, like a native source list's footer. */}
       <div className="sidebar-foot">

@@ -61,6 +61,7 @@ export function App() {
     useApp.getState().setFullscreen(false);
   };
   useTheme();
+  useWindowChrome(fullscreen);
   useGlobalKeyboard(true);
   useDeepLinks();
   useQueueDropReveal();
@@ -72,7 +73,7 @@ export function App() {
     document.getElementById("main")?.focus();
   };
   return (
-    <div className={`app ${narrow ? "narrow" : ""}`} data-testid="app">
+    <div className={`app ${narrow ? "narrow" : ""} ${fullscreen ? "player-open" : ""}`} data-testid="app">
       <header className="app-header" inert={modal}>
         <a href="#main" className="skip-link" onClick={skip} data-testid="skip-link">{t("a11y.skipToContent")}</a>
         {coreKind === "fake" ? <div className="dev-banner" data-testid="dev-banner">{t("app.devBanner")}</div> : null}
@@ -100,6 +101,20 @@ export function App() {
       <Toasts />
     </div>
   );
+}
+
+/**
+ * The window chrome around the app: the platform on the root (Windows keeps the fullscreen player's
+ * buttons clear of its caption buttons), and main told when the fullscreen player covers the window.
+ */
+function useWindowChrome(playerOpen: boolean): void {
+  const platform = useApp((s) => s.meta?.platform);
+  useEffect(() => {
+    if (platform) document.documentElement.dataset.platform = platform;
+  }, [platform]);
+  useEffect(() => {
+    bridge().window.setPlayerOpen(playerOpen);
+  }, [playerOpen]);
 }
 
 /**

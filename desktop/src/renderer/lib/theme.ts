@@ -23,14 +23,18 @@ export function useTheme() {
       const name: ThemeName = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
       document.documentElement.setAttribute("data-theme", name);
       setResolved(name);
-      // The main window's ground and Windows' caption buttons follow (and the next launch starts in
-      // it); the mini player has its own frameless window and leaves them be.
-      if (new URLSearchParams(window.location.search).get("window") !== "mini") bridge().window.setTheme(name);
     };
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [theme]);
+  // The theme setting goes to main for the window's ground and Windows' caption buttons (and the
+  // next launch's first paint), once the settings have arrived: before that the setting reads as its
+  // fallback. Only the main window reports it; the mini player has its own frameless window.
+  const ready = useApp((s) => s.ready);
+  useEffect(() => {
+    if (ready && new URLSearchParams(window.location.search).get("window") !== "mini") bridge().window.setTheme(theme);
+  }, [ready, theme]);
   useEffect(() => {
     if (!dynamic || !cover) {
       setAccent(undefined);

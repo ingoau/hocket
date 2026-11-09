@@ -87,6 +87,8 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       app.forward();
       return;
     case "ui.toggleSidebar":
+      // A narrow window is always a rail: nothing to toggle (and nothing to flip behind it).
+      if (isNarrow()) return;
       app.setPanels({ sidebarCollapsed: !app.panels.sidebarCollapsed });
       return;
     case "ui.escape":

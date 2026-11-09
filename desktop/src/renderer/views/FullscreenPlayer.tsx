@@ -360,6 +360,8 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       })}
       <div className="np-fade" aria-hidden="true" />
 
+      {/* The window's drag strip while the player covers the top bar (the buttons stay clickable). */}
+      <div className="np-drag" aria-hidden="true" />
       <header className="np-head np-chrome">
         <button type="button" className="np-icon-btn np-round" aria-pressed={windowFullscreen} aria-label={t("player.windowFullscreen")} title={windowFullscreen ? t("player.exitWindowFullscreen") : t("player.windowFullscreen")} onClick={toggleWindowFullscreen} data-testid="fs-window-fullscreen"><Icon name={windowFullscreen ? "fullscreenExit" : "fullscreen"} size={22} /></button>
         <button ref={closeRef} type="button" className="np-icon-btn np-round" aria-label={t("fullscreen.exit")} title={t("fullscreen.exit")} onClick={() => setFullscreen(false)} data-testid="fullscreen-exit"><Icon name="closeFullscreen" size={22} /></button>
@@ -399,7 +401,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
             <div className="np-transport">
               <button type="button" className={`np-tonal np-flank ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="fs-shuffle"><Icon name="shuffle" size={22} filled={queue.shuffle} /></button>
               <button type="button" className="np-skip" aria-label={t("player.previous")} title={t("player.previous")} onClick={() => d({ type: "previous" })} data-testid="fs-previous"><Icon name="previous" size={36} filled /></button>
-              <button type="button" className={`np-play ${playing ? "playing" : "paused"}`} aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="fs-play-pause">
+              <button type="button" className="np-play" aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="fs-play-pause">
                 {transport.buffering ? <Icon name="spinner" className="spin" size={34} /> : <Icon name={playing ? "pause" : "play"} size={40} filled />}
               </button>
               <button type="button" className="np-skip" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="fs-next"><Icon name="next" size={36} filled /></button>

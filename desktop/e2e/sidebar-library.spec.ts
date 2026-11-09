@@ -3,7 +3,7 @@
 // folds it to a rail of icons and covers.
 import type { Page } from "@playwright/test";
 import type { ServerInfo } from "../src/core/api";
-import { completeSetup, expect, test } from "./fixtures";
+import { completeSetup, expect, resizeWindow, test } from "./fixtures";
 
 async function playAlbum(page: Page, id: string): Promise<void> {
   const servers = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: ServerInfo[] };
@@ -24,10 +24,8 @@ test.describe("Your library in the sidebar", () => {
     await expect(list.first()).toHaveAttribute("data-entry", "album:al-1");
     // The playing album is marked.
     await expect(list.first()).toHaveClass(/playing/);
-    const all = await entries(page);
-    expect(all).toContain("album:al-3");
-    expect(all.some((e) => e?.startsWith("playlist:"))).toBe(true);
-    expect(all.some((e) => e?.startsWith("artist:"))).toBe(true);
+    // The rows are virtualised: what is near the top is drawn.
+    expect(await entries(page)).toContain("album:al-3");
 
     // A pinned album moves up to the pins and out of the list.
     await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "library.pins", value: JSON.stringify([{ kind: "album", id: "al-1", tap: "open" }]) } }));
@@ -38,7 +36,11 @@ test.describe("Your library in the sidebar", () => {
     await page.getByTestId("side-lib-chip-album").click();
     await expect(page.getByTestId("side-lib-chip-album")).toHaveAttribute("aria-pressed", "true");
     expect((await entries(page)).every((e) => e?.startsWith("album:"))).toBe(true);
+    await page.getByTestId("side-lib-chip-artist").click();
+    await expect(list.first()).toBeVisible();
+    expect((await entries(page)).every((e) => e?.startsWith("artist:"))).toBe(true);
     await page.getByTestId("side-lib-chip-playlist").click();
+    await expect(list.first()).toBeVisible();
     expect((await entries(page)).every((e) => e?.startsWith("playlist:"))).toBe(true);
     // Remembered on the device.
     await page.reload();
@@ -102,5 +104,22 @@ test.describe("the collapsed sidebar", () => {
     await page.keyboard.press("ControlOrMeta+b");
     await expect(page.getByTestId("sidebar")).not.toHaveAttribute("data-rail", "true");
     expect(Math.round((await sidebar.boundingBox())!.width)).toBe(Math.round(wide));
+  });
+
+  test("a narrow window is a rail with the covers showing, and Mod+B leaves the remembered state alone", async ({ hocket }) => {
+    const { app, page } = hocket;
+    await completeSetup(page);
+    await playAlbum(page, "al-1");
+    await resizeWindow(app, page, 820, 700);
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-rail", "true");
+    await expect(page.getByTestId("sidebar-toggle")).toHaveCount(0);
+    const thumb = page.locator('[data-testid="sidebar-library-item"] .lib-thumb').first();
+    await expect(thumb).toBeVisible();
+    expect((await thumb.boundingBox())!.width).toBeGreaterThan(30);
+    await page.locator("body").click({ position: { x: 500, y: 300 } });
+    await page.keyboard.press("ControlOrMeta+b");
+    await resizeWindow(app, page, 1456, 912);
+    // Still expanded: the shortcut did nothing while the window was narrow.
+    await expect(page.getByTestId("sidebar")).not.toHaveAttribute("data-rail", "true");
   });
 });

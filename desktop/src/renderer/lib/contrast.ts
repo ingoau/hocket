@@ -8,6 +8,8 @@
 // The fullscreen player's scrim is sized from the artwork's brightest pixel so
 // white text over the fluid background always reaches 4.5:1.
 
+import { DEFAULT_ACCENT } from "@shared/settings-keys";
+
 export interface Rgb {
   r: number;
   g: number;
@@ -134,7 +136,7 @@ export function themeSurfaces(theme: ThemeName, tint?: Rgb): Rgb[] {
 
 export function accentTokens(raw: string, theme: ThemeName): AccentTokens {
   const c = THEME_COLOURS[theme];
-  const accent = parseColor(raw) ?? (parseColor("#6f5cff") as Rgb);
+  const accent = parseColor(raw) ?? (parseColor(DEFAULT_ACCENT) as Rgb);
   const fg = parseColor(c.fg) as Rgb;
   const faint = parseColor(c.faint) as Rgb;
   const bg = parseColor(c.bg) as Rgb;
@@ -189,14 +191,14 @@ export function brightestPixel(data: Uint8ClampedArray | Uint8Array): Rgb {
 
 /**
  * A detail page's header colour from its artwork's accent: dark enough that white text (and white
- * at 80%) reads at 4.5:1 on it, so the title and lines over the wash always hold.
+ * at 80%) reads at 4.5:1 on it, and white on the eyebrow chip (16% white over the wash), so the
+ * title, its lines and the chip always hold.
  */
 export function heroWash(raw: string): string {
   const c = parseColor(raw) ?? BLACK;
-  // 80% white over the wash is the faintest text on it.
-  const faint = (bg: Rgb) => composite(WHITE, 0.8, bg);
+  const holds = (wash: Rgb) => contrast(composite(WHITE, 0.8, wash), wash) >= 4.5 && contrast(WHITE, composite(WHITE, 0.16, wash)) >= 4.5;
   // Rounded at each step: the hex written out is what has to pass.
   let wash = roundRgb(ensureContrast(c, [WHITE], 4.5, BLACK));
-  for (let i = 0; i < 40 && contrast(faint(wash), wash) < 4.5; i++) wash = roundRgb(mix(wash, BLACK, 0.04));
+  for (let i = 0; i < 60 && !holds(wash); i++) wash = roundRgb(mix(wash, BLACK, 0.04));
   return toHex(wash);
 }

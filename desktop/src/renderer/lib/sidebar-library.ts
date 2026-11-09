@@ -19,7 +19,7 @@ export interface LibraryEntry {
   coverArt?: string;
   /** When it was last played (a queue from it, or one of its songs). */
   playedAt?: number;
-  /** When it came into the library, where known (playlists); otherwise its first sighting here. */
+  /** When it came into the library, where known (playlists). */
   addedAt?: number;
 }
 
@@ -102,10 +102,11 @@ export function viewLibrary(entries: readonly LibraryEntry[], pinned: ReadonlySe
   const byTitle = (a: LibraryEntry, b: LibraryEntry) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }) || entryKey(a).localeCompare(entryKey(b));
   // Recents: the last play, else when it was added (a playlist never played sits by its date).
   const recent = (e: LibraryEntry) => e.playedAt ?? e.addedAt ?? 0;
-  const added = (e: LibraryEntry) => e.addedAt ?? e.playedAt ?? 0;
   switch (view.sort) {
     case "alpha": return list.sort(byTitle);
-    case "added": return list.sort((a, b) => added(b) - added(a) || byTitle(a, b));
+    // Recently added: what has a date (playlists) newest first, then what the library gives none
+    // (albums and artists met through plays) by their last play.
+    case "added": return list.sort((a, b) => Number(a.addedAt === undefined) - Number(b.addedAt === undefined) || (b.addedAt ?? 0) - (a.addedAt ?? 0) || recent(b) - recent(a) || byTitle(a, b));
     default: return list.sort((a, b) => recent(b) - recent(a) || byTitle(a, b));
   }
 }
