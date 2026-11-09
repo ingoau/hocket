@@ -621,7 +621,9 @@ impl Engine {
     }
 
     fn promote_next(&mut self) {
-        let Some(mut next) = self.next.take() else { return };
+        let Some(mut next) = self.next.take() else {
+            return;
+        };
         self.next_key = None;
         self.drop_tail();
         self.mix_skipped = false;
@@ -3002,11 +3004,7 @@ mod tests {
         b.url = "https://navidrome.example/rest/stream?id=slow&format=wav".into();
         b.mix_in = Some(fade_plan(1_000, 1_500, 0, 1_200));
         rig.start(a, b);
-        let buffering = |on: bool| {
-            move |r: &BackendReport| {
-                matches!(r, BackendReport::Buffering { key, buffering } if key == "a.wav" && *buffering == on)
-            }
-        };
+        let buffering = |on: bool| move |r: &BackendReport| matches!(r, BackendReport::Buffering { key, buffering } if key == "a.wav" && *buffering == on);
         rig.wait_for(Duration::from_secs(10), is_started);
         rig.wait_for(Duration::from_secs(10), buffering(true));
         rig.wait_for(Duration::from_secs(10), buffering(false));
