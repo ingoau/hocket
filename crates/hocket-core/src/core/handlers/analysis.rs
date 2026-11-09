@@ -166,8 +166,11 @@ impl Actor {
         match result {
             Ok(record) if self.server_id().as_deref() == Some(server_id.as_str()) => {
                 tracing::info!(target: "hocket::automix", track = %track_id, bpm = ?record.bpm, confidence = record.beat_confidence, "analysed");
-                self.store_analysis_record(track_id.clone(), (*record).clone());
-                self.on_analysis_produced(&server_id, &track_id, &record);
+                // Shared only when kept: a record the store refused (another
+                // file, a better one held) is no use to other devices either.
+                if self.store_analysis_record(track_id.clone(), (*record).clone()) {
+                    self.on_analysis_produced(&server_id, &track_id, &record);
+                }
             }
             Ok(_) => {}
             Err(e) => {
