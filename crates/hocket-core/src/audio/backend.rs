@@ -65,6 +65,14 @@ pub trait PlaybackBackend: Send + Sync {
     /// is audible.
     fn seek(&self, position_ms: u32) -> Result<(), BackendError>;
 
+    /// AutoMix: end a running transition now (Next pressed before the
+    /// handover). Drops the rendered tail and, if the handover has not
+    /// happened, reports it at once (`Ended`, `TransitionedToNext`, then
+    /// `Position` of the incoming item). No-op without a transition.
+    fn complete_transition(&self) -> Result<(), BackendError> {
+        Ok(())
+    }
+
     /// Amplitude gain 0.0–1.0, applied post-DSP with a short ramp. The core
     /// sends the slider position through [`volume_to_gain`] first.
     fn set_volume(&self, volume: f64) -> Result<(), BackendError>;

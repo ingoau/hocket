@@ -1474,6 +1474,8 @@ mod tests {
                 transcoded: false,
                 local: false,
                 artwork_url: None,
+                mix_in: None,
+                mix_out_ms: None,
             }
         }
 
@@ -1742,6 +1744,8 @@ mod tests {
             transcoded: false,
             local: false,
             artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         };
         rig.backend.load(src, None, 100, true).unwrap();
         let reports = rig.wait_for(

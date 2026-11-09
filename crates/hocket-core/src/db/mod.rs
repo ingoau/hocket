@@ -65,10 +65,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0008_lyrics_search",
         include_str!("migrations/0008_lyrics_search.sql"),
     ),
+    (
+        9,
+        "0009_automix_records",
+        include_str!("migrations/0009_automix_records.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -99,6 +104,7 @@ pub const DURABLE_TABLES: &[&str] = &[
     "saved_state",
     "settings",
     "filters",
+    "automix_records",
 ];
 
 #[derive(Debug, thiserror::Error)]

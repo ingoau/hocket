@@ -17,3 +17,4 @@ pub(crate) mod session;
 pub(crate) mod settings;
 pub(crate) mod snooze;
 pub(crate) mod stash;
+pub(crate) mod transitions;

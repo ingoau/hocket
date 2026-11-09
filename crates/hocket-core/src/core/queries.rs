@@ -212,6 +212,10 @@ impl Actor {
             Query::Settings => QueryResult::Settings(self.settings.to_api()),
             Query::Setting { key } => QueryResult::SettingDetail(self.settings.setting(&key)),
             Query::AudioSettings => QueryResult::Audio(self.audio.clone()),
+            Query::Transitions => QueryResult::Transitions(self.transition_settings()),
+            Query::TrackAnalysis { track_id } => {
+                QueryResult::Analysis(self.stored_analysis_record(&track_id))
+            }
             Query::OutputDevices => QueryResult::OutputDevices(self.output_devices.clone()),
             Query::Connection => QueryResult::Connection(self.connection_state()),
             Query::Devices => QueryResult::Devices(

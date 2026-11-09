@@ -66,8 +66,19 @@ pub fn describe_source(source: &MediaSource) -> String {
     } else {
         ""
     };
+    let mix = match &source.mix_in {
+        Some(p) => format!(
+            ", mixed in ({:?} from {} ms, {} ms tail)",
+            p.kind, p.tail_start_ms, p.tail_len_ms
+        ),
+        None => String::new(),
+    };
+    let mix_out = source
+        .mix_out_ms
+        .map(|ms| format!(", mix out from {ms} ms"))
+        .unwrap_or_default();
     format!(
-        "{} ({}) from {}{transcoded}",
+        "{} ({}) from {}{transcoded}{mix}{mix_out}",
         source.key,
         source.track.id,
         source_kind(&source.url)
@@ -130,6 +141,13 @@ impl PlaybackBackend for LoggedBackend {
         logged(
             || format!("seek to {position_ms} ms"),
             self.inner.seek(position_ms),
+        )
+    }
+
+    fn complete_transition(&self) -> Result<(), BackendError> {
+        logged(
+            || "complete transition".into(),
+            self.inner.complete_transition(),
         )
     }
 
@@ -228,6 +246,8 @@ mod tests {
             transcoded: false,
             local: false,
             artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         }
     }
 

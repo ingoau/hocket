@@ -322,6 +322,10 @@ impl Actor {
 
             // -- sleep timer --
             Command::SetSleepTimer { timer } => self.set_sleep_timer(timer),
+            Command::SetTransitionSettings { settings } => self.set_transition_settings(settings),
+            Command::StoreAnalysisRecord { track_id, record } => {
+                self.store_analysis_record(track_id, record)
+            }
 
             // -- from the platform --
             Command::BackendReport { report } => match &self.external {

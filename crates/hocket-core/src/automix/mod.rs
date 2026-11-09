@@ -11,12 +11,14 @@
 //! - [`plan`]: the deterministic planner ([`plan::plan_transition`]).
 //! - [`render`]: the outgoing tail ([`render::render_tail`]) and [`render::IncomingShaper`].
 //! - [`stretch`]: the time-stretcher behind the tail's tempo ramp.
+//! - [`store`]: the local table of records (the one module here with I/O: the client db).
 
 pub mod loudness;
 pub mod plan;
 pub mod record;
 pub mod render;
 pub mod rules;
+pub mod store;
 pub mod stretch;
 
 pub use crate::api::{
@@ -33,6 +35,23 @@ pub const CROSSFADE_MIN_SECONDS: f64 = 1.0;
 pub const CROSSFADE_MAX_SECONDS: f64 = 12.0;
 /// AutoMix's fade length when it has nothing better to go on.
 pub const AUTOMIX_DEFAULT_FADE_MS: u32 = 6_000;
+/// The plan into the next track is committed this long before its tail
+/// start: a later change to what plays next gets [`late_edit_fade`].
+pub const LOCK_IN_MS: u32 = 30_000;
+
+impl TransitionPlan {
+    /// B's position at the handover (`incoming_from_ms` plus however long B
+    /// has played by then).
+    pub fn handover_position_ms(&self) -> u32 {
+        self.incoming_position_at(self.handover_ms)
+    }
+
+    /// B's position `offset_ms` of output time after the tail start.
+    pub fn incoming_position_at(&self, offset_ms: u32) -> u32 {
+        self.incoming_from_ms
+            .saturating_add(offset_ms.saturating_sub(self.incoming_at_ms))
+    }
+}
 
 impl TransitionMode {
     /// Whether this mode ever mixes.

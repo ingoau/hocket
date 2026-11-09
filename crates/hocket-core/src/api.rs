@@ -1565,6 +1565,17 @@ pub struct MediaSource {
     /// that shows it; only sources resolved for one carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artwork_url: Option<String>,
+    /// AutoMix (`docs/automix.md`): on a source given as the follow-up
+    /// (`set_next`, `load`'s `next`), how to enter it from the current one.
+    /// `None` is the gapless/cut join. Never set on a source loaded as current.
+    #[serde(default)]
+    pub mix_in: Option<TransitionPlan>,
+    /// AutoMix: the earliest position at which a transition out of this source
+    /// may begin, fixed when the source is first handed over. A following
+    /// `mix_in`'s `tail_start_ms` equals it whenever it is set. Backends that
+    /// commit early (Android's clipping) clip here.
+    #[serde(default)]
+    pub mix_out_ms: Option<Ms>,
 }
 
 /// A URL with its query string (where Subsonic carries the auth token) and
@@ -1586,6 +1597,8 @@ impl std::fmt::Debug for MediaSource {
             .field("mime_type", &self.mime_type)
             .field("gain_db", &self.gain_db)
             .field("transcoded", &self.transcoded)
+            .field("mix_in", &self.mix_in.as_ref().map(|p| p.kind))
+            .field("mix_out_ms", &self.mix_out_ms)
             .finish()
     }
 }
@@ -1646,6 +1659,10 @@ pub enum BackendCommand {
     },
     /// Unload the preview player. The main item is untouched.
     PreviewStop,
+    /// AutoMix: drop the rendered tail now and treat this instant as the
+    /// handover if it has not happened (Next pressed mid-transition). No-op
+    /// when no transition is running.
+    CompleteTransition,
 }
 
 /// What an external backend reports back.
@@ -1678,9 +1695,19 @@ pub enum BackendReport {
     Ended {
         key: QueueKey,
     },
-    /// Transitioned to the preloaded item (gapless).
+    /// Transitioned to the preloaded item (gapless, or at an AutoMix handover).
     TransitionedToNext {
         key: QueueKey,
+    },
+    /// AutoMix: the backend began playing the rendered tail of `from` per the
+    /// `mix_in` plan of `to`. `Ended(from)` and `TransitionedToNext(to)` follow
+    /// at the handover, `handover_ms` later.
+    TransitionStarted {
+        from: QueueKey,
+        to: QueueKey,
+        tail_len_ms: Ms,
+        incoming_at_ms: Ms,
+        handover_ms: Ms,
     },
     Error {
         key: QueueKey,
@@ -2825,6 +2852,20 @@ pub enum Command {
         timer: Option<SleepTimer>,
     },
 
+    // -- transitions (AutoMix) ---------------------------------------------
+    /// Off / Crossfade / AutoMix and the crossfade length. Synced
+    /// (`playback.transitions`).
+    SetTransitionSettings {
+        settings: TransitionSettings,
+    },
+    /// Keep an analysis record for a track of the current server (Android's
+    /// loudness-only records, a desktop's analysis). Kept only when it is the
+    /// best record known for the track.
+    StoreAnalysisRecord {
+        track_id: TrackId,
+        record: AnalysisRecord,
+    },
+
     // -- from the platform ------------------------------------------------
     /// Reports from an external playback backend.
     BackendReport {
@@ -3029,6 +3070,13 @@ pub enum Query {
         key: String,
     },
     AudioSettings,
+    /// AutoMix setting: `QueryResult::Transitions`.
+    Transitions,
+    /// The stored analysis record of a track of the current server (whether or
+    /// not it is usable for it): `QueryResult::Analysis`.
+    TrackAnalysis {
+        track_id: TrackId,
+    },
     OutputDevices,
     Connection,
     Devices,
@@ -3252,6 +3300,8 @@ pub enum QueryResult {
     Settings(Vec<Setting>),
     SettingDetail(Option<Setting>),
     Audio(AudioSettings),
+    Transitions(TransitionSettings),
+    Analysis(Option<AnalysisRecord>),
     OutputDevices(Vec<OutputDevice>),
     Connection(ConnectionState),
     Devices(Vec<DeviceInfo>),
@@ -3762,6 +3812,8 @@ mod redaction_tests {
             transcoded: false,
             local: false,
             artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         };
         let dbg = format!("{source:?}");
         assert!(dbg.contains("https://music.example/rest/stream"), "{dbg}");

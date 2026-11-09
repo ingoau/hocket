@@ -55,6 +55,9 @@ pub mod keys {
     pub const QUEUE_SAVED_CAP: &str = "queue.savedCap";
     /// Offer to continue an album that was started from the album and left unfinished.
     pub const PLAYBACK_RESUME_ALBUMS: &str = "playback.resumeAlbums";
+    /// AutoMix: how consecutive tracks join ([`crate::api::TransitionSettings`]). Synced, so a
+    /// queue sounds the same whichever device plays it.
+    pub const PLAYBACK_TRANSITIONS: &str = "playback.transitions";
     pub const AUTOPLAY_SETTINGS: &str = "autoplay.settings";
     pub const AUTOPLAY_CONTEXT_OVERRIDES: &str = "autoplay.contextOverrides";
     pub const AUDIO_SETTINGS: &str = "audio.settings";
@@ -219,6 +222,24 @@ fn autoplay_valid(v: &Value) -> Result<(), String> {
     serde_json::from_value::<AutoplaySettings>(v.clone())
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+fn transitions_default() -> Value {
+    serde_json::to_value(crate::api::TransitionSettings::default()).unwrap_or(Value::Null)
+}
+
+fn transitions_valid(v: &Value) -> Result<(), String> {
+    let t = serde_json::from_value::<crate::api::TransitionSettings>(v.clone())
+        .map_err(|e| e.to_string())?;
+    let range = crate::automix::CROSSFADE_MIN_SECONDS..=crate::automix::CROSSFADE_MAX_SECONDS;
+    if !range.contains(&t.crossfade_seconds) {
+        return Err(format!(
+            "crossfadeSeconds must be within {}..={}",
+            range.start(),
+            range.end()
+        ));
+    }
+    Ok(())
 }
 
 fn audio_default() -> Value {
@@ -484,6 +505,12 @@ pub static REGISTRY: &[SettingDef] = &[
     def(PLAYBACK_RESUME_ALBUMS, Synced, SettingKind::Bool, || {
         json!(true)
     }),
+    json_def(
+        PLAYBACK_TRANSITIONS,
+        Synced,
+        transitions_default,
+        transitions_valid,
+    ),
     json_def(AUTOPLAY_SETTINGS, Synced, autoplay_default, autoplay_valid),
     json_def(
         AUTOPLAY_CONTEXT_OVERRIDES,

@@ -75,11 +75,26 @@ impl Actor {
                     a.set_overrides(overrides);
                 }
             }
+            keys::PLAYBACK_TRANSITIONS => {
+                // Off → on may start preloading (gapless off), on → off drops the plan.
+                if self.playback.loaded {
+                    if self.preloads_next() {
+                        self.replan_next();
+                    } else {
+                        self.refresh_next();
+                    }
+                }
+            }
             keys::AUDIO_SETTINGS => {
                 if let Some(a) = self.settings.get_typed::<AudioSettings>(key) {
                     if a != self.audio {
+                        let exclusive_changed = a.exclusive != self.audio.exclusive;
                         self.audio = a;
                         self.apply_audio_to_backend();
+                        if exclusive_changed {
+                            // Exclusive output never mixes.
+                            self.replan_next();
+                        }
                         self.emit(Event::AudioSettingsChanged {
                             settings: self.audio.clone(),
                         });

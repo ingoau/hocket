@@ -560,6 +560,9 @@ impl PlaybackBackend for RecordingBackend {
     fn seek(&self, position_ms: u32) -> Result<(), crate::audio::backend::BackendError> {
         self.inner.seek(position_ms)
     }
+    fn complete_transition(&self) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.complete_transition()
+    }
     fn set_volume(&self, volume: f64) -> Result<(), crate::audio::backend::BackendError> {
         self.inner.set_volume(volume)
     }

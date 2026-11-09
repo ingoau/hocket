@@ -453,6 +453,8 @@ mod tests {
                         transcoded: false,
                         local: false,
                         artwork_url: None,
+                        mix_in: None,
+                        mix_out_ms: None,
                     },
                     next: None,
                     position_ms: 0,
