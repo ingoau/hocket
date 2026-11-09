@@ -469,3 +469,35 @@ async fn a_record_for_another_file_is_not_stored() {
         other => panic!("{other:?}"),
     }
 }
+
+/// The follow-up failing for good during its mix ends the transition: a
+/// later edit preloads a new follow-up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_follow_up_failing_mid_mix_ends_the_transition() {
+    let t = synced_core("fail").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t0", "t4", "t1"]).await;
+    t.run_for(194_000.0).await;
+    assert!(transition_started(&t));
+    let next = t.backend.next_source().unwrap();
+    t.backend.report(BackendReport::Error {
+        key: next.key.clone(),
+        message: "gone".into(),
+        fatal: true,
+    });
+    t.run_for(100.0).await;
+    t.backend.clear_log();
+    t.run(Command::PlayNext {
+        server_id: t.server_id.clone(),
+        track_ids: vec!["t5".into()],
+        keys: vec![],
+    })
+    .await;
+    t.run_for(200.0).await;
+    let log = t.backend.log();
+    assert!(
+        log.iter()
+            .any(|c| matches!(c, ScriptedCall::SetNext { next: Some(_) })),
+        "{log:?}"
+    );
+}

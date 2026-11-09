@@ -534,6 +534,12 @@ impl ScriptedBackend {
         (self.sink)(report);
     }
 
+    /// Send `report` as if the backend made it (a failure the script has no
+    /// other way to produce).
+    pub fn report(&self, report: BackendReport) {
+        self.emit(report);
+    }
+
     /// End the preview the way a player does: naturally, or because another
     /// app took the output (`interrupted` does not restore main playback).
     pub fn finish_preview(&self, interrupted: bool) {

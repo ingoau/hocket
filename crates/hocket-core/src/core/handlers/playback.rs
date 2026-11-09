@@ -1491,8 +1491,11 @@ impl Actor {
                 if is_next && !current(&key, self) {
                     // The preloaded follow-up failed. Forget it: it is resolved
                     // afresh (with the usual retry and skip) when it comes up.
+                    // A mix into it is over too: without this `refresh_next`
+                    // would wait for a handover that never comes.
                     self.playback.next = None;
                     self.playback.next_doc_key = None;
+                    self.playback.transition = None;
                     if !self.playback.awaiting_transition {
                         // The current item is still playing: leave it alone.
                         return;
