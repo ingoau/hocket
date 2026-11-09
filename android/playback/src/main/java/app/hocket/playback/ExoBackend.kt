@@ -470,7 +470,23 @@ class ExoBackend(
             return
         }
         PlaybackLog.i("retrying $key (attempt $recoveryAttempts)")
+        settleTransitionForRestart()
         player.prepare()
+    }
+
+    /**
+     * A mixed transition can't survive a restart of B's stream (`prepare()` after an error): the
+     * sink's queued tail is gone, and ExoPlayer's position for B runs `incoming_at − incoming_from`
+     * ahead of B's real one. Hand over if that hasn't happened and resume B where it really is.
+     */
+    private fun settleTransitionForRestart() {
+        if (running == null && offsetKey == null) return
+        if (running?.handedOver == false) handOver(reportPosition = false)
+        val p = position().toLong()
+        running = null
+        offsetKey = null
+        mixControl.cancelMix()
+        player.seekTo(player.currentMediaItemIndex, p)
     }
 
     /**
