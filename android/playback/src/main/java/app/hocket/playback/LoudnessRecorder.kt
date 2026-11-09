@@ -14,6 +14,7 @@ import app.hocket.core.api.TransitionMode
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,7 +26,7 @@ import kotlinx.coroutines.withContext
  * entry: nothing is fetched for this), decodes its first and last minute with `MediaCodec` on one
  * low-priority thread, builds the record in Rust and hands it to the core
  * (`Command.StoreAnalysisRecord`, which stores, replans and uploads it). One track at a time; each
- * tried once per session.
+ * tried once per session. A window that changes while a pass runs is kept (the newest) and runs next.
  */
 internal class LoudnessRecorder(
     private val scope: CoroutineScope,
@@ -42,23 +43,21 @@ internal class LoudnessRecorder(
 
     private val tried = HashSet<String>()
     private var job: Job? = null
+    /** The newest window that came while [job] ran; it runs next. */
+    private var pending: List<Candidate>? = null
 
     fun onWindow(candidates: List<Candidate>) {
-        if (job?.isActive == true || candidates.isEmpty()) return
+        if (candidates.isEmpty()) return
+        if (job?.isActive == true) {
+            pending = candidates
+            return
+        }
         job = scope.launch {
-            val mode = (query(Query.Transitions) as? QueryResult.Transitions)?.data?.mode
-            if (mode != TransitionMode.AutoMix) return@launch
-            for (c in candidates) {
-                if (!isActive) return@launch
-                if (c.trackId in tried || c.durationMs <= 0) continue
-                val stored = (query(Query.TrackAnalysis(QueryTrackAnalysisInner(c.trackId))) as? QueryResult.Analysis)?.data
-                if (stored != null && ffi.usable(stored, c.durationMs)) continue
-                val source = c.source ?: (query(Queries.mediaSource(c.trackId)) as? QueryResult.Source)?.data ?: continue
-                if (!withContext(io) { isLocal(source) }) continue
-                tried += c.trackId
-                val record = withContext(worker) { analyse(source, c.durationMs) } ?: continue
-                PlaybackLog.i("AutoMix: loudness record for ${c.trackId} (audible ${record.audibleStartMs}–${record.audibleEndMs} ms)")
-                dispatch(Command.StoreAnalysisRecord(CommandStoreAnalysisRecordInner(c.trackId, record)))
+            var window: List<Candidate>? = candidates
+            while (window != null && isActive) {
+                record(window)
+                window = pending
+                pending = null
             }
         }
     }
@@ -66,6 +65,24 @@ internal class LoudnessRecorder(
     fun cancel() {
         job?.cancel()
         job = null
+        pending = null
+    }
+
+    private suspend fun record(candidates: List<Candidate>) {
+        val mode = (query(Query.Transitions) as? QueryResult.Transitions)?.data?.mode
+        if (mode != TransitionMode.AutoMix) return
+        for (c in candidates) {
+            if (!currentCoroutineContext().isActive) return
+            if (c.trackId in tried || c.durationMs <= 0) continue
+            val stored = (query(Query.TrackAnalysis(QueryTrackAnalysisInner(c.trackId))) as? QueryResult.Analysis)?.data
+            if (stored != null && ffi.usable(stored, c.durationMs)) continue
+            val source = c.source ?: (query(Queries.mediaSource(c.trackId)) as? QueryResult.Source)?.data ?: continue
+            if (!withContext(io) { isLocal(source) }) continue
+            tried += c.trackId
+            val record = withContext(worker) { analyse(source, c.durationMs) } ?: continue
+            PlaybackLog.i("AutoMix: loudness record for ${c.trackId} (audible ${record.audibleStartMs}–${record.audibleEndMs} ms)")
+            dispatch(Command.StoreAnalysisRecord(CommandStoreAnalysisRecordInner(c.trackId, record)))
+        }
     }
 
     private fun isLocal(source: CoreMediaSource): Boolean = when {
