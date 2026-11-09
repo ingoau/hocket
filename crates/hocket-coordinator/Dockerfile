@@ -22,6 +22,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --home /data --create-home hocket
 COPY --from=build /src/target/release/hocket-coordinator /usr/local/bin/hocket-coordinator
+# Attribution for the beat-tracking model built into the binary.
+COPY crates/hocket-core/src/automix/analysis/NOTICE /usr/share/doc/hocket-coordinator/NOTICE
 USER hocket
 VOLUME ["/data"]
 EXPOSE 7373
