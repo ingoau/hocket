@@ -159,6 +159,14 @@ fn fit_overlap(input: &PlanInput<'_>, overlap: Ms) -> Ms {
     overlap.min(a_span / 2).min(b_span / 2)
 }
 
+/// An overlap taking `a_ms` of A and `b_ms` of B stays within half of each
+/// track's audible span (the limit [`fit_overlap`] puts on fades). Beat plans
+/// can't shorten an overlap off the grid, so they drop a bar count that
+/// breaks it.
+fn overlap_fits(input: &PlanInput<'_>, a_ms: Ms, b_ms: Ms) -> bool {
+    fit_overlap(input, a_ms) == a_ms && fit_overlap(input, b_ms) == b_ms
+}
+
 /// Case 1 (and the rescue): an equal-power fade of `overlap_ms` ending at A's
 /// audible end, or starting at the fixed tail start.
 pub fn fixed_fade(input: &PlanInput<'_>, overlap_ms: Ms) -> TransitionPlan {
@@ -546,6 +554,9 @@ fn blend(
     } else {
         (None, src_lead as Ms, src_overlap as Ms)
     };
+    if !overlap_fits(input, src_overlap.round() as Ms, overlap_out) {
+        return None;
+    }
     let tail_len = incoming_at + overlap_out;
     let tail_source = (source_ms(tempo.as_ref(), tail_len as f64).round() as Ms)
         .min(input.a.duration_ms - tail_start);
@@ -599,6 +610,9 @@ fn aligned_fade(
     let tail_start = fixed.unwrap_or(da[o]);
     let incoming_at = da[o] - tail_start;
     let overlap = da[o + bars] - da[o];
+    if !overlap_fits(input, overlap, overlap) {
+        return None;
+    }
     let tail_len = incoming_at + overlap;
     Some(TransitionPlan {
         kind: TransitionKind::Fade,
@@ -905,6 +919,27 @@ mod tests {
             assert!(a.downbeats_ms.contains(&p.tail_start_ms));
             assert_eq!(p.incoming_from_ms, b.downbeats_ms[0]);
             assert!(p.bass_swap.is_none());
+        }
+    }
+
+    /// Beat plans keep the overlap within half of each track's audible span,
+    /// as fades do: a short B drops 8 bars (16 s) of blend or 4 bars (8 s)
+    /// of aligned fade for the rescue fade.
+    #[test]
+    fn beat_plans_stay_within_half_a_short_track() {
+        let s = settings(TransitionMode::AutoMix);
+        let a = beats(DUR, 120.0, 4, 250.0);
+        for (b, beat_len) in [
+            (beats(30_000, 120.0, 4, 1_000.0), 16_000),
+            (beats(14_000, 132.0, 4, 600.0), 8_000),
+        ] {
+            let i = input(&s, Some(&a), Some(&b), None);
+            let p = plan(&i);
+            let b_half = (b.duration_ms - b.audible_start_ms) / 2;
+            let overlap = p.tail_len_ms - p.incoming_at_ms;
+            assert!(overlap <= b_half, "{overlap} > {b_half}: {p:?}");
+            assert!(overlap < beat_len, "{p:?}");
+            assert_eq!(p.kind, TransitionKind::Fade, "{p:?}");
         }
     }
 
