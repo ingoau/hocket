@@ -15,6 +15,7 @@
 
 pub mod engine;
 pub mod http;
+mod mix;
 pub mod output;
 pub mod resample;
 pub mod ring;

@@ -1394,6 +1394,7 @@ fn native_backend(
             device_id: audio.output_device.clone(),
             sample_rate: None,
             null_sink: false,
+            tap: None,
         },
         audio: audio.clone(),
         watch_devices: true,

@@ -20,16 +20,22 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
+use crate::api::TransitionPlan;
 use crate::api::{AudioSettings, BackendReport, MediaSource, OutputDevice, QueueKey};
 use crate::audio::backend::{clamp_volume, BackendError, PlaybackBackend, ReportSink};
 use crate::audio::decoder::{open_file, open_media_source, DecodeError, DecodeHandle, Spec};
-use crate::audio::dsp::{DspChain, DspSettings, SmoothGain};
+use crate::audio::dsp::{DspChain, DspSettings, SmoothGain, SoftLimiter};
 use crate::audio::native::http::{HttpSource, RangeFetcher};
+use crate::audio::native::mix::{
+    render_tail_job, RenderedTail, TailJob, TailState, Transition, SWITCH_XFADE_MS, TAIL_LEAD_MS,
+};
 use crate::audio::native::output::{
     list_output_devices, open_output, probe_format, DeviceWatcher, OutputConfig, OutputRing,
     OutputStream,
 };
 use crate::audio::native::resample::{remap_channels, Resampler, CHUNK_FRAMES};
+use crate::automix::render::ms_to_frames;
+use crate::automix::IncomingShaper;
 
 /// Output ring capacity.
 pub const RING_MS: u32 = 200;
@@ -94,6 +100,11 @@ enum Cmd {
     SetOutputDevice(Option<String>),
     SetExclusive(bool),
     SetDsp(DspSettings),
+    CompleteTransition,
+    TailRendered {
+        id: u64,
+        result: Result<Vec<f32>, String>,
+    },
     Loaded {
         role: Role,
         generation: u64,
@@ -103,7 +114,7 @@ enum Cmd {
     Shutdown,
 }
 
-struct Source {
+pub(super) struct Source {
     media: MediaSource,
     handle: DecodeHandle,
     spec: Spec,
@@ -114,6 +125,8 @@ struct Source {
     start_frame: u64,
     /// Source frames pushed towards the output since `start_frame`.
     pushed_frames: u64,
+    /// Output-format frames converted from this source since `start_frame`.
+    out_emitted: u64,
     buffering: bool,
     /// Decoder hit end-of-stream and the resampler has been flushed.
     finished: bool,
@@ -138,6 +151,7 @@ impl Source {
             resampler_for: None,
             start_frame,
             pushed_frames: 0,
+            out_emitted: 0,
             buffering: false,
             finished: false,
         }
@@ -145,6 +159,19 @@ impl Source {
 
     fn key(&self) -> &QueueKey {
         &self.media.key
+    }
+
+    /// Restart decoding at `frame` (seek, or repositioning a follow-up).
+    fn rewind(&mut self, frame: u64) {
+        self.handle.seek(frame);
+        self.start_frame = frame;
+        self.pushed_frames = 0;
+        self.out_emitted = 0;
+        self.finished = false;
+        self.buffering = false;
+        if let Some(r) = self.resampler.as_mut() {
+            r.reset();
+        }
     }
 
     fn frames_to_ms(&self, frames: u64) -> u32 {
@@ -224,6 +251,90 @@ struct Engine {
     scratch_map: Vec<f32>,
     last_position_report: Instant,
     error_flag: Arc<AtomicBool>,
+    /// AutoMix: the tail for current → next, and the transition playing.
+    tail: TailState,
+    /// Bumped whenever a tail is dropped, so a late render is ignored.
+    tail_id: u64,
+    transition: Option<Transition>,
+    /// The follow-up's plan was given up on (tail late, seek past it):
+    /// join it gaplessly. Cleared by `set_next`, `load` and seeks.
+    mix_skipped: bool,
+    /// On the summed signal while two sources sound.
+    limiter: SoftLimiter,
+}
+
+/// Pop up to a chunk of `src`, run it through `dsp`, adapt channels and
+/// resample to the output format, appending to `out`. Returns the source
+/// frames taken (0: nothing queued).
+#[allow(clippy::too_many_arguments)]
+fn convert_chunk(
+    src: &mut Source,
+    dsp: &mut DspChain,
+    out_rate: u32,
+    out_ch: usize,
+    scratch_src: &mut Vec<f32>,
+    scratch_map: &mut Vec<f32>,
+    out: &mut Vec<f32>,
+) -> usize {
+    scratch_src.clear();
+    let (n, _) = src.handle.queue.pop(CHUNK_FRAMES, scratch_src);
+    if n == 0 {
+        return 0;
+    }
+    src.pushed_frames += n as u64;
+    dsp.process(scratch_src);
+    scratch_map.clear();
+    remap_channels(scratch_src, src.spec.channels, out_ch, scratch_map);
+    let before = out.len();
+    resample_into(src, out_rate, out_ch, scratch_map, out);
+    src.out_emitted += ((out.len() - before) / out_ch) as u64;
+    n
+}
+
+/// Resample `input` (output channel count, source rate) into `out` with
+/// the source's own resampler, created on first use for this format.
+fn resample_into(
+    src: &mut Source,
+    out_rate: u32,
+    out_ch: usize,
+    input: &[f32],
+    out: &mut Vec<f32>,
+) {
+    let src_rate = src.spec.sample_rate;
+    if src_rate == out_rate {
+        out.extend_from_slice(input);
+        return;
+    }
+    let fmt = (out_rate, out_ch);
+    if src.resampler_for != Some(fmt) {
+        src.resampler = Resampler::new(src_rate, out_rate, out_ch).ok();
+        src.resampler_for = Some(fmt);
+    }
+    match src.resampler.as_mut() {
+        Some(r) => {
+            let before = out.len();
+            if let Err(e) = r.process(input, out) {
+                tracing::warn!(target: "hocket::audio::native", error = %e, "resampling failed, passing through");
+                out.truncate(before);
+                out.extend_from_slice(input);
+            }
+        }
+        None => out.extend_from_slice(input),
+    }
+}
+
+/// Flush the source's resampler at end of stream (once).
+fn flush_source(src: &mut Source, out: &mut Vec<f32>) {
+    if src.finished {
+        return;
+    }
+    src.finished = true;
+    if let Some(r) = src.resampler.as_mut() {
+        let mut tail = Vec::new();
+        if r.flush(&mut tail).is_ok() {
+            out.extend_from_slice(&tail);
+        }
+    }
 }
 
 impl Engine {
@@ -262,6 +373,11 @@ impl Engine {
             scratch_map: Vec::with_capacity(CHUNK_FRAMES * 8),
             last_position_report: Instant::now(),
             error_flag: Arc::new(AtomicBool::new(false)),
+            tail: TailState::None,
+            tail_id: 0,
+            transition: None,
+            mix_skipped: false,
+            limiter: SoftLimiter::default(),
         }
     }
 
@@ -273,6 +389,9 @@ impl Engine {
     // -- output -----------------------------------------------------------
 
     fn open_output(&mut self, config: OutputConfig) -> Result<(), String> {
+        // A tail rendered for the old format can't be mixed into the new one.
+        self.cut_transition("output changed");
+        self.drop_tail();
         let (rate, channels) = probe_format(&config).map_err(|e| e.to_string())?;
         let ring = OutputRing::new((rate * RING_MS / 1000) as usize, channels);
         let flag = self.error_flag.clone();
@@ -501,6 +620,8 @@ impl Engine {
     fn promote_next(&mut self) {
         let Some(next) = self.next.take() else { return };
         self.next_key = None;
+        self.drop_tail();
+        self.mix_skipped = false;
         let key = next.key().clone();
         self.dsp
             .set_format(f64::from(next.spec.sample_rate), next.spec.channels);
@@ -518,8 +639,11 @@ impl Engine {
     // -- positions --------------------------------------------------------
 
     fn pending_src_frames(&self, src: &Source) -> u64 {
-        let ring_out_frames = (self.ring.ring.len() / self.out_channels.max(1)) as u64
-            + (self.pending_out.len() / self.out_channels.max(1)) as u64;
+        let ring_out_frames = self.queued_frames() as u64
+            + self
+                .transition
+                .as_ref()
+                .map_or(0, |t| (t.incoming.len() / self.out_channels.max(1)) as u64);
         let ratio = f64::from(src.spec.sample_rate) / f64::from(self.out_rate.max(1));
         let ring_src = (ring_out_frames as f64 * ratio) as u64;
         ring_src
@@ -537,6 +661,27 @@ impl Engine {
         }
     }
 
+    /// Output frames pushed but not yet played.
+    fn queued_frames(&self) -> usize {
+        (self.ring.ring.len() + self.pending_out.len()) / self.out_channels.max(1)
+    }
+
+    /// The item the listener hears as "now playing" and its position: A
+    /// until a transition's handover, then the current source.
+    fn now_playing(&self) -> Option<(QueueKey, u32)> {
+        if let Some(t) = self.transition.as_ref().filter(|t| !t.handed_over) {
+            let heard = t.heard(self.queued_frames()).max(0);
+            let ms = heard as f64 * 1000.0 / f64::from(self.out_rate.max(1));
+            let plan = &t.tail.plan;
+            let pos = f64::from(plan.tail_start_ms)
+                + crate::automix::stretch::source_ms(plan.tempo.as_ref(), ms);
+            return Some((t.from.clone(), pos as u32));
+        }
+        self.current
+            .as_ref()
+            .map(|c| (c.key().clone(), self.current_position()))
+    }
+
     // -- commands ---------------------------------------------------------
 
     fn handle(&mut self, cmd: Cmd) -> bool {
@@ -548,15 +693,7 @@ impl Engine {
                 position_ms,
                 play,
             } => self.load(source, next, position_ms, play),
-            Cmd::SetNext(next) => {
-                self.next = None;
-                self.next_key = next.as_ref().map(|n| n.key.clone());
-                self.awaiting_next = false;
-                self.next_generation += 1;
-                if let Some(n) = next {
-                    self.spawn_load(Role::Next, self.next_generation, n, 0);
-                }
-            }
+            Cmd::SetNext(next) => self.set_next(next),
             Cmd::Play => {
                 self.ensure_output();
                 if self.playing && !self.fading_out {
@@ -565,13 +702,11 @@ impl Engine {
                 self.playing = true;
                 self.fading_out = false;
                 self.volume.set_target(self.user_volume);
-                if let Some(c) = &self.current {
-                    let key = c.key().clone();
-                    if c.finished {
-                        // Replaying a finished track from its end: restart it.
-                        self.seek(0);
-                    }
-                    let pos = self.current_position();
+                if self.current.as_ref().is_some_and(|c| c.finished) {
+                    // Replaying a finished track from its end: restart it.
+                    self.seek(0);
+                }
+                if let Some((key, pos)) = self.now_playing() {
                     self.report(BackendReport::Playing {
                         key,
                         position_ms: pos,
@@ -599,6 +734,9 @@ impl Engine {
                 self.awaiting_next = false;
                 self.pre_buffer = None;
                 self.pre_buffer_key = None;
+                self.transition = None;
+                self.drop_tail();
+                self.mix_skipped = false;
                 self.playing = false;
                 self.fading_out = false;
                 self.pending_out.clear();
@@ -655,6 +793,8 @@ impl Engine {
                 self.maybe_switch_rate();
             }
             Cmd::SetDsp(s) => self.dsp.set_settings(s),
+            Cmd::CompleteTransition => self.cut_transition("completed"),
+            Cmd::TailRendered { id, result } => self.on_tail_rendered(id, result),
             Cmd::Loaded {
                 role,
                 generation,
@@ -677,6 +817,9 @@ impl Engine {
         self.current = None;
         self.next = None;
         self.awaiting_next = false;
+        self.transition = None;
+        self.drop_tail();
+        self.mix_skipped = false;
         self.pending_out.clear();
         self.ring.request_flush();
         self.dsp.reset();
@@ -699,9 +842,7 @@ impl Engine {
             pre.media = source;
             if self.pre_buffer_position_ms != position_ms {
                 let frame = pre.ms_to_frames(position_ms);
-                pre.handle.seek(frame);
-                pre.start_frame = frame;
-                pre.pushed_frames = 0;
+                pre.rewind(frame);
             }
             let key = pre.key().clone();
             let duration = pre.duration_ms;
@@ -722,19 +863,20 @@ impl Engine {
     }
 
     fn seek(&mut self, ms: u32) {
+        // A seek cancels a transition: before the handover A plays on from
+        // the seek (B goes back to being the follow-up), after it B does.
+        if self.transition.as_ref().is_some_and(|t| t.handed_over) {
+            self.transition = None;
+        } else {
+            self.cancel_transition();
+        }
+        self.mix_skipped = false;
         let Some(cur) = self.current.as_mut() else {
             return;
         };
         let ms = cur.duration_ms.map(|d| ms.min(d)).unwrap_or(ms);
         let frame = cur.ms_to_frames(ms);
-        cur.handle.seek(frame);
-        cur.start_frame = frame;
-        cur.pushed_frames = 0;
-        cur.finished = false;
-        cur.buffering = false;
-        if let Some(r) = cur.resampler.as_mut() {
-            r.reset();
-        }
+        cur.rewind(frame);
         let key = cur.key().clone();
         self.pending_out.clear();
         self.ring.request_flush();
@@ -783,8 +925,7 @@ impl Engine {
                 // Fade finished: now actually pause.
                 self.fading_out = false;
                 self.playing = false;
-                if let Some(key) = self.current.as_ref().map(|c| c.key().clone()) {
-                    let pos = self.current_position();
+                if let Some((key, pos)) = self.now_playing() {
                     self.report(BackendReport::Paused {
                         key,
                         position_ms: pos,
@@ -808,24 +949,40 @@ impl Engine {
 
     /// One iteration of [`Self::feed`] with a current source present.
     fn feed_one_chunk(&mut self, out_ch: usize) -> Step {
-        let (src_rate, src_channels) = {
-            let cur = self.current.as_ref().expect("caller checked");
-            (cur.spec.sample_rate, cur.spec.channels)
-        };
+        if self.transition.is_some() {
+            return self.feed_transition(out_ch);
+        }
+        let src_rate = self
+            .current
+            .as_ref()
+            .expect("caller checked")
+            .spec
+            .sample_rate;
         // Room for one chunk at the worst-case ratio.
         let ratio = f64::from(self.out_rate) / f64::from(src_rate);
         let need = ((CHUNK_FRAMES as f64 * ratio) as usize + 64) * out_ch;
         if self.ring.ring.free() < need {
             return Step::Wait;
         }
-        self.scratch_src.clear();
         let mut reports: Vec<BackendReport> = Vec::new();
-        let n = {
+        let mut converted = std::mem::take(&mut self.pending_out);
+        let start = converted.len();
+        let (n, before_out) = {
             let cur = self.current.as_mut().expect("caller checked");
-            let (n, _) = cur.handle.queue.pop(CHUNK_FRAMES, &mut self.scratch_src);
-            n
+            let before_out = cur.out_emitted;
+            let n = convert_chunk(
+                cur,
+                &mut self.dsp,
+                self.out_rate,
+                out_ch,
+                &mut self.scratch_src,
+                &mut self.scratch_map,
+                &mut converted,
+            );
+            (n, before_out)
         };
         if n == 0 {
+            self.pending_out = converted;
             let cur = self.current.as_mut().expect("caller checked");
             if let Some(e) = cur.handle.queue.error() {
                 let key = cur.key().clone();
@@ -841,14 +998,10 @@ impl Engine {
             }
             if cur.handle.queue.is_eof() {
                 if !cur.finished {
-                    cur.finished = true;
-                    if let Some(r) = cur.resampler.as_mut() {
-                        let mut tail = Vec::new();
-                        if r.flush(&mut tail).is_ok() {
-                            self.volume.process(&mut tail, out_ch);
-                            self.pending_out.extend_from_slice(&tail);
-                        }
-                    }
+                    let mut tail = Vec::new();
+                    flush_source(cur, &mut tail);
+                    self.volume.process(&mut tail, out_ch);
+                    self.pending_out.extend_from_slice(&tail);
                 }
                 if !self.pending_out.is_empty() {
                     return Step::Continue;
@@ -879,44 +1032,472 @@ impl Engine {
                     buffering: false,
                 });
             }
-            cur.pushed_frames += n as u64;
         }
-        self.dsp.process(&mut self.scratch_src);
-        self.scratch_map.clear();
-        remap_channels(
-            &self.scratch_src,
-            src_channels,
-            out_ch,
-            &mut self.scratch_map,
-        );
-        let mut converted = std::mem::take(&mut self.pending_out);
-        if src_rate != self.out_rate {
-            let fmt = (self.out_rate, out_ch);
-            let cur = self.current.as_mut().expect("caller checked");
-            if cur.resampler_for != Some(fmt) {
-                cur.resampler = Resampler::new(src_rate, self.out_rate, out_ch).ok();
-                cur.resampler_for = Some(fmt);
-            }
-            match cur.resampler.as_mut() {
-                Some(r) => {
-                    let before = converted.len();
-                    if let Err(e) = r.process(&self.scratch_map, &mut converted) {
-                        tracing::warn!(target: "hocket::audio::native", error = %e, "resampling failed, passing through");
-                        converted.truncate(before);
-                        converted.extend_from_slice(&self.scratch_map);
-                    }
+        // AutoMix: does this chunk cross the tail start of a pending mix?
+        let mut live = None;
+        if let Some(switch) = self.switch_frame() {
+            let produced = ((converted.len() - start) / out_ch) as i64;
+            let before = before_out as i64;
+            if before > switch {
+                self.skip_mix("already past the tail start");
+            } else if before + produced > switch {
+                if self.tail_is_ready() {
+                    let split = start + (switch - before) as usize * out_ch;
+                    live = Some(converted.split_off(split));
+                } else {
+                    self.skip_mix("the tail isn't rendered in time");
                 }
-                None => converted.extend_from_slice(&self.scratch_map),
             }
-        } else {
-            converted.extend_from_slice(&self.scratch_map);
         }
-        self.volume.process(&mut converted, out_ch);
+        self.volume.process(&mut converted[start..], out_ch);
         self.pending_out = converted;
         for r in reports {
             self.report(r);
         }
+        if let Some(live) = live {
+            self.begin_transition(live, out_ch);
+        }
         Step::Continue
+    }
+
+    // -- AutoMix ----------------------------------------------------------
+
+    fn drop_tail(&mut self) {
+        self.tail = TailState::None;
+        self.tail_id += 1;
+    }
+
+    /// The follow-up's plan, when a transition into it may still happen.
+    fn pending_plan(&self) -> Option<&TransitionPlan> {
+        if self.exclusive || self.mix_skipped || self.transition.is_some() {
+            return None;
+        }
+        self.next.as_ref()?.media.mix_in.as_ref()
+    }
+
+    /// Output frame (counted from the current source's start frame, as
+    /// `out_emitted` is) where the pending plan's tail starts.
+    fn switch_frame(&self) -> Option<i64> {
+        let plan = self.pending_plan()?;
+        let cur = self.current.as_ref()?;
+        let tail_src = cur.ms_to_frames(plan.tail_start_ms) as i64 - cur.start_frame as i64;
+        let ratio = f64::from(self.out_rate) / f64::from(cur.spec.sample_rate);
+        Some((tail_src as f64 * ratio).round() as i64)
+    }
+
+    /// The rendered tail matches the follow-up's plan and the output, and
+    /// the follow-up sits at its entry point.
+    fn tail_is_ready(&self) -> bool {
+        let (Some(plan), Some(next)) = (self.pending_plan(), self.next.as_ref()) else {
+            return false;
+        };
+        let TailState::Ready(t) = &self.tail else {
+            return false;
+        };
+        t.next_generation == self.next_generation
+            && t.rate == self.out_rate
+            && t.channels == self.out_channels
+            && &t.plan == plan
+            && next.start_frame == next.ms_to_frames(plan.incoming_from_ms)
+            && next.pushed_frames == 0
+    }
+
+    /// Give up on the pending plan: A plays to its end and B follows from
+    /// its start, gaplessly. Never stalls playback.
+    fn skip_mix(&mut self, why: &str) {
+        if !self.mix_skipped {
+            tracing::info!(target: "hocket::audio::native", reason = why, "AutoMix: plain cut instead of the planned transition");
+        }
+        self.mix_skipped = true;
+        if let Some(n) = self.next.as_mut() {
+            if n.start_frame != 0 || n.pushed_frames != 0 {
+                n.rewind(0);
+            }
+        }
+    }
+
+    fn set_next(&mut self, next: Option<MediaSource>) {
+        if let Some(t) = self.transition.as_mut().filter(|t| !t.handed_over) {
+            // During the overlap: for the transition after this one.
+            t.held_next = Some(next);
+            return;
+        }
+        if let (Some(n), Some(cur)) = (next.as_ref(), self.next.as_ref()) {
+            if &cur.media == n {
+                return; // the same follow-up: keep its load and tail
+            }
+        }
+        self.drop_tail();
+        self.mix_skipped = false;
+        self.next = None;
+        self.next_key = next.as_ref().map(|n| n.key.clone());
+        self.awaiting_next = false;
+        self.next_generation += 1;
+        if let Some(n) = next {
+            self.spawn_load(Role::Next, self.next_generation, n, 0);
+        }
+    }
+
+    /// Start rendering the tail once current and follow-up are both known
+    /// and the tail start is near; position the follow-up once it's ready.
+    fn maybe_prepare_tail(&mut self) {
+        if self.output.is_none() || self.current.is_none() {
+            return;
+        }
+        let Some(plan) = self.pending_plan().cloned() else {
+            return;
+        };
+        match &self.tail {
+            TailState::Rendering { .. } => return,
+            TailState::Ready(t) => {
+                if t.next_generation == self.next_generation
+                    && t.rate == self.out_rate
+                    && t.channels == self.out_channels
+                    && t.plan == plan
+                {
+                    let next = self.next.as_mut().expect("pending_plan checked");
+                    let frame = next.ms_to_frames(plan.incoming_from_ms);
+                    if next.start_frame != frame || next.pushed_frames != 0 {
+                        next.rewind(frame);
+                    }
+                    return;
+                }
+                self.drop_tail();
+            }
+            TailState::None => {}
+        }
+        let pos = self.current_position();
+        if pos >= plan.tail_start_ms {
+            self.skip_mix("already past the tail start");
+            return;
+        }
+        if pos.saturating_add(TAIL_LEAD_MS) < plan.tail_start_ms {
+            return;
+        }
+        let cur = self.current.as_ref().expect("checked");
+        self.tail_id += 1;
+        let id = self.tail_id;
+        self.tail = TailState::Rendering {
+            next_generation: self.next_generation,
+            plan: plan.clone(),
+            rate: self.out_rate,
+            channels: self.out_channels,
+        };
+        let job = TailJob {
+            source: cur.media.clone(),
+            plan,
+            dsp: self.dsp.clone(),
+            gapless: self.gapless,
+            out_rate: self.out_rate,
+            out_channels: self.out_channels,
+            fetcher: self.fetcher.clone(),
+            runtime: self.runtime.clone(),
+        };
+        let tx = self.tx.clone();
+        let spawned = thread::Builder::new()
+            .name("hocket-tail".into())
+            .spawn(move || {
+                let result = render_tail_job(job);
+                let _ = tx.send(Cmd::TailRendered { id, result });
+            });
+        if let Err(e) = spawned {
+            self.drop_tail();
+            self.skip_mix(&e.to_string());
+        }
+    }
+
+    fn on_tail_rendered(&mut self, id: u64, result: Result<Vec<f32>, String>) {
+        if id != self.tail_id {
+            return;
+        }
+        let TailState::Rendering {
+            next_generation,
+            plan,
+            rate,
+            channels,
+        } = std::mem::replace(&mut self.tail, TailState::None)
+        else {
+            return;
+        };
+        match result {
+            Ok(pcm) => {
+                self.tail = TailState::Ready(RenderedTail {
+                    plan,
+                    next_generation,
+                    rate,
+                    channels,
+                    pcm,
+                });
+                // Position the follow-up now rather than at the next tick.
+                self.maybe_prepare_tail();
+            }
+            Err(e) => {
+                tracing::warn!(target: "hocket::audio::native", error = %e, "AutoMix: rendering the tail failed");
+                self.skip_mix("the tail couldn't be rendered");
+            }
+        }
+    }
+
+    /// At A's tail start: A's live output stops (after `live`, its first
+    /// frames past the switch, crossfaded into the tail), B becomes the
+    /// current source with its own DSP chain, and the mix begins.
+    fn begin_transition(&mut self, mut live: Vec<f32>, out_ch: usize) {
+        let TailState::Ready(tail) = std::mem::replace(&mut self.tail, TailState::None) else {
+            return;
+        };
+        let (Some(mut a), Some(b)) = (self.current.take(), self.next.take()) else {
+            return;
+        };
+        self.next_key = None;
+        let plan = tail.plan.clone();
+        let mut b_dsp = self.dsp.clone();
+        b_dsp.set_format(f64::from(b.spec.sample_rate), b.spec.channels);
+        b_dsp.begin_track_gain_db(b.media.gain_db);
+        b_dsp.reset();
+        let mut a_dsp = std::mem::replace(&mut self.dsp, b_dsp);
+        let rate = self.out_rate;
+        let xfade = ms_to_frames(f64::from(SWITCH_XFADE_MS), rate);
+        while live.len() / out_ch < xfade {
+            let n = convert_chunk(
+                &mut a,
+                &mut a_dsp,
+                rate,
+                out_ch,
+                &mut self.scratch_src,
+                &mut self.scratch_map,
+                &mut live,
+            );
+            if n == 0 {
+                break;
+            }
+        }
+        live.truncate(xfade * out_ch);
+        tracing::debug!(target: "hocket::audio::native", from = %a.key(), to = %b.key(), kind = ?plan.kind, "AutoMix: transition started");
+        self.transition = Some(Transition {
+            from: a.key().clone(),
+            to: b.key().clone(),
+            frame: 0,
+            incoming_at: ms_to_frames(f64::from(plan.incoming_at_ms.min(plan.tail_len_ms)), rate),
+            handover: ms_to_frames(f64::from(plan.handover_ms), rate),
+            live,
+            outgoing: Some((a, a_dsp)),
+            shaper: IncomingShaper::new(&plan, out_ch, rate),
+            incoming: Vec::new(),
+            incoming_done: false,
+            started_reported: false,
+            handed_over: false,
+            held_next: None,
+            tail,
+        });
+        self.current = Some(b);
+    }
+
+    /// One block of a running transition: tail (+ live A at the switch) +
+    /// shaped B, limited, then volume.
+    fn feed_transition(&mut self, out_ch: usize) -> Step {
+        const BLOCK: usize = 1024;
+        if self.ring.ring.free() < BLOCK * out_ch {
+            return Step::Wait;
+        }
+        let mut t = self.transition.take().expect("caller checked");
+        let start = t.frame;
+        let end = start + BLOCK;
+        let b_need = end.saturating_sub(start.max(t.incoming_at));
+        while t.incoming.len() / out_ch < b_need && !t.incoming_done {
+            let cur = self.current.as_mut().expect("B is current");
+            let before = t.incoming.len();
+            let n = convert_chunk(
+                cur,
+                &mut self.dsp,
+                self.out_rate,
+                out_ch,
+                &mut self.scratch_src,
+                &mut self.scratch_map,
+                &mut t.incoming,
+            );
+            if n == 0 {
+                if cur.handle.queue.error().is_some() {
+                    // B failed: hand over so its error lands on the item
+                    // now playing; the plain path reports it.
+                    self.transition = Some(t);
+                    self.hand_over(None, true);
+                    self.transition = None;
+                    return Step::Continue;
+                }
+                if !cur.handle.queue.is_eof() {
+                    // B is late: wait for it rather than drop its audio.
+                    self.transition = Some(t);
+                    return Step::Wait;
+                }
+                flush_source(cur, &mut t.incoming);
+                t.incoming_done = true;
+            }
+            t.shaper.process(&mut t.incoming[before..]);
+        }
+
+        let tail_frames = t.tail.frames();
+        let live_frames = t.live.len() / out_ch;
+        let mut block = vec![0.0f32; BLOCK * out_ch];
+        let mut b_used = 0usize;
+        for (i, o) in block.chunks_exact_mut(out_ch).enumerate() {
+            let f = start + i;
+            if f < tail_frames {
+                o.copy_from_slice(&t.tail.pcm[f * out_ch..(f + 1) * out_ch]);
+            }
+            if f < live_frames {
+                let w = (f + 1) as f32 / (live_frames + 1) as f32;
+                for (c, s) in o.iter_mut().enumerate() {
+                    *s = t.live[f * out_ch + c] * (1.0 - w) + *s * w;
+                }
+            }
+            if f >= t.incoming_at && (b_used + 1) * out_ch <= t.incoming.len() {
+                for (c, s) in o.iter_mut().enumerate() {
+                    *s += t.incoming[b_used * out_ch + c];
+                }
+                b_used += 1;
+            }
+        }
+        t.incoming.drain(..b_used * out_ch);
+        self.limiter.process(&mut block);
+        self.volume.process(&mut block, out_ch);
+        self.pending_out = block;
+        t.frame = end;
+
+        let b_out = t.incoming_done && t.incoming.is_empty();
+        if t.frame >= tail_frames && (t.shaper.is_done() || b_out) {
+            if !t.handed_over && b_out {
+                // B ran out inside the overlap: hand over now.
+                self.transition = Some(t);
+                self.hand_over(None, true);
+                t = self.transition.take().expect("still there");
+            }
+            if t.handed_over {
+                // Done: B carries on through the plain path.
+                let mut rest = std::mem::take(&mut t.incoming);
+                self.volume.process(&mut rest, out_ch);
+                self.pending_out.extend_from_slice(&rest);
+                tracing::debug!(target: "hocket::audio::native", "AutoMix: transition finished");
+                return Step::Continue;
+            }
+        }
+        self.transition = Some(t);
+        Step::Continue
+    }
+
+    /// Reports that follow what the listener hears: `TransitionStarted`
+    /// when the tail's first frame plays, the handover when its frame does.
+    fn transition_marks(&mut self) {
+        let queued = self.queued_frames();
+        let Some(t) = self.transition.as_mut() else {
+            return;
+        };
+        let heard = t.heard(queued);
+        if !t.started_reported && heard >= 0 {
+            t.started_reported = true;
+            let plan = &t.tail.plan;
+            let r = BackendReport::TransitionStarted {
+                from: t.from.clone(),
+                to: t.to.clone(),
+                tail_len_ms: plan.tail_len_ms,
+                incoming_at_ms: plan.incoming_at_ms,
+                handover_ms: plan.handover_ms,
+            };
+            self.report(r);
+        }
+        let t = self.transition.as_ref().expect("checked");
+        if !t.handed_over && heard >= t.handover as i64 {
+            self.hand_over(Some(heard), true);
+        }
+    }
+
+    /// Report the handover (`Ended(A)`, `TransitionedToNext(B)` and, when
+    /// asked, `Position(B, p)`) and let A go. Returns B's position.
+    fn hand_over(&mut self, heard: Option<i64>, report_position: bool) -> u32 {
+        let queued = self.queued_frames();
+        let rate = f64::from(self.out_rate.max(1));
+        let b_duration = self.current.as_ref().and_then(|c| c.duration_ms);
+        let Some(t) = self.transition.as_mut().filter(|t| !t.handed_over) else {
+            return 0;
+        };
+        let mut reports = Vec::new();
+        let plan = &t.tail.plan;
+        if !t.started_reported {
+            t.started_reported = true;
+            reports.push(BackendReport::TransitionStarted {
+                from: t.from.clone(),
+                to: t.to.clone(),
+                tail_len_ms: plan.tail_len_ms,
+                incoming_at_ms: plan.incoming_at_ms,
+                handover_ms: plan.handover_ms,
+            });
+        }
+        let heard = heard.unwrap_or_else(|| t.heard(queued)).max(0);
+        let mut p = plan.incoming_position_at((heard as f64 * 1000.0 / rate) as u32);
+        if let Some(d) = b_duration {
+            p = p.min(d);
+        }
+        t.handed_over = true;
+        t.outgoing = None;
+        let held = t.held_next.take();
+        reports.push(BackendReport::Ended {
+            key: t.from.clone(),
+        });
+        reports.push(BackendReport::TransitionedToNext { key: t.to.clone() });
+        if report_position {
+            reports.push(BackendReport::Position {
+                key: t.to.clone(),
+                position_ms: p,
+            });
+            self.last_position_report = Instant::now();
+        }
+        for r in reports {
+            self.report(r);
+        }
+        if let Some(n) = held {
+            self.set_next(n);
+        }
+        p
+    }
+
+    /// End a transition at once (Next pressed, output changed): hand over
+    /// if that hasn't happened and play B on alone from where it is.
+    fn cut_transition(&mut self, why: &str) {
+        let Some(t) = self.transition.as_ref() else {
+            return;
+        };
+        tracing::debug!(target: "hocket::audio::native", reason = why, "AutoMix: transition cut short");
+        if t.handed_over {
+            self.transition = None;
+            return;
+        }
+        let p = self.hand_over(None, false);
+        self.transition = None;
+        self.seek(p);
+    }
+
+    /// A seek before the handover: A becomes current again and B goes back
+    /// to being the follow-up (mixed into again if A reaches its tail start).
+    fn cancel_transition(&mut self) {
+        let Some(mut t) = self.transition.take() else {
+            return;
+        };
+        if t.handed_over {
+            return;
+        }
+        let Some((a, a_dsp)) = t.outgoing.take() else {
+            return;
+        };
+        if let Some(mut b) = self.current.take() {
+            b.rewind(0);
+            self.next_key = Some(b.key().clone());
+            self.next = Some(b);
+        }
+        self.dsp = a_dsp;
+        self.current = Some(a);
+        self.tail = TailState::Ready(t.tail);
+        if let Some(n) = t.held_next {
+            self.set_next(n);
+        }
     }
 
     /// The current source has played out: report and move on.
@@ -945,17 +1526,18 @@ impl Engine {
             self.output = None;
             self.ensure_output();
         }
-        if self.playing && !self.fading_out {
-            if let Some(c) = &self.current {
-                if self.last_position_report.elapsed() >= POSITION_INTERVAL {
-                    let key = c.key().clone();
-                    let pos = self.current_position();
-                    self.report(BackendReport::Position {
-                        key,
-                        position_ms: pos,
-                    });
-                    self.last_position_report = Instant::now();
-                }
+        self.transition_marks();
+        self.maybe_prepare_tail();
+        if self.playing
+            && !self.fading_out
+            && self.last_position_report.elapsed() >= POSITION_INTERVAL
+        {
+            if let Some((key, pos)) = self.now_playing() {
+                self.report(BackendReport::Position {
+                    key,
+                    position_ms: pos,
+                });
+                self.last_position_report = Instant::now();
             }
         }
     }
@@ -989,7 +1571,7 @@ impl Engine {
 }
 
 /// Open and start decoding one source at `position_ms`.
-fn load_source(
+pub(super) fn load_source(
     source: &MediaSource,
     position_ms: u32,
     gapless: bool,
@@ -1220,6 +1802,7 @@ impl NativeBackend {
                 device_id: kit.output.device_id.clone(),
                 sample_rate: None,
                 null_sink: kit.output.null_sink,
+                tap: None,
             },
             audio: kit.audio.clone(),
             watch_devices: false,
@@ -1345,6 +1928,10 @@ impl PlaybackBackend for NativeBackend {
         }
         self.send(Cmd::SetExclusive(exclusive))
     }
+    fn complete_transition(&self) -> Result<(), BackendError> {
+        self.send(Cmd::CompleteTransition)
+    }
+
     fn name(&self) -> &'static str {
         "native"
     }
