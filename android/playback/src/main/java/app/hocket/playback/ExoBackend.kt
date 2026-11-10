@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -60,6 +61,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Executors
+import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -150,6 +152,14 @@ class ExoBackend(
     internal companion object {
         /** The native desktop engine's cadence (`audio/native/engine.rs`): receivers extrapolate between reports. */
         private const val POSITION_INTERVAL_MS = 1_000L
+        /**
+         * A mix whose lead (`incoming_at − incoming_from`) is at least this gets ExoPlayer's clock
+         * corrected once its tail has sounded ([MixClockSink]); a smaller one is left to the sink's
+         * re-base at the next item, well within how far the sink runs ahead of what is heard.
+         */
+        private const val MIN_CLOCK_FIX_MS = 100L
+        /** No clock correction this close to B's end ([correctClockAfter]). */
+        private const val CLOCK_FIX_MARGIN_MS = 3_000L
         /** How often the handover is checked against B's position during an overlap. */
         private const val HANDOVER_POLL_MS = 40L
         /** A's tail is decoded and rendered once A is this close to its tail start. */
@@ -239,7 +249,7 @@ class ExoBackend(
             val p = processor ?: return super.buildAudioSink(context, enableFloatOutput, enableAudioOutputPlaybackParams)
             // PCM path only: no float output, no offload (both are off by default), so every buffer
             // reaches the processor.
-            return DefaultAudioSink.Builder(context).setAudioProcessors(arrayOf(p)).build()
+            return MixClockSink(DefaultAudioSink.Builder(context).setAudioProcessors(arrayOf(p)).build()).also { clockSink = it }
         }
     }
 
@@ -330,9 +340,23 @@ class ExoBackend(
     private var running: Running? = null
     private var handoverJob: Job? = null
     private var tailJob: Job? = null
-    /** After a handover, B's true position is ExoPlayer's plus this, until the next seek. */
+    /**
+     * After a handover, B's true position is ExoPlayer's plus this, until the next seek or until
+     * ExoPlayer's clock is corrected ([clockFix]).
+     */
     private var offsetKey: String? = null
     private var offsetMs = 0L
+    /** The sink whose clock is corrected after a mix; null without the DSP (JVM tests). */
+    private var clockSink: MixClockSink? = null
+    private var clockJob: Job? = null
+
+    /**
+     * A clock correction of [leadMs] asked of [clockSink] for [key], once the sink has applied more
+     * than [appliedBefore]; [lastExo] is ExoPlayer's position at [at] (elapsed realtime).
+     */
+    private class ClockFix(val key: String, val leadMs: Long, val appliedBefore: Int, var lastExo: Long, var at: Long)
+
+    private var clockFix: ClockFix? = null
     private var queueView: QueueView? = null
     /** After a transition, ExoPlayer's position in B where the tail stops sounding. */
     private var mixTailEndMs = 0L
@@ -525,7 +549,7 @@ class ExoBackend(
         if (running?.handedOver == false) handOver(reportPosition = false)
         val p = position().toLong()
         running = null
-        offsetKey = null
+        clearOffset()
         mixControl.cancelMix()
         player.seekTo(player.currentMediaItemIndex, p)
     }
@@ -671,7 +695,7 @@ class ExoBackend(
      */
     private fun seek(positionMs: Long) {
         val r = running
-        offsetKey = null
+        clearOffset()
         mixControl.cancelMix()
         if (r != null && !r.handedOver) {
             running = null
@@ -689,7 +713,7 @@ class ExoBackend(
     private fun resetTransition() {
         running = null
         handoverJob?.cancel()
-        offsetKey = null
+        clearOffset()
         mixHeard = null
         unclipWanted = null
         disarm()
@@ -776,8 +800,68 @@ class ExoBackend(
             val source = if (a.tailLenMs > 0) played * a.tailSourceMs / a.tailLenMs else played
             return (a.tailStartMs + source).toUInt()
         }
-        if (offsetKey != null && offsetKey == player.currentMediaItem?.mediaId) return (exo + offsetMs).coerceAtLeast(0).toUInt()
+        if (offsetKey != null && offsetKey == player.currentMediaItem?.mediaId) {
+            val mapped = exo + offsetMs
+            val fix = clockFix?.takeIf { it.key == offsetKey } ?: return mapped.coerceAtLeast(0).toUInt()
+            // The sink applies the correction on the playback thread and ExoPlayer's position follows
+            // a moment later: the correction counts once it is applied and ExoPlayer's own reading
+            // has stepped by the lead since the last one (read every [HANDOVER_POLL_MS] meanwhile).
+            val now = SystemClock.elapsedRealtime()
+            val played = if (player.isPlaying) now - fix.at else 0L
+            val moved = exo - fix.lastExo
+            fix.lastExo = exo
+            fix.at = now
+            val stepped = abs(moved - (played / 2 - fix.leadMs)) < abs(moved - played / 2)
+            if ((clockSink?.applied ?: 0) > fix.appliedBefore && stepped) {
+                clearOffset()
+                return exo.toUInt()
+            }
+            return mapped.coerceAtLeast(0).toUInt()
+        }
         return exo.toUInt()
+    }
+
+    /** ExoPlayer's positions are true again (a seek, another item, a corrected clock). */
+    private fun clearOffset() {
+        offsetKey = null
+        clockFix = null
+        clockJob?.cancel()
+        clockJob = null
+    }
+
+    /**
+     * Once [armed]'s tail has sounded, correct ExoPlayer's clock by the mix's lead, so B's end and
+     * the next item are timed and reported right ([MixClockSink]). Before that, positions during
+     * the overlap are output time, which the handover and A's reported position rely on.
+     */
+    private fun correctClockAfter(armed: MixControl.Armed) {
+        val sink = clockSink ?: return
+        val lead = armed.incomingAtMs - armed.incomingFromMs
+        if (abs(lead) < MIN_CLOCK_FIX_MS) return
+        clockJob = scope.launch {
+            while (true) {
+                val seen = wake.value
+                if (offsetKey != armed.to) return@launch
+                val onB = player.currentMediaItem?.mediaId == armed.to
+                val pos = player.currentPosition
+                if (onB && pos >= armed.tailLenMs) break
+                awaitWake(seen, if (onB) playTimeFor(armed.tailLenMs - pos) else null)
+            }
+            // Too close to B's end, the correction could land after the sink moved on to the next
+            // item (whose clock is already right); the re-base there takes the lead out anyway.
+            val left = player.duration - player.currentPosition
+            if (player.duration == C.TIME_UNSET || left < CLOCK_FIX_MARGIN_MS) return@launch
+            val fix = ClockFix(armed.to, lead, sink.applied, player.currentPosition, SystemClock.elapsedRealtime())
+            clockFix = fix
+            sink.correct(lead * 1_000)
+            // Read the position often until the step shows, so it is told apart from playback.
+            while (clockFix === fix) {
+                val seen = wake.value
+                position()
+                if (clockFix !== fix) break
+                if (player.isPlaying) delay(HANDOVER_POLL_MS) else awaitWake(seen, null)
+            }
+        }
     }
 
     /**
@@ -788,7 +872,7 @@ class ExoBackend(
         val played = if (player.currentMediaItemIndex > 0) player.getMediaItemAt(0).mediaId else null
         val heard = mixHeard
         mixHeard = null
-        offsetKey = null
+        clearOffset()
         // The processor's post can land after a reset (a `Load`, a seek): only the transition still
         // armed counts.
         if (heard != null && heard === mixControl.armed && heard.to == mediaItem.mediaId && heard.from == played) {
@@ -814,6 +898,7 @@ class ExoBackend(
         offsetKey = armed.to
         offsetMs = armed.incomingFromMs - armed.incomingAtMs
         mixTailEndMs = armed.tailLenMs
+        correctClockAfter(armed)
         applyGain(currentGainDb)
         PlaybackLog.i("AutoMix: transition ${armed.from} -> ${armed.to} started")
         report(
@@ -864,7 +949,7 @@ class ExoBackend(
         }
         if (r != null) handOver(reportPosition = false)
         val p = position().toLong()
-        offsetKey = null
+        clearOffset()
         mixControl.cancelMix()
         player.seekTo(player.currentMediaItemIndex, p)
     }
@@ -986,7 +1071,7 @@ class ExoBackend(
         val source = sources[key] ?: return
         val p = position().toLong()
         PlaybackLog.i("AutoMix: $key plays to its end ($why), from $p ms")
-        offsetKey = null
+        clearOffset()
         player.addMediaSource(index + 1, mediaSource(source, clip = false))
         player.removeMediaItem(index)
         player.seekTo(index, p)

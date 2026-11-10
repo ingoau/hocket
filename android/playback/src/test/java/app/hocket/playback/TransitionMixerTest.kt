@@ -157,6 +157,46 @@ class TransitionMixerTest {
     }
 
     @Test
+    fun aFormatChangeAtTheJoinKeepsTheMix() {
+        control.items["a"] = MixControl.Item(0.0, 1_000)
+        control.items["b"] = MixControl.Item(0.0, null)
+        arm(tail())
+        mixer.startItem("a", 0, contiguous = false)
+        feed(*ones(1_000))
+        // DefaultAudioSink when B's sample rate differs: drain A, flush still naming A (its
+        // configuration is swapped in after that flush), then flush for B with no end of stream
+        // between (applying playback parameters, then again when the new AudioTrack starts).
+        mixer.startItem("a", 0, contiguous = true)
+        mixer.startItem("b", 0, contiguous = false)
+        mixer.startItem("b", 0, contiguous = false)
+        assertEquals(listOf("a->b"), started)
+        assertTrue(mixer.mixing)
+        assertEquals("a join keeps the filter state", 1, dsp.resets)
+        val out = feed(*ones(200))
+        assertEquals(250, out.size)
+        assertEquals(0.25f, out[0], 1e-6f)
+        assertEquals(0.75f, out[100], 1e-6f)
+        // Once B's frames flow, a flush without an end of stream is a seek again.
+        mixer.startItem("b", 10_000, contiguous = false)
+        assertTrue(!mixer.mixing)
+    }
+
+    @Test
+    fun aSeekWhileTheSinkPlaysOutAIsStillASeek() {
+        control.items["a"] = MixControl.Item(0.0, 1_000)
+        control.items["b"] = MixControl.Item(0.0, null)
+        arm(tail())
+        mixer.startItem("a", 0, contiguous = false)
+        feed(*ones(1_000))
+        // A drained for a format change; a seek into B comes before the sink moved on.
+        mixer.startItem("a", 0, contiguous = true)
+        mixer.startItem("b", 60_000_000, contiguous = false)
+        assertTrue(started.isEmpty())
+        assertTrue(!mixer.mixing)
+        assertEquals(2, dsp.resets)
+    }
+
+    @Test
     fun theLimiterRunsAfterTheSum() {
         control.items["b"] = MixControl.Item(0.0, null)
         arm(tail(value = 0.8f))
