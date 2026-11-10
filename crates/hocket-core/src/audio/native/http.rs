@@ -651,7 +651,6 @@ impl MediaSource for HttpSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
@@ -775,7 +774,7 @@ mod tests {
     struct CancelFetcher {
         data: Arc<Vec<u8>>,
         chunk: usize,
-        requests: AtomicUsize,
+        requests: Arc<Mutex<Vec<u64>>>,
     }
 
     impl RangeFetcher for CancelFetcher {
@@ -785,11 +784,12 @@ mod tests {
             _headers: HashMap<String, String>,
             start: u64,
         ) -> FetchFuture {
-            let n = self.requests.fetch_add(1, Ordering::SeqCst);
             let data = self.data.clone();
             let chunk = self.chunk;
+            let requests = self.requests.clone();
+            self.requests.lock().push(start);
             Box::pin(async move {
-                if n > 0 {
+                if requests.lock().len() > 1 {
                     return Err(FetchError::Cancelled);
                 }
                 let end = (start as usize + chunk).min(data.len());
@@ -813,8 +813,9 @@ mod tests {
         let fetcher = CancelFetcher {
             data: Arc::new(bytes),
             chunk: 4096,
-            requests: AtomicUsize::new(0),
+            requests: Arc::new(Mutex::new(Vec::new())),
         };
+        let requests = fetcher.requests.clone();
         let mut src = HttpSource::open(
             Arc::new(fetcher),
             rt.handle().clone(),
@@ -829,6 +830,9 @@ mod tests {
         let mut next = vec![0u8; 16];
         let err = src.read(&mut next).unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
+        // And the downloader stopped instead of retrying: only the first
+        // fetch (whose body was cancelled) was made.
+        assert_eq!(requests.lock().len(), 1, "{:?}", requests.lock());
     }
 
     /// Serves the first chunk, then the body stalls forever.
@@ -880,17 +884,21 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut out = Vec::new();
-            let res = src.read_to_end(&mut out);
-            let _ = tx.send((res, out.len()));
+            let res = src.read_to_end(&mut out).map(|_| out.len());
+            let _ = tx.send(res);
         });
         // Let the decoder consume the first chunk and block on the stall.
         std::thread::sleep(Duration::from_millis(200));
         // Engine stop / runtime shutdown cancels the downloader mid-fetch.
         drop(rt);
-        let (res, len) = rx
+        let res = rx
             .recv_timeout(Duration::from_secs(5))
             .expect("decoder thread did not exit");
-        assert!(res.is_err(), "read should fail, got {len} bytes");
+        let err = res.unwrap_err();
+        assert!(
+            err.to_string().contains("source closed"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
