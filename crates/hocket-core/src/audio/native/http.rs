@@ -475,12 +475,33 @@ fn is_closed(shared: &Shared) -> bool {
     shared.state.lock().closed
 }
 
+/// Marks the state closed and wakes readers when the downloader task ends,
+/// however it ends: completion, an error return, task cancellation (engine
+/// stop) or runtime shutdown. Without this, a decoder blocked in `read`
+/// would wait forever once the downloader is gone.
+struct CloseGuard(Arc<Shared>);
+
+impl Drop for CloseGuard {
+    fn drop(&mut self) {
+        self.0.state.lock().closed = true;
+        self.0.data_ready.notify_all();
+    }
+}
+
+/// Errors that can never succeed on retry: the fetch was cancelled because
+/// the downloader or runtime is being torn down. Waiting through them is
+/// pointless — the downloader is never coming back.
+fn is_final_fetch_error(e: &FetchError) -> bool {
+    matches!(e, FetchError::Cancelled)
+}
+
 async fn downloader(
     shared: Arc<Shared>,
     fetcher: Arc<dyn RangeFetcher>,
     url: String,
     headers: HashMap<String, String>,
 ) {
+    let _close_on_exit = CloseGuard(shared.clone());
     loop {
         let start = match plan_next(&shared) {
             Next::Fetch(s) => s,
@@ -490,7 +511,11 @@ async fn downloader(
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(target: "hocket::audio::http", error = %e, "fetch failed");
-                if record_fetch_error(&shared, e) {
+                let final_error = is_final_fetch_error(&e);
+                if record_fetch_error(&shared, e) || final_error {
+                    // Either `open` reports the error itself, or retrying is
+                    // pointless: the exit guard marks the state closed and
+                    // wakes any reader waiting on us.
                     return;
                 }
                 // Mid-stream failure: back off and retry from the same gap.
@@ -523,6 +548,10 @@ async fn downloader(
                 }
                 Some(Err(e)) => {
                     tracing::warn!(target: "hocket::audio::http", error = %e, "body stream error");
+                    if is_final_fetch_error(&e) {
+                        record_fetch_error(&shared, e);
+                        return;
+                    }
                     break;
                 }
                 None => {
@@ -551,6 +580,13 @@ impl Read for HttpSource {
             if let Some(t) = st.total {
                 if self.pos >= t {
                     return Ok(0);
+                }
+            }
+            if let Some(e) = &st.error {
+                if is_final_fetch_error(e) {
+                    // The fetch was cancelled (engine stop, runtime shutdown)
+                    // and the downloader is gone: surface instead of waiting.
+                    return Err(io::Error::other(e.to_string()));
                 }
             }
             if st.closed {
@@ -615,6 +651,7 @@ impl MediaSource for HttpSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
@@ -731,6 +768,129 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("403"), "{err}");
+    }
+
+    /// Serves one chunk, then the body fails as cancelled and every further
+    /// fetch returns `Cancelled` too — as when the downloader is torn down.
+    struct CancelFetcher {
+        data: Arc<Vec<u8>>,
+        chunk: usize,
+        requests: AtomicUsize,
+    }
+
+    impl RangeFetcher for CancelFetcher {
+        fn fetch(
+            &self,
+            _url: String,
+            _headers: HashMap<String, String>,
+            start: u64,
+        ) -> FetchFuture {
+            let n = self.requests.fetch_add(1, Ordering::SeqCst);
+            let data = self.data.clone();
+            let chunk = self.chunk;
+            Box::pin(async move {
+                if n > 0 {
+                    return Err(FetchError::Cancelled);
+                }
+                let end = (start as usize + chunk).min(data.len());
+                let first = Bytes::copy_from_slice(&data[start as usize..end]);
+                let stream = futures::stream::once(async move { Ok(first) })
+                    .chain(futures::stream::once(async { Err(FetchError::Cancelled) }));
+                Ok(FetchResponse {
+                    range_start: start,
+                    total_len: Some(data.len() as u64),
+                    supports_ranges: true,
+                    body: Box::pin(stream),
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn cancelled_fetch_surfaces_from_read_instead_of_waiting() {
+        let rt = runtime();
+        let bytes = data(100_000);
+        let fetcher = CancelFetcher {
+            data: Arc::new(bytes),
+            chunk: 4096,
+            requests: AtomicUsize::new(0),
+        };
+        let mut src = HttpSource::open(
+            Arc::new(fetcher),
+            rt.handle().clone(),
+            "http://x/a".into(),
+            HashMap::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let mut first = vec![0u8; 4096];
+        src.read_exact(&mut first).unwrap();
+        // The body was cancelled after the first chunk: this must not hang.
+        let mut next = vec![0u8; 16];
+        let err = src.read(&mut next).unwrap_err();
+        assert!(err.to_string().contains("cancelled"), "{err}");
+    }
+
+    /// Serves the first chunk, then the body stalls forever.
+    struct StallFetcher {
+        data: Arc<Vec<u8>>,
+        chunk: usize,
+    }
+
+    impl RangeFetcher for StallFetcher {
+        fn fetch(
+            &self,
+            _url: String,
+            _headers: HashMap<String, String>,
+            start: u64,
+        ) -> FetchFuture {
+            let data = self.data.clone();
+            let chunk = self.chunk;
+            Box::pin(async move {
+                let end = (start as usize + chunk).min(data.len());
+                let first = Bytes::copy_from_slice(&data[start as usize..end]);
+                let stream = futures::stream::once(async move { Ok(first) })
+                    .chain(futures::stream::pending());
+                Ok(FetchResponse {
+                    range_start: start,
+                    total_len: Some(data.len() as u64),
+                    supports_ranges: true,
+                    body: Box::pin(stream),
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn runtime_shutdown_wakes_a_blocked_decoder() {
+        let rt = runtime();
+        let bytes = data(100_000);
+        let fetcher = StallFetcher {
+            data: Arc::new(bytes),
+            chunk: 4096,
+        };
+        let mut src = HttpSource::open(
+            Arc::new(fetcher),
+            rt.handle().clone(),
+            "http://x/a".into(),
+            HashMap::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let res = src.read_to_end(&mut out);
+            let _ = tx.send((res, out.len()));
+        });
+        // Let the decoder consume the first chunk and block on the stall.
+        std::thread::sleep(Duration::from_millis(200));
+        // Engine stop / runtime shutdown cancels the downloader mid-fetch.
+        drop(rt);
+        let (res, len) = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("decoder thread did not exit");
+        assert!(res.is_err(), "read should fail, got {len} bytes");
     }
 
     #[test]
