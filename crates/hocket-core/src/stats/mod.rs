@@ -13,9 +13,9 @@
 //!
 //! Hour/weekday buckets are in the device's local time: pass the zone
 //! offset (minutes east of UTC) in [`StatsOptions`]. A "play" is any
-//! history row; rows whose `played_ms` is below [`StatsOptions::min_played_ms`]
-//! are ignored for counts (skips don't count) but still appear in
-//! "recently played".
+//! history row whose `played_ms` reaches the same threshold the scrobbler
+//! records plays at ([`is_play`], 50% of the track or 4 minutes): skips
+//! don't count, but still appear in "recently played".
 
 use std::collections::HashMap;
 
@@ -44,9 +44,6 @@ pub struct StatsOptions {
     pub period_days: u32,
     /// Minutes east of UTC for hour/weekday/streak bucketing.
     pub tz_offset_minutes: i32,
-    /// Rows heard for less than this don't count as plays (default 30 s,
-    /// matching the scrobble floor on track length).
-    pub min_played_ms: u32,
     /// How many entries in each top list.
     pub top_n: usize,
 }
@@ -56,9 +53,23 @@ impl Default for StatsOptions {
         Self {
             period_days: 30,
             tz_offset_minutes: 0,
-            min_played_ms: 30_000,
             top_n: 10,
         }
+    }
+}
+
+/// Whether a history row is a *play* for counting: [`PlayRow::played_ms`]
+/// must reach the same threshold the recorder stores rows at
+/// ([`crate::outbox::scrobbler::threshold_ms`], 50% of the track or
+/// 4 minutes; tracks under 30 s never count). Relative, so a fully heard
+/// short track counts — the row only carries the time heard when the
+/// threshold was crossed, not the whole track.
+pub fn is_play(row: &PlayRow) -> bool {
+    use crate::outbox::scrobbler::{threshold_ms, MIN_TRACK_MS};
+    match row.track.duration_ms {
+        0 => row.played_ms >= MIN_TRACK_MS,
+        d if d < MIN_TRACK_MS => false,
+        d => row.played_ms >= threshold_ms(d),
     }
 }
 
@@ -102,9 +113,7 @@ pub fn listening_stats_with_extras(
     let since = now_ms - f64::from(options.period_days) * MS_PER_DAY;
     let in_period: Vec<&PlayRow> = rows
         .iter()
-        .filter(|r| {
-            r.played_at >= since && r.played_at <= now_ms && r.played_ms >= options.min_played_ms
-        })
+        .filter(|r| r.played_at >= since && r.played_at <= now_ms && is_play(r))
         .collect();
 
     let mut stats = ListeningStats {
@@ -207,7 +216,7 @@ pub fn recently_played(rows: &[PlayRow], limit: u32) -> Vec<PlayHistoryEntry> {
 pub fn streaks(rows: &[PlayRow], options: &StatsOptions, now_ms: f64) -> Streaks {
     let mut days: Vec<i64> = rows
         .iter()
-        .filter(|r| r.played_ms >= options.min_played_ms && r.played_at <= now_ms)
+        .filter(|r| is_play(r) && r.played_at <= now_ms)
         .map(|r| local_date(r.played_at, options.tz_offset_minutes).to_days())
         .collect();
     days.sort_unstable();
@@ -262,18 +271,31 @@ mod tests {
     const NOW: f64 = 1_704_715_200_000.0;
 
     fn row(track: &str, artist: &str, album: &str, at: f64, played_ms: u32) -> PlayRow {
+        row_dur(track, artist, album, at, 240_000, played_ms)
+    }
+
+    fn row_dur(
+        track: &str,
+        artist: &str,
+        album: &str,
+        at: f64,
+        duration_ms: u32,
+        played_ms: u32,
+    ) -> PlayRow {
         PlayRow {
             track: TrackSummary {
                 id: track.into(),
                 title: track.to_uppercase(),
                 artist: Some(artist.into()),
                 album: Some(album.into()),
-                duration_ms: 240_000,
+                duration_ms,
                 ..Default::default()
             },
             played_at: at,
             played_ms,
-            scrobbled: played_ms >= 120_000,
+            // What the recorder stores: the row carries the flag the session
+            // judged, here simply "reached the scrobble threshold".
+            scrobbled: played_ms >= crate::outbox::scrobbler::threshold_ms(duration_ms),
             device_id: "dev".into(),
             album: Some(Album {
                 id: format!("al-{album}"),
@@ -295,10 +317,10 @@ mod tests {
             row("t1", "A", "X", NOW - 3.0 * DAY, 240_000),
             row("t2", "A", "Y", NOW - 1.0 * DAY + 3_600_000.0, 200_000),
             row("t2", "A", "Y", NOW - 5.0 * DAY, 200_000),
-            row("t3", "B", "Z", NOW - 6.0 * DAY, 100_000),
-            row("t4", "C", "W", NOW - 6.0 * DAY, 5_000), // skip: below floor
+            row("t3", "B", "Z", NOW - 6.0 * DAY, 100_000), // 42% heard: below the 50% threshold
+            row("t4", "C", "W", NOW - 6.0 * DAY, 5_000),   // skip: below any threshold
             row("t5", "D", "V", NOW - 40.0 * DAY, 240_000), // outside a 30-day period
-            row("t6", "E", "U", NOW + DAY, 240_000),     // future clock skew: ignored
+            row("t6", "E", "U", NOW + DAY, 240_000),       // future clock skew: ignored
         ]
     }
 
@@ -306,49 +328,50 @@ mod tests {
     fn totals_and_top_lists() {
         let (s, extras) = listening_stats_with_extras(&rows(), &StatsOptions::default(), NOW);
         assert_eq!(s.period_days, 30);
-        assert_eq!(s.total_plays, 6);
-        assert_eq!(s.total_ms, 3.0 * 240_000.0 + 2.0 * 200_000.0 + 100_000.0);
+        assert_eq!(s.total_plays, 5);
+        assert_eq!(s.total_ms, 3.0 * 240_000.0 + 2.0 * 200_000.0);
         assert_eq!(
             s.top_tracks
                 .iter()
                 .map(|t| t.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["t1", "t2", "t3"]
+            vec!["t1", "t2"]
         );
         assert_eq!(
             s.top_albums
                 .iter()
                 .map(|a| a.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["X", "Y", "Z"]
+            vec!["X", "Y"]
         );
         assert_eq!(
             s.top_artists
                 .iter()
                 .map(|a| a.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["A", "B"]
+            vec!["A"]
         );
-        assert_eq!(extras.distinct_tracks, 3);
-        assert_eq!(extras.distinct_albums, 3);
-        assert_eq!(extras.distinct_artists, 2);
+        assert_eq!(extras.distinct_tracks, 2);
+        assert_eq!(extras.distinct_albums, 2);
+        assert_eq!(extras.distinct_artists, 1);
         assert_eq!(extras.scrobbled_plays, 5);
         assert_eq!(extras.track_play_counts["t1"], 3);
         assert_eq!(s.plays_by_hour.len(), 24);
         assert_eq!(s.plays_by_weekday.len(), 7);
-        assert_eq!(s.plays_by_hour.iter().sum::<u32>(), 6);
-        assert_eq!(s.plays_by_weekday.iter().sum::<u32>(), 6);
+        assert_eq!(s.plays_by_hour.iter().sum::<u32>(), 5);
+        assert_eq!(s.plays_by_weekday.iter().sum::<u32>(), 5);
     }
 
     #[test]
     fn buckets_follow_local_time() {
-        // Plays at 12:00Z on Sun, Sat, Fri… (NOW is Monday 12:00Z).
+        // Plays at 12:00Z on Sun, Sat, Fri… (NOW is Monday 12:00Z; the
+        // partial t3 play at Tue doesn't count).
         let utc = StatsOptions::default();
         let s = listening_stats(&rows(), &utc, NOW);
-        assert_eq!(s.plays_by_hour[12], 5);
+        assert_eq!(s.plays_by_hour[12], 4);
         assert_eq!(s.plays_by_hour[13], 1); // t2 at 13:00Z
-                                            // Monday-first weekdays: Sun(6)=t1+t2, Sat(5)=t1, Fri(4)=t1, Wed(2)=t2, Tue(1)=t3.
-        assert_eq!(s.plays_by_weekday, vec![0, 1, 1, 0, 1, 1, 2]);
+                                            // Monday-first weekdays: Sun(6)=t1+t2, Sat(5)=t1, Fri(4)=t1, Wed(2)=t2.
+        assert_eq!(s.plays_by_weekday, vec![0, 0, 1, 0, 1, 1, 2]);
 
         // UTC+13 pushes 12:00Z to 01:00 the next local day.
         let nz = StatsOptions {
@@ -356,14 +379,14 @@ mod tests {
             ..Default::default()
         };
         let s = listening_stats(&rows(), &nz, NOW);
-        assert_eq!(s.plays_by_hour[1], 5);
+        assert_eq!(s.plays_by_hour[1], 4);
         assert_eq!(s.plays_by_hour[2], 1);
-        // Every play moves one weekday forward: Mon=2, Wed=1, Thu=1, Sat=1, Sun=1.
-        assert_eq!(s.plays_by_weekday, vec![2, 0, 1, 1, 0, 1, 1]);
+        // Every play moves one weekday forward: Mon=2, Thu=1, Sat=1, Sun=1.
+        assert_eq!(s.plays_by_weekday, vec![2, 0, 0, 1, 0, 1, 1]);
     }
 
     #[test]
-    fn period_and_floor_are_honoured() {
+    fn period_is_honoured() {
         let s = listening_stats(
             &rows(),
             &StatsOptions {
@@ -377,12 +400,11 @@ mod tests {
             &rows(),
             &StatsOptions {
                 period_days: 365,
-                min_played_ms: 0,
                 ..Default::default()
             },
             NOW,
         );
-        assert_eq!(s.total_plays, 8);
+        assert_eq!(s.total_plays, 6); // t4 (skip) and t3 (42% heard) still don't count
         let s = listening_stats(&[], &StatsOptions::default(), NOW);
         assert_eq!(s.total_plays, 0);
         assert!(s.top_tracks.is_empty());
@@ -390,18 +412,74 @@ mod tests {
     }
 
     #[test]
+    fn play_threshold_matches_the_scrobbler() {
+        // A fully heard short track: the row only carries the time played
+        // when the threshold was crossed (15 s for a 30 s track) — it must
+        // still count, this was the "Listening is empty" bug.
+        let short = vec![row_dur("s", "A", "X", NOW - DAY, 30_000, 15_000)];
+        assert_eq!(
+            listening_stats(&short, &StatsOptions::default(), NOW).total_plays,
+            1
+        );
+        assert_eq!(short[0].scrobbled, true);
+
+        // A 10% partial play of a 5 min track is not a play.
+        let partial = vec![row_dur("p", "A", "X", NOW - DAY, 300_000, 30_000)];
+        assert_eq!(
+            listening_stats(&partial, &StatsOptions::default(), NOW).total_plays,
+            0
+        );
+        // …while crossing its (relative) half does count.
+        let half = vec![row_dur("h", "A", "X", NOW - DAY, 300_000, 150_000)];
+        assert_eq!(
+            listening_stats(&half, &StatsOptions::default(), NOW).total_plays,
+            1
+        );
+
+        // Long track: the 4-minute cap means 4 min played counts whatever
+        // the track's length.
+        let long = vec![row_dur("l", "A", "X", NOW - DAY, 3_600_000, 240_000)];
+        assert_eq!(
+            listening_stats(&long, &StatsOptions::default(), NOW).total_plays,
+            1
+        );
+
+        // Tracks under 30 s are never plays, even fully heard (the
+        // recorder never writes these, but be defensive).
+        let tiny = vec![row_dur("t", "A", "X", NOW - DAY, 20_000, 20_000)];
+        assert_eq!(
+            listening_stats(&tiny, &StatsOptions::default(), NOW).total_plays,
+            0
+        );
+
+        // Unknown duration (track gone from the mirror): fall back to the
+        // absolute scrobble floor.
+        let unknown = vec![row_dur("u", "A", "X", NOW - DAY, 0, 15_000)];
+        assert_eq!(
+            listening_stats(&unknown, &StatsOptions::default(), NOW).total_plays,
+            0
+        );
+        let unknown_ok = vec![row_dur("u2", "A", "X", NOW - DAY, 0, 30_000)];
+        assert_eq!(
+            listening_stats(&unknown_ok, &StatsOptions::default(), NOW).total_plays,
+            1
+        );
+    }
+
+    #[test]
     fn top_lists_are_capped_and_tie_broken() {
         let mut r = Vec::new();
         for i in 0..15 {
-            r.push(row(
+            r.push(row_dur(
                 &format!("t{i}"),
                 "A",
                 "X",
                 NOW - DAY,
-                100_000 + i * 1000,
+                240_000,
+                130_000 + i * 1000,
             ));
         }
-        r.push(row("t0", "A", "X", NOW - DAY, 100_000));
+        r.push(row("t0", "A", "X", NOW - DAY, 130_000));
         let s = listening_stats(
             &r,
             &StatsOptions {
@@ -440,13 +518,14 @@ mod tests {
     #[test]
     fn streak_maths() {
         let opts = StatsOptions::default();
-        // Days with plays: -1, -2, -3, -5, -6, -40 → current 3 (ends yesterday), longest 3, active 6.
+        // Days with plays: -1, -2, -3, -5, -40 → current 3 (ends yesterday),
+        // longest 3, active 5 (t3's partial play and t4's skip don't count).
         assert_eq!(
             streaks(&rows(), &opts, NOW),
             Streaks {
                 current_days: 3,
                 longest_days: 3,
-                active_days: 6
+                active_days: 5
             }
         );
         // A play today extends the current streak to 4.
