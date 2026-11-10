@@ -347,6 +347,8 @@ class MixProcessor(
     private var configured: AudioProcessor.AudioFormat? = null
     /** The stream ends at this end of stream: its resampler's last frames are still to come out. */
     private var finishPending = false
+    /** The sink plays out the end of the playlist: the next end of stream is the last. */
+    private var lastEnd = false
     private val period = Timeline.Period()
     private val window = Timeline.Window()
 
@@ -360,18 +362,24 @@ class MixProcessor(
         return AudioProcessor.AudioFormat(out, inputAudioFormat.channelCount, inputAudioFormat.encoding)
     }
 
+    /** The sink is asked to play out the end of the playlist (on the playback thread, before its drain). */
+    fun playToEnd() {
+        lastEnd = true
+    }
+
     override fun onQueueEndOfStream() {
         endedBeforeFlush = true
-        val next = configured ?: return
-        // The next stream is at another format (it was configured while this one played): this
-        // resampler's held-back frames are this stream's last, and must come out before the switch.
-        if (rate.endsBefore(next.sampleRate, next.channelCount)) finishPending = true
+        // The next stream is at another format (it was configured while this one played), or there
+        // is none: this resampler's held-back frames are this stream's last, and must come out now.
+        val next = configured
+        if (rate.resampling && (lastEnd || (next != null && rate.endsBefore(next.sampleRate, next.channelCount)))) finishPending = true
     }
 
     override fun isEnded(): Boolean = super.isEnded() && !finishPending
 
     override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
         finishPending = false
+        lastEnd = false
         mixer.configure(inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
         mixer.startItem(mediaIdOf(streamMetadata), streamMetadata.positionOffsetUs, endedBeforeFlush)
         val lead = mixer.tail?.takeIf { mixer.joined }?.lead
@@ -385,6 +393,7 @@ class MixProcessor(
         configured = null
         endedBeforeFlush = false
         finishPending = false
+        lastEnd = false
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
@@ -393,7 +402,8 @@ class MixProcessor(
         if (finishPending) {
             // After the end of stream the pipeline asks for more with an empty buffer: the last frames.
             finishPending = false
-            emit(rate.output, finish(), format.channelCount, float)
+            val n = finish()
+            emit(rate.output, n, format.channelCount, float)
             return
         }
         val frames = inputBuffer.remaining() / format.bytesPerFrame

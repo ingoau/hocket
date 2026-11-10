@@ -182,4 +182,37 @@ class OutputRateTest {
         // held back again).
         assertEquals(160, queue(147))
     }
+
+    @Test
+    fun theLastStreamOfThePlaylistComesOutWhole() {
+        processor.configure(pcm16(48_000))
+        processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        processor.configure(pcm16(44_100))
+        processor.queueEndOfStream()
+        processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        assertEquals(479, queue(441))
+        processor.playToEnd()
+        processor.queueEndOfStream()
+        assertFalse(processor.isEnded)
+        processor.queueInput(ByteBuffer.allocateDirect(0))
+        assertEquals(1, processor.output.remaining() / 2)
+        assertTrue(processor.isEnded)
+    }
+
+    @Test
+    fun aLeadStillPrimesAStreamThatHasNotStarted() {
+        val r = OutputRate(dsp, 4)
+        r.latch(4)
+        r.start(4, 1, joined = false, lead = null)
+        // A first flush for the new format without the mix, then the one that starts it.
+        r.start(3, 1, joined = true, lead = null)
+        r.start(3, 1, joined = true, lead = ramp(27, 3))
+        val out = r.feed(ramp(30, 6)) + r.end()
+        assertArrayEquals(whole(ramp(0, 36)).copyOfRange(40, 48), out, 1e-6f)
+        // Once it has had input, a lead is too late.
+        r.start(3, 1, joined = false, lead = null)
+        r.feed(ramp(0, 3))
+        r.start(3, 1, joined = true, lead = ramp(27, 3))
+        assertEquals(1, dsp.live)
+    }
 }

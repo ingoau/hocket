@@ -28,6 +28,8 @@ class OutputRate(private val dsp: DspEngine, private val fallbackRate: Int) {
     var channels = 0
         private set
     private var handle = 0L
+    /** The resampler hasn't had input yet (a lead can still prime it). */
+    private var fresh = false
 
     /** Whether the current stream is converted (else it passes through as is). */
     val resampling: Boolean get() = handle != 0L
@@ -50,7 +52,12 @@ class OutputRate(private val dsp: DspEngine, private val fallbackRate: Int) {
      */
     fun start(rate: Int, channels: Int, joined: Boolean, lead: FloatArray?) {
         if (outRate == 0) latch(rate)
-        if (joined && rate == inRate && channels == this.channels) return
+        if (joined && rate == inRate && channels == this.channels) {
+            // A stream that hasn't started yet can still take a lead: at a change of channel count
+            // the sink flushes twice before the first frame, and only the second starts the mix.
+            if (handle != 0L && fresh && lead != null && lead.size >= channels) prime(lead)
+            return
+        }
         free()
         inRate = rate
         this.channels = channels
@@ -60,10 +67,14 @@ class OutputRate(private val dsp: DspEngine, private val fallbackRate: Int) {
             PlaybackLog.w("no resampler for $rate Hz -> $outRate Hz: plays at the wrong speed")
             return
         }
-        if (joined && lead != null && lead.size >= channels) {
-            val n = lead.size / channels * channels
-            dsp.resamplerPrime(handle, fill(lead, n), n)
-        }
+        fresh = true
+        if (joined && lead != null && lead.size >= channels) prime(lead)
+    }
+
+    private fun prime(lead: FloatArray) {
+        val n = lead.size / channels * channels
+        dsp.resamplerPrime(handle, fill(lead, n), n)
+        fresh = false
     }
 
     /** Whether the stream must end before a next one at [rate] × [channels]: it is converted, and differently. */
@@ -85,7 +96,10 @@ class OutputRate(private val dsp: DspEngine, private val fallbackRate: Int) {
     }
 
     /** Convert [frames] input frames from [input]; returns the frames written to [output]. */
-    fun process(input: ByteBuffer, frames: Int): Int = drain(input, frames * channels, frames)
+    fun process(input: ByteBuffer, frames: Int): Int {
+        fresh = false
+        return drain(input, frames * channels, frames)
+    }
 
     fun release() {
         free()

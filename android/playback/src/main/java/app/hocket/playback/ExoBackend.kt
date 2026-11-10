@@ -166,7 +166,7 @@ class ExoBackend(
         /** A's tail is decoded and rendered once A is this close to its tail start. */
         private const val PREPARE_AHEAD_MS = 60_000L
         /** A decoded before its tail start for the tail render (more than its resampler seam needs). */
-        private const val TAIL_CONTEXT_MS = 30L
+        private const val TAIL_CONTEXT_MS = 60L
         /**
          * A clipped item whose tail isn't ready this long before its clip point is unclipped: the
          * sink and the decoder run up to about a second ahead of what is heard.
@@ -256,7 +256,8 @@ class ExoBackend(
             val p = processor ?: return super.buildAudioSink(context, enableFloatOutput, enableAudioOutputPlaybackParams)
             // PCM path only: no float output, no offload (both are off by default), so every buffer
             // reaches the processor.
-            return MixClockSink(DefaultAudioSink.Builder(context).setAudioProcessors(arrayOf(p)).build()).also { clockSink = it }
+            val sink = DefaultAudioSink.Builder(context).setAudioProcessors(arrayOf(p)).build()
+            return MixClockSink(sink, onPlayToEnd = p::playToEnd).also { clockSink = it }
         }
     }
 

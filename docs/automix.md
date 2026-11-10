@@ -420,8 +420,9 @@ The planner is deterministic: same inputs → same plan on every device.
     and only the kernel's lookahead (~1.5 ms) is held back.
     - A gapless join at the same format goes on through the same resampler:
       no seam inside continuous audio. What it held back comes out after
-      the flush, which moves B's clock by ~1.5 ms (and at the very end of
-      playback, with nothing after, those ~1.5 ms are dropped).
+      the flush, which moves B's clock by ~1.5 ms. At the end of the
+      playlist (`MixClockSink.playToEndOfStream` tells the processor) they
+      come out at the end of stream.
     - When the next stream is at another format (the sink configures it
       while A plays), A's end of stream lets out A's last frames, with the
       armed tail's `after` (A from the tail start through A's chain, at A's
@@ -429,7 +430,7 @@ The planner is deterministic: same inputs → same plan on every device.
       with the tail's `lead` (A just before the tail start, at B's format;
       its frames line up with the tail's, both from one resampler run). So
       the switch from A to the tail is as seamless as at one rate.
-    - The tail render decodes A from 30 ms before the tail start for that
+    - The tail render decodes A from 60 ms before the tail start for that
       (and so the tail's own first frames have filter history).
   - **Clipping**: an item with `mix_out_ms` gets
     `ClippingConfiguration(endPositionMs)` (on `load` only when its `next`
@@ -448,7 +449,7 @@ The planner is deterministic: same inputs → same plan on every device.
     the source's headers — probes B's rate and channels from its container,
     and calls `automix_prepare_tail`: a `DspChain` like A's (A's gain, the
     EQ), channel map, resampling to B's rate (the `StreamResampler`, primed
-    with the 30 ms before the tail start), then `render_tail`; plus the
+    with the 60 ms before the tail start), then `render_tail`; plus the
     `lead` and `after` above.
   - **Mixing**: at B's first frame after a contiguous join, if the armed
     pair matches and the tail is at B's format, the processor outputs the

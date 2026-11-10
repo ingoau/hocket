@@ -141,7 +141,8 @@ pub fn prepare_tail(plan: &TransitionPlan, input: TailInput<'_>) -> Result<Prepa
     chain.set_track_gain(input.gain_db);
     chain.process(&mut pcm);
     let frames = pcm.len() / in_ch;
-    let ctx = ((u64::from(input.context_ms) * u64::from(in_rate) + 500) / 1000) as usize;
+    // Floored, like the decoder's start trim and the processor's clip point.
+    let ctx = (u64::from(input.context_ms) * u64::from(in_rate) / 1000) as usize;
     let ctx = ctx.min(frames);
     let seam_in = (u64::from(SEAM_MS) * u64::from(in_rate) / 1000) as usize;
     let after = pcm[ctx * in_ch..(ctx + seam_in).min(frames) * in_ch].to_vec();
@@ -174,7 +175,8 @@ pub fn prepare_tail(plan: &TransitionPlan, input: TailInput<'_>) -> Result<Prepa
         r.prime(&mapped[..start * out_ch]);
         r.push(&mapped[start * out_ch..]);
         r.finish(&[]);
-        let mut converted = vec![0f32; ((frames - start) * den).div_ceil(step) * out_ch + out_ch];
+        let out_frames = ((frames - start) as u64 * den as u64).div_ceil(step as u64) as usize;
+        let mut converted = vec![0f32; out_frames * out_ch + out_ch];
         let n = r.pull(&mut converted);
         converted.truncate(n);
         let split = (lead_out * out_ch).min(converted.len());
@@ -551,6 +553,11 @@ mod jni_shims {
         out_offset: jint,
         out_capacity: jint,
     ) -> jint {
+        // Two views of one buffer would be aliasing `&mut` slices.
+        if env.get_direct_buffer_address(&input).ok() == env.get_direct_buffer_address(&output).ok()
+        {
+            return 0;
+        }
         let Some(inp) = floats(&env, &input, in_samples) else {
             return 0;
         };
@@ -772,7 +779,7 @@ mod tests {
         let lead_frames = prepared.lead.len() / 2;
         assert_eq!(lead_frames, 480);
         let want_lead = sine_at(48_000, lead_frames, 1_440 - lead_frames, 2);
-        assert!(err(&prepared.lead[lead_frames..], &want_lead[lead_frames..]) < 1e-3);
+        assert!(err(&prepared.lead, &want_lead) < 1e-3);
         // The lookahead is A from the tail start at A's rate.
         assert_eq!(
             prepared.after,
