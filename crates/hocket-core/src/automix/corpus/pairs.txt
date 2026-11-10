@@ -18,3 +18,6 @@
 1DMG2i8cK3Mmse824oMhUP 02kysUxrOkF4vOeQj9hcaf low-confidence grid (SOPHIE) out
 02EttoWRiUSK7mRV9b6CPY 50zDEvfjOlQn2jomn7Ga8j musical theatre, sung dialogue (same album, not consecutive)
 16OARk2ReAs7a18htkYeN5 0L4XZrjVDrsEhljQDX88xD comedy song -> fast track
+4fbhc5rAaFGNsjBtHlm5fp 07PeZn1rHImo7xNPk1muNK voices apart: handover moved to B's downbeat before its voice (vocals case a)
+088uJDL2m0dUTpuE1Nea7N 4ZFNmV8NWkj3mTuLeuJU63 rap -> rap: blend shortened to the instrumental gap (vocals case b)
+7p9l86ZSFHGiYvUZYYy5UH 4jzQOhw9wkfcq4z29EOLWc voices throughout: short blend, early bass swap, presence cut (vocals case c)

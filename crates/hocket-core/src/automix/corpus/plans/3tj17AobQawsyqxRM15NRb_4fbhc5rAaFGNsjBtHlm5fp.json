@@ -1,11 +1,11 @@
 {
   "kind": "blend",
-  "tailStartMs": 133724,
-  "tailSourceMs": 23984,
-  "tailLenMs": 23984,
+  "tailStartMs": 145735,
+  "tailSourceMs": 11973,
+  "tailLenMs": 11973,
   "incomingAtMs": 0,
   "incomingFromMs": 997,
-  "handoverMs": 11992,
+  "handoverMs": 0,
   "outCurve": "equalPower",
   "inCurve": "equalPower",
   "tempo": null,
@@ -13,15 +13,15 @@
     "freqHz": 100.0,
     "fromDb": 0.0,
     "toDb": -26.0,
-    "startMs": 8994,
-    "lenMs": 2998
+    "startMs": 0,
+    "lenMs": 0
   },
   "highCut": {
     "freqHz": 5000.0,
     "fromDb": 0.0,
     "toDb": -12.0,
-    "startMs": 11992,
-    "lenMs": 11992
+    "startMs": 0,
+    "lenMs": 11973
   },
   "incomingGainDb": 0.0
 }

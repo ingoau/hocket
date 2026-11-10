@@ -1560,6 +1560,8 @@ mod tests {
                 audible_end_ms: 0,
                 head: LoudnessCurve::default(),
                 tail: LoudnessCurve::default(),
+                head_vocals: Default::default(),
+                tail_vocals: Default::default(),
                 bpm: None,
                 beats_ms: (0..beats).map(|b| 10_000_000 + b).collect(),
                 downbeats_ms: vec![],

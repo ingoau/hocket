@@ -79,6 +79,8 @@ struct AnalysisRecord {
     audible_end_ms: u32,          // last sample above -60 dBFS
     head: LoudnessCurve,          // short-term loudness of the first ~60 s
     tail: LoudnessCurve,          // short-term loudness of the last ~60 s
+    head_vocals: VocalCurve,      // voice probability of the first ~36 s (empty: not analysed)
+    tail_vocals: VocalCurve,      // voice probability of the last ~36 s
     bpm: Option<f32>,             // None when no beat analysis or not trustworthy
     beats_ms: Vec<u32>,           // empty for loudness-only records
     downbeats_ms: Vec<u32>,       // subset of beats_ms
@@ -87,6 +89,7 @@ struct AnalysisRecord {
 }
 struct SourceFingerprint { duration_ms: u32, size_bytes: Option<f64>, suffix: Option<String>, transcoded: bool }
 struct LoudnessCurve { start_ms: u32, hop_ms: u32, lufs: Vec<f32> }
+struct VocalCurve { start_ms: u32, hop_ms: u32, voice: Vec<f32> }
 ```
 
 `size_bytes` is `f64` like `Track::size_bytes` (no 64-bit integers cross the
@@ -94,6 +97,9 @@ FFI). Curves are K-weighted (BS.1770), 3 s windows centred on points 100 ms
 apart, floored at −70 LUFS. A loudness-only record's `integrated_lufs` is
 measured over its head and tail windows together (an approximation of the
 whole track); `automix::loudness::loudness_record` builds one from PCM.
+Voice curves are singing-voice probabilities (sung or rapped, 0..1) every
+100 ms, held over the detector's 3 s patches (see *Analysis*); only full
+records have them.
 
 - A record is usable for a track when `version` matches and its fingerprint
   matches the track's (duration within 1 s; size and suffix when both known).
@@ -102,7 +108,8 @@ whole track); `automix::loudness::loudness_record` builds one from PCM.
 - Loudness-only records (`beats_ms` empty) are valid and drive the smart plain
   fade.
 - `automix::record::compact` tidies a record before storing or sending it
-  (sorted beats, downbeats ⊂ beats, curve values to 0.1 LU).
+  (sorted beats, downbeats ⊂ beats, curve values to 0.1 LU, voice
+  probabilities to 0.01).
 
 ### TransitionPlan
 
@@ -247,6 +254,21 @@ nothing. Every overlap is limited to half of each track's audible span.
      1 bar before).
    - With `fixed_tail_start_ms`, the overlap (or the ramp) starts at the first
      downbeat at or after it; A plays unaltered up to there.
+   - **Voices** (both records have voice curves; otherwise all of the above
+     unchanged): one voice at a time. A point is voiced at probability
+     ≥ 0.5; over a candidate's overlap (output time; A through the tempo
+     ramp, B from `incoming_from_ms`) the voices are apart when A's last
+     voiced point is no more than 0.5 s after B's first. Blends, in order:
+     (a) the usual 8/16 bars when apart, the handover moved, if the midpoint
+     isn't between the voices, to B's downbeat between them nearest the
+     midpoint (so B's voice comes in on or after it; bass swap over the bar
+     before it, never before B enters; high cut from it); (b) else the first
+     of 4 and 2 bars that keeps them apart (same handover rule); (c) else
+     the fewest bars lasting ≥ 4 s, with the bass swap from B's entry over
+     half the way to the handover and A's high shelf moved down to 2 kHz
+     (−12 dB) from B's entry to the handover. Beat-aligned fades drop bars
+     (down to the 4 s minimum) until the voices are apart, else take the
+     shortest.
 4. Rescue: if no candidate fits (A too short, overlap would cut > 20 s of
    audible A), plain 6 s `Fade`.
 
@@ -299,7 +321,27 @@ The planner is deterministic: same inputs → same plan on every device.
   `integrated_lufs` of a full record is the whole track's. `source` is the
   file's (decoded duration, size, extension, `transcoded: false`); callers
   replace it with the library's fingerprint when they analysed a
-  transcode. `analyser` is `"beat-this-small/1.1.0"`.
+  transcode. `analyser` is `"beat-this-small/1.1.0+musicnn-mtt"`.
+- **Voice detector** (`vocals.rs`): musicnn's MagnaTagATune model
+  (`MTT_musicnn`, Pons & Serra, MTG-UPF; ISC licence, code and checkpoint),
+  converted to ONNX by `scripts/musicnn-to-onnx.py` (3.2 MB, embedded, run
+  by the same `rten`; `analysis/NOTICE` has provenance and SHA-256). The
+  front end is ours, a port of the reference's librosa calls (16 kHz mono via
+  `audio::resample`, 512-point periodic Hann every 256 samples, centred with
+  zero padding, power, 96 Slaney mel bands, `log10(10000·x + 1)`), checked
+  against librosa and TensorFlow to 1e-3 by `parity_with_reference`
+  (ignored; needs the script's reference files). It runs on non-overlapping
+  3 s patches (187 frames) of the first and last 35.9 s (12 patches each:
+  blends are at most 32 s); a patch's voice probability is the strongest of
+  the vocal tags (vocal, vocals, singing, voice, male/female …, choir,
+  opera) over that plus the strongest no-vocal tag (`v / (v + n)`), held
+  over the patch's 3 s in the 100 ms `VocalCurve`. Candidates considered:
+  YAMNet (Apache-2.0) and EfficientAT `mn10_as` (MIT) read AudioSet's
+  Singing / Rapping / Speech classes, but on the corpus's vocal and
+  instrumental versions of the same songs they told them apart only on
+  10 s windows (YAMNet not at all); Essentia's voice/instrumental models are
+  CC BY-NC-SA; the dedicated SVD research models publish no weights or no
+  licence; Demucs-class separation is too slow on the worker.
 - **Grid** (`grid.rs`). The tracker's "minimal" output (peaks on 50 fps
   frames) is tidied before it goes in the record:
   1. each peak is refined to sub-frame time by a parabola through the
@@ -334,6 +376,19 @@ The planner is deterministic: same inputs → same plan on every device.
   only 9 of 38 tails passed the gate; before the 4 s fade minimum most
   beat-aligned fades were a single bar. 80 rendered pairs: no non-finite
   samples, peak ≤ −0.00 dBFS after the limiter, exact lengths.
+- **Voice detector cost** (same build, one thread, five 2:38–5:12 tracks,
+  old and new analyser run alternately): +1.3–1.5 s per track, fixed
+  whatever the length (24 patches at ~45 ms, plus resampling and the mel
+  front end): +15–17 % on a 3-minute track, +8 % on a 5-minute one. The
+  network's cost is linear in the audio it sees, so the regions are the
+  planner's longest overlap, not the loudness curves' minute.
+- **Voices on the corpus** (same 500 pairs): of the 40 beat-matched blends,
+  A's and B's voices overlapped in 31 without voice curves and in 14 with
+  them (the rest kept apart; the 14 are voices all the way through, now
+  short shaped blends); median blend overlap 19.2 s → 7.1 s, longest
+  32.8 s → 25.9 s. Beat-aligned fades changed in 20 pairs. Smart and rescue
+  fades (3–12 s, no grid) don't read voices: their voices overlap in 199 of
+  460 pairs either way.
 
 ## Platforms
 
@@ -667,7 +722,15 @@ and friends stay out of hocket-core; depends on hocket-core with
 - `stats <dir> [--pairs N] [--seed S] [--check]`: plan N random pairs of
   the directory's tracks and print the share of each kind, overlap /
   cut-from-A / skipped-B-intro / stretch quantiles and overlaps in bars;
-  `--check` renders every pair in memory and checks it.
+  `--check` renders every pair in memory and checks it. Pairs with voice
+  curves also get a voices line: how many plans put A's and B's voices on
+  top of each other without the curves and with them, how many changed, and
+  the median overlap before and after.
+- `vocals <files..> [--tags]`: the voice detector alone on each file's
+  first and last minute: its time and a digit (0–9) per second of voice
+  probability.
+- `--no-vocals` (any command): plan without the records' voice curves, so
+  `pair` renders the same pair as before voice detection.
 
 Corpus: `scripts/automix-corpus.sh [count]` downloads original files
 (Subsonic `download`) from the test Navidrome server

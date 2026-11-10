@@ -513,6 +513,8 @@ mod tests {
                 hop_ms: 100,
                 lufs: vec![-10.0; 600],
             },
+            head_vocals: Default::default(),
+            tail_vocals: Default::default(),
             bpm: beats.then_some(120.0),
             beats_ms: if beats {
                 (0..400).map(|i| i * 500).collect()

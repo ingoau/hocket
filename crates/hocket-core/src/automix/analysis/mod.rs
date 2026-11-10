@@ -1,9 +1,10 @@
 //! Full AutoMix analysis (feature `automix-analysis`): decode a file (or take
-//! PCM), track beats and downbeats with Beat This! and measure loudness, and
-//! build an [`AnalysisRecord`].
+//! PCM), track beats and downbeats with Beat This!, find the singing voice in
+//! the head and tail with musicnn ([`vocals`]) and measure loudness, and build
+//! an [`AnalysisRecord`].
 //!
-//! - [`Analyser`] holds the two embedded models (load once, reuse; loading
-//!   takes ~50 ms). It is `Send` but not `Sync`: one per worker thread.
+//! - [`Analyser`] holds the embedded models (load once, reuse; loading
+//!   takes ~100 ms). It is `Send` but not `Sync`: one per worker thread.
 //! - [`Analyser::analyse_file`] streams the file: peak memory is the models,
 //!   the mel spectrogram (~1.5 MB per minute), and 60 s of head and tail PCM,
 //!   whatever the track's length.
@@ -15,10 +16,11 @@
 //! producer, and may replace `source` with the library's fingerprint of the
 //! track (the record's own is the file's: decoded duration, size, extension).
 //!
-//! See `NOTICE` for the beat model's provenance and licences.
+//! See `NOTICE` for the models' provenance and licences.
 
 mod grid;
 mod model;
+pub mod vocals;
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -33,16 +35,18 @@ use crate::audio::dsp::loudness::LoudnessMeter;
 
 use super::loudness::{loudness_record, HeadTail, HEAD_TAIL_MS};
 use super::record::compact;
+pub use model::pool as inference_pool;
 use model::EmbeddedModel;
+use vocals::VoiceDetector;
 
 /// `AnalysisRecord::analyser` of full records.
-pub const ANALYSER: &str = "beat-this-small/1.1.0";
+pub const ANALYSER: &str = "beat-this-small/1.1.0+musicnn-mtt";
 
 #[derive(Debug, thiserror::Error)]
 pub enum AnalysisError {
     #[error(transparent)]
     Decode(#[from] DecodeError),
-    #[error("beat model: {0}")]
+    #[error("model: {0}")]
     Model(String),
     #[error("no audio")]
     NoAudio,
@@ -52,9 +56,10 @@ fn model_err(e: anyhow::Error) -> AnalysisError {
     AnalysisError::Model(format!("{e:#}"))
 }
 
-/// The beat tracker, ready to analyse tracks one after another.
+/// The beat tracker and voice detector, ready to analyse tracks one after another.
 pub struct Analyser {
     bt: BeatThis<EmbeddedModel>,
+    voice: VoiceDetector,
 }
 
 impl Analyser {
@@ -62,9 +67,11 @@ impl Analyser {
     /// 0 shares rten's default pool (one per physical core). Background
     /// analysis should pass 1.
     pub fn new(threads: usize) -> Result<Self, AnalysisError> {
-        let (mel, beat) = EmbeddedModel::load_pair(threads).map_err(model_err)?;
+        let pool = model::pool(threads);
+        let (mel, beat) = EmbeddedModel::load_pair(pool.clone()).map_err(model_err)?;
         Ok(Self {
             bt: BeatThis::from_models(mel, beat),
+            voice: VoiceDetector::new(pool).map_err(model_err)?,
         })
     }
 
@@ -117,8 +124,12 @@ impl Analyser {
                 .map(str::to_ascii_lowercase),
             transcoded: false,
         };
-        acc.ok_or(AnalysisError::NoAudio)?
-            .finish(source, produced_by, crate::util::now_ms())
+        acc.ok_or(AnalysisError::NoAudio)?.finish(
+            &mut self.voice,
+            source,
+            produced_by,
+            crate::util::now_ms(),
+        )
     }
 
     /// Analyse interleaved PCM of a whole track. `source.duration_ms` is
@@ -136,7 +147,9 @@ impl Analyser {
         for chunk in pcm.chunks(channels.max(1) * 8192) {
             acc.push(chunk)?;
         }
-        Ok(acc.finish(source, produced_by, created_at)?.0)
+        Ok(acc
+            .finish(&mut self.voice, source, produced_by, created_at)?
+            .0)
     }
 }
 
@@ -224,6 +237,7 @@ impl<'a> Accumulator<'a> {
 
     fn finish(
         self,
+        voice: &mut VoiceDetector,
         mut source: SourceFingerprint,
         produced_by: AnalysisProducer,
         created_at: EpochMs,
@@ -250,6 +264,9 @@ impl<'a> Accumulator<'a> {
             created_at,
         );
         record.integrated_lufs = self.meter.integrated_lufs().map(|v| v as f32);
+        (record.head_vocals, record.tail_vocals) = voice
+            .head_tail(&self.head, &tail, self.channels, self.rate, duration_ms)
+            .map_err(model_err)?;
 
         let beats = self.beats.finish().map_err(model_err)?;
         let refined = |t: &[f32], logits: &[f32]| -> Vec<f64> {

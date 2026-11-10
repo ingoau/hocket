@@ -46,6 +46,8 @@ mdns-sd = "0.13"
 symphonia = { version = "0.5", features = ["all"] }
 cpal = "0.15"
 rubato = "0.16"
+# FFT for the AutoMix voice detector's log-mel front end (already in the tree through rubato).
+realfft = "3.5"
 # AutoMix beat tracking (Beat This!, pure-Rust rten inference). Pinned exactly: the
 # embedded model files in hocket-core/models/ come from the same upstream revision.
 beat-this = { version = "=1.1.0", default-features = false }

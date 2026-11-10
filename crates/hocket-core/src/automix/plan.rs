@@ -12,7 +12,11 @@
 //!    level ([`smart_fade`]).
 //! 3. AutoMix with a trustworthy beat grid on both: `Blend`/`TempoBlend`
 //!    over 8 or 16 bars with a bass swap when both are 4/4 within 8 %, else a
-//!    beat-aligned `Fade` of 4/2/1 bars ([`beat_plan`]).
+//!    beat-aligned `Fade` of 4/2/1 bars ([`beat_plan`]). With voice curves
+//!    on both, one voice at a time ([`vocal_blend`], [`vocal_fade`]): the
+//!    usual length with the handover between A's last voice and B's first,
+//!    else a blend short enough for the instrumental gap, else a short blend
+//!    with an early bass swap and a presence cut on A.
 //! 4. Rescue: whatever doesn't fit falls back to a plain 6 s fade.
 //!
 //! The caller has already decided to mix ([`super::rules::should_mix`]) and
@@ -20,7 +24,7 @@
 
 use crate::api::{
     AnalysisRecord, FadeCurve, LoudnessCurve, Ms, ShelfMove, TempoRamp, TransitionKind,
-    TransitionMode, TransitionPlan, TransitionSettings,
+    TransitionMode, TransitionPlan, TransitionSettings, VocalCurve,
 };
 
 use super::record::{has_beats, LUFS_FLOOR};
@@ -446,6 +450,204 @@ fn both_low_energy(ra: &AnalysisRecord, a_end: Ms, rb: &AnalysisRecord, b_start:
 }
 
 // ---------------------------------------------------------------------------
+// Vocals: one voice at a time
+// ---------------------------------------------------------------------------
+
+/// A voice curve point at or above this counts as singing or rapping.
+pub const VOICE_THRESHOLD: f32 = 0.5;
+/// A's last voice may run this far past B's first (output time) and still
+/// count as one voice at a time: the fades make the overlap's ends lopsided.
+pub const VOICE_TOLERANCE_MS: Ms = 500;
+/// Bar counts a blend shortens to so its overlap fits the instrumental gap
+/// (after the usual 16 or 8).
+pub const SHORT_BLEND_BARS: &[usize] = &[4, 2];
+/// With voices all the way through, the blend is the fewest bars at least
+/// this long.
+pub const CLASH_MIN_OVERLAP_MS: f64 = 4_000.0;
+/// High-shelf cut on A when voices can't be kept apart: low enough to take
+/// the presence out of A's voice.
+pub const CLASH_HIGH_CUT_HZ: f32 = 2_000.0;
+
+/// A's tail and B's head voice curves, when both records have them.
+#[derive(Debug, Clone, Copy)]
+pub struct Voices<'a> {
+    pub a: &'a VocalCurve,
+    pub b: &'a VocalCurve,
+}
+
+impl<'a> Voices<'a> {
+    pub fn of(ra: &'a AnalysisRecord, rb: &'a AnalysisRecord) -> Option<Self> {
+        let usable = |c: &VocalCurve| c.hop_ms > 0 && !c.voice.is_empty();
+        (usable(&ra.tail_vocals) && usable(&rb.head_vocals)).then_some(Voices {
+            a: &ra.tail_vocals,
+            b: &rb.head_vocals,
+        })
+    }
+}
+
+/// Whether `curve` has a voice at track position `ms` (`false` outside it).
+pub fn voiced(curve: &VocalCurve, ms: Ms) -> bool {
+    if curve.hop_ms == 0 || ms < curve.start_ms {
+        return false;
+    }
+    let i = ((ms - curve.start_ms) / curve.hop_ms) as usize;
+    curve.voice.get(i).is_some_and(|&v| v >= VOICE_THRESHOLD)
+}
+
+/// Where voices fall in a plan's overlap, in output time from the tail start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoiceSpan {
+    /// A's last voiced point.
+    pub a_last: Option<Ms>,
+    /// B's first voiced point.
+    pub b_first: Option<Ms>,
+}
+
+impl VoiceSpan {
+    /// One voice at a time: A's voice ends before B's starts.
+    pub fn is_clean(&self) -> bool {
+        match (self.a_last, self.b_first) {
+            (Some(a), Some(b)) => a <= b.saturating_add(VOICE_TOLERANCE_MS),
+            _ => true,
+        }
+    }
+}
+
+/// Voices over `plan`'s overlap, sampled every curve hop of output time: A
+/// through the tempo ramp, B from `incoming_from_ms`.
+pub fn voice_span(plan: &TransitionPlan, voices: &Voices<'_>) -> VoiceSpan {
+    let step = voices.a.hop_ms.min(voices.b.hop_ms).max(1);
+    let mut span = VoiceSpan {
+        a_last: None,
+        b_first: None,
+    };
+    let mut t = plan.incoming_at_ms;
+    while t < plan.tail_len_ms {
+        let a_pos = plan.tail_start_ms + source_ms(plan.tempo.as_ref(), t as f64).round() as Ms;
+        if voiced(voices.a, a_pos) {
+            span.a_last = Some(t);
+        }
+        if span.b_first.is_none() && voiced(voices.b, plan.incoming_position_at(t)) {
+            span.b_first = Some(t);
+        }
+        t += step;
+    }
+    span
+}
+
+/// The handover of a clean blend: mid-overlap when that falls between A's
+/// last voice and B's first, else B's downbeat in that window nearest the
+/// middle (so B's voice comes in at or after it), else the window's edge.
+fn clean_handover(plan: &TransitionPlan, span: VoiceSpan, db: &[Ms]) -> Ms {
+    let lo = span
+        .a_last
+        .unwrap_or(plan.incoming_at_ms)
+        .max(plan.incoming_at_ms);
+    let hi = span
+        .b_first
+        .unwrap_or(plan.tail_len_ms)
+        .min(plan.tail_len_ms);
+    let mid = plan.handover_ms;
+    if lo > hi || (lo..=hi).contains(&mid) {
+        return mid.clamp(lo.min(hi), hi);
+    }
+    let from = plan.incoming_from_ms;
+    db.iter()
+        .filter(|&&d| d >= from)
+        .map(|&d| plan.incoming_at_ms + (d - from))
+        .filter(|t| (lo..=hi).contains(t))
+        .min_by_key(|t| t.abs_diff(mid))
+        .unwrap_or(mid.clamp(lo, hi))
+}
+
+/// Move a blend's handover to `h`: the bass swap over the bar before it (not
+/// before B enters), the high cut from it.
+fn move_handover(plan: &mut TransitionPlan, h: Ms) {
+    plan.handover_ms = h;
+    if let Some(swap) = plan.bass_swap.as_mut() {
+        let start = h.saturating_sub(swap.len_ms).max(plan.incoming_at_ms);
+        swap.start_ms = start;
+        swap.len_ms = h - start;
+    }
+    if let Some(cut) = plan.high_cut.as_mut() {
+        cut.start_ms = h;
+        cut.len_ms = plan.tail_len_ms - h;
+    }
+}
+
+/// Voices can't be kept apart: B's bass in by the middle of the way to the
+/// handover, and A's presence cut from B's entry to the handover.
+fn shape_clash(plan: &mut TransitionPlan) {
+    let entry = plan.incoming_at_ms;
+    let to_handover = plan.handover_ms - entry;
+    if let Some(swap) = plan.bass_swap.as_mut() {
+        swap.start_ms = entry;
+        swap.len_ms = to_handover / 2;
+    }
+    if let Some(cut) = plan.high_cut.as_mut() {
+        cut.freq_hz = CLASH_HIGH_CUT_HZ;
+        cut.start_ms = entry;
+        cut.len_ms = to_handover;
+    }
+}
+
+/// The blend with voices known, in order of preference: the usual length
+/// when its voices don't overlap (handover between them); a shorter blend
+/// that fits the instrumental gap; else the shortest blend of at least
+/// [`CLASH_MIN_OVERLAP_MS`], shaped by [`shape_clash`].
+fn vocal_blend(
+    options: &[usize],
+    bar_ms: f64,
+    db: &[Ms],
+    voices: &Voices<'_>,
+    blend_at: impl Fn(usize) -> Option<TransitionPlan>,
+) -> Option<TransitionPlan> {
+    let shortest = options.iter().copied().min().unwrap_or(8);
+    let tries = options
+        .iter()
+        .copied()
+        .chain(SHORT_BLEND_BARS.iter().copied().filter(|&b| b < shortest));
+    for bars in tries {
+        let Some(mut plan) = blend_at(bars) else {
+            continue;
+        };
+        let span = voice_span(&plan, voices);
+        if span.is_clean() {
+            let h = clean_handover(&plan, span, db);
+            move_handover(&mut plan, h);
+            return Some(plan);
+        }
+    }
+    let mut bars = 2;
+    while (bars as f64) * bar_ms < CLASH_MIN_OVERLAP_MS && bars < shortest {
+        bars += 1;
+    }
+    let mut plan = blend_at(bars)?;
+    shape_clash(&mut plan);
+    Some(plan)
+}
+
+/// The beat-aligned fade with voices known: `bars` when its voices don't
+/// overlap, else fewer bars (down to [`MIN_ALIGNED_FADE_MS`]) that keep them
+/// apart, else the shortest.
+fn vocal_fade(
+    bars: usize,
+    bar_ms: f64,
+    voices: &Voices<'_>,
+    fade_at: impl Fn(usize) -> Option<TransitionPlan>,
+) -> Option<TransitionPlan> {
+    let mut shortest = bars;
+    while shortest > 1 && ((shortest - 1) as f64) * bar_ms >= MIN_ALIGNED_FADE_MS {
+        shortest -= 1;
+    }
+    (shortest..=bars)
+        .rev()
+        .filter_map(&fade_at)
+        .find(|p| voice_span(p, voices).is_clean())
+        .or_else(|| fade_at(shortest))
+}
+
+// ---------------------------------------------------------------------------
 // Case 3: beat-matched plans
 // ---------------------------------------------------------------------------
 
@@ -489,9 +691,11 @@ pub fn beat_plan(
         // 90 BPM they are 43 s, plus the ramp a minute of A.
         let long = both_low_energy(ra, a_end, rb, b_start) && 16.0 * ga.bar_ms <= MAX_LONG_BLEND_MS;
         let options: &[usize] = if long { &[16, 8] } else { &[8] };
-        options
-            .iter()
-            .find_map(|&bars| blend(input, da, db, k, bars, fixed, a_end))
+        let blend_at = |bars| blend(input, da, db, k, bars, fixed, a_end);
+        match Voices::of(ra, rb) {
+            Some(v) => vocal_blend(options, ga.bar_ms, db, &v, blend_at),
+            None => options.iter().find_map(|&bars| blend_at(bars)),
+        }
     } else {
         // Half or double time lines up on every beat of the slower track, so
         // the fade's length goes by the gap counted modulo an octave.
@@ -506,7 +710,11 @@ pub fn beat_plan(
         while (bars as f64) * ga.bar_ms < MIN_ALIGNED_FADE_MS {
             bars += 1;
         }
-        aligned_fade(input, da, db, k, bars, fixed, a_end)
+        let fade_at = |bars| aligned_fade(input, da, db, k, bars, fixed, a_end);
+        match Voices::of(ra, rb) {
+            Some(v) => vocal_fade(bars, ga.bar_ms, &v, fade_at),
+            None => fade_at(bars),
+        }
     }?;
     // Never skip more than MAX_CUT_MS of audible A.
     let overlap_end_in_a = plan.tail_start_ms + plan.tail_source_ms;
@@ -1127,5 +1335,228 @@ mod tests {
         assert_eq!(downbeat_near(&db, 7_900, 200), Some(4));
         assert_eq!(downbeat_near(&db, 7_000, 200), None);
         assert_eq!(downbeat_near(&db, 1_950, 100), Some(1));
+    }
+
+    // -- Vocals -------------------------------------------------------------
+
+    /// A voice curve over `[start, start + len)` (100 ms points), voiced in `ranges`.
+    fn voice(start: Ms, len: Ms, ranges: &[(Ms, Ms)]) -> VocalCurve {
+        VocalCurve {
+            start_ms: start,
+            hop_ms: 100,
+            voice: (0..len / 100)
+                .map(|i| {
+                    let t = start + i * 100;
+                    if ranges.iter().any(|&(a, b)| t >= a && t < b) {
+                        0.9
+                    } else {
+                        0.1
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// 120 BPM 4/4 tracks (A's downbeats at 250 + 2000k, audible to DUR − 1 s;
+    /// B's at 1000 + 2000k): A sings until `a_until`, B from `b_from`.
+    fn sung(a_until: Ms, b_from: Ms) -> (AnalysisRecord, AnalysisRecord) {
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 120.0, 4, 1_000.0);
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, a_until)]);
+        b.head_vocals = voice(0, 36_000, &[(b_from, DUR)]);
+        (a, b)
+    }
+
+    fn span(p: &TransitionPlan, a: &AnalysisRecord, b: &AnalysisRecord) -> VoiceSpan {
+        voice_span(p, &Voices::of(a, b).unwrap())
+    }
+
+    #[test]
+    fn voice_helpers() {
+        let c = voice(10_000, 1_000, &[(10_300, 10_500)]);
+        assert!(!voiced(&c, 9_900));
+        assert!(!voiced(&c, 10_200));
+        assert!(voiced(&c, 10_300) && voiced(&c, 10_499));
+        assert!(!voiced(&c, 10_500));
+        assert!(!voiced(&c, 11_000), "past the curve");
+        let clean = |a, b| {
+            VoiceSpan {
+                a_last: a,
+                b_first: b,
+            }
+            .is_clean()
+        };
+        assert!(clean(None, Some(0)) && clean(Some(9_000), None));
+        assert!(clean(Some(4_000), Some(5_000)));
+        assert!(clean(Some(5_400), Some(5_000)), "within the tolerance");
+        assert!(!clean(Some(5_600), Some(5_000)));
+        let (a, mut b) = sung(0, 0);
+        assert!(Voices::of(&a, &b).is_some());
+        b.head_vocals = VocalCurve::default();
+        assert!(Voices::of(&a, &b).is_none());
+    }
+
+    /// Without voice curves on both sides the plan is the one without vocals.
+    #[test]
+    fn no_voice_data_plans_as_before() {
+        let s = settings(TransitionMode::AutoMix);
+        let plain_a = beats(DUR, 120.0, 4, 250.0);
+        let plain_b = beats(DUR, 120.0, 4, 1_000.0);
+        let before = plan(&input(&s, Some(&plain_a), Some(&plain_b), None));
+        let (a, b) = sung(DUR, 0);
+        assert_eq!(plan(&input(&s, Some(&a), Some(&plain_b), None)), before);
+        assert_eq!(plan(&input(&s, Some(&plain_a), Some(&b), None)), before);
+    }
+
+    /// (a) The voices already take turns: the usual 8 bars, and the handover
+    /// stays mid-overlap when that is between them.
+    #[test]
+    fn voices_in_turn_keep_the_blend() {
+        let s = settings(TransitionMode::AutoMix);
+        let plain = plan(&input(
+            &s,
+            Some(&beats(DUR, 120.0, 4, 250.0)),
+            Some(&beats(DUR, 120.0, 4, 1_000.0)),
+            None,
+        ));
+        // Overlap: A 222.25–238.25 s; A sings to 230 s (output 7.75 s), B from 10 s (output 9 s).
+        let (a, b) = sung(230_000, 10_000);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p, plain);
+        let sp = span(&p, &a, &b);
+        assert_eq!(sp.a_last, Some(7_700));
+        assert_eq!(sp.b_first, Some(9_000));
+        assert!(sp.is_clean());
+    }
+
+    /// (a) With the middle outside the gap, the handover moves to B's downbeat
+    /// in it, and B's voice comes in on or after it.
+    #[test]
+    fn handover_moves_between_the_voices() {
+        let s = settings(TransitionMode::AutoMix);
+        // A sings to 233 s (output 10.75 s), B from 14 s (output 13 s).
+        let (a, b) = sung(233_000, 14_000);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!(p.tail_len_ms, 16_000, "still 8 bars");
+        assert_eq!(p.handover_ms, 12_000, "B's downbeat at 13 s");
+        let swap = p.bass_swap.unwrap();
+        assert_eq!((swap.start_ms, swap.len_ms), (10_000, 2_000));
+        let cut = p.high_cut.unwrap();
+        assert_eq!(
+            (cut.start_ms, cut.len_ms, cut.freq_hz),
+            (12_000, 4_000, HIGH_CUT_HZ)
+        );
+        let sp = span(&p, &a, &b);
+        assert!(sp.a_last.unwrap() <= p.handover_ms && p.handover_ms <= sp.b_first.unwrap());
+    }
+
+    /// (b) 8 and 4 bars would put the voices on top of each other; 2 bars fit
+    /// the gap (A's last 2.25 s and B's first 4 s are instrumental).
+    #[test]
+    fn blend_shortens_to_the_instrumental_gap() {
+        let s = settings(TransitionMode::AutoMix);
+        let (a, b) = sung(236_000, 5_000);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!(p.tail_len_ms, 4_000);
+        assert_eq!(p.tail_start_ms, 234_250, "still ends on A's last downbeat");
+        assert!(span(&p, &a, &b).is_clean());
+        assert_eq!(p.high_cut.unwrap().freq_hz, HIGH_CUT_HZ);
+    }
+
+    /// (c) Voices all the way through: the shortest blend of at least 4 s,
+    /// bass swapped early and A's presence cut from B's entry.
+    #[test]
+    fn voices_throughout_get_a_short_shaped_blend() {
+        let s = settings(TransitionMode::AutoMix);
+        let (a, b) = sung(DUR, 0);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!(p.tail_len_ms, 4_000);
+        assert_eq!(p.handover_ms, 2_000);
+        let swap = p.bass_swap.unwrap();
+        assert_eq!((swap.start_ms, swap.len_ms), (0, 1_000));
+        let cut = p.high_cut.unwrap();
+        assert_eq!(
+            (cut.start_ms, cut.len_ms, cut.freq_hz),
+            (0, 2_000, CLASH_HIGH_CUT_HZ)
+        );
+        assert!(!span(&p, &a, &b).is_clean());
+        // At 90 BPM two bars are 5.3 s: still the shortest.
+        let mut a = beats(DUR, 90.0, 4, 250.0);
+        let mut b = beats(DUR, 90.0, 4, 1_000.0);
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, DUR)]);
+        b.head_vocals = voice(0, 36_000, &[(0, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.tail_len_ms - p.incoming_at_ms, 5_333);
+        // At 170 BPM two bars are 2.8 s: three.
+        let mut a = beats(DUR, 170.0, 4, 250.0);
+        let mut b = beats(DUR, 170.0, 4, 1_000.0);
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, DUR)]);
+        b.head_vocals = voice(0, 36_000, &[(0, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        let bars = (p.tail_len_ms - p.incoming_at_ms) as f64 / (4.0 * 60_000.0 / 170.0);
+        assert!((bars - 3.0).abs() < 0.01, "{bars}");
+    }
+
+    /// A tempo blend reads A's voice through the ramp's stretch.
+    #[test]
+    fn tempo_blends_follow_the_stretch() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 124.0, 4, 800.0);
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, 230_000)]);
+        b.head_vocals = voice(0, 36_000, &[(20_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::TempoBlend);
+        let sp = span(&p, &a, &b);
+        assert!(sp.is_clean(), "{sp:?}");
+        // A's voice ends at source 230 s: output time through the ramp.
+        let a_last = sp.a_last.unwrap() as f64;
+        let src = p.tail_start_ms as f64 + source_ms(p.tempo.as_ref(), a_last);
+        assert!((src - 230_000.0).abs() < 150.0, "{src}");
+        // B sings over the whole overlap's second half: shortened until clean.
+        b.head_vocals = voice(0, 36_000, &[(3_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert!(span(&p, &a, &b).is_clean());
+        assert!(p.tail_len_ms - p.incoming_at_ms < 16_000);
+    }
+
+    /// The beat-aligned fade drops bars to keep voices apart, to 4 s at least.
+    #[test]
+    fn aligned_fades_shorten_for_voices() {
+        let s = settings(TransitionMode::AutoMix);
+        // 132 BPM: a 4-bar (8 s) fade without voices.
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 132.0, 4, 600.0);
+        assert_eq!(
+            plan(&input(&s, Some(&a), Some(&b), None)).tail_len_ms,
+            8_000
+        );
+        // A sings to 235.5 s; B from 4 s: 3 bars (6 s) keep them apart.
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, 235_500)]);
+        b.head_vocals = voice(0, 36_000, &[(4_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_len_ms, 6_000);
+        assert!(span(&p, &a, &b).is_clean());
+        // Singing throughout: the shortest, 2 bars.
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, DUR)]);
+        b.head_vocals = voice(0, 36_000, &[(0, DUR)]);
+        assert_eq!(
+            plan(&input(&s, Some(&a), Some(&b), None)).tail_len_ms,
+            4_000
+        );
+    }
+
+    /// A committed tail start is kept with voices too.
+    #[test]
+    fn voices_with_a_fixed_tail_start() {
+        let s = settings(TransitionMode::AutoMix);
+        let (a, b) = sung(DUR, 0);
+        let p = plan(&input(&s, Some(&a), Some(&b), Some(222_250)));
+        assert_eq!(p.tail_start_ms, 222_250);
+        assert_eq!(p.kind, TransitionKind::Blend);
     }
 }

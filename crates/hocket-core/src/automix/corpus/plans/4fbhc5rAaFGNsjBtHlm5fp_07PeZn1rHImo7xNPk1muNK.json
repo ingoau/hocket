@@ -1,0 +1,30 @@
+{
+  "kind": "tempoBlend",
+  "tailStartMs": 138990,
+  "tailSourceMs": 36075,
+  "tailLenMs": 37949,
+  "incomingAtMs": 12365,
+  "incomingFromMs": 36,
+  "handoverMs": 12365,
+  "outCurve": "equalPower",
+  "inCurve": "equalPower",
+  "tempo": {
+    "ratioEnd": 0.9410178,
+    "rampMs": 12365
+  },
+  "bassSwap": {
+    "freqHz": 100.0,
+    "fromDb": 0.0,
+    "toDb": -26.0,
+    "startMs": 12365,
+    "lenMs": 0
+  },
+  "highCut": {
+    "freqHz": 5000.0,
+    "fromDb": 0.0,
+    "toDb": -12.0,
+    "startMs": 12365,
+    "lenMs": 25584
+  },
+  "incomingGainDb": 0.0
+}
