@@ -400,6 +400,12 @@ The planner is deterministic: same inputs → same plan on every device.
     renderer's `handleDiscontinuity` at every stream change forces a timing
     resync); a contiguous flush of the item already playing is the same
     stream going on and must not end a mix.
+    When B is at another sample rate the sink can't join gaplessly: it
+    drains A, flushes once still naming A (the new configuration takes over
+    after that flush), then flushes for B with no end of stream in between.
+    So every flush between an end of stream and the next frame belongs to
+    the join; without that, every mix between a 44.1 kHz and a 48 kHz track
+    was dropped and A cut off at its clip point.
   - **Clipping**: an item with `mix_out_ms` gets
     `ClippingConfiguration(endPositionMs)` (on `load` only when its `next`
     has `mix_in`); the processor also drops frames past the clip end

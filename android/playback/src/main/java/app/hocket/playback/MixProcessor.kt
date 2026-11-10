@@ -95,6 +95,8 @@ class TransitionMixer(
         private set
     private var itemStartUs = 0L
     private var itemFrames = 0L
+    /** The last flush joined from the previous item (or continued a join) and no frame came since. */
+    private var joining = false
     private var mix: Active? = null
     private var seenCancels = control.cancelCount
 
@@ -124,7 +126,13 @@ class TransitionMixer(
      * item's end without a seek (a gapless join), else a seek or a fresh start.
      */
     fun startItem(mediaId: String?, positionUs: Long, contiguous: Boolean) {
-        if (contiguous && mediaId != null && mediaId == item) {
+        // Until a frame comes, a flush still belongs to the join. When B's format differs from A's
+        // (another sample rate) the sink can't join gaplessly: it drains A, flushes once still naming
+        // A (the new configuration takes over after that flush), then flushes for B without another
+        // end of stream. Taken as a seek, that second flush would leave B unmixed.
+        val joined = contiguous || (joining && itemFrames == 0L)
+        joining = joined
+        if (joined && mediaId != null && mediaId == item) {
             // The same stream going on: the sink drains and flushes again to resync its timing,
             // right after every stream change (the renderer's `handleDiscontinuity`) and before B's
             // first frame. A new item here would end the mix before a frame of the tail is heard.
@@ -141,10 +149,10 @@ class TransitionMixer(
         seenCancels = control.cancelCount
         applySettings()
         if (chain != 0L) {
-            if (!contiguous) dsp.chainReset(chain)
+            if (!joined) dsp.chainReset(chain)
             dsp.chainSetTrackGain(chain, mediaId?.let { control.items[it]?.gainDb } ?: 0.0)
         }
-        if (!contiguous || previous == null || mediaId == null) return
+        if (!joined || previous == null || mediaId == null) return
         val armed = control.armed ?: return
         if (armed.from != previous || armed.to != mediaId) return
         val tail = armed.tail
@@ -239,6 +247,7 @@ class TransitionMixer(
         if (chain != 0L) dsp.chainFree(chain)
         chain = 0L
         item = null
+        joining = false
     }
 
     private fun endMix() {
@@ -294,6 +303,9 @@ class TransitionMixer(
  * So the first frame after such a flush is the item's first frame, sample-exact, without counting
  * frames against durations. The sink then drains and flushes once more for the same item (a timing
  * resync after every stream change); [TransitionMixer.startItem] lets that through as the same stream.
+ * At a format change (B at another sample rate) the sink drains A and flushes twice before B's first
+ * frame, the first time still naming A and the second without an end of stream before it;
+ * [TransitionMixer.startItem] takes every flush before the next frame as part of the join.
  */
 class MixProcessor(dsp: DspEngine, control: MixControl, listener: MixListener) : BaseAudioProcessor() {
     val mixer = TransitionMixer(dsp, control, listener)
