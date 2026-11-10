@@ -6,6 +6,8 @@
 //!   `render_tail` + `IncomingShaper`, and write the plan as JSON.
 //! - `batch <pairs.txt>`: `pair` for every line of a pair list (track ids
 //!   resolved in a corpus directory); can write the committed reference set.
+//! - `vocals <files..>`: time the voice detector on each file's head and
+//!   tail and print its curves (one digit per second, 0–9).
 //! - `stats <dir>`: plan random pairs and print the distribution of kinds,
 //!   overlaps and cuts; `--check` also renders each one and checks levels.
 
@@ -22,7 +24,7 @@ use rand::SeedableRng;
 
 use hocket_core::api::{AnalysisProducer, AnalysisRecord, TransitionKind, TransitionMode};
 use hocket_core::automix::analysis::{apply_grid, Analyser, RawBeats};
-use hocket_core::automix::plan::{Grid, Region};
+use hocket_core::automix::plan::{voice_span, Grid, Region, VoiceSpan, Voices};
 use hocket_core::automix::{
     plan_transition, PlanInput, PlanTrack, TransitionPlan, TransitionSettings, ANALYSIS_VERSION,
 };
@@ -33,6 +35,10 @@ struct Cli {
     /// Inference threads (0: one per core).
     #[arg(long, global = true, default_value_t = 0)]
     threads: usize,
+    /// Plan without the records' voice curves (as before voice detection):
+    /// renders differ from the default only in the planner.
+    #[arg(long, global = true)]
+    no_vocals: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -96,6 +102,13 @@ enum Cmd {
         #[arg(long)]
         reference: Option<PathBuf>,
     },
+    /// Time the voice detector on each file's first and last minute and print its curves.
+    Vocals {
+        files: Vec<PathBuf>,
+        /// Also print the mean of every tag above 0.05.
+        #[arg(long)]
+        tags: bool,
+    },
     /// Distribution of plans over random pairs of a directory's tracks.
     Stats {
         dir: PathBuf,
@@ -119,6 +132,7 @@ fn main() -> Result<()> {
     let mut lab = Lab {
         threads: cli.threads,
         analyser: None,
+        no_vocals: cli.no_vocals,
     };
     match cli.cmd {
         Cmd::Analyse {
@@ -156,6 +170,7 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Cmd::Vocals { files, tags } => vocals(&files, cli.threads, tags)?,
         Cmd::Pair {
             a,
             b,
@@ -259,6 +274,8 @@ fn cache_path(file: &Path) -> PathBuf {
 struct Lab {
     threads: usize,
     analyser: Option<Analyser>,
+    /// Strip voice curves from records before planning.
+    no_vocals: bool,
 }
 
 impl Lab {
@@ -271,12 +288,22 @@ impl Lab {
             .with_context(|| file.display().to_string())
     }
 
-    /// The record of `file`, from `<file>.automix.json` when it is current.
+    /// The record of `file` ([`Self::full_record`]), without its voice
+    /// curves under `--no-vocals`.
+    fn record(&mut self, file: &Path) -> Result<AnalysisRecord> {
+        let mut r = self.full_record(file)?;
+        if self.no_vocals {
+            r.head_vocals = Default::default();
+            r.tail_vocals = Default::default();
+        }
+        Ok(r)
+    }
+
     /// The record of `file`. The cache next to it (`<file>.automix.json`)
     /// keeps the record and the tracker's raw output; the grid is rebuilt
     /// from the raw output every time, so grid post-processing changes need
     /// no re-analysis.
-    fn record(&mut self, file: &Path) -> Result<AnalysisRecord> {
+    fn full_record(&mut self, file: &Path) -> Result<AnalysisRecord> {
         let cache = cache_path(file);
         if let Ok(text) = std::fs::read_to_string(&cache) {
             if let Ok(mut c) = serde_json::from_str::<Cached>(&text) {
@@ -346,6 +373,21 @@ impl Lab {
             serde_json::to_string_pretty(&plan)?,
         )?;
         println!("{name}: {}", describe(&plan, &ra, &rb));
+        let (fa, fb) = (self.full_record(a)?, self.full_record(b)?);
+        if let Some(v) = Voices::of(&fa, &fb) {
+            let sp = voice_span(&plan, &v);
+            let t = |x: Option<u32>| {
+                x.map(|v| format!("{:.1} s", v as f64 / 1000.0))
+                    .unwrap_or("-".into())
+            };
+            println!(
+                "  voices {}: A's last {}, B's first {} (output time from the tail start; handover {:.1} s)",
+                if sp.is_clean() { "apart" } else { "overlap" },
+                t(sp.a_last),
+                t(sp.b_first),
+                plan.handover_ms as f64 / 1000.0
+            );
+        }
         if render {
             let r = render::render_pair(a, b, &plan)?;
             println!("  {}", r.check.summary());
@@ -405,6 +447,8 @@ impl Lab {
         let mut by_kind: BTreeMap<String, Vec<(f64, f64, f64, f64)>> = BTreeMap::new();
         let mut bars_hist: BTreeMap<String, usize> = BTreeMap::new();
         let mut checks = render::CheckTotals::default();
+        // Pairs with voice curves: (clash today, clash now, plan changed, overlap today, overlap now).
+        let mut voiced: Vec<(bool, bool, bool, f64, f64)> = Vec::new();
         for _ in 0..n {
             idx.shuffle(&mut rng);
             let (i, j) = (idx[0], idx[1]);
@@ -431,6 +475,60 @@ impl Lab {
             let skip_b = plan.incoming_from_ms.saturating_sub(rb.audible_start_ms) as f64 / 1000.0;
             let ratio = plan.tempo.map(|t| t.ratio_end as f64).unwrap_or(1.0);
             let kind = format!("{:?}", plan.kind);
+            let mut voice_note = String::new();
+            if let Some(v) = Voices::of(ra, rb) {
+                let deaf = |r: &AnalysisRecord| AnalysisRecord {
+                    head_vocals: Default::default(),
+                    tail_vocals: Default::default(),
+                    ..r.clone()
+                };
+                let (da, db) = (deaf(ra), deaf(rb));
+                let before = plan_transition(&PlanInput {
+                    settings,
+                    a: PlanTrack {
+                        duration_ms: ra.duration_ms,
+                        record: Some(&da),
+                    },
+                    b: PlanTrack {
+                        duration_ms: rb.duration_ms,
+                        record: Some(&db),
+                    },
+                    fixed_tail_start_ms: None,
+                })
+                .ok_or_else(|| anyhow!("mode off"))?;
+                let (sb, sa) = (voice_span(&before, &v), voice_span(&plan, &v));
+                let ov = |p: &TransitionPlan| {
+                    p.tail_len_ms.saturating_sub(p.incoming_at_ms) as f64 / 1000.0
+                };
+                voiced.push((
+                    !sb.is_clean(),
+                    !sa.is_clean(),
+                    before != plan,
+                    ov(&before),
+                    ov(&plan),
+                ));
+                let fmt = |s: VoiceSpan| {
+                    let t = |x: Option<u32>| {
+                        x.map(|v| format!("{:.1}", v as f64 / 1000.0))
+                            .unwrap_or("-".into())
+                    };
+                    format!(
+                        "{} (A to {}, B from {})",
+                        if s.is_clean() { "apart" } else { "CLASH" },
+                        t(s.a_last),
+                        t(s.b_first)
+                    )
+                };
+                voice_note = format!(
+                    "; voices {}{}",
+                    fmt(sa),
+                    if before != plan {
+                        format!(", was {:.1} s: {}", ov(&before), fmt(sb))
+                    } else {
+                        String::new()
+                    }
+                );
+            }
             if list {
                 let stem = |p: &Path| {
                     p.file_stem()
@@ -439,7 +537,7 @@ impl Lab {
                         .to_string()
                 };
                 println!(
-                    "{} {} {}",
+                    "{} {} {}{voice_note}",
                     stem(&files[i]),
                     stem(&files[j]),
                     describe(&plan, ra, rb)
@@ -498,6 +596,25 @@ impl Lab {
                 println!("  {k}: {c}");
             }
         }
+        if !voiced.is_empty() {
+            let count = |f: fn(&(bool, bool, bool, f64, f64)) -> bool| {
+                voiced.iter().filter(|x| f(x)).count()
+            };
+            let med = |f: fn(&(bool, bool, bool, f64, f64)) -> f64| {
+                let mut c: Vec<f64> = voiced.iter().map(f).collect();
+                c.sort_by(f64::total_cmp);
+                c[c.len() / 2]
+            };
+            println!(
+                "\nvoices ({} pairs with curves): overlapping voices without them {}, with them {}; plans changed {}; median overlap {:.1} s -> {:.1} s",
+                voiced.len(),
+                count(|x| x.0),
+                count(|x| x.1),
+                count(|x| x.2),
+                med(|x| x.3),
+                med(|x| x.4),
+            );
+        }
         if check {
             println!("\n{}", checks.summary());
         }
@@ -525,4 +642,73 @@ fn describe(plan: &TransitionPlan, ra: &AnalysisRecord, rb: &AnalysisRecord) -> 
             .map(|t| format!(", ratio {:.3}", t.ratio_end))
             .unwrap_or_default()
     )
+}
+
+/// `vocals`: the detector alone on each file's head and tail.
+fn vocals(files: &[PathBuf], threads: usize, tags: bool) -> Result<()> {
+    use hocket_core::automix::analysis::vocals::{PatchTags, VoiceDetector};
+    let mut d = VoiceDetector::new(hocket_core::automix::analysis::inference_pool(threads))?;
+    let mut total = 0.0;
+    let digits = |t: &PatchTags| -> String {
+        let v = t.voice();
+        let mut out = String::new();
+        for sec in 0.. {
+            let lo = sec as f64 * 1000.0;
+            let m = t
+                .centres_ms
+                .iter()
+                .zip(&v)
+                .filter(|(c, _)| **c >= lo && **c < lo + 1000.0)
+                .map(|(_, &p)| p)
+                .fold(f32::NAN, f32::max);
+            if m.is_nan() && lo > *t.centres_ms.last().unwrap_or(&0.0) {
+                break;
+            }
+            out.push(if m.is_nan() {
+                '-'
+            } else {
+                char::from(b'0' + ((m * 9.99) as u8).min(9))
+            });
+            if sec % 10 == 9 {
+                out.push(' ');
+            }
+        }
+        out
+    };
+    for f in files {
+        let pcm = render::decode(f)?;
+        let frames = pcm.samples.len() / 2;
+        let edge = (60 * pcm.rate as usize).min(frames);
+        let head = &pcm.samples[..edge * 2];
+        let tail = &pcm.samples[(frames - edge) * 2..];
+        let t = Instant::now();
+        let th = d.tags(head, 2, pcm.rate)?;
+        let tt = d.tags(tail, 2, pcm.rate)?;
+        let secs = t.elapsed().as_secs_f64();
+        total += secs;
+        println!(
+            "{}  ({:.0} s, detector {:.2} s)",
+            f.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+            frames as f64 / pcm.rate as f64,
+            secs
+        );
+        println!("  head {}", digits(&th));
+        println!("  tail {}", digits(&tt));
+        if tags {
+            for (name, t) in [("head", &th), ("tail", &tt)] {
+                let mean = |i: usize| {
+                    (0..t.len()).map(|p| t.patch(p)[i]).sum::<f32>() / t.len().max(1) as f32
+                };
+                let mut line = format!("  {name} tag means:");
+                for i in 0..hocket_core::automix::analysis::vocals::TAGS {
+                    if mean(i) >= 0.05 {
+                        line += &format!(" {i}:{:.2}", mean(i));
+                    }
+                }
+                println!("{line}");
+            }
+        }
+    }
+    eprintln!("detector total {total:.2} s for {} files", files.len());
+    Ok(())
 }

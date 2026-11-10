@@ -18,13 +18,13 @@ const CONTEXT_MS: u32 = 30_000;
 /// The rendering is stereo.
 const CHANNELS: usize = 2;
 
-struct Pcm {
-    samples: Vec<f32>,
-    rate: u32,
+pub(crate) struct Pcm {
+    pub(crate) samples: Vec<f32>,
+    pub(crate) rate: u32,
 }
 
 /// Decode to interleaved stereo.
-fn decode(path: &Path) -> Result<Pcm> {
+pub(crate) fn decode(path: &Path) -> Result<Pcm> {
     let mut samples = Vec::new();
     let spec = decode_file(path, |spec, pcm| match spec.channels {
         1 => samples.extend(pcm.iter().flat_map(|&s| [s, s])),
