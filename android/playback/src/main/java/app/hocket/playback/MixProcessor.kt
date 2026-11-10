@@ -18,8 +18,20 @@ class MixControl {
     /** A playlist item by media id (the queue key). */
     data class Item(val gainDb: Double, val clipEndMs: Long?)
 
-    /** A rendered tail: interleaved floats at B's rate and channel count. */
-    class Tail(val samples: FloatArray, val rate: Int, val channels: Int) {
+    /**
+     * A rendered tail: interleaved floats at B's rate and channel count. [lead] is A just before the
+     * tail (B's format) and [after] A from the tail's start (A's format, [afterRate] ×
+     * [afterChannels]): the [OutputRate] seam when A and B are converted differently.
+     */
+    class Tail(
+        val samples: FloatArray,
+        val rate: Int,
+        val channels: Int,
+        val lead: FloatArray = FloatArray(0),
+        val after: FloatArray = FloatArray(0),
+        val afterRate: Int = 0,
+        val afterChannels: Int = 0,
+    ) {
         val frames: Int get() = samples.size / channels.coerceAtLeast(1)
     }
 
@@ -110,6 +122,12 @@ class TransitionMixer(
 
     val mixing: Boolean get() = mix != null
 
+    /** The running mix's tail. */
+    val tail: MixControl.Tail? get() = mix?.tail
+
+    /** The last [startItem] continued the stream before it (a gapless join, or the same item going on). */
+    val joined: Boolean get() = joining
+
     fun configure(rate: Int, channels: Int) {
         if (chain == 0L) {
             chain = dsp.chainNew(rate, channels)
@@ -126,11 +144,12 @@ class TransitionMixer(
      * item's end without a seek (a gapless join), else a seek or a fresh start.
      */
     fun startItem(mediaId: String?, positionUs: Long, contiguous: Boolean) {
-        // Until a frame comes, a flush at the item's start still belongs to the join. When B's format
-        // differs from A's (another sample rate) the sink can't join gaplessly: it drains A, flushes
-        // once still naming A (the new configuration takes over after that flush), then flushes for
-        // B without another end of stream. Taken as a seek, that second flush would leave B unmixed.
-        // A seek while the sink waits for A to play out lands elsewhere and stays a seek.
+        // Until a frame comes, a flush at the item's start still belongs to the join. When the sink
+        // can't keep its `AudioTrack` for B (another channel count; the rate is always the same)
+        // it drains A, flushes once still naming A (the new configuration takes over after that
+        // flush), then flushes for B without another end of stream. Taken as a seek, that second
+        // flush would leave B unmixed. A seek while the sink waits for A to play out lands
+        // elsewhere and stays a seek.
         val joined = contiguous || (joining && itemFrames == 0L && positionUs < JOIN_START_US)
         joining = joined
         if (joined && mediaId != null && mediaId == item) {
@@ -298,8 +317,9 @@ class TransitionMixer(
 }
 
 /**
- * The ExoPlayer side of [TransitionMixer] (`docs/automix.md` → Android): installed in the main
- * player's `DefaultAudioSink`, on the PCM path only (no offload, 16-bit or float in, the same out).
+ * The ExoPlayer side of [TransitionMixer] and [OutputRate] (`docs/automix.md` → Android): installed
+ * in the main player's `DefaultAudioSink`, on the PCM path only (no offload, 16-bit or float in, the
+ * same out).
  *
  * Item boundaries come from the sink itself: at a gapless join it drains the processors
  * (`queueEndOfStream`) and flushes them with the new stream's [AudioProcessor.StreamMetadata],
@@ -307,13 +327,28 @@ class TransitionMixer(
  * So the first frame after such a flush is the item's first frame, sample-exact, without counting
  * frames against durations. The sink then drains and flushes once more for the same item (a timing
  * resync after every stream change); [TransitionMixer.startItem] lets that through as the same stream.
- * At a format change (B at another sample rate) the sink drains A and flushes twice before B's first
- * frame, the first time still naming A and the second without an end of stream before it;
- * [TransitionMixer.startItem] takes every flush before the next frame as part of the join.
+ *
+ * Every item leaves at one rate ([OutputRate]), so a join at another sample rate is a gapless join
+ * like any other: the sink keeps its `AudioTrack`. (A change of channel count still rebuilds it:
+ * the sink drains A and flushes twice before B's first frame, the first time still naming A;
+ * [TransitionMixer.startItem] takes every flush before the next frame as part of the join.)
  */
-class MixProcessor(dsp: DspEngine, control: MixControl, listener: MixListener) : BaseAudioProcessor() {
+class MixProcessor(
+    dsp: DspEngine,
+    private val control: MixControl,
+    listener: MixListener,
+    /** The output rate when the first item isn't at 44.1 or 48 kHz: the device's. */
+    fallbackRate: Int,
+) : BaseAudioProcessor() {
     val mixer = TransitionMixer(dsp, control, listener)
+    val rate = OutputRate(dsp, fallbackRate)
     private var endedBeforeFlush = false
+    /** The input format the sink configured last: the next stream's, once it differs. */
+    private var configured: AudioProcessor.AudioFormat? = null
+    /** The stream ends at this end of stream: its resampler's last frames are still to come out. */
+    private var finishPending = false
+    /** The sink plays out the end of the playlist: the next end of stream is the last. */
+    private var lastEnd = false
     private val period = Timeline.Period()
     private val window = Timeline.Window()
 
@@ -322,31 +357,60 @@ class MixProcessor(dsp: DspEngine, control: MixControl, listener: MixListener) :
             PlaybackLog.w("DSP bypassed for PCM encoding ${inputAudioFormat.encoding}")
             return AudioProcessor.AudioFormat.NOT_SET
         }
-        return inputAudioFormat
+        configured = inputAudioFormat
+        val out = rate.latch(inputAudioFormat.sampleRate)
+        return AudioProcessor.AudioFormat(out, inputAudioFormat.channelCount, inputAudioFormat.encoding)
+    }
+
+    /** The sink is asked to play out the end of the playlist (on the playback thread, before its drain). */
+    fun playToEnd() {
+        lastEnd = true
     }
 
     override fun onQueueEndOfStream() {
         endedBeforeFlush = true
+        // The next stream is at another format (it was configured while this one played), or there
+        // is none: this resampler's held-back frames are this stream's last, and must come out now.
+        val next = configured
+        if (rate.resampling && (lastEnd || (next != null && rate.endsBefore(next.sampleRate, next.channelCount)))) finishPending = true
     }
 
+    override fun isEnded(): Boolean = super.isEnded() && !finishPending
+
     override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
+        finishPending = false
+        lastEnd = false
         mixer.configure(inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
         mixer.startItem(mediaIdOf(streamMetadata), streamMetadata.positionOffsetUs, endedBeforeFlush)
+        val lead = mixer.tail?.takeIf { mixer.joined }?.lead
+        rate.start(inputAudioFormat.sampleRate, inputAudioFormat.channelCount, mixer.joined, lead)
         endedBeforeFlush = false
     }
 
     override fun onReset() {
         mixer.release()
+        rate.release()
+        configured = null
         endedBeforeFlush = false
+        finishPending = false
+        lastEnd = false
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         val format = inputAudioFormat
         val float = format.encoding == C.ENCODING_PCM_FLOAT
+        if (finishPending) {
+            // After the end of stream the pipeline asks for more with an empty buffer: the last frames.
+            finishPending = false
+            val n = finish()
+            emit(rate.output, n, format.channelCount, float)
+            return
+        }
         val frames = inputBuffer.remaining() / format.bytesPerFrame
         if (frames == 0) return
-        if (mixer.passThrough(frames)) {
-            // Nothing to do (no mix, nothing clipped, a passthrough chain): the input as is.
+        val pass = mixer.passThrough(frames)
+        if (pass && !rate.resampling) {
+            // Nothing to do (no mix, nothing clipped, a passthrough chain, the output rate): the input as is.
             replaceOutputBuffer(inputBuffer.remaining()).put(inputBuffer).flip()
             return
         }
@@ -359,14 +423,36 @@ class MixProcessor(dsp: DspEngine, control: MixControl, listener: MixListener) :
             for (i in 0 until samples) work.putFloat(i * 4, inputBuffer.getShort(start + i * 2) / 32768f)
         }
         inputBuffer.position(inputBuffer.limit())
-        val outFrames = mixer.process(frames)
-        val outSamples = outFrames * format.channelCount
-        val out = replaceOutputBuffer(outFrames * format.bytesPerFrame)
-        val src = mixer.output
+        var src = work
+        var n = frames
+        if (!pass) {
+            n = mixer.process(frames)
+            src = mixer.output
+        }
+        if (rate.resampling) {
+            n = rate.process(src, n)
+            src = rate.output
+        }
+        emit(src, n, format.channelCount, float)
+    }
+
+    /** The stream's last frames, with A's continuation as lookahead when the armed mix goes on from here. */
+    private fun finish(): Int {
+        val armed = control.armed
+        val tail = armed?.tail
+        val after = tail?.takeIf {
+            armed.from == mixer.item && it.afterRate == rate.inRate && it.afterChannels == rate.channels
+        }?.after
+        return rate.finish(after)
+    }
+
+    private fun emit(src: ByteBuffer, frames: Int, channels: Int, float: Boolean) {
+        val samples = frames * channels
+        val out = replaceOutputBuffer(samples * if (float) 4 else 2)
         if (float) {
-            for (i in 0 until outSamples) out.putFloat(src.getFloat(i * 4))
+            for (i in 0 until samples) out.putFloat(src.getFloat(i * 4))
         } else {
-            for (i in 0 until outSamples) out.putShort(toPcm16(src.getFloat(i * 4)))
+            for (i in 0 until samples) out.putShort(toPcm16(src.getFloat(i * 4)))
         }
         out.flip()
     }

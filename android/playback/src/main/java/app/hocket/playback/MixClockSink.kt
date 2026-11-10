@@ -23,6 +23,8 @@ import kotlin.math.abs
 class MixClockSink(
     sink: AudioSink,
     private val nanoTime: () -> Long = System::nanoTime,
+    /** The renderer plays out the end of the whole playlist (the next end of stream is the last). */
+    private val onPlayToEnd: () -> Unit = {},
 ) : ForwardingAudioSink(sink) {
     private val requested = AtomicLong()
     private var correctionUs = 0L
@@ -73,6 +75,11 @@ class MixClockSink(
             listener?.onPositionDiscontinuity()
         }
         return raw - correctionUs
+    }
+
+    override fun playToEndOfStream() {
+        onPlayToEnd()
+        super.playToEndOfStream()
     }
 
     override fun flush() {

@@ -108,12 +108,21 @@ internal class LoudnessRecorder(
     }
 }
 
+/**
+ * A rendered tail ([tail], at B's format) and A's audio either side of its start: [lead] just before
+ * it at B's format, [after] from it at A's format (`MixControl.Tail`).
+ */
+class RenderedTail(val tail: FloatArray, val lead: FloatArray, val after: FloatArray)
+
 /** The one-shot UniFFI calls of AutoMix, behind a seam (no native library in JVM tests). */
 interface AutomixFfi {
     fun usable(record: AnalysisRecord, durationMs: Long): Boolean
     fun loudnessRecord(head: PcmDecoder.Pcm, tail: PcmDecoder.Pcm, tailStartMs: Long, durationMs: Long, transcoded: Boolean): AnalysisRecord?
-    /** The rendered tail as interleaved floats at [outRate] × [outChannels]. */
-    fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double): FloatArray
+    /**
+     * The rendered tail from [pcm] (A from [contextMs] before the tail start), as interleaved floats
+     * at [outRate] × [outChannels], with A's audio either side of the tail start.
+     */
+    fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, contextMs: Int, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double): RenderedTail
 
     object Native : AutomixFfi {
         override fun usable(record: AnalysisRecord, durationMs: Long): Boolean =
@@ -128,10 +137,14 @@ interface AutomixFfi {
             return HocketJson.json.decodeFromString(AnalysisRecord.serializer(), json)
         }
 
-        override fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double): FloatArray {
-            val bytes = app.hocket.core.ffi.automixPrepareTail(
-                planJson, pcm.leBytes(), pcm.channels.toUInt(), pcm.rate.toUInt(), outChannels.toUInt(), outRate.toUInt(), audioSettingsJson, gainDb,
+        override fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, contextMs: Int, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double): RenderedTail {
+            val r = app.hocket.core.ffi.automixPrepareTail(
+                planJson, pcm.leBytes(), contextMs.toUInt(), pcm.channels.toUInt(), pcm.rate.toUInt(), outChannels.toUInt(), outRate.toUInt(), audioSettingsJson, gainDb,
             )
+            return RenderedTail(floats(r.tail), floats(r.lead), floats(r.after))
+        }
+
+        private fun floats(bytes: ByteArray): FloatArray {
             val floats = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
             return FloatArray(floats.remaining()).also { floats.get(it) }
         }

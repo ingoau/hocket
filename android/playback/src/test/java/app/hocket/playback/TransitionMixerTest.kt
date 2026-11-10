@@ -54,6 +54,11 @@ class TransitionMixerTest {
         override fun limit(buffer: ByteBuffer, samples: Int) {
             for (i in 0 until samples) buffer.putFloat(i * 4, buffer.getFloat(i * 4).coerceIn(-0.9f, 0.9f))
         }
+        override fun resamplerNew(inRate: Int, outRate: Int, channels: Int) = 0L
+        override fun resamplerFree(handle: Long) = Unit
+        override fun resamplerPrime(handle: Long, buffer: ByteBuffer, samples: Int) = Unit
+        override fun resamplerFinish(handle: Long, buffer: ByteBuffer, samples: Int) = Unit
+        override fun resamplerProcess(handle: Long, input: ByteBuffer, inSamples: Int, output: ByteBuffer, outOffset: Int, outCapacity: Int) = 0
     }
 
     private val dsp = FakeDsp()

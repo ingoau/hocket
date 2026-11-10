@@ -49,13 +49,18 @@ class ExoBackendClipTest {
         override fun shaperFree(handle: Long) = Unit
         override fun shaperProcess(handle: Long, buffer: ByteBuffer, samples: Int) = Unit
         override fun limit(buffer: ByteBuffer, samples: Int) = Unit
+        override fun resamplerNew(inRate: Int, outRate: Int, channels: Int) = 0L
+        override fun resamplerFree(handle: Long) = Unit
+        override fun resamplerPrime(handle: Long, buffer: ByteBuffer, samples: Int) = Unit
+        override fun resamplerFinish(handle: Long, buffer: ByteBuffer, samples: Int) = Unit
+        override fun resamplerProcess(handle: Long, input: ByteBuffer, inSamples: Int, output: ByteBuffer, outOffset: Int, outCapacity: Int) = 0
     }
 
     /** Every render fails, like a tail that never gets ready. */
     private object FailingFfi : AutomixFfi {
         override fun usable(record: AnalysisRecord, durationMs: Long) = true
         override fun loudnessRecord(head: PcmDecoder.Pcm, tail: PcmDecoder.Pcm, tailStartMs: Long, durationMs: Long, transcoded: Boolean): AnalysisRecord? = null
-        override fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double): FloatArray =
+        override fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, contextMs: Int, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double): RenderedTail =
             throw IllegalStateException("no tail")
     }
 

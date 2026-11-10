@@ -25,6 +25,22 @@ interface DspEngine {
     fun shaperProcess(handle: Long, buffer: ByteBuffer, samples: Int)
     /** The chain's soft limiter (−1 dB knee), for the sum of a tail and B. */
     fun limit(buffer: ByteBuffer, samples: Int)
+
+    /**
+     * A `StreamResampler` (`crates/hocket-android/src/resampler.rs`): one stream from [inRate] to
+     * [outRate], output frame `j` at input frame `j × inRate / outRate` exactly.
+     */
+    fun resamplerNew(inRate: Int, outRate: Int, channels: Int): Long
+    fun resamplerFree(handle: Long)
+    /** Frames before the stream's start, as history only. Before any input. */
+    fun resamplerPrime(handle: Long, buffer: ByteBuffer, samples: Int)
+    /** The stream ends: frames that would have followed, as lookahead only (0 samples: silence). */
+    fun resamplerFinish(handle: Long, buffer: ByteBuffer, samples: Int)
+    /**
+     * Take [inSamples] from [input], then write what is ready into [output] from sample [outOffset]
+     * up to [outCapacity]; returns the samples written. Call again with no input while it fills it.
+     */
+    fun resamplerProcess(handle: Long, input: ByteBuffer, inSamples: Int, output: ByteBuffer, outOffset: Int, outCapacity: Int): Int
 }
 
 /**
@@ -56,4 +72,9 @@ object NativeDsp : DspEngine {
     external override fun shaperFree(handle: Long)
     external override fun shaperProcess(handle: Long, buffer: ByteBuffer, samples: Int)
     external override fun limit(buffer: ByteBuffer, samples: Int)
+    external override fun resamplerNew(inRate: Int, outRate: Int, channels: Int): Long
+    external override fun resamplerFree(handle: Long)
+    external override fun resamplerPrime(handle: Long, buffer: ByteBuffer, samples: Int)
+    external override fun resamplerFinish(handle: Long, buffer: ByteBuffer, samples: Int)
+    external override fun resamplerProcess(handle: Long, input: ByteBuffer, inSamples: Int, output: ByteBuffer, outOffset: Int, outCapacity: Int): Int
 }

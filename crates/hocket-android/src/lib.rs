@@ -259,22 +259,35 @@ pub fn artwork_layout(
 // One-shot calls for a background thread. PCM crosses as little-endian `f32` bytes (a Kotlin
 // `ByteArray`; a `Vec<f32>` would be a boxed `List<Float>`). The per-buffer calls are JNI.
 
-/// The rendered tail of a transition (`docs/automix.md`): `pcm` is A from `tail_start_ms`,
-/// `in_channels` at `in_rate`; it goes through a DSP chain like A's (`audio_settings_json`, an
-/// `AudioSettings`, and A's `gain_db`), is mapped to B's channels, resampled to B's rate and
-/// rendered with `render_tail`. Returns exactly `tail_len_ms` at `out_rate`, as LE `f32` bytes.
+/// [`automix_prepare_tail`]'s result, each as LE `f32` bytes (see [`dsp::PreparedTail`]).
+#[derive(uniffi::Record)]
+pub struct PreparedTail {
+    /// Exactly `tail_len_ms` at `out_rate` × `out_channels`.
+    pub tail: Vec<u8>,
+    /// A just before `tail_start_ms`, at `out_rate` × `out_channels`.
+    pub lead: Vec<u8>,
+    /// A from `tail_start_ms` through A's chain, at `in_rate` × `in_channels`.
+    pub after: Vec<u8>,
+}
+
+/// The rendered tail of a transition (`docs/automix.md`): `pcm` is A from `tail_start_ms −
+/// context_ms`, `in_channels` at `in_rate`; it goes through a DSP chain like A's
+/// (`audio_settings_json`, an `AudioSettings`, and A's `gain_db`), is mapped to B's channels,
+/// resampled to B's rate and rendered with `render_tail`. Also returns A's audio either side of
+/// `tail_start_ms` for a seamless switch of the output resampler.
 #[uniffi::export]
 #[allow(clippy::too_many_arguments)]
 pub fn automix_prepare_tail(
     plan_json: String,
     pcm: Vec<u8>,
+    context_ms: u32,
     in_channels: u32,
     in_rate: u32,
     out_channels: u32,
     out_rate: u32,
     audio_settings_json: Option<String>,
     gain_db: f64,
-) -> Result<Vec<u8>, HocketError> {
+) -> Result<PreparedTail, HocketError> {
     let failed = |reason: String| HocketError::Failed { reason };
     let plan = dsp::parse_plan(&plan_json).map_err(failed)?;
     let audio = audio_settings_json
@@ -283,10 +296,11 @@ pub fn automix_prepare_tail(
         .transpose()
         .map_err(failed)?;
     let pcm = dsp::f32_from_le(&pcm);
-    let tail = dsp::prepare_tail(
+    let prepared = dsp::prepare_tail(
         &plan,
         dsp::TailInput {
             pcm: &pcm,
+            context_ms,
             in_channels: in_channels as usize,
             in_rate,
             out_channels: out_channels as usize,
@@ -296,7 +310,11 @@ pub fn automix_prepare_tail(
         },
     )
     .map_err(failed)?;
-    Ok(dsp::f32_to_le(&tail))
+    Ok(PreparedTail {
+        tail: dsp::f32_to_le(&prepared.tail),
+        lead: dsp::f32_to_le(&prepared.lead),
+        after: dsp::f32_to_le(&prepared.after),
+    })
 }
 
 /// A loudness-only `AnalysisRecord` (JSON, producer Device) from a track's decoded head (from 0)
@@ -343,6 +361,7 @@ pub fn core_version() -> String {
 }
 
 pub mod dsp;
+pub mod resampler;
 
 #[cfg(test)]
 mod fixtures;

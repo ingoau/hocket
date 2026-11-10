@@ -9,6 +9,7 @@
 //!   - [`Chain`]: hocket-core's [`DspChain`] (track gain incl. boost, EQ, normalisation, limiter).
 //!   - [`IncomingShaper`]: B's side of a transition.
 //!   - `limit`: the chain's soft limiter, run on the sum of the tail and B.
+//!   - [`StreamResampler`]: the output stage, to the one rate the sink plays at.
 //! - **One shot, UniFFI** (`lib.rs`): [`prepare_tail`] (DSP chain like A's, channel map, resample to
 //!   B's rate, `render_tail`) and [`loudness_record`], on a background thread.
 //!
@@ -23,6 +24,8 @@ use hocket_core::audio::dsp::{DspChain, DspSettings, SoftLimiter};
 use hocket_core::audio::resample;
 use hocket_core::automix::loudness::{self, HeadTail};
 use hocket_core::automix::{is_usable, render_tail, IncomingShaper};
+
+use crate::resampler::{gcd, StreamResampler};
 
 /// The chain for one stream: hocket-core's [`DspChain`] with the format the processor was
 /// configured with.
@@ -90,8 +93,12 @@ pub fn parse_audio_settings(json: &str) -> Result<AudioSettings, String> {
 
 /// What [`prepare_tail`] renders from.
 pub struct TailInput<'a> {
-    /// A from `tail_start_ms` (no preroll), interleaved, at `in_rate`, straight from the decoder.
+    /// A from `tail_start_ms − context_ms` (no preroll), interleaved, at `in_rate`, straight from
+    /// the decoder.
     pub pcm: &'a [f32],
+    /// How much of `pcm` comes before `tail_start_ms`: history for the chain and the resampler,
+    /// and where the lead comes from.
+    pub context_ms: u32,
     pub in_channels: usize,
     pub in_rate: u32,
     /// B's output format: the tail is mixed into B's frames.
@@ -102,21 +109,85 @@ pub struct TailInput<'a> {
     pub gain_db: f64,
 }
 
+/// [`prepare_tail`]'s result.
+#[derive(Debug, Default)]
+pub struct PreparedTail {
+    /// Exactly `tail_len_ms` at `out_rate` × `out_channels`, from `tail_start_ms`.
+    pub tail: Vec<f32>,
+    /// A just before `tail_start_ms` at `out_rate` × `out_channels`, its last frame the one before
+    /// the tail's first: history for the output resampler when B's stream starts with the tail.
+    pub lead: Vec<f32>,
+    /// A from `tail_start_ms` through A's chain, at `in_rate` × `in_channels`: lookahead for the
+    /// output resampler when A's stream ends at the tail.
+    pub after: Vec<f32>,
+}
+
+/// Lead and lookahead length (at least the output resampler's kernel half-width).
+const SEAM_MS: u32 = 10;
+
 /// The rendered tail: A's PCM through a chain configured like A's, mapped to B's channels,
-/// resampled to B's rate, then `render_tail`. Exactly `tail_len_ms` at `out_rate`.
-pub fn prepare_tail(plan: &TransitionPlan, input: TailInput<'_>) -> Result<Vec<f32>, String> {
+/// resampled to B's rate, then `render_tail`; plus the [`PreparedTail::lead`] and
+/// [`PreparedTail::after`] that let the output resampler switch streams without a seam.
+pub fn prepare_tail(plan: &TransitionPlan, input: TailInput<'_>) -> Result<PreparedTail, String> {
     let in_ch = input.in_channels.max(1);
+    let in_rate = input.in_rate.max(1);
+    let out_ch = input.out_channels.max(1);
+    let out_rate = input.out_rate.max(1);
     let mut pcm = input.pcm[..input.pcm.len() / in_ch * in_ch].to_vec();
-    let mut chain = Chain::new(input.in_rate, in_ch);
+    let mut chain = Chain::new(in_rate, in_ch);
     if let Some(a) = input.audio {
         chain.set_audio_settings(a);
     }
     chain.set_track_gain(input.gain_db);
     chain.process(&mut pcm);
-    let out_ch = input.out_channels.max(1);
-    let converted = resample::convert(&pcm, in_ch, input.in_rate, out_ch, input.out_rate)
-        .map_err(|e| e.to_string())?;
-    Ok(render_tail(plan, &converted, out_ch, input.out_rate))
+    let frames = pcm.len() / in_ch;
+    // Floored, like the decoder's start trim and the processor's clip point.
+    let ctx = (u64::from(input.context_ms) * u64::from(in_rate) / 1000) as usize;
+    let ctx = ctx.min(frames);
+    let seam_in = (u64::from(SEAM_MS) * u64::from(in_rate) / 1000) as usize;
+    let after = pcm[ctx * in_ch..(ctx + seam_in).min(frames) * in_ch].to_vec();
+
+    let mut mapped = Vec::with_capacity(frames * out_ch);
+    resample::remap_channels(&pcm, in_ch, out_ch, &mut mapped);
+    let seam_out = (u64::from(SEAM_MS) * u64::from(out_rate) / 1000) as usize;
+    let (lead, source) = if in_rate == out_rate {
+        let lead_from = ctx.saturating_sub(seam_out);
+        (
+            mapped[lead_from * out_ch..ctx * out_ch].to_vec(),
+            mapped[ctx * out_ch..].to_vec(),
+        )
+    } else {
+        // One stream from a little before `tail_start_ms`, so that an output frame lands exactly on
+        // it: `lead_in` input frames make `lead` output frames when both are whole multiples of
+        // the reduced ratio. What comes before only primes the filter.
+        let g = gcd(u64::from(in_rate), u64::from(out_rate));
+        let (step, den) = (
+            (u64::from(in_rate) / g) as usize,
+            (u64::from(out_rate) / g) as usize,
+        );
+        let mut k = seam_out.div_ceil(den).max(1);
+        while k > 0 && k * step > ctx {
+            k -= 1;
+        }
+        let (lead_out, lead_in) = (k * den, k * step);
+        let start = ctx - lead_in;
+        let mut r = StreamResampler::new(in_rate, out_rate, out_ch);
+        r.prime(&mapped[..start * out_ch]);
+        r.push(&mapped[start * out_ch..]);
+        r.finish(&[]);
+        let out_frames = ((frames - start) as u64 * den as u64).div_ceil(step as u64) as usize;
+        let mut converted = vec![0f32; out_frames * out_ch + out_ch];
+        let n = r.pull(&mut converted);
+        converted.truncate(n);
+        let split = (lead_out * out_ch).min(converted.len());
+        let source = converted.split_off(split);
+        (converted, source)
+    };
+    Ok(PreparedTail {
+        tail: render_tail(plan, &source, out_ch, out_rate),
+        lead,
+        after,
+    })
 }
 
 /// A loudness-only record from a track's decoded head and tail, fingerprinted with the
@@ -225,6 +296,11 @@ mod jni_shims {
     fn shaper<'a>(h: jlong) -> Option<&'a mut IncomingShaper> {
         // SAFETY: as for `chain`, from `shaperNew`.
         (h != 0).then(|| unsafe { &mut *(h as *mut IncomingShaper) })
+    }
+
+    fn resampler<'a>(h: jlong) -> Option<&'a mut StreamResampler> {
+        // SAFETY: as for `chain`, from `resamplerNew`.
+        (h != 0).then(|| unsafe { &mut *(h as *mut StreamResampler) })
     }
 
     #[no_mangle]
@@ -402,6 +478,108 @@ mod jni_shims {
     }
 
     #[no_mangle]
+    pub extern "system" fn Java_app_hocket_playback_NativeDsp_resamplerNew(
+        _env: JNIEnv,
+        _this: JObject,
+        in_rate: jint,
+        out_rate: jint,
+        channels: jint,
+    ) -> jlong {
+        guarded(0, || {
+            Box::into_raw(Box::new(StreamResampler::new(
+                in_rate.max(1) as u32,
+                out_rate.max(1) as u32,
+                channels.max(1) as usize,
+            ))) as jlong
+        })
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_app_hocket_playback_NativeDsp_resamplerFree(
+        _env: JNIEnv,
+        _this: JObject,
+        h: jlong,
+    ) {
+        if h != 0 {
+            // SAFETY: from `resamplerNew`, freed once (Kotlin zeroes its copy).
+            drop(unsafe { Box::from_raw(h as *mut StreamResampler) });
+        }
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_app_hocket_playback_NativeDsp_resamplerPrime(
+        env: JNIEnv,
+        _this: JObject,
+        h: jlong,
+        buf: JByteBuffer,
+        samples: jint,
+    ) {
+        let Some(s) = floats(&env, &buf, samples) else {
+            return;
+        };
+        guarded((), || {
+            if let Some(r) = resampler(h) {
+                r.prime(s);
+            }
+        })
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_app_hocket_playback_NativeDsp_resamplerFinish(
+        env: JNIEnv,
+        _this: JObject,
+        h: jlong,
+        buf: JByteBuffer,
+        samples: jint,
+    ) {
+        let Some(s) = floats(&env, &buf, samples) else {
+            return;
+        };
+        guarded((), || {
+            if let Some(r) = resampler(h) {
+                r.finish(s);
+            }
+        })
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_app_hocket_playback_NativeDsp_resamplerProcess(
+        env: JNIEnv,
+        _this: JObject,
+        h: jlong,
+        input: JByteBuffer,
+        in_samples: jint,
+        output: JByteBuffer,
+        out_offset: jint,
+        out_capacity: jint,
+    ) -> jint {
+        // Two views of one buffer would be aliasing `&mut` slices.
+        if env.get_direct_buffer_address(&input).ok() == env.get_direct_buffer_address(&output).ok()
+        {
+            return 0;
+        }
+        let Some(inp) = floats(&env, &input, in_samples) else {
+            return 0;
+        };
+        let Some(out) = floats(&env, &output, out_capacity) else {
+            return 0;
+        };
+        let Ok(offset) = usize::try_from(out_offset) else {
+            return 0;
+        };
+        if offset > out.len() {
+            return 0;
+        }
+        guarded(0, || match resampler(h) {
+            Some(r) => {
+                r.push(inp);
+                r.pull(&mut out[offset..]) as jint
+            }
+            None => 0,
+        })
+    }
+
+    #[no_mangle]
     pub extern "system" fn Java_app_hocket_playback_NativeDsp_limit(
         env: JNIEnv,
         _this: JObject,
@@ -527,10 +705,11 @@ mod tests {
     fn tail_is_exact_length_at_bs_rate_and_channels() {
         let p = plan();
         let pcm = dc(44_100, 1, 0.5);
-        let tail = prepare_tail(
+        let prepared = prepare_tail(
             &p,
             TailInput {
                 pcm: &pcm,
+                context_ms: 0,
                 in_channels: 1,
                 in_rate: 44_100,
                 out_channels: 2,
@@ -540,12 +719,93 @@ mod tests {
             },
         )
         .unwrap();
+        let tail = prepared.tail;
         assert_eq!(tail.len(), 48_000 * 2);
         // Before the overlap the tail is A at A's gain (−6 dB of 0.5).
         assert!((tail[4_800 * 2] - 0.25).abs() < 0.01, "{}", tail[4_800 * 2]);
         // It has faded out by its end.
         assert!(tail[tail.len() - 1].abs() < 0.01);
         assert!(tail.iter().all(|s| s.is_finite()));
+        // No context: no lead; the lookahead is A's first 10 ms at A's format.
+        assert!(prepared.lead.is_empty());
+        assert_eq!(prepared.after.len(), 441);
+    }
+
+    /// A sine at `rate`, `frames` long, from frame `from` of the same sine.
+    fn sine_at(rate: u32, frames: usize, from: usize, channels: usize) -> Vec<f32> {
+        (from..from + frames)
+            .flat_map(|i| {
+                let s = (2.0 * std::f64::consts::PI * 2_000.0 * i as f64 / f64::from(rate)).sin()
+                    as f32
+                    * 0.25;
+                std::iter::repeat_n(s, channels)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tail_lead_and_after_line_up_with_the_tail_start() {
+        // A at 44.1 kHz from 30 ms before the tail start; B at 48 kHz. A plain fade with no
+        // overlap yet at the start, so the tail's first frames are A itself.
+        let mut p = plan();
+        p.incoming_at_ms = 900;
+        p.handover_ms = 950;
+        let ctx_frames = 1_323; // 30 ms at 44.1 kHz
+        let pcm = sine_at(44_100, 44_100, 0, 2);
+        let prepared = prepare_tail(
+            &p,
+            TailInput {
+                pcm: &pcm,
+                context_ms: 30,
+                in_channels: 2,
+                in_rate: 44_100,
+                out_channels: 2,
+                out_rate: 48_000,
+                audio: None,
+                gain_db: 0.0,
+            },
+        )
+        .unwrap();
+        // The tail starts exactly at the tail start: frame j is A at ctx + j × 44.1 / 48.
+        let want_tail = sine_at(48_000, 200, 1_440, 2);
+        let err =
+            |a: &[f32], b: &[f32]| a.iter().zip(b).fold(0f32, |m, (x, y)| m.max((x - y).abs()));
+        assert!(
+            err(&prepared.tail[..400], &want_tail) < 1e-3,
+            "tail start {}",
+            err(&prepared.tail[..400], &want_tail)
+        );
+        // The lead ends on the frame before it (at least 10 ms of it, in whole 160-frame steps).
+        let lead_frames = prepared.lead.len() / 2;
+        assert_eq!(lead_frames, 480);
+        let want_lead = sine_at(48_000, lead_frames, 1_440 - lead_frames, 2);
+        assert!(err(&prepared.lead, &want_lead) < 1e-3);
+        // The lookahead is A from the tail start at A's rate.
+        assert_eq!(
+            prepared.after,
+            pcm[ctx_frames * 2..(ctx_frames + 441) * 2].to_vec()
+        );
+    }
+
+    #[test]
+    fn same_rate_tail_needs_no_resampling() {
+        let pcm = sine_at(48_000, 48_000, 0, 1);
+        let prepared = prepare_tail(
+            &plan(),
+            TailInput {
+                pcm: &pcm,
+                context_ms: 20,
+                in_channels: 1,
+                in_rate: 48_000,
+                out_channels: 1,
+                out_rate: 48_000,
+                audio: None,
+                gain_db: 0.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(prepared.lead, pcm[480..960].to_vec());
+        assert_eq!(prepared.tail[..100], pcm[960..1_060]);
     }
 
     #[test]
