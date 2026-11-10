@@ -1393,6 +1393,7 @@ dependencies = [
  "proptest",
  "rand 0.9.5",
  "rand_chacha",
+ "realfft",
  "reqwest",
  "rten",
  "rten-tensor",

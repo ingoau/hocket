@@ -1843,6 +1843,17 @@ pub struct LoudnessCurve {
     pub lufs: Vec<f32>,
 }
 
+/// Singing-voice probability (0..1, sung or rapped) sampled every `hop_ms` from `start_ms` (a
+/// track position). Empty when the voice detector didn't run.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VocalCurve {
+    pub start_ms: Ms,
+    pub hop_ms: Ms,
+    pub voice: Vec<f32>,
+}
+
 /// One track's analysis: loudness envelope of head and tail, silence edges and (when a beat
 /// tracker ran) beats and downbeats. JSON, a few KB. Positions are milliseconds into the track.
 #[typeshare]
@@ -1865,6 +1876,12 @@ pub struct AnalysisRecord {
     pub head: LoudnessCurve,
     /// Short-term loudness of the last ~60 s.
     pub tail: LoudnessCurve,
+    /// Voice in the first ~36 s (empty for loudness-only records).
+    #[serde(default)]
+    pub head_vocals: VocalCurve,
+    /// Voice in the last ~36 s (empty for loudness-only records).
+    #[serde(default)]
+    pub tail_vocals: VocalCurve,
     /// `None` without beat analysis or when it isn't trustworthy.
     pub bpm: Option<f32>,
     /// Empty for loudness-only records.

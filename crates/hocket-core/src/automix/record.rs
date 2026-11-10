@@ -6,9 +6,9 @@ use std::cmp::Ordering;
 use crate::api::{AnalysisProducer, AnalysisRecord, SourceFingerprint};
 
 /// Version of every analysis algorithm (beats, loudness curve, silence
-/// edges). Bump on any change that would change a record's contents; records
-/// of any other version are ignored, never migrated.
-pub const ANALYSIS_VERSION: u32 = 1;
+/// edges, voice). Bump on any change that would change a record's contents;
+/// records of any other version are ignored, never migrated.
+pub const ANALYSIS_VERSION: u32 = 2;
 
 /// Duration tolerance between a record's source and the track.
 pub const FINGERPRINT_DURATION_TOLERANCE_MS: u32 = 1_000;
@@ -77,7 +77,8 @@ pub fn has_beats(r: &AnalysisRecord) -> bool {
 
 /// Tidy a record for storage and transport: beats sorted and deduplicated,
 /// downbeats restricted to beats, curve values rounded to 0.1 LU and floored
-/// at −70, non-finite numbers dropped. Planning on a compacted record gives
+/// at −70, voice probabilities rounded to 0.01 within 0..1 (a voice curve
+/// without a hop emptied), non-finite numbers dropped. Planning on a compacted record gives
 /// the same plan on every device.
 pub fn compact(mut r: AnalysisRecord) -> AnalysisRecord {
     r.beats_ms.sort_unstable();
@@ -89,6 +90,18 @@ pub fn compact(mut r: AnalysisRecord) -> AnalysisRecord {
     for curve in [&mut r.head, &mut r.tail] {
         for v in curve.lufs.iter_mut() {
             *v = round_lu(*v);
+        }
+    }
+    for curve in [&mut r.head_vocals, &mut r.tail_vocals] {
+        if curve.hop_ms == 0 {
+            curve.voice.clear();
+        }
+        for v in curve.voice.iter_mut() {
+            *v = if v.is_finite() {
+                (v.clamp(0.0, 1.0) * 100.0).round() / 100.0
+            } else {
+                0.0
+            };
         }
     }
     r.integrated_lufs = r
@@ -204,7 +217,19 @@ mod tests {
         r.head.lufs = vec![-12.345, f32::NEG_INFINITY, -90.0];
         r.beat_confidence = 3.0;
         r.bpm = Some(f32::NAN);
+        r.head_vocals = crate::api::VocalCurve {
+            start_ms: 0,
+            hop_ms: 100,
+            voice: vec![0.123, f32::NAN, 1.5, -0.2],
+        };
+        r.tail_vocals = crate::api::VocalCurve {
+            start_ms: 0,
+            hop_ms: 0,
+            voice: vec![0.5],
+        };
         let c = compact(r);
+        assert_eq!(c.head_vocals.voice, vec![0.12, 0.0, 1.0, 0.0]);
+        assert!(c.tail_vocals.voice.is_empty());
         assert_eq!(c.beats_ms, vec![0, 500, 1000]);
         assert_eq!(c.downbeats_ms, vec![0, 1000]);
         assert_eq!(c.head.lufs, vec![-12.3, -70.0, -70.0]);

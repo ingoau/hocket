@@ -174,6 +174,8 @@ pub fn loudness_record(
         audible_end_ms,
         head: loudness_curve(pcm.head, channels, pcm.rate, 0),
         tail: loudness_curve(pcm.tail, channels, pcm.rate, pcm.tail_start_ms),
+        head_vocals: Default::default(),
+        tail_vocals: Default::default(),
         bpm: None,
         beats_ms: Vec::new(),
         downbeats_ms: Vec::new(),

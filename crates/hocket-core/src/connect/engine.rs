@@ -5460,6 +5460,8 @@ mod tests {
             audible_end_ms: 1_000,
             head: Default::default(),
             tail: Default::default(),
+            head_vocals: Default::default(),
+            tail_vocals: Default::default(),
             bpm: None,
             beats_ms: vec![],
             downbeats_ms: vec![],

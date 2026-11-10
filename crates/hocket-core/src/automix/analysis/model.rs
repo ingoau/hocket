@@ -47,15 +47,19 @@ impl EmbeddedModel {
         })
     }
 
-    /// The mel and beat models. `threads == 0` uses rten's shared pool (one
-    /// thread per physical core, or `RTEN_NUM_THREADS`).
-    pub fn load_pair(threads: usize) -> Result<(Self, Self)> {
-        let pool = (threads > 0).then(|| Arc::new(ThreadPool::with_num_threads(threads)));
+    /// The mel and beat models, run on `pool` (see [`pool`]).
+    pub fn load_pair(pool: Option<Arc<ThreadPool>>) -> Result<(Self, Self)> {
         Ok((
             Self::load(MEL_MODEL, pool.clone())?,
             Self::load(BEAT_MODEL, pool)?,
         ))
     }
+}
+
+/// The inference pool for `threads` (0: `None`, rten's shared pool: one
+/// thread per physical core, or `RTEN_NUM_THREADS`).
+pub fn pool(threads: usize) -> Option<Arc<ThreadPool>> {
+    (threads > 0).then(|| Arc::new(ThreadPool::with_num_threads(threads)))
 }
 
 impl Model for EmbeddedModel {

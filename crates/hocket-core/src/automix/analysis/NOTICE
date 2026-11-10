@@ -44,3 +44,39 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+----------------------------------------------------------------------------
+
+The singing-voice detector is musicnn (Pons & Serra, "musicnn: Pre-trained
+convolutional neural networks for music audio tagging", ISMIR 2019 LBD;
+https://github.com/jordipons/musicnn), its "MTT_musicnn" model (trained on
+MagnaTagATune; the repository reports ROC-AUC 0.907 on its test set).
+
+models/musicnn_mtt.onnx is converted from the MTT_musicnn checkpoint shipped in
+that repository at revision 516acb2a0ff5ef73f64547898e018e793152c506 by
+scripts/musicnn-to-onnx.py (TensorFlow 2.15.1, tf2onnx 1.16.1, opset 13;
+inference mode, sigmoid outputs). The graph and weights are otherwise unchanged.
+
+  sha256 041f3935e981a65cea739842d30c188d3a7d2adf4410955c8668eb3de4a5acab  MTT_musicnn/.data-00000-of-00001
+  sha256 704bf0fcf10f58f3a33781e26722f75bca891d1fe877c46f5f7fd31ad757f105  musicnn_mtt.onnx
+
+The repository, including the checkpoint, is under the ISC License, which
+follows. (MagnaTagATune's audio comes from Magnatune under CC BY-NC-SA; the
+dataset is not redistributed here. Essentia redistributes its own conversions of
+musicnn models under CC BY-NC-SA; those are not used.)
+
+----------------------------------------------------------------------------
+Copyright (c) Music Technology Group, Universitat Pompeu Fabra 2019. Code
+developed by Jordi Pons (www.jordipons.me).
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
