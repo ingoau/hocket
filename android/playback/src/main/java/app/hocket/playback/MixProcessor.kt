@@ -126,11 +126,12 @@ class TransitionMixer(
      * item's end without a seek (a gapless join), else a seek or a fresh start.
      */
     fun startItem(mediaId: String?, positionUs: Long, contiguous: Boolean) {
-        // Until a frame comes, a flush still belongs to the join. When B's format differs from A's
-        // (another sample rate) the sink can't join gaplessly: it drains A, flushes once still naming
-        // A (the new configuration takes over after that flush), then flushes for B without another
-        // end of stream. Taken as a seek, that second flush would leave B unmixed.
-        val joined = contiguous || (joining && itemFrames == 0L)
+        // Until a frame comes, a flush at the item's start still belongs to the join. When B's format
+        // differs from A's (another sample rate) the sink can't join gaplessly: it drains A, flushes
+        // once still naming A (the new configuration takes over after that flush), then flushes for
+        // B without another end of stream. Taken as a seek, that second flush would leave B unmixed.
+        // A seek while the sink waits for A to play out lands elsewhere and stays a seek.
+        val joined = contiguous || (joining && itemFrames == 0L && positionUs < JOIN_START_US)
         joining = joined
         if (joined && mediaId != null && mediaId == item) {
             // The same stream going on: the sink drains and flushes again to resync its timing,
@@ -285,6 +286,9 @@ class TransitionMixer(
     }
 
     private companion object {
+        /** A flush continuing a join starts the item within this (its first sample, after encoder delay). */
+        const val JOIN_START_US = 500_000L
+
         fun floatBuffer(samples: Int): ByteBuffer = ByteBuffer.allocateDirect(samples.coerceAtLeast(1) * 4).order(ByteOrder.nativeOrder())
 
         fun copy(from: ByteBuffer, fromSample: Int, to: ByteBuffer, toSample: Int, samples: Int) {

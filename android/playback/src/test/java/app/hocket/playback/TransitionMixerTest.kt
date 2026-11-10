@@ -182,6 +182,21 @@ class TransitionMixerTest {
     }
 
     @Test
+    fun aSeekWhileTheSinkPlaysOutAIsStillASeek() {
+        control.items["a"] = MixControl.Item(0.0, 1_000)
+        control.items["b"] = MixControl.Item(0.0, null)
+        arm(tail())
+        mixer.startItem("a", 0, contiguous = false)
+        feed(*ones(1_000))
+        // A drained for a format change; a seek into B comes before the sink moved on.
+        mixer.startItem("a", 0, contiguous = true)
+        mixer.startItem("b", 60_000_000, contiguous = false)
+        assertTrue(started.isEmpty())
+        assertTrue(!mixer.mixing)
+        assertEquals(2, dsp.resets)
+    }
+
+    @Test
     fun theLimiterRunsAfterTheSum() {
         control.items["b"] = MixControl.Item(0.0, null)
         arm(tail(value = 0.8f))

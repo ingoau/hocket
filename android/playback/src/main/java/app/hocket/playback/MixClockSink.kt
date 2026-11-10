@@ -30,6 +30,10 @@ class MixClockSink(
     private var lastAtNs = 0L
     private var listener: AudioSink.Listener? = null
 
+    /** Corrections applied so far (each lands at a position reading). Any thread. */
+    @Volatile var applied = 0
+        private set
+
     /** Move the clock back by [us] (forward when negative), from its next reading. Any thread. */
     fun correct(us: Long) {
         requested.addAndGet(us)
@@ -64,6 +68,7 @@ class MixClockSink(
         val add = requested.getAndSet(0)
         if (add != 0L) {
             correctionUs += add
+            applied++
             // Lets the renderer's position go back (its position is otherwise monotonic).
             listener?.onPositionDiscontinuity()
         }

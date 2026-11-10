@@ -158,6 +158,8 @@ class ExoBackend(
          * re-base at the next item, well within how far the sink runs ahead of what is heard.
          */
         private const val MIN_CLOCK_FIX_MS = 100L
+        /** No clock correction this close to B's end ([correctClockAfter]). */
+        private const val CLOCK_FIX_MARGIN_MS = 3_000L
         /** How often the handover is checked against B's position during an overlap. */
         private const val HANDOVER_POLL_MS = 40L
         /** A's tail is decoded and rendered once A is this close to its tail start. */
@@ -349,10 +351,10 @@ class ExoBackend(
     private var clockJob: Job? = null
 
     /**
-     * A clock correction asked of [clockSink] for [key]: until ExoPlayer's position shows it, the
-     * true position is the one that continues from [lastTrue] (at [at], elapsed realtime).
+     * A clock correction of [leadMs] asked of [clockSink] for [key], once the sink has applied more
+     * than [appliedBefore]; [lastExo] is ExoPlayer's position at [at] (elapsed realtime).
      */
-    private class ClockFix(val key: String, var lastTrue: Long, var at: Long)
+    private class ClockFix(val key: String, val leadMs: Long, val appliedBefore: Int, var lastExo: Long, var at: Long)
 
     private var clockFix: ClockFix? = null
     private var queueView: QueueView? = null
@@ -801,16 +803,19 @@ class ExoBackend(
         if (offsetKey != null && offsetKey == player.currentMediaItem?.mediaId) {
             val mapped = exo + offsetMs
             val fix = clockFix?.takeIf { it.key == offsetKey } ?: return mapped.coerceAtLeast(0).toUInt()
-            // The correction lands on the playback thread: whichever reading continues the true
-            // position says whether ExoPlayer's clock has moved yet.
+            // The sink applies the correction on the playback thread and ExoPlayer's position follows
+            // a moment later: the correction counts once it is applied and ExoPlayer's own reading
+            // has stepped by the lead since the last one (read every [HANDOVER_POLL_MS] meanwhile).
             val now = SystemClock.elapsedRealtime()
-            val expected = fix.lastTrue + if (player.isPlaying) ((now - fix.at) * player.playbackParameters.speed).toLong() else 0L
-            if (abs(exo - expected) < abs(mapped - expected)) {
+            val played = if (player.isPlaying) now - fix.at else 0L
+            val moved = exo - fix.lastExo
+            fix.lastExo = exo
+            fix.at = now
+            val stepped = abs(moved - (played / 2 - fix.leadMs)) < abs(moved - played / 2)
+            if ((clockSink?.applied ?: 0) > fix.appliedBefore && stepped) {
                 clearOffset()
                 return exo.toUInt()
             }
-            fix.lastTrue = mapped
-            fix.at = now
             return mapped.coerceAtLeast(0).toUInt()
         }
         return exo.toUInt()
@@ -842,8 +847,20 @@ class ExoBackend(
                 if (onB && pos >= armed.tailLenMs) break
                 awaitWake(seen, if (onB) playTimeFor(armed.tailLenMs - pos) else null)
             }
-            clockFix = ClockFix(armed.to, position().toLong(), SystemClock.elapsedRealtime())
+            // Too close to B's end, the correction could land after the sink moved on to the next
+            // item (whose clock is already right); the re-base there takes the lead out anyway.
+            val left = player.duration - player.currentPosition
+            if (player.duration == C.TIME_UNSET || left < CLOCK_FIX_MARGIN_MS) return@launch
+            val fix = ClockFix(armed.to, lead, sink.applied, player.currentPosition, SystemClock.elapsedRealtime())
+            clockFix = fix
             sink.correct(lead * 1_000)
+            // Read the position often until the step shows, so it is told apart from playback.
+            while (clockFix === fix) {
+                val seen = wake.value
+                position()
+                if (clockFix !== fix) break
+                if (player.isPlaying) delay(HANDOVER_POLL_MS) else awaitWake(seen, null)
+            }
         }
     }
 
