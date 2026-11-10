@@ -1986,6 +1986,9 @@ impl PlaybackBackend for NativeBackend {
         }
         self.send(Cmd::SetExclusive(exclusive))
     }
+    fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        NativeBackend::set_audio_settings(self, settings)
+    }
     fn complete_transition(&self) -> Result<(), BackendError> {
         self.send(Cmd::CompleteTransition)
     }
@@ -2930,7 +2933,9 @@ mod tests {
         audio.eq = crate::audio::dsp::eq::flat();
         audio.eq.enabled = true;
         audio.eq.preamp_db = -6.0;
-        rig.backend.set_audio_settings(&audio).unwrap();
+        // Through the seam the core drives (the trait method, which the
+        // LoggedBackend wrapper forwards), not the inherent one.
+        PlaybackBackend::set_audio_settings(&rig.backend, &audio).unwrap();
         thread::sleep(Duration::from_millis(1_500));
         rig.backend.play().unwrap();
         rig.wait_for(

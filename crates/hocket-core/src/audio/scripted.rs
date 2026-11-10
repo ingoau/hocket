@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::api::{BackendReport, MediaSource, OutputDevice, QueueKey};
+use crate::api::{AudioSettings, BackendReport, MediaSource, OutputDevice, QueueKey};
 use crate::audio::backend::{clamp_volume, BackendError, PlaybackBackend, ReportSink};
 use crate::util::Clock;
 
@@ -67,6 +67,9 @@ pub enum ScriptedCall {
     DiscardPreBuffer,
     SetGapless {
         enabled: bool,
+    },
+    SetAudioSettings {
+        settings: AudioSettings,
     },
     SetOutputDevice {
         id: Option<String>,
@@ -784,6 +787,15 @@ impl PlaybackBackend for ScriptedBackend {
         let mut st = self.state.lock();
         st.log.push(ScriptedCall::SetGapless { enabled });
         st.gapless = enabled;
+        Ok(())
+    }
+
+    fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        let mut st = self.state.lock();
+        st.log.push(ScriptedCall::SetAudioSettings {
+            settings: settings.clone(),
+        });
+        st.gapless = settings.gapless;
         Ok(())
     }
 
