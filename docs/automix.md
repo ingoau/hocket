@@ -378,8 +378,9 @@ The planner is deterministic: same inputs → same plan on every device.
     `store_analysis_record`, which replans the follow-up. One at a time,
     each track tried once per session. `on_analysis_produced` uploads the
     record (see *Sharing records*).
-- **Android** (`ExoBackend.kt`, `MixProcessor.kt`, `PcmDecoder.kt`,
-  `LoudnessRecorder.kt`; Rust side `crates/hocket-android/src/dsp.rs`):
+- **Android** (`ExoBackend.kt`, `MixProcessor.kt`, `OutputRate.kt`,
+  `PcmDecoder.kt`, `LoudnessRecorder.kt`; Rust side
+  `crates/hocket-android/src/dsp.rs`, `resampler.rs`):
   - **DSP**: a Media3 `BaseAudioProcessor` in the main player's
     `DefaultAudioSink` (PCM path only: 16-bit or float in, the same out; no
     float output, no offload) runs hocket-core's `DspChain` per buffer
@@ -400,12 +401,36 @@ The planner is deterministic: same inputs → same plan on every device.
     renderer's `handleDiscontinuity` at every stream change forces a timing
     resync); a contiguous flush of the item already playing is the same
     stream going on and must not end a mix.
-    When B is at another sample rate the sink can't join gaplessly: it
-    drains A, flushes once still naming A (the new configuration takes over
-    after that flush), then flushes for B with no end of stream in between.
-    So every flush between an end of stream and the next frame belongs to
-    the join; without that, every mix between a 44.1 kHz and a 48 kHz track
-    was dropped and A cut off at its clip point.
+    When B is at another channel count the sink can't keep its
+    `AudioTrack`: it drains A, flushes once still naming A (the new
+    configuration takes over after that flush), then flushes for B with no
+    end of stream in between. So every flush between an end of stream and
+    the next frame belongs to the join.
+  - **Output rate** (`OutputRate`): the sink rebuilds its `AudioTrack`
+    whenever its output format changes, and a rebuild plays the old track
+    out to silence before the new one starts: a gap at every join between
+    tracks at different rates, in the middle of A's audio when the join is
+    a mix. So the processor keeps one output rate: the first stream's after
+    a reset when it is 44.1 or 48 kHz, else the device's
+    (`PROPERTY_OUTPUT_SAMPLE_RATE`). A library at one rate is never
+    resampled. Other streams go through a `StreamResampler` (JNI; a
+    Kaiser-windowed sinc with one row of taps per output phase, ~80 dB
+    stopband), after the mixer, so the mixer's sample-exact item accounting
+    is untouched. Output frame `j` is input frame `j × in / out` exactly,
+    and only the kernel's lookahead (~1.5 ms) is held back.
+    - A gapless join at the same format goes on through the same resampler:
+      no seam inside continuous audio. What it held back comes out after
+      the flush, which moves B's clock by ~1.5 ms (and at the very end of
+      playback, with nothing after, those ~1.5 ms are dropped).
+    - When the next stream is at another format (the sink configures it
+      while A plays), A's end of stream lets out A's last frames, with the
+      armed tail's `after` (A from the tail start through A's chain, at A's
+      format) as lookahead when the mix follows. B's resampler is primed
+      with the tail's `lead` (A just before the tail start, at B's format;
+      its frames line up with the tail's, both from one resampler run). So
+      the switch from A to the tail is as seamless as at one rate.
+    - The tail render decodes A from 30 ms before the tail start for that
+      (and so the tail's own first frames have filter history).
   - **Clipping**: an item with `mix_out_ms` gets
     `ClippingConfiguration(endPositionMs)` (on `load` only when its `next`
     has `mix_in`); the processor also drops frames past the clip end
@@ -422,9 +447,9 @@ The planner is deterministic: same inputs → same plan on every device.
     stream reader as a `MediaDataSource`, `file:` from disk, else HTTP with
     the source's headers — probes B's rate and channels from its container,
     and calls `automix_prepare_tail`: a `DspChain` like A's (A's gain, the
-    EQ), channel map, **rubato** resampling to B's rate (the desktop
-    resampler, moved to `audio::resample` behind the feature `resample`,
-    which `hocket-android` enables; pure Rust), then `render_tail`.
+    EQ), channel map, resampling to B's rate (the `StreamResampler`, primed
+    with the 30 ms before the tail start), then `render_tail`; plus the
+    `lead` and `after` above.
   - **Mixing**: at B's first frame after a contiguous join, if the armed
     pair matches and the tail is at B's format, the processor outputs the
     tail's first `incoming_at_ms` at once, then B (its first

@@ -1,6 +1,7 @@
 package app.hocket.playback
 
 import android.content.Context
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -164,6 +165,8 @@ class ExoBackend(
         private const val HANDOVER_POLL_MS = 40L
         /** A's tail is decoded and rendered once A is this close to its tail start. */
         private const val PREPARE_AHEAD_MS = 60_000L
+        /** A decoded before its tail start for the tail render (more than its resampler seam needs). */
+        private const val TAIL_CONTEXT_MS = 30L
         /**
          * A clipped item whose tail isn't ready this long before its clip point is unclipped: the
          * sink and the decoder run up to about a second ahead of what is heard.
@@ -242,7 +245,11 @@ class ExoBackend(
             PlaybackLog.i("AutoMix: ${armed.from} -> ${armed.to} plays unmixed: $reason")
         }
     }
-    private val processor: MixProcessor? = dsp?.let { MixProcessor(it, mixControl, mixListener) }
+    private val processor: MixProcessor? = dsp?.let { MixProcessor(it, mixControl, mixListener, deviceRate()) }
+
+    /** The device's output rate (what [OutputRate] uses when the first item isn't at 44.1 or 48 kHz). */
+    private fun deviceRate(): Int =
+        (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 48_000
 
     private fun renderersFactory() = object : DefaultRenderersFactory(context) {
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink? {
@@ -1084,15 +1091,21 @@ class ExoBackend(
         mixControl.armed = null
     }
 
-    /** Decode A's tail, then DSP, resample to B's format and render it in Rust. Null on failure (logged). */
+    /**
+     * Decode A's tail (from [TAIL_CONTEXT_MS] before it: filter history, and A's audio either side of
+     * the tail start for [OutputRate]), then DSP, resample to B's format and render it in Rust. Null
+     * on failure (logged).
+     */
     private fun renderTail(a: CoreMediaSource, b: CoreMediaSource, armed: MixControl.Armed, settings: String?, cancelled: () -> Boolean): MixControl.Tail? = try {
         val started = System.nanoTime()
         val decoder = PcmDecoder(streams)
-        val pcm = decoder.decode(a.url, a.headers, armed.tailStartMs, armed.tailSourceMs + 50, cancelled)
+        val from = (armed.tailStartMs - TAIL_CONTEXT_MS).coerceAtLeast(0)
+        val context = armed.tailStartMs - from
+        val pcm = decoder.decode(a.url, a.headers, from, context + armed.tailSourceMs + 50, cancelled)
         val (rate, channels) = decoder.probe(b.url, b.headers)
-        val samples = ffi.prepareTail(armed.planJson, pcm, channels, rate, settings, a.gainDb)
+        val r = ffi.prepareTail(armed.planJson, pcm, context.toInt(), channels, rate, settings, a.gainDb)
         PlaybackLog.i("AutoMix: tail ${a.key} -> ${b.key} ready (${pcm.durationMs} ms of A at ${pcm.rate} Hz -> ${armed.tailLenMs} ms at $rate Hz) in ${(System.nanoTime() - started) / 1_000_000} ms")
-        MixControl.Tail(samples, rate, channels)
+        MixControl.Tail(r.tail, rate, channels, r.lead, r.after, pcm.rate, pcm.channels)
     } catch (e: InterruptedException) {
         null
     } catch (e: Throwable) {

@@ -19,7 +19,8 @@ class LoudnessRecorderTest {
     private object NoFfi : AutomixFfi {
         override fun usable(record: AnalysisRecord, durationMs: Long) = false
         override fun loudnessRecord(head: PcmDecoder.Pcm, tail: PcmDecoder.Pcm, tailStartMs: Long, durationMs: Long, transcoded: Boolean): AnalysisRecord? = null
-        override fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double) = FloatArray(0)
+        override fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, contextMs: Int, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double) =
+            RenderedTail(FloatArray(0), FloatArray(0), FloatArray(0))
     }
 
     @Test
