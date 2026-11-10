@@ -438,7 +438,20 @@ The planner is deterministic: same inputs → same plan on every device.
     (checked every 40 ms). Until then reports name A at `tail_start_ms` +
     the tail played (at the tail's average speed) and A stays in the
     playlist; after it B's position is ExoPlayer's + `incoming_from_ms −
-    incoming_at_ms` until the next seek.
+    incoming_at_ms`, until the next seek or the clock correction below.
+  - **Clock correction**: ExoPlayer's clock counts the sink's output, so
+    after a mix it runs `incoming_at_ms − incoming_from_ms` ahead of B. Left
+    alone, the next item would inherit that: ExoPlayer moves on by the lead
+    too early (or late), and the renderer, whose position never goes back,
+    holds the next item's position at the lead until real time catches up
+    (seen as a 48 kHz B reported 14 s in at its start). So once the tail has
+    sounded (B at `tail_len_ms`), a lead of 100 ms or more is taken out of
+    the clock by `MixClockSink` (a `ForwardingAudioSink`), signalled as a
+    position discontinuity so the renderer accepts it. The correction lasts
+    until the sink re-bases its own clock at the next item's first frame
+    (the raw clock steps by the lead it carried) or a flush. The backend
+    keeps adding the offset until ExoPlayer's position shows the step, so the
+    reported position stays continuous.
   - Seek before the handover goes back to A (B stays next, the tail stays
     armed unless the target is past the tail start); after it B seeks.
     `complete_transition` hands over and seeks B to its position, which
