@@ -18,10 +18,9 @@ use crate::connect::{PeerId, SessionOp, SyncPoint};
 use crate::sim::clock::{quantize, DeviceClock};
 use crate::util::Clock;
 
-/// Scrobble rule: 50% or 4 minutes, whichever first (Last.fm).
-pub fn scrobble_threshold_ms(duration_ms: Ms) -> Ms {
-    (duration_ms / 2).min(240_000)
-}
+/// Scrobble rule: 50% or 4 minutes, whichever first (Last.fm). One
+/// definition, shared with the real scrobbler.
+pub use crate::outbox::scrobbler::threshold_ms as scrobble_threshold_ms;
 
 /// Tracks the simulated library knows about, with durations.
 #[derive(Debug, Clone, Default)]
