@@ -547,11 +547,11 @@ async fn downloader(
                     pos += bytes.len() as u64;
                 }
                 Some(Err(e)) => {
+                    // Not final even when cancelled: the stream reader also
+                    // cancels handles it evicts as idle (a long pause), and
+                    // a fresh fetch recovers from that. After a real stop the
+                    // refetch itself fails as cancelled and ends us.
                     tracing::warn!(target: "hocket::audio::http", error = %e, "body stream error");
-                    if is_final_fetch_error(&e) {
-                        record_fetch_error(&shared, e);
-                        return;
-                    }
                     break;
                 }
                 None => {
@@ -770,7 +770,7 @@ mod tests {
     }
 
     /// Serves one chunk, then the body fails as cancelled and every further
-    /// fetch returns `Cancelled` too — as when the downloader is torn down.
+    /// fetch returns `Cancelled` too — as when the stream reader stops.
     struct CancelFetcher {
         data: Arc<Vec<u8>>,
         chunk: usize,
@@ -830,9 +830,10 @@ mod tests {
         let mut next = vec![0u8; 16];
         let err = src.read(&mut next).unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
-        // And the downloader stopped instead of retrying: only the first
-        // fetch (whose body was cancelled) was made.
-        assert_eq!(requests.lock().len(), 1, "{:?}", requests.lock());
+        // A cancelled body is retried once (an idle-evicted handle recovers
+        // that way); the refetch failing as cancelled ends the downloader.
+        let made = requests.lock().clone();
+        assert_eq!(made.len(), 2, "{made:?}");
     }
 
     /// Serves the first chunk, then the body stalls forever.
