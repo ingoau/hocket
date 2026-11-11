@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::api::{MediaSource, OutputDevice};
+use crate::api::{AudioSettings, MediaSource, OutputDevice};
 use crate::audio::backend::{BackendError, PlaybackBackend};
 use crate::core::stream_reader::STREAM_URL_PREFIX;
 
@@ -197,6 +197,21 @@ impl PlaybackBackend for LoggedBackend {
         )
     }
 
+    fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        // One call carries what the piecewise methods log separately, so
+        // log it as one; nothing here names a source or a device.
+        logged(
+            || {
+                format!(
+                    "audio settings (gapless {}, exclusive {})",
+                    if settings.gapless { "on" } else { "off" },
+                    if settings.exclusive { "on" } else { "off" },
+                )
+            },
+            self.inner.set_audio_settings(settings),
+        )
+    }
+
     fn name(&self) -> &'static str {
         self.inner.name()
     }
@@ -341,6 +356,13 @@ mod tests {
             self.0.lock().push(format!("exclusive {e}"));
             Ok(())
         }
+        fn set_audio_settings(&self, s: &AudioSettings) -> Result<(), BackendError> {
+            self.0.lock().push(format!(
+                "audio settings eq {} {}",
+                s.eq.enabled, s.eq.preamp_db
+            ));
+            Ok(())
+        }
         fn name(&self) -> &'static str {
             "recorder"
         }
@@ -398,6 +420,10 @@ mod tests {
         ));
         assert!(b.output_devices().is_empty());
         b.set_exclusive(true).unwrap();
+        let mut audio = crate::core::default_audio_settings();
+        audio.eq.enabled = true;
+        audio.eq.preamp_db = -6.0;
+        b.set_audio_settings(&audio).unwrap();
         b.stop().unwrap();
         assert_eq!(b.name(), "recorder");
         assert_eq!(
@@ -416,6 +442,7 @@ mod tests {
                 "output Some(\"hdmi\")",
                 "devices",
                 "exclusive true",
+                "audio settings eq true -6",
                 "stop",
             ]
         );

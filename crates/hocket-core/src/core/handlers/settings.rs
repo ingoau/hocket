@@ -266,21 +266,20 @@ impl Actor {
     }
 
     pub(crate) fn apply_audio_to_backend(&mut self) {
-        if let Err(e) = self.backend.set_gapless(self.audio.gapless) {
-            self.log("debug", format!("set_gapless: {e}"));
-        }
+        // DSP chain (ReplayGain, EQ, normalisation) plus gapless and
+        // exclusive go as one update, so a backend that can retune
+        // mid-stream applies them to the playing track right away; one
+        // that can't still takes the pieces it supports, and the DSP
+        // settings apply with the next load.
+        // Device first: exclusive then opens the device it applies to.
         if let Err(e) = self
             .backend
             .set_output_device(self.audio.output_device.clone())
         {
             self.log("debug", format!("set_output_device: {e}"));
         }
-        if let Err(e) = self.backend.set_exclusive(self.audio.exclusive) {
-            self.log("debug", format!("set_exclusive: {e}"));
-        }
-        #[cfg(feature = "native-audio")]
-        {
-            let _ = &self.audio;
+        if let Err(e) = self.backend.set_audio_settings(&self.audio) {
+            self.log("debug", format!("set_audio_settings: {e}"));
         }
         // ReplayGain/preamp/normalisation reach the backend through the
         // per-item gain, so the loaded items are refreshed.

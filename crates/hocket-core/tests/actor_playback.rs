@@ -901,6 +901,43 @@ async fn a_volume_saved_as_a_linear_gain_keeps_its_loudness() {
     assert_eq!(snapshot_volume(&t).await, 0.9);
 }
 
+/// An EQ or normalisation change reaches the backend as one settings
+/// update, so a backend that retunes mid-stream applies it to the playing
+/// track without a restart.
+#[tokio::test]
+async fn an_audio_settings_change_reaches_the_backend_while_playing() {
+    let t = synced_core("eq").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+
+    let mut settings = hocket_core::core::default_audio_settings();
+    settings.eq.enabled = true;
+    settings.eq.preamp_db = -6.0;
+    settings.normalisation = true;
+    t.run(Command::SetAudioSettings {
+        settings: settings.clone(),
+    })
+    .await;
+
+    assert!(
+        t.backend.log().iter().any(|c| matches!(
+            c,
+            ScriptedCall::SetAudioSettings { settings: s }
+                if s.eq.enabled
+                    && s.eq.preamp_db == -6.0
+                    && s.normalisation
+                    && s.gapless == settings.gapless
+                    && s.exclusive == settings.exclusive
+        )),
+        "no settings update reached the backend: {:?}",
+        t.backend.log()
+    );
+}
+
 #[tokio::test]
 async fn mute_survives_clearing_the_queue() {
     let t = synced_core("mute").await;

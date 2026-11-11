@@ -14,7 +14,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::api::{BackendReport, MediaSource, OutputDevice};
+use crate::api::{AudioSettings, BackendReport, MediaSource, OutputDevice};
 
 /// Where a backend posts its reports. Must be cheap and non-blocking; the
 /// actor's implementation pushes onto an unbounded channel.
@@ -106,6 +106,21 @@ pub trait PlaybackBackend: Send + Sync {
     /// rate where the device supports it. Ignored by backends that can't.
     fn set_exclusive(&self, _exclusive: bool) -> Result<(), BackendError> {
         Ok(())
+    }
+
+    /// Apply a full audio-settings change to a running backend: the DSP
+    /// chain (ReplayGain, EQ, normalisation) plus gapless and exclusive, so
+    /// the playing track follows the settings within a block or two. The
+    /// default takes the pieces a backend updates one by one; a backend
+    /// that can't retune its DSP chain mid-stream applies those settings
+    /// with the next load instead.
+    fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        // Both pieces are attempted even when one fails: the caller logs
+        // the error, and a backend that rejects one piece should still
+        // take the other.
+        let gapless = self.set_gapless(settings.gapless);
+        let exclusive = self.set_exclusive(settings.exclusive);
+        gapless.and(exclusive)
     }
 
     /// Human-readable backend name for diagnostics.

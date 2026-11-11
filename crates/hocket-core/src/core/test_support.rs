@@ -587,6 +587,13 @@ impl PlaybackBackend for RecordingBackend {
     fn set_gapless(&self, enabled: bool) -> Result<(), crate::audio::backend::BackendError> {
         self.inner.set_gapless(enabled)
     }
+
+    fn set_audio_settings(
+        &self,
+        settings: &crate::api::AudioSettings,
+    ) -> Result<(), crate::audio::backend::BackendError> {
+        self.inner.set_audio_settings(settings)
+    }
     fn set_output_device(
         &self,
         id: Option<String>,

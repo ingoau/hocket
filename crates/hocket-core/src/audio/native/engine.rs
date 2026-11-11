@@ -1550,9 +1550,16 @@ impl Engine {
             self.next_key = Some(b.key().clone());
             self.next = Some(b);
         }
+        // Settings changed during the transition reached only B's chain:
+        // carry them over, and re-render the tail made with the old ones.
+        let settings = self.dsp.settings().clone();
         self.dsp = a_dsp;
         self.current = Some(a);
         self.tail = TailState::Ready(t.tail);
+        if &settings != self.dsp.settings() {
+            self.dsp.set_settings(settings);
+            self.drop_tail();
+        }
         if let Some(n) = t.held_next {
             self.set_next(n);
         }
@@ -1985,6 +1992,9 @@ impl PlaybackBackend for NativeBackend {
             let _ = preview.set_exclusive(exclusive);
         }
         self.send(Cmd::SetExclusive(exclusive))
+    }
+    fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        NativeBackend::set_audio_settings(self, settings)
     }
     fn complete_transition(&self) -> Result<(), BackendError> {
         self.send(Cmd::CompleteTransition)
@@ -2930,7 +2940,9 @@ mod tests {
         audio.eq = crate::audio::dsp::eq::flat();
         audio.eq.enabled = true;
         audio.eq.preamp_db = -6.0;
-        rig.backend.set_audio_settings(&audio).unwrap();
+        // Through the seam the core drives (the trait method, which the
+        // LoggedBackend wrapper forwards), not the inherent one.
+        PlaybackBackend::set_audio_settings(&rig.backend, &audio).unwrap();
         thread::sleep(Duration::from_millis(1_500));
         rig.backend.play().unwrap();
         rig.wait_for(
