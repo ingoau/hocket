@@ -279,8 +279,9 @@ pub fn album_gain_db(tracks: &[(Option<f64>, u64)]) -> Option<f64> {
     Some(REPLAYGAIN_REFERENCE_LUFS - lufs)
 }
 
-/// Decode a local file and measure it (feature `native-audio`). This is what
-/// the downloads subsystem calls when a transcode dropped the tags.
+/// Decode a local file and measure it (feature `decode`). This is what the
+/// downloads subsystem's background scan runs for tracks the server left
+/// without ReplayGain tags.
 #[cfg(feature = "decode")]
 pub fn compute_replaygain(
     path: &std::path::Path,

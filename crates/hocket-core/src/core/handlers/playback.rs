@@ -56,17 +56,22 @@ impl Actor {
             .doc()
             .and_then(|d| d.context.as_ref())
             .is_some_and(|c| matches!(c.kind, ContextKind::Album { .. }));
-        let download_gain = self
+        let download = self
             .downloads
-            .gain(&track.server_id, &track.id)
+            .gain_with_peak(&track.server_id, &track.id)
             .ok()
             .flatten();
-        let rg = track.replay_gain.clone().or_else(|| {
-            download_gain.map(|g| ReplayGain {
-                track_gain_db: Some(g),
-                ..Default::default()
-            })
-        });
+        // The measured gain fills what the server left out: a partial tag
+        // set (album gain, a bare peak) would otherwise shadow the
+        // on-device scan of the track.
+        let mut rg = track.replay_gain.clone().unwrap_or_default();
+        if rg.track_gain_db.is_none() {
+            if let Some((gain_db, peak)) = download {
+                rg.track_gain_db = Some(gain_db);
+                rg.track_peak = rg.track_peak.or(peak);
+            }
+        }
+        let rg = (rg != ReplayGain::default()).then_some(rg);
         source.gain_db = gain_for_track(
             rg.as_ref(),
             self.audio.replay_gain,

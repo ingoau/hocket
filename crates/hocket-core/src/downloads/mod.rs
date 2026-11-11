@@ -10,7 +10,11 @@
 //!   fetches them through a [`SubsonicApi`] with bounded concurrency and files
 //!   out-of-space as a loud `Problem`. [`Downloads::reconcile_playlist`] keeps
 //!   a playlist pin in step when the playlist changes (enqueues fetches and
-//!   removals). [`Downloads::set_gain`] stores gain computed at download time.
+//!   removals). [`Downloads::set_gain`] stores gain computed at download
+//!   time; when the server provides none, a background worker measures the
+//!   finished file on this device ([`GainScanner`], EBU R128, one thread)
+//!   and stores the result — for downloads and for complete stream-cache
+//!   entries alike, so levelling works for untagged tracks.
 //!   A track already complete in the stream cache (the pin's profile or the
 //!   original) is moved into downloads instead of fetched again.
 //! - Stream cache (see `stream_cache.rs`): complete and partial entries
@@ -38,9 +42,9 @@ pub mod receivers;
 pub mod spans;
 mod stream_cache;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 pub use stream_cache::{
     eviction_score, CacheRow, CacheSignal, EntryKey, EvictFacts, MergeOutcome, Traffic,
@@ -100,6 +104,39 @@ fn dir_bytes(path: &Path) -> f64 {
             }
         })
         .sum()
+}
+
+/// Measures ReplayGain of a finished file, off the playback path: the
+/// download or stream-cache entry of a track the server left without a
+/// track gain. Injected so tests substitute a fake; the real one needs the
+/// Symphonia decoder (feature `decode`, included by `native-audio` and
+/// `automix-analysis`).
+pub trait GainScanner: Send + Sync + 'static {
+    /// `(track gain dB, peak)` for the file, or `None` when it cannot be
+    /// decoded (unsupported format, unreadable). Digital silence measures
+    /// 0 dB, not `None`.
+    fn scan(&self, path: &Path) -> Option<(f64, f64)>;
+}
+
+/// The real scanner: a full EBU R128 pass with the native decoder.
+struct NativeGainScanner;
+
+impl GainScanner for NativeGainScanner {
+    fn scan(&self, path: &Path) -> Option<(f64, f64)> {
+        #[cfg(feature = "decode")]
+        match crate::audio::dsp::loudness::compute_replaygain(path) {
+            Ok(rg) => rg.track_gain_db.map(|g| (g, rg.track_peak.unwrap_or(0.0))),
+            Err(e) => {
+                tracing::debug!(error = %e, path = %path.display(), "measuring ReplayGain");
+                None
+            }
+        }
+        #[cfg(not(feature = "decode"))]
+        {
+            let _ = path;
+            None
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -233,6 +270,12 @@ struct Inner {
     traffic: Traffic,
     /// The traffic totals last persisted.
     traffic_saved: parking_lot::Mutex<Option<TrafficTotals>>,
+    /// Measures ReplayGain for tracks the server left without a track gain.
+    gain_scanner: RwLock<Arc<dyn GainScanner>>,
+    /// Queued (server, track) scans for the worker thread.
+    gain_tx: mpsc::Sender<(String, String)>,
+    /// What the worker has not taken yet (dedup for repeat completions).
+    gain_queued: parking_lot::Mutex<HashSet<(String, String)>>,
 }
 
 /// `(server_id, track_id)`: a track whose offline state may have changed.
@@ -293,6 +336,7 @@ impl Downloads {
         }) {
             tracing::warn!(error = %e, "resetting interrupted downloads");
         }
+        let (gain_tx, gain_rx) = mpsc::channel();
         Downloads {
             inner: Arc::new(Inner {
                 db,
@@ -310,10 +354,120 @@ impl Downloads {
                 cache_use: parking_lot::Mutex::new(CacheUse::default()),
                 traffic: Traffic::default(),
                 traffic_saved: parking_lot::Mutex::new(None),
+                gain_scanner: RwLock::new(Arc::new(NativeGainScanner)),
+                gain_tx,
+                gain_queued: parking_lot::Mutex::new(HashSet::new()),
             }),
         }
+        .spawn_gain_worker(gain_rx)
         .sweep_stream_cache()
         .reconcile_at_start()
+    }
+
+    /// Replace the ReplayGain measurement (tests inject a fake). The
+    /// catch-up queue goes round again: files whose first scan ran with the
+    /// replaced scanner get another chance.
+    pub fn with_gain_scanner(self, scanner: Arc<dyn GainScanner>) -> Self {
+        *self.inner.gain_scanner.write() = scanner;
+        self.schedule_catchup_scans();
+        self
+    }
+
+    /// The scan worker: one file at a time on its own thread, nothing on
+    /// the playback or pin path. Exits when the `Downloads` is gone.
+    fn spawn_gain_worker(self, rx: mpsc::Receiver<(String, String)>) -> Self {
+        let weak = Arc::downgrade(&self.inner);
+        if let Err(e) = std::thread::Builder::new()
+            .name("replaygain-scan".into())
+            .spawn(move || {
+                while let Ok((server_id, track_id)) = rx.recv() {
+                    let Some(inner) = weak.upgrade() else {
+                        break;
+                    };
+                    inner
+                        .gain_queued
+                        .lock()
+                        .remove(&(server_id.clone(), track_id.clone()));
+                    Downloads { inner }.run_gain_scan(&server_id, &track_id);
+                }
+            })
+        {
+            tracing::warn!(error = %e, "spawning the ReplayGain scan worker");
+        }
+        self
+    }
+
+    /// Queue an on-device ReplayGain scan for the track: when its finished
+    /// file (download or complete stream-cache entry) is the only gain we
+    /// will ever have, the worker measures it and stores the result.
+    /// Deduplicated while a scan is already pending; a send failure (the
+    /// worker never started) does not leave the key stuck in the set.
+    fn schedule_gain_scan(&self, server_id: &str, track_id: &str) {
+        let key = (server_id.to_string(), track_id.to_string());
+        if self.inner.gain_queued.lock().insert(key.clone())
+            && self.inner.gain_tx.send(key.clone()).is_err()
+        {
+            self.inner.gain_queued.lock().remove(&key);
+        }
+    }
+
+    /// The worker's step: measure the track's finished file once and store
+    /// the result. Skips when the server already provides a track gain, a
+    /// value is already stored, or there is no complete file to measure.
+    fn run_gain_scan(&self, server_id: &str, track_id: &str) {
+        let server_gain: Option<f64> = self
+            .inner
+            .db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT rg_track_gain FROM tracks WHERE server_id = ?1 AND id = ?2",
+                    params![server_id, track_id],
+                    |r| r.get::<_, Option<f64>>(0),
+                )
+                .optional()?
+                .flatten())
+            })
+            .unwrap_or(None);
+        if server_gain.is_some() || self.gain(server_id, track_id).unwrap_or(None).is_some() {
+            return;
+        }
+        // The pin's file when there is one, else the newest complete cache
+        // entry — the same track either way, only the format differs.
+        let pin_path = self.downloaded_path(server_id, track_id).unwrap_or(None);
+        let file = pin_path.clone().or_else(|| {
+            self.inner
+                .db
+                .with_conn(|c| {
+                    Ok(c.query_row(
+                        "SELECT path FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND complete = 1 ORDER BY last_used_at DESC LIMIT 1",
+                        params![server_id, track_id],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()?)
+                })
+                .unwrap_or(None)
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+        });
+        let Some(file) = file else {
+            return;
+        };
+        let Some((gain_db, peak)) = self.inner.gain_scanner.read().scan(&file) else {
+            tracing::debug!(path = %file.display(), "ReplayGain scan could not decode the file");
+            return;
+        };
+        tracing::info!(track = %track_id, gain_db, peak, "stored a measured ReplayGain");
+        if pin_path.is_some() {
+            let _ = self.set_gain(server_id, track_id, Some(gain_db), Some(peak));
+        } else {
+            let _ = self.inner.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE cache_entries SET gain_db = ?3, peak = ?4 WHERE server_id = ?1 AND track_id = ?2 AND path = ?5 AND complete = 1",
+                    params![server_id, track_id, gain_db, peak, file.to_string_lossy().as_ref()],
+                )?;
+                Ok(())
+            });
+        }
     }
 
     /// Startup: drop temp files a previous process left mid-write, and
@@ -361,7 +515,30 @@ impl Downloads {
             tracing::warn!(error = %e, "reconciling the stream cache");
         }
         self.load_traffic();
+        self.schedule_catchup_scans();
         self
+    }
+
+    /// The scan queue lives in memory: a process that died between a file's
+    /// completion and its scan loses the measurement. Completed files
+    /// without a stored gain go back in; the worker's own skip checks make
+    /// the extra entries cheap (server-tagged tracks are dropped there).
+    fn schedule_catchup_scans(&self) {
+        let Ok(candidates) = self.inner.db.with_conn(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT server_id, track_id FROM pin_tracks WHERE state = 'done' AND gain_db IS NULL
+                 UNION
+                 SELECT server_id, track_id FROM cache_entries WHERE complete = 1 AND gain_db IS NULL",
+            )?;
+            let rows =
+                st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        }) else {
+            return;
+        };
+        for (server_id, track_id) in candidates {
+            self.schedule_gain_scan(&server_id, &track_id);
+        }
     }
 
     pub fn db(&self) -> &Db {
@@ -705,7 +882,8 @@ impl Downloads {
         self.plan(server_id, &target, transcoded)
     }
 
-    /// Gain computed at download time (from the audio module's tag reader),
+    /// Gain for the track's downloads: computed at download time (from the
+    /// server, or the audio module's on-device scan of the finished file),
     /// stored on every pin row for the track.
     pub fn set_gain(
         &self,
@@ -722,17 +900,41 @@ impl Downloads {
         })
     }
 
-    /// Stored download gain for a track, if any.
-    pub fn gain(&self, server_id: &str, track_id: &str) -> DbResult<Option<f64>> {
+    /// Stored gain for a track: a download's value, else one measured from
+    /// a complete stream-cache entry (the on-device ReplayGain scan), so
+    /// levelling also works for untagged tracks that were never pinned.
+    /// The original beats a transcoded variant when both were measured.
+    pub fn gain_with_peak(
+        &self,
+        server_id: &str,
+        track_id: &str,
+    ) -> DbResult<Option<(f64, Option<f64>)>> {
+        let pin = self.inner.db.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT gain_db, peak FROM pin_tracks WHERE server_id = ?1 AND track_id = ?2 AND gain_db IS NOT NULL LIMIT 1",
+                params![server_id, track_id],
+                |r| Ok((r.get::<_, f64>(0)?, r.get::<_, Option<f64>>(1)?)),
+            )
+            .optional()?)
+        })?;
+        if pin.is_some() {
+            return Ok(pin);
+        }
         self.inner.db.with_conn(|c| {
             Ok(c.query_row(
-                "SELECT gain_db FROM pin_tracks WHERE server_id = ?1 AND track_id = ?2 AND gain_db IS NOT NULL LIMIT 1",
+                "SELECT gain_db, peak FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND complete = 1 AND gain_db IS NOT NULL ORDER BY (profile = '') DESC, last_used_at DESC LIMIT 1",
                 params![server_id, track_id],
-                |r| r.get::<_, Option<f64>>(0),
+                |r| Ok((r.get::<_, f64>(0)?, r.get::<_, Option<f64>>(1)?)),
             )
-            .optional()?
-            .flatten())
+            .optional()?)
         })
+    }
+
+    /// Stored gain for a track, if any.
+    pub fn gain(&self, server_id: &str, track_id: &str) -> DbResult<Option<f64>> {
+        Ok(self
+            .gain_with_peak(server_id, track_id)?
+            .map(|(gain_db, _)| gain_db))
     }
 
     /// Path of a completed download for the track, if the file exists.
@@ -884,6 +1086,11 @@ impl Downloads {
                     Ok(())
                 })?;
                 self.refresh_offline(server_id, track_id)?;
+                // No server-provided track gain: measure the finished file
+                // in the background, so levelling works for untagged tracks.
+                if rg.and_then(|g| g.track_gain_db).is_none() {
+                    self.schedule_gain_scan(server_id, track_id);
+                }
                 Ok(out.bytes)
             }
             Err(e) => {
@@ -980,6 +1187,12 @@ impl Downloads {
                 self.drop_row(&row, &mut changed)?;
             }
             tracing::info!(track = %track.id, moved, "pinned from the stream cache, no download");
+            // A measured gain follows the file into the pins (a rescan of
+            // the same bytes would only repeat the work): stored now, the
+            // pin update's COALESCE keeps it.
+            if row.gain_db.is_some() {
+                let _ = self.set_gain(server_id, &track.id, row.gain_db, row.peak);
+            }
             return Ok(Some((
                 dest,
                 suffix,
@@ -1906,9 +2119,43 @@ mod tests {
         server: FakeServer,
         dl: Downloads,
         storage: Arc<FixedStorage>,
+        scanner: Arc<FakeScanner>,
+    }
+
+    /// Counts the files it is asked to measure and reports a fixed result.
+    struct FakeScanner {
+        result: Option<(f64, f64)>,
+        calls: parking_lot::Mutex<Vec<String>>,
+    }
+
+    impl FakeScanner {
+        fn silent() -> Arc<Self> {
+            Arc::new(Self {
+                result: None,
+                calls: parking_lot::Mutex::new(vec![]),
+            })
+        }
+
+        fn measuring(gain_db: f64, peak: f64) -> Arc<Self> {
+            Arc::new(Self {
+                result: Some((gain_db, peak)),
+                calls: parking_lot::Mutex::new(vec![]),
+            })
+        }
+    }
+
+    impl GainScanner for FakeScanner {
+        fn scan(&self, path: &Path) -> Option<(f64, f64)> {
+            self.calls.lock().push(path.display().to_string());
+            self.result
+        }
     }
 
     fn fixture() -> Fixture {
+        fixture_with(FakeScanner::silent())
+    }
+
+    fn fixture_with(scanner: Arc<FakeScanner>) -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open_in_memory().unwrap();
         let server = FakeServer::new("srv", "alice");
@@ -1973,14 +2220,41 @@ mod tests {
             &dir.path().join("data"),
             &dir.path().join("cache"),
             Platform::Linux,
-        );
+        )
+        .with_gain_scanner(scanner.clone());
         Fixture {
             dir,
             db,
             server,
             dl,
             storage,
+            scanner,
         }
+    }
+
+    /// A track the server left without ReplayGain, plus its media bytes.
+    fn add_untagged_track(f: &Fixture, id: &str) {
+        let mut c = FakeServer::song(id, &format!("Track {id}"), "al0", "ar", 100.0);
+        c.size = Some(1000.0);
+        f.server.add_song(c.clone());
+        f.server.set_media(id, vec![b'x'; 1000]);
+        f.db.upsert_tracks(
+            &[crate::subsonic::convert::track_from_child("srv", &c)],
+            &[],
+            1,
+        )
+        .unwrap();
+    }
+
+    /// The scan runs on its own thread: poll for the stored gain.
+    fn wait_for_gain(f: &Fixture, track: &str) -> Option<f64> {
+        for _ in 0..400 {
+            if let Some(g) = f.dl.gain("srv", track).unwrap() {
+                return Some(g);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        f.dl.gain("srv", track).unwrap()
     }
 
     async fn run_job(f: &Fixture, spec: JobSpec) -> api::Job {
@@ -2039,6 +2313,175 @@ mod tests {
         assert_eq!(f.dl.downloads_bytes().unwrap(), 3000.0);
         // download URL, never a stream/transcode
         assert!(f.server.calls().iter().all(|c| c != "stream"));
+    }
+
+    #[tokio::test]
+    async fn untagged_download_measures_replaygain_in_background() {
+        let f = fixture_with(FakeScanner::measuring(-7.5, 0.7));
+        add_untagged_track(&f, "u1");
+        let target = PinTarget::Track { id: "u1".into() };
+        run_job(&f, f.dl.pin("srv", &target, false).unwrap().unwrap()).await;
+        assert_eq!(wait_for_gain(&f, "u1"), Some(-7.5));
+        // The measured file is the pin's download, measured once, with peak.
+        let p = f.dl.downloaded_path("srv", "u1").unwrap().unwrap();
+        let calls = f.scanner.calls.lock().clone();
+        assert_eq!(calls, vec![p.display().to_string()]);
+        let peak: Option<f64> = f
+            .db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT peak FROM pin_tracks WHERE server_id = 'srv' AND track_id = 'u1' LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten())
+            })
+            .unwrap();
+        assert_eq!(peak, Some(0.7));
+        // The resolved source levels with the measured gain.
+        let track = f.db.track("u1").unwrap().unwrap();
+        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        assert_eq!(s.gain_db, -7.5);
+    }
+
+    #[tokio::test]
+    async fn server_reported_gain_needs_no_scan() {
+        let f = fixture_with(FakeScanner::measuring(-7.5, 0.7));
+        run_job(
+            &f,
+            f.dl.pin("srv", &PinTarget::Track { id: "t0".into() }, false)
+                .unwrap()
+                .unwrap(),
+        )
+        .await;
+        // Give a wrongly scheduled scan its chance to run.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(f.dl.gain("srv", "t0").unwrap(), Some(-3.5));
+        assert!(
+            f.scanner.calls.lock().is_empty(),
+            "the server provides a track gain"
+        );
+    }
+
+    #[test]
+    fn complete_stream_cache_entry_measured_for_untagged_track() {
+        let f = fixture_with(FakeScanner::measuring(-6.0, 0.5));
+        add_untagged_track(&f, "u2");
+        let row =
+            f.dl.cache_begin(
+                "srv",
+                "u2",
+                None,
+                Some("flac"),
+                Some(1000),
+                Some("audio/flac"),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        let key = row.key();
+        write_at(&row.path, 0, &[1u8; 1000]);
+        let out =
+            f.dl.cache_merge(&key, &spans::SpanSet::of(0, 1000), Some(1000), None)
+                .unwrap();
+        assert!(out.complete);
+        assert_eq!(wait_for_gain(&f, "u2"), Some(-6.0));
+        // Stored on the cache entry: no pin rows exist for this track.
+        let (gain_db, peak): (Option<f64>, Option<f64>) = f
+            .db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT gain_db, peak FROM cache_entries WHERE server_id = 'srv' AND track_id = 'u2'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!((gain_db, peak), (Some(-6.0), Some(0.5)));
+        let pinned: i64 =
+            f.db.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM pin_tracks WHERE server_id = 'srv' AND track_id = 'u2'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(pinned, 0);
+        // The resolved source levels with the measured gain.
+        let track = f.db.track("u2").unwrap().unwrap();
+        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        assert_eq!(s.gain_db, -6.0);
+    }
+
+    #[tokio::test]
+    async fn undecodable_file_stays_gainless_without_rescans() {
+        let f = fixture_with(FakeScanner::silent());
+        add_untagged_track(&f, "u3");
+        run_job(
+            &f,
+            f.dl.pin("srv", &PinTarget::Track { id: "u3".into() }, false)
+                .unwrap()
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            wait_for_gain(&f, "u3"),
+            None,
+            "a decode failure stores no gain"
+        );
+        // Measured once: a failed scan is not retried on every completion.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(f.scanner.calls.lock().len(), 1);
+    }
+
+    #[test]
+    fn startup_scans_files_completed_while_away() {
+        let f = fixture_with(FakeScanner::silent());
+        add_untagged_track(&f, "u4");
+        let row =
+            f.dl.cache_begin(
+                "srv",
+                "u4",
+                None,
+                Some("flac"),
+                Some(1000),
+                Some("audio/flac"),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        let key = row.key();
+        write_at(&row.path, 0, &[1u8; 1000]);
+        let out =
+            f.dl.cache_merge(&key, &spans::SpanSet::of(0, 1000), Some(1000), None)
+                .unwrap();
+        assert!(out.complete);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(f.dl.gain("srv", "u4").unwrap(), None, "the scan was silent");
+
+        // A fresh process finds the completed file without a stored gain
+        // and measures it.
+        let dl2 = Downloads::new(
+            f.db.clone(),
+            Arc::new(WallClock),
+            f.storage.clone(),
+            &f.dir.path().join("data"),
+            &f.dir.path().join("cache"),
+            Platform::Linux,
+        )
+        .with_gain_scanner(FakeScanner::measuring(-5.0, 0.4));
+        for _ in 0..400 {
+            if dl2.gain("srv", "u4").unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(dl2.gain("srv", "u4").unwrap(), Some(-5.0));
+        assert_eq!(f.dl.gain("srv", "u4").unwrap(), Some(-5.0));
     }
 
     #[tokio::test]

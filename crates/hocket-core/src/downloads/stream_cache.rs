@@ -26,7 +26,7 @@ use crate::db::DbResult;
 /// size, suffix, content type, and the change markers the mirror has.
 const SOURCE_TAG_SQL: &str = "COALESCE(CAST(t.size_bytes AS TEXT), '') || '|' || COALESCE(t.suffix, '') || '|' || COALESCE(t.content_type, '') || '|' || COALESCE(CAST(t.changed AS TEXT), '') || '|' || COALESCE(CAST(t.created AS TEXT), '')";
 
-const ROW_COLUMNS: &str = "server_id, track_id, profile, path, content_type, total_bytes, spans, complete, bytes, source_tag, last_used_at";
+const ROW_COLUMNS: &str = "server_id, track_id, profile, path, content_type, total_bytes, spans, complete, bytes, source_tag, last_used_at, gain_db, peak";
 
 /// One stream-cache row, complete or partial.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +44,9 @@ pub struct CacheRow {
     pub bytes: u64,
     pub source_tag: Option<String>,
     pub last_used_at: f64,
+    /// ReplayGain measured on this file by the background scan.
+    pub gain_db: Option<f64>,
+    pub peak: Option<f64>,
 }
 
 impl CacheRow {
@@ -70,6 +73,8 @@ impl CacheRow {
             bytes: bytes.max(0.0) as u64,
             source_tag: r.get(9)?,
             last_used_at: r.get(10)?,
+            gain_db: r.get(11)?,
+            peak: r.get(12)?,
         })
     }
 
@@ -667,6 +672,11 @@ impl Downloads {
             if key.profile.is_empty() {
                 self.drop_redundant_variants(&key.server_id, &key.track_id, &mut out.changed)?;
             }
+            // A complete entry is the only copy of the track some plays will
+            // ever see: without a server track gain, measure it in the
+            // background (the worker skips tracks that have a gain already
+            // or one from the server).
+            self.schedule_gain_scan(&key.server_id, &key.track_id);
         } else if let Ok(Some(row)) = self
             .cache_rows(&key.server_id, &key.track_id)
             .map(|rows| rows.into_iter().find(|r| r.path == key.path))
@@ -791,8 +801,10 @@ impl Downloads {
     /// Every entry with its eviction facts, in eviction order.
     pub fn eviction_order(&self) -> DbResult<Vec<(CacheRow, EvictFacts)>> {
         let mut rows: Vec<(CacheRow, EvictFacts, i64)> = self.inner.db.with_conn(|c| {
-            let cols = ROW_COLUMNS
-                .split(", ")
+            let cols: Vec<&str> = ROW_COLUMNS.split(", ").collect();
+            let base = cols.len();
+            let cols = cols
+                .into_iter()
                 .map(|col| format!("c.{col}"))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -809,14 +821,14 @@ impl Downloads {
                 let facts = EvictFacts {
                     complete: row.complete,
                     last_used_at: row.last_used_at,
-                    loved: r.get::<_, i64>(11)? != 0,
-                    rating: r.get::<_, i64>(12)?.max(0) as u32,
-                    plays: r.get::<_, i64>(13)?.max(0) as u32,
-                    autoplay: r.get::<_, i64>(14)? != 0,
-                    skips: r.get::<_, i64>(15)?.max(0) as u32,
-                    primed: r.get::<_, i64>(16)? != 0,
+                    loved: r.get::<_, i64>(base)? != 0,
+                    rating: r.get::<_, i64>(base + 1)?.max(0) as u32,
+                    plays: r.get::<_, i64>(base + 2)?.max(0) as u32,
+                    autoplay: r.get::<_, i64>(base + 3)? != 0,
+                    skips: r.get::<_, i64>(base + 4)?.max(0) as u32,
+                    primed: r.get::<_, i64>(base + 5)? != 0,
                 };
-                Ok((row, facts, r.get::<_, i64>(17)?))
+                Ok((row, facts, r.get::<_, i64>(base + 6)?))
             })?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })?;
