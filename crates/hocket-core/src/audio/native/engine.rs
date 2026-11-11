@@ -1550,9 +1550,16 @@ impl Engine {
             self.next_key = Some(b.key().clone());
             self.next = Some(b);
         }
+        // Settings changed during the transition reached only B's chain:
+        // carry them over, and re-render the tail made with the old ones.
+        let settings = self.dsp.settings().clone();
         self.dsp = a_dsp;
         self.current = Some(a);
         self.tail = TailState::Ready(t.tail);
+        if &settings != self.dsp.settings() {
+            self.dsp.set_settings(settings);
+            self.drop_tail();
+        }
         if let Some(n) = t.held_next {
             self.set_next(n);
         }

@@ -271,14 +271,15 @@ impl Actor {
         // mid-stream applies them to the playing track right away; one
         // that can't still takes the pieces it supports, and the DSP
         // settings apply with the next load.
-        if let Err(e) = self.backend.set_audio_settings(&self.audio) {
-            self.log("debug", format!("set_audio_settings: {e}"));
-        }
+        // Device first: exclusive then opens the device it applies to.
         if let Err(e) = self
             .backend
             .set_output_device(self.audio.output_device.clone())
         {
             self.log("debug", format!("set_output_device: {e}"));
+        }
+        if let Err(e) = self.backend.set_audio_settings(&self.audio) {
+            self.log("debug", format!("set_audio_settings: {e}"));
         }
         // ReplayGain/preamp/normalisation reach the backend through the
         // per-item gain, so the loaded items are refreshed.
