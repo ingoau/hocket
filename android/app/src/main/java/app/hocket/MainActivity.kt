@@ -192,6 +192,12 @@ class MainActivity : ComponentActivity() {
      * handled one is cleared.
      */
     private fun handleShortcut(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_VIEW) {
+            // Another device's setup code (hocket://setup), once, as for shortcuts.
+            app.hocket.ui.screens.setup.SetupLink.parse(intent.dataString)?.let(AppLinks::openSetup)
+            setIntent(Intent(intent).setAction(Intent.ACTION_MAIN).setData(null))
+            return
+        }
         val shortcut = AppShortcuts.parse(this, intent) ?: return
         setIntent(Intent(intent).setAction(Intent.ACTION_MAIN).replaceExtras(null as android.os.Bundle?))
         (application as HocketApp).runShortcut(shortcut)

@@ -253,6 +253,9 @@ impl Actor {
             Query::ConfigDocument { include_secrets } => {
                 QueryResult::Text(self.config_document(include_secrets))
             }
+            Query::SetupSettings => QueryResult::Text(
+                serde_json::Value::Object(self.settings.setup_settings()).to_string(),
+            ),
             Query::CreateShare { ids } => {
                 self.create_share_query(ids, reply);
                 return;

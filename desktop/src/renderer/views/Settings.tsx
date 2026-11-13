@@ -85,6 +85,7 @@ export function Settings({ section }: { section?: string }) {
 function AccountCard() {
   const server = useApp((s) => s.servers[0]);
   const navigate = useApp((s) => s.navigate);
+  const openDialog = useApp((s) => s.openDialog);
   const syncing = useApp((s) => s.jobs.some((j) => j.kind === "librarySync" && (j.state === "running" || j.state === "queued")));
   if (!server) return null;
   const host = server.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
@@ -105,6 +106,7 @@ function AccountCard() {
       <div className="settings-account-links">
         <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "stats" })} data-testid="settings-account-stats"><Icon name="stats" size={18} />{t("settings.account.stats")}</button>
         <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "settings", param: "connect" }, true)} data-testid="settings-account-devices"><Icon name="devices" size={18} />{t("settings.account.devices")}</button>
+        <button type="button" className="btn settings-account-link" onClick={() => openDialog({ kind: "setupDevice" })} data-testid="settings-account-setup-device"><Icon name="qr" size={18} />{t("settings.account.setUpDevice")}</button>
       </div>
     </div>
   );

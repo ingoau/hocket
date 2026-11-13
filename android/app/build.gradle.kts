@@ -99,6 +99,11 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":playback"))
     if (!foss) implementation(project(":cast"))
+    // Scanning another device's setup code with Google's code scanner (no camera permission). A
+    // FOSS build leaves it out: the system camera opens the code's hocket://setup link instead.
+    if (!foss) implementation(libs.play.services.code.scanner)
+    // Drawing the setup code (pure Java, so FOSS builds keep it).
+    implementation(libs.zxing.core)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)

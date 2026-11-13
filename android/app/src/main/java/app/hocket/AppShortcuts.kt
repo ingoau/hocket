@@ -115,4 +115,12 @@ object AppLinks {
     fun openSearch(query: String?) { _search.value = SearchLink(query?.takeIf { it.isNotBlank() }) }
 
     fun consume(link: SearchLink) { _search.compareAndSet(link, null) }
+
+    private val _setup = MutableStateFlow<app.hocket.ui.screens.setup.SetupLink?>(null)
+    /** Another device's setup link (hocket://setup), until setup applies it or the shell turns it away. */
+    val setup: StateFlow<app.hocket.ui.screens.setup.SetupLink?> = _setup.asStateFlow()
+
+    fun openSetup(link: app.hocket.ui.screens.setup.SetupLink) { _setup.value = link }
+
+    fun consume(link: app.hocket.ui.screens.setup.SetupLink) { _setup.compareAndSet(link, null) }
 }

@@ -13,6 +13,7 @@ import { Slider } from "./controls";
 import { useVolumeControl } from "../lib/volume";
 import { SongInfo } from "./SongInfo";
 import { ReportDialog } from "./ReportDialog";
+import { SetupDeviceDialog } from "./SetupDeviceDialog";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
 
@@ -57,6 +58,7 @@ export function Dialogs() {
         {dialog.kind === "trackInfo" ? <SongInfo trackId={dialog.trackId} /> : null}
         {dialog.kind === "albumInfo" ? <AlbumInfo albumId={dialog.albumId} /> : null}
         {dialog.kind === "report" ? <ReportDialog allDevices={dialog.allDevices} /> : null}
+        {dialog.kind === "setupDevice" ? <SetupDeviceDialog /> : null}
       </div>
     </div>
   );

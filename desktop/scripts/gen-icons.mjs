@@ -46,7 +46,7 @@ const MAP = {
   playNext: "arrow-bend-down-right", playLater: "rows-plus-bottom", pin: "push-pin", pinOff: "push-pin-slash", restore: "clock-counter-clockwise", seek: "arrow-right", sleep: "moon", bug: "bug",
   selectAll: "selection-all", grip: "dots-six-vertical", dragHandle: "dots-six", more: "dots-three", moreVert: "dots-three-vertical", minimize: "minus", maximize: "square", restoreWin: "copy-simple",
   spinner: "circle-notch", offline: "wifi-slash", warn: "warning", battery: "battery-low", external: "arrow-square-out", folder: "folder",
-  copy: "copy", resume: "play-circle", music: "music-note", cloud: "cloud", sync: "arrows-clockwise", lan: "network", plus: "plus",
+  copy: "copy", qr: "qr-code", resume: "play-circle", music: "music-note", cloud: "cloud", sync: "arrows-clockwise", lan: "network", plus: "plus",
   // The song stash (#150).
   stash: "stack",
   // Now playing (#47): device kinds, the side panel toggle, the connect dropdown and the fullscreen glyphs.

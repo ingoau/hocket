@@ -2829,6 +2829,13 @@ pub enum Command {
         #[serde(default)]
         include_device_local: bool,
     },
+    /// Apply the settings a setup link carried (`Query::SetupSettings` on the
+    /// device that made it): a JSON object of key → value. Account-synced keys
+    /// only; device-local and unknown keys, and invalid values, are skipped.
+    /// For a device set up without a coordinator to sync them.
+    ApplySetupSettings {
+        settings: String,
+    },
 
     // -- audio ------------------------------------------------------------
     SetAudioSettings {
@@ -3127,6 +3134,11 @@ pub enum Query {
     ConfigDocument {
         include_secrets: bool,
     },
+    /// The account-synced settings changed from their defaults, as a JSON
+    /// object of key → value (`QueryResult::Text`), for a setup link to carry
+    /// to a new device when there is no coordinator to sync them
+    /// (`Command::ApplySetupSettings`). Taken whether or not sync is on.
+    SetupSettings,
     /// `createShare` for these song, album or playlist ids. The answer is the public URL.
     CreateShare {
         ids: Vec<String>,

@@ -51,6 +51,7 @@ const SYMBOLS = {
   NestDisplay: "nest_display", NestDisplayMax: "nest_display_max", Chromecast2: "chromecast_2", ChromecastDevice: "chromecast_device",
   NestWifiPoint: "nest_wifi_point",
   OpenInNew: "open_in_new", Laptop: "laptop_windows", DesktopWindows: "desktop_windows", Warning: "warning", Equalizer: "equalizer",
+  QrCode2: "qr_code_2", QrCodeScanner: "qr_code_scanner",
 };
 
 /** Which glyphs each group emits. AutoMirrored ones flip in right-to-left layouts. */
@@ -76,6 +77,8 @@ const GROUPS = [
     // Cast receivers by kind: the connect button and the Connect sheet.
     "SpeakerGroup", "NestMini", "HomeMini", "NestAudio", "HomeMax", "NestDisplay", "NestDisplayMax", "Chromecast2",
     "ChromecastDevice", "NestWifiPoint",
+    // Set up another device: the account sheet's entry, and scanning a code at setup.
+    "QrCode2", "QrCodeScanner",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",

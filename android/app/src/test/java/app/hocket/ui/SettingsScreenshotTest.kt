@@ -129,7 +129,7 @@ class SettingsScreenshotTest {
         compose.mainClock.advanceTimeBy(1_000)
         save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "$prefix-default.png"))
 
-        sheet = { AccountSheetContent(NavItem.DEFAULT, {}, {}, {}, {}, {}) }
+        sheet = { AccountSheetContent(NavItem.DEFAULT, {}, {}, {}, {}, {}, {}) }
         awaitTag("account.settings")
         save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "$prefix-account-sheet.png"))
 

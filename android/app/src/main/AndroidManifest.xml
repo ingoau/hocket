@@ -83,6 +83,14 @@
                 <category android:name="android.intent.category.APP_MUSIC" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <!-- Another device's setup code (Set up another device): hocket://setup?server=…, from
+                 the system camera, a shared link or the in-app scanner (SetupLink). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="hocket" android:host="setup" />
+            </intent-filter>
         </activity>
         <!-- Assistant's discovery intent ("play … on Hocket"): no UI, finishes once it has played or
              handed the query to search (MediaSearchActivity; plays directly only with "Allow control

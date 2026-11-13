@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSP
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
+import { showToast } from "./lib/ui-toast";
 import { SIDEBAR_RAIL, useApp } from "./store/app";
 import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
@@ -214,6 +215,12 @@ function useDeepLinks() {
       // Main already validated and canonicalised the link.
       const link = parseDeepLink(url);
       if (!link || link.kind === "open") return;
+      if (link.kind === "setup") {
+        // Another device's setup code: the setup form applies it; a signed-in device turns it away.
+        if (useApp.getState().servers.length > 0) showToast(t("setupDevice.alreadySetUp"));
+        else useApp.getState().setPendingSetup(link);
+        return;
+      }
       if (link.kind === "track") {
         // Never mutate the queue on an external request: confirm with a
         // toast, and only for a track the current server knows.

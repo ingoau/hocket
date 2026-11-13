@@ -208,6 +208,26 @@ describe("ipc", () => {
     await expect(handlers.get(IPC.configExport)!(ours, "[]")).rejects.toThrow("rejected");
   });
 
+  it("builds the setup link, with the password only when asked for", async () => {
+    const { passwordFor } = setup();
+    const build = handlers.get(IPC.setupLink)!;
+    const req = { server: "https://a.example", user: "alice", coordinator: "wss://c.example", includePassword: false };
+    const withCoordinator = "hocket://setup?server=https%3A%2F%2Fa.example&user=alice&coordinator=wss%3A%2F%2Fc.example";
+    expect(await build(ours, req)).toEqual({ link: withCoordinator, codeLink: withCoordinator, passwordAvailable: true });
+    const withPassword = "hocket://setup?server=https%3A%2F%2Fa.example&user=alice&password=secret";
+    expect(await build(ours, { ...req, coordinator: undefined, includePassword: true })).toEqual({ link: withPassword, codeLink: withPassword, passwordAvailable: true });
+    expect(passwordFor).toHaveBeenCalledWith("https://a.example", "alice");
+    passwordFor.mockReturnValue(undefined);
+    expect(await build(ours, { ...req, includePassword: true })).toEqual({ link: withCoordinator, codeLink: withCoordinator, passwordAvailable: false });
+    expect(() => build(ours, { server: "https://a.example", includePassword: true })).toThrow("rejected");
+    // Packed settings ride along; past what a code can carry, the code leaves them out.
+    const plain = "hocket://setup?server=https%3A%2F%2Fa.example&user=alice";
+    expect(await build(ours, { ...req, coordinator: undefined, settings: "eNqrVg" })).toEqual({ link: `${plain}&settings=eNqrVg`, codeLink: `${plain}&settings=eNqrVg`, passwordAvailable: false });
+    const big = "A".repeat(2000);
+    expect(await build(ours, { ...req, coordinator: undefined, settings: big })).toEqual({ link: `${plain}&settings=${big}`, codeLink: plain, passwordAvailable: false });
+    expect(() => build(ours, { ...req, settings: "not packed!" })).toThrow("rejected");
+  });
+
   it("config import adds each server carried in the file, then imports the document without the secrets", async () => {
     const { dispatch } = setup();
     dialogs.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/home/u/cfg.json"] });
