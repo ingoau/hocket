@@ -102,7 +102,8 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
     var urlError by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     var started by rememberSaveable { mutableStateOf(needsRelogin) }
-    // The coordinator, or else the settings (a JSON object), from a setup link: applied as the form connects.
+    // The coordinator, or else the settings (a JSON object), from a scanned or pasted setup link:
+    // applied as the form connects, and dropped once the person types a server or user of their own.
     var linkCoordinator by rememberSaveable { mutableStateOf<String?>(null) }
     var linkSettings by rememberSaveable { mutableStateOf<String?>(null) }
     val sync by client.syncProgress.collectAsStateWithLifecycle()
@@ -136,23 +137,24 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
     }
     /**
      * Another device's setup code: fills the form (its coordinator or settings are applied as the
-     * form connects).
-     * Scanned or pasted here, with the password, it signs in straight away; a link opened from
-     * outside (any web page can open one) waits for Connect, so the person sees the server first.
+     * form connects). Scanned or pasted here ([fromHere]), with the password, it signs in straight
+     * away. A link opened from outside (any web page can open one) only fills in the server and
+     * user and waits for Connect: its coordinator and settings are dropped, since neither shows in
+     * the form and a coordinator receives the account's credential when the device joins it.
      */
-    fun applySetupLink(link: SetupLink, connectNow: Boolean) {
+    fun applySetupLink(link: SetupLink, fromHere: Boolean) {
         url = link.server
         username = link.username
         password = link.password ?: ""
-        linkCoordinator = link.coordinator
-        linkSettings = link.settings
+        linkCoordinator = link.coordinator?.takeIf { fromHere }
+        linkSettings = link.settings?.takeIf { fromHere }
         urlError = false
         error = null
         started = true
-        if (connectNow && link.password != null && !connecting) connect()
+        if (fromHere && link.password != null && !connecting) connect()
     }
     fun scan() = app.hocket.SetupScanner.scan(context,
-        onResult = { text -> SetupLink.parse(text)?.let { applySetupLink(it, connectNow = true) } ?: run { started = true; error = invalidCode } },
+        onResult = { text -> SetupLink.parse(text)?.let { applySetupLink(it, fromHere = true) } ?: run { started = true; error = invalidCode } },
         onError = { started = true; error = scanFailed })
     // A setup link opened from outside (the camera, a shared link), while the form can take it.
     val pendingLink by app.hocket.AppLinks.setup.collectAsStateWithLifecycle()
@@ -160,7 +162,7 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
         val link = pendingLink ?: return@LaunchedEffect
         if (step == SetupStep.Summary) return@LaunchedEffect
         app.hocket.AppLinks.consume(link)
-        applySetupLink(link, connectNow = false)
+        applySetupLink(link, fromHere = false)
     }
     val cleartext = url.trim().startsWith("http://", ignoreCase = true)
     val ground = Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainer))
@@ -199,7 +201,12 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
                     }
                     val field = RoundedCornerShape(16.dp)
                     OutlinedTextField(
-                        value = url, onValueChange = { typed -> SetupLink.parse(typed)?.let { applySetupLink(it, connectNow = true) } ?: run { url = typed; urlError = false } }, label = { Text(stringResource(R.string.setup_url)) },
+                        value = url, onValueChange = { typed ->
+                            // A pasted link, even into a field that already holds an address.
+                            val link = typed.indexOf("hocket://setup?", ignoreCase = true).takeIf { it >= 0 }?.let { SetupLink.parse(typed.substring(it)) }
+                            if (link != null) applySetupLink(link, fromHere = true)
+                            else { url = typed; urlError = false; linkCoordinator = null; linkSettings = null }
+                        }, label = { Text(stringResource(R.string.setup_url)) },
                         placeholder = { Text(stringResource(R.string.setup_url_hint)) }, singleLine = true, isError = urlError, shape = field,
                         supportingText = if (urlError) ({ Text(stringResource(R.string.setup_error_url)) }) else null,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
@@ -211,7 +218,7 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
                         }
                     }
                     val user = @Composable { m: Modifier ->
-                        OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text(stringResource(R.string.setup_username)) }, singleLine = true, shape = field,
+                        OutlinedTextField(value = username, onValueChange = { username = it; linkCoordinator = null; linkSettings = null }, label = { Text(stringResource(R.string.setup_username)) }, singleLine = true, shape = field,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next), modifier = m.testTag("setup.username"), enabled = !connecting)
                     }
                     val pass = @Composable { m: Modifier ->

@@ -193,8 +193,10 @@ class MainActivity : ComponentActivity() {
      */
     private fun handleShortcut(intent: Intent?) {
         if (intent?.action == Intent.ACTION_VIEW) {
-            // Another device's setup code (hocket://setup), once, as for shortcuts.
-            app.hocket.ui.screens.setup.SetupLink.parse(intent.dataString)?.let(AppLinks::openSetup)
+            // Another device's setup code (hocket://setup), once, as for shortcuts: never again from Recents.
+            if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) {
+                app.hocket.ui.screens.setup.SetupLink.parse(intent.dataString)?.let(AppLinks::openSetup)
+            }
             setIntent(Intent(intent).setAction(Intent.ACTION_MAIN).setData(null))
             return
         }

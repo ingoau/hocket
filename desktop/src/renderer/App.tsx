@@ -66,6 +66,14 @@ export function App() {
   useGlobalKeyboard(true);
   useDeepLinks();
   useQueueDropReveal();
+  // A setup link that arrived before the servers loaded (a cold start from the link): turned away
+  // once this device turns out to be signed in, rather than waiting for a sign-out.
+  const pendingSetup = useApp((s) => !!s.pendingSetup);
+  useEffect(() => {
+    if (!ready || !hasServer || setupSummary || !pendingSetup) return;
+    useApp.getState().setPendingSetup(undefined);
+    showToast(t("setupDevice.alreadySetUp"));
+  }, [ready, hasServer, setupSummary, pendingSetup]);
 
   if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
   if (!hasServer || setupSummary) return <Setup />;

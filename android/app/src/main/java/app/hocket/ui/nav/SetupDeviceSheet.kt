@@ -63,6 +63,8 @@ import com.google.zxing.EncodeHintType
 import com.google.zxing.common.BitMatrix
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonObject
 
 /**
@@ -99,11 +101,13 @@ internal const val MAX_CODE_LINK = 1800
 fun SetupDeviceSheetContent(server: ServerInfo, coordinatorUrl: String?, settings: String? = null) {
     val context = LocalContext.current
     var includePassword by remember { mutableStateOf(false) }
-    // The keystore read happens only once the person asks for the password to go in.
-    val password = remember(server.url, server.username, includePassword) {
-        if (includePassword) CoreHost.credentials?.get(server.url, server.username)?.password else null
+    // Off the main thread (a keystore decrypt), and the password itself only once the person asks for it.
+    val passwordAvailable by produceState<Boolean?>(null, server.url, server.username) {
+        value = withContext(Dispatchers.IO) { CoreHost.credentials?.get(server.url, server.username) != null }
     }
-    val passwordAvailable = remember(server.url, server.username) { CoreHost.credentials?.get(server.url, server.username) != null }
+    val password by produceState<String?>(null, server.url, server.username, includePassword) {
+        value = if (!includePassword) null else withContext(Dispatchers.IO) { CoreHost.credentials?.get(server.url, server.username)?.password }
+    }
     val coordinator = coordinatorUrl?.takeIf { it.isNotBlank() }
     val settingsCount = remember(settings) { settings?.let { runCatching { HocketJson.json.parseToJsonElement(it).jsonObject.size }.getOrNull() } ?: 0 }
     val carried = settings?.takeIf { coordinator == null && settingsCount > 0 }
@@ -141,14 +145,14 @@ fun SetupDeviceSheetContent(server: ServerInfo, coordinatorUrl: String?, setting
                 headlineContent = { Text(stringResource(R.string.setup_device_include_password)) },
                 supportingContent = {
                     Text(stringResource(when {
-                        !passwordAvailable -> R.string.setup_device_password_unavailable
+                        passwordAvailable == false -> R.string.setup_device_password_unavailable
                         on -> R.string.setup_device_include_password_on
                         else -> R.string.setup_device_include_password_off
                     }), color = if (on) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                 },
-                trailingContent = { Switch(checked = on, onCheckedChange = null, enabled = passwordAvailable) },
+                trailingContent = { Switch(checked = on, onCheckedChange = null, enabled = passwordAvailable == true) },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier.toggleable(value = on, enabled = passwordAvailable, role = Role.Switch) { includePassword = it }.testTag("setupDevice.includePassword"),
+                modifier = Modifier.toggleable(value = on, enabled = passwordAvailable == true, role = Role.Switch) { includePassword = it }.testTag("setupDevice.includePassword"),
             )
         }
         OutlinedButton(

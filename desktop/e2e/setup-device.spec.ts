@@ -57,7 +57,9 @@ test.describe("set up another device", () => {
     const { app, page } = hocket;
     const open = (url: string) => app.evaluate(({ BrowserWindow }, u) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send("hocket:deep-link", u); }, url);
     await expect(page.getByTestId("setup")).toBeVisible();
-    await open("hocket://setup?server=https%3A%2F%2Fmusic.example.org&user=alice&password=secret");
+    // Its settings (like a coordinator) don't show in the form, so a link from outside doesn't bring them.
+    const settings = deflateSync(JSON.stringify({ "queue.savedCap": 7 })).toString("base64url");
+    await open(`hocket://setup?server=https%3A%2F%2Fmusic.example.org&user=alice&password=secret&settings=${settings}`);
     await expect(page.getByTestId("setup-url")).toHaveValue("https://music.example.org");
     await expect(page.getByTestId("setup-password")).toHaveValue("secret");
     // Any web page can open a hocket:// link: nothing connects until the person presses Connect.
@@ -66,6 +68,11 @@ test.describe("set up another device", () => {
     await page.getByTestId("setup-connect").click();
     await page.getByTestId("setup-continue").click({ timeout: 15_000 });
     await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
+    const cap = await page.evaluate(async () => {
+      const r = await window.hocket.query({ type: "setting", data: { key: "queue.savedCap" } });
+      return r.type === "settingDetail" ? r.data?.value : undefined;
+    });
+    expect(cap).toBe("10");
     await open("hocket://setup?server=https%3A%2F%2Fother.example.org&user=bob");
     await expect(page.getByText("This device is already set up", { exact: false })).toBeVisible();
   });

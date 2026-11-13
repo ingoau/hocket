@@ -68,7 +68,8 @@ function ConnectForm() {
   }, [lastError, submittedAt, busy]);
 
   const cleartext = /^http:\/\/./i.test(url.trim());
-  // The coordinator, or else the (packed) settings, from a setup link: applied as the form connects.
+  // The coordinator, or else the (packed) settings, from a pasted setup link: applied as the form
+  // connects, and dropped once the person types a server or user of their own.
   const [linkCoordinator, setLinkCoordinator] = useState<string | undefined>(undefined);
   const [linkSettings, setLinkSettings] = useState<string | undefined>(undefined);
   const connect = (rawUrl: string, user: string, pass: string, coordinator = linkCoordinator, settings = linkSettings) => {
@@ -95,17 +96,20 @@ function ConnectForm() {
     connect(url, username, password);
   };
   // Another device's setup code (Set up another device): fills the form (its
-  // coordinator or settings are applied as the form connects). Pasted here with the password, it
-  // connects straight away; a hocket:// link opened from outside (any web page
-  // can open one) waits for Connect, so the person sees the server first.
-  const applySetupLink = (link: SetupLink, connectNow: boolean) => {
+  // coordinator or settings are applied as the form connects). Pasted here
+  // (fromHere) with the password, it connects straight away. A hocket:// link
+  // opened from outside (any web page can open one) only fills in the server and
+  // user and waits for Connect: its coordinator and settings are dropped, since
+  // neither shows in the form and a coordinator receives the account's
+  // credential when the device joins it.
+  const applySetupLink = (link: SetupLink, fromHere: boolean) => {
     setUrl(link.server);
     setUsername(link.user);
     setPassword(link.password ?? "");
-    setLinkCoordinator(link.coordinator);
-    setLinkSettings(link.settings);
+    setLinkCoordinator(fromHere ? link.coordinator : undefined);
+    setLinkSettings(fromHere ? link.settings : undefined);
     setError(undefined);
-    if (connectNow && link.password && !busy) connect(link.server, link.user, link.password, link.coordinator, link.settings);
+    if (fromHere && link.password && !busy) connect(link.server, link.user, link.password, link.coordinator, link.settings);
   };
   const pendingSetup = useApp((s) => s.pendingSetup);
   useEffect(() => {
@@ -115,11 +119,17 @@ function ConnectForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- applies each link once, as it arrives
   }, [pendingSetup]);
   const onUrl = (value: string) => {
-    // A pasted setup link, rather than an address.
-    const link = /^\s*hocket:/i.test(value) ? parseDeepLink(value.trim()) : undefined;
-    if (link?.kind === "setup") applySetupLink(link, true);
-    else setUrl(value);
+    // A pasted setup link, rather than an address (even pasted into a field that holds one).
+    const at = value.search(/hocket:\/\/setup\?/i);
+    const link = at >= 0 ? parseDeepLink(value.slice(at).trim()) : undefined;
+    if (link?.kind === "setup") return applySetupLink(link, true);
+    setUrl(value);
+    forgetLink();
   };
+  function forgetLink() {
+    setLinkCoordinator(undefined);
+    setLinkSettings(undefined);
+  }
   const ready = !!url.trim() && !!username.trim() && !!password;
   return (
     <form className="setup-card" onSubmit={submit} aria-labelledby="setup-title" aria-describedby="setup-subtitle">
@@ -129,7 +139,7 @@ function ConnectForm() {
       <label className="setup-field">{t("setup.url")}<input className="input" type="url" aria-required="true" aria-invalid={error === t("setup.errorUrl") || undefined} aria-describedby={[error ? "setup-error" : "", "setup-url-hint", cleartext ? "setup-cleartext" : ""].filter(Boolean).join(" ")} placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => onUrl(e.target.value)} autoFocus data-testid="setup-url" /><span className="setup-hint" id="setup-url-hint">{t("setup.urlHint")}</span></label>
       {cleartext ? <div className="setup-cleartext" id="setup-cleartext" data-testid="setup-cleartext"><Icon name="warn" size={18} />{t("setup.cleartext")}</div> : null}
       <div className="setup-pair">
-        <label className="setup-field">{t("setup.username")}<input className="input" aria-required="true" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" data-testid="setup-username" /></label>
+        <label className="setup-field">{t("setup.username")}<input className="input" aria-required="true" value={username} onChange={(e) => { setUsername(e.target.value); forgetLink(); }} autoComplete="username" data-testid="setup-username" /></label>
         <label className="setup-field">{t("setup.password")}
           <span className="setup-password">
             <input className="input" type={showPassword ? "text" : "password"} aria-required="true" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" data-testid="setup-password" />

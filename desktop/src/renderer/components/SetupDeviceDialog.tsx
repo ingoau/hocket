@@ -22,23 +22,27 @@ export function SetupDeviceDialog() {
   const [includePassword, setIncludePassword] = useState(false);
   const [result, setResult] = useState<SetupLinkResult>();
   // Without a coordinator the settings ride in the link: the core's JSON, then packed.
-  const [settings, setSettings] = useState<{ json: string; packed: string }>();
+  // "loading" until they're known, so no link (or Copy) goes out without them.
+  const [settings, setSettings] = useState<{ json: string; packed: string } | "loading" | undefined>(coordinator ? undefined : "loading");
 
   useEffect(() => {
-    setSettings(undefined);
-    if (coordinator) return;
+    if (coordinator) return setSettings(undefined);
+    setSettings("loading");
     let live = true;
     void (async () => {
       const r = await bridge().query({ type: "setupSettings" });
-      if (r.type !== "text" || setupSettingsCount(r.data) === 0) return;
-      const packed = await packSetupSettings(r.data);
-      if (live) setSettings({ json: r.data, packed });
-    })().catch((err: unknown) => console.error("setup settings failed", err));
+      const json = r.type === "text" && setupSettingsCount(r.data) > 0 ? r.data : undefined;
+      const next = json ? { json, packed: await packSetupSettings(json) } : undefined;
+      if (live) setSettings(next);
+    })().catch((err: unknown) => {
+      console.error("setup settings failed", err);
+      if (live) setSettings(undefined);
+    });
     return () => { live = false; };
   }, [coordinator]);
 
   useEffect(() => {
-    if (!server) return;
+    if (!server || settings === "loading") return;
     let live = true;
     bridge().setupLink({ server: server.url, user: server.username, coordinator, settings: settings?.packed, includePassword })
       .then((r) => { if (live) setResult(r); })
@@ -63,7 +67,7 @@ export function SetupDeviceDialog() {
         <dt>{t("setupDevice.coordinator")}</dt>
         <dd data-testid="setup-device-coordinator">{coordinator ?? t("setupDevice.noCoordinator")}</dd>
         <dt>{t("setupDevice.settings")}</dt>
-        <dd data-testid="setup-device-settings">{settingsSummary(coordinator, settings?.json, result)}</dd>
+        <dd data-testid="setup-device-settings">{settings === "loading" ? "…" : settingsSummary(coordinator, settings?.json, result)}</dd>
       </dl>
       <label className="setup-device-password">
         <span className="grow">
@@ -75,7 +79,7 @@ export function SetupDeviceDialog() {
         <Switch checked={passwordOn} disabled={unavailable} onChange={setIncludePassword} aria-describedby="setup-device-password-desc" data-testid="setup-device-password" />
       </label>
       <div className="buttons">
-        <button type="button" className="btn" disabled={!result} onClick={() => { if (result) { bridge().clipboard.writeText(result.link); showToast(t("setupDevice.copied")); } }} data-testid="setup-device-copy"><Icon name="copy" size={18} />{t("setupDevice.copy")}</button>
+        <button type="button" className="btn" disabled={!result || settings === "loading"} onClick={() => { if (result) { bridge().clipboard.writeText(result.link); showToast(t("setupDevice.copied")); } }} data-testid="setup-device-copy"><Icon name="copy" size={18} />{t("setupDevice.copy")}</button>
         <button type="button" className="btn primary" onClick={close} data-autofocus>{t("misc.close")}</button>
       </div>
     </>

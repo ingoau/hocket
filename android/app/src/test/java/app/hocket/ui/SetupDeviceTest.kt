@@ -88,18 +88,20 @@ class SetupDeviceTest {
     }
 
     @Test
-    fun anOpenedSetupLinkFillsTheFormAndConnectSignsInAndSetsTheCoordinator() {
+    fun anOpenedSetupLinkFillsTheFormWaitsForConnectAndDropsItsCoordinatorAndSettings() {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
         await("setup.start")
-        AppLinks.openSetup(SetupLink("https://music.example.net", "ada", "secret", "wss://coord.example.net"))
-        // A link from outside waits for Connect (any web page can open one); nothing is set before.
+        AppLinks.openSetup(SetupLink("https://music.example.net", "ada", "secret", "wss://coord.example.net", """{"${SettingKeys.QUEUE_SAVED_CAP}":7}"""))
+        // A link from outside waits for Connect (any web page can open one), and what the form
+        // doesn't show (a coordinator, which would get the credential, and settings) stays out.
         await("setup.connect")
-        assertEquals(null, core.client.connection.value.coordinatorUrl)
         click("setup.connect")
         await("setup.continue")
-        assertEquals("wss://coord.example.net", core.client.connection.value.coordinatorUrl)
+        assertEquals(null, core.client.connection.value.coordinatorUrl)
+        val cap = runBlocking { core.client.query(Queries.setting(SettingKeys.QUEUE_SAVED_CAP)) as QueryResult.SettingDetail }
+        assertEquals("10", cap.data?.value)
         assertEquals(null, AppLinks.setup.value)
     }
 
@@ -110,8 +112,9 @@ class SetupDeviceTest {
         core.start()
         click("setup.start")
         await("setup.url")
-        compose.onNodeWithTag("setup.url").performTextInput(SetupLink("https://music.example.net", "ada", "secret").format())
+        compose.onNodeWithTag("setup.url").performTextInput(SetupLink("https://music.example.net", "ada", "secret", "wss://coord.example.net").format())
         await("setup.continue")
+        assertEquals("wss://coord.example.net", core.client.connection.value.coordinatorUrl)
     }
 
     @Test
