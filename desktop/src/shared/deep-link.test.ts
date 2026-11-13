@@ -26,3 +26,33 @@ describe("deep links", () => {
     for (const u of ["hocket://album/a1", "hocket://track/t1", "hocket://open"]) expect(formatDeepLink(parseDeepLink(u)!)).toBe(u);
   });
 });
+
+describe("setup links", () => {
+  it("round-trips every field in the form Android writes", () => {
+    // The same link as SetupLinkTest.roundTripsEveryField on Android.
+    const text = "hocket://setup?server=https%3A%2F%2Fmusic.example.net%2Fnavidrome&user=ada%20lovelace&password=p%26ss%3Dw0rd%2B%C3%BC&coordinator=wss%3A%2F%2Fcoord.example.net";
+    const link = parseDeepLink(text);
+    expect(link).toEqual({ kind: "setup", server: "https://music.example.net/navidrome", user: "ada lovelace", password: "p&ss=w0rd+ü", coordinator: "wss://coord.example.net" });
+    expect(formatDeepLink(link!)).toBe(text);
+  });
+
+  it("leaves out what the link leaves out and normalises the server", () => {
+    expect(parseDeepLink("HOCKET://setup?user=ada&server=Https%3A%2F%2Fmusic.example.net%2F&extra=1")).toEqual({ kind: "setup", server: "https://music.example.net", user: "ada" });
+    expect(formatDeepLink({ kind: "setup", server: "https://x", user: "ada" })).toBe("hocket://setup?server=https%3A%2F%2Fx&user=ada");
+  });
+
+  it("carries packed settings, dropping a value that isn't packed", () => {
+    const link = { kind: "setup", server: "https://x", user: "ada", settings: "eNqrVg_-" } as const;
+    expect(formatDeepLink(link)).toBe("hocket://setup?server=https%3A%2F%2Fx&user=ada&settings=eNqrVg_-");
+    expect(parseDeepLink(formatDeepLink(link))).toEqual(link);
+    expect(parseDeepLink("hocket://setup?server=https%3A%2F%2Fx&user=ada&settings=a%20b")).toEqual({ kind: "setup", server: "https://x", user: "ada" });
+  });
+
+  it("rejects setup links without a usable server or user", () => {
+    expect(parseDeepLink("hocket://setup?user=ada")).toBeUndefined();
+    expect(parseDeepLink("hocket://setup?server=ftp%3A%2F%2Fx&user=ada")).toBeUndefined();
+    expect(parseDeepLink("hocket://setup?server=https%3A%2F%2Fx&user=%20")).toBeUndefined();
+    expect(parseDeepLink("hocket://setup?server=https%3A%2F%2Fx&user=ada%ZZ")).toBeUndefined();
+    expect(parseDeepLink("hocket://setup/x?server=https%3A%2F%2Fx&user=ada")).toBeUndefined();
+  });
+});

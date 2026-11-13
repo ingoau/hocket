@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSP
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
+import { showToast } from "./lib/ui-toast";
 import { SIDEBAR_RAIL, useApp } from "./store/app";
 import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
@@ -65,6 +66,14 @@ export function App() {
   useGlobalKeyboard(true);
   useDeepLinks();
   useQueueDropReveal();
+  // A setup link that arrived before the servers loaded (a cold start from the link): turned away
+  // once this device turns out to be signed in, rather than waiting for a sign-out.
+  const pendingSetup = useApp((s) => !!s.pendingSetup);
+  useEffect(() => {
+    if (!ready || !hasServer || setupSummary || !pendingSetup) return;
+    useApp.getState().setPendingSetup(undefined);
+    showToast(t("setupDevice.alreadySetUp"));
+  }, [ready, hasServer, setupSummary, pendingSetup]);
 
   if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
   if (!hasServer || setupSummary) return <Setup />;
@@ -214,6 +223,12 @@ function useDeepLinks() {
       // Main already validated and canonicalised the link.
       const link = parseDeepLink(url);
       if (!link || link.kind === "open") return;
+      if (link.kind === "setup") {
+        // Another device's setup code: the setup form applies it; a signed-in device turns it away.
+        if (useApp.getState().servers.length > 0) showToast(t("setupDevice.alreadySetUp"));
+        else useApp.getState().setPendingSetup(link);
+        return;
+      }
       if (link.kind === "track") {
         // Never mutate the queue on an external request: confirm with a
         // toast, and only for a track the current server knows.

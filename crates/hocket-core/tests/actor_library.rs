@@ -1275,3 +1275,74 @@ async fn song_link_finds_the_song_on_deezer_by_isrc_then_by_search() {
         .iter()
         .all(|u| u.starts_with("https://api.deezer.com/")));
 }
+
+/// Set up another device without a coordinator: `Query::SetupSettings` gives
+/// the account-synced settings changed from their defaults (device-local ones
+/// stay behind), and `Command::ApplySetupSettings` on the new device takes
+/// them, skipping device-local, unknown and invalid keys.
+#[tokio::test]
+async fn setup_settings_carry_changed_synced_settings_to_a_new_device() {
+    let a = TestCore::start("setup-a", seeded_server(2, 180.0)).await;
+    a.run(Command::SetSetting {
+        key: "queue.savedCap".into(),
+        value: "5".into(),
+    })
+    .await;
+    a.run(Command::SetSetting {
+        key: "display.theme".into(),
+        value: "\"dark\"".into(),
+    })
+    .await;
+    // Set to its default: nothing to carry.
+    a.run(Command::SetSetting {
+        key: "queue.section".into(),
+        value: "true".into(),
+    })
+    .await;
+    let text = match a.query(Query::SetupSettings).await {
+        QueryResult::Text(t) => t,
+        other => panic!("{other:?}"),
+    };
+    let carried: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        carried.get("queue.savedCap"),
+        Some(&serde_json::json!(5)),
+        "{text}"
+    );
+    assert!(
+        !carried.contains_key("display.theme"),
+        "device-local stays: {text}"
+    );
+    assert!(
+        !carried.contains_key("queue.section"),
+        "defaults stay: {text}"
+    );
+
+    let b = TestCore::start("setup-b", seeded_server(2, 180.0)).await;
+    let mut incoming = carried.clone();
+    incoming.insert("display.theme".into(), serde_json::json!("dark"));
+    incoming.insert("no.such.key".into(), serde_json::json!(1));
+    incoming.insert("queue.section".into(), serde_json::json!("not a bool"));
+    b.run(Command::ApplySetupSettings {
+        settings: serde_json::Value::Object(incoming).to_string(),
+    })
+    .await;
+    assert_eq!(setting_of(&b, "queue.savedCap").await.value, "5");
+    assert_eq!(
+        setting_of(&b, "display.theme").await.value,
+        "\"system\"",
+        "device-local ignored"
+    );
+    assert_eq!(
+        setting_of(&b, "queue.section").await.value,
+        "true",
+        "invalid value ignored"
+    );
+    assert!(b.events.all().iter().any(|e| matches!(e, Event::SettingChanged { setting } if setting.key == "queue.savedCap" && setting.value == "5")));
+    // Not a JSON object: nothing happens.
+    b.run(Command::ApplySetupSettings {
+        settings: "[1]".into(),
+    })
+    .await;
+    assert_eq!(setting_of(&b, "queue.savedCap").await.value, "5");
+}

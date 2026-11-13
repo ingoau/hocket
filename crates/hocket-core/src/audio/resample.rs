@@ -143,8 +143,8 @@ impl Resampler {
         self.out_frames += (frames - skip) as u64;
         out.reserve((frames - skip) * self.channels);
         for i in skip..frames {
-            for ch in 0..self.channels {
-                out.push(self.out_planar[ch][i]);
+            for plane in self.out_planar.iter().take(self.channels) {
+                out.push(plane[i]);
             }
         }
     }

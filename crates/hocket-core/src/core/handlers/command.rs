@@ -262,6 +262,7 @@ impl Actor {
                 document,
                 include_device_local,
             } => self.import_config(&document, include_device_local),
+            Command::ApplySetupSettings { settings } => self.apply_setup_settings(&settings),
             Command::AnswerDiagnosticsRequest { request_id, text } => {
                 self.answer_diagnostics_request(request_id, text)
             }

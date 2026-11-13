@@ -94,8 +94,8 @@ fun OfflineIndicator(modifier: Modifier = Modifier) {
 }
 
 /**
- * Who is signed in where, then Settings, Listening stats and Devices (the Connect picker), the
- * places not in the bottom bar (so every place stays reachable) and the bar editor.
+ * Who is signed in where, then Settings, Listening stats, Devices (the Connect picker) and Set up
+ * another device ([SetupDeviceSheet]), the places not in the bottom bar (so every place stays reachable) and the bar editor.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -104,12 +104,13 @@ fun AccountSheet(
     onSettings: () -> Unit,
     onStats: () -> Unit,
     onDevices: () -> Unit,
+    onSetUpDevice: () -> Unit,
     onPlace: (NavItem) -> Unit,
     onEditBar: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("account.sheet")) {
-        AccountSheetContent(barItems, onSettings, onStats, onDevices, onPlace, onEditBar)
+        AccountSheetContent(barItems, onSettings, onStats, onDevices, onSetUpDevice, onPlace, onEditBar)
     }
 }
 
@@ -120,6 +121,7 @@ fun AccountSheetContent(
     onSettings: () -> Unit,
     onStats: () -> Unit,
     onDevices: () -> Unit,
+    onSetUpDevice: () -> Unit,
     onPlace: (NavItem) -> Unit,
     onEditBar: () -> Unit,
 ) {
@@ -142,6 +144,7 @@ fun AccountSheetContent(
         SheetRow(HocketIcons.Filled.Settings, stringResource(R.string.account_settings), "account.settings", onSettings)
         SheetRow(HocketIcons.Filled.BarChart, stringResource(R.string.account_stats), "account.stats", onStats)
         SheetRow(HocketIcons.Filled.Devices, stringResource(R.string.account_devices), "account.devices", onDevices)
+        SheetRow(HocketIcons.Filled.QrCode2, stringResource(R.string.account_set_up_device), "account.setUpDevice", onSetUpDevice)
         val others = NavItem.entries.filter { it !in barItems && it != NavItem.Stats }
         if (others.isNotEmpty()) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))

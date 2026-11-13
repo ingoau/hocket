@@ -308,6 +308,59 @@ impl Actor {
         crate::settings::to_json(&doc).unwrap_or_default()
     }
 
+    /// Apply the settings a setup link carried ([`Command::ApplySetupSettings`]):
+    /// account-synced keys only, each stamped now, then announced like an
+    /// import. Quiet: the new device is being set up, so no toast.
+    pub(crate) fn apply_setup_settings(&mut self, settings: &str) {
+        let map = match serde_json::from_str::<serde_json::Value>(settings) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => {
+                self.log("warn", "setup settings: not a JSON object".to_string());
+                return;
+            }
+        };
+        let now = self.now();
+        let incoming: Vec<Setting> = map
+            .into_iter()
+            .filter(|(k, _)| {
+                crate::settings::lookup(k).is_some_and(|d| d.scope == SettingScope::AccountSynced)
+            })
+            .map(|(key, value)| Setting {
+                key,
+                value: value.to_string(),
+                scope: SettingScope::AccountSynced,
+                updated_at: now,
+            })
+            .collect();
+        let out = self.settings.import_settings(&incoming, now, false);
+        self.save_settings();
+        self.announce_imported_settings(&out);
+    }
+
+    /// After an import: every setting goes to the UI; changed synced keys go
+    /// through the local-edit path, which also feeds the engine (otherwise the
+    /// next merge from a peer would revert them).
+    fn announce_imported_settings(&mut self, out: &crate::settings::ImportOutcome) {
+        let changed_synced: std::collections::HashSet<&str> =
+            out.changed_synced.iter().map(String::as_str).collect();
+        let all = self.settings.to_api();
+        for s in &all {
+            if !changed_synced.contains(s.key.as_str()) {
+                self.emit(Event::SettingChanged { setting: s.clone() });
+            }
+        }
+        for key in &out.applied {
+            if !changed_synced.contains(key.as_str()) {
+                self.apply_setting_side_effects(key);
+            }
+        }
+        for s in all {
+            if changed_synced.contains(s.key.as_str()) {
+                self.after_setting_changed(s, true);
+            }
+        }
+    }
+
     /// Import a config document. Synced keys the document changes are
     /// broadcast like a local edit (otherwise the next merge from a peer
     /// would revert the import); device-local keys, including the `audio`
@@ -360,26 +413,7 @@ impl Actor {
             }
         }
         self.save_settings();
-        let changed_synced: std::collections::HashSet<&str> =
-            out.changed_synced.iter().map(String::as_str).collect();
-        // Everything is announced to the UI; changed synced keys go through
-        // the local-edit path below, which also feeds the engine.
-        let all = self.settings.to_api();
-        for s in &all {
-            if !changed_synced.contains(s.key.as_str()) {
-                self.emit(Event::SettingChanged { setting: s.clone() });
-            }
-        }
-        for key in &out.applied {
-            if !changed_synced.contains(key.as_str()) {
-                self.apply_setting_side_effects(key);
-            }
-        }
-        for s in all {
-            if changed_synced.contains(s.key.as_str()) {
-                self.after_setting_changed(s, true);
-            }
-        }
+        self.announce_imported_settings(&out);
         let shortcuts = self.registry.shortcuts();
         self.emit(Event::ShortcutsChanged { shortcuts });
         let mut notes = Vec::new();

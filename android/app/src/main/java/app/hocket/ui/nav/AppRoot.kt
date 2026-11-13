@@ -416,6 +416,11 @@ private fun MainShell(snackbar: SnackbarHostState) {
     val client = LocalCoreClient.current
     val nowPlaying = client.nowPlaying.collectAsStateWithLifecycle()
     val playerVisible by remember { derivedStateOf { nowPlaying.value != null } }
+    // Another device's setup code opened while this one is signed in: setup is where it applies.
+    val alreadySetUp = stringResource(R.string.setup_device_already_set_up)
+    LaunchedEffect(Unit) {
+        app.hocket.AppLinks.setup.collect { link -> if (link != null) { app.hocket.AppLinks.consume(link); snackbar.showSnackbar(alreadySetUp) } }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // The phone's bar: the compact floating pill, or the standard full-width bar.
         val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR).bool ?: true
@@ -470,6 +475,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             var accountOpen by rememberSaveable { mutableStateOf(false) }
             var editorOpen by rememberSaveable { mutableStateOf(false) }
             var devicesOpen by rememberSaveable { mutableStateOf(false) }
+            var setUpDeviceOpen by rememberSaveable { mutableStateOf(false) }
             // The phone navigation bar's height (including the edge-to-edge navigation-bar inset), so
             // the content column ends above it and the sheet's collapsed anchor sits on it. Known from
             // the first frame (fixed height + inset); the measurement only corrects it when it differs.
@@ -823,6 +829,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     onSettings = { accountOpen = false; nav.navigate(Route.Settings) { launchSingleTop = true } },
                     onStats = { accountOpen = false; go(NavItem.Stats) },
                     onDevices = { accountOpen = false; devicesOpen = true },
+                    onSetUpDevice = { accountOpen = false; setUpDeviceOpen = true },
                     onPlace = { accountOpen = false; go(it) },
                     onEditBar = { accountOpen = false; editorOpen = true },
                     onDismiss = { accountOpen = false },
@@ -830,6 +837,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             }
             if (editorOpen) BottomBarEditorSheet(onDismiss = { editorOpen = false })
             if (devicesOpen) app.hocket.ui.player.HandoffSheet(onDismiss = { devicesOpen = false })
+            if (setUpDeviceOpen) SetupDeviceSheet(onDismiss = { setUpDeviceOpen = false })
             }
         }
     }

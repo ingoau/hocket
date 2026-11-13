@@ -135,6 +135,8 @@ export class FakeCore implements CoreHandle {
   private devices: DeviceInfo[] = [];
   private connection: ConnectionState = { tier: "local", connected: false, coordinatorUrl: undefined, clockOffsetMs: 0, roundTripMs: undefined, peerCount: 0, error: undefined };
   private settings = new Map<string, Setting>();
+  /** Each seeded setting's default (JSON), for setupSettings. */
+  private settingDefaults = new Map<string, string>();
   private audio: AudioSettings;
   private transitions: TransitionSettings = { mode: "off", crossfadeSeconds: 6 };
   private outputDevices: OutputDevice[] = [
@@ -665,6 +667,9 @@ export class FakeCore implements CoreHandle {
         return;
       case "importConfig":
         this.importConfig(cmd.data.document);
+        return;
+      case "applySetupSettings":
+        this.applySetupSettings(cmd.data.settings);
         return;
       case "setAudioSettings":
         this.audio = cmd.data.settings;
@@ -2228,6 +2233,7 @@ export class FakeCore implements CoreHandle {
       if (onlyKey && key !== onlyKey) continue;
       const setting: Setting = { key, value: JSON.stringify(value), scope, updatedAt: Date.now() };
       this.settings.set(key, setting);
+      this.settingDefaults.set(key, setting.value);
       if (onlyKey) this.emit({ type: "settingChanged", data: { setting } });
     }
     if (onlyKey?.startsWith("battery.")) this.refreshSaver();
@@ -2311,6 +2317,29 @@ export class FakeCore implements CoreHandle {
       audio: this.audio,
       autoplay: this.autoplaySettings,
     };
+  }
+
+  /** Like the core: the account-synced settings changed from their defaults, key → value. */
+  private setupSettings(): string {
+    const out: Record<string, unknown> = {};
+    for (const s of this.settings.values()) {
+      if (s.scope === "accountSynced" && this.settingDefaults.get(s.key) !== s.value) out[s.key] = JSON.parse(s.value);
+    }
+    return JSON.stringify(out);
+  }
+
+  /** Like the core: known account-synced keys only. */
+  private applySetupSettings(json: string): void {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(json);
+    } catch {
+      return;
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    for (const [key, value] of Object.entries(obj)) {
+      if (this.settings.get(key)?.scope === "accountSynced") this.setSettingValue(key, JSON.stringify(value));
+    }
   }
 
   private importConfig(document: string): void {
@@ -2924,6 +2953,8 @@ export class FakeCore implements CoreHandle {
         return { type: "text", data: this.diagnostics() };
       case "roomDiagnostics":
         throw new Error("roomDiagnostics is answered by query()");
+      case "setupSettings":
+        return { type: "text", data: this.setupSettings() };
       case "configDocument":
         return { type: "text", data: JSON.stringify(this.configDocument(q.data.include_secrets), null, 2) };
       case "createShare": {

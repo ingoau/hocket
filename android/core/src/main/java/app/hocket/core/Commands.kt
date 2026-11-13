@@ -122,6 +122,7 @@ object Commands {
     fun setSettingsSync(enabled: Boolean) = Command.SetSettingsSync(CommandSetSettingsSyncInner(enabled))
     fun exportConfig(includeSecrets: Boolean) = Command.ExportConfig(CommandExportConfigInner(includeSecrets))
     fun importConfig(document: String) = Command.ImportConfig(CommandImportConfigInner(document))
+    fun applySetupSettings(settings: String) = Command.ApplySetupSettings(CommandApplySetupSettingsInner(settings))
     fun setAudioSettings(settings: AudioSettings) = Command.SetAudioSettings(CommandSetAudioSettingsInner(settings))
     fun setOutputDevice(id: String?) = Command.SetOutputDevice(CommandSetOutputDeviceInner(id))
 

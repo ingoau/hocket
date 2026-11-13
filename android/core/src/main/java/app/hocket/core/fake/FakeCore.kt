@@ -1080,6 +1080,7 @@ class FakeCore(
             Command.RetryReportUpload -> reportUpload?.takeIf { it.state == ReportUploadState.Failed }?.let { runReportUpload(it.totalBytes, it.sentBytes, it.startedAt) }
             Command.DismissReportUpload -> { reportUploadJob?.cancel(); reportUploadJob = null; setReportUpload(null) }
             is Command.ImportConfig -> toast("Configuration restored")
+            is Command.ApplySetupSettings -> applySetupSettings(c.data.settings)
             is Command.SetAudioSettings -> { audio = c.data.settings; emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
             is Command.SetOutputDevice -> { audio = audio.copy(outputDevice = c.data.id); emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
             Command.RefreshOutputDevices -> emit(Event.OutputDevicesChanged(EventOutputDevicesChangedInner(listOf(OutputDevice("default", "Phone speaker", true), OutputDevice("bt", "Headphones", false)))))
@@ -1489,6 +1490,18 @@ class FakeCore(
 
     private fun lyricsFor(id: TrackId): Lyrics? = library.lyricsByTrack[id]?.let { it.copy(offsetMs = lyricsOffsets[id] ?: 0) }
 
+    /** Like the core: the account-synced settings changed from their defaults, key → value. */
+    private fun setupSettings(): String = kotlinx.serialization.json.JsonObject(
+        settings.values.filter { it.scope == SettingScope.AccountSynced && it.value != defaults[it.key] }
+            .associate { it.key to HocketJson.json.parseToJsonElement(it.value) },
+    ).toString()
+
+    /** Like the core: known account-synced keys only; the rest are skipped. */
+    private fun applySetupSettings(json: String) {
+        val obj = runCatching { HocketJson.json.parseToJsonElement(json) as? kotlinx.serialization.json.JsonObject }.getOrNull() ?: return
+        for ((key, value) in obj) if (settings[key]?.scope == SettingScope.AccountSynced) setSetting(key, value.toString())
+    }
+
     private fun configDocument(secrets: Boolean) = HocketJson.json.encodeToString(ConfigDocument.serializer(), ConfigDocument(2u, now(), settings.values.toList(), filters.toList(), emptyList(), servers.toList(),
         if (secrets) hashMapOf("fake-server.password" to "••••") else null, audio, autoplaySettings, null))
 
@@ -1795,6 +1808,7 @@ class FakeCore(
         Query.RoomDiagnostics -> error("RoomDiagnostics is answered by query()")
         Query.ReportUpload -> QueryResult.ReportUpload(reportUpload)
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
+        Query.SetupSettings -> QueryResult.Text(setupSettings())
         is Query.CreateShare -> QueryResult.Share(q.data.ids.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() }?.let { CreatedShare("https://navidrome.example/share/${it.joinToString("-")}") })
         is Query.ExportAudio -> QueryResult.AudioFile(null)
         is Query.SongLink -> QueryResult.SongLink(

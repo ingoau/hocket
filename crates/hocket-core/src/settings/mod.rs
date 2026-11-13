@@ -335,6 +335,21 @@ impl Settings {
             .collect()
     }
 
+    /// The account-synced settings whose value differs from the registry
+    /// default, as key → value: what a setup link carries to a device set up
+    /// without a coordinator. Taken whether or not sync is on.
+    pub fn setup_settings(&self) -> serde_json::Map<String, Value> {
+        self.entries
+            .iter()
+            .filter(|(k, e)| {
+                lookup(k).is_some_and(|d| {
+                    d.scope == SettingScope::AccountSynced && (d.default)() != e.value
+                })
+            })
+            .map(|(k, e)| (k.clone(), e.value.clone()))
+            .collect()
+    }
+
     /// Accepts remote synced settings, last-write-wins per key. Returns the
     /// keys that changed. No-op when sync is off. Device-local keys and
     /// invalid values from peers are ignored.

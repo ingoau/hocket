@@ -9,8 +9,9 @@ import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from "nod
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, SetupLinkRequest, SetupLinkResult, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
 import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
+import { formatDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
@@ -58,6 +59,17 @@ const NOT_COLLECTED = "Other devices: not collected";
 export const REUSE_COLLECTION_MS = 15_000;
 /** Bundles kept in the diagnostics folder; older ones are removed when a new one is written. */
 const KEEP_BUNDLES = 5;
+
+/** The longest setup link a QR code carries (as Android's SetupDeviceSheet). */
+export const MAX_SETUP_CODE_LINK = 1800;
+
+function isSetupLinkRequest(v: unknown): v is SetupLinkRequest {
+  if (!v || typeof v !== "object") return false;
+  const r = v as Record<string, unknown>;
+  const short = (s: unknown) => typeof s === "string" && s.length > 0 && s.length <= 512;
+  const packed = (s: unknown) => typeof s === "string" && s.length <= 6000 && /^[A-Za-z0-9_-]+$/.test(s);
+  return short(r.server) && short(r.user) && (r.coordinator === undefined || short(r.coordinator)) && (r.settings === undefined || packed(r.settings)) && typeof r.includePassword === "boolean";
+}
 
 function isOurs(windows: Windows, sender: Electron.WebContents): boolean {
   return windows.all().some((w) => w.webContents.id === sender.id);
@@ -284,6 +296,23 @@ export function installIpc(deps: IpcDeps): void {
     if (r.canceled || !r.filePath) return undefined;
     await writeFile(r.filePath, text, { encoding: "utf8", mode: 0o600 });
     return r.filePath;
+  });
+
+  // Set up another device: the password leaves the credential store only when asked for.
+  ipcMain.handle(IPC.setupLink, (e, raw: unknown): SetupLinkResult => {
+    if (!isOurs(windows, e.sender) || !isSetupLinkRequest(raw)) throw new Error("rejected");
+    const password = deps.credentials.passwordFor(raw.server, raw.user);
+    const base = {
+      kind: "setup" as const,
+      server: raw.server,
+      user: raw.user,
+      ...(raw.includePassword && password ? { password } : {}),
+      ...(raw.coordinator ? { coordinator: raw.coordinator } : {}),
+    };
+    const link = formatDeepLink({ ...base, ...(raw.settings ? { settings: raw.settings } : {}) });
+    // Past this a code gets too dense to scan off a screen: it leaves the settings out (Copy link keeps them).
+    const codeLink = link.length <= MAX_SETUP_CODE_LINK ? link : formatDeepLink(base);
+    return { link, codeLink, passwordAvailable: password !== undefined };
   });
 
   ipcMain.handle(IPC.configImport, async (e): Promise<boolean> => {

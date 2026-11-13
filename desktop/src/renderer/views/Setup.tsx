@@ -9,6 +9,8 @@ import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { normaliseServerUrl } from "../lib/server-url";
+import { parseDeepLink, type SetupLink } from "@shared/deep-link";
+import { unpackSetupSettings } from "@shared/setup-settings";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { Icon } from "../components/Icon";
 import { BrandMark } from "../components/BrandMark";
@@ -66,27 +68,78 @@ function ConnectForm() {
   }, [lastError, submittedAt, busy]);
 
   const cleartext = /^http:\/\/./i.test(url.trim());
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const u = normaliseServerUrl(url);
+  // The coordinator, or else the (packed) settings, from a pasted setup link: applied as the form
+  // connects, and dropped once the person types a server or user of their own.
+  const [linkCoordinator, setLinkCoordinator] = useState<string | undefined>(undefined);
+  const [linkSettings, setLinkSettings] = useState<string | undefined>(undefined);
+  const connect = (rawUrl: string, user: string, pass: string, coordinator = linkCoordinator, settings = linkSettings) => {
+    const u = normaliseServerUrl(rawUrl);
     if (!u) return setError(t("setup.errorUrl"));
-    if (!username.trim() || !password) return setError(t("setup.errorCredentials"));
+    if (!user.trim() || !pass) return setError(t("setup.errorCredentials"));
     setError(undefined);
     setBusy(true);
     setSubmittedAt(Date.now());
     setSummary(true);
-    bridge().dispatch({ type: "addServer", data: { url: u, username: username.trim(), password, name: undefined } });
+    if (coordinator) {
+      bridge().dispatch({ type: "setCoordinatorUrl", data: { url: coordinator } });
+      bridge().dispatch({ type: "connectCoordinator" });
+    }
+    if (settings) {
+      void unpackSetupSettings(settings).then((json) => {
+        if (json) bridge().dispatch({ type: "applySetupSettings", data: { settings: json } });
+      });
+    }
+    bridge().dispatch({ type: "addServer", data: { url: u, username: user.trim(), password: pass, name: undefined } });
   };
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    connect(url, username, password);
+  };
+  // Another device's setup code (Set up another device): fills the form (its
+  // coordinator or settings are applied as the form connects). Pasted here
+  // (fromHere) with the password, it connects straight away. A hocket:// link
+  // opened from outside (any web page can open one) only fills in the server and
+  // user and waits for Connect: its coordinator and settings are dropped, since
+  // neither shows in the form and a coordinator receives the account's
+  // credential when the device joins it.
+  const applySetupLink = (link: SetupLink, fromHere: boolean) => {
+    setUrl(link.server);
+    setUsername(link.user);
+    setPassword(link.password ?? "");
+    setLinkCoordinator(fromHere ? link.coordinator : undefined);
+    setLinkSettings(fromHere ? link.settings : undefined);
+    setError(undefined);
+    if (fromHere && link.password && !busy) connect(link.server, link.user, link.password, link.coordinator, link.settings);
+  };
+  const pendingSetup = useApp((s) => s.pendingSetup);
+  useEffect(() => {
+    if (!pendingSetup) return;
+    useApp.getState().setPendingSetup(undefined);
+    applySetupLink(pendingSetup, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- applies each link once, as it arrives
+  }, [pendingSetup]);
+  const onUrl = (value: string) => {
+    // A pasted setup link, rather than an address (even pasted into a field that holds one).
+    const at = value.search(/hocket:\/\/setup\?/i);
+    const link = at >= 0 ? parseDeepLink(value.slice(at).trim()) : undefined;
+    if (link?.kind === "setup") return applySetupLink(link, true);
+    setUrl(value);
+    forgetLink();
+  };
+  function forgetLink() {
+    setLinkCoordinator(undefined);
+    setLinkSettings(undefined);
+  }
   const ready = !!url.trim() && !!username.trim() && !!password;
   return (
     <form className="setup-card" onSubmit={submit} aria-labelledby="setup-title" aria-describedby="setup-subtitle">
       <h1 id="setup-title" className="setup-title">{t("setup.title")}</h1>
       <p className="setup-subtitle" id="setup-subtitle">{t("setup.subtitle")}</p>
       <CredentialWarning />
-      <label className="setup-field">{t("setup.url")}<input className="input" type="url" aria-required="true" aria-invalid={error === t("setup.errorUrl") || undefined} aria-describedby={[error ? "setup-error" : "", "setup-url-hint", cleartext ? "setup-cleartext" : ""].filter(Boolean).join(" ")} placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => setUrl(e.target.value)} autoFocus data-testid="setup-url" /><span className="setup-hint" id="setup-url-hint">{t("setup.urlHint")}</span></label>
+      <label className="setup-field">{t("setup.url")}<input className="input" type="url" aria-required="true" aria-invalid={error === t("setup.errorUrl") || undefined} aria-describedby={[error ? "setup-error" : "", "setup-url-hint", cleartext ? "setup-cleartext" : ""].filter(Boolean).join(" ")} placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => onUrl(e.target.value)} autoFocus data-testid="setup-url" /><span className="setup-hint" id="setup-url-hint">{t("setup.urlHint")}</span></label>
       {cleartext ? <div className="setup-cleartext" id="setup-cleartext" data-testid="setup-cleartext"><Icon name="warn" size={18} />{t("setup.cleartext")}</div> : null}
       <div className="setup-pair">
-        <label className="setup-field">{t("setup.username")}<input className="input" aria-required="true" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" data-testid="setup-username" /></label>
+        <label className="setup-field">{t("setup.username")}<input className="input" aria-required="true" value={username} onChange={(e) => { setUsername(e.target.value); forgetLink(); }} autoComplete="username" data-testid="setup-username" /></label>
         <label className="setup-field">{t("setup.password")}
           <span className="setup-password">
             <input className="input" type={showPassword ? "text" : "password"} aria-required="true" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" data-testid="setup-password" />
