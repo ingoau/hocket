@@ -25,6 +25,7 @@ pub mod db;
 pub mod devlog;
 pub mod downloads;
 pub mod filters;
+pub mod identity;
 pub mod jobs;
 pub mod lyrics;
 pub mod media_session;
