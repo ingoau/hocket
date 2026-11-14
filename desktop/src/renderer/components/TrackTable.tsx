@@ -132,8 +132,8 @@ export function TrackTable(props: TrackTableProps) {
   const pendingFocus = useRef<number | undefined>(undefined);
   const selection = useApp((s) => (s.selectionScope === scope ? s.selection : EMPTY_SELECTION));
   const setSelection = useApp((s) => s.setSelection);
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
-  const snoozedIds = useApp((s) => s.snoozes.map((x) => x.trackId).join("\n"));
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
+  const snoozedIds = useApp((s) => s.snoozes.map((x) => x.trackRef.id).join("\n"));
   const snoozed = useMemo(() => new Set(snoozedIds ? snoozedIds.split("\n") : []), [snoozedIds]);
   const [focusIdx, setFocusIdx] = useState(0);
   const typeBuf = useRef({ text: "", at: 0 });

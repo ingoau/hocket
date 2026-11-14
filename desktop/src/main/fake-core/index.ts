@@ -11,7 +11,8 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
+  TrackRef,
+  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
@@ -115,7 +116,7 @@ export class FakeCore implements CoreHandle {
   private readonly config: CoreConfig;
   private readonly opts: Required<FakeOptions>;
   private lib: FakeLibrary | undefined;
-  private servers: ServerInfo[] = [];
+  private servers: AccountInfo[] = [];
   private session: SessionState = { list: [], ptr: 0, shuffle: false, repeat: "off", autoplay: true, revision: 1 };
   private transport: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 0.8, muted: false, volumeDevice: undefined };
   /** Each device's own volume (Connect: the control drives the device playing). */
@@ -283,19 +284,27 @@ export class FakeCore implements CoreHandle {
         this.powerSave = cmd.data.enabled;
         this.refreshSaver();
         return;
-      case "addServer":
-        this.addServer(cmd.data.url, cmd.data.username, cmd.data.name ?? new URL(cmd.data.url).host, false);
+      case "addAccount": {
+        const a = cmd.data.setup.data;
+        this.addServer(a.url, a.username, a.name ?? new URL(a.url).host, false);
         return;
-      case "removeServer":
-        this.servers = this.servers.filter((s) => s.id !== cmd.data.server_id);
+      }
+      case "reorderAccounts": {
+        const order = cmd.data.account_ids;
+        this.servers = [...this.servers].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)).map((a, i) => ({ ...a, priority: i }));
+        this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
+        return;
+      }
+      case "removeAccount":
+        this.servers = this.servers.filter((s) => s.id !== cmd.data.account_id);
         this.lib = undefined;
         // Like the core: its syncs must not read as the next server's.
         this.jobs = this.jobs.filter((j) => j.kind !== "librarySync");
         this.emitJobs();
-        this.emit({ type: "serversChanged", data: { servers: this.servers } });
+        this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
         this.persistServer(undefined);
         return;
-      case "probeServer":
+      case "probeAccount":
       case "syncLibrary":
         this.runSyncJob(cmd.type === "syncLibrary" && cmd.data.full);
         return;
@@ -358,7 +367,7 @@ export class FakeCore implements CoreHandle {
       case "resumeAlbum": {
         const p = this.albumResumes.find((x) => x.albumId === cmd.data.album_id);
         const album = this.lib?.albums.find((x) => x.id === cmd.data.album_id);
-        const ctx = { serverId: this.servers[0]?.id ?? "", kind: { type: "album" as const, data: { id: cmd.data.album_id } }, label: album?.name ?? "", sort: "default" as const, tracks: [] as string[] };
+        const ctx: QueueContext = { source: this.servers[0]?.id ?? "", kind: { type: "album" as const, data: { id: cmd.data.album_id } }, label: album?.name ?? "", sort: "default" as const, tracks: [] };
         if (!p) this.playContext(ctx, 0, false, true);
         else {
           this.playContext(ctx, p.trackIndex, false, true);
@@ -371,7 +380,7 @@ export class FakeCore implements CoreHandle {
         this.emitAlbumResumes();
         return;
       case "playTracks":
-        this.playContext({ serverId: cmd.data.server_id, kind: { type: "adHoc", data: { label: cmd.data.label } }, label: cmd.data.label, sort: "default", tracks: cmd.data.track_ids }, cmd.data.start_index, cmd.data.shuffle, true);
+        this.playContext({ source: cmd.data.server_id, kind: { type: "adHoc", data: { label: cmd.data.label } }, label: cmd.data.label, sort: "default", tracks: this.refs(cmd.data.track_ids) }, cmd.data.start_index, cmd.data.shuffle, true);
         if (cmd.data.start_position_ms) this.seek(cmd.data.start_position_ms);
         return;
       case "playNext":
@@ -408,10 +417,10 @@ export class FakeCore implements CoreHandle {
       case "stashQueueGroup": {
         const group = this.session.list.slice(Q.afterCurrent(this.session), Q.groupEnd(this.session));
         if (!group.length) return;
-        this.stashAdd(group.map((i) => i.trackId));
+        this.stashAdd(group.map((i) => i.track.id));
         // Only what is in the stash now leaves the queue; a song it could not take stays queued.
         const stashed = new Set(this.stash.filter((e) => !e.removed).map((e) => e.trackId));
-        const keys = group.filter((i) => stashed.has(i.trackId)).map((i) => i.key);
+        const keys = group.filter((i) => stashed.has(i.track.id)).map((i) => i.key);
         if (!keys.length) return;
         this.withUndo("Stash next in queue", () => {
           Q.removeKeys(this.session, keys);
@@ -644,7 +653,7 @@ export class FakeCore implements CoreHandle {
       case "setExternalLyricsEnabled":
         this.externalLyrics = cmd.data.enabled;
         this.setSettingValue("lyrics.external.enabled", JSON.stringify(cmd.data.enabled));
-        if (this.cur()) this.emitLyrics(this.cur()!.trackId);
+        if (this.cur()) this.emitLyrics(this.cur()!.track.id);
         return;
       case "fetchLyrics":
         this.emitLyrics(cmd.data.track_id);
@@ -975,7 +984,7 @@ export class FakeCore implements CoreHandle {
 
   private snapshot(): Snapshot {
     return {
-      servers: this.servers,
+      accounts: this.servers,
       session: this.sessionDocument(),
       queue: this.queueView(),
       transport: this.transport,
@@ -1030,8 +1039,12 @@ export class FakeCore implements CoreHandle {
       return;
     }
     const id = `srv-${hash32(url + username).toString(16)}`;
-    const server: ServerInfo = {
+    const server: AccountInfo = {
       id,
+      kind: "navidrome",
+      priority: 0,
+      source: id,
+      features: { librarySync: true, search: true, browse: true, stream: true, download: true, transcode: true, coverArt: true, star: true, rate: true, playlists: true, smartPlaylists: true, reportPlay: true, lyrics: true, radio: true, homeShelves: false, share: true },
       url,
       username,
       name,
@@ -1057,7 +1070,7 @@ export class FakeCore implements CoreHandle {
     if (!silent) {
       this.persistServer({ url, username, name });
       this.later(400, () => {
-        this.emit({ type: "serversChanged", data: { servers: this.servers } });
+        this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
         this.emit({ type: "filtersChanged", data: { filters: this.filters } });
         this.emit({ type: "storageChanged", data: { storage: this.storage() } });
         this.runSyncJob(true);
@@ -1104,7 +1117,7 @@ export class FakeCore implements CoreHandle {
         server.lastSync = Date.now();
         server.lastSyncTracks = total;
         this.emit({ type: "syncProgress", data: { progress: { serverId: server.id, phase: "done", done: total, total, readyTables: phases, finished: true } } });
-        this.emit({ type: "serversChanged", data: { servers: this.servers } });
+        this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
         this.emit({ type: "libraryChanged", data: { server_id: server.id, tables: [], ids: [] } });
         this.emitJobs();
         return;
@@ -1115,9 +1128,15 @@ export class FakeCore implements CoreHandle {
   }
 
   // ---- Queue -----------------------------------------------------------
+  /** Track references for this (single-account) library's ids. */
+  private refs(ids: string[]): TrackRef[] {
+    const source = this.servers[0]?.id ?? "";
+    return ids.map((id) => ({ source, id }));
+  }
+
   private contextTracks(ctx: QueueContext): string[] {
     if (!this.lib) return [];
-    if (ctx.tracks && ctx.tracks.length) return ctx.tracks;
+    if (ctx.tracks && ctx.tracks.length) return ctx.tracks.map((t) => t.id);
     const k = ctx.kind;
     switch (k.type) {
       case "album":
@@ -1132,7 +1151,7 @@ export class FakeCore implements CoreHandle {
         return this.evaluateFilter(k.data.filter).map((t) => t.id);
       case "adHoc":
       case "autoplay":
-        return ctx.tracks ?? [];
+        return (ctx.tracks ?? []).map((t) => t.id);
     }
   }
 
@@ -1146,7 +1165,7 @@ export class FakeCore implements CoreHandle {
   }
 
   private fresh(trackId: string, source: QueueSource, added: boolean): QueueItem {
-    return { key: newKey(), trackId, source, unavailable: false, added, queued: false, ordinal: 0 };
+    return { key: newKey(), track: { source: this.servers[0]?.id ?? "", id: trackId }, source, unavailable: false, added, queued: false, ordinal: 0 };
   }
 
   private playContext(ctx: QueueContext, startIndex: number | undefined, shuffle: boolean, saveOutgoing: boolean): void {
@@ -1155,7 +1174,7 @@ export class FakeCore implements CoreHandle {
     const { tracks, start: startIndexFiltered } = this.filterSnoozed(ctx.kind, raw, startIndex);
     startIndex = startIndexFiltered;
     if (!tracks.length) return;
-    const resolved: QueueContext = { ...ctx, tracks };
+    const resolved: QueueContext = { ...ctx, tracks: this.refs(tracks) };
     const before = this.captureSession();
     const outgoingPos = this.positionNow();
     if (saveOutgoing) this.autoSaveQueue();
@@ -1206,7 +1225,7 @@ export class FakeCore implements CoreHandle {
   }
 
   private adhocContext(tracks: string[]): QueueContext {
-    return { serverId: this.session.context?.serverId ?? this.servers[0]?.id ?? "", kind: { type: "adHoc", data: { label: "Queue" } }, label: "Queue", sort: "default", tracks };
+    return { source: this.session.context?.source ?? this.servers[0]?.id ?? "", kind: { type: "adHoc", data: { label: "Queue" } }, label: "Queue", sort: "default", tracks: this.refs(tracks) };
   }
 
   /** Move the pointer onto an entry; the list is untouched. */
@@ -1256,7 +1275,7 @@ export class FakeCore implements CoreHandle {
       const cur = Q.currentItem(s);
       s.shuffle = false;
       if (cur) {
-        s.context = this.adhocContext([cur.trackId]);
+        s.context = this.adhocContext([cur.track.id]);
         s.list = [{ ...cur, source: { type: "context", data: { index: 0 } }, queued: false, ordinal: 0 }];
         s.ptr = 0;
       } else {
@@ -1278,10 +1297,10 @@ export class FakeCore implements CoreHandle {
     const s = this.session;
     const cur = Q.currentItem(s);
     if (!this.lib || !cur) return undefined;
-    const seedTrack = this.lib.tracksById.get(cur.trackId);
+    const seedTrack = this.lib.tracksById.get(cur.track.id);
     // Offline, autoplay picks from what plays offline (the core's offline autoplay).
     const offline = this.isOffline();
-    const played = new Set(s.list.slice(0, s.ptr + 1).map((h) => h.trackId));
+    const played = new Set(s.list.slice(0, s.ptr + 1).map((h) => h.track.id));
     const fresh = (id: string) => !played.has(id);
     let pick = this.related(seedTrack?.id ?? "", 5).find((r) => fresh(r.track.id) && (!offline || FakeStreamCache.availableOffline(r.track)));
     if (!pick && offline) {
@@ -1331,8 +1350,8 @@ export class FakeCore implements CoreHandle {
       this.emitAlbumResumes();
       return;
     }
-    const track = this.lib?.tracksById.get(cur!.trackId);
-    const point = { albumId, trackId: cur!.trackId, trackIndex: index, positionMs: Math.round(this.positionNow()), durationMs: track?.durationMs ?? 0, updatedAt: Date.now() };
+    const track = this.lib?.tracksById.get(cur!.track.id);
+    const point = { albumId, trackId: cur!.track.id, trackIndex: index, positionMs: Math.round(this.positionNow()), durationMs: track?.durationMs ?? 0, updatedAt: Date.now() };
     this.albumResumes = [...this.albumResumes.filter((x) => x.albumId !== albumId), point];
     this.emitAlbumResumes();
   }
@@ -1361,7 +1380,7 @@ export class FakeCore implements CoreHandle {
     s.list[i]!.unavailable = true;
     if (i === s.ptr) {
       this.playerNotice = undefined;
-      this.setNotice("couldNotPlaySkipped", this.trackTitle(s.list[i]!.trackId));
+      this.setNotice("couldNotPlaySkipped", this.trackTitle(s.list[i]!.track.id));
       this.next(true);
     } else this.emitQueue();
   }
@@ -1378,7 +1397,7 @@ export class FakeCore implements CoreHandle {
     };
     this.consecutiveFailures = 0;
     this.cacheFilledKey = undefined;
-    const curTrack = cur ? this.lib?.tracksById.get(cur.trackId) : undefined;
+    const curTrack = cur ? this.lib?.tracksById.get(cur.track.id) : undefined;
     if (curTrack && play) this.cache.playStarted(curTrack);
     // The offline notices stay until something has played a moment (tick), like the core's clear on Playing.
     if (cur && this.playerNotice && !cur.unavailable && this.playerNotice !== "offlineSkipping") {
@@ -1386,7 +1405,7 @@ export class FakeCore implements CoreHandle {
     }
     this.emitNowPlaying();
     this.emitTransport();
-    if (cur) this.emitLyrics(cur.trackId);
+    if (cur) this.emitLyrics(cur.track.id);
   }
 
   /**
@@ -1402,7 +1421,7 @@ export class FakeCore implements CoreHandle {
       }
       return false;
     }
-    const t = this.lib?.tracksById.get(cur.trackId);
+    const t = this.lib?.tracksById.get(cur.track.id);
     if (!this.isOffline() || !t || FakeStreamCache.availableOffline(t)) {
       this.offlineSkips = 0;
       return false;
@@ -1498,7 +1517,7 @@ export class FakeCore implements CoreHandle {
   }
 
   private currentTrack(): Track | undefined {
-    const id = this.cur()?.trackId;
+    const id = this.cur()?.track.id;
     return id ? this.lib?.tracksById.get(id) : undefined;
   }
 
@@ -1521,8 +1540,8 @@ export class FakeCore implements CoreHandle {
     const s = this.session;
     const d = range ? Q.deriveRange(s, range.start, range.count) : Q.deriveWindow(s, VIEW_BEFORE, VIEW_AFTER);
     const entry = (item: QueueItem, inGroup = false): QueueEntry => {
-      const t = this.lib?.tracksById.get(item.trackId);
-      const track: TrackSummary = t ? summary(t) : { id: item.trackId, serverId: s.context?.serverId ?? "", title: item.trackId, durationMs: 0, rating: 0, loved: false, offline: "none" };
+      const t = this.lib?.tracksById.get(item.track.id);
+      const track: TrackSummary = t ? summary(t) : { id: item.track.id, serverId: s.context?.source ?? "", title: item.track.id, durationMs: 0, rating: 0, loved: false, offline: "none" };
       return { item, track, inGroup, autoplay: item.source.type === "autoplay" };
     };
     return {
@@ -1614,7 +1633,7 @@ export class FakeCore implements CoreHandle {
       // Stored without its entries (too long to keep): rebuild them around the current one.
       const cur = list[0];
       list = tracks.map((t, i) => ({ ...this.fresh(t, { type: "context", data: { index: i } }, false), ordinal: i }));
-      const at = cur ? (cur.source.type === "context" && tracks[cur.source.data.index] === cur.trackId ? cur.source.data.index : tracks.indexOf(cur.trackId)) : 0;
+      const at = cur ? (cur.source.type === "context" && tracks[cur.source.data.index] === cur.track.id ? cur.source.data.index : tracks.indexOf(cur.track.id)) : 0;
       if (cur && at >= 0) list[at] = { ...cur, ordinal: at };
       else if (cur) list.unshift(cur);
       ptr = Math.max(0, at);
@@ -1622,7 +1641,7 @@ export class FakeCore implements CoreHandle {
     const rebuilt = list.length > 1 && q.history.length + q.upcoming.length === 0;
     this.session = {
       ...this.session,
-      context: { ...q.context, tracks },
+      context: { ...q.context, tracks: this.refs(tracks) },
       list,
       ptr,
       shuffle: q.shuffle,
@@ -1649,9 +1668,9 @@ export class FakeCore implements CoreHandle {
       const q = this.savedQueues.find((s) => s.id === savedQueueId);
       if (!q) return;
       const entries = [...q.history, ...(q.current ? [q.current] : []), ...q.upcoming];
-      ids = entries.length > 1 ? entries.map((i) => i.trackId) : this.contextTracks(q.context);
+      ids = entries.length > 1 ? entries.map((i) => i.track.id) : this.contextTracks(q.context);
     } else {
-      ids = this.session.list.map((i) => i.trackId);
+      ids = this.session.list.map((i) => i.track.id);
     }
     this.createPlaylist(name, [...new Set(ids)]);
   }
@@ -1750,7 +1769,7 @@ export class FakeCore implements CoreHandle {
     const out: import("@core/api").SnoozeItem[] = [];
     for (const [trackId, until] of this.snoozes) {
       const track = this.lib?.tracksById.get(trackId);
-      if (track) out.push({ trackId, until: until ?? undefined, track });
+      if (track) out.push({ trackRef: { source: track.serverId, id: trackId }, until: until ?? undefined, track });
     }
     return out;
   }
@@ -2141,11 +2160,11 @@ export class FakeCore implements CoreHandle {
     if (!cur || !this.lib || this.cacheFilledKey === cur.key || this.transport.playedMs < CACHE_FILL_AFTER_MS) return;
     this.cacheFilledKey = cur.key;
     const changed: string[] = [];
-    const t = this.lib.tracksById.get(cur.trackId);
+    const t = this.lib.tracksById.get(cur.track.id);
     if (t && !this.isOffline() && this.cache.fill(t, false)) changed.push(t.id);
     const prefetchOk = !this.isOffline() && (!this.network?.metered || this.setting<boolean>("storage.prefetchOnMobileData", false));
     if (prefetchOk) {
-      const upcoming = s.list.slice(s.ptr + 1).filter((i) => !i.unavailable).map((i) => i.trackId).slice(0, 2);
+      const upcoming = s.list.slice(s.ptr + 1).filter((i) => !i.unavailable).map((i) => i.track.id).slice(0, 2);
       for (const id of upcoming) {
         const u = this.lib.tracksById.get(id);
         if (u && this.cache.fill(u, true)) changed.push(u.id);
@@ -2436,7 +2455,7 @@ export class FakeCore implements CoreHandle {
     const idx = tracks.indexOf(t.id);
     this.resumeOffer = undefined;
     this.emit({ type: "resumeOfferChanged", data: { offer: undefined } });
-    this.playContext({ serverId: this.lib.serverId, kind: { type: "album", data: { id: t.albumId } }, label: album?.name ?? "Album", sort: "default", tracks: [] }, idx, false, true);
+    this.playContext({ source: this.lib.serverId, kind: { type: "album", data: { id: t.albumId } }, label: album?.name ?? "Album", sort: "default", tracks: [] }, idx, false, true);
     this.seek(offer.positionMs);
   }
 
@@ -2520,19 +2539,19 @@ export class FakeCore implements CoreHandle {
       case "play":
         if (target.type === "albums" && target.data.ids.length === 1) {
           const a = this.lib?.albums.find((x) => x.id === target.data.ids[0]);
-          if (a) this.playContext({ serverId: sid, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, 0, false, true);
+          if (a) this.playContext({ source: sid, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, 0, false, true);
         } else if (target.type === "playlists" && target.data.ids.length === 1) {
           const p = this.lib?.playlists.find((x) => x.playlist.id === target.data.ids[0]);
-          if (p) this.playContext({ serverId: sid, kind: { type: "playlist", data: { id: p.playlist.id } }, label: p.playlist.name, sort: "default", tracks: [] }, undefined, false, true);
+          if (p) this.playContext({ source: sid, kind: { type: "playlist", data: { id: p.playlist.id } }, label: p.playlist.name, sort: "default", tracks: [] }, undefined, false, true);
         } else if (target.type === "artists" && target.data.ids.length === 1) {
           const a = this.lib?.artists.find((x) => x.id === target.data.ids[0]);
-          if (a) this.playContext({ serverId: sid, kind: { type: "artist", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, undefined, false, true);
+          if (a) this.playContext({ source: sid, kind: { type: "artist", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, undefined, false, true);
         } else if (trackIds.length) {
-          this.playContext({ serverId: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: "Selection", sort: "default", tracks: trackIds }, 0, false, true);
+          this.playContext({ source: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: "Selection", sort: "default", tracks: this.refs(trackIds) }, 0, false, true);
         }
         return;
       case "playShuffled":
-        if (trackIds.length) this.playContext({ serverId: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: this.targetLabel(target), sort: "default", tracks: trackIds }, undefined, true, true);
+        if (trackIds.length) this.playContext({ source: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: this.targetLabel(target), sort: "default", tracks: this.refs(trackIds) }, undefined, true, true);
         return;
       case "playNext":
       case "addToQueue":
@@ -2677,7 +2696,7 @@ export class FakeCore implements CoreHandle {
         return target.data.ids.flatMap((id) => this.lib?.playlists.find((p) => p.playlist.id === id)?.trackIds ?? []);
       case "queueItems": {
         const all = this.session.list;
-        return target.data.keys.map((k) => all.find((i) => i.key === k)?.trackId).filter((x): x is string => !!x);
+        return target.data.keys.map((k) => all.find((i) => i.key === k)?.track.id).filter((x): x is string => !!x);
       }
       case "savedQueue":
       case "none":
@@ -2707,7 +2726,7 @@ export class FakeCore implements CoreHandle {
 
   private emitNowPlaying(): void {
     const cur = this.cur();
-    const t = cur ? this.lib?.tracksById.get(cur.trackId) : undefined;
+    const t = cur ? this.lib?.tracksById.get(cur.track.id) : undefined;
     this.emit({ type: "nowPlayingChanged", data: { entry: cur && t ? { item: cur, track: summary(t) } : undefined } });
     this.emitMediaSession();
   }
@@ -2790,8 +2809,8 @@ export class FakeCore implements CoreHandle {
     switch (q.type) {
       case "snapshot":
         return { type: "snapshotResult", data: this.snapshot() };
-      case "servers":
-        return { type: "servers", data: this.servers };
+      case "accounts":
+        return { type: "accounts", data: this.servers };
       case "tracks": {
         const all = this.sortTracks(q.data.filter ? this.evaluateNode(q.data.filter) : (lib?.tracks ?? []), q.data.sort, q.data.descending);
         return { type: "tracks", data: { items: all.slice(q.data.page.offset, q.data.page.offset + q.data.page.limit), offset: q.data.page.offset, total: all.length } };

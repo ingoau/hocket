@@ -17,7 +17,7 @@ const KINDS: Kind[] = ["all", "songs", "lyrics", "albums", "artists", "playlists
 const PREVIEW = 5;
 
 export function SearchView({ query }: { query: string }) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const serverBatch = useApp((s) => s.lastServerSearch);
   // One request id per query, so a late server batch for the previous query is ignored.

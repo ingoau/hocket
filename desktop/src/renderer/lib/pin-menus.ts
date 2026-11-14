@@ -18,11 +18,11 @@ export function savePins(pins: LibraryPin[]): void {
 }
 
 export function playFilter(serverId: string, f: Filter, shuffle = false): void {
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter: f } }, label: filterName(f), sort: f.sort, tracks: [] }, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "filter", data: { filter: f } }, label: filterName(f), sort: f.sort, tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
 export function playGenre(serverId: string, name: string, shuffle = false): void {
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "genre", data: { name } }, label: name, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "genre", data: { name } }, label: name, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
 /** Opens the Edit pins panel (from [pin]'s menu, focus going back to it after, or the sidebar's pins). */
@@ -73,7 +73,7 @@ export function pinMenuItems(pin: LibraryPin, title: string, withUnpin: boolean,
   }
   if (pin.kind === "genre" || pin.kind === "filter") {
     const app = useApp.getState();
-    const serverId = app.servers[0]?.id ?? "";
+    const serverId = app.accounts[0]?.id ?? "";
     const filter = pin.kind === "filter" ? app.filters.find((f) => f.id === pin.id) : undefined;
     const play = (shuffle: boolean) => (filter ? playFilter(serverId, filter, shuffle) : playGenre(serverId, pin.id, shuffle));
     items.push({ id: "open", label: t("library.tap.open"), icon: "openInFull", enabled: true, run: () => useApp.getState().navigate(pin.kind === "genre" ? { view: "genre", id: pin.id } : { view: "filter", id: pin.id }) });

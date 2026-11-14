@@ -24,7 +24,7 @@ function resumeFraction(list: Track[], resume: AlbumResumePoint): number {
 }
 
 export function AlbumDetail({ id }: { id: string }) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const isPlaying = useApp((s) => s.transport.position.isPlaying);
@@ -40,7 +40,7 @@ export function AlbumDetail({ id }: { id: string }) {
   // play button primes that track. Once per visit (a remount is a new visit).
   useAlbumDwellPrime(a?.id);
   const primer = usePlayIntent(`album:${id}`);
-  const play = (start?: number, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
+  const play = (start?: number, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   const more = useQuery(() => (a?.artistId ? { type: "albums", data: { server_id: serverId, artist_id: a.artistId, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 13 } } } : null), "albums", [a?.artistId, serverId]);
   const others = (more.data?.items ?? []).filter((x) => x.id !== id).slice(0, 12);
   const footnote = [a?.year ? t("album.released", { year: a.year }) : "", a?.created ? t("album.added", { date: fmtDate(a.created) }) : "", a?.playCount ? t("album.plays", { count: a.playCount }) : ""].filter(Boolean).join(" · ");

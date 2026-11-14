@@ -2,7 +2,7 @@
 // with server results appended below a divider, container never shrinking),
 // and the job/problems indicator with its popover.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Job, SearchResults, ServerInfo, SyncProgress } from "@core/api";
+import type { Job, SearchResults, AccountInfo, SyncProgress } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
@@ -54,7 +54,7 @@ export function TopBar() {
 }
 
 function SearchBox() {
-  const serverId = useApp((s) => s.servers[0]?.id);
+  const serverId = useApp((s) => s.accounts[0]?.id);
   const focusNonce = useApp((s) => s.searchFocusNonce);
   const navigate = useApp((s) => s.navigate);
   const serverBatch = useApp((s) => s.lastServerSearch);
@@ -220,7 +220,7 @@ function JobsIndicator() {
   const jobs = useApp((s) => s.jobs);
   const problems = useApp((s) => s.problems);
   const sync = useApp((s) => s.syncProgress);
-  const servers = useApp((s) => s.servers);
+  const servers = useApp((s) => s.accounts);
   // Library syncs are summarised per server (last result only), not listed one row per run.
   const others = jobs.filter((j) => j.kind !== "librarySync");
   const [open, setOpen] = useState(false);
@@ -287,7 +287,7 @@ function JobsIndicator() {
 }
 
 /** The server's sync as one row: what it is doing or when it last finished, the library size or live count, one action. */
-function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
+function SyncRow({ server, job, sync }: { server: AccountInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
   const active = job && (job.state === "running" || job.state === "queued" || job.state === "paused") ? job : undefined;
   // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
   const unsuccessful = job && (job.state === "failed" || job.state === "cancelled") && job.updatedAt > (server.lastSync ?? 0) ? job : undefined;
@@ -319,7 +319,7 @@ function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefin
           <div className="small muted truncate">{supporting}</div>
         </div>
         {!active && failed ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "retryJob", data: { id: unsuccessful.id } })}>{t("jobs.retry")}</button>
-          : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { server_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
+          : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { account_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
           : active.state === "paused" ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "resumeJob", data: { id: active.id } })}>{t("jobs.resume")}</button>
           : active.cancellable ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "cancelJob", data: { id: active.id } })}>{t("jobs.cancel")}</button>
           : null}

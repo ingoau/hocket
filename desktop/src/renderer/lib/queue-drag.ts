@@ -292,7 +292,7 @@ export function addToQueue(target: ActionTarget, slot?: DropSlot): void {
   }
   void resolveTrackIds(target).then((ids) => {
     const s = useApp.getState();
-    const cmd = insertTracksCommand(s.queue, s.servers[0]?.id ?? "", ids, plan.insert);
+    const cmd = insertTracksCommand(s.queue, s.accounts[0]?.id ?? "", ids, plan.insert);
     if (cmd) s.dispatch(cmd);
   });
 }

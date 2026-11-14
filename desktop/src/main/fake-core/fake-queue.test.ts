@@ -16,7 +16,7 @@ beforeEach(() => {
     { dataDir: join(dir, "data"), cacheDir: join(dir, "cache"), deviceId: "dev-test", deviceName: "Test", platform: "linux", appVersion: "0.0.0", audio: "native" } as never,
     { trackCount: 300 },
   );
-  core.dispatch({ type: "addServer", data: { url: "https://music.test", username: "me", password: "x" } } as unknown as Command);
+  core.dispatch({ type: "addAccount", data: { setup: { type: "navidrome", data: { url: "https://music.test", username: "me", password: "x" } } } } as unknown as Command);
 });
 
 afterEach(async () => {
@@ -38,7 +38,7 @@ describe("FakeCore queue", () => {
     expect(v.currentIndex).toBe(120);
     expect(v.windowStart).toBe(20);
     expect(v.entries.length).toBe(201);
-    expect(v.current?.item.trackId).toBe(t[120]);
+    expect(v.current?.item.track.id).toBe(t[120]);
 
     core.dispatch({ type: "addToQueue", data: { server_id: sid(), track_ids: [lib.tracks[260]!.id] } });
     core.dispatch({ type: "playNext", data: { server_id: sid(), track_ids: [lib.tracks[261]!.id] } });
@@ -52,7 +52,7 @@ describe("FakeCore queue", () => {
     core.dispatch({ type: "previousTrack" });
     core.dispatch({ type: "previousTrack" });
     v = await view();
-    expect(v.current?.item.trackId).toBe(t[120]);
+    expect(v.current?.item.track.id).toBe(t[120]);
     expect(v.groupCount).toBe(2);
     expect(v.total).toBe(252);
 
@@ -99,11 +99,11 @@ describe("FakeCore queue", () => {
     core.dispatch({ type: "insertTracks", data: { server_id: sid(), track_ids: many, keys: [], after, in_group: false } });
     v = await view();
     expect(v.total).toBe(5 + 150);
-    expect(v.entries[3]!.item.trackId).toBe(many[0]);
+    expect(v.entries[3]!.item.track.id).toBe(many[0]);
     expect(v.entries[3]!.item.added).toBe(true);
     const range = expectResult(await core.query({ type: "queueRange", data: { start: 150, count: 5 } }), "queue");
-    expect(range.entries[0]!.item.trackId).toBe(many[147]);
-    expect(range.entries[3]!.item.trackId).toBe(lib.tracks[3]!.id);
+    expect(range.entries[0]!.item.track.id).toBe(many[147]);
+    expect(range.entries[3]!.item.track.id).toBe(lib.tracks[3]!.id);
   });
 
   it("stashing the group only removes songs the stash took", async () => {
@@ -111,12 +111,12 @@ describe("FakeCore queue", () => {
     core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(0, 3).map((x) => x.id), start_index: 0, label: "A", shuffle: false } });
     core.dispatch({ type: "addToQueue", data: { server_id: sid(), track_ids: [lib.tracks[10]!.id], keys: [] } });
     // An entry for a song the library (and so the stash) doesn't know.
-    const s = (core as unknown as { session: { list: { trackId: string; queued: boolean }[] } }).session;
-    s.list.splice(2, 0, { ...s.list[1]!, key: "ghost", trackId: "not-in-library", queued: true } as never);
+    const s = (core as unknown as { session: { list: { track: { source: string; id: string }; queued: boolean }[] } }).session;
+    s.list.splice(2, 0, { ...s.list[1]!, key: "ghost", track: { source: sid(), id: "not-in-library" }, queued: true } as never);
     core.dispatch({ type: "stashQueueGroup" });
     const v = await view();
     expect(v.groupCount).toBe(1);
-    expect(v.entries.find((e) => e.inGroup)?.item.trackId).toBe("not-in-library");
+    expect(v.entries.find((e) => e.inGroup)?.item.track.id).toBe("not-in-library");
   });
 
   it("restoring a shuffled queue rebuilt from its context shuffles what follows", async () => {
@@ -135,7 +135,7 @@ describe("FakeCore queue", () => {
     const v = await view();
     expect(v.total).toBe(40);
     expect(v.shuffle).toBe(true);
-    const order = v.entries.slice(1).map((e) => e.item.trackId);
+    const order = v.entries.slice(1).map((e) => e.item.track.id);
     expect(order).not.toEqual(ids.slice(1));
     expect([...order].sort()).toEqual(ids.slice(1).sort());
   });
@@ -150,7 +150,7 @@ describe("FakeCore queue", () => {
     expect(saved[0]?.upcoming.length).toBe(2);
     core.dispatch({ type: "restoreSavedQueue", data: { id: saved[0]!.id } });
     const v = await view();
-    expect(v.current?.item.trackId).toBe(lib.tracks[2]!.id);
+    expect(v.current?.item.track.id).toBe(lib.tracks[2]!.id);
     expect(v.historyCount).toBe(2);
   });
 });

@@ -252,9 +252,9 @@ async function main(): Promise<void> {
       applyBattery();
       pushNetwork(net.isOnline());
     }
-    if (event.type === "serversChanged") {
-      const servers = event.data.servers;
-      void credentialsOpen.then((c) => c.retainOnly(servers));
+    if (event.type === "accountsChanged") {
+      const accounts = event.data.accounts;
+      void credentialsOpen.then((c) => c.retainOnly(accounts));
     }
     if (event.type === "settingChanged") applySettingsFromSnapshot([event.data.setting]);
   });

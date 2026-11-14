@@ -171,6 +171,20 @@
 .dialog .setup-device-password { flex-direction: row; align-items: center; gap: 16px; cursor: pointer; color: var(--fg); }
 .setup-device-password .grow { display: flex; flex-direction: column; gap: 2px; font-weight: 400; }
 .setup-device-warn { color: var(--danger); }
+/* "Where's your music?" / "Add another source?": one card per kind of source. */
+.setup-sources:not(.setup-card) { width: 540px; max-width: 100%; display: flex; flex-direction: column; gap: 14px; }
+.setup .setup-heading { margin: 0 0 4px; font-size: 30px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.15; text-align: center; }
+.setup-source-list { display: flex; flex-direction: column; gap: 10px; }
+.setup-source { display: flex; align-items: center; gap: 16px; width: 100%; padding: 16px 18px; border-radius: var(--shape-lg); border: 1px solid var(--border); background: var(--bg-elev); color: var(--fg); text-align: left; font: inherit; cursor: pointer; transition: background-color var(--dur-short) var(--ease-emphasized), border-radius var(--dur-spring) var(--spring-fast); }
+.setup-source:hover { background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev)); }
+.setup-source:active { border-radius: var(--shape-md); }
+.setup-source:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.setup-source > .icon { flex: 0 0 auto; color: var(--accent-text); }
+.setup-source-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.setup-source-title { font-size: 16px; font-weight: 600; }
+.setup-source .setup-hint { margin: 0; }
+.setup-sources .setup-buttons { display: flex; justify-content: flex-end; gap: 10px; }
+.setup-sources > .setup-source { background: var(--bg-elev); }
 /* After Connect: what the server is, while the first sync runs. */
 .setup-summary { align-items: stretch; text-align: center; }
 .setup-version { margin: 0; font-size: 28px; line-height: 34px; font-weight: 700; }

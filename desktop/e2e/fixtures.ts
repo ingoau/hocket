@@ -85,6 +85,8 @@ export async function completeSetup(page: Page): Promise<void> {
   await page.getByTestId("setup-connect").click();
   // The summary of what was found, while the first sync runs; Continue goes in.
   await page.getByTestId("setup-continue").click({ timeout: 15_000 });
+  // "Add another source?": not now.
+  await page.getByTestId("setup-done").click({ timeout: 15_000 });
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }
 

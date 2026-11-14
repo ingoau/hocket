@@ -2,13 +2,13 @@
 // played lately, newest first) with its chips, filter and sort; and the top bar's toggle that
 // folds it to a rail of icons and covers.
 import type { Page } from "@playwright/test";
-import type { ServerInfo } from "../src/core/api";
+import type { AccountInfo } from "../src/core/api";
 import { completeSetup, expect, resizeWindow, test } from "./fixtures";
 
 async function playAlbum(page: Page, id: string): Promise<void> {
-  const servers = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: ServerInfo[] };
+  const servers = (await page.evaluate(() => window.hocket.query({ type: "accounts" }))) as { data: AccountInfo[] };
   const serverId = servers.data[0]!.id;
-  await page.evaluate(({ serverId, id }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: "Album", sort: "default" }, shuffle: false, saveOutgoing: true } } } as never), { serverId, id });
+  await page.evaluate(({ serverId, id }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label: "Album", sort: "default" }, shuffle: false, saveOutgoing: true } } } as never), { serverId, id });
   await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { albumId?: string } } } } }).data.queue.current?.track.albumId).toBe(id);
 }
 

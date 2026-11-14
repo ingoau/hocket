@@ -343,7 +343,7 @@ export function installIpc(deps: IpcDeps): void {
       detail: servers.length ? t("config.importServers", { n: servers.length }) : undefined,
     });
     if (confirm.response !== 0) return false;
-    for (const s of servers) dispatch({ type: "addServer", data: { url: s.url, username: s.username, password: s.password, name: s.name } });
+    for (const s of servers) dispatch({ type: "addAccount", data: { setup: { type: "navidrome", data: { url: s.url, username: s.username, password: s.password, name: s.name } } } });
     dispatch({ type: "importConfig", data: { document } });
     return true;
   });

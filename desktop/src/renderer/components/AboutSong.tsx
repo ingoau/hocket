@@ -87,7 +87,7 @@ export function AboutSong({ trackId, onNavigate, variant }: { trackId: string | 
 }
 
 function Related({ trackId }: { trackId: string }) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const { data, loading } = useQuery(() => ({ type: "related", data: { track_id: trackId, count: 12 } }), "related", [trackId], { static: true });
   const providerLabel = (p: string) => t(`related.provider.${p}` as never);
   const playNext = (id: string) => bridge().dispatch({ type: "playNext", data: { server_id: serverId, track_ids: [id] } });

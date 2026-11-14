@@ -107,7 +107,7 @@ export function usePinnedIds(kind: PinKind): ReadonlySet<string> {
 
 /** The recently played songs, newest first (refreshed as the current song changes, as Home's). */
 export function useRecentHistory(): PlayHistoryEntry[] | undefined {
-  const nowId = useApp((s) => s.session?.current?.trackId);
+  const nowId = useApp((s) => s.session?.current?.track.id);
   return useQuery(() => ({ type: "recentlyPlayed", data: { limit: 100 } }), "history", [nowId]).data;
 }
 

@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, BatterySaver, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem, SaverFeature,
+  AudioSettings, BatterySaver, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, AccountInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem, SaverFeature,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -17,7 +17,7 @@ export const saverEngaged = (saver: BatterySaver): boolean => saver.features.len
 
 export interface CoreState {
   ready: boolean;
-  servers: ServerInfo[];
+  accounts: AccountInfo[];
   session: SessionDocument | undefined;
   queue: QueueView;
   transport: TransportState;
@@ -80,7 +80,7 @@ export const EMPTY_TRANSPORT: TransportState = { lease: { owner: undefined, epoc
 
 export const initialCoreState: CoreState = {
   ready: false,
-  servers: [],
+  accounts: [],
   session: undefined,
   queue: EMPTY_QUEUE,
   transport: EMPTY_TRANSPORT,
@@ -129,7 +129,7 @@ export function applySnapshot(state: CoreState, s: Snapshot): CoreState {
   return {
     ...state,
     ready: true,
-    servers: s.servers,
+    accounts: s.accounts,
     session: s.session,
     queue: s.queue,
     transport: s.transport,
@@ -162,8 +162,8 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "snapshot":
       // Handled above (snapshotOf); kept so the exhaustiveness check below stays.
       return applySnapshot(state, e.data.snapshot);
-    case "serversChanged":
-      return { ...state, servers: e.data.servers };
+    case "accountsChanged":
+      return { ...state, accounts: e.data.accounts };
     case "syncProgress":
       return { ...state, syncProgress: e.data.progress, libraryVersion: e.data.progress.finished ? state.libraryVersion + 1 : state.libraryVersion };
     case "libraryChanged":

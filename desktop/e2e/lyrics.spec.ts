@@ -5,7 +5,7 @@
 import { completeSetup, expect, test, chooseOption, showSideView } from "./fixtures";
 
 async function playShowcase(page: import("@playwright/test").Page): Promise<void> {
-  const servers = await page.evaluate(async () => (await window.hocket.query({ type: "servers" })) as { type: string; data: { id: string }[] });
+  const servers = await page.evaluate(async () => (await window.hocket.query({ type: "accounts" })) as { type: string; data: { id: string }[] });
   const serverId = servers.data[0]!.id;
   await page.evaluate((sid) => window.hocket.dispatch({ type: "playTracks", data: { server_id: sid, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } }), serverId);
   await expect(page.getByTestId("player-bar").locator(".now .title")).toContainText("Word by Word");

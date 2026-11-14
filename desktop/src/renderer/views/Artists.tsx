@@ -13,7 +13,7 @@ import { recentFromHistory } from "../lib/list-groups";
 
 /** Artists: a grid of round portraits (Pinned, Recent, then all of them in the chosen order). */
 export function Artists() {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("artists"));
   const sort = order.sort as SortOrder;
@@ -25,7 +25,7 @@ export function Artists() {
   }, [serverId, sort, desc]);
   const { rows, total, onNeedRange } = usePagedGrid<Artist>(fetchPage, [serverId, sort, desc], 120);
   const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: albumCount(a), coverArt: a.coverArt, round: true } : undefined));
-  const playArtist = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: true, saveOutgoing: true } } });
+  const playArtist = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "artist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: true, saveOutgoing: true } } });
   const sorter = <SortMenu list="artists" value={order} onChange={(v) => { setOrder(v); saveListSort("artists", v); }} testId="artists-sort" />;
   return (
     <div className="view" data-testid="view-artists">

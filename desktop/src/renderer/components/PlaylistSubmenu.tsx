@@ -45,7 +45,7 @@ interface Props {
 type Row = { kind: "new" } | { kind: "playlist"; playlist: Playlist; state: RowState };
 
 export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onClose, exitProps }: Props) {
-  const serverId = useApp((s) => s.servers[0]?.id);
+  const serverId = useApp((s) => s.accounts[0]?.id);
   const dispatch = useApp((s) => s.dispatch);
   const pins = usePins();
   const ids = JSON.stringify(trackIds);

@@ -3,7 +3,7 @@ import type { Event, Snapshot } from "@core/api";
 import { SAVER_OFF, applySnapshot, dismissToast, initialCoreState, reduce, saverEngaged, saverHas, settingValue } from "./reducer";
 
 const snapshot: Snapshot = {
-  servers: [],
+  accounts: [],
   session: undefined,
   queue: { contextLabel: "Album", entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: true, repeat: "all", autoplay: true },
   transport: { lease: { owner: "me", epoch: 3, expiresAt: 1 }, position: { positionMs: 5000, takenAt: 0, rate: 1, isPlaying: true }, buffering: false, playedMs: 0, volume: 0.5 },
@@ -82,7 +82,7 @@ describe("reducer", () => {
 
   it("patches ratings and loves from libraryItemsChanged into now playing, the queue and server search results", () => {
     const track = (id: string) => ({ id, serverId: "s", title: id, durationMs: 1, rating: 0, loved: false, offline: "none" as const });
-    const entry = (id: string) => ({ item: { key: `k-${id}`, trackId: id, source: { type: "context" as const, data: { index: 0 } } }, track: track(id) });
+    const entry = (id: string) => ({ item: { key: `k-${id}`, track: { source: "s", id }, source: { type: "context" as const, data: { index: 0 } } }, track: track(id) });
     let s = applySnapshot(initialCoreState, { ...snapshot, queue: { ...snapshot.queue, current: entry("t1"), entries: [entry("t1"), entry("t2"), entry("t1")], total: 3, currentIndex: 0, totalUpcoming: 2 } });
     s = reduce(s, { type: "searchResults", data: { results: { requestId: "r", query: "q", tracks: [track("t1"), track("t3")], albums: [], artists: [], playlists: [], fromServer: true, lyrics: [] } } });
     const version = s.libraryVersion;
@@ -188,7 +188,7 @@ describe("reducer", () => {
   });
 
   it("nowPlaying follows QueueChanged and NowPlayingChanged", () => {
-    const entry = { item: { key: "k", trackId: "t", source: { type: "inserted" as const }, unavailable: false }, track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" as const } };
+    const entry = { item: { key: "k", track: { source: "s", id: "t" }, source: { type: "inserted" as const }, unavailable: false }, track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" as const } };
     let s = reduce(initialCoreState, { type: "queueChanged", data: { queue: { ...snapshot.queue, current: entry } } });
     expect(s.nowPlaying?.track.id).toBe("t");
     s = reduce(s, { type: "nowPlayingChanged", data: { entry: undefined } });

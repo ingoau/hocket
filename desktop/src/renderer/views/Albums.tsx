@@ -13,7 +13,7 @@ import { recentFromHistory } from "../lib/list-groups";
 
 /** Albums: the library's (Pinned, Recent, then all of them), or one genre's or artist's when given. */
 export function Albums({ artistId, genre, title }: { artistId?: string; genre?: string; title?: string } = {}) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("albums"));
   const sort = order.sort as SortOrder;
@@ -25,7 +25,7 @@ export function Albums({ artistId, genre, title }: { artistId?: string; genre?: 
   }, [serverId, artistId, genre, sort, desc]);
   const { rows, total, onNeedRange } = usePagedGrid<Album>(fetchPage, [serverId, artistId, genre, sort, desc], 120);
   const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: [a.artist, a.year].filter(Boolean).join(" · "), coverArt: a.coverArt, badge: a.offline === "downloaded" ? "download" : undefined } : undefined));
-  const playAlbum = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
+  const playAlbum = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const sorter = <SortMenu list="albums" value={order} onChange={(v) => { setOrder(v); saveListSort("albums", v); }} testId="albums-sort" />;
   // A genre's or an artist's albums are a plain list; the library's has its groups and the wordmark title.
   const library = !artistId && !genre;
