@@ -58,9 +58,9 @@ class SpotlightTest {
         val playing = lib.tracks[3]
         val resumed = lib.albums.first { it.id != playing.albumId && it.artistId != playing.artistId }
         val track = lib.albumTracks(resumed.id)[1]
-        core.fake.albumResumes[resumed.id] = AlbumResumePoint(resumed.id, track.id, 1u, track.durationMs / 3u, track.durationMs, 1.0)
+        core.fake.albumResumes[resumed.id] = AlbumResumePoint(source = "fake-server", albumId = resumed.id, track.id, 1u, track.durationMs / 3u, track.durationMs, 1.0)
         // The playing album's own point is never offered: it's what's on.
-        playing.albumId?.let { id -> core.fake.albumResumes[id] = AlbumResumePoint(id, playing.id, 0u, 1000u, playing.durationMs, 2.0) }
+        playing.albumId?.let { id -> core.fake.albumResumes[id] = AlbumResumePoint(source = "fake-server", albumId = id, playing.id, 0u, 1000u, playing.durationMs, 2.0) }
         core.start()
         val serverId = core.client.server.value!!.id
         val stats = (core.client.query(Queries.stats(365)) as? QueryResult.Stats)?.data
@@ -99,7 +99,7 @@ class SpotlightTest {
         val playing = lib.tracks[3]
         val resumed = lib.albums.first { it.id != playing.albumId && it.artistId != playing.artistId }
         val track = lib.albumTracks(resumed.id)[3]
-        core.fake.albumResumes[resumed.id] = AlbumResumePoint(resumed.id, track.id, 3u, track.durationMs / 3u, track.durationMs, 1.0)
+        core.fake.albumResumes[resumed.id] = AlbumResumePoint(source = "fake-server", albumId = resumed.id, track.id, 3u, track.durationMs / 3u, track.durationMs, 1.0)
         // A different painted cover per album; the resumed one nearly white, to show a pale cover
         // keeps the slide dark in the dark theme.
         val covers = Cover.entries.associateWith { coverFile(it) }

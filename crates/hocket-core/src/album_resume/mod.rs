@@ -40,6 +40,8 @@ pub struct Snapshot {
     /// Current item was added by autoplay: the album itself has run out.
     pub autoplay: bool,
     pub track_id: String,
+    /// Where the album and track ids are valid.
+    pub source: String,
     pub position_ms: Ms,
     pub duration_ms: Ms,
     /// The album's last track just ended (the queue stopped, or autoplay was asked for).
@@ -97,6 +99,7 @@ pub fn decide(snap: &Snapshot, now: EpochMs, enabled: bool) -> Decision {
         return Decision::Ignore;
     }
     Decision::Save(AlbumResumeEntry {
+        source: snap.source.clone(),
         album_id,
         track_id: snap.track_id.clone(),
         track_index: index,
@@ -254,6 +257,7 @@ pub fn clear(
         Some(_) => false,
         None if tombstone => {
             entries.push(AlbumResumeEntry {
+                source: String::new(),
                 album_id: album_id.to_string(),
                 track_id: String::new(),
                 track_index: 0,
@@ -276,6 +280,7 @@ fn live(e: &AlbumResumeEntry, now: EpochMs) -> bool {
 
 fn to_point(e: &AlbumResumeEntry) -> AlbumResumePoint {
     AlbumResumePoint {
+        source: e.source.clone(),
         album_id: e.album_id.clone(),
         track_id: e.track_id.clone(),
         track_index: e.track_index,
@@ -321,6 +326,7 @@ mod tests {
             index,
             autoplay: false,
             track_id: index.map(|i| format!("t{i}")).unwrap_or_default(),
+            source: "srv".into(),
             position_ms: 12_000,
             duration_ms: 180_000,
             finished: false,
@@ -521,6 +527,7 @@ mod tests {
 
     fn entry(album: &str, index: u32, at: f64) -> AlbumResumeEntry {
         AlbumResumeEntry {
+            source: "srv".into(),
             album_id: album.into(),
             track_id: format!("t{index}"),
             track_index: index,

@@ -156,7 +156,7 @@ class JobsSheetScreenshotTest {
     @Test
     fun neverSynced() {
         val core = show()
-        core.fake.stageSync(jobs = emptyList(), servers = core.client.servers.value.map { it.copy(lastSync = null, lastSyncTracks = null) })
+        core.fake.stageSync(jobs = emptyList(), servers = core.client.accounts.value.map { it.copy(lastSync = null, lastSyncTracks = null) })
         compose.waitForIdle()
         compose.onNodeWithText("Not synced yet").assertExists()
         shot("android-dark-activity-never-synced")
@@ -165,7 +165,7 @@ class JobsSheetScreenshotTest {
     @Test
     fun oneTrackIsSingular() {
         val core = show()
-        core.fake.stageSync(servers = core.client.servers.value.map { it.copy(lastSyncTracks = 1u) })
+        core.fake.stageSync(servers = core.client.accounts.value.map { it.copy(lastSyncTracks = 1u) })
         compose.waitForIdle()
         compose.onNodeWithText("music.example.net · 1 track").assertExists()
     }

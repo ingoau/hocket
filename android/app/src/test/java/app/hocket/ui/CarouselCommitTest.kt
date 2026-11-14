@@ -16,7 +16,7 @@ import org.junit.Test
 class CarouselCommitTest : PlayerRulesTestBase() {
     private fun keys(core: TestCore): List<String> {
         val q = core.client.queue.value
-        return listOfNotNull(q.current?.item?.trackId) + q.groupEntries.map { it.item.trackId } + q.restEntries.map { it.item.trackId }
+        return listOfNotNull(q.current?.item?.track?.id) + q.groupEntries.map { it.item.track.id } + q.restEntries.map { it.item.track.id }
     }
 
     /** A swipe towards next released [share] of the way (past half: a skip; the settle then runs on the test's clock). */

@@ -30,7 +30,7 @@ use crate::undo::UndoStack;
 use crate::util::Clock;
 
 use super::io::ConnectIo;
-use super::state::{PendingCas, Playback, SavedPosition, ServerState};
+use super::state::{AccountRegistry, AccountState, PendingCas, Playback, SavedPosition};
 use super::{ActorMsg, BackendChoice, CoreError, Deps, EventSink, Internal, PollFn};
 
 /// Session document persistence debounce.
@@ -184,9 +184,9 @@ pub(crate) struct Actor {
     pub discovery: Option<Box<dyn Discovery>>,
     pub lyrics_http: Option<Arc<dyn crate::lyrics::LyricsHttp>>,
 
-    pub server: Option<ServerState>,
-    /// Servers added but not yet verified by a probe.
-    pub pending_servers: HashMap<ServerId, super::PendingServer>,
+    pub accounts: AccountRegistry,
+    /// Accounts added but not yet verified by a probe.
+    pub pending_accounts: HashMap<AccountId, super::PendingAccount>,
     pub engine: Option<Engine>,
     pub scope: Option<String>,
     pub queued_inputs: VecDeque<Input>,
@@ -201,7 +201,7 @@ pub(crate) struct Actor {
     /// Where albums were left off, tombstones included (`crate::album_resume`).
     pub album_resumes: Vec<crate::api::AlbumResumeEntry>,
     /// Track and position the next local load should land on (album resume).
-    pub pending_resume_at: Option<(TrackId, Ms)>,
+    pub pending_resume_at: Option<(TrackRef, Ms)>,
     /// When the oldest offered album resume point expires (re-announced from the tick).
     pub album_resume_expires_at: Option<crate::api::EpochMs>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
@@ -212,7 +212,7 @@ pub(crate) struct Actor {
     pub emitted_devices: Option<Vec<DeviceInfo>>,
     /// Plays waiting for the session's scrobble verdict (mirrors the durable
     /// [`super::state::PendingScrobble`] records of the open scope).
-    pub pending_submits: HashMap<(TrackId, u64), super::state::PendingScrobble>,
+    pub pending_submits: HashMap<(TrackRef, u64), super::state::PendingScrobble>,
     pub pending_cas: HashMap<String, PendingCas>,
     pub outbox_entries: HashMap<String, String>,
 
@@ -495,8 +495,8 @@ impl Actor {
             listener_stop: None,
             discovery: None,
             lyrics_http: deps.lyrics_http,
-            server: None,
-            pending_servers: HashMap::new(),
+            accounts: AccountRegistry::default(),
+            pending_accounts: HashMap::new(),
             engine: None,
             scope: None,
             queued_inputs: VecDeque::new(),
@@ -568,7 +568,7 @@ impl Actor {
             &crate::saver::parse_custom(&actor.settings.get(crate::settings::keys::BATTERY_CUSTOM)),
         );
         crate::devlog::set_detailed(actor.settings.get_bool(keys::DEVELOPER_MODE));
-        if let Some(preset) = deps.server {
+        for preset in deps.servers {
             actor.attach_preset_server(preset);
         }
         Ok(actor)
@@ -638,7 +638,7 @@ impl Actor {
                 }
             },
             Internal::SyncProgress(p) => self.on_sync_progress(p),
-            Internal::Probed { server_id, result } => self.on_probed(server_id, result),
+            Internal::Probed { account_id, result } => self.on_probed(account_id, result),
             Internal::Connected { peer, url, tx } => {
                 self.conns.insert(peer.clone(), tx);
                 self.engine_input(Input::Connected { peer, url });
@@ -802,18 +802,18 @@ impl Actor {
                 "coordinator mode: no audio, no credentials, room served by hocket-coordinator",
             );
         }
-        // Servers (metadata only; credentials arrive with AddServer).
-        if self.server.is_none() {
-            match self.db.servers() {
-                Ok(list) => {
-                    if let Some(info) = list.into_iter().next() {
-                        self.server = Some(ServerState::new(info));
+        // Servers (metadata only; credentials arrive with AddAccount).
+        match self.db.accounts() {
+            Ok(list) => {
+                for info in list {
+                    if !self.accounts.contains(&info.id) {
+                        self.accounts.insert(AccountState::new(info));
                     }
                 }
-                Err(e) => self.error(ErrorKind::Storage, "load servers", Some(e.to_string())),
             }
+            Err(e) => self.error(ErrorKind::Storage, "load accounts", Some(e.to_string())),
         }
-        if self.server.is_some() && self.engine.is_none() {
+        if self.accounts.primary().is_some() && self.engine.is_none() {
             self.open_session();
         }
         // Jobs and outbox.
@@ -887,8 +887,8 @@ impl Actor {
                 snapshot: snapshot.clone(),
             });
         }
-        self.emit(Event::ServersChanged {
-            servers: snapshot.servers.clone(),
+        self.emit(Event::AccountsChanged {
+            accounts: snapshot.accounts.clone(),
         });
         if let Some(doc) = &snapshot.session {
             self.emit(Event::SessionChanged {
@@ -1278,12 +1278,37 @@ impl Actor {
         });
     }
 
-    pub(crate) fn server_id(&self) -> Option<String> {
-        self.server.as_ref().map(|s| s.info.id.clone())
+    /// The account the session is scoped to (Phase 1: the highest-priority
+    /// Navidrome account). Session-wide state (the document, the stash,
+    /// snoozes, album resume points, shared analysis) lives under it.
+    pub(crate) fn scope_account(&self) -> Option<String> {
+        self.accounts.primary().map(|s| s.info.id.clone())
     }
 
-    pub(crate) fn api(&self) -> Option<Arc<dyn crate::subsonic::SubsonicApi>> {
-        self.server.as_ref().and_then(|s| s.api.clone())
+    /// The provider whose ids are valid in `source`, once it has credentials.
+    pub(crate) fn provider_for(&self, source: &str) -> Option<Arc<dyn crate::provider::Provider>> {
+        self.accounts
+            .for_source(source)
+            .and_then(|a| a.provider.clone())
+    }
+
+    /// The Subsonic client for `source`, when it is a Navidrome account
+    /// with credentials: for work that is Subsonic through and through.
+    pub(crate) fn subsonic_for(
+        &self,
+        source: &str,
+    ) -> Option<Arc<dyn crate::subsonic::SubsonicApi>> {
+        self.accounts.for_source(source).and_then(|a| a.subsonic())
+    }
+
+    /// Every provider with credentials, highest priority first.
+    pub(crate) fn providers(&self) -> crate::provider::ProviderSet {
+        self.accounts.providers()
+    }
+
+    /// Whether any account can reach its server right now.
+    pub(crate) fn any_provider(&self) -> bool {
+        self.accounts.iter().any(|a| a.provider.is_some())
     }
 
     /// The gain the backend applies: the volume slider, scaled by the sleep
@@ -1303,7 +1328,7 @@ impl Actor {
     }
 
     pub(crate) fn snapshot(&mut self) -> Snapshot {
-        let servers = self.server_infos();
+        let accounts = self.account_infos();
         let session = self.engine.as_ref().map(|e| e.document().clone());
         let queue = self.queue_view();
         let transport = self.transport_state();
@@ -1313,7 +1338,7 @@ impl Actor {
         };
         let media_session = self.media_session_state(&queue, &transport);
         Snapshot {
-            servers,
+            accounts,
             session,
             queue,
             transport,

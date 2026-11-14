@@ -12,7 +12,7 @@ use hocket_core::util::WallClock;
 fn album_args(server_id: &str, album: &str) -> PlayContextArgs {
     PlayContextArgs {
         context: QueueContext {
-            server_id: server_id.into(),
+            source: server_id.into(),
             kind: ContextKind::Album { id: album.into() },
             label: String::new(),
             sort: SortOrder::Default,
@@ -168,9 +168,9 @@ async fn started_is_emitted_once_and_snapshot_requests_emit_snapshot() {
         .rposition(|e| matches!(e, Event::Snapshot { .. }))
         .unwrap();
     assert!(
-        events[snap_idx..]
-            .iter()
-            .any(|e| matches!(e, Event::ServersChanged { servers } if servers.len() == 1)),
+        events[snap_idx..].iter().any(
+            |e| matches!(e, Event::AccountsChanged { accounts: servers } if servers.len() == 1)
+        ),
         "ServersChanged follows the Snapshot"
     );
 
@@ -179,7 +179,7 @@ async fn started_is_emitted_once_and_snapshot_requests_emit_snapshot() {
     assert_eq!(started(&t), 1);
     assert_eq!(snapshots(&t), 2);
     let sid = t.server_id.clone();
-    t.run(Command::RemoveServer { server_id: sid }).await;
+    t.run(Command::RemoveAccount { account_id: sid }).await;
     assert_eq!(started(&t), 1);
     assert_eq!(snapshots(&t), 3);
 }

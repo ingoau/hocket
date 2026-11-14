@@ -17,7 +17,7 @@ use crate::db::Db;
 use crate::filters::{self, ServerCaps};
 use crate::lyrics::{ExternalLyricsProvider, LyricsRequest};
 use crate::outbox::{CancelOutcome, CasTarget, LoveTarget, Mutation, Prior};
-use crate::subsonic::convert::{album_from_id3, artist_from_id3, summary_of, track_from_child};
+use crate::subsonic::convert::{summary_of, track_from_child};
 use crate::subsonic::SubsonicApi;
 use crate::undo::{
     CasMutation, CasOutcome, CasResult, RemoteItem, RemoteTarget, RemoteUndo, RemoteValue,
@@ -26,10 +26,57 @@ use crate::undo::{
 impl Actor {
     // -- ratings and loves -----------------------------------------------------------
 
+    /// The account a mutation's target belongs to.
+    fn owner_of(&self, mutation: &Mutation) -> Option<String> {
+        use crate::outbox::LoveTarget;
+        let kind = match mutation {
+            Mutation::SetRating {
+                target: RatingTarget::Track { id },
+                ..
+            }
+            | Mutation::SetLoved {
+                target: LoveTarget::Track { id },
+                ..
+            } => return self.db.track(id).ok().flatten().map(|t| t.server_id),
+            Mutation::SetRating {
+                target: RatingTarget::Album { id },
+                ..
+            }
+            | Mutation::SetLoved {
+                target: LoveTarget::Album { id },
+                ..
+            } => ContextKind::Album { id: id.clone() },
+            Mutation::SetLoved {
+                target: LoveTarget::Artist { id },
+                ..
+            } => ContextKind::Artist { id: id.clone() },
+            Mutation::PlaylistDelete { playlist_id }
+            | Mutation::PlaylistRename { playlist_id, .. }
+            | Mutation::PlaylistAdd { playlist_id, .. }
+            | Mutation::PlaylistRemove { playlist_id, .. }
+            | Mutation::PlaylistMove { playlist_id, .. } => ContextKind::Playlist {
+                id: playlist_id.clone(),
+            },
+            _ => return None,
+        };
+        self.source_of_context(&kind)
+    }
+
+    /// Queue a mutation for its target's account (the session's account
+    /// when the mirror doesn't know the target).
     fn enqueue(&mut self, mutation: Mutation, prior: Option<Prior>) -> Option<String> {
-        let server_id = self.server_id()?;
+        let server_id = self.owner_of(&mutation).or_else(|| self.scope_account())?;
+        self.enqueue_on(&server_id, mutation, prior)
+    }
+
+    fn enqueue_on(
+        &mut self,
+        server_id: &str,
+        mutation: Mutation,
+        prior: Option<Prior>,
+    ) -> Option<String> {
         let key = mutation.target_key();
-        match self.outbox.enqueue(&server_id, mutation, prior) {
+        match self.outbox.enqueue(server_id, mutation, prior) {
             Ok(id) => {
                 self.outbox_entries.insert(key, id.clone());
                 Some(id)
@@ -46,11 +93,13 @@ impl Actor {
             .iter()
             .any(|t| *t == "playlists" || *t == "playlist_tracks");
         let refresh_queue = playlist_shape || ids.is_empty() || self.queue_contains_any(&ids);
-        if let Some(sid) = self.server_id() {
+        // The ids may be any account's: every account's screens refetch.
+        let tables: Vec<String> = tables.into_iter().map(String::from).collect();
+        for sid in self.accounts.ids() {
             self.emit(Event::LibraryChanged {
                 server_id: sid,
-                tables: tables.into_iter().map(String::from).collect(),
-                ids,
+                tables: tables.clone(),
+                ids: ids.clone(),
             });
         }
         self.schedule_flush();
@@ -66,10 +115,10 @@ impl Actor {
                 .iter()
                 .chain(d.upcoming.iter())
                 .chain(d.history.iter())
-                .any(|i| ids.contains(&i.track_id))
+                .any(|i| ids.contains(&i.track.id))
                 || d.context
                     .as_ref()
-                    .is_some_and(|c| c.tracks.iter().any(|t| ids.contains(t)))
+                    .is_some_and(|c| c.tracks.iter().any(|t| ids.contains(&t.id)))
         })
     }
 
@@ -104,7 +153,11 @@ impl Actor {
     /// the screens here, and the new values to the other devices in the
     /// Connect room (which apply them to their mirrors and tell theirs).
     pub(crate) fn announce_items(&mut self, targets: &[(LibraryItemKind, String)]) {
-        let Some(server_id) = self.server_id() else {
+        let Some(server_id) = targets
+            .first()
+            .and_then(|(_, id)| self.source_of_any_id(id))
+            .or_else(|| self.scope_account())
+        else {
             return;
         };
         let mut items: Vec<LibraryItemState> = vec![];
@@ -134,9 +187,6 @@ impl Actor {
     /// here and the mirror's row (and, with `with_tracks`, its order) to the
     /// other devices. A playlist the mirror no longer has goes out deleted.
     pub(crate) fn announce_playlists(&mut self, ids: &[PlaylistId], with_tracks: bool) {
-        let Some(server_id) = self.server_id() else {
-            return;
-        };
         let mut edits: Vec<PlaylistEdit> = vec![];
         for id in ids {
             if edits.iter().any(|e| &e.playlist_id == id) {
@@ -154,8 +204,14 @@ impl Actor {
             });
         }
         for e in &edits {
+            let server_id = e
+                .playlist
+                .as_ref()
+                .map(|p| p.server_id.clone())
+                .or_else(|| self.scope_account())
+                .unwrap_or_default();
             self.emit(Event::PlaylistChanged {
-                server_id: server_id.clone(),
+                server_id,
                 playlist_id: e.playlist_id.clone(),
                 playlist: e.playlist.clone(),
                 from_device: None,
@@ -178,24 +234,28 @@ impl Actor {
         items: Vec<LibraryItemState>,
         playlists: Vec<PlaylistEdit>,
     ) {
-        let Some(sid) = self.server_id() else {
+        let Some(sid) = self.scope_account() else {
             return;
         };
+        // Account ids are the same on every device: an edit names its
+        // account through the playlist row; items carry bare ids and apply
+        // wherever the mirror has them.
+        let known = self.accounts.ids();
         let applied = self.db.with_tx(|tx| {
             for it in &items {
                 let rating = it.rating.min(5);
                 match it.kind {
                     LibraryItemKind::Track => tx.execute(
-                        "UPDATE tracks SET rating = ?3, loved = ?4 WHERE server_id = ?1 AND id = ?2",
-                        rusqlite::params![sid, it.id, rating, it.loved as i64],
+                        "UPDATE tracks SET rating = ?2, loved = ?3 WHERE id = ?1",
+                        rusqlite::params![it.id, rating, it.loved as i64],
                     )?,
                     LibraryItemKind::Album => tx.execute(
-                        "UPDATE albums SET rating = ?3, loved = ?4 WHERE server_id = ?1 AND id = ?2",
-                        rusqlite::params![sid, it.id, rating, it.loved as i64],
+                        "UPDATE albums SET rating = ?2, loved = ?3 WHERE id = ?1",
+                        rusqlite::params![it.id, rating, it.loved as i64],
                     )?,
                     LibraryItemKind::Artist => tx.execute(
-                        "UPDATE artists SET loved = ?3 WHERE server_id = ?1 AND id = ?2",
-                        rusqlite::params![sid, it.id, it.loved as i64],
+                        "UPDATE artists SET loved = ?2 WHERE id = ?1",
+                        rusqlite::params![it.id, it.loved as i64],
                     )?,
                 };
             }
@@ -203,22 +263,24 @@ impl Actor {
                 match &p.playlist {
                     None => {
                         tx.execute(
-                            "DELETE FROM playlist_tracks WHERE server_id = ?1 AND playlist_id = ?2",
-                            [&sid, &p.playlist_id],
+                            "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+                            [&p.playlist_id],
                         )?;
-                        tx.execute(
-                            "DELETE FROM playlists WHERE server_id = ?1 AND id = ?2",
-                            [&sid, &p.playlist_id],
-                        )?;
+                        tx.execute("DELETE FROM playlists WHERE id = ?1", [&p.playlist_id])?;
                     }
+                    // An account this device doesn't have: nothing to mirror.
+                    Some(pl) if !known.contains(&pl.server_id) => {}
                     Some(pl) => {
-                        // The sender's row, under our own server id.
                         let mut pl = pl.clone();
                         pl.id = p.playlist_id.clone();
-                        pl.server_id = sid.clone();
                         crate::db::queries::upsert_playlists_in(tx, std::slice::from_ref(&pl), 0)?;
                         if let Some(ids) = &p.track_ids {
-                            crate::db::queries::set_playlist_tracks_in(tx, &sid, &pl.id, ids)?;
+                            crate::db::queries::set_playlist_tracks_in(
+                                tx,
+                                &pl.server_id,
+                                &pl.id,
+                                ids,
+                            )?;
                         }
                     }
                 }
@@ -450,7 +512,17 @@ impl Actor {
         name: String,
         track_ids: Vec<TrackId>,
     ) {
-        if self.server_id().as_deref() != Some(server_id.as_str()) {
+        // No account named: the first song's, else the session's.
+        let server_id = if server_id.is_empty() {
+            track_ids
+                .first()
+                .map(|id| self.track_ref_of(id).source)
+                .or_else(|| self.scope_account())
+                .unwrap_or_default()
+        } else {
+            server_id
+        };
+        if !self.accounts.contains(&server_id) {
             self.toast("Unknown server", None);
             return;
         }
@@ -458,7 +530,11 @@ impl Actor {
             self.toast("Give the playlist a name", None);
             return;
         }
-        self.enqueue(Mutation::PlaylistCreate { name, track_ids }, None);
+        self.enqueue_on(
+            &server_id,
+            Mutation::PlaylistCreate { name, track_ids },
+            None,
+        );
         self.after_library_mutation(vec!["playlists"], vec![]);
     }
 
@@ -862,8 +938,11 @@ impl Actor {
             self.finish_cas(entry_id);
             return;
         }
-        let api = self.api();
         for m in mutations {
+            // The account the target belongs to answers the CAS.
+            let api = self
+                .remote_target_owner(&m.target)
+                .and_then(|sid| self.subsonic_for(&sid));
             // Still in the outbox: cancel is the exact inverse.
             let key = cas_target_key(&m);
             if let Some(id) = key
@@ -880,7 +959,7 @@ impl Actor {
                     Err(e) => self.log("warn", format!("cancel outbox entry: {e}")),
                 }
             }
-            match (cas_target(&m), &m.expect, cas_new(&m), api.clone()) {
+            match (cas_target(&m), &m.expect, cas_new(&m), api) {
                 (Some(target), RemoteValue::Rating(exp), Some(Prior::Rating(new)), Some(api)) => {
                     self.spawn_cas(
                         entry_id,
@@ -947,7 +1026,7 @@ impl Actor {
     pub(crate) fn on_cas_result(&mut self, entry_id: String, result: CasResult) {
         self.record_cas(&entry_id, result);
         self.finish_cas(&entry_id);
-        if let Some(sid) = self.server_id() {
+        for sid in self.accounts.ids() {
             self.emit(Event::LibraryChanged {
                 server_id: sid,
                 tables: vec!["tracks".into(), "albums".into(), "artists".into()],
@@ -990,10 +1069,43 @@ impl Actor {
 
     // -- downloads -----------------------------------------------------------------------
 
+    /// Every account's pins.
     pub(crate) fn pins(&self) -> Vec<Pin> {
-        self.server_id()
-            .and_then(|sid| self.downloads.pins(&sid).ok())
-            .unwrap_or_default()
+        self.accounts
+            .ids()
+            .iter()
+            .flat_map(|sid| self.downloads.pins(sid).unwrap_or_default())
+            .collect()
+    }
+
+    /// The account a pin target belongs to.
+    fn pin_owner(&self, target: &PinTarget) -> Option<String> {
+        match target {
+            PinTarget::Track { id } => self.db.track(id).ok().flatten().map(|t| t.server_id),
+            PinTarget::Album { id } => {
+                self.source_of_context(&ContextKind::Album { id: id.clone() })
+            }
+            PinTarget::Playlist { id } => {
+                self.source_of_context(&ContextKind::Playlist { id: id.clone() })
+            }
+        }
+    }
+
+    /// The account an undo target belongs to.
+    fn remote_target_owner(&self, target: &RemoteTarget) -> Option<String> {
+        match target {
+            RemoteTarget::Track { id } => self.db.track(id).ok().flatten().map(|t| t.server_id),
+            RemoteTarget::Album { id } => {
+                self.source_of_context(&ContextKind::Album { id: id.clone() })
+            }
+            RemoteTarget::Artist { id } => {
+                self.source_of_context(&ContextKind::Artist { id: id.clone() })
+            }
+            RemoteTarget::Playlist { id }
+            | RemoteTarget::PlaylistTrack {
+                playlist_id: id, ..
+            } => self.source_of_context(&ContextKind::Playlist { id: id.clone() }),
+        }
     }
 
     pub(crate) fn storage_summary(&self) -> StorageSummary {
@@ -1002,7 +1114,7 @@ impl Actor {
     }
 
     pub(crate) fn pin(&mut self, target: PinTarget, transcode: bool) {
-        let Some(sid) = self.server_id() else {
+        let Some(sid) = self.pin_owner(&target).or_else(|| self.scope_account()) else {
             self.toast("Add a server first", None);
             return;
         };
@@ -1032,7 +1144,17 @@ impl Actor {
     }
 
     pub(crate) fn unpin(&mut self, target: PinTarget) {
-        let Some(sid) = self.server_id() else { return };
+        // The account holding the pin (the mirror may have dropped the item).
+        let held = self.accounts.ids().into_iter().find(|sid| {
+            self.downloads
+                .pins(sid)
+                .unwrap_or_default()
+                .iter()
+                .any(|p| p.target == target)
+        });
+        let Some(sid) = held.or_else(|| self.pin_owner(&target)) else {
+            return;
+        };
         // A paused job would otherwise outlive its pin and keep holding its
         // tracks from a later pin of the same target.
         for job in self
@@ -1065,7 +1187,7 @@ impl Actor {
         }
         let storage = self.storage_summary();
         self.emit(Event::StorageChanged { storage });
-        if let Some(server_id) = self.server_id() {
+        for server_id in self.accounts.ids() {
             self.emit(Event::LibraryChanged {
                 server_id,
                 tables: vec!["tracks".into()],
@@ -1143,10 +1265,12 @@ impl Actor {
         self.emit(Event::FiltersChanged { filters });
     }
 
+    /// The session account's Navidrome capabilities: filters and smart
+    /// playlists are Navidrome features, scoped to it.
     pub(crate) fn server_caps(&self) -> ServerCaps {
         let caps = self
-            .server
-            .as_ref()
+            .accounts
+            .primary()
             .map(|s| s.info.capabilities.clone())
             .unwrap_or_default();
         ServerCaps {
@@ -1172,7 +1296,7 @@ impl Actor {
 
     pub(crate) fn filter_preview(&self, filter: &Filter) -> FilterPreview {
         let capability = filters::capability(filter, self.server_caps());
-        let server_id = self.server_id().unwrap_or_default();
+        let server_id = self.scope_account().unwrap_or_default();
         let now = self.now();
         let count: u32 =
             filters::count_for_node(Some(&filter.root), &server_id, now)
@@ -1213,8 +1337,12 @@ impl Actor {
                 .ok()
         })
         .map(|ids| {
-            let map = self.summaries(&ids);
-            ids.iter().filter_map(|i| map.get(i).cloned()).collect()
+            let refs: Vec<TrackRef> = ids
+                .into_iter()
+                .map(|id| TrackRef::new(server_id.clone(), id))
+                .collect();
+            let map = self.summaries(&refs);
+            refs.iter().filter_map(|i| map.get(i).cloned()).collect()
         })
         .unwrap_or_default();
         FilterPreview {
@@ -1230,6 +1358,12 @@ impl Actor {
         filter: Filter,
         name: String,
     ) {
+        // A playlist lives on one account: the session's, unless named.
+        let server_id = if server_id.is_empty() {
+            self.scope_account().unwrap_or_default()
+        } else {
+            server_id
+        };
         let ids = self.filter_track_ids(&filter, &server_id);
         if ids.is_empty() {
             self.toast("The filter matches nothing right now", None);
@@ -1244,7 +1378,12 @@ impl Actor {
         filter: Filter,
         name: String,
     ) {
-        let Some(api) = self.api() else {
+        let server_id = if server_id.is_empty() {
+            self.scope_account().unwrap_or_default()
+        } else {
+            server_id
+        };
+        let Some(api) = self.subsonic_for(&server_id) else {
             self.toast("Add a server first", None);
             return;
         };
@@ -1349,8 +1488,22 @@ impl Actor {
     }
 
     /// Cached lyrics with the user's offset applied.
+    /// The account a bare track id from the UI is played from: the playing
+    /// track's when it is that one, else the highest-priority one with it.
+    pub(crate) fn source_for_track(&self, track_id: &str) -> Option<String> {
+        if let Some(t) = self.playback.track.as_ref().filter(|t| t.id == track_id) {
+            return Some(t.server_id.clone());
+        }
+        self.db
+            .ref_for_id(track_id)
+            .ok()
+            .flatten()
+            .map(|r| r.source)
+            .or_else(|| self.scope_account())
+    }
+
     pub(crate) fn cached_lyrics(&self, track_id: &str) -> Option<Lyrics> {
-        let sid = self.server_id()?;
+        let sid = self.source_for_track(track_id)?;
         let mut l = self.caches.lyrics_get_any(&sid, track_id).ok().flatten()?;
         crate::lyrics::set_user_offset(&mut l, self.lyrics_offset(track_id));
         Some(l)
@@ -1373,7 +1526,9 @@ impl Actor {
 
     /// Warm the cache for a track without announcing it (the next item).
     pub(crate) fn prefetch_lyrics(&mut self, track_id: TrackId) {
-        let Some(sid) = self.server_id() else { return };
+        let Some(sid) = self.source_for_track(&track_id) else {
+            return;
+        };
         let cached = self
             .caches
             .lyrics_get_any(&sid, &track_id)
@@ -1407,8 +1562,12 @@ impl Actor {
     }
 
     fn fetch_lyrics_with(&mut self, track_id: TrackId, force: bool, announce: bool) {
-        let Some(sid) = self.server_id() else { return };
-        let Some(api) = self.api() else { return };
+        let Some(sid) = self.source_for_track(&track_id) else {
+            return;
+        };
+        let Some(api) = self.provider_for(&sid) else {
+            return;
+        };
         if !force {
             if let Some(l) = self.cached_lyrics(&track_id) {
                 if announce {
@@ -1423,7 +1582,7 @@ impl Actor {
         let external_enabled = self
             .settings
             .get_bool(crate::settings::keys::LYRICS_EXTERNAL_ENABLED);
-        let track = self.track_or_bare(&track_id);
+        let track = self.track_or_bare(&TrackRef::new(sid.clone(), track_id.clone()));
         let caches = self.caches.clone();
         let tx = self.tx.clone();
         let http = self.lyrics_http.clone();
@@ -1435,7 +1594,7 @@ impl Actor {
         self.spawn(async move {
             let mut found: Option<Lyrics> = None;
             if !server_negative {
-                match api.lyrics_by_song_id(&track_id).await {
+                match api.lyrics(&track_id).await {
                     Ok(entries) => {
                         // A conversion failure is our bug, not "no lyrics":
                         // log it and do not negative-cache, or the track would
@@ -1574,31 +1733,39 @@ impl Actor {
                 .as_ref()
                 .is_some_and(|n| n.kind == NetworkKind::Offline);
         if wanted {
-            if let Some(api) = self.api() {
+            // Every account's provider (one, when the search names one).
+            let providers: Vec<Arc<dyn crate::provider::Provider>> = self
+                .providers()
+                .iter()
+                .filter(|p| server_id.is_empty() || p.source() == server_id)
+                .cloned()
+                .collect();
+            if !providers.is_empty() {
                 let tx = self.tx.clone();
-                let sid = server_id.clone();
-                let username = self.server.as_ref().map(|s| s.info.username.clone());
                 self.spawn(async move {
-                    let page = crate::subsonic::Search3Page::all(limit.clamp(1, 100));
-                    let Ok(r) = api.search3(&query, page).await else {
-                        return;
-                    };
-                    let results = SearchResults {
+                    let mut results = SearchResults {
                         request_id,
-                        query,
-                        tracks: r
-                            .song
-                            .iter()
-                            .map(|c| summary_of(&track_from_child(&sid, c)))
-                            .collect(),
-                        albums: r.album.iter().map(|a| album_from_id3(&sid, a)).collect(),
-                        artists: r.artist.iter().map(|a| artist_from_id3(&sid, a)).collect(),
+                        query: query.clone(),
+                        tracks: vec![],
+                        albums: vec![],
+                        artists: vec![],
                         playlists: vec![],
                         from_server: true,
                         lyrics: vec![],
                     };
-                    let _ = username;
-                    let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { results }));
+                    let mut any = false;
+                    for p in providers {
+                        let Ok(r) = p.search(&query, limit.clamp(1, 100)).await else {
+                            continue;
+                        };
+                        any = true;
+                        results.tracks.extend(r.tracks.iter().map(summary_of));
+                        results.albums.extend(r.albums);
+                        results.artists.extend(r.artists);
+                    }
+                    if any {
+                        let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { results }));
+                    }
                 });
             }
         }
@@ -1608,15 +1775,15 @@ impl Actor {
     // -- stats ---------------------------------------------------------------------------------
 
     pub(crate) fn play_rows(&self, since_ms: f64) -> Vec<crate::stats::PlayRow> {
-        let rows: Vec<(String, f64, u32, bool, String)> = self
+        let rows: Vec<(TrackRef, f64, u32, bool, String)> = self
             .db
             .with_conn(|c| {
                 let mut st = c.prepare_cached(
-                    "SELECT track_id, played_at, played_ms, scrobbled, device_id FROM play_history WHERE played_at >= ?1 ORDER BY played_at DESC",
+                    "SELECT track_id, played_at, played_ms, scrobbled, device_id, server_id FROM play_history WHERE played_at >= ?1 ORDER BY played_at DESC",
                 )?;
                 let rows = st.query_map([since_ms], |r| {
                     Ok((
-                        r.get::<_, String>(0)?,
+                        TrackRef::new(r.get::<_, String>(5)?, r.get::<_, String>(0)?),
                         r.get::<_, f64>(1)?,
                         r.get::<_, i64>(2)?.max(0) as u32,
                         r.get::<_, i64>(3)? != 0,
@@ -1626,13 +1793,13 @@ impl Actor {
                 Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
             .unwrap_or_default();
-        let ids: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
-        let tracks: HashMap<String, Track> = self
+        let refs: Vec<TrackRef> = rows.iter().map(|r| r.0.clone()).collect();
+        let tracks: HashMap<TrackRef, Track> = self
             .db
-            .tracks_by_ids(&ids)
+            .tracks_by_refs(&refs)
             .unwrap_or_default()
             .into_iter()
-            .map(|t| (t.id.clone(), t))
+            .map(|t| (TrackRef::new(t.server_id.clone(), t.id.clone()), t))
             .collect();
         let album_ids: Vec<String> = tracks.values().filter_map(|t| t.album_id.clone()).collect();
         let artist_ids: Vec<String> = tracks

@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import type { AlbumPage, ServerInfo, Snapshot } from "../src/core/api";
+import type { AlbumPage, AccountInfo, Snapshot } from "../src/core/api";
 import { completeSetup, launchFake, resizeWindow } from "./fixtures";
 
 const covers = process.env.HOCKET_FAKE_COVERS;
@@ -50,14 +50,14 @@ test("fullscreen player with real covers", async () => {
       await page.addStyleTag({ content: '[data-testid="toasts"] { display: none !important; }' });
       const theme = process.env.HOCKET_SCREENSHOT_THEME;
       if (theme === "light" || theme === "dark") await page.evaluate((value) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(value) } }), theme);
-      const servers = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: ServerInfo[] };
+      const servers = (await page.evaluate(() => window.hocket.query({ type: "accounts" }))) as { data: AccountInfo[] };
       const serverId = servers.data[0]!.id;
       const albums = ((await page.evaluate((id) => window.hocket.query({ type: "albums", data: { server_id: id, sort: "default", descending: false, page: { offset: 0, limit: 1000 } } }), serverId)) as { data: AlbumPage }).data.items;
       const count = Math.min(albums.length, total - offset);
       for (let i = 0; i < count; i++) {
         if (shot(offset + i)) continue;
         const album = albums[i]!;
-        await page.evaluate(({ serverId, id }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: "Album", sort: "default" }, shuffle: false, saveOutgoing: false } } }), { serverId, id: album.id });
+        await page.evaluate(({ serverId, id }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label: "Album", sort: "default" }, shuffle: false, saveOutgoing: false } } }), { serverId, id: album.id });
         if (i === 0) {
           await page.keyboard.press("f");
           await page.getByTestId("fullscreen-player").waitFor();

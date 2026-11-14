@@ -345,8 +345,8 @@ fun MenuSheet(
         onDispose { client.dispatch(Command.PreviewStop) }
     }
     val snoozeItems by client.snoozes.collectAsStateWithLifecycle()
-    val snoozed = subject.trackId?.let { id -> snoozeItems.any { it.trackId == id } }
-    val snoozeUntil = subject.trackId?.let { id -> snoozeItems.firstOrNull { it.trackId == id }?.until }
+    val snoozed = subject.trackId?.let { id -> snoozeItems.any { it.trackRef.id == id } }
+    val snoozeUntil = subject.trackId?.let { id -> snoozeItems.firstOrNull { it.trackRef.id == id }?.until }
     // The sleep timer (the player's extra row and its sub-page; nothing else on the menu sees it).
     val sleepTimer by client.sleepTimer.collectAsStateWithLifecycle()
     val sheetState = rememberPulledSheetState(pull)
@@ -891,7 +891,7 @@ internal fun snoozeTrackIds(target: app.hocket.core.api.ActionTarget, trackId: S
     is app.hocket.core.api.ActionTarget.Tracks -> target.data.ids
     is app.hocket.core.api.ActionTarget.QueueItems -> {
         val entries = queue.entries + listOfNotNull(queue.current)
-        val byKey = entries.associate { it.item.key to it.item.trackId }
+        val byKey = entries.associate { it.item.key to it.item.track.id }
         target.data.keys.mapNotNull { byKey[it] }.distinct().ifEmpty { listOfNotNull(trackId) }
     }
     else -> listOfNotNull(trackId)

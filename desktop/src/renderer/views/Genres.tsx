@@ -14,7 +14,7 @@ import { recentGenres } from "../lib/list-groups";
 
 /** Genres: Pinned, the genres of the songs played lately, then all of them (sorted here; the core hands them over whole). */
 export function Genres() {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("genres"));
   const { data, loading } = useQuery(() => ({ type: "genres", data: { server_id: serverId } }), "genres", [serverId]);

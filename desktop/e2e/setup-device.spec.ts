@@ -34,6 +34,8 @@ test.describe("set up another device", () => {
     await page.getByTestId("setup-url").fill("hocket://setup?server=https%3A%2F%2Fmusic.example.org&user=alice&password=secret&coordinator=wss%3A%2F%2Fcoord.example.org");
     await expect(page.getByTestId("setup-summary")).toBeVisible({ timeout: 15_000 });
     await page.getByTestId("setup-continue").click({ timeout: 15_000 });
+    // "Add another source?": not now.
+    await page.getByTestId("setup-done").click({ timeout: 15_000 });
     await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
   });
 
@@ -43,6 +45,8 @@ test.describe("set up another device", () => {
     const settings = deflateSync(JSON.stringify({ "queue.savedCap": 7, "display.theme": "dark" })).toString("base64url");
     await page.getByTestId("setup-url").fill(`hocket://setup?server=https%3A%2F%2Fmusic.example.org&user=alice&password=secret&settings=${settings}`);
     await page.getByTestId("setup-continue").click({ timeout: 15_000 });
+    // "Add another source?": not now.
+    await page.getByTestId("setup-done").click({ timeout: 15_000 });
     await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
     const value = (key: string) => page.evaluate(async (k) => {
       const r = await window.hocket.query({ type: "setting", data: { key: k } });
@@ -67,6 +71,8 @@ test.describe("set up another device", () => {
     await expect(page.getByTestId("setup-summary")).toHaveCount(0);
     await page.getByTestId("setup-connect").click();
     await page.getByTestId("setup-continue").click({ timeout: 15_000 });
+    // "Add another source?": not now.
+    await page.getByTestId("setup-done").click({ timeout: 15_000 });
     await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
     const cap = await page.evaluate(async () => {
       const r = await window.hocket.query({ type: "setting", data: { key: "queue.savedCap" } });

@@ -11,7 +11,7 @@ import { loadListSort, saveListSort, type ListSort } from "../lib/list-sort";
 import { GROUP_SIZE } from "../lib/list-groups";
 
 export function Songs() {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("songs"));
   const sort = order.sort as SortOrder;
@@ -46,7 +46,7 @@ export function Songs() {
 
 /** Pinned songs, then the songs played lately; a click plays that one song. */
 function SongGroups() {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const pins = usePinsOf("track");
   const pinned = usePinnedIds("track");
   const history = useRecentHistory();

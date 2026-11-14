@@ -21,11 +21,12 @@ object Commands {
     fun setVisibility(visible: Boolean, focused: Boolean) = Command.SetVisibility(CommandSetVisibilityInner(visible, focused))
     /** The device's own power-save state; battery saver itself is the `battery.level` setting. */
     fun setPowerSave(enabled: Boolean) = Command.SetPowerSave(CommandSetPowerSaveInner(enabled))
-    fun addServer(url: String, username: String, password: String, name: String? = null) =
-        Command.AddServer(CommandAddServerInner(url, username, password, name))
-    fun removeServer(serverId: ServerId) = Command.RemoveServer(CommandRemoveServerInner(serverId))
-    fun probeServer(serverId: ServerId) = Command.ProbeServer(CommandProbeServerInner(serverId))
-    fun syncLibrary(serverId: ServerId, full: Boolean) = Command.SyncLibrary(CommandSyncLibraryInner(serverId, full))
+    fun addNavidrome(url: String, username: String, password: String, name: String? = null) =
+        Command.AddAccount(CommandAddAccountInner(AccountSetup.Navidrome(AccountSetupNavidromeInner(url, username, password, name))))
+    fun removeAccount(accountId: AccountId) = Command.RemoveAccount(CommandRemoveAccountInner(accountId))
+    fun reorderAccounts(accountIds: List<AccountId>) = Command.ReorderAccounts(CommandReorderAccountsInner(accountIds))
+    fun probeAccount(accountId: AccountId) = Command.ProbeAccount(CommandProbeAccountInner(accountId))
+    fun syncLibrary(accountId: AccountId, full: Boolean) = Command.SyncLibrary(CommandSyncLibraryInner(accountId, full))
     fun setTranscodingProfile(networkId: String?, profile: TranscodingProfile) =
         Command.SetTranscodingProfile(CommandSetTranscodingProfileInner(networkId, profile))
 
@@ -165,7 +166,7 @@ object Commands {
     fun filterContext(serverId: ServerId, filter: Filter) =
         QueueContext(serverId, ContextKind.Filter(ContextKindFilterInner(filter)), filter.name, filter.sort)
     fun adHocContext(serverId: ServerId, label: String, tracks: List<TrackId>, sort: SortOrder = SortOrder.Default) =
-        QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(label)), label, sort, tracks)
+        QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(label)), label, sort, tracks.map { TrackRef(serverId, it) })
 
     fun trackPin(id: TrackId): PinTarget = PinTarget.Track(PinTargetTrackInner(id))
     fun albumPin(id: AlbumId): PinTarget = PinTarget.Album(PinTargetAlbumInner(id))

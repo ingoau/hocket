@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{self, RatingTarget};
 use crate::db::{Db, DbError, DbResult};
 use crate::jobs::{JobContext, JobError, JobResult, JobRunner, RetryAction};
+use crate::provider::{Provider, ProviderSet};
 use crate::subsonic::{PlayQueueSave, PlaylistUpdate, StarTarget, SubsonicApi, SubsonicError};
 use crate::util::{new_id, Clock};
 
@@ -266,6 +267,26 @@ pub struct FlushReport {
     /// Playlists whose mirror row or order was rewritten from the server's
     /// answer (or removed because the server no longer has them), in order.
     pub playlists: Vec<String>,
+    /// Accounts with an entry applied.
+    pub servers: Vec<String>,
+}
+
+impl FlushReport {
+    /// Fold another account's report into this one.
+    pub fn absorb(&mut self, other: FlushReport) {
+        self.applied += other.applied;
+        self.deferred += other.deferred;
+        self.failed.extend(other.failed);
+        self.expired += other.expired;
+        self.conflicts.extend(other.conflicts);
+        self.created_playlists.extend(other.created_playlists);
+        self.playlists.extend(other.playlists);
+        for s in other.servers {
+            if !self.servers.contains(&s) {
+                self.servers.push(s);
+            }
+        }
+    }
 }
 
 /// Compare-and-swap target for inverses of sent mutations.
@@ -456,6 +477,22 @@ impl Outbox {
         })
     }
 
+    /// Pending entries for these accounts (the ones that can be sent now).
+    pub fn pending_count_for(&self, accounts: &[String]) -> DbResult<u32> {
+        let mut n = 0u32;
+        for a in accounts {
+            n += self.db.with_conn(|c| {
+                let n: i64 = c.query_row(
+                    "SELECT count(*) FROM outbox WHERE server_id = ?1 AND status IN ('pending','inflight')",
+                    [a],
+                    |r| r.get(0),
+                )?;
+                Ok(n as u32)
+            })?;
+        }
+        Ok(n)
+    }
+
     pub fn pending_count(&self) -> DbResult<u32> {
         self.db.with_conn(|c| {
             let n: i64 = c.query_row(
@@ -525,9 +562,9 @@ impl Outbox {
 
     /// Send every due entry for the api's server. Stops early on the first
     /// network failure (the rest would fail the same way) and reschedules.
-    pub async fn flush(&self, api: &dyn SubsonicApi, max: usize) -> DbResult<FlushReport> {
+    pub async fn flush(&self, provider: &dyn Provider, max: usize) -> DbResult<FlushReport> {
         let now = self.clock.now_ms();
-        let server_id = api.server_id().to_string();
+        let server_id = provider.account_id().to_string();
         let due: Vec<OutboxEntry> = self.db.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
                 "SELECT {ENTRY_COLUMNS} FROM outbox WHERE server_id = ?1 AND status = 'pending' AND next_attempt_at <= ?2 ORDER BY created_at ASC LIMIT ?3"
@@ -565,7 +602,7 @@ impl Outbox {
             if !claimed {
                 continue; // cancelled meanwhile
             }
-            match self.execute(api, &entry, &mut report).await {
+            match self.execute(provider, &entry, &mut report).await {
                 Ok(post) => {
                     // Mirror update and `done` are one transaction: either
                     // both land or the entry is replayed (idempotently).
@@ -596,6 +633,9 @@ impl Outbox {
                         return Err(e);
                     }
                     report.applied += 1;
+                    if !report.servers.contains(&server_id) {
+                        report.servers.push(server_id.clone());
+                    }
                 }
                 // Local DB trouble (`Io`) after a server call is not a reason
                 // to give up: the replay is idempotent, so defer like a
@@ -646,10 +686,22 @@ impl Outbox {
     /// the call may already have been applied (crash, lost response).
     async fn execute(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         entry: &OutboxEntry,
         report: &mut FlushReport,
     ) -> Result<PostCall, SubsonicError> {
+        if matches!(entry.mutation, Mutation::Scrobble { .. }) {
+            return self.execute_scrobble(provider, entry).await;
+        }
+        // Everything else is a Subsonic edit (ratings, stars, playlists by
+        // index, the play queue).
+        let Some(api) = provider.navidrome().map(|a| a.as_ref()) else {
+            return Err(SubsonicError::Unsupported(format!(
+                "{} on a {:?} account",
+                entry.mutation.target_key(),
+                provider.kind()
+            )));
+        };
         let replay = entry.attempts > 0;
         match &entry.mutation {
             Mutation::SetRating { target, rating } => {
@@ -908,38 +960,7 @@ impl Outbox {
                 }
                 self.refresh_playlist(api, playlist_id).await
             }
-            Mutation::Scrobble {
-                track_id,
-                played_at,
-                submission,
-                history_id,
-            } => {
-                // A submission whose history row is already scrobbled was
-                // delivered on a previous attempt: done, never sent twice.
-                if let (true, Some(h)) = (submission, history_id) {
-                    let already: bool = self
-                        .db
-                        .with_conn(|c| {
-                            Ok(c.query_row(
-                                "SELECT scrobbled FROM play_history WHERE id = ?1",
-                                [h],
-                                |r| r.get::<_, i64>(0),
-                            )
-                            .optional()?
-                            .is_some_and(|v| v != 0))
-                        })
-                        .map_err(db_err)?;
-                    if already {
-                        return Ok(PostCall::None);
-                    }
-                }
-                api.scrobble(track_id, Some(*played_at), *submission)
-                    .await?;
-                Ok(match (submission, history_id) {
-                    (true, Some(h)) => PostCall::Scrobbled(*h),
-                    _ => PostCall::None,
-                })
-            }
+            Mutation::Scrobble { .. } => self.execute_scrobble(provider, entry).await,
             Mutation::SavePlayQueue {
                 track_ids,
                 current,
@@ -954,6 +975,49 @@ impl Outbox {
                 Ok(PostCall::None)
             }
         }
+    }
+
+    /// A scrobble (or "now playing"): the one mutation every provider takes.
+    async fn execute_scrobble(
+        &self,
+        provider: &dyn Provider,
+        entry: &OutboxEntry,
+    ) -> Result<PostCall, SubsonicError> {
+        let Mutation::Scrobble {
+            track_id,
+            played_at,
+            submission,
+            history_id,
+        } = &entry.mutation
+        else {
+            return Ok(PostCall::None);
+        };
+        // A submission whose history row is already scrobbled was
+        // delivered on a previous attempt: done, never sent twice.
+        if let (true, Some(h)) = (submission, history_id) {
+            let already: bool = self
+                .db
+                .with_conn(|c| {
+                    Ok(c.query_row(
+                        "SELECT scrobbled FROM play_history WHERE id = ?1",
+                        [h],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .is_some_and(|v| v != 0))
+                })
+                .map_err(db_err)?;
+            if already {
+                return Ok(PostCall::None);
+            }
+        }
+        provider
+            .report_play(track_id, Some(*played_at), *submission)
+            .await?;
+        Ok(match (submission, history_id) {
+            (true, Some(h)) => PostCall::Scrobbled(*h),
+            _ => PostCall::None,
+        })
     }
 
     /// Re-read a playlist after an edit; the mirror write happens with `done`.
@@ -1337,19 +1401,19 @@ pub struct FlushJobPayload {
 /// for permanently failed entries and one for entries stuck for many attempts.
 pub struct OutboxFlushRunner {
     outbox: Outbox,
-    api: Arc<dyn SubsonicApi>,
+    providers: ProviderSet,
 }
 
 impl OutboxFlushRunner {
-    pub fn new(outbox: Outbox, api: Arc<dyn SubsonicApi>) -> Self {
-        OutboxFlushRunner { outbox, api }
+    pub fn new(outbox: Outbox, providers: ProviderSet) -> Self {
+        OutboxFlushRunner { outbox, providers }
     }
 }
 
 impl JobRunner for OutboxFlushRunner {
     fn run(&self, ctx: JobContext) -> BoxFuture<'static, JobResult<()>> {
         let outbox = self.outbox.clone();
-        let api = self.api.clone();
+        let providers = self.providers.clone();
         Box::pin(async move {
             let payload: FlushJobPayload = serde_json::from_str(&ctx.payload).unwrap_or_default();
             if payload.retry_failed {
@@ -1359,14 +1423,18 @@ impl JobRunner for OutboxFlushRunner {
             ctx.set_progress(0, Some(total));
             let mut done = 0u32;
             let mut all_failed: Vec<(String, String)> = vec![];
-            loop {
-                ctx.checkpoint().await?;
-                let r = outbox.flush(api.as_ref(), 50).await?;
-                done += (r.applied + r.failed.len()) as u32;
-                ctx.set_progress(done.min(total), Some(total));
-                all_failed.extend(r.failed);
-                if r.applied == 0 || r.deferred > 0 {
-                    break;
+            // Each account's entries go to its own provider; one that is
+            // offline defers its entries without holding up the others.
+            for provider in providers.iter() {
+                loop {
+                    ctx.checkpoint().await?;
+                    let r = outbox.flush(provider.as_ref(), 50).await?;
+                    done += (r.applied + r.failed.len()) as u32;
+                    ctx.set_progress(done.min(total), Some(total));
+                    all_failed.extend(r.failed);
+                    if r.applied == 0 || r.deferred > 0 {
+                        break;
+                    }
                 }
             }
             for (entry_id, err) in &all_failed {
@@ -1509,7 +1577,7 @@ mod tests {
             "original prior inherited"
         );
         assert_eq!(outbox.pending_count().unwrap(), 1);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(s.rating_of("t0"), 5);
         assert_eq!(s.calls_to("setRating"), 1);
@@ -1558,7 +1626,7 @@ mod tests {
                 Some(Prior::Loved(false)),
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert!(s.starred("t1"));
         assert_eq!(
             outbox.cancel_if_unsent(&id).unwrap(),
@@ -1580,7 +1648,7 @@ mod tests {
             )
             .unwrap();
         s.set_rating("t2", 1).await.unwrap(); // changed elsewhere meanwhile
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(s.rating_of("t2"), 4);
         assert_eq!(r.conflicts.len(), 1);
@@ -1615,7 +1683,7 @@ mod tests {
             )
             .unwrap();
         s.set_offline(true);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.deferred, 1);
         assert_eq!(r.applied, 0);
         let e = outbox.entry(&id).unwrap().unwrap();
@@ -1624,10 +1692,10 @@ mod tests {
         assert!(e.next_attempt_at > clock.now_ms());
         assert!(e.last_error.is_some());
         s.set_offline(false);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!((r.applied, r.deferred), (0, 0), "not due yet");
         *clock.0.lock() += backoff_ms(1) + 1.0;
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(r.failed.len(), 1);
         assert_eq!(r.failed[0].0, bad);
@@ -1661,7 +1729,7 @@ mod tests {
                 .unwrap();
         }
         s.fail_next(SubsonicError::Network("x".into()), 1);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.deferred, 1);
         assert_eq!(
             s.calls_to("setRating"),
@@ -1712,7 +1780,7 @@ mod tests {
                 "t3".into(),
             ],
         );
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(
             s.playlist_song_ids("pl"),
@@ -1753,7 +1821,7 @@ mod tests {
                 .map(String::from)
                 .collect(),
         );
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(s.playlist_song_ids("pl"), vec!["t3", "t4", "t2", "t0"]);
 
         // Insert at index and append.
@@ -1779,7 +1847,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(
             s.playlist_song_ids("pl"),
             vec!["t3", "t1", "t4", "t2", "t0", "t1"]
@@ -1835,7 +1903,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(db.playlist("pl").unwrap().unwrap().name, "Renamed");
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 2);
         let (eid, pid) = &r.created_playlists[0];
         assert_eq!(eid, &id);
@@ -1853,7 +1921,7 @@ mod tests {
             )
             .unwrap();
         assert!(db.playlist("pl").unwrap().is_none());
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert!(!s.state.lock().playlists.contains_key("pl"));
         // deleting again (already gone on server) is not an error
         outbox
@@ -1865,7 +1933,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
     }
 
@@ -1928,7 +1996,7 @@ mod tests {
             3,
             "play queue saves coalesce"
         );
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 3);
         let sc = s.scrobbles();
         assert_eq!(sc.len(), 2);
@@ -1976,7 +2044,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         let pid = r.created_playlists[0].1.clone();
         assert_eq!(
@@ -1997,7 +2065,7 @@ mod tests {
         crash_after_call(&db, &id);
         db.delete_playlist(&pid).unwrap();
         assert_eq!(outbox.recover().unwrap(), 1);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!((r.applied, r.failed.len()), (1, 0));
         assert_eq!(count_named(&s), 1, "reused the recorded id");
         assert_eq!(r.created_playlists[0].1, pid);
@@ -2015,7 +2083,7 @@ mod tests {
         })
         .unwrap();
         outbox.recover().unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(count_named(&s), 1, "matched by name/owner, no duplicate");
         assert_eq!(r.created_playlists[0].1, pid);
@@ -2032,7 +2100,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(count_named(&s), 2);
     }
 
@@ -2057,14 +2125,14 @@ mod tests {
                 ])),
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(
             s.playlist_song_ids("pl"),
             vec!["t0", "t1", "t2", "t3", "t4"]
         );
         crash_after_call(&db, &id);
         outbox.recover().unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(
             s.playlist_song_ids("pl"),
@@ -2099,12 +2167,12 @@ mod tests {
                 None,
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(s.scrobbles().len(), 1);
         assert!(db.recently_played(1).unwrap()[0].scrobbled);
         crash_after_call(&db, &id);
         outbox.recover().unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(s.scrobbles().len(), 1, "never duplicated");
         assert_eq!(
@@ -2143,7 +2211,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!((r.expired, r.applied), (1, 1));
         let sc = s.scrobbles();
         assert_eq!(sc.len(), 1);
@@ -2166,7 +2234,7 @@ mod tests {
             )
             .unwrap();
         s.fail_next(SubsonicError::Io("database is locked".into()), 1);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!((r.deferred, r.failed.len()), (1, 0));
         let e = outbox.entry(&id).unwrap().unwrap();
         assert_eq!(e.status, EntryStatus::Pending);
@@ -2226,7 +2294,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         let pending = outbox
             .enqueue(
                 "srv",
@@ -2325,7 +2393,10 @@ mod tests {
         q.register(
             api::JobKind::OutboxFlush,
             1,
-            Arc::new(OutboxFlushRunner::new(outbox.clone(), Arc::new(s.clone()))),
+            Arc::new(OutboxFlushRunner::new(
+                outbox.clone(),
+                crate::provider::ProviderSet::single(Arc::new(s.provider())),
+            )),
         );
         let id = q
             .submit(JobSpec::new(api::JobKind::OutboxFlush, "Sync changes"))

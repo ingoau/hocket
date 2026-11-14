@@ -24,7 +24,7 @@ use rand::SeedableRng;
 
 use crate::api::{
     AutoplayProvider, AutoplaySettings, ContextKind, FilterId, QueueItem, QueueKey, QueueSource,
-    RelatedTrack, TrackId, TrackSummary,
+    RelatedTrack, TrackId, TrackRef, TrackSummary,
 };
 
 /// A track with a sonic similarity score (`getSonicSimilarTracks`: 1.0 is
@@ -141,7 +141,7 @@ impl AutoplayPick {
     pub fn to_queue_item(&self, key: QueueKey) -> QueueItem {
         QueueItem {
             key,
-            track_id: self.track.id.clone(),
+            track: TrackRef::new(self.track.server_id.clone(), self.track.id.clone()),
             source: QueueSource::Autoplay {
                 provider: self.provider,
                 reason: self.reason.clone(),

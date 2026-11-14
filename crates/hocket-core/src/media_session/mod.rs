@@ -342,7 +342,7 @@ mod tests {
             q.current = Some(QueueEntry {
                 item: QueueItem {
                     key: "k1".into(),
-                    track_id: "t1".into(),
+                    track: "t1".into(),
                     source: QueueSource::Inserted,
                     unavailable: false,
                     added: false,

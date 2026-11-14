@@ -235,7 +235,7 @@ describe("ipc", () => {
     dialogs.showMessageBox.mockResolvedValue({ response: 0 });
     expect(await handlers.get(IPC.configImport)!(ours)).toBe(true);
     expect(dispatch.mock.calls.map((c) => c[0])).toEqual([
-      { type: "addServer", data: { url: "https://a.example", username: "alice", password: "pw", name: "A" } },
+      { type: "addAccount", data: { setup: { type: "navidrome", data: { url: "https://a.example", username: "alice", password: "pw", name: "A" } } } },
       { type: "importConfig", data: { document: JSON.stringify({ version: 1, servers: [{ id: "s1", url: "https://a.example", username: "alice", name: "A" }] }) } },
     ]);
     dialogs.showMessageBox.mockResolvedValue({ response: 1 });

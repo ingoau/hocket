@@ -192,13 +192,20 @@ impl Actor {
         recently_autoplayed: &[TrackId],
         want: usize,
     ) -> Vec<crate::autoplay::AutoplayPick> {
-        let Some(sid) = self.server_id() else {
+        // Autoplay stays within the seed's account.
+        let seed = seeds.recent.first().and_then(|s| {
+            self.db
+                .track_ref(&TrackRef::new(s.server_id.clone(), s.id.clone()))
+                .ok()
+                .flatten()
+        });
+        let Some(sid) = seed
+            .as_ref()
+            .map(|t| t.server_id.clone())
+            .or_else(|| self.scope_account())
+        else {
             return vec![];
         };
-        let seed = seeds
-            .recent
-            .first()
-            .and_then(|s| self.db.track(&s.id).ok().flatten());
         let artist = seed.as_ref().and_then(|t| t.artist_id.clone());
         let genre = seed.as_ref().and_then(|t| t.genre.clone());
         let ids: Vec<String> = self

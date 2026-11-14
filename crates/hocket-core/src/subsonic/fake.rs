@@ -62,6 +62,11 @@ pub struct FakeServer {
 }
 
 impl FakeServer {
+    /// This server behind the provider seam, as the core uses it.
+    pub fn provider(&self) -> crate::provider::NavidromeProvider {
+        crate::provider::NavidromeProvider::new(std::sync::Arc::new(self.clone()))
+    }
+
     pub fn new(server_id: &str, username: &str) -> Self {
         let caps = ServerCapabilities {
             server_version: Some("0.63.1 (fake)".into()),

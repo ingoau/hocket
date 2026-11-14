@@ -40,7 +40,7 @@ const FullscreenPlayer = lazy(() => loadFullscreen().catch(loadFullscreen));
 export function App() {
   const ready = useApp((s) => s.ready);
   // The core probes before installing: ServersChanged only arrives once a server is real.
-  const hasServer = useApp((s) => s.servers.length > 0);
+  const hasServer = useApp((s) => s.accounts.length > 0);
   const setupSummary = useSetupSummary();
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);
@@ -203,7 +203,7 @@ function useLyricPlayerPreload(): void {
 /** A `hocket://track/<id>` link becomes a toast with a Play-next action when the id is one of the current server's tracks. */
 async function confirmDeepLinkTrack(id: string): Promise<void> {
   const b = bridge();
-  const serverId = useApp.getState().servers[0]?.id;
+  const serverId = useApp.getState().accounts[0]?.id;
   if (!serverId) return;
   try {
     const r = await b.query({ type: "track", data: { id } });
@@ -225,7 +225,7 @@ function useDeepLinks() {
       if (!link || link.kind === "open") return;
       if (link.kind === "setup") {
         // Another device's setup code: the setup form applies it; a signed-in device turns it away.
-        if (useApp.getState().servers.length > 0) showToast(t("setupDevice.alreadySetUp"));
+        if (useApp.getState().accounts.length > 0) showToast(t("setupDevice.alreadySetUp"));
         else useApp.getState().setPendingSetup(link);
         return;
       }

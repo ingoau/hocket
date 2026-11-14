@@ -53,7 +53,7 @@ import app.hocket.R
 import app.hocket.core.HocketJson
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
-import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.AccountInfo
 import app.hocket.playback.CoreHost
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
@@ -98,7 +98,7 @@ internal const val MAX_CODE_LINK = 1800
  * `Query.SetupSettings` (a JSON object), for a device without a coordinator.
  */
 @Composable
-fun SetupDeviceSheetContent(server: ServerInfo, coordinatorUrl: String?, settings: String? = null) {
+fun SetupDeviceSheetContent(server: AccountInfo, coordinatorUrl: String?, settings: String? = null) {
     val context = LocalContext.current
     var includePassword by remember { mutableStateOf(false) }
     // Off the main thread (a keystore decrypt), and the password itself only once the person asks for it.

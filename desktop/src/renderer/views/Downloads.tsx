@@ -136,7 +136,7 @@ function StorageCard() {
 }
 
 function AvailableOffline() {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const filter = useApp((s) => s.filters.find((f) => f.id === AVAILABLE_OFFLINE_FILTER_ID)) ?? AVAILABLE_OFFLINE_FILTER;
   const fetchPage = useCallback(async (offset: number, limit: number) => {
@@ -145,7 +145,7 @@ function AvailableOffline() {
     return { items: r.data.items, total: r.data.total };
   }, [serverId, filter.sort, filter.descending]);
   const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [serverId, "offline", filter.sort, filter.descending]);
-  const play = (startIndex: number) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter } }, label: t("downloads.tab.offline"), sort: filter.sort, tracks: [] }, startIndex, shuffle: false, saveOutgoing: true } } });
+  const play = (startIndex: number) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "filter", data: { filter } }, label: t("downloads.tab.offline"), sort: filter.sort, tracks: [] }, startIndex, shuffle: false, saveOutgoing: true } } });
   return (
     <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }} data-testid="available-offline">
       <div className="row offline-head">

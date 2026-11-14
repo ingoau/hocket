@@ -95,6 +95,21 @@
 
     <!-- Server setup -->
     <string name="setup_title">Connect to Navidrome</string>
+    <string name="setup_sources_title">Where\'s your music?</string>
+    <string name="setup_source_navidrome">Navidrome</string>
+    <string name="setup_source_navidrome_body">Your own server, with your library</string>
+    <string name="setup_source_device">I use Hocket on another device</string>
+    <string name="setup_source_device_body">Scan or paste the setup link from its Set up another device</string>
+    <string name="setup_source_device_paste">Paste the setup link from your other device into Server URL, or scan its code.</string>
+    <string name="setup_another_title">Add another source?</string>
+    <string name="setup_another_body">Songs from every source share one library and one queue.</string>
+    <string name="setup_another_done">Not now</string>
+    <string name="setup_cancel">Cancel</string>
+    <string name="settings_accounts_add">Add account</string>
+    <string name="settings_accounts_add_body">Another Navidrome server or login. Its songs join the same library.</string>
+    <string name="settings_accounts_order_hint">The first account plays first and holds this device\'s session.</string>
+    <string name="settings_accounts_up">Move %1$s up</string>
+    <string name="settings_accounts_down">Move %1$s down</string>
     <string name="setup_subtitle">Hocket needs Navidrome 0.63.0 or newer.</string>
     <string name="setup_url">Server URL</string>
     <string name="setup_url_hint">https://music.example.com</string>
@@ -816,7 +831,7 @@
     <string name="settings_copy_diagnostics">Copy diagnostics</string>
     <string name="settings_diagnostics_copied">Diagnostics copied</string>
     <string name="settings_section_about">About</string>
-    <string name="settings_category_account">Account &amp; server</string>
+    <string name="settings_category_account">Accounts</string>
     <string name="settings_category_playback">Playback &amp; queue</string>
     <string name="settings_category_streaming">Streaming &amp; transcoding</string>
     <string name="settings_category_downloads">Downloads &amp; storage</string>

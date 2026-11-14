@@ -15,13 +15,13 @@ import { recentPlaylists } from "../lib/list-groups";
 
 /** Playlists: Pinned, the most recently changed, then all of them (the core hands them over whole, so they're sorted here). */
 export function Playlists() {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("playlists"));
   const { data } = useQuery(() => ({ type: "playlists", data: { server_id: serverId } }), "playlists", [serverId]);
   const sorted = useMemo(() => sortPlaylists(data ?? [], order.sort, order.descending), [data, order]);
   const items: GridItem[] = sorted.map((p) => ({ id: p.id, title: p.name, subtitle: playlistLine(p), coverArt: p.coverArt, badge: p.offline === "downloaded" ? "download" : undefined }));
-  const play = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
+  const play = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "playlist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const sorter = <SortMenu list="playlists" value={order} onChange={(v) => { setOrder(v); saveListSort("playlists", v); }} testId="playlists-sort" />;
   return (
     <div className="view" data-testid="view-playlists">

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use serde_json::{json, Map, Value};
 
 use crate::api::{
-    AudioSettings, AutoplaySettings, ConfigDocument, Filter, ServerInfo, Setting, Shortcut,
+    AccountInfo, AudioSettings, AutoplaySettings, ConfigDocument, Filter, Setting, Shortcut,
 };
 
 /// Current document version.
@@ -33,7 +33,7 @@ pub struct ConfigInputs {
     pub settings: Vec<Setting>,
     pub filters: Vec<Filter>,
     pub shortcuts: Vec<Shortcut>,
-    pub servers: Vec<ServerInfo>,
+    pub servers: Vec<AccountInfo>,
     pub audio: Option<AudioSettings>,
     pub autoplay: Option<AutoplaySettings>,
 }

@@ -29,7 +29,7 @@ interface Item extends Rankable {
 export function CommandPalette() {
   const open = useApp((s) => s.paletteOpen);
   const setOpen = useApp((s) => s.setPaletteOpen);
-  const serverId = useApp((s) => s.servers[0]?.id);
+  const serverId = useApp((s) => s.accounts[0]?.id);
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
   const navigate = useApp((s) => s.navigate);

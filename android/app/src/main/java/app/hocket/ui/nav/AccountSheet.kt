@@ -42,17 +42,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
 import app.hocket.core.api.NetworkKind
-import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.AccountInfo
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 
 /** The user's (or else the server's) initial, for the avatar. */
-private fun initialOf(server: ServerInfo?): String =
+private fun initialOf(server: AccountInfo?): String =
     (server?.username?.firstOrNull { it.isLetterOrDigit() } ?: server?.name?.firstOrNull { it.isLetterOrDigit() } ?: '?').uppercaseChar().toString()
 
 /** A round avatar with the initial; decorative (its button or row says who). The letter is sized to the circle, not the font scale. */
 @Composable
-private fun Avatar(server: ServerInfo?, size: Dp) {
+private fun Avatar(server: AccountInfo?, size: Dp) {
     val letterSize = with(LocalDensity.current) { (size * 0.5f).toSp() }
     Box(Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer).clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
         Text(initialOf(server), fontSize = letterSize, lineHeight = letterSize, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onPrimaryContainer, maxLines = 1)

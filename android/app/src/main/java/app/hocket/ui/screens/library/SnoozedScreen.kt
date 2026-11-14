@@ -67,14 +67,14 @@ fun SnoozedScreen(nav: NavHostController) {
                     contentPadding = maxWidthListPadding(maxWidth, padding.calculateTopPadding(), BottomContentInset),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(snoozes, key = { it.trackId }) { item ->
+                    items(snoozes, key = { it.trackRef.id }) { item ->
                         val until = item.until?.let { whenFormat.format(Date(it.toLong())) }
                         val subtitle = if (until == null) stringResource(R.string.snooze_until_never) else stringResource(R.string.snooze_until, until)
                         TrackRow(
                             item.track.toSummary(),
                             onClick = {
                                 val serverId = server?.id ?: return@TrackRow
-                                client.dispatch(Commands.playTracks(serverId, listOf(item.trackId), 0, item.track.title))
+                                client.dispatch(Commands.playTracks(serverId, listOf(item.trackRef.id), 0, item.track.title))
                             },
                             onMore = { songMenu.open(item.track.toSummary()) },
                             subtitle = subtitle,

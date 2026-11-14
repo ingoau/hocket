@@ -104,7 +104,7 @@ async fn deferred_on_b() -> Deferred {
     let (_, state) = connect_state(&b);
     let waits = awaiting(&state);
     assert_eq!(waits.len(), 1, "{state}");
-    assert_eq!(waits[0]["trackId"], "t0");
+    assert_eq!(waits[0]["trackId"]["id"], "t0");
     Deferred { a, b, net, started }
 }
 

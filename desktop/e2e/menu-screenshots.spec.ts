@@ -54,7 +54,7 @@ test("context menu and add to playlist", async () => {
       await setSetting(page, "library.pins", [{ kind: "playlist", id: "pl-2", tap: "open" }, { kind: "playlist", id: "pl-1", tap: "open" }]);
       // A few more playlists (they become Recent), one with a name long enough to truncate.
       await page.evaluate(async () => {
-        const servers = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+        const servers = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
         for (const name of ["Road trip 2024 (the extended summer edition)", "Run club", "Focus"]) window.hocket.dispatch({ type: "createPlaylist", data: { server_id: servers.data[0]!.id, name, track_ids: [] } });
       });
       await openPlaylist(page, "Slow Sundays");
@@ -147,7 +147,7 @@ test("context menu and add to playlist", async () => {
 
       // Edit pins (the phone's pin edit mode): from a pin's menu, a chip cycled, a tile picked up, one unpinned.
       const genres = (await page.evaluate(async () => {
-        const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+        const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
         return window.hocket.query({ type: "genres", data: { server_id: s.data[0]!.id } });
       })) as { data?: { name: string }[] };
       await setSetting(page, "library.pins", [

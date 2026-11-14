@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { safeStorage } from "electron";
 import type { Command } from "@core/api";
 import type { CredentialStorage } from "@shared/bridge-types";
+import { accountIdFor } from "./account-id";
 
 interface StoredCredential {
   url: string;
@@ -75,7 +76,7 @@ export class ServerCredentialStore {
   private undecryptable = new Map<string, StoredCredential>();
   /** Passwords entered this session when OS encryption isn't available. */
   private volatile = new Map<string, string>();
-  /** Set by a RemoveServer on its way to the core; the next ServersChanged may then prune. */
+  /** Set by a RemoveAccount on its way to the core; the next AccountsChanged may then prune. */
   private removalPending = false;
 
   private constructor(
@@ -101,14 +102,18 @@ export class ServerCredentialStore {
     return this.usable ? "os" : "volatile";
   }
 
+  /** Credentials are keyed by the account they sign in (the core's `AccountId`). */
   static key(url: string, username: string): string {
-    return `${url.replace(/\/+$/, "").toLowerCase()}|${username}`;
+    return accountIdFor(url, username);
   }
 
   /** Observe commands on their way to the core. */
   intercept(command: Command): void {
-    if (command.type === "addServer") void this.remember(command.data.url, command.data.username, command.data.password, command.data.name);
-    if (command.type === "removeServer") {
+    if (command.type === "addAccount" && command.data.setup.type === "navidrome") {
+      const s = command.data.setup.data;
+      void this.remember(s.url, s.username, s.password, s.name);
+    }
+    if (command.type === "removeAccount") {
       // Server ids are core-assigned; we don't know the mapping, so the
       // removal is applied by retainOnly() once ServersChanged arrives.
       this.removalPending = true;
@@ -152,15 +157,15 @@ export class ServerCredentialStore {
   }
 
   /**
-   * Keep only servers the core still knows about. An empty list is honoured
-   * only after a RemoveServer: the core also emits an empty ServersChanged
-   * with Started when its server table couldn't be read, and that must not
+   * Keep only accounts the core still knows about. An empty list is honoured
+   * only after a RemoveAccount: the core also emits an empty AccountsChanged
+   * with Started when its account table couldn't be read, and that must not
    * log the user out.
    */
-  retainOnly(servers: { url: string; username: string }[]): void {
-    if (!servers.length && !this.removalPending) return;
+  retainOnly(accounts: { id: string }[]): void {
+    if (!accounts.length && !this.removalPending) return;
     this.removalPending = false;
-    const keep = new Set(servers.map((s) => ServerCredentialStore.key(s.url, s.username)));
+    const keep = new Set(accounts.map((s) => s.id));
     let dropped = false;
     for (const map of [this.known, this.undecryptable])
       for (const key of [...map.keys()])
@@ -178,9 +183,12 @@ export class ServerCredentialStore {
     return this.volatile.get(key) ?? this.known.get(key)?.password;
   }
 
-  /** AddServer commands to replay at startup. */
+  /** AddAccount commands to replay at startup. */
   replayCommands(): Command[] {
-    return [...this.known.values()].map((e) => ({ type: "addServer", data: { url: e.url, username: e.username, password: e.password, name: e.name } }));
+    return [...this.known.values()].map((e) => ({
+      type: "addAccount",
+      data: { setup: { type: "navidrome", data: { url: e.url, username: e.username, password: e.password, name: e.name } } },
+    }));
   }
 
   hasAny(): boolean {

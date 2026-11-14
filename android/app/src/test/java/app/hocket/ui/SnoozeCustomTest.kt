@@ -58,8 +58,8 @@ class SnoozeCustomTest {
         awaitTag("songMenu.snoozeUntil.ok")
         compose.onNodeWithTag("songMenu.snoozeUntil.ok").performSemanticsAction(SemanticsActions.OnClick)
         settle()
-        compose.waitUntil(5_000) { core.client.snoozes.value.any { it.trackId == trackId } }
-        val until = core.client.snoozes.value.first { it.trackId == trackId }.until
+        compose.waitUntil(5_000) { core.client.snoozes.value.any { it.trackRef.id == trackId } }
+        val until = core.client.snoozes.value.first { it.trackRef.id == trackId }.until
         val want = expected.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli().toDouble()
         assertTrue("snoozed until a moment, not indefinitely", until != null)
         // Within a minute: the clock may tick over between the picker opening and this line.

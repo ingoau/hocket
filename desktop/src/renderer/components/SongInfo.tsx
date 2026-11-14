@@ -41,7 +41,7 @@ const ordinal = (n: number) => {
 export function SongInfo({ trackId }: { trackId: string }) {
   const close = useApp((s) => s.closeDialog);
   const navigate = useApp((s) => s.navigate);
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const { data } = useQuery(() => ({ type: "track", data: { id: trackId } }), "trackDetail", [trackId]);
   const tr = data as Track | undefined;
   const related = useQuery(() => ({ type: "related", data: { track_id: trackId, count: 6 } }), "related", [trackId], { static: true });

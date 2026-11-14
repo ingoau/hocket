@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use crate::api::{
     AlbumResumeEntry, DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, Snooze,
-    StashEntry, TrackId, TransportLease,
+    StashEntry, TrackRef, TransportLease,
 };
 use crate::connect::wire::{
     merge_saved_queues, merge_settings, DeviceLease, LastStamp, ReplicaState, ScrobbleRecord,
@@ -87,14 +87,14 @@ pub trait ReplicaExt {
     fn merge_album_resumes(&mut self, theirs: &[AlbumResumeEntry], now: EpochMs) -> bool;
     fn claim_scrobble(
         &mut self,
-        track_id: &str,
+        track_id: &TrackRef,
         started_at: EpochMs,
         device_id: &str,
         now: EpochMs,
     ) -> ScrobbleClaim;
     /// Drop the record of a pair (a claim withdrawn before it was
     /// confirmed). Returns whether there was one.
-    fn forget_scrobble(&mut self, track_id: &str, started_at: EpochMs, now: EpochMs) -> bool;
+    fn forget_scrobble(&mut self, track_id: &TrackRef, started_at: EpochMs, now: EpochMs) -> bool;
     fn set_document(&mut self, document: SessionDocument, now: EpochMs);
     fn set_stamp(&mut self, stamp: LastStamp, now: EpochMs);
     fn set_lease(&mut self, lease: TransportLease, now: EpochMs);
@@ -181,7 +181,7 @@ impl ReplicaExt for ReplicaState {
 
     fn claim_scrobble(
         &mut self,
-        track_id: &str,
+        track_id: &TrackRef,
         started_at: EpochMs,
         device_id: &str,
         now: EpochMs,
@@ -189,7 +189,7 @@ impl ReplicaExt for ReplicaState {
         if let Some(r) = self
             .scrobbles
             .iter()
-            .find(|r| r.track_id == track_id && same_start(r.started_at, started_at))
+            .find(|r| &r.track_id == track_id && same_start(r.started_at, started_at))
         {
             return if r.device_id == device_id {
                 ScrobbleClaim::Own
@@ -198,7 +198,7 @@ impl ReplicaExt for ReplicaState {
             };
         }
         self.scrobbles.push(ScrobbleRecord {
-            track_id: track_id.to_string(),
+            track_id: track_id.clone(),
             started_at,
             device_id: device_id.to_string(),
             recorded_at: now,
@@ -210,10 +210,10 @@ impl ReplicaExt for ReplicaState {
         ScrobbleClaim::New
     }
 
-    fn forget_scrobble(&mut self, track_id: &str, started_at: EpochMs, now: EpochMs) -> bool {
+    fn forget_scrobble(&mut self, track_id: &TrackRef, started_at: EpochMs, now: EpochMs) -> bool {
         let before = self.scrobbles.len();
         self.scrobbles
-            .retain(|r| !(r.track_id == track_id && same_start(r.started_at, started_at)));
+            .retain(|r| !(&r.track_id == track_id && same_start(r.started_at, started_at)));
         let changed = self.scrobbles.len() != before;
         if changed {
             self.updated_at = now;
@@ -270,7 +270,7 @@ pub(crate) fn same_start(a: EpochMs, b: EpochMs) -> bool {
 /// A scrobble identity, for callers that want to reason about pairs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScrobblePair {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub started_at: EpochMs,
     pub device_id: DeviceId,
 }
@@ -502,25 +502,42 @@ mod tests {
     #[test]
     fn scrobble_claims_dedupe_across_devices_but_not_self() {
         let mut r = new_replica(doc(), 0.0);
-        assert_eq!(r.claim_scrobble("t", 1000.0, "a", 1.0), ScrobbleClaim::New);
-        assert_eq!(r.claim_scrobble("t", 1000.4, "a", 2.0), ScrobbleClaim::Own);
         assert_eq!(
-            r.claim_scrobble("t", 1000.0, "b", 3.0),
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 1000.0, "a", 1.0),
+            ScrobbleClaim::New
+        );
+        assert_eq!(
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 1000.4, "a", 2.0),
+            ScrobbleClaim::Own
+        );
+        assert_eq!(
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 1000.0, "b", 3.0),
             ScrobbleClaim::Duplicate
         );
-        assert_eq!(r.claim_scrobble("t", 5000.0, "b", 4.0), ScrobbleClaim::New);
+        assert_eq!(
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 5000.0, "b", 4.0),
+            ScrobbleClaim::New
+        );
         assert_eq!(r.scrobbles.len(), 2);
         // a withdrawn claim frees the pair for whoever asks next
-        assert!(r.forget_scrobble("t", 1000.3, 5.0));
-        assert!(!r.forget_scrobble("t", 1000.3, 6.0));
-        assert_eq!(r.claim_scrobble("t", 1000.0, "b", 7.0), ScrobbleClaim::New);
+        assert!(r.forget_scrobble(&crate::api::TrackRef::from("t"), 1000.3, 5.0));
+        assert!(!r.forget_scrobble(&crate::api::TrackRef::from("t"), 1000.3, 6.0));
+        assert_eq!(
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 1000.0, "b", 7.0),
+            ScrobbleClaim::New
+        );
     }
 
     #[test]
     fn scrobble_log_is_capped_and_expires() {
         let mut r = new_replica(doc(), 0.0);
         for i in 0..(SCROBBLE_LOG_CAP + 10) {
-            r.claim_scrobble("t", i as f64 * 10_000.0, "a", i as f64);
+            r.claim_scrobble(
+                &crate::api::TrackRef::from("t"),
+                i as f64 * 10_000.0,
+                "a",
+                i as f64,
+            );
         }
         assert_eq!(r.scrobbles.len(), SCROBBLE_LOG_CAP);
         // kept: recorded_at 10..=509; expiring at TTL+100 drops recorded_at <= 100
@@ -550,7 +567,7 @@ mod tests {
         for i in 0..HISTORY_CAP + 100 {
             d.history.push(crate::api::QueueItem {
                 key: format!("k{i}"),
-                track_id: format!("t{i}"),
+                track: format!("t{i}").into(),
                 source: crate::api::QueueSource::Inserted,
                 unavailable: false,
                 added: false,

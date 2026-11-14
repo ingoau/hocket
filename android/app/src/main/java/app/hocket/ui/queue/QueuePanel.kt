@@ -625,7 +625,7 @@ private fun QueueRow(
     val playLabel = stringResource(R.string.action_play)
     val content = LocalContentColor.current
     val wash by animateColorAsState(if (selected) content.copy(alpha = 0.14f) else Color.Transparent, label = "queueRowSelected")
-    val snoozed = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackId == track.id }
+    val snoozed = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackRef.id == track.id }
     val dim = (if (section == Section.History) 0.7f else 1f) * (if (snoozed) 0.45f else 1f)
     Column(
         modifier

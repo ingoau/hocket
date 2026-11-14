@@ -65,7 +65,7 @@ test.describe("now playing", () => {
     await expect(panel).toHaveAttribute("data-view", "overview");
     await expect(page.getByTestId("sidebar-empty")).toBeVisible();
     await page.evaluate(async () => {
-      const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+      const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
       window.hocket.dispatch({ type: "playTracks", data: { server_id: s.data[0]!.id, track_ids: ["tr-1", "tr-2", "tr-3", "tr-4", "tr-5"], start_index: 0, label: "e2e", shuffle: false } });
     });
     // The overview: artwork, the title, then the lyrics peek, the next three songs and the song's facts.
@@ -225,7 +225,7 @@ test.describe("now playing", () => {
     const { page } = hocket;
     await completeSetup(page);
     await page.evaluate(async () => {
-      const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+      const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
       window.hocket.dispatch({ type: "playTracks", data: { server_id: s.data[0]!.id, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } });
     });
     await page.getByTestId("toggle-lyrics").click();
@@ -440,7 +440,7 @@ test.describe("the artist in the now playing subtitle", () => {
     const { page } = hocket;
     await completeSetup(page);
     await page.evaluate(async () => {
-      const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+      const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
       window.hocket.dispatch({ type: "playTracks", data: { server_id: s.data[0]!.id, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } });
     });
     await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { id: string } } } } }).data.queue.current?.track.id).toBe("tr-1");
@@ -596,8 +596,8 @@ test.describe("fullscreen idle fade over the immersive artwork", () => {
       await resizeWindow(app, page, 1456, 912);
       await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "display.immersiveArtwork", value: JSON.stringify("always") } }));
       await page.evaluate(async () => {
-        const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
-        window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId: s.data[0]!.id, kind: { type: "album", data: { id: "al-1" } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
+        const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+        window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: s.data[0]!.id, kind: { type: "album", data: { id: "al-1" } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
       });
       await expect(page.getByTestId("play-pause")).toHaveAttribute("aria-label", "Pause");
       await page.getByTestId("toggle-fullscreen").click();
@@ -682,8 +682,8 @@ function busy(x: number, y: number): [number, number, number] {
 /** Plays album `al-<n>` (which wears cover n - 1) from the fake library. */
 async function playCover(page: Page, n: number): Promise<void> {
   await page.evaluate(async (id) => {
-    const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
-    window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId: s.data[0]!.id, kind: { type: "album", data: { id } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
+    const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+    window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: s.data[0]!.id, kind: { type: "album", data: { id } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
   }, `al-${n}`);
   await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { albumId?: string } } } } }).data.queue.current?.track.albumId).toBe(`al-${n}`);
 }

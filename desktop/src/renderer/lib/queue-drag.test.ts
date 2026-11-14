@@ -125,7 +125,7 @@ describe("stepMove", () => {
 });
 
 const entry = (key: string, queued = false): QueueEntry => ({
-  item: { key, trackId: `t-${key}`, source: { type: "context", data: { index: 0 } }, queued },
+  item: { key, track: { source: "s", id: `t-${key}` }, source: { type: "context", data: { index: 0 } }, queued },
   track: { id: `t-${key}`, serverId: "s", title: key, durationMs: 1, rating: 0, loved: false, offline: "none" },
 });
 
@@ -205,7 +205,7 @@ describe("insertTracksCommand", () => {
 
 describe("previewMoves", () => {
   const entry = (key: string, inGroup = false): QueueEntry => ({
-    item: { key, trackId: `t-${key}`, source: { type: "context", data: { index: 0 } } },
+    item: { key, track: { source: "s", id: `t-${key}` }, source: { type: "context", data: { index: 0 } } },
     track: { id: `t-${key}`, serverId: "s", title: key, durationMs: 1, rating: 0, loved: false, offline: "none" },
     ...(inGroup ? { inGroup: true } : {}),
   });

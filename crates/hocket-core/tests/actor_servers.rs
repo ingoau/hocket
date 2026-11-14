@@ -74,6 +74,7 @@ async fn bare_core(name: &str) -> Bare {
         TestOptions {
             backend,
             api: None,
+            more_apis: vec![],
             server_url: String::new(),
             password: String::new(),
             net: None,
@@ -109,8 +110,8 @@ async fn wait_for_error(b: &Bare) -> ErrorKind {
 }
 
 async fn assert_nothing_added(b: &Bare) {
-    match b.core.query(Query::Servers).await.unwrap() {
-        QueryResult::Servers(s) => assert!(s.is_empty(), "no server row: {s:?}"),
+    match b.core.query(Query::Accounts).await.unwrap() {
+        QueryResult::Accounts(s) => assert!(s.is_empty(), "no server row: {s:?}"),
         other => panic!("{other:?}"),
     }
     match b.core.query(Query::Jobs).await.unwrap() {
@@ -123,9 +124,9 @@ async fn assert_nothing_added(b: &Bare) {
     }
     let events = b.events.all();
     assert!(
-        !events
-            .iter()
-            .any(|e| matches!(e, Event::ServersChanged { servers } if !servers.is_empty())),
+        !events.iter().any(
+            |e| matches!(e, Event::AccountsChanged { accounts: servers } if !servers.is_empty())
+        ),
         "no ServersChanged with a server"
     );
     assert!(!events
@@ -142,11 +143,13 @@ async fn add_server_with_wrong_password_adds_nothing() {
     .await;
     let b = bare_core("auth").await;
     b.core
-        .dispatch(Command::AddServer {
-            url,
-            username: "alice".into(),
-            password: "nope".into(),
-            name: None,
+        .dispatch(Command::AddAccount {
+            setup: AccountSetup::Navidrome {
+                url,
+                username: "alice".into(),
+                password: "nope".into(),
+                name: None,
+            },
         })
         .unwrap();
     assert_eq!(wait_for_error(&b).await, ErrorKind::Auth);
@@ -162,11 +165,13 @@ async fn add_server_with_wrong_password_adds_nothing() {
 async fn add_server_that_is_unreachable_adds_nothing() {
     let b = bare_core("net").await;
     b.core
-        .dispatch(Command::AddServer {
-            url: "http://127.0.0.1:9/".into(),
-            username: "alice".into(),
-            password: "pw".into(),
-            name: Some("Nowhere".into()),
+        .dispatch(Command::AddAccount {
+            setup: AccountSetup::Navidrome {
+                url: "http://127.0.0.1:9/".into(),
+                username: "alice".into(),
+                password: "pw".into(),
+                name: Some("Nowhere".into()),
+            },
         })
         .unwrap();
     assert_eq!(wait_for_error(&b).await, ErrorKind::Network);
@@ -183,26 +188,26 @@ async fn add_server_that_answers_the_probe_is_persisted_and_synced() {
     .await;
     let b = bare_core("old").await;
     b.core
-        .dispatch(Command::AddServer {
-            url: url.clone(),
-            username: "alice".into(),
-            password: "pw".into(),
-            name: Some("Old".into()),
+        .dispatch(Command::AddAccount {
+            setup: AccountSetup::Navidrome {
+                url: url.clone(),
+                username: "alice".into(),
+                password: "pw".into(),
+                name: Some("Old".into()),
+            },
         })
         .unwrap();
     for _ in 0..600 {
         b.core.settle().await;
-        if b.events
-            .all()
-            .iter()
-            .any(|e| matches!(e, Event::ServersChanged { servers } if !servers.is_empty()))
-        {
+        if b.events.all().iter().any(
+            |e| matches!(e, Event::AccountsChanged { accounts: servers } if !servers.is_empty()),
+        ) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    match b.core.query(Query::Servers).await.unwrap() {
-        QueryResult::Servers(s) => {
+    match b.core.query(Query::Accounts).await.unwrap() {
+        QueryResult::Accounts(s) => {
             assert_eq!(s.len(), 1);
             assert_eq!(s[0].name, "Old");
             assert_eq!(s[0].url, url);

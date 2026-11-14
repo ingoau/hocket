@@ -64,11 +64,12 @@ async fn fake_coordinator(net: &Arc<MemoryNet>, clock: Arc<SimTime>, fake: Share
                         Msg::AnalysisFetch { track_ids } => {
                             let records = {
                                 let mut f = fake.lock();
-                                f.fetches.push(track_ids.clone());
+                                f.fetches
+                                    .push(track_ids.iter().map(|t| t.id.clone()).collect());
                                 track_ids
                                     .iter()
                                     .filter_map(|id| {
-                                        f.records.get(id).map(|r| AnalysisEntry {
+                                        f.records.get(&id.id).map(|r| AnalysisEntry {
                                             track_id: id.clone(),
                                             record: r.clone(),
                                         })
@@ -227,7 +228,7 @@ async fn the_window_is_fetched_once_and_own_records_are_uploaded() {
         .lock()
         .uploads
         .iter()
-        .map(|e| e.track_id.clone())
+        .map(|e| e.track_id.id.clone())
         .collect();
     assert_eq!(uploaded, vec!["t6", "t5"]);
 

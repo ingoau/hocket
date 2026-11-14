@@ -34,7 +34,8 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use crate::api::{
-    ActionTarget, Command, DeviceId, EpochMs, RatingTarget, SessionDocument, UndoEntry, UndoState,
+    ActionTarget, Command, DeviceId, EpochMs, RatingTarget, SessionDocument, TrackRef, UndoEntry,
+    UndoState,
 };
 
 /// Default byte budget for the whole stack (undo + redo).
@@ -61,7 +62,7 @@ pub enum UndoAction {
     Cas(Vec<CasMutation>),
     /// Put each track back to this snooze. `None` means not snoozed; `Some(until)` is snoozed
     /// (`None` inside means it doesn't end).
-    Snoozes(Vec<(String, Option<Option<EpochMs>>)>),
+    Snoozes(Vec<(TrackRef, Option<Option<EpochMs>>)>),
     Nothing,
 }
 
@@ -295,16 +296,16 @@ pub trait UndoableCommand: Send + Sync {
 pub struct SnoozeUndo {
     pub kind: String,
     pub label: String,
-    pub before: Vec<(String, Option<Option<EpochMs>>)>,
-    pub after: Vec<(String, Option<Option<EpochMs>>)>,
+    pub before: Vec<(TrackRef, Option<Option<EpochMs>>)>,
+    pub after: Vec<(TrackRef, Option<Option<EpochMs>>)>,
 }
 
 impl SnoozeUndo {
     pub fn new(
         kind: impl Into<String>,
         label: impl Into<String>,
-        before: Vec<(String, Option<Option<EpochMs>>)>,
-        after: Vec<(String, Option<Option<EpochMs>>)>,
+        before: Vec<(TrackRef, Option<Option<EpochMs>>)>,
+        after: Vec<(TrackRef, Option<Option<EpochMs>>)>,
     ) -> SnoozeUndo {
         SnoozeUndo {
             kind: kind.into(),

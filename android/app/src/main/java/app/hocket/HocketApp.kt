@@ -112,7 +112,7 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         scope.launch {
             withTimeoutOrNull(SHORTCUT_WAIT_MS) {
                 val client = client.filterNotNull().first()
-                val server = client.servers.first { it.isNotEmpty() }.first()
+                val server = client.accounts.first { it.isNotEmpty() }.first()
                 shortcut.command(this@HocketApp, server.id)?.let(client::dispatch)
             }
         }

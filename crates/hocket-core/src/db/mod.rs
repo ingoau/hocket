@@ -26,59 +26,14 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 
 use crate::util::{now_ms, Clock};
 
-/// Numbered, forward-only migrations. `0001` is `schema.sql` itself (the
-/// v1 snapshot; never edited), later ones live in `migrations/`.
-pub const MIGRATIONS: &[(u32, &str, &str)] = &[
-    (1, "0001_init", include_str!("schema.sql")),
-    (
-        2,
-        "0002_outbox_server_ref",
-        include_str!("migrations/0002_outbox_server_ref.sql"),
-    ),
-    (
-        3,
-        "0003_stream_cache_spans",
-        include_str!("migrations/0003_stream_cache_spans.sql"),
-    ),
-    (
-        4,
-        "0004_play_history_unique",
-        include_str!("migrations/0004_play_history_unique.sql"),
-    ),
-    (
-        5,
-        "0005_track_artists",
-        include_str!("migrations/0005_track_artists.sql"),
-    ),
-    (
-        6,
-        "0006_artist_sort_index",
-        include_str!("migrations/0006_artist_sort_index.sql"),
-    ),
-    (
-        7,
-        "0007_album_release_types",
-        include_str!("migrations/0007_album_release_types.sql"),
-    ),
-    (
-        8,
-        "0008_lyrics_search",
-        include_str!("migrations/0008_lyrics_search.sql"),
-    ),
-    (
-        9,
-        "0009_automix_records",
-        include_str!("migrations/0009_automix_records.sql"),
-    ),
-    (
-        10,
-        "0010_cache_entry_replaygain",
-        include_str!("migrations/0010_cache_entry_replaygain.sql"),
-    ),
-];
+/// The schema, applied as one migration. Hocket has no users yet: a schema
+/// change edits `schema.sql` and bumps the version, and a database from an
+/// older version is backed up and recreated (`migrate`). 11 squashed the
+/// earlier 0001–0010 and renamed `servers` to `accounts`.
+pub const MIGRATIONS: &[(u32, &str, &str)] = &[(11, "0011_accounts", include_str!("schema.sql"))];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -98,7 +53,7 @@ pub const MIRROR_TABLES: &[&str] = &[
 
 /// Tables that cannot be rebuilt from the server (backed up before migrating).
 pub const DURABLE_TABLES: &[&str] = &[
-    "servers",
+    "accounts",
     "pins",
     "pin_tracks",
     "outbox",
@@ -471,6 +426,13 @@ fn migrate(
             report.backup_path = Some(dest);
         }
     }
+    if from > 0 && from < MIGRATIONS[0].0 {
+        // Older than the squashed schema: nothing to migrate from (no users
+        // yet). The backup above keeps the old file; start over.
+        tracing::warn!(from, "database predates the squashed schema; recreating it");
+        drop_all_tables(conn)?;
+        report.mirror_rebuilt = true;
+    }
     for (version, name, sql) in pending {
         match apply_migration(conn, *version, sql) {
             Ok(()) => tracing::info!(version, name, "applied migration"),
@@ -487,6 +449,25 @@ fn migrate(
         report.to_version = *version;
     }
     Ok(report)
+}
+
+fn drop_all_tables(conn: &Connection) -> DbResult<()> {
+    let names: Vec<(String, String)> = {
+        let mut st = conn.prepare(
+            "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger', 'index')
+             AND name NOT LIKE 'sqlite_%' ORDER BY type = 'table'",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+    for (kind, name) in names {
+        // FTS shadow tables vanish with their virtual table.
+        let kind = kind.to_uppercase();
+        conn.execute_batch(&format!("DROP {kind} IF EXISTS \"{name}\""))?;
+    }
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL, applied_at REAL NOT NULL); PRAGMA foreign_keys = ON")?;
+    Ok(())
 }
 
 fn drop_mirror_tables(conn: &Connection) -> DbResult<()> {
@@ -583,26 +564,19 @@ mod tests {
     }
 
     #[test]
-    fn migration_4_drops_duplicate_plays() {
+    fn database_older_than_the_squashed_schema_is_recreated() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hocket.db");
         {
-            // A version 3 database holding one play recorded twice.
+            // A pre-squash database (version 10, `servers` table).
             let db = Db::open(&path, &dir.path().join("backups")).unwrap();
             db.with_conn(|c| {
                 c.execute_batch(
-                    "DROP INDEX idx_play_history_play;
-                     ALTER TABLE tracks DROP COLUMN artists;
-                     ALTER TABLE albums DROP COLUMN release_types;
-                     ALTER TABLE cache_entries DROP COLUMN gain_db;
-                     ALTER TABLE cache_entries DROP COLUMN peak;
-                     DELETE FROM schema_version WHERE version >= 4;
-                     INSERT INTO tracks(id, server_id, title, local_play_count) VALUES ('t', 's', 'T', 3), ('u', 's', 'U', 1);
-                     INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES
-                         ('s', 't', 1790294961606.5, 126260, 0, 'd'),
-                         ('s', 't', 1790294961606.5, 132388, 1, 'd'),
-                         ('s', 't', 1790294000000.0, 126260, 0, 'd'),
-                         ('s', 'u', 1790294961606.5, 126260, 0, 'd');",
+                    "DROP TABLE accounts;
+                     CREATE TABLE servers (id TEXT PRIMARY KEY);
+                     DELETE FROM schema_version;
+                     INSERT INTO schema_version(version, applied_at) VALUES (10, 0);
+                     INSERT INTO tracks(id, server_id, title) VALUES ('t', 's', 'T');",
                 )?;
                 Ok(())
             })
@@ -610,84 +584,18 @@ mod tests {
         }
         let db = Db::open(&path, &dir.path().join("backups")).unwrap();
         assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
-        let rows: Vec<(String, f64, i64, i64)> = db
+        assert!(db.open_report().backup_path.is_some());
+        let (servers, tracks): (i64, i64) = db
             .with_conn(|c| {
-                let mut st = c.prepare(
-                    "SELECT track_id, played_at, played_ms, scrobbled FROM play_history ORDER BY id",
-                )?;
-                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
-                Ok(rows.collect::<Result<Vec<_>, _>>()?)
-            })
-            .unwrap();
-        assert_eq!(
-            rows,
-            vec![
-                ("t".into(), 1790294961606.5, 126260, 1),
-                ("t".into(), 1790294000000.0, 126260, 0),
-                ("u".into(), 1790294961606.5, 126260, 0),
-            ]
-        );
-        let counts: Vec<i64> = db
-            .with_conn(|c| {
-                let mut st = c.prepare("SELECT local_play_count FROM tracks ORDER BY id")?;
-                let rows = st.query_map([], |r| r.get(0))?;
-                Ok(rows.collect::<Result<Vec<_>, _>>()?)
-            })
-            .unwrap();
-        assert_eq!(counts, vec![2, 1]);
-        // The index refuses a copy from now on.
-        assert!(db
-            .with_conn(|c| {
-                c.execute(
-                    "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES ('s', 'u', 1790294961606.5, 1, 0, 'd')",
+                Ok(c.query_row(
+                    "SELECT (SELECT count(*) FROM sqlite_master WHERE name = 'servers'), (SELECT count(*) FROM tracks)",
                     [],
-                )?;
-                Ok(())
-            })
-            .is_err());
-    }
-
-    #[test]
-    fn migration_5_adds_track_artists_and_makes_the_next_sync_full() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("hocket.db");
-        {
-            // A version 4 database with a song and a server synced in full once.
-            let db = Db::open(&path, &dir.path().join("backups")).unwrap();
-            db.with_conn(|c| {
-                c.execute_batch(
-                    "ALTER TABLE tracks DROP COLUMN artists;
-                     ALTER TABLE albums DROP COLUMN release_types;
-                     ALTER TABLE cache_entries DROP COLUMN gain_db;
-                     ALTER TABLE cache_entries DROP COLUMN peak;
-                     DELETE FROM schema_version WHERE version >= 5;
-                     INSERT INTO tracks(id, server_id, title, artist_id, artist) VALUES ('t', 's', 'T', 'ar1', 'A feat. B');
-                     INSERT INTO saved_state VALUES ('sync:s', '{\"gen\":3,\"phase\":\"done\",\"lastFullAt\":1790000000000.0,\"readyTables\":[\"tracks\"]}', 0);
-                     INSERT INTO saved_state VALUES ('sync:never', '{\"gen\":0,\"phase\":\"done\"}', 0);",
-                )?;
-                Ok(())
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
             })
             .unwrap();
-        }
-        let db = Db::open(&path, &dir.path().join("backups")).unwrap();
-        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
-        // A row from before the list: its one artist.
-        let t = db.track("t").unwrap().unwrap();
-        assert_eq!(t.artist.as_deref(), Some("A feat. B"));
-        assert_eq!(
-            t.artists,
-            vec![crate::api::ArtistRef {
-                id: Some("ar1".into()),
-                name: "A feat. B".into()
-            }]
-        );
-        // The synced server's next sync is a full one (it refetches every song); still synced once.
-        let c: sync::SyncCursor = db.saved_state_get("sync:s").unwrap().unwrap();
-        assert_eq!(c.last_full_at, Some(0.0));
-        assert!(c.has_completed_once());
-        assert_eq!(c.gen, 3);
-        let never: sync::SyncCursor = db.saved_state_get("sync:never").unwrap().unwrap();
-        assert_eq!(never.last_full_at, None);
+        assert_eq!((servers, tracks), (0, 0));
+        assert!(db.accounts().unwrap().is_empty());
     }
 
     #[test]

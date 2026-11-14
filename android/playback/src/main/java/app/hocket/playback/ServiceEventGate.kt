@@ -22,7 +22,7 @@ internal class ServiceEventGate {
             prev == null || !prev.isPositionTick(event.data.transport)
         }
         is Event.Backend, is Event.MediaSession, is Event.DevicesChanged, is Event.QueueChanged,
-        is Event.ServersChanged, is Event.LibraryChanged, is Event.ConnectionChanged, is Event.Started,
+        is Event.AccountsChanged, is Event.LibraryChanged, is Event.ConnectionChanged, is Event.Started,
         is Event.Snapshot, is Event.SettingChanged, is Event.ResumeOfferChanged, is Event.AudioSettingsChanged -> true
         else -> false
     }

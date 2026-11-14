@@ -39,7 +39,7 @@ mod tests {
         QueueEntry {
             item: QueueItem {
                 key: key.into(),
-                track_id: format!("t-{key}"),
+                track: TrackRef::new("srv", format!("t-{key}")),
                 source,
                 unavailable: false,
                 added: false,
@@ -103,7 +103,7 @@ mod tests {
             json!(Command::PlayContext {
                 args: PlayContextArgs {
                     context: QueueContext {
-                        server_id: "srv".into(),
+                        source: "srv".into(),
                         kind: ContextKind::Album { id: "al1".into() },
                         label: "Album".into(),
                         sort: SortOrder::Default,

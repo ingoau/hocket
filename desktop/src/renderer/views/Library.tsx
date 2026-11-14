@@ -18,14 +18,14 @@ const RECENT_ALBUMS = 60;
  * statistics), then Recently added as a grid. What's pinned lives in the sidebar, under the Library.
  */
 export function Library() {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const recent = useQuery(() => ({ type: "albums", data: { server_id: serverId, artist_id: undefined, genre: undefined, sort: "dateAdded", descending: true, page: { offset: 0, limit: RECENT_ALBUMS } } }), "albums", [serverId]);
   // The Albums tile shows the covers of the three most played albums (this month, else this year).
   const month = useQuery(() => ({ type: "stats", data: { period_days: 30 } }), "stats", []);
   const year = useQuery(() => (month.data && !month.data.topAlbums.length ? { type: "stats", data: { period_days: 365 } } : null), "stats", [month.data?.topAlbums.length]);
   const topCovers = ((month.data?.topAlbums.length ? month.data : year.data)?.topAlbums ?? []).map((a) => a.coverArt).filter((c): c is string => !!c).slice(0, 3);
-  const playAlbum = (a: Album) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
+  const playAlbum = (a: Album) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const tile = (view: ViewName, label: string, icon: string, cls: string, testId: string, param?: string, covers: string[] = []) => (
     <button type="button" className={`lib-tile ${cls}`} onClick={() => navigate({ view, param })} data-testid={testId}>
       {covers.length ? (

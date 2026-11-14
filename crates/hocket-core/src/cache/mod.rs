@@ -29,7 +29,8 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::api::{Lyrics, LyricsSource, Track};
 use crate::db::{Db, DbError, DbResult};
-use crate::subsonic::{SubsonicApi, SubsonicError};
+use crate::provider::{Provider, ResolvedStream};
+use crate::subsonic::SubsonicError;
 use crate::util::Clock;
 
 /// The fixed artwork sizes. Requests snap up to the nearest.
@@ -226,11 +227,11 @@ impl Caches {
     /// not cached. Returns `None` when the server has no image (404).
     pub async fn artwork_path(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         image_id: &str,
         size: u32,
     ) -> Result<Option<PathBuf>, CacheError> {
-        let server_id = api.server_id();
+        let server_id = provider.source();
         let size = snap_size(size);
         if let Some(p) = self.artwork_cached(server_id, image_id, size)? {
             return Ok(Some(p));
@@ -240,8 +241,20 @@ impl Caches {
             return Ok(None);
         }
         let dest = self.image_path(server_id, image_id, size);
-        let url = api.cover_art_url(image_id, Some(size));
-        let out = match api.download_to_file(url, &dest).await {
+        let Some(url) = provider.cover_art_url(image_id, Some(size)) else {
+            return Ok(None);
+        };
+        let stream = ResolvedStream {
+            url,
+            headers: Default::default(),
+            expires_at: None,
+            container: None,
+            codec: None,
+            gain_db: None,
+            range_capable: false,
+            transcoded: false,
+        };
+        let out = match provider.download_to_file(&stream, &dest).await {
             Ok(o) => o,
             Err(SubsonicError::NotFound(_)) => {
                 self.inner.image_missing.lock().insert(missing);
@@ -670,18 +683,24 @@ mod tests {
         let (_dir, _db, caches, _clock, server) = fixture();
         server.set_media("al-1", vec![1u8; 300]);
         server.fail_next(SubsonicError::Network("drop".into()), 1);
-        assert!(caches.artwork_path(&server, "al-1", 640).await.is_err());
-        let got = caches.artwork_path(&server, "al-1", 640).await.unwrap();
+        assert!(caches
+            .artwork_path(&server.provider(), "al-1", 640)
+            .await
+            .is_err());
+        let got = caches
+            .artwork_path(&server.provider(), "al-1", 640)
+            .await
+            .unwrap();
         assert!(got.is_some(), "a failed fetch is not remembered");
         server.fail_next(SubsonicError::NotFound("al-2".into()), 1);
         assert!(caches
-            .artwork_path(&server, "al-2", 640)
+            .artwork_path(&server.provider(), "al-2", 640)
             .await
             .unwrap()
             .is_none());
         let before = server.calls_to("download");
         assert!(caches
-            .artwork_path(&server, "al-2", 640)
+            .artwork_path(&server.provider(), "al-2", 640)
             .await
             .unwrap()
             .is_none());
@@ -702,7 +721,7 @@ mod tests {
         });
         server.set_media("al-1", vec![1u8; 300]);
         let big = caches
-            .artwork_path(&server, "al-1", 1000)
+            .artwork_path(&server.provider(), "al-1", 1000)
             .await
             .unwrap()
             .unwrap();
@@ -714,7 +733,7 @@ mod tests {
             "a large image is never downscaled for a grid"
         );
         let small = caches
-            .artwork_path(&server, "al-1", 64)
+            .artwork_path(&server.provider(), "al-1", 64)
             .await
             .unwrap()
             .unwrap();
@@ -723,7 +742,7 @@ mod tests {
         // second request is served from cache
         assert_eq!(
             caches
-                .artwork_path(&server, "al-1", 1280)
+                .artwork_path(&server.provider(), "al-1", 1280)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -739,7 +758,7 @@ mod tests {
             .unwrap()
             .is_none());
         caches
-            .artwork_path(&server, "al-1", 1280)
+            .artwork_path(&server.provider(), "al-1", 1280)
             .await
             .unwrap()
             .unwrap();
@@ -747,12 +766,12 @@ mod tests {
         // missing artwork on the server is None, not an error
         server.fail_next(SubsonicError::NotFound("no art".into()), 1);
         assert!(caches
-            .artwork_path(&server, "none", 320)
+            .artwork_path(&server.provider(), "none", 320)
             .await
             .unwrap()
             .is_none());
         // the fetch URL carried the snapped size
-        let s = server.stream_url("x", &Default::default());
+        let s = crate::subsonic::SubsonicApi::stream_url(&server, "x", &Default::default());
         assert!(s.as_str().contains("stream"));
     }
 
@@ -764,13 +783,13 @@ mod tests {
         server.set_media("c", vec![0u8; 100]);
         caches.set_image_budget(250.0);
         let a = caches
-            .artwork_path(&server, "a", 64)
+            .artwork_path(&server.provider(), "a", 64)
             .await
             .unwrap()
             .unwrap();
         *clock.0.lock() += 10.0;
         let b = caches
-            .artwork_path(&server, "b", 64)
+            .artwork_path(&server.provider(), "b", 64)
             .await
             .unwrap()
             .unwrap();
@@ -778,7 +797,7 @@ mod tests {
         caches.artwork_cached("srv", "a", 64).unwrap(); // touch a
         *clock.0.lock() += 10.0;
         let c = caches
-            .artwork_path(&server, "c", 64)
+            .artwork_path(&server.provider(), "c", 64)
             .await
             .unwrap()
             .unwrap();

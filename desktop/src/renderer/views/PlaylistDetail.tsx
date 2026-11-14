@@ -13,7 +13,7 @@ import { executeAction } from "../store/actions";
 import { trackTableHeight } from "../lib/track-row";
 
 export function PlaylistDetail({ id }: { id: string }) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const pl = useQuery(() => ({ type: "playlist", data: { id } }), "playlistDetail", [id]);
   const fetchPage = useCallback(async (offset: number, limit: number) => {
@@ -26,7 +26,7 @@ export function PlaylistDetail({ id }: { id: string }) {
   // Resting on a play button primes that track's start (the album primer, per track).
   const primer = usePlayIntent(`playlist:${id}`);
   const editable = !!p && !p.isSmart && p.isMine;
-  const play = (start?: number, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id } }, label: p?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
+  const play = (start?: number, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "playlist", data: { id } }, label: p?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   const by = p?.owner ? t("playlist.by", { owner: p.owner }) : "";
   // Downloaded or on its way; fully in the stream cache is not kept, so the button offers to download it.
   const kept = p?.offline === "downloaded" || p?.offline === "downloading";

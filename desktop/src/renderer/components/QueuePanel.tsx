@@ -406,7 +406,7 @@ function SectionHeading({ labelId, label, anchorName, sortId, onDragOver }: { la
 
 const QueueRow = memo(function QueueRow({ id, entry, kind, large, selected, focused, sortable, carried, dropAt, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; kind: QueueRowKind; large: boolean; selected: boolean; focused: boolean; sortable: boolean; carried: boolean; dropAt?: "before" | "after"; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.item.key, disabled: !sortable });
-  const snoozed = useApp((s) => s.snoozes.some((x) => x.trackId === entry.track.id));
+  const snoozed = useApp((s) => s.snoozes.some((x) => x.trackRef.id === entry.track.id));
   const src = entry.item.source;
   const sub = src.type === "autoplay" ? t("queue.autoplayFrom", { reason: src.data.reason }) : entry.track.artist ?? "";
   const marker = rowMarker(entry, kind);

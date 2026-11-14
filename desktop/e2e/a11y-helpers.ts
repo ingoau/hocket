@@ -85,7 +85,7 @@ export async function setTheme(page: Page, theme: "light" | "dark"): Promise<voi
 }
 
 export async function serverId(page: Page): Promise<string> {
-  const servers = await page.evaluate(async () => (await window.hocket.query({ type: "servers" })) as { type: string; data: { id: string }[] });
+  const servers = await page.evaluate(async () => (await window.hocket.query({ type: "accounts" })) as { type: string; data: { id: string }[] });
   return servers.data[0]!.id;
 }
 
@@ -110,6 +110,9 @@ export async function keyboardSetup(page: Page): Promise<void> {
   await page.keyboard.press("Enter");
   // The summary takes focus on Continue: Enter goes in.
   await expect(page.getByTestId("setup-continue")).toBeFocused({ timeout: 15_000 });
+  await page.keyboard.press("Enter");
+  // "Add another source?" takes focus on Not now: Enter goes in.
+  await expect(page.getByTestId("setup-done")).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }

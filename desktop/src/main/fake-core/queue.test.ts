@@ -5,7 +5,7 @@ import * as Q from "./queue";
 let n = 0;
 const item = (trackId: string, extra: Partial<QueueItem> = {}): QueueItem => ({
   key: `k${++n}`,
-  trackId,
+  track: { source: "s", id: trackId },
   source: { type: "context", data: { index: 0 } },
   unavailable: false,
   added: false,
@@ -21,9 +21,9 @@ function ctx(count: number, ptr = 0): Q.FlatQueue {
   Q.renumber(q);
   return q;
 }
-const tracks = (q: Q.FlatQueue) => q.list.map((i) => i.trackId);
-const cur = (q: Q.FlatQueue) => Q.currentItem(q)?.trackId;
-const keyOf = (q: Q.FlatQueue, t: string) => q.list.find((i) => i.trackId === t)!.key;
+const tracks = (q: Q.FlatQueue) => q.list.map((i) => i.track.id);
+const cur = (q: Q.FlatQueue) => Q.currentItem(q)?.track.id;
+const keyOf = (q: Q.FlatQueue, t: string) => q.list.find((i) => i.track.id === t)!.key;
 
 describe("navigation", () => {
   it("next X times then previous X times lands back, and never edits the list", () => {
@@ -82,7 +82,7 @@ describe("queueing", () => {
     Q.queueItems(q, ["l"], [], "later", true, fresh);
     expect(tracks(q)).toEqual(["t0", "t1", "n", "a", "b", "t2", "t3", "t4", "l"]);
     expect(q.list.map((i) => !!i.queued)).toEqual([false, false, true, true, true, false, false, false, false]);
-    expect(q.list.filter((i) => i.added).map((i) => i.trackId)).toEqual(["n", "a", "b", "l"]);
+    expect(q.list.filter((i) => i.added).map((i) => i.track.id)).toEqual(["n", "a", "b", "l"]);
     expect(Q.groupEnd(q) - Q.afterCurrent(q)).toBe(3);
   });
 
@@ -150,7 +150,7 @@ describe("move and group", () => {
     const q = ctx(3, 0);
     Q.queueItems(q, ["a", "b"], [], "group", true, fresh);
     Q.queueItems(q, ["l"], [], "later", true, fresh);
-    expect(Q.clearGroup(q).map((i) => i.trackId)).toEqual(["a", "b"]);
+    expect(Q.clearGroup(q).map((i) => i.track.id)).toEqual(["a", "b"]);
     expect(tracks(q)).toEqual(["t0", "t1", "t2", "l"]);
   });
 
@@ -216,7 +216,7 @@ describe("insert at a position", () => {
     Q.settle(q);
     return q;
   }
-  const group = (q: Q.FlatQueue) => q.list.slice(Q.afterCurrent(q), Q.groupEnd(q)).map((i) => i.trackId);
+  const group = (q: Q.FlatQueue) => q.list.slice(Q.afterCurrent(q), Q.groupEnd(q)).map((i) => i.track.id);
 
   it("lands directly after the named entry, in or out of the group", () => {
     let q = withGroup();
@@ -290,16 +290,16 @@ describe("view", () => {
     expect(w.currentIndex).toBe(250);
     expect(w.groupCount).toBe(2);
     expect(w.totalUpcoming).toBe(251);
-    expect(w.entries[100]!.item.trackId).toBe("t250");
-    expect(w.entries.filter((e) => e.inGroup).map((e) => e.item.trackId)).toEqual(["a", "b"]);
-    expect(w.previous?.trackId).toBe("t249");
+    expect(w.entries[100]!.item.track.id).toBe("t250");
+    expect(w.entries.filter((e) => e.inGroup).map((e) => e.item.track.id)).toEqual(["a", "b"]);
+    expect(w.previous?.track.id).toBe("t249");
   });
 
   it("queueRange pages rows with the same totals, clamped", () => {
     const q = ctx(50, 10);
     const r = Q.deriveRange(q, 45, 20);
     expect(r.windowStart).toBe(45);
-    expect(r.entries.map((e) => e.item.trackId)).toEqual(["t45", "t46", "t47", "t48", "t49"]);
+    expect(r.entries.map((e) => e.item.track.id)).toEqual(["t45", "t46", "t47", "t48", "t49"]);
     expect(r.total).toBe(50);
     expect(r.historyCount).toBe(10);
     expect(Q.deriveRange(q, 100, 5).entries).toEqual([]);
@@ -308,7 +308,7 @@ describe("view", () => {
   it("wrapNext under repeat all at the end; no current gives no currentIndex", () => {
     const q = ctx(3, 2);
     q.repeat = "all";
-    expect(Q.deriveRange(q, 0, 10).wrapNext?.trackId).toBe("t0");
+    expect(Q.deriveRange(q, 0, 10).wrapNext?.track.id).toBe("t0");
     const empty: Q.FlatQueue = { list: [], ptr: 0, shuffle: false, repeat: "off" };
     expect(Q.deriveWindow(empty, 100, 100).currentIndex).toBeUndefined();
   });

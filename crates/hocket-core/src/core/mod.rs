@@ -104,7 +104,7 @@ pub enum Internal {
     /// A server capability probe finished. `Err` carries the error kind
     /// (auth / network / server) and a message.
     Probed {
-        server_id: ServerId,
+        account_id: AccountId,
         result: Result<ServerCapabilities, (ErrorKind, String)>,
     },
     /// Connect I/O reports.
@@ -308,10 +308,10 @@ impl LateSink {
 
 /// A server the core is attached to from construction (tests): the fake
 /// server plus the metadata the platform would otherwise supply through
-/// `Command::AddServer`.
+/// `Command::AddAccount`.
 /// A server whose credentials are being verified before it is added.
-pub(crate) struct PendingServer {
-    pub info: ServerInfo,
+pub(crate) struct PendingAccount {
+    pub info: AccountInfo,
     pub client: Arc<crate::subsonic::Client>,
     pub credential: crate::connect::wire::Credential,
     pub lan_key: crate::connect::auth::LanKey,
@@ -331,7 +331,7 @@ pub(crate) struct Deps {
     pub io: Arc<dyn ConnectIo>,
     pub storage: Arc<dyn StorageProbe>,
     pub lyrics_http: Option<Arc<dyn LyricsHttp>>,
-    pub server: Option<PresetServer>,
+    pub servers: Vec<PresetServer>,
     /// Session entropy seed for deterministic tests (`None` = OS random).
     pub seed: Option<u64>,
     /// Drive time from the tick only (no wall-clock ticker task).
@@ -350,7 +350,7 @@ impl Deps {
             io: Arc::new(RealIo::new(config)),
             storage: Arc::new(crate::downloads::UnknownStorage),
             lyrics_http: None,
-            server: None,
+            servers: vec![],
             seed: None,
             manual_tick: false,
             stream_upstream: None,

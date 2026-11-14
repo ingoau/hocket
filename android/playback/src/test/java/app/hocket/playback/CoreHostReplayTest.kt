@@ -2,17 +2,20 @@ package app.hocket.playback
 
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
+import app.hocket.core.api.AccountKind
+import app.hocket.core.api.AccountSetup
 import app.hocket.core.api.Command
+import app.hocket.core.api.ProviderCapabilities
 import app.hocket.core.api.ErrorKind
 import app.hocket.core.api.Event
 import app.hocket.core.api.EventErrorInner
-import app.hocket.core.api.EventServersChangedInner
+import app.hocket.core.api.EventAccountsChangedInner
 import app.hocket.core.api.EventSnapshotInner
 import app.hocket.core.api.EventStartedInner
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.ServerCapabilities
-import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.AccountInfo
 import app.hocket.core.api.Snapshot
 import app.hocket.core.fake.FakeCore
 import kotlinx.coroutines.CoroutineStart
@@ -51,21 +54,25 @@ class CoreHostReplayTest {
         override suspend fun query(query: Query): QueryResult = error("unused")
         override fun close() = Unit
         suspend fun emit(event: Event) { flow.emit(event); yield(); yield() }
-        val addServers get() = dispatched.filterIsInstance<Command.AddServer>()
+        val addServers get() = dispatched.filterIsInstance<Command.AddAccount>().map { (it.data.setup as AccountSetup.Navidrome).data }
     }
 
     private val url = "https://music.example.net"
     private val caps = ServerCapabilities("0.63.1", true, emptyList(), true, true, true, true, false, true, false, true)
-    private fun server(reachable: Boolean = true, user: String = "alice") = ServerInfo("srv", url, user, "Music", caps, null, reachable = reachable)
+    private fun server(reachable: Boolean = true, user: String = "alice"): AccountInfo {
+        val id = ServerCredentialStore.key(url, user)
+        val features = ProviderCapabilities(true, true, true, true, true, true, true, true, true, true, false, true, true, true, false, true)
+        return AccountInfo(id, AccountKind.Navidrome, 0u, id, url, user, "Music", features, caps, null, reachable = reachable)
+    }
     private val credential = ServerCredential(url, "alice", "secret", null)
     private lateinit var snapshot: Snapshot
     private lateinit var core: ScriptedCore
     private lateinit var store: InMemoryCredentialStore
     private var replay: Job? = null
 
-    private fun started(servers: List<ServerInfo>) = Event.Started(EventStartedInner(snapshot.copy(servers = servers)))
-    private fun snapshotOf(servers: List<ServerInfo>) = Event.Snapshot(EventSnapshotInner(snapshot.copy(servers = servers)))
-    private fun serversChanged(servers: List<ServerInfo>) = Event.ServersChanged(EventServersChangedInner(servers))
+    private fun started(servers: List<AccountInfo>) = Event.Started(EventStartedInner(snapshot.copy(accounts = servers)))
+    private fun snapshotOf(servers: List<AccountInfo>) = Event.Snapshot(EventSnapshotInner(snapshot.copy(accounts = servers)))
+    private fun serversChanged(servers: List<AccountInfo>) = Event.AccountsChanged(EventAccountsChangedInner(servers))
     private fun authError() = Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", null))
 
     @Before
@@ -132,7 +139,7 @@ class CoreHostReplayTest {
         store.save(ServerCredential("https://other.example.net", "bob", "pw", null))
         startReplay()
         core.emit(started(listOf(server(reachable = false))))
-        assertEquals(listOf("alice"), core.addServers.map { it.data.username })
+        assertEquals(listOf("alice"), core.addServers.map { it.username })
     }
 
     @Test
@@ -143,8 +150,8 @@ class CoreHostReplayTest {
         core.emit(serversChanged(listOf(server(reachable = true))))
         assertEquals(1, core.addServers.size)
         var storeEmptyAtRemove: Boolean? = null
-        core.onDispatch = { c -> if (c is Command.RemoveServer) storeEmptyAtRemove = store.all().isEmpty() }
-        CoreHost.removeServer(core::dispatch, server())
+        core.onDispatch = { c -> if (c is Command.RemoveAccount) storeEmptyAtRemove = store.all().isEmpty() }
+        CoreHost.removeAccount(core::dispatch, server())
         assertEquals("the credential is gone before RemoveServer reaches the core", true, storeEmptyAtRemove)
         assertFalse(CoreHost.hasLogin(server(), CoreHost.logins.value))
         // The core clears the server and re-emits everything: Snapshot{servers: []} then ServersChanged{[]}.

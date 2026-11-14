@@ -418,7 +418,7 @@ mod tests {
         let track = |i: usize| format!("{i:032x}");
         let item = |i: usize| QueueItem {
             key: key(10_000 + i / 50, i % 50),
-            track_id: track(i),
+            track: crate::api::TrackRef::from(track(i)),
             source: match i % 4 {
                 0 | 1 => QueueSource::Context { index: i as u32 },
                 2 => QueueSource::Inserted,
@@ -435,13 +435,13 @@ mod tests {
         };
         let list: Vec<QueueItem> = (0..MAX_QUEUE_LEN).map(item).collect();
         let context = |label: &str, tracks: Vec<String>| QueueContext {
-            server_id: "4b9a1c2d3e4f5a6b7c8d9e0f1a2b3c4d".into(),
+            source: "4b9a1c2d3e4f5a6b7c8d9e0f1a2b3c4d".into(),
             kind: ContextKind::AdHoc {
                 label: label.into(),
             },
             label: label.into(),
             sort: SortOrder::Default,
-            tracks,
+            tracks: tracks.into_iter().map(crate::api::TrackRef::from).collect(),
         };
         let label = "A selection with a long name, the kind people give playlists".to_string();
 

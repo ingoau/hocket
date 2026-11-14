@@ -696,7 +696,7 @@ async fn a_library_sync_that_sees_a_track_change_drops_its_cached_audio() {
     }
     t.events.clear();
     t.run(Command::SyncLibrary {
-        server_id: t.server_id.clone(),
+        account_id: t.server_id.clone(),
         full: true,
     })
     .await;

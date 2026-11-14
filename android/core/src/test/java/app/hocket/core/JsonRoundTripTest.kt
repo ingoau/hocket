@@ -92,7 +92,7 @@ class JsonRoundTripTest {
     fun nullsAreOmittedSoRustDefaultsApply() {
         val text = HocketJson.encodeCommand(Commands.setSleepTimer(null))
         assertEquals("""{"type":"setSleepTimer","data":{}}""", text)
-        val item = json.encodeToString(QueueItem.serializer(), QueueItem("k", "t", QueueSource.Inserted, null))
+        val item = json.encodeToString(QueueItem.serializer(), QueueItem("k", TrackRef("s", "t"), QueueSource.Inserted, null))
         assertTrue(item, "unavailable" !in item)
     }
 

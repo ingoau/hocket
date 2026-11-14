@@ -127,12 +127,12 @@ class RealCoreEndToEndTest {
         waitFor { it as? Event.Started }
         // The platform reports connectivity (the service does this on Android); the outbox and prefetch gate on it.
         core.dispatch(Commands.setNetworkState(app.hocket.core.api.NetworkState(app.hocket.core.api.NetworkKind.Wifi, false, "test")))
-        assertTrue("fresh core has no servers", (events.first { it is Event.Started } as Event.Started).data.snapshot.servers.isEmpty())
+        assertTrue("fresh core has no servers", (events.first { it is Event.Started } as Event.Started).data.snapshot.accounts.isEmpty())
 
         // AddServer → probe (ping, extensions, /auth/login 404) → ServersChanged with capabilities.
-        core.dispatch(Commands.addServer(server.baseUrl, "alice", "secret", "Fake"))
-        val servers = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.capabilities.serverVersion != null } } }
-        val info = servers.data.servers.first()
+        core.dispatch(Commands.addNavidrome(server.baseUrl, "alice", "secret", "Fake"))
+        val servers = waitFor { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.capabilities.serverVersion != null } } }
+        val info = servers.data.accounts.first()
         assertTrue("0.63.1 meets the floor", info.capabilities.meetsFloor)
         assertTrue(info.capabilities.songLyrics)
         assertFalse("no native API: /auth/login is a 404", info.capabilities.nativeApi)
@@ -233,8 +233,8 @@ class RealCoreEndToEndTest {
         waitFor { it as? Event.Started }
         // Metered: background prefetch stays off, so every stream request below is one of ours.
         core.dispatch(Commands.setNetworkState(app.hocket.core.api.NetworkState(app.hocket.core.api.NetworkKind.Wifi, true, "test")))
-        core.dispatch(Commands.addServer(server.baseUrl, "alice", "secret", "Fake"))
-        val info = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.meetsFloor } } }.data.servers.first()
+        core.dispatch(Commands.addNavidrome(server.baseUrl, "alice", "secret", "Fake"))
+        val info = waitFor { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.reachable && s.capabilities.meetsFloor } } }.data.accounts.first()
         waitFor(40_000) { e -> (e as? Event.SyncProgress)?.takeIf { it.data.progress.finished } }
 
         events.clear()
@@ -298,8 +298,8 @@ class RealCoreEndToEndTest {
         val first = startCore()
         first.dispatch(Command.Start)
         waitFor { it as? Event.Started }
-        first.dispatch(Commands.addServer(server.baseUrl, "alice", "secret", "Fake"))
-        waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.capabilities.serverVersion != null } } }
+        first.dispatch(Commands.addNavidrome(server.baseUrl, "alice", "secret", "Fake"))
+        waitFor { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.capabilities.serverVersion != null } } }
         first.close()
         core = null
         events.clear()
@@ -310,15 +310,15 @@ class RealCoreEndToEndTest {
         val replay = scope.launch { CoreHost.replayCredentials(second, store) }
         second.dispatch(Command.Start)
         val started = waitFor { it as? Event.Started }
-        assertEquals(1, started.data.snapshot.servers.size)
-        assertFalse("metadata only: not reachable until credentials are replayed", started.data.snapshot.servers[0].reachable)
-        val probed = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.meetsFloor } } }
-        assertEquals("alice", probed.data.servers[0].username)
+        assertEquals(1, started.data.snapshot.accounts.size)
+        assertFalse("metadata only: not reachable until credentials are replayed", started.data.snapshot.accounts[0].reachable)
+        val probed = waitFor { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.reachable && s.capabilities.meetsFloor } } }
+        assertEquals("alice", probed.data.accounts[0].username)
         // The install-time ServersChanged carries the persisted capabilities; the fresh probe follows.
         withTimeout(20_000) { while (!server.calls.contains("ping")) kotlinx.coroutines.delay(50) }
         assertTrue("the replayed AddServer probed the server again", server.calls.contains("ping"))
         withTimeout(20_000) { while (!CoreHost.credentialsReplayed.value) kotlinx.coroutines.delay(25) }
-        assertTrue("the shell gate sees the login", CoreHost.hasLogin(probed.data.servers[0], CoreHost.logins.value))
+        assertTrue("the shell gate sees the login", CoreHost.hasLogin(probed.data.accounts[0], CoreHost.logins.value))
 
         // RequestSnapshot (every UI attach, every service reconnect) re-emits the state as `Snapshot`,
         // never as a second `Started`: no second replay, no second probe.
@@ -327,7 +327,7 @@ class RealCoreEndToEndTest {
         events.clear()
         second.dispatch(Command.RequestSnapshot)
         val snapshot = waitFor { it as? Event.Snapshot }
-        assertEquals("alice", snapshot.data.snapshot.servers[0].username)
+        assertEquals("alice", snapshot.data.snapshot.accounts[0].username)
         kotlinx.coroutines.delay(750)
         assertTrue("RequestSnapshot never emits Started", events.none { it is Event.Started })
         assertEquals("a snapshot must not replay AddServer", pings, server.calls.count { it == "ping" })
@@ -336,13 +336,13 @@ class RealCoreEndToEndTest {
         // core emits while clearing (before ServersChanged{[]}) must not resurrect the server.
         CoreHost.credentials = store
         events.clear()
-        CoreHost.removeServer(second::dispatch, probed.data.servers[0])
+        CoreHost.removeAccount(second::dispatch, probed.data.accounts[0])
         assertTrue("credential removed synchronously", store.all().isEmpty())
-        waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isEmpty() } }
+        waitFor { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.isEmpty() } }
         kotlinx.coroutines.delay(750)
         assertTrue("RemoveServer re-emits as Snapshot, never Started", events.none { it is Event.Started })
         assertEquals("nothing re-added the server", pings, server.calls.count { it == "ping" })
-        assertTrue(events.none { it is Event.ServersChanged && it.data.servers.isNotEmpty() })
+        assertTrue(events.none { it is Event.AccountsChanged && it.data.accounts.isNotEmpty() })
         assertTrue(store.all().isEmpty())
         replay.cancel()
         CoreHost.credentials = null
@@ -356,8 +356,8 @@ class RealCoreEndToEndTest {
         val first = startCore()
         first.dispatch(Command.Start)
         waitFor { it as? Event.Started }
-        first.dispatch(Commands.addServer(server.baseUrl, "alice", "secret", "Fake"))
-        waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.meetsFloor } } }
+        first.dispatch(Commands.addNavidrome(server.baseUrl, "alice", "secret", "Fake"))
+        waitFor { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.reachable && s.capabilities.meetsFloor } } }
         first.close()
         core = null
         events.clear()
@@ -370,19 +370,19 @@ class RealCoreEndToEndTest {
         second.dispatch(Commands.setNetworkState(app.hocket.core.api.NetworkState(app.hocket.core.api.NetworkKind.Offline, false, null)))
         second.dispatch(Command.Start)
         val started = waitFor { it as? Event.Started }
-        assertEquals(1, started.data.snapshot.servers.size)
-        assertFalse(started.data.snapshot.servers[0].reachable)
+        assertEquals(1, started.data.snapshot.accounts.size)
+        assertFalse(started.data.snapshot.accounts[0].reachable)
         // Contract #2: the replayed AddServer for the persisted server installs the client at once
         // from the persisted capabilities (reachable=false), so downloads play offline; the failed
         // probe is an Error + toast only and the server stays installed.
-        val installed = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.isNotEmpty() } }
-        assertFalse(installed.data.servers[0].reachable)
-        assertTrue("persisted capabilities are kept", installed.data.servers[0].capabilities.meetsFloor)
+        val installed = waitFor { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.isNotEmpty() } }
+        assertFalse(installed.data.accounts[0].reachable)
+        assertTrue("persisted capabilities are kept", installed.data.accounts[0].capabilities.meetsFloor)
         withTimeout(20_000) { while (!CoreHost.credentialsReplayed.value) kotlinx.coroutines.delay(25) }
-        assertTrue("the shell gate: a server with a login", CoreHost.hasLogin(installed.data.servers[0], CoreHost.logins.value))
+        assertTrue("the shell gate: a server with a login", CoreHost.hasLogin(installed.data.accounts[0], CoreHost.logins.value))
         val err = waitFor { e -> (e as? Event.Error)?.takeIf { it.data.kind == app.hocket.core.api.ErrorKind.Network } }
         assertNotNull(err)
-        assertTrue("a failed probe leaves the server installed", events.none { it is Event.ServersChanged && it.data.servers.isEmpty() })
+        assertTrue("a failed probe leaves the server installed", events.none { it is Event.AccountsChanged && it.data.accounts.isEmpty() })
         assertTrue("a network error must not touch the stored login", store.all().size == 1)
 
         // Back online on the same address: the core re-probes the unreachable server on its own; the
@@ -390,8 +390,8 @@ class RealCoreEndToEndTest {
         server = FakeNavidrome(port = port).also { it.start() }
         events.clear()
         second.dispatch(Commands.setNetworkState(app.hocket.core.api.NetworkState(app.hocket.core.api.NetworkKind.Wifi, false, "test")))
-        val reprobed = waitFor { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable } } }
-        assertEquals("alice", reprobed.data.servers[0].username)
+        val reprobed = waitFor { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.reachable } } }
+        assertEquals("alice", reprobed.data.accounts[0].username)
         assertTrue("the re-probe hit the server", server.calls.contains("ping"))
         replay.cancel()
     }
@@ -402,12 +402,12 @@ class RealCoreEndToEndTest {
         core.dispatch(Command.Start)
         waitFor { it as? Event.Started }
         events.clear() // drop the start-up ServersChanged (empty list)
-        core.dispatch(Commands.addServer(server.baseUrl, "alice", "wrong", null))
+        core.dispatch(Commands.addNavidrome(server.baseUrl, "alice", "wrong", null))
         val err = waitFor { it as? Event.Error }
         // A brand-new server is probed first: a refused login installs nothing (only a persisted
         // server is installed ahead of its probe, see the offline-start test).
         kotlinx.coroutines.delay(500)
-        assertTrue("a refused new server is never listed", events.none { it is Event.ServersChanged && it.data.servers.isNotEmpty() })
+        assertTrue("a refused new server is never listed", events.none { it is Event.AccountsChanged && it.data.accounts.isNotEmpty() })
         // Subsonic error 40 ("Wrong username or password") maps to ErrorKind.Auth, so the setup screen can
         // tell a bad password from an outage.
         assertEquals("probe error kind (message=${err.data.message} detail=${err.data.detail})", app.hocket.core.api.ErrorKind.Auth, err.data.kind)

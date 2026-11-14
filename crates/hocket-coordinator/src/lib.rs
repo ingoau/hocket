@@ -95,8 +95,8 @@ use hocket_core::connect::replica::{
 use hocket_core::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
 use hocket_core::connect::session_adapter::RealReducer;
 use hocket_core::connect::wire::{
-    scope_key, server_key, AnalysisEntry, Credential, Msg, RefuseReason, ReplicaState, WireMessage,
-    ANALYSIS_BATCH_MAX, ANALYSIS_FETCH_MAX,
+    account_id_for_scope, scope_key, server_key, AnalysisEntry, Credential, Msg, RefuseReason,
+    ReplicaState, WireMessage, ANALYSIS_BATCH_MAX, ANALYSIS_FETCH_MAX,
 };
 use hocket_core::connect::PeerId;
 use hocket_core::util::WallClock;
@@ -616,6 +616,7 @@ impl App {
         &self,
         tx: &mpsc::UnboundedSender<Message>,
         server: String,
+        account: String,
         mut track_ids: Vec<String>,
     ) {
         let Some(store) = self.analysis.clone() else {
@@ -634,7 +635,7 @@ impl App {
                 if let (Some(queue), Some(asked)) = (&self.worker_priority, asked) {
                     let missed = asked.iter().filter(|id| {
                         !r.iter()
-                            .any(|e| &e.track_id == *id && analysis::complete(&e.record))
+                            .any(|e| &e.track_id.id == *id && analysis::complete(&e.record))
                     });
                     let added = queue.push(&server, missed.map(String::as_str));
                     if added > 0 {
@@ -645,7 +646,12 @@ impl App {
                         );
                     }
                 }
-                r
+                r.into_iter()
+                    .map(|mut e| {
+                        e.track_id.source = account.clone();
+                        e
+                    })
+                    .collect()
             }
             Ok(Err(e)) => {
                 warn!(error = %e, "analysis store read failed");
@@ -678,12 +684,12 @@ impl App {
             let (mut stored, mut refused) = (0, 0);
             for mut e in records {
                 analysis::sanitize_upload(&mut e.record, now);
-                if let Err(why) = analysis::validate(&e.track_id, &e.record) {
+                if let Err(why) = analysis::validate(&e.track_id.id, &e.record) {
                     debug!(track = %e.track_id, why, "analysis upload refused");
                     refused += 1;
                     continue;
                 }
-                match store.put(&server, &e.track_id, e.record, now) {
+                match store.put(&server, &e.track_id.id, e.record, now) {
                     Ok(analysis::PutOutcome::Stored) => stored += 1,
                     Ok(analysis::PutOutcome::Kept) => {}
                     Err(err) => warn!(error = %err, "analysis store write failed"),
@@ -1345,10 +1351,20 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
                 .is_some_and(|d| app.has_member(&current_scope, d));
             match (server, member, analysis_budget.take(Instant::now())) {
                 (Some(server), true, true) => match msg.msg {
+                    // Records are kept for the room's own account; tracks of
+                    // the room's other accounts (a mixed queue) aren't stored here.
                     Msg::AnalysisFetch { track_ids } => {
-                        app.answer_analysis_fetch(&tx, server, track_ids).await
+                        let account = account_id_for_scope(&current_scope);
+                        let ids = track_ids
+                            .into_iter()
+                            .filter(|t| t.source == account)
+                            .map(|t| t.id)
+                            .collect();
+                        app.answer_analysis_fetch(&tx, server, account, ids).await
                     }
-                    Msg::AnalysisUpload { records } => {
+                    Msg::AnalysisUpload { mut records } => {
+                        let account = account_id_for_scope(&current_scope);
+                        records.retain(|e| e.track_id.source == account);
                         app.take_analysis_upload(server, records).await
                     }
                     _ => {}
@@ -1543,7 +1559,7 @@ mod tests {
             AnalysisProducer, AnalysisRecord, LoudnessCurve, SourceFingerprint,
         };
         let entry = |id: usize, beats: u32| AnalysisEntry {
-            track_id: format!("t{id}"),
+            track_id: hocket_core::api::TrackRef::new("s", format!("t{id}")),
             record: AnalysisRecord {
                 version: 1,
                 analyser: "test".into(),
@@ -1588,7 +1604,7 @@ mod tests {
         let ids: Vec<&str> = chunks
             .iter()
             .flatten()
-            .map(|e| e.track_id.as_str())
+            .map(|e| e.track_id.id.as_str())
             .collect();
         assert_eq!(ids, vec!["t0", "t2"]);
     }

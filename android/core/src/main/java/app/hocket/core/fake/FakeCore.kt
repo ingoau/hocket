@@ -69,7 +69,7 @@ class FakeCore(
     val deviceId = "fake-device"
 
     // -- state -------------------------------------------------------------------------------------
-    private var servers = ArrayList<ServerInfo>()
+    private var servers = ArrayList<AccountInfo>()
     private var context: QueueContext? = null
     private var contextTracks: List<TrackId> = emptyList()
     /** The queue: one flat list with a pointer ("Queue model" in docs/design.md). */
@@ -230,15 +230,15 @@ class FakeCore(
         }
         if (startWithServer) {
             // Last synced an hour ago.
-            servers += ServerInfo("fake-server", "https://music.example.net", "ada", "music.example.net", capabilities(), lastSync = now() - 3_600_000.0,
-                lastSyncTracks = library.tracks.size.toUInt(), reachable = true)
+            servers += fakeAccount("https://music.example.net", "ada", "music.example.net", capabilities(), lastSync = now() - 3_600_000.0,
+                lastSyncTracks = library.tracks.size.toUInt())
             if (startPlaying) {
                 val album = library.albums[5]
                 setContext(QueueContext(serverId, ContextKind.Album(ContextKindAlbumInner(album.id)), album.name, SortOrder.Default), library.albumTracks(album.id).map { it.id }, 2, false)
                 // Some history, a "Next in queue" entry, an added entry later on and an autoplay tail so
                 // the queue timeline has every kind of row.
-                list.add(ptr + 1, QueueItem(newKey(), library.tracks[300].id, QueueSource.Inserted, false, added = true, queued = true))
-                list += QueueItem(newKey(), library.tracks[301].id, QueueSource.Inserted, false, added = true, queued = false)
+                list.add(ptr + 1, QueueItem(newKey(), ref(library.tracks[300].id), QueueSource.Inserted, false, added = true, queued = true))
+                list += QueueItem(newKey(), ref(library.tracks[301].id), QueueSource.Inserted, false, added = true, queued = false)
                 renumber()
                 stamp = PositionStamp(42_000u, now(), 1.0, true)
                 scheduleAdvance()
@@ -358,11 +358,11 @@ class FakeCore(
     }
 
     /** Test helper: replace the jobs, sync progress and/or servers, announced as the core would. */
-    fun stageSync(jobs: List<Job>? = null, progress: SyncProgress? = null, servers: List<ServerInfo>? = null) {
+    fun stageSync(jobs: List<Job>? = null, progress: SyncProgress? = null, servers: List<AccountInfo>? = null) {
         scope.launch {
             jobs?.let { this@FakeCore.jobs.clear(); this@FakeCore.jobs += it; emitJobs() }
             progress?.let { syncProgress = it; emit(Event.SyncProgress(EventSyncProgressInner(it))) }
-            servers?.let { this@FakeCore.servers.clear(); this@FakeCore.servers += it; emit(Event.ServersChanged(EventServersChangedInner(it))) }
+            servers?.let { this@FakeCore.servers.clear(); this@FakeCore.servers += it; emit(Event.AccountsChanged(EventAccountsChangedInner(it))) }
         }
     }
 
@@ -380,7 +380,7 @@ class FakeCore(
 
     // -- snapshot ----------------------------------------------------------------------------------
     private fun snapshot() = Snapshot(
-        servers = servers.toList(), session = sessionDocument(), queue = queueView(), transport = transport(), connection = connection,
+        accounts = servers.toList(), session = sessionDocument(), queue = queueView(), transport = transport(), connection = connection,
         devices = devices.toList(), jobs = jobs.toList(), problems = problems.toList(), undo = undoState(), settings = settings.values.toList(),
         audio = audio, mediaSession = mediaSessionState(), resumeOffer = resumeOffer, sleepTimer = sleepTimer, network = network,
         batterySaver = batterySaver, syncProgress = syncProgress,
@@ -417,7 +417,7 @@ class FakeCore(
         val seed = currentTrack() ?: library.tracks[0]
         for (i in 0 until 3 - upcoming.size) {
             val t = library.tracks[(seed.id.drop(1).toInt() * 31 + (list.size + i) * 97) % library.tracks.size]
-            list += QueueItem(newKey(), t.id, QueueSource.Autoplay(QueueSourceAutoplayInner(AutoplayProvider.SonicSimilarity, "Similar to ${seed.title}", 0.93 - i * 0.07)), false, ordinal = list.size.toUInt())
+            list += QueueItem(newKey(), ref(t.id), QueueSource.Autoplay(QueueSourceAutoplayInner(AutoplayProvider.SonicSimilarity, "Similar to ${seed.title}", 0.93 - i * 0.07)), false, ordinal = list.size.toUInt())
         }
     }
 
@@ -490,7 +490,7 @@ class FakeCore(
     private fun stashItems(): List<StashItem> = stash.mapNotNull { (id, t) -> library.track(t)?.let { StashItem(id, 0.0, it) } }
     private fun emitStash() = emit(Event.StashChanged(EventStashChangedInner(stashItems())))
     private val snoozes = linkedMapOf<String, Double?>()
-    private fun snoozeItems(): List<SnoozeItem> = snoozes.mapNotNull { (id, until) -> library.track(id)?.let { SnoozeItem(id, until, it) } }
+    private fun snoozeItems(): List<SnoozeItem> = snoozes.mapNotNull { (id, until) -> library.track(id)?.let { SnoozeItem(ref(id), until, it) } }
     private fun emitSnoozes() = emit(Event.SnoozesChanged(EventSnoozesChangedInner(snoozeItems())))
     private fun untilFor(duration: SnoozeFor): Double? {
         val day = 86_400_000.0
@@ -572,10 +572,10 @@ class FakeCore(
 
     /** Playing something new replaces the whole list (group and history included). */
     private fun setContext(ctx: QueueContext, tracks: List<TrackId>, startIndex: Int, shuffled: Boolean) {
-        context = ctx.copy(tracks = tracks)
+        context = ctx.copy(tracks = tracks.map(::ref))
         contextTracks = tracks
         list.clear()
-        tracks.forEachIndexed { i, id -> list += QueueItem(newKey(), id, QueueSource.Context(QueueSourceContextInner(i.toUInt())), false, ordinal = i.toUInt()) }
+        tracks.forEachIndexed { i, id -> list += QueueItem(newKey(), ref(id), QueueSource.Context(QueueSourceContextInner(i.toUInt())), false, ordinal = i.toUInt()) }
         val start = startIndex.coerceIn(0, (tracks.size - 1).coerceAtLeast(0))
         shuffle = shuffled
         ptr = if (shuffled && list.isNotEmpty()) {
@@ -645,9 +645,9 @@ class FakeCore(
         for (k in keys) {
             val i = list.indexOfFirst { it.key == k }
             if (i < 0) continue
-            if (current != null && i > ptr) items += list.removeAt(i) else items += QueueItem(newKey(), list[i].trackId, QueueSource.Inserted, false, added = true)
+            if (current != null && i > ptr) items += list.removeAt(i) else items += QueueItem(newKey(), ref(list[i].trackId), QueueSource.Inserted, false, added = true)
         }
-        trackIds.forEach { items += QueueItem(newKey(), it, QueueSource.Inserted, false, added = true) }
+        trackIds.forEach { items += QueueItem(newKey(), ref(it), QueueSource.Inserted, false, added = true) }
         return items
     }
 
@@ -697,7 +697,7 @@ class FakeCore(
         is ContextKind.Playlist -> library.playlistTracks[k.data.id]?.toList() ?: emptyList()
         is ContextKind.Genre -> library.sorted(library.genreTracks(k.data.name), ctx.sort, false).map { it.id }
         is ContextKind.Filter -> evaluateFilter(k.data.filter).map { it.id }
-        is ContextKind.AdHoc -> ctx.tracks ?: emptyList()
+        is ContextKind.AdHoc -> ctx.tracks?.map { it.id } ?: emptyList()
         ContextKind.Autoplay -> emptyList()
     }
 
@@ -832,9 +832,15 @@ class FakeCore(
             is Command.SetVisibility -> Unit
             is Command.SetPowerSave -> if (powerSave != c.data.enabled) { powerSave = c.data.enabled; refreshBatterySaver() }
 
-            is Command.AddServer -> addServer(c.data)
-            is Command.RemoveServer -> { servers.clear(); jobs.removeAll { it.kind == JobKind.LibrarySync }; emitJobs(); emit(Event.ServersChanged(EventServersChangedInner(emptyList()))) }
-            is Command.ProbeServer -> emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
+            is Command.AddAccount -> when (val setup = c.data.setup) { is AccountSetup.Navidrome -> addServer(setup.data) }
+            is Command.ReorderAccounts -> {
+                val order = c.data.account_ids
+                val sorted = servers.sortedBy { order.indexOf(it.id) }.mapIndexed { i, a -> a.copy(priority = i.toUInt()) }
+                servers.clear(); servers += sorted
+                emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
+            }
+            is Command.RemoveAccount -> { servers.clear(); jobs.removeAll { it.kind == JobKind.LibrarySync }; emitJobs(); emit(Event.AccountsChanged(EventAccountsChangedInner(emptyList()))) }
+            is Command.ProbeAccount -> emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
             is Command.SyncLibrary -> startSync(c.data.full)
             is Command.SetTranscodingProfile -> {
                 // Like the core: one JSON map keyed by network id, "default" when none.
@@ -890,7 +896,7 @@ class FakeCore(
             is Command.PlayTracks -> {
                 val before = captureSession()
                 saveOutgoingQueue()
-                setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.track_ids), c.data.track_ids, c.data.start_index.toInt(), c.data.shuffle)
+                setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.track_ids.map(::ref)), c.data.track_ids, c.data.start_index.toInt(), c.data.shuffle)
                 startPlayback(c.data.start_position_ms?.toLong() ?: 0, true)
                 pushUndo("Play ${c.data.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
@@ -1413,29 +1419,40 @@ class FakeCore(
                 if (jobs[i].kind == JobKind.LibrarySync) {
                     syncProgress = SyncProgress(serverId, if (done < total / 2u) "tracks" else "albums", done, total, if (done > total / 3u) listOf("artists", "albums") else listOf("artists"), done >= total)
                     emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-                    if (done >= total) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))); emitLibrary(emptyList()) }
+                    if (done >= total) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total); emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList()))); emitLibrary(emptyList()) }
                 }
                 if (done >= total) return@launch
             }
         }
     }
 
-    private fun addServer(a: CommandAddServerInner) {
+    private fun addServer(a: AccountSetupNavidromeInner) {
         when {
             a.password == "wrong" -> emit(Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", "The server refused the credentials.")))
             a.url.contains("old") -> {
-                servers.clear(); servers += ServerInfo("fake-server", a.url, a.username, a.name ?: a.url.removePrefix("https://"), capabilities(false), null, reachable = true)
-                emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
+                servers.clear(); servers += fakeAccount(a.url, a.username, a.name ?: a.url.removePrefix("https://"), capabilities(false), null)
+                emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
                 emit(Event.Error(EventErrorInner(ErrorKind.Server, "Navidrome 0.58.0 is too old", "Hocket needs Navidrome 0.63.0 or newer for synced lyrics and fast library sync.")))
             }
             a.url.contains("down") -> emit(Event.Error(EventErrorInner(ErrorKind.Network, "Couldn't reach ${a.url}", null)))
             else -> {
-                servers.clear(); servers += ServerInfo("fake-server", a.url, a.username, a.name ?: a.url.removePrefix("https://").removePrefix("http://"), capabilities(), null, reachable = true)
-                emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
+                servers.clear(); servers += fakeAccount(a.url, a.username, a.name ?: a.url.removePrefix("https://").removePrefix("http://"), capabilities(), null)
+                emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
                 startSync(true)
             }
         }
     }
+
+    /** A track of the fake's one library, named by its account. */
+    private fun ref(id: TrackId) = TrackRef("fake-server", id)
+    private val QueueItem.trackId: TrackId get() = track.id
+
+    /** The fake's one Navidrome account (its library is `fake-server`'s). */
+    private fun fakeAccount(url: String, username: String, name: String, caps: ServerCapabilities, lastSync: Double?, lastSyncTracks: UInt? = null) =
+        AccountInfo("fake-server", AccountKind.Navidrome, 0u, "fake-server", url, username, name,
+            ProviderCapabilities(librarySync = true, search = true, browse = true, stream = true, download = true, transcode = true, coverArt = true, star = true,
+                rate = true, playlists = true, smartPlaylists = caps.nativeApi, reportPlay = true, lyrics = true, radio = true, homeShelves = false, share = true),
+            caps, lastSync, lastSyncTracks, reachable = true)
 
     private fun startSync(full: Boolean) {
         val total = library.tracks.size
@@ -1446,7 +1463,7 @@ class FakeCore(
             updateJob(id) { it.copy(state = JobState.Done, done = total.toUInt()) }
             syncProgress = syncProgress!!.copy(done = total.toUInt(), finished = true, readyTables = listOf("artists", "albums", "tracks"))
             emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-            if (servers.isNotEmpty()) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total.toUInt()); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))) }
+            if (servers.isNotEmpty()) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total.toUInt()); emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList()))) }
         }
     }
 
@@ -1717,7 +1734,7 @@ class FakeCore(
     // -- queries -----------------------------------------------------------------------------------
     private fun answer(q: Query): QueryResult = when (q) {
         Query.Snapshot -> QueryResult.SnapshotResult(snapshot())
-        Query.Servers -> QueryResult.Servers(servers.toList())
+        Query.Accounts -> QueryResult.Accounts(servers.toList())
         is Query.Tracks -> {
             val all = q.data.filter?.let { f -> library.tracks.filter { matches(it, f) } } ?: library.tracks
             val sorted = library.sorted(all, q.data.sort, q.data.descending)

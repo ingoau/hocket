@@ -383,8 +383,9 @@ impl AnalysisStore {
                 })
                 .optional()?;
             if let Some(record) = json.and_then(|j| serde_json::from_str(&j).ok()) {
+                // The caller names the source (the room's account).
                 out.push(AnalysisEntry {
-                    track_id: id.clone(),
+                    track_id: hocket_core::api::TrackRef::new("", id.clone()),
                     record,
                 });
             }

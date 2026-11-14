@@ -974,7 +974,7 @@ async fn a_room_rekeying_the_current_item_does_not_restart_it() {
     assert!(b.snapshot().await.connection.connected, "b rejoined");
     let current = b.queue().await.current.unwrap();
     assert_eq!(current.item.key, theirs, "b adopted the room's document");
-    assert_eq!(current.item.track_id, "t1");
+    assert_eq!(current.item.track, "t1");
     assert_eq!(loads(&b), loads_before, "{:?}", b.backend.log());
     assert!(b.backend.is_playing());
     let (_, pos) = b.backend.current().unwrap();

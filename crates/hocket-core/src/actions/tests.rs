@@ -1,23 +1,27 @@
 use std::collections::HashSet;
 
 use super::*;
-use crate::api::{ContextKind, PinTarget, RatingTarget};
+use crate::api::{ContextKind, PinTarget, RatingTarget, TrackRef};
 
 struct FakeResolver;
 
 impl Resolver for FakeResolver {
-    fn track_for_key(&self, key: &QueueKey) -> Option<TrackId> {
-        key.strip_prefix("key-").map(|t| format!("track-{t}"))
+    fn track_for_key(&self, key: &QueueKey) -> Option<TrackRef> {
+        key.strip_prefix("key-")
+            .map(|t| TrackRef::new("srv", format!("track-{t}")))
     }
     fn is_upcoming(&self, key: &QueueKey) -> bool {
         key.starts_with("key-up")
     }
-    fn context_tracks(&self, _server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
-        match kind {
+    fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackRef> {
+        let ids = match kind {
             ContextKind::Album { id } => vec![format!("{id}-1"), format!("{id}-2")],
             ContextKind::Playlist { id } => vec![format!("{id}-a")],
             _ => vec![],
-        }
+        };
+        ids.into_iter()
+            .map(|id| TrackRef::new(server_id, id))
+            .collect()
     }
     fn context_label(&self, _server_id: &str, kind: &ContextKind) -> String {
         NoResolver.context_label("", kind)

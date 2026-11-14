@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type Page } from "@playwright/test";
-import type { ServerInfo } from "../src/core/api";
+import type { AccountInfo } from "../src/core/api";
 import { completeSetup, expect, launchFake, resizeWindow } from "./fixtures";
 
 const out = process.env.HOCKET_SCREENSHOT_DIR;
@@ -31,10 +31,10 @@ test("album resume", async () => {
     await completeSetup(page);
     await page.addStyleTag({ content: '[data-testid="toasts"], [data-testid="dev-banner"] { display: none !important; }' });
     await resizeWindow(app, page, 1280, 800);
-    const servers = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: ServerInfo[] };
+    const servers = (await page.evaluate(() => window.hocket.query({ type: "accounts" }))) as { data: AccountInfo[] };
     const serverId = servers.data[0]!.id;
     const albumId = "al-1";
-    await page.evaluate(({ serverId, albumId }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: albumId } }, label: "Album", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { serverId, albumId });
+    await page.evaluate(({ serverId, albumId }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id: albumId } }, label: "Album", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { serverId, albumId });
     await page.evaluate(() => window.hocket.dispatch({ type: "next" }));
     await page.evaluate(() => window.hocket.dispatch({ type: "seekTo", data: { position_ms: 75000 } }));
     await page.evaluate(() => window.hocket.dispatch({ type: "pause" }));
@@ -45,7 +45,7 @@ test("album resume", async () => {
     await expect(page.getByTestId("album-play")).toContainText("Resume");
     // Leave the album playing something else, so the page offers Resume and the ring
     // (while this album is what is playing, the button stays Play).
-    await page.evaluate(({ serverId }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: "al-2" } }, label: "Other", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { serverId });
+    await page.evaluate(({ serverId }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id: "al-2" } }, label: "Other", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { serverId });
     await expect(page.getByTestId("album-play")).toContainText("Resume");
     await page.getByTestId("track-row").nth(1).scrollIntoViewIfNeeded();
     await settle(page);

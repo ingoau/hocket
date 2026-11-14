@@ -29,6 +29,7 @@ pub mod jobs;
 pub mod lyrics;
 pub mod media_session;
 pub mod outbox;
+pub mod provider;
 pub mod reports;
 pub mod saver;
 pub mod session;

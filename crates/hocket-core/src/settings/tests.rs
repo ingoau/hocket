@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::api::{AutoplaySettings, Filter, FilterNode, ServerInfo, Shortcut};
+use crate::api::{AccountInfo, AutoplaySettings, Filter, FilterNode, Shortcut};
 
 #[test]
 fn registry_is_complete_and_consistent() {
@@ -368,7 +368,7 @@ fn merge_remote_respects_master_toggle() {
 fn config_document_builds_and_round_trips() {
     let mut s = Settings::new();
     s.set_json(keys::QUEUE_SAVED_CAP, "7", 10.0).unwrap();
-    let server = ServerInfo {
+    let server = AccountInfo {
         id: "srv1".into(),
         url: "https://music.example".into(),
         username: "me".into(),

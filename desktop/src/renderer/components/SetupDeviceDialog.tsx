@@ -17,7 +17,7 @@ import { Switch } from "./controls";
 
 export function SetupDeviceDialog() {
   const close = useApp((s) => s.closeDialog);
-  const server = useApp((s) => s.servers[0]);
+  const server = useApp((s) => s.accounts[0]);
   const coordinator = useApp((s) => s.connection.coordinatorUrl) || undefined;
   const [includePassword, setIncludePassword] = useState(false);
   const [result, setResult] = useState<SetupLinkResult>();

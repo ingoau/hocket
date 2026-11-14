@@ -11,7 +11,7 @@ use hocket_core::sim::SimTime;
 fn album(server_id: &str, id: &str, shuffle: bool) -> PlayContextArgs {
     PlayContextArgs {
         context: QueueContext {
-            server_id: server_id.into(),
+            source: server_id.into(),
             kind: ContextKind::Album { id: id.into() },
             label: String::new(),
             sort: SortOrder::Default,
@@ -114,7 +114,7 @@ async fn shuffle_playlists_and_the_switch_do_not_offer_resume() {
     t.run(Command::PlayContext {
         args: PlayContextArgs {
             context: QueueContext {
-                server_id: sid.clone(),
+                source: sid.clone(),
                 kind: ContextKind::Playlist { id: "p0".into() },
                 label: String::new(),
                 sort: SortOrder::Default,
@@ -213,7 +213,7 @@ async fn playing_something_else_after_the_album_ended_does_not_revive_it() {
     t.run(Command::PlayContext {
         args: PlayContextArgs {
             context: QueueContext {
-                server_id: sid.clone(),
+                source: sid.clone(),
                 kind: ContextKind::Playlist { id: "p0".into() },
                 label: String::new(),
                 sort: SortOrder::Default,

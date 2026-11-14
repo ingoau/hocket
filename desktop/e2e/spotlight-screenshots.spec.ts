@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type Page } from "@playwright/test";
-import type { ServerInfo } from "../src/core/api";
+import type { AccountInfo } from "../src/core/api";
 import { completeSetup, expect, launchFake, resizeWindow } from "./fixtures";
 
 const out = process.env.HOCKET_SCREENSHOT_DIR;
@@ -34,10 +34,10 @@ test("spotlight", async () => {
       await page.addStyleTag({ content: '[data-testid="toasts"], [data-testid="dev-banner"] { display: none !important; }' });
       await resizeWindow(app, page, 1440, 900);
       await page.evaluate((theme) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(theme) } }), theme);
-      const servers = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: ServerInfo[] };
+      const servers = (await page.evaluate(() => window.hocket.query({ type: "accounts" }))) as { data: AccountInfo[] };
       const serverId = servers.data[0]!.id;
       // Leave an album part-way (its resume point), then play another one.
-      const play = (albumId: string) => page.evaluate(({ serverId, albumId }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id: albumId } }, label: "Album", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { serverId, albumId });
+      const play = (albumId: string) => page.evaluate(({ serverId, albumId }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id: albumId } }, label: "Album", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { serverId, albumId });
       await play("al-1");
       await page.evaluate(() => window.hocket.dispatch({ type: "next" }));
       await page.evaluate(() => window.hocket.dispatch({ type: "seekTo", data: { position_ms: 75000 } }));

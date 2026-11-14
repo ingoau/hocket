@@ -30,19 +30,13 @@ impl Actor {
             }
             Command::SetPowerSave { enabled } => self.set_power_save(enabled),
 
-            // -- servers --
-            Command::AddServer {
-                url,
-                username,
-                password,
-                name,
-            } => self.add_server(url, username, password, name),
-            Command::RemoveServer { server_id } => self.remove_server(server_id),
-            Command::ProbeServer { server_id } => self.probe_server(&server_id),
-            Command::SyncLibrary { server_id, full } => {
-                if self.server_id().as_deref() == Some(server_id.as_str()) {
-                    self.maybe_start_sync(full, true);
-                }
+            // -- accounts --
+            Command::AddAccount { setup } => self.add_account(setup),
+            Command::RemoveAccount { account_id } => self.remove_account(account_id),
+            Command::ReorderAccounts { account_ids } => self.reorder_accounts(account_ids),
+            Command::ProbeAccount { account_id } => self.probe_account(&account_id),
+            Command::SyncLibrary { account_id, full } => {
+                self.maybe_start_sync_for(&account_id, full, true);
             }
             Command::SetTranscodingProfile {
                 network_id,
@@ -160,10 +154,10 @@ impl Actor {
             // scrobble setting. The variant is honoured under `sim` for tests.
             #[cfg(feature = "sim")]
             Command::Scrobble {
-                track_id,
+                track,
                 played_at,
                 submission,
-            } => self.scrobble_command(track_id, played_at, submission),
+            } => self.scrobble_command(track, played_at, submission),
             #[cfg(not(feature = "sim"))]
             Command::Scrobble { .. } => {
                 self.log(
@@ -177,7 +171,10 @@ impl Actor {
             Command::Unpin { target } => self.unpin(target),
             Command::ClearStreamCache => self.clear_stream_cache(),
             Command::PrimeAlbum { album_id } => self.prime_album(album_id),
-            Command::PrimeTrack { track_id } => self.request_prime(track_id),
+            Command::PrimeTrack { track_id } => {
+                let track = self.track_ref_of(&track_id);
+                self.request_prime(track)
+            }
             Command::SetBackendCapabilities { core_stream } => {
                 let native = self.cfg.audio == AudioMode::Native;
                 self.core_stream = (core_stream || native) && self.stream_reader.is_some();
@@ -326,10 +323,9 @@ impl Actor {
             Command::SetTransitionSettings { settings } => self.set_transition_settings(settings),
             Command::StoreAnalysisRecord { track_id, record } => {
                 // A platform's own record (Android's loudness-only one): share it too.
-                if self.store_analysis_record(track_id.clone(), (*record).clone()) {
-                    if let Some(server_id) = self.server_id() {
-                        self.share_analysis_record(&server_id, &track_id, &record);
-                    }
+                let track = self.track_ref_of(&track_id);
+                if self.store_analysis_record(track.clone(), (*record).clone()) {
+                    self.share_analysis_record(&track.source, &track.id, &record);
                 }
             }
 

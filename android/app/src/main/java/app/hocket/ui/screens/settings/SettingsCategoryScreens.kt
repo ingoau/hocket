@@ -1,5 +1,8 @@
 package app.hocket.ui.screens.settings
 
+import app.hocket.core.api.AccountInfo
+import androidx.compose.material3.IconButton
+import androidx.compose.foundation.layout.Row
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -87,27 +90,46 @@ import kotlin.math.roundToInt
 @Composable
 internal fun Chevron() = Icon(HocketIcons.Filled.ChevronRight, null)
 
-/** Account & server: the settings-sync master switch, the server, sync now / full sync, sign out. */
+/**
+ * Accounts: every account in priority order (the first plays first and holds the session), each
+ * with its server, sync now / full sync, move up / down and remove; Add account; then the
+ * settings-sync master switch.
+ */
 @Composable
 fun AccountSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
-    val server by client.server.collectAsStateWithLifecycle()
+    val accounts by client.accounts.collectAsStateWithLifecycle()
     val sync = setting(SettingKeys.SYNC_ENABLED)
-    var signOut by remember { mutableStateOf(false) }
-    SubScreen(nav, stringResource(R.string.settings_category_account)) {
-        // The server login is kept on this device only (the keystore); the sync switch has its registry scope.
-        server?.let { s ->
-            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgoPhrase(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = "server.info")
-            SettingRow(stringResource(R.string.settings_sync_now), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = false)) }, tag = "server.syncNow")
-            SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) }, tag = "server.fullSync")
-        }
-        SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body), scope = sync.scope ?: SettingScope.DeviceLocal, tag = "sync.master")
-        // Destructive, and last: nothing below it to hit by mistake.
-        server?.let { SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = true }, tag = "server.remove", destructive = true) { Icon(HocketIcons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error) } }
+    var signOut by remember { mutableStateOf<AccountInfo?>(null) }
+    fun move(from: Int, to: Int) {
+        if (to !in accounts.indices) return
+        val ids = accounts.map { it.id }.toMutableList()
+        ids.add(to, ids.removeAt(from))
+        client.dispatch(Commands.reorderAccounts(ids))
     }
-    // Sign-out goes through CoreHost.removeServer: the stored login is removed before RemoveServer,
-    // so nothing can replay it and resurrect the server.
-    if (signOut) server?.let { s -> ConfirmDialog(stringResource(R.string.settings_remove_server_confirm, s.name), stringResource(R.string.settings_remove_server), onConfirm = { CoreHost.removeServer(client::dispatch, s) }, onDismiss = { signOut = false }) }
+    SubScreen(nav, stringResource(R.string.settings_category_account)) {
+        if (accounts.size > 1) Text(stringResource(R.string.settings_accounts_order_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        accounts.forEachIndexed { i, s ->
+            // The first account keeps the tags tests and the settings search know.
+            val tag = { t: String -> if (i == 0) t else "$t.$i" }
+            SettingsSection(s.name, tag = tag("server.section"))
+            // The login is kept on this device only (the keystore).
+            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgoPhrase(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = tag("server.info")) {
+                if (accounts.size > 1) Row {
+                    IconButton(onClick = { move(i, i - 1) }, enabled = i > 0, modifier = Modifier.testTag("account.up.$i")) { Icon(HocketIcons.Filled.ArrowUpward, stringResource(R.string.settings_accounts_up, s.name)) }
+                    IconButton(onClick = { move(i, i + 1) }, enabled = i < accounts.size - 1, modifier = Modifier.testTag("account.down.$i")) { Icon(HocketIcons.Filled.ArrowDownward, stringResource(R.string.settings_accounts_down, s.name)) }
+                }
+            }
+            SettingRow(stringResource(R.string.settings_sync_now), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = false)) }, tag = tag("server.syncNow"))
+            SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) }, tag = tag("server.fullSync"))
+            SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = s }, tag = tag("server.remove"), destructive = true) { Icon(HocketIcons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error) }
+        }
+        SettingRow(stringResource(R.string.settings_accounts_add), stringResource(R.string.settings_accounts_add_body), onClick = { app.hocket.ui.screens.setup.SetupRequests.addAccount() }, tag = "account.add") { Icon(HocketIcons.Filled.Add, null) }
+        SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body), scope = sync.scope ?: SettingScope.DeviceLocal, tag = "sync.master")
+    }
+    // Removal goes through CoreHost.removeAccount: the stored login is removed before RemoveAccount,
+    // so nothing can replay it and resurrect the account.
+    signOut?.let { s -> ConfirmDialog(stringResource(R.string.settings_remove_server_confirm, s.name), stringResource(R.string.settings_remove_server), onConfirm = { CoreHost.removeAccount(client::dispatch, s) }, onDismiss = { signOut = null }) }
 }
 
 /** Appearance: theme, accent colour, colour from the artwork, animated background, immersive artwork. */

@@ -225,15 +225,18 @@ mod tests {
     fn doc_with_context(n: usize) -> SessionDocument {
         let mut d = new_document("s:u", "sess".into(), 1.0);
         d.context = Some(QueueContext {
-            server_id: "s".into(),
+            source: "s".into(),
             kind: ContextKind::AdHoc { label: "x".into() },
             label: "x".into(),
             sort: SortOrder::Default,
-            tracks: (0..n).map(|i| format!("t{i}")).collect(),
+            tracks: (0..n)
+                .map(|i| format!("t{i}"))
+                .map(crate::api::TrackRef::from)
+                .collect(),
         });
         d.current = Some(QueueItem {
             key: "k0".into(),
-            track_id: "t0".into(),
+            track: "t0".into(),
             source: QueueSource::Context { index: 0 },
             unavailable: false,
             added: false,

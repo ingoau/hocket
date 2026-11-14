@@ -46,7 +46,7 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
       // Counted before the detail lookups, so a large or partly unresolved selection still gets
       // Unsnooze rather than Snooze for songs already snoozed.
       const snoozes = useApp.getState().snoozes;
-      const mine = ids.map((id) => snoozes.find((s) => s.trackId === id)).filter((s) => !!s);
+      const mine = ids.map((id) => snoozes.find((s) => s.trackRef.id === id)).filter((s) => !!s);
       const snoozeFacts = {
         snoozed: mine.length,
         snoozeUntil: ids.length === 1 ? (mine[0] ? (mine[0].until ?? null) : undefined) : undefined,

@@ -207,11 +207,11 @@ interface SectionData {
 
 /** A section's items from the core's existing queries (each section only runs its own). */
 function useSectionData(id: HomeSectionId): SectionData {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const filters = useApp((s) => s.filters);
   const saved = useApp((s) => s.savedQueues);
-  const nowId = useApp((s) => s.session?.current?.trackId);
+  const nowId = useApp((s) => s.session?.current?.track.id);
   const stats = useListeningStats(id === "favouriteArtists" || id === "topGenre" || id === "moreFromArtist" || id === "onRepeat");
   const genre = useMemo(() => {
     const counts = new Map<string, number>();
@@ -289,7 +289,7 @@ function useSectionData(id: HomeSectionId): SectionData {
 
 /** The listening stats the "favourite" sections read: the last month, or the year when the month was quiet. */
 function useListeningStats(enabled: boolean) {
-  const nowId = useApp((s) => s.session?.current?.trackId);
+  const nowId = useApp((s) => s.session?.current?.track.id);
   const month = useQuery(() => (enabled ? { type: "stats", data: { period_days: 30 } } : null), "stats", [enabled, nowId]);
   // A quiet month falls back to the year, so favourites are still there.
   const year = useQuery(() => (enabled && month.data && month.data.totalPlays === 0 ? { type: "stats", data: { period_days: 365 } } : null), "stats", [enabled, month.data?.totalPlays]);
@@ -331,7 +331,7 @@ function toSummary(tr: { id: string; serverId: string; title: string; artist?: s
 }
 
 function playContext(serverId: string, kind: { type: "album" | "artist" | "playlist"; data: { id: string } }, label: string, shuffle = false): void {
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: kind as never, label, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: kind as never, label, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
 /** The Customise Home panel: every section in order, a switch, drag (or the arrows) to move, how it's shown. */

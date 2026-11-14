@@ -78,7 +78,7 @@ class RealServerTest {
     private fun mask(s: String?): String? = s?.replace(url, "<server>")?.replace(user, "<user>")?.replace(pass, "<password>")
 
     private fun diagnostics(): String = "errors=" + events.filterIsInstance<Event.Error>().map { "${it.data.kind}: ${mask(it.data.message)} / ${mask(it.data.detail)}" } +
-        " servers=" + events.filterIsInstance<Event.ServersChanged>().lastOrNull()?.data?.servers?.map { "${it.capabilities.serverVersion} reachable=${it.reachable} floor=${it.capabilities.meetsFloor} lyrics=${it.capabilities.songLyrics}" } +
+        " servers=" + events.filterIsInstance<Event.AccountsChanged>().lastOrNull()?.data?.accounts?.map { "${it.capabilities.serverVersion} reachable=${it.reachable} floor=${it.capabilities.meetsFloor} lyrics=${it.capabilities.songLyrics}" } +
         " sync=" + events.filterIsInstance<Event.SyncProgress>().lastOrNull()?.data?.progress?.let { "${it.phase} ${it.done}/${it.total} finished=${it.finished}" } +
         " jobs=" + events.filterIsInstance<Event.JobsChanged>().lastOrNull()?.data?.jobs?.map { "${it.kind}/${it.state}" }
 
@@ -106,9 +106,9 @@ class RealServerTest {
         c.dispatch(Commands.setNetworkState(NetworkState(NetworkKind.Wifi, false, "test")))
 
         // Login: the probe must accept the credentials and the server must meet the floor.
-        c.dispatch(Commands.addServer(url, user, pass, null))
-        val servers = waitFor(60_000, "a reachable server") { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.serverVersion != null } } }
-        val info = servers.data.servers.first()
+        c.dispatch(Commands.addNavidrome(url, user, pass, null))
+        val servers = waitFor(60_000, "a reachable server") { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.reachable && s.capabilities.serverVersion != null } } }
+        val info = servers.data.accounts.first()
         assertTrue("server below the floor: ${info.capabilities.serverVersion}", info.capabilities.meetsFloor)
         assertTrue("songLyrics extension expected", info.capabilities.songLyrics)
         assertTrue("no auth error expected; ${diagnostics()}", events.none { it is Event.Error && it.data.kind == app.hocket.core.api.ErrorKind.Auth })
@@ -159,8 +159,8 @@ class RealServerTest {
         waitFor(20_000, "Started") { it as? Event.Started }
         // Metered: no background prefetch competing with the reads below.
         c.dispatch(Commands.setNetworkState(NetworkState(NetworkKind.Wifi, true, "test")))
-        c.dispatch(Commands.addServer(url, user, pass, null))
-        val info = waitFor(60_000, "a reachable server") { e -> (e as? Event.ServersChanged)?.takeIf { it.data.servers.any { s -> s.reachable && s.capabilities.serverVersion != null } } }.data.servers.first()
+        c.dispatch(Commands.addNavidrome(url, user, pass, null))
+        val info = waitFor(60_000, "a reachable server") { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.reachable && s.capabilities.serverVersion != null } } }.data.accounts.first()
         waitFor(600_000, "the library sync to finish") { e -> (e as? Event.SyncProgress)?.takeIf { it.data.progress.finished } }
 
         c.dispatch(Commands.playTracks(info.id, listOf(TALLY), 0, "Stream test"))

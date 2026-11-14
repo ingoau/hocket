@@ -71,8 +71,9 @@ class CoreClient(
     val kind: CoreKind get() = core.kind
 
     // -- snapshot pieces ---------------------------------------------------------------------------
-    private val _servers = MutableStateFlow<List<ServerInfo>>(emptyList())
-    val servers: StateFlow<List<ServerInfo>> = _servers.asStateFlow()
+    private val _servers = MutableStateFlow<List<AccountInfo>>(emptyList())
+    /** Every account, highest priority first. */
+    val accounts: StateFlow<List<AccountInfo>> = _servers.asStateFlow()
     private val _session = MutableStateFlow<SessionDocument?>(null)
     val session: StateFlow<SessionDocument?> = _session.asStateFlow()
     private val _queue = MutableStateFlow(emptyQueue())
@@ -222,8 +223,8 @@ class CoreClient(
     val actionsChanged: SharedFlow<String> = _actionsChanged.asSharedFlow()
 
     // -- derived -----------------------------------------------------------------------------------
-    /** The single configured server (multi-server has no UI yet). */
-    val server: StateFlow<ServerInfo?> = _servers.mapState(scope) { it.firstOrNull() }
+    /** The first account: the session's, and the one list queries name for the unified library. */
+    val server: StateFlow<AccountInfo?> = _servers.mapState(scope) { it.firstOrNull() }
     val isPlaying: StateFlow<Boolean> = _transport.mapState(scope) { it.position.isPlaying }
     /** Buffering only: the mini player should not recompose on every transport stamp. */
     val buffering: StateFlow<Boolean> = _transport.mapState(scope) { it.buffering }
@@ -523,7 +524,7 @@ class CoreClient(
         (query(Queries.actions(surface, target)) as? QueryResult.Actions)?.data ?: emptyList()
 
     fun applySnapshot(s: Snapshot) {
-        _servers.value = s.servers
+        _servers.value = s.accounts
         _session.value = s.session
         setQueue(s.queue)
         clockTransport = s.transport
@@ -551,7 +552,7 @@ class CoreClient(
             // `Started` once per core; `Snapshot` on every RequestSnapshot (UI attach, service reconnect).
             is Event.Started -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
             is Event.Snapshot -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
-            is Event.ServersChanged -> _servers.value = event.data.servers
+            is Event.AccountsChanged -> _servers.value = event.data.accounts
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {
                 val sid = event.data.server_id

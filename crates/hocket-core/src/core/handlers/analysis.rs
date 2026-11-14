@@ -80,7 +80,7 @@ impl Actor {
     fn analysis_candidates(&self) -> Vec<Track> {
         let mut out: Vec<Track> = self.playback.track.iter().cloned().collect();
         for item in self.upcoming_playable(2) {
-            if let Some(t) = self.track_or_bare(&item.track_id) {
+            if let Some(t) = self.track_or_bare(&item.track) {
                 if !out.iter().any(|o| o.id == t.id) {
                     out.push(t);
                 }
@@ -97,15 +97,9 @@ impl Actor {
         {
             return;
         }
-        let Some(server_id) = self.server_id() else {
-            return;
-        };
         for track in self.analysis_candidates() {
-            let key = (server_id.clone(), track.id.clone());
-            if track.server_id != server_id
-                || self.analysis.tried.contains(&key)
-                || !self.needs_analysis(&track)
-            {
+            let key = (track.server_id.clone(), track.id.clone());
+            if self.analysis.tried.contains(&key) || !self.needs_analysis(&track) {
                 continue;
             }
             let Some((path, transcoded)) = self.complete_local_file(&track) else {
@@ -169,11 +163,12 @@ impl Actor {
             self.analysis.busy = None;
         }
         match result {
-            Ok(record) if self.server_id().as_deref() == Some(server_id.as_str()) => {
+            Ok(record) if self.accounts.for_source(&server_id).is_some() => {
                 tracing::info!(target: "hocket::automix", track = %track_id, bpm = ?record.bpm, confidence = record.beat_confidence, "analysed");
                 // Shared only when kept: a record the store refused (another
                 // file, a better one held) is no use to other devices either.
-                if self.store_analysis_record(track_id.clone(), (*record).clone()) {
+                let track = TrackRef::new(server_id.clone(), track_id.clone());
+                if self.store_analysis_record(track, (*record).clone()) {
                     self.on_analysis_produced(&server_id, &track_id, &record);
                 }
             }

@@ -30,8 +30,8 @@ use typeshare::typeshare;
 use crate::api::{
     AlbumResumeEntry, AnalysisRecord, AutoplayProvider, Command, DeviceId, DeviceInfo,
     DeviceVolume, EpochMs, LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId,
-    PositionStamp, QueueKey, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting,
-    Snooze, StashEntry, TrackId, TransportLease, UndoEntry,
+    PositionStamp, QueueKey, RepeatMode, SavedQueue, SessionDocument, SessionId, Setting, Snooze,
+    StashEntry, TrackId, TrackRef, TransportLease, UndoEntry,
 };
 
 /// Highest protocol version this build speaks.
@@ -44,9 +44,11 @@ use crate::api::{
 /// reduce ops differently and can't share a session with this one.
 /// (AutoMix's analysis messages and `Welcome.analysis_store` were added
 /// without a bump: they are optional, and peers ignore what they don't know.)
-pub const PROTOCOL: u32 = 3;
+/// 4 = track references: every track id names its source (`TrackRef`), so a
+/// queue can mix accounts.
+pub const PROTOCOL: u32 = 4;
 /// Hard floor. The handshake refuses anything older.
-pub const PROTOCOL_MIN: u32 = 3;
+pub const PROTOCOL_MIN: u32 = 4;
 
 /// Extra fields preserved verbatim. Typeshare never sees it.
 pub type Extra = HashMap<String, Value>;
@@ -200,6 +202,15 @@ pub fn scope_key(server_url: &str, username: &str) -> String {
     format!("{}|{username}", server_key(server_url))
 }
 
+/// The account id (`api::AccountId`) of a session scope: deterministic on
+/// every device, so a coordinator can tell which source a scope's track
+/// references belong to.
+pub fn account_id_for_scope(scope: &str) -> String {
+    use md5::{Digest, Md5};
+    let d = Md5::digest(scope.as_bytes());
+    hex::encode(&d[..8])
+}
+
 /// A Navidrome server's URL normalised the way [`scope_key`] does it: what
 /// the coordinator's analysis store keys records on. Surrounding blanks and
 /// trailing slashes go and the scheme and host are lowercased; the path keeps
@@ -227,7 +238,7 @@ pub const ANALYSIS_BATCH_MAX: usize = 16;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisEntry {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub record: AnalysisRecord,
 }
 
@@ -296,7 +307,7 @@ pub struct LastStamp {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ScrobbleRecord {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub started_at: EpochMs,
     pub device_id: DeviceId,
     pub recorded_at: EpochMs,
@@ -360,7 +371,7 @@ pub enum TransportCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoplayOpItem {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub provider: AutoplayProvider,
     pub reason: String,
     pub score: Option<f64>,
@@ -381,8 +392,7 @@ pub enum SessionOp {
         args: PlayContextArgs,
     },
     PlayTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         start_index: u32,
         label: String,
         shuffle: bool,
@@ -394,25 +404,21 @@ pub enum SessionOp {
     /// `queued`: into the "Next in queue" group (the sender's Queue section
     /// setting), decided by the sender so every replica agrees.
     PlayNext {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
         queued: bool,
     },
     AddToQueue {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
     },
     PlayLater {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
     },
     /// After `after`, in or out of the group (see `Command::InsertTracks`).
     InsertTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
         after: QueueKey,
         in_group: bool,
@@ -452,10 +458,10 @@ pub enum SessionOp {
     TrackEnded,
     RestoreSavedQueue {
         id: String,
-        tracks: Option<Vec<TrackId>>,
+        tracks: Option<Vec<TrackRef>>,
     },
     SetContextTracks {
-        tracks: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     SaveCurrentQueue {
         pinned: bool,
@@ -500,8 +506,7 @@ impl SessionOp {
                 shuffle,
                 start_position_ms,
             } => SessionOp::PlayTracks {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: crate::session::reducer::refs(server_id, track_ids),
                 start_index: *start_index,
                 label: label.clone(),
                 shuffle: *shuffle,
@@ -513,8 +518,7 @@ impl SessionOp {
                 track_ids,
                 keys,
             } => SessionOp::PlayNext {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: crate::session::reducer::refs(server_id, track_ids),
                 keys: keys.clone(),
                 queued: true,
             },
@@ -523,8 +527,7 @@ impl SessionOp {
                 track_ids,
                 keys,
             } => SessionOp::AddToQueue {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: crate::session::reducer::refs(server_id, track_ids),
                 keys: keys.clone(),
             },
             Command::PlayLater {
@@ -532,8 +535,7 @@ impl SessionOp {
                 track_ids,
                 keys,
             } => SessionOp::PlayLater {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: crate::session::reducer::refs(server_id, track_ids),
                 keys: keys.clone(),
             },
             Command::InsertTracks {
@@ -543,8 +545,7 @@ impl SessionOp {
                 after,
                 in_group,
             } => SessionOp::InsertTracks {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: crate::session::reducer::refs(server_id, track_ids),
                 keys: keys.clone(),
                 after: after.clone(),
                 in_group: *in_group,
@@ -597,10 +598,10 @@ impl SessionOp {
     /// their first `MAX_QUEUE_LEN`. `doc` is the document the op applies to.
     pub fn within_caps(self, doc: &SessionDocument) -> SessionOp {
         use crate::session::{window_around, window_tracks, MAX_QUEUE_LEN};
-        let cut = |mut v: Vec<String>| {
+        fn cut<T>(mut v: Vec<T>) -> Vec<T> {
             v.truncate(MAX_QUEUE_LEN);
             v
-        };
+        }
         match self {
             SessionOp::PlayContext { mut args } => {
                 let len = args.context.tracks.len();
@@ -615,7 +616,6 @@ impl SessionOp {
                 SessionOp::PlayContext { args }
             }
             SessionOp::PlayTracks {
-                server_id,
                 mut track_ids,
                 start_index,
                 label,
@@ -632,7 +632,6 @@ impl SessionOp {
                     start_index = (start_index as usize).saturating_sub(window.start) as u32;
                 }
                 SessionOp::PlayTracks {
-                    server_id,
                     track_ids,
                     start_index,
                     label,
@@ -642,42 +641,28 @@ impl SessionOp {
                 }
             }
             SessionOp::PlayNext {
-                server_id,
                 track_ids,
                 keys,
                 queued,
             } => SessionOp::PlayNext {
-                server_id,
                 track_ids: cut(track_ids),
                 keys: cut(keys),
                 queued,
             },
-            SessionOp::AddToQueue {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::AddToQueue {
-                server_id,
+            SessionOp::AddToQueue { track_ids, keys } => SessionOp::AddToQueue {
                 track_ids: cut(track_ids),
                 keys: cut(keys),
             },
-            SessionOp::PlayLater {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::PlayLater {
-                server_id,
+            SessionOp::PlayLater { track_ids, keys } => SessionOp::PlayLater {
                 track_ids: cut(track_ids),
                 keys: cut(keys),
             },
             SessionOp::InsertTracks {
-                server_id,
                 track_ids,
                 keys,
                 after,
                 in_group,
             } => SessionOp::InsertTracks {
-                server_id,
                 track_ids: cut(track_ids),
                 keys: cut(keys),
                 after,
@@ -977,7 +962,7 @@ pub enum Msg {
     /// decides with its own network and battery state). Peers that do not
     /// know it ignore it.
     PrimeRequest {
-        track_id: TrackId,
+        track_id: TrackRef,
         from: DeviceId,
     },
     /// → room. Every keepalive period (5 s unless a slower [`Msg::Cadence`]
@@ -1058,7 +1043,7 @@ pub enum Msg {
         from: DeviceId,
         target: DeviceId,
         key: QueueKey,
-        track_id: TrackId,
+        track_id: TrackRef,
         position_ms: Ms,
     },
     /// → room, routed to `from`. Target reports readiness.
@@ -1074,7 +1059,7 @@ pub enum Msg {
         from: DeviceId,
         target: DeviceId,
         key: QueueKey,
-        track_id: TrackId,
+        track_id: TrackRef,
         position_ms: Ms,
         played_ms: Ms,
         started_at: EpochMs,
@@ -1098,14 +1083,14 @@ pub enum Msg {
     // -- scrobbling -----------------------------------------------------
     /// → room. Record a submitted scrobble in the dedupe log.
     ScrobbleSubmitted {
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         device_id: DeviceId,
     },
     /// → room. Claim a pair before submitting; the room records it if new.
     ScrobbleDedupeQuery {
         query_id: String,
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         device_id: DeviceId,
     },
@@ -1216,7 +1201,7 @@ pub enum Msg {
     /// [`Msg::AnalysisRecords`] (the answer is split to keep frames small;
     /// one empty one when nothing was found).
     AnalysisFetch {
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
     },
     /// → client. The usable records the coordinator has among those asked
     /// for; tracks it has nothing for are left out.
@@ -1753,6 +1738,12 @@ mod tests {
             scope_key("HTTPS://Music.Example/", "bob"),
             "https://music.example|bob"
         );
+        // The account id platforms key credentials by derives the same way
+        // (desktop `accountIdFor`, Android `AccountIds.forNavidrome`).
+        assert_eq!(
+            account_id_for_scope(&scope_key("HTTPS://Music.Example/", "bob")),
+            "cb1d7475e3b86104"
+        );
         assert_eq!(
             scope_key(" https://music.example ", "bob"),
             scope_key("https://music.example/", "bob")
@@ -1769,7 +1760,7 @@ mod tests {
         SavedQueue {
             id: id.into(),
             context: crate::api::QueueContext {
-                server_id: "srv".into(),
+                source: "srv".into(),
                 kind: crate::api::ContextKind::Album { id: id.into() },
                 label: id.into(),
                 sort: Default::default(),
@@ -1877,8 +1868,7 @@ mod tests {
         assert_eq!(
             op,
             SessionOp::InsertTracks {
-                server_id: "s".into(),
-                track_ids: vec!["t1".into(), "t2".into()],
+                track_ids: vec![TrackRef::new("s", "t1"), TrackRef::new("s", "t2")],
                 keys: vec!["k".into()],
                 after: "a".into(),
                 in_group: true,
@@ -1907,8 +1897,10 @@ mod tests {
         let tracks: Vec<String> = (0..n).map(|i| format!("t{i}")).collect();
         let d = doc();
         let op = SessionOp::PlayTracks {
-            server_id: "s".into(),
-            track_ids: tracks.clone(),
+            track_ids: (tracks.clone())
+                .into_iter()
+                .map(crate::api::TrackRef::from)
+                .collect::<Vec<_>>(),
             start_index: 9000,
             label: "All".into(),
             shuffle: false,
@@ -1928,8 +1920,10 @@ mod tests {
         assert_eq!(start_index as usize, HISTORY_CAP);
         assert_eq!(track_ids[start_index as usize], "t9000");
         let op = SessionOp::PlayLater {
-            server_id: "s".into(),
-            track_ids: tracks,
+            track_ids: (tracks)
+                .into_iter()
+                .map(crate::api::TrackRef::from)
+                .collect::<Vec<_>>(),
             keys: vec![],
         }
         .within_caps(&d);
@@ -1938,7 +1932,6 @@ mod tests {
         );
         // Short lists are untouched.
         let small = SessionOp::PlayTracks {
-            server_id: "s".into(),
             track_ids: vec!["a".into(), "b".into()],
             start_index: 1,
             label: "x".into(),

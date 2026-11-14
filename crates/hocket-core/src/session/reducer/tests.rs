@@ -17,11 +17,14 @@ fn ctx<'a>(e: &'a DeterministicEntropy, now: f64, position_ms: Ms) -> ReduceCtx<
 
 fn album(id: &str, n: usize) -> QueueContext {
     QueueContext {
-        server_id: "srv".into(),
+        source: "srv".into(),
         kind: ContextKind::Album { id: id.into() },
         label: format!("Album {id}"),
         sort: SortOrder::Default,
-        tracks: (0..n).map(|i| format!("{id}{i}")).collect(),
+        tracks: (0..n)
+            .map(|i| format!("{id}{i}"))
+            .map(crate::api::TrackRef::from)
+            .collect(),
     }
 }
 
@@ -63,20 +66,33 @@ fn err(doc: &SessionDocument, e: &DeterministicEntropy, op: QueueOp) -> ReduceEr
 fn cur(doc: &SessionDocument) -> &str {
     doc.current
         .as_ref()
-        .map(|c| c.track_id.as_str())
+        .map(|c| c.track.id.as_str())
         .unwrap_or("")
 }
 
 fn list(doc: &SessionDocument) -> Vec<String> {
-    Flat::of(doc).list.into_iter().map(|i| i.track_id).collect()
+    Flat::of(doc)
+        .list
+        .into_iter()
+        .map(|i| i.track)
+        .map(|t| t.id)
+        .collect()
 }
 
 fn upcoming(doc: &SessionDocument) -> Vec<String> {
-    doc.upcoming.iter().map(|i| i.track_id.clone()).collect()
+    doc.upcoming
+        .iter()
+        .map(|i| i.track.clone())
+        .map(|t| t.id)
+        .collect()
 }
 
 fn history(doc: &SessionDocument) -> Vec<String> {
-    doc.history.iter().map(|i| i.track_id.clone()).collect()
+    doc.history
+        .iter()
+        .map(|i| i.track.clone())
+        .map(|t| t.id)
+        .collect()
 }
 
 fn group(doc: &SessionDocument) -> Vec<String> {
@@ -86,7 +102,8 @@ fn group(doc: &SessionDocument) -> Vec<String> {
     doc.upcoming
         .iter()
         .take_while(|i| i.queued)
-        .map(|i| i.track_id.clone())
+        .map(|i| i.track.clone())
+        .map(|t| t.id)
         .collect()
 }
 
@@ -94,7 +111,7 @@ fn key_of(doc: &SessionDocument, track: &str) -> QueueKey {
     Flat::of(doc)
         .list
         .into_iter()
-        .find(|i| i.track_id == track)
+        .find(|i| i.track == track)
         .map(|i| i.key)
         .unwrap_or_else(|| panic!("no {track}"))
 }
@@ -105,8 +122,10 @@ fn ids(v: &[&str]) -> Vec<String> {
 
 fn play_next(track_ids: &[&str], keys: Vec<QueueKey>, queued: bool) -> QueueOp {
     QueueOp::PlayNext {
-        server_id: "srv".into(),
-        track_ids: ids(track_ids),
+        track_ids: (ids(track_ids))
+            .into_iter()
+            .map(crate::api::TrackRef::from)
+            .collect::<Vec<_>>(),
         keys,
         queued,
     }
@@ -114,16 +133,20 @@ fn play_next(track_ids: &[&str], keys: Vec<QueueKey>, queued: bool) -> QueueOp {
 
 fn add_to_queue(track_ids: &[&str], keys: Vec<QueueKey>) -> QueueOp {
     QueueOp::AddToQueue {
-        server_id: "srv".into(),
-        track_ids: ids(track_ids),
+        track_ids: (ids(track_ids))
+            .into_iter()
+            .map(crate::api::TrackRef::from)
+            .collect::<Vec<_>>(),
         keys,
     }
 }
 
 fn play_later(track_ids: &[&str], keys: Vec<QueueKey>) -> QueueOp {
     QueueOp::PlayLater {
-        server_id: "srv".into(),
-        track_ids: ids(track_ids),
+        track_ids: (ids(track_ids))
+            .into_iter()
+            .map(crate::api::TrackRef::from)
+            .collect::<Vec<_>>(),
         keys,
     }
 }
@@ -226,14 +249,22 @@ fn repeat_all_wraps_both_ways_and_repeat_one_only_on_track_end() {
         &e,
     );
     assert_eq!(
-        derive(&d).wrap_next.map(|i| i.track_id).as_deref(),
+        derive(&d)
+            .wrap_next
+            .map(|i| i.track)
+            .map(|t| t.id)
+            .as_deref(),
         Some("a0")
     );
     let w = doc_of(QueueOp::Next, &d, &e);
     assert_eq!(cur(&w), "a0");
     assert_eq!(list(&w), list(&d), "a wrap edits nothing");
     assert_eq!(
-        derive(&w).previous.map(|i| i.track_id).as_deref(),
+        derive(&w)
+            .previous
+            .map(|i| i.track)
+            .map(|t| t.id)
+            .as_deref(),
         Some("a2")
     );
     let back = doc_of(QueueOp::Previous, &w, &e);
@@ -436,7 +467,7 @@ fn autoplay_entries_append_flagged_and_not_added() {
     let d = doc_of(
         QueueOp::AppendAutoplay {
             items: vec![AutoplayItem {
-                track_id: "auto".into(),
+                track: "auto".into(),
                 provider: AutoplayProvider::Random,
                 reason: "r".into(),
                 score: None,
@@ -446,10 +477,10 @@ fn autoplay_entries_append_flagged_and_not_added() {
         &e,
     );
     let last = d.upcoming.last().unwrap();
-    assert_eq!(last.track_id, "auto");
+    assert_eq!(last.track, "auto");
     assert!(!last.added && !last.queued);
     let v = derive(&d).into_view(|id| TrackSummary {
-        id: id.clone(),
+        id: (id.clone()).id,
         ..Default::default()
     });
     assert!(v.entries.last().unwrap().autoplay);
@@ -581,8 +612,10 @@ fn insert_tracks_lands_after_the_named_entry_like_a_drop() {
                in_group: bool| {
         doc_of(
             QueueOp::InsertTracks {
-                server_id: "srv".into(),
-                track_ids: ids(tracks),
+                track_ids: (ids(tracks))
+                    .into_iter()
+                    .map(crate::api::TrackRef::from)
+                    .collect::<Vec<_>>(),
                 keys,
                 after: after.clone(),
                 in_group,
@@ -628,9 +661,9 @@ fn insert_tracks_lands_after_the_named_entry_like_a_drop() {
     let many: Vec<&str> = many.iter().map(|s| s.as_str()).collect();
     let m = ins(&d, &many, vec![], &k2, false);
     assert_eq!(m.upcoming.len(), 4 + 300);
-    assert_eq!(m.upcoming[3].track_id, "m0");
-    assert_eq!(m.upcoming[302].track_id, "m299");
-    assert_eq!(m.upcoming[303].track_id, "a3");
+    assert_eq!(m.upcoming[3].track, "m0");
+    assert_eq!(m.upcoming[302].track, "m299");
+    assert_eq!(m.upcoming[303].track, "a3");
     // Shuffle on: the new entries take the ordinals after their predecessor.
     let s = doc_of(QueueOp::SetShuffle { enabled: true }, &d, &e);
     let after = s.upcoming.iter().find(|i| !i.queued).unwrap().clone();
@@ -638,13 +671,15 @@ fn insert_tracks_lands_after_the_named_entry_like_a_drop() {
     let n = Flat::of(&m)
         .list
         .into_iter()
-        .find(|i| i.track_id == "n")
+        .find(|i| i.track == "n")
         .unwrap();
     assert_eq!(n.ordinal, after.ordinal + 1);
     // Nothing into history; unknown keys are refused.
     let insert = |after: QueueKey| QueueOp::InsertTracks {
-        server_id: "srv".into(),
-        track_ids: ids(&["n"]),
+        track_ids: (ids(&["n"]))
+            .into_iter()
+            .map(crate::api::TrackRef::from)
+            .collect::<Vec<_>>(),
         keys: vec![],
         after,
         in_group: false,
@@ -795,7 +830,7 @@ fn a_new_context_replaces_everything_and_saves_the_old_one() {
     let sq = &b.saved_queues[0];
     assert_eq!(sq.label, "Album a");
     assert_eq!(sq.history.len(), 1);
-    assert_eq!(sq.current.as_ref().map(|c| c.track_id.as_str()), Some("a1"));
+    assert_eq!(sq.current.as_ref().map(|c| c.track.id.as_str()), Some("a1"));
     assert!(
         sq.context.tracks.is_empty(),
         "ID-referenced: tracks re-resolve"
@@ -900,18 +935,18 @@ fn history_is_trimmed_from_the_oldest_end() {
     let n = HISTORY_CAP + 20;
     let mut d = play(&fresh(), &e, album("a", n), Some(HISTORY_CAP as u32), false);
     assert_eq!(d.history.len(), HISTORY_CAP);
-    assert_eq!(d.history[0].track_id, "a0");
+    assert_eq!(d.history[0].track, "a0");
     for _ in 0..3 {
         d = doc_of(QueueOp::Next, &d, &e);
     }
     assert_eq!(cur(&d), format!("a{}", HISTORY_CAP + 3));
     assert_eq!(d.history.len(), HISTORY_CAP);
-    assert_eq!(d.history[0].track_id, "a3");
+    assert_eq!(d.history[0].track, "a3");
     // A jump far ahead trims too.
     let k = key_of(&d, &format!("a{}", n - 2));
     d = doc_of(QueueOp::JumpToQueueItem { key: k }, &d, &e);
     assert_eq!(d.history.len(), HISTORY_CAP);
-    assert_eq!(d.history[0].track_id, "a18");
+    assert_eq!(d.history[0].track, "a18");
 }
 
 #[test]
@@ -937,15 +972,15 @@ fn the_list_is_capped_history_first_then_the_far_end() {
     let d = doc_of(play_later(&more, vec![]), &d, &e);
     assert_eq!(d.history.len() + 1 + d.upcoming.len(), MAX_QUEUE_LEN);
     assert_eq!(d.history.len(), 3000);
-    assert_eq!(d.history[0].track_id, "a1000");
-    assert_eq!(d.upcoming.last().unwrap().track_id, "x3999");
+    assert_eq!(d.history[0].track, "a1000");
+    assert_eq!(d.upcoming.last().unwrap().track, "x3999");
     // ...then cuts the far end once there is none left.
     let d = play(&fresh(), &e, album("a", 7000), Some(0), false);
     let d = doc_of(play_next(&more, vec![], false), &d, &e);
     assert_eq!(d.history.len() + 1 + d.upcoming.len(), MAX_QUEUE_LEN);
     assert_eq!(cur(&d), "a0");
-    assert_eq!(d.upcoming[0].track_id, "x0");
-    assert_eq!(d.upcoming.last().unwrap().track_id, "a5999");
+    assert_eq!(d.upcoming[0].track, "x0");
+    assert_eq!(d.upcoming.last().unwrap().track, "a5999");
 }
 
 #[test]
@@ -961,8 +996,8 @@ fn the_view_is_windowed_both_ways_with_exact_totals() {
     assert_eq!(w.total_upcoming, 501);
     assert_eq!(w.window_start, 400);
     assert_eq!(w.entries.len(), 100 + 1 + 100);
-    assert_eq!(w.entries[0].0.track_id, "a400");
-    assert_eq!(w.entries[100].0.track_id, "a500");
+    assert_eq!(w.entries[0].0.track, "a400");
+    assert_eq!(w.entries[100].0.track, "a500");
     assert!(w.entries[101].1 && w.entries[102].1 && !w.entries[103].1);
     assert_eq!(w.history().count(), 100);
     assert_eq!(w.upcoming().count(), 100);
@@ -973,14 +1008,14 @@ fn the_view_is_windowed_both_ways_with_exact_totals() {
     assert_eq!(back.total, 1002);
     let ahead = derive_range(&d, 990, 50);
     assert_eq!(ahead.entries.len(), 12, "clamped to the end");
-    assert_eq!(ahead.entries.last().unwrap().0.track_id, "a999");
+    assert_eq!(ahead.entries.last().unwrap().0.track, "a999");
     // The full derive is the whole list.
     let full = derive(&d);
     assert_eq!(full.entries.len(), 1002);
     // Resolved into the wire shape.
     let v = w.into_view(|id| TrackSummary {
-        id: id.clone(),
-        title: id.to_uppercase(),
+        id: id.id.clone(),
+        title: id.id.to_uppercase(),
         ..Default::default()
     });
     assert_eq!(v.current.as_ref().unwrap().track.title, "A500");
@@ -1003,7 +1038,10 @@ fn empty_and_pointer_past_the_end_views() {
     let gone = doc_of(QueueOp::RemoveQueueItems { keys: vec![kc] }, &last, &e);
     let v = derive(&gone);
     assert_eq!((v.total, v.history_count, v.current_index), (1, 1, None));
-    assert_eq!(v.previous.map(|i| i.track_id).as_deref(), Some("b0"));
+    assert_eq!(
+        v.previous.map(|i| i.track).map(|t| t.id).as_deref(),
+        Some("b0")
+    );
 }
 
 // -- robustness -----------------------------------------------------------------
