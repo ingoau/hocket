@@ -88,7 +88,7 @@ class CoreClientShutdownTest {
             override fun close() = Unit
         }
         val client = CoreClient(core, backgroundScope)
-        val pending = async { client.query(Query.Servers) }
+        val pending = async { client.query(Query.Accounts) }
         runCurrent()
         pending.cancel()
         runCurrent()

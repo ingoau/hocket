@@ -71,14 +71,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
-import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.AccountInfo
 import app.hocket.playback.CoreHost
 import app.hocket.playback.ServerCredential
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 
 /** Where setup is: the welcome, the sign-in form, or the summary of the server just connected. */
-private enum class SetupStep { Welcome, Form, Summary }
+private enum class SetupStep { Welcome, Form, Summary, Another }
 
 /**
  * Server setup is the entire first screen (design: empty states, the Setup board): a welcome (the
@@ -91,7 +91,7 @@ private enum class SetupStep { Welcome, Form, Summary }
  * [summary]: show the summary for [existing] (signed in, or too old) rather than the form. [onConnecting] runs when the form signs in, so the app holds setup open for the summary.
  */
 @Composable
-fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summary: Boolean = existing != null && !needsRelogin, onConnecting: () -> Unit = {}, onContinue: () -> Unit = {}) {
+fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, summary: Boolean = existing != null && !needsRelogin, adding: Boolean = false, onConnecting: () -> Unit = {}, onContinue: () -> Unit = {}) {
     val client = LocalCoreClient.current
     var url by rememberSaveable { mutableStateOf(existing?.url ?: "") }
     var username by rememberSaveable { mutableStateOf(existing?.username ?: "") }
@@ -101,7 +101,14 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
     var connecting by rememberSaveable { mutableStateOf(false) }
     var urlError by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
-    var started by rememberSaveable { mutableStateOf(needsRelogin) }
+    var started by rememberSaveable { mutableStateOf(needsRelogin || adding) }
+    // Adding another account: the one installed when the form opened, until a new one arrives.
+    var addingFrom by rememberSaveable { mutableStateOf(if (adding) existing?.id ?: "" else null) }
+    // "Add another source?", after the summary's Continue.
+    var another by rememberSaveable { mutableStateOf(false) }
+    // The other device's card: the form says to paste its setup link.
+    var fromDevice by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(existing?.id) { if (addingFrom != null && existing != null && existing.id != addingFrom) addingFrom = null }
     // The coordinator, or else the settings (a JSON object), from a scanned or pasted setup link:
     // applied as the form connects, and dropped once the person types a server or user of their own.
     var linkCoordinator by rememberSaveable { mutableStateOf<String?>(null) }
@@ -112,6 +119,8 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
     LaunchedEffect(existing) { if (existing != null) connecting = false }
 
     val step = when {
+        another -> SetupStep.Another
+        addingFrom != null -> SetupStep.Form
         existing != null && summary -> SetupStep.Summary
         started -> SetupStep.Form
         else -> SetupStep.Welcome
@@ -170,22 +179,35 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
     BoxWithConstraints(Modifier.fillMaxSize().background(ground)) {
         val tooOld = existing != null && !existing.capabilities.meetsFloor
         // The mark: centred and large on the welcome, small over the form, mid-size over the summary.
-        val tile by animateDpAsState(when (step) { SetupStep.Welcome -> 132.dp; SetupStep.Form -> 72.dp; SetupStep.Summary -> 104.dp }, label = "setupTile")
-        val mark by animateDpAsState(when (step) { SetupStep.Welcome -> 52.dp; SetupStep.Form -> 26.dp; SetupStep.Summary -> 30.dp }, label = "setupMark")
-        val top by animateDpAsState(when (step) { SetupStep.Welcome -> maxHeight * 0.30f; SetupStep.Form -> 40.dp; SetupStep.Summary -> 72.dp }, label = "setupTop")
+        val tile by animateDpAsState(when (step) { SetupStep.Welcome -> 104.dp; SetupStep.Form -> 72.dp; SetupStep.Summary, SetupStep.Another -> 104.dp }, label = "setupTile")
+        val mark by animateDpAsState(when (step) { SetupStep.Welcome -> 40.dp; SetupStep.Form -> 26.dp; SetupStep.Summary, SetupStep.Another -> 30.dp }, label = "setupMark")
+        val top by animateDpAsState(when (step) { SetupStep.Welcome -> maxHeight * 0.14f; SetupStep.Form -> 40.dp; SetupStep.Summary, SetupStep.Another -> 72.dp }, label = "setupTop")
         Column(Modifier.fillMaxWidth().systemBarsPadding().padding(top = top).alpha(if (tooOld) 0.45f else 1f), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(if (step == SetupStep.Welcome) 28.dp else 14.dp)) {
             AppTile(tile)
             Wordmark(mark)
         }
         when (step) {
-            SetupStep.Welcome -> Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 480.dp).systemBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                Text(stringResource(R.string.setup_subtitle), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-                Button(onClick = { started = true }, shapes = ButtonDefaults.shapes(), modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.LargeContainerHeight).testTag("setup.start"),
-                    contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.LargeContainerHeight)) {
-                    Text(stringResource(R.string.setup_title), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
+            // "Where's your music?": a card per kind of source.
+            SetupStep.Welcome -> Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 480.dp).systemBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.setup_sources_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).semantics { heading() })
+                SourceCard(HocketIcons.Filled.LibraryMusic, stringResource(R.string.setup_source_navidrome), stringResource(R.string.setup_source_navidrome_body), "setup.start") { fromDevice = false; started = true }
+                SourceCard(HocketIcons.Filled.Devices, stringResource(R.string.setup_source_device), stringResource(R.string.setup_source_device_body), "setup.device") {
+                    fromDevice = true
+                    if (app.hocket.SetupScanner.available) scan() else started = true
                 }
-                if (app.hocket.SetupScanner.available) ScanButton(::scan, Modifier.fillMaxWidth())
+            }
+            SetupStep.Another -> Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 480.dp).systemBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.setup_another_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().semantics { heading() })
+                Text(stringResource(R.string.setup_another_body), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
+                SourceCard(HocketIcons.Filled.LibraryMusic, stringResource(R.string.setup_source_navidrome), stringResource(R.string.setup_source_navidrome_body), "setup.another.navidrome") {
+                    url = ""; username = ""; password = ""; error = null; urlError = false; fromDevice = false
+                    addingFrom = existing?.id ?: ""
+                    another = false
+                    started = true
+                }
+                Button(onClick = { another = false; onContinue() }, shapes = ButtonDefaults.shapes(), modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.LargeContainerHeight).padding(top = 8.dp).testTag("setup.done"),
+                    contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.LargeContainerHeight)) { Text(stringResource(R.string.setup_another_done), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight)) }
             }
             SetupStep.Form -> Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
@@ -193,7 +215,7 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
             ) {
                 Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 24.dp)) {
                     Text(stringResource(R.string.setup_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                    Text(stringResource(R.string.setup_subtitle), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
+                    Text(stringResource(if (fromDevice) R.string.setup_source_device_paste else R.string.setup_subtitle), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
                     if (needsRelogin) {
                         Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp).testTag("setup.relogin")) {
                             Text(stringResource(R.string.setup_relogin_notice), color = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
@@ -253,6 +275,8 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
                         } else Text(stringResource(R.string.setup_connect), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
                     }
                     if (app.hocket.SetupScanner.available && !connecting) ScanButton(::scan, Modifier.fillMaxWidth().padding(top = 8.dp))
+                    // Adding from Settings: back to the app without one.
+                    if (addingFrom != null && existing != null && !connecting) TextButton(onClick = { addingFrom = null; onContinue() }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp).heightIn(min = 48.dp).testTag("setup.cancel")) { Text(stringResource(R.string.setup_cancel)) }
                 }
             }
             SetupStep.Summary -> existing?.let { server ->
@@ -260,7 +284,7 @@ fun ServerSetupScreen(existing: ServerInfo?, needsRelogin: Boolean = false, summ
                     Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, top = 72.dp + 104.dp + 14.dp + 48.dp, bottom = 32.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    ServerSummary(server, sync, onContinue = onContinue, onDifferentServer = { CoreHost.removeServer(client::dispatch, server); started = true })
+                    ServerSummary(server, sync, onContinue = { another = true }, onDifferentServer = { CoreHost.removeAccount(client::dispatch, server); started = true })
                 }
             }
         }
@@ -302,7 +326,7 @@ private fun Wordmark(size: androidx.compose.ui.unit.Dp) {
  * below the floor says why and offers only Use a different server.
  */
 @Composable
-private fun ServerSummary(server: ServerInfo, sync: app.hocket.core.api.SyncProgress?, onContinue: () -> Unit, onDifferentServer: () -> Unit) {
+private fun ServerSummary(server: AccountInfo, sync: app.hocket.core.api.SyncProgress?, onContinue: () -> Unit, onDifferentServer: () -> Unit) {
     val caps = server.capabilities
     val host = server.url.removePrefix("https://").removePrefix("http://").trimEnd('/')
     Column(Modifier.fillMaxWidth().widthIn(max = 480.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -340,6 +364,21 @@ private fun ServerSummary(server: ServerInfo, sync: app.hocket.core.api.SyncProg
     }
 }
 
+/** One kind of source on "Where's your music?": its icon, name and what it is, as a tonal card. */
+@Composable
+private fun SourceCard(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, body: String, tag: String, onClick: () -> Unit) {
+    Surface(onClick = onClick, color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).testTag(tag)) {
+        Row(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.size(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
 /** A capability as a chip: filled with a check when the server has it, outlined with a cross when not. */
 @Composable
 private fun CapChip(label: String, ok: Boolean) {
@@ -355,7 +394,7 @@ private fun CapChip(label: String, ok: Boolean) {
 }
 
 @Composable
-fun CapabilitySummary(server: ServerInfo) {
+fun CapabilitySummary(server: AccountInfo) {
     val caps = server.capabilities
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(stringResource(R.string.setup_caps_title), style = MaterialTheme.typography.titleMedium)

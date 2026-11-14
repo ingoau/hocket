@@ -17,7 +17,7 @@ import app.hocket.core.api.Event
 import app.hocket.core.api.Platform
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
-import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.AccountInfo
 import app.hocket.core.fake.FakeCore
 import java.io.File
 import java.util.UUID
@@ -100,7 +100,7 @@ object CoreHost {
     private var pendingLogin: ServerCredential? = null
 
     @Volatile
-    private var lastServers: List<ServerInfo> = emptyList()
+    private var lastServers: List<AccountInfo> = emptyList()
 
     val current: CoreHandle? get() = _handle.value
     val kind: CoreKind? get() = _handle.value?.kind
@@ -181,10 +181,10 @@ object CoreHost {
 
     /**
      * The core never persists passwords. Once per core instance, when the first `Started` arrives,
-     * replay `AddServer` for each stored login that matches a persisted server (or, when the core has
+     * replay `AddAccount` for each stored login that matches a persisted server (or, when the core has
      * no server yet, every stored login). The core emits `Started` once per instance (`RequestSnapshot`
-     * and `RemoveServer` re-emit everything as `Snapshot`); should a second `Started` ever arrive it
-     * is not replayed either. `ServersChanged` prunes logins for servers that were
+     * and `RemoveAccount` re-emit everything as `Snapshot`); should a second `Started` ever arrive it
+     * is not replayed either. `AccountsChanged` prunes logins for servers that were
      * removed and confirms a pending setup login (saved only once the server is reachable with it);
      * `Error{auth}` drops a pending login, or removes the stored one the server now refuses.
      */
@@ -193,7 +193,7 @@ object CoreHost {
         core.events.collect { event ->
             when (event) {
                 is Event.Started -> {
-                    val known = event.data.snapshot.servers
+                    val known = event.data.snapshot.accounts
                     lastServers = known
                     if (!replayed) {
                         replayed = true
@@ -203,7 +203,7 @@ object CoreHost {
                         val toReplay = if (known.isEmpty()) stored else stored.filter { c -> known.any { matches(it, c) } }
                         toReplay.forEach { c ->
                             Log.i(TAG, "replaying credentials for ${c.username}@${c.url}")
-                            core.dispatch(Commands.addServer(c.url, c.username, c.password, c.name))
+                            core.dispatch(Commands.addNavidrome(c.url, c.username, c.password, c.name))
                         }
                         refreshLogins(lookups)
                         _credentialsReplayed.value = true
@@ -211,9 +211,9 @@ object CoreHost {
                 }
                 // RequestSnapshot (every UI attach, every service reconnect) and RemoveServer re-emit
                 // the state as `Snapshot`, never as a second `Started`: nothing to replay here.
-                is Event.Snapshot -> lastServers = event.data.snapshot.servers
-                is Event.ServersChanged -> {
-                    val servers = event.data.servers
+                is Event.Snapshot -> lastServers = event.data.snapshot.accounts
+                is Event.AccountsChanged -> {
+                    val servers = event.data.accounts
                     lastServers = servers
                     pendingLogin?.let { p ->
                         if (servers.any { it.reachable && matches(it, p) }) {
@@ -222,7 +222,7 @@ object CoreHost {
                         }
                     }
                     // Only after the replay: the start-up list is what the replay is keyed on. An
-                    // emptied list (RemoveServer) drops everything.
+                    // emptied list (RemoveAccount) drops everything.
                     if (replayed) store.retainOnly(servers.map { it.url.trimEnd('/') to it.username })
                     refreshLogins(store)
                 }
@@ -242,8 +242,8 @@ object CoreHost {
         }
     }
 
-    private fun matches(server: ServerInfo, c: ServerCredential) =
-        server.url.trimEnd('/') == c.url.trimEnd('/') && server.username == c.username
+    private fun matches(server: AccountInfo, c: ServerCredential) =
+        server.id == ServerCredentialStore.key(c.url, c.username)
 
     private fun refreshLogins(store: ServerCredentialStore) = refreshLogins(store.lookupAll())
 
@@ -253,29 +253,29 @@ object CoreHost {
     }
 
     /** True when [logins] (a collected value) holds a login for [server]. */
-    fun hasLogin(server: ServerInfo, logins: Set<String>): Boolean = ServerCredentialStore.key(server.url, server.username) in logins
+    fun hasLogin(server: AccountInfo, logins: Set<String>): Boolean = server.id in logins
 
-    fun needsRelogin(server: ServerInfo, unreadable: Set<String>): Boolean = ServerCredentialStore.key(server.url, server.username) in unreadable
+    fun needsRelogin(server: AccountInfo, unreadable: Set<String>): Boolean = server.id in unreadable
 
     /**
-     * Setup: dispatch `AddServer` and hold the login until the core confirms it. It is saved on the
-     * first `ServersChanged` listing the server as reachable and dropped on `Error{auth}`, so a
+     * Setup: dispatch `AddAccount` and hold the login until the core confirms it. It is saved on the
+     * first `AccountsChanged` listing the server as reachable and dropped on `Error{auth}`, so a
      * mistyped password or url is never stored and replayed on every later launch.
      */
     fun login(dispatch: (Command) -> Unit, credential: ServerCredential) {
         pendingLogin = credential
-        dispatch(Commands.addServer(credential.url, credential.username, credential.password, credential.name))
+        dispatch(Commands.addNavidrome(credential.url, credential.username, credential.password, credential.name))
     }
 
     /**
-     * Sign out, for every screen that offers it: the stored login goes first, then `RemoveServer`.
+     * Sign out, for every screen that offers it: the stored login goes first, then `RemoveAccount`.
      * The core re-emits `Started` while clearing the server; with the login already gone (and the
      * replay done once per core anyway) nothing can resurrect the server.
      */
-    fun removeServer(dispatch: (Command) -> Unit, server: ServerInfo) {
+    fun removeAccount(dispatch: (Command) -> Unit, server: AccountInfo) {
         pendingLogin = null
         credentials?.let { it.remove(server.url, server.username); refreshLogins(it) }
-        dispatch(Commands.removeServer(server.id))
+        dispatch(Commands.removeAccount(server.id))
     }
 
     /** Clears the login bookkeeping between tests (the object is process-global). */

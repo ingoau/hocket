@@ -214,7 +214,7 @@ class LibraryBrowserTest {
         assertTrue(play.data.args.shuffle)
         val kind = play.data.args.context.kind as ContextKind.Filter
         assertEquals(QuickPlay.LOVED_FILTER_ID, kind.data.filter.id)
-        assertEquals(server, play.data.args.context.serverId)
+        assertEquals(server, play.data.args.context.source)
     }
 
     @Test

@@ -41,6 +41,9 @@ class ServerSetupFlowTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 0 }
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.continue") == 1 }
         compose.onNodeWithTag("setup.continue").performScrollTo().performClick()
+        // "Add another source?": not now.
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.done") == 1 }
+        compose.onNodeWithTag("setup.done").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
         compose.onNodeWithTag("home.screen").assertIsDisplayed()
     }

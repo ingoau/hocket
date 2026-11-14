@@ -231,7 +231,7 @@ fun TrackRow(
     var rating by remember { mutableStateOf(false) }
     var playlistPicker by remember { mutableStateOf(false) }
     val target = actionTarget ?: Commands.tracks(listOf(track.id))
-    val faded = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackId == track.id }
+    val faded = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackRef.id == track.id }
     // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
     val (startId, endId) = if (swipe != null) swipeActionIds(swipe) else SwipeOptions.NONE to SwipeOptions.NONE

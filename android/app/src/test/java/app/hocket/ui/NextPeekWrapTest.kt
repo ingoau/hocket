@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueItem
@@ -40,7 +41,7 @@ import org.robolectric.annotation.Config
 class NextPeekWrapTest : PlayerRulesTestBase() {
 
     private fun entry(key: String, index: Int?) = QueueEntry(
-        QueueItem(key, "t-$key", if (index != null) QueueSource.Context(QueueSourceContextInner(index.toUInt())) else QueueSource.Inserted),
+        QueueItem(key, TrackRef("fake-server", "t-$key"), if (index != null) QueueSource.Context(QueueSourceContextInner(index.toUInt())) else QueueSource.Inserted),
         TrackSummary(id = "t-$key", serverId = "s", title = key, durationMs = 1u, rating = 0u, loved = false, offline = OfflineState.None),
     )
 

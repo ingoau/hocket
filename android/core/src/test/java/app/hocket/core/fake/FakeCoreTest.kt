@@ -40,8 +40,8 @@ class FakeCoreTest {
         val started = async { core.events.filterIsInstance<Event.Started>().first() }
         core.dispatchAndWait(Command.Start)
         val snap = started.await().data.snapshot
-        assertEquals(1, snap.servers.size)
-        assertTrue(snap.servers[0].capabilities.meetsFloor)
+        assertEquals(1, snap.accounts.size)
+        assertTrue(snap.accounts[0].capabilities.meetsFloor)
         assertNotNull(snap.queue.current)
         assertTrue(snap.queue.restEntries.isNotEmpty())
         assertEquals(1, snap.queue.groupEntries.size)
@@ -68,10 +68,10 @@ class FakeCoreTest {
     @Test
     fun setupFlowAddsServerAndSyncs() = runTest {
         val core = core(startWithServer = false)
-        assertEquals(0, core.snapshot().servers.size)
-        core.dispatchAndWait(Commands.addServer("https://music.example", "ada", "pw"))
+        assertEquals(0, core.snapshot().accounts.size)
+        core.dispatchAndWait(Commands.addNavidrome("https://music.example", "ada", "pw"))
         val snap = core.snapshot()
-        assertEquals(1, snap.servers.size)
+        assertEquals(1, snap.accounts.size)
         assertTrue(snap.syncProgress!!.finished)
         assertTrue(snap.jobs.any { it.kind == JobKind.LibrarySync && it.state == JobState.Done })
     }
@@ -80,16 +80,16 @@ class FakeCoreTest {
     fun wrongPasswordIsAnAuthError() = runTest {
         val core = core(startWithServer = false)
         val err = async { core.events.filterIsInstance<Event.Error>().first() }
-        core.dispatchAndWait(Commands.addServer("https://music.example", "ada", "wrong"))
+        core.dispatchAndWait(Commands.addNavidrome("https://music.example", "ada", "wrong"))
         assertEquals(ErrorKind.Auth, err.await().data.kind)
-        assertEquals(0, core.snapshot().servers.size)
+        assertEquals(0, core.snapshot().accounts.size)
     }
 
     @Test
     fun oldServerFailsTheFloor() = runTest {
         val core = core(startWithServer = false)
-        core.dispatchAndWait(Commands.addServer("https://old.example", "ada", "pw"))
-        assertFalse(core.snapshot().servers[0].capabilities.meetsFloor)
+        core.dispatchAndWait(Commands.addNavidrome("https://old.example", "ada", "pw"))
+        assertFalse(core.snapshot().accounts[0].capabilities.meetsFloor)
     }
 
     @Test
@@ -468,7 +468,7 @@ class FakeCoreTest {
     fun artistsSortByTheQuerysOrderAndDirection() = runTest {
         val core = core()
         core.dispatchAndWait(Command.Start)
-        val server = core.snapshot().servers.first().id
+        val server = core.snapshot().accounts.first().id
         suspend fun artists(sort: SortOrder? = null, descending: Boolean? = null): List<Artist> =
             (core.query(Query.Artists(QueryArtistsInner(server, Page(0u, 500u), sort, descending))) as QueryResult.Artists).data.items
         val byName = artists()

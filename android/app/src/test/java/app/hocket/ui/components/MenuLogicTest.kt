@@ -4,6 +4,7 @@ import app.hocket.core.queueViewOf
 import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.Queries
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.ActionTargetAlbumsInner
@@ -42,7 +43,7 @@ class MenuLogicTest {
     @Test
     fun snoozeOnQueueRowsSnoozesTheirSongs() {
         fun entry(key: String, track: String) = QueueEntry(
-            QueueItem(key, track, QueueSource.Inserted),
+            QueueItem(key, TrackRef("fake-server", track), QueueSource.Inserted),
             TrackSummary(id = track, serverId = "s", title = track, durationMs = 1u, rating = 0u, loved = false, offline = OfflineState.None),
         )
         val queue = queueViewOf(
