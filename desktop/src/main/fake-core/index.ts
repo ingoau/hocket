@@ -15,6 +15,7 @@ import type {
   ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
+import { accountIdFor } from "../account-id";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
 import { coverPng } from "../png";
 import { describeActions, shortcutDefaults, DEFAULT_ORDERS } from "./actions";
@@ -1038,7 +1039,8 @@ export class FakeCore implements CoreHandle {
       });
       return;
     }
-    const id = `srv-${hash32(url + username).toString(16)}`;
+    // The core's AccountId, as credentials are keyed.
+    const id = accountIdFor(url, username);
     const server: AccountInfo = {
       id,
       kind: "navidrome",
@@ -1575,7 +1577,7 @@ export class FakeCore implements CoreHandle {
       case "filter":
         return `filter:${k.data.filter.id}`;
       case "adHoc":
-        return `adhoc:${hash32((ctx.tracks ?? []).join(","))}`;
+        return `adhoc:${hash32((ctx.tracks ?? []).map((t) => t.id).join(","))}`;
       case "autoplay":
         return "autoplay";
     }
