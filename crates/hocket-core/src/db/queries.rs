@@ -1295,8 +1295,8 @@ impl Db {
         let caps = serde_json::to_string(&info.capabilities)?;
         self.with_tx(|tx| {
             tx.execute(
-                "INSERT INTO servers(id, url, username, name, last_sync, capabilities, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(id) DO UPDATE SET url = excluded.url, username = excluded.username, name = excluded.name, last_sync = COALESCE(excluded.last_sync, servers.last_sync), capabilities = excluded.capabilities",
+                "INSERT INTO accounts(id, url, username, name, last_sync, server_capabilities, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(id) DO UPDATE SET url = excluded.url, username = excluded.username, name = excluded.name, last_sync = COALESCE(excluded.last_sync, accounts.last_sync), server_capabilities = excluded.server_capabilities",
                 params![info.id, info.url, info.username, info.name, info.last_sync, caps, created_at],
             )?;
             tx.execute("DELETE FROM capabilities WHERE server_id = ?1", [&info.id])?;
@@ -1321,7 +1321,7 @@ impl Db {
 
     pub fn servers(&self) -> DbResult<Vec<api::ServerInfo>> {
         self.with_conn(|c| {
-            let mut st = c.prepare_cached("SELECT id, url, username, name, last_sync, capabilities FROM servers ORDER BY created_at ASC")?;
+            let mut st = c.prepare_cached("SELECT id, url, username, name, last_sync, server_capabilities FROM accounts ORDER BY priority ASC, created_at ASC")?;
             let rows = st.query_map([], |r| {
                 let caps: String = r.get(5)?;
                 Ok(api::ServerInfo {
@@ -1342,7 +1342,7 @@ impl Db {
     pub fn set_server_last_sync(&self, server_id: &str, at: f64) -> DbResult<()> {
         self.with_conn(|c| {
             c.execute(
-                "UPDATE servers SET last_sync = ?2 WHERE id = ?1",
+                "UPDATE accounts SET last_sync = ?2 WHERE id = ?1",
                 params![server_id, at],
             )?;
             Ok(())
@@ -1358,7 +1358,7 @@ impl Db {
                     [server_id],
                 )?;
             }
-            tx.execute("DELETE FROM servers WHERE id = ?1", [server_id])?;
+            tx.execute("DELETE FROM accounts WHERE id = ?1", [server_id])?;
             Ok(())
         })
     }
