@@ -46,7 +46,7 @@ follow-up review, and all of them are confirmed.
 |---|---|
 | Framing | YouTube Music is one provider among several: multiple Navidrome servers, YouTube Music, and later Audiobookshelf. The provider layer comes first. |
 | ToS | Use the unofficial InnerTube API. It's always on, with no build flag and no Play Store build. |
-| Client | `rustypipe` runs in the Rust core. We add our own InnerTube calls wherever rustypipe falls short. |
+| Client | A slim InnerTube client of our own in `hocket-core` (decided after Phase 0: rustypipe is unmaintained and its stream extraction is broken). Streams come from the `VISIONOS` player client, which needs no JS or PO token. |
 | YTM accounts | Anonymous, signed in, or signed in with Premium. Premium is detected, not chosen. |
 | Queues | Fully mixed. Every track reference names its source, starting in Phase 1. |
 | Identity | Every device is equal. Each device has its own keys, and the member list is replicated to all of them. Any device can pair or remove another, so the first device can leave. |
@@ -61,12 +61,12 @@ follow-up review, and all of them are confirmed.
 | Anonymous YTM | Stars and adds go into a Hocket library on the identity. |
 | Offline | YouTube Music tracks use the stream cache and pinned downloads. |
 | Write-back | Star means Like. Playlist edits, history, and library adds and removes are written back. There's no dislike, and ratings are hidden. |
-| Format | AAC. itag 140 (128k) is the baseline, and 141 (256k) is used when it's available. |
+| Format | AAC. itag 140 (128k) through visionOS is the baseline and the fallback. For Premium accounts, a JS path tries itag 141 (256k): the app's WebView (Android) or Chromium (desktop) solves the signature and `n` puzzles and produces the PO token for the core. If that fails, playback drops back to 140. |
 | Content | Songs only. Your own uploads still count as songs. |
 | Lyrics | YouTube Music lyrics, then LRCLIB. |
 | Autoplay | Stays within one provider. |
 | Cast | The direct googlevideo URL, fetched just in time. No proxy. |
-| Stream fallback | The coordinator doesn't resolve streams in v1. Decide after Phase 0. |
+| Stream fallback | None in v1: no coordinator resolving or relaying, and no remote client config. Breakages are fixed with app updates. |
 | Trait shape | Music items plus capability flags, with `kind` and a resume position added in Phase 1. |
 | Setup | "Where's your music?" cards, then "Add another source?". Settings → Accounts reuses the same cards. |
 | Home | Shelves contributed by each provider, which you can reorder and hide. |
@@ -277,7 +277,8 @@ Pairing is a two-way exchange, not a static link.
 - **Hidden controls.** Capability flags hide ratings and dislike.
 - **Lyrics.** YouTube Music lyrics come before LRCLIB.
 - **Radio.** A YouTube Music radio `AutoplaySource`, used only for YouTube Music seeds.
-- **Missing endpoints.** Anything Phase 0 found missing from rustypipe is implemented in-tree here.
+- **Client.** Everything goes through our own InnerTube client: search, browse, library, writes, home, uploads, lyrics, radio and `player`.
+- **Premium JS path.** The core asks the platform to solve the signature and `n` puzzles and to produce a PO token. It does this through a callback interface implemented with a hidden WebView on Android and a hidden `BrowserWindow` on desktop. This path is only used for Premium accounts, to reach itag 141, and failures fall back to visionOS 140.
 
 **Done when:**
 - Provider tests pass against recorded InnerTube fixtures: library sync, search, writes, lyrics and radio.
@@ -343,14 +344,14 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
 
 - **Coordinator stream fallback.** Decide after Phase 0 and real-world experience with how often extraction on the device breaks.
   - In favour: you can redeploy the coordinator in minutes, faster than an app update, and your home coordinator has a residential IP.
-  - Against: it runs the same rustypipe, and away from home it has to relay the audio over an authenticated range endpoint, using your home upload bandwidth.
+  - Against: it runs the same client code, and away from home it has to relay the audio over an authenticated range endpoint, using your home upload bandwidth.
   - The coordinator gets YouTube Music support for AutoMix anyway, so adding this later is small.
 - **Desktop Opus decoder,** if AAC at 128k sounds poor.
 - **Proxied Cast,** if direct URLs fail too often.
 
 ## Risks
 
-- **InnerTube changes** will break playback from time to time. Keep rustypipe and our in-tree calls easy to bump. Nothing else in v1 protects playback when YouTube changes.
+- **InnerTube changes** will break playback from time to time. Keep the client profiles (names, versions) in one place so they're easy to bump. Nothing else in v1 protects playback when YouTube changes.
 - **Account flags.** Heavy library sync, or using a session from a datacenter IP, can flag a Google account. Poll slowly, never share one session between machines, and keep the coordinator's sign-in optional.
 - **Signing in from desktop.** Google may block sign-in from Electron. The fallback comes out of Phase 0.
 - **Size of Phases 1–3.** They're most of the work and change the wire protocol, the schema and every subsystem. They also deliver multi-server support on their own.
