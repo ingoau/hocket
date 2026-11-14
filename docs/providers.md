@@ -1,6 +1,6 @@
 # Providers, then YouTube Music
 
-*Status: planned, not started (14 Nov 2026). Revised after review.*
+*Status: Phase 1 implemented (15 Nov 2026); later phases planned. Revised after review.*
 
 Hocket is built around one Navidrome server. This plan turns music sources into
 **providers**: first several Navidrome servers, then YouTube Music, and later
@@ -411,3 +411,13 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
 - **Schema.** Migrations 0002–0010 are squashed into `schema.sql` as version 11 (with `accounts`,
   `tracks.kind` and `tracks.resume_position`). A database older than that is backed up and recreated
   rather than migrated. `PROTOCOL` is 4 and so is the floor.
+- **Platforms.** Setup opens on "Where's your music?". On desktop the Navidrome card is the sign-in
+  form itself (one click fewer, and the setup link pasted into Server URL still works); "I use Hocket
+  on another device" points at it. On Android both are cards (the device card scans or opens the
+  form for a pasted link). After the summary comes "Add another source?". Settings → Accounts lists
+  the accounts with move up/down (drag reordering can come later), sync, remove and Add account,
+  which opens the same cards over the app. Credential stores are keyed by `AccountId`, derived on
+  each platform the same way as the core (`accountIdFor`, `AccountIds`, checked against a shared
+  test vector). The platforms' fake cores stay single-account.
+- **Not verified by hand.** The "two real servers on Android and desktop" check needs two
+  Navidrome servers and devices; the sim test `actor_multi_account` covers the core side.
