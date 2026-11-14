@@ -6,8 +6,6 @@ use tokio::sync::mpsc;
 use crate::api::*;
 use crate::connect::discovery::PeerAdvert;
 use crate::connect::transport::Connection;
-use crate::connect::wire::Credential;
-use crate::connect::PeerId;
 use crate::core::actor::Actor;
 use crate::core::{ActorMsg, Internal};
 
@@ -194,18 +192,6 @@ impl Actor {
                 self.log("debug", format!("advertise: {e}"));
             }
         }
-    }
-
-    pub(crate) fn io_verify(&mut self, peer: PeerId, credential: Credential) {
-        let io = self.io.clone();
-        let tx = self.tx.clone();
-        self.spawn(async move {
-            let ok = io.verify(credential).await;
-            let _ = tx.send(ActorMsg::Internal(Internal::CredentialVerified {
-                peer,
-                ok,
-            }));
-        });
     }
 
     /// Connect a preset (test) server's fake socket: unused in production.

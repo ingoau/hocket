@@ -134,10 +134,8 @@ pub enum Internal {
         tx: mpsc::UnboundedSender<WireMessage>,
     },
     Discovery(DiscoveryEvent),
-    CredentialVerified {
-        peer: PeerId,
-        ok: bool,
-    },
+    /// A pairing or coordinator exchange finished.
+    Exchange(crate::core::handlers::identity::ExchangeResult),
     /// The autoplay engine comes back from a fetch with its picks.
     Autoplay {
         engine: Box<AutoplayEngine>,
@@ -313,8 +311,7 @@ impl LateSink {
 pub(crate) struct PendingAccount {
     pub info: AccountInfo,
     pub client: Arc<crate::subsonic::Client>,
-    pub credential: crate::connect::wire::Credential,
-    pub lan_key: crate::connect::auth::LanKey,
+    pub password: crate::api::Secret,
 }
 
 pub(crate) struct PresetServer {

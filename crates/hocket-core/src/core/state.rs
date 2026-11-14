@@ -3,8 +3,6 @@
 use std::sync::Arc;
 
 use crate::api::*;
-use crate::connect::auth::LanKey;
-use crate::connect::wire::Credential as WireCredential;
 use crate::db::sync::LibrarySync;
 use crate::provider::{Provider, ProviderSet};
 use crate::subsonic::{Client, SubsonicApi};
@@ -17,11 +15,9 @@ pub(crate) struct AccountState {
     pub provider: Option<Arc<dyn Provider>>,
     /// The concrete Subsonic client, for the capability probe.
     pub client: Option<Arc<Client>>,
-    pub credential: Option<WireCredential>,
-    /// The scope's shared LAN key (mutual LAN auth), derived from the
-    /// password the user entered; the engine is rebuilt when the session
-    /// scope's key changes.
-    pub lan_key: Option<LanKey>,
+    /// The password the platform supplied (kept in memory only, for
+    /// credential sync).
+    pub password: Option<crate::api::Secret>,
     pub sync: Option<Arc<LibrarySync>>,
     pub probing: bool,
     pub sync_job: Option<JobId>,
@@ -35,8 +31,7 @@ impl AccountState {
             info,
             provider: None,
             client: None,
-            credential: None,
-            lan_key: None,
+            password: None,
             sync: None,
             probing: false,
             sync_job: None,
@@ -93,8 +88,7 @@ impl AccountRegistry {
         self.accounts.iter().find(|a| a.info.source == source)
     }
 
-    /// The account sessions are scoped to until identities arrive: the
-    /// highest-priority Navidrome account.
+    /// The highest-priority Navidrome account: the library's default scope.
     pub fn primary(&self) -> Option<&AccountState> {
         self.accounts
             .iter()

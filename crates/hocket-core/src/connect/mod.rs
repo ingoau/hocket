@@ -51,26 +51,21 @@
 //! 6. `Output::FilePreviousStateAsSavedQueue` means: snapshot this document
 //!    with `session::saved::snapshot`, upsert it locally and report it back
 //!    through `Input::SavedQueuesChanged`. Never merge it.
-//! 7. **Supply the LAN key.** Set [`EngineConfig::lan_key`] to
-//!    `Some(auth::derive_lan_key(&wire::scope_key(&server_url, &username), &password))`
-//!    — the account password the user typed, never the wire credential:
-//!    the Subsonic token is minted with a per-device random salt, so only
-//!    the password is the same on every device of the account (the key is
-//!    PBKDF2-HMAC-SHA256, [`auth::KEY_ROUNDS`] rounds, salt
-//!    `"hocket-lan-v1|" || scope`). Derive it once per `AddAccount` (it costs
-//!    a few ms), keep it in memory with the server, and push a new one with
-//!    [`Input::SetLanKey`] when the password changes (`None` closes the
-//!    LAN). LAN rooms admit only devices that prove knowledge of this key
-//!    and a device only follows a LAN leader that proves it back
-//!    ([`auth`]); with `None` the engine neither serves nor follows LAN
-//!    peers and advertises nothing. The credential is sent only to a
-//!    coordinator (`ConnectionTier::Coordinator`) and only when
-//!    [`auth::coordinator_url_check`] passes: `wss://`, or `ws://` to the
-//!    loopback, or `ws://` to a private host when
-//!    [`EngineConfig::allow_insecure_coordinator`] is set from the
+//! 7. **Supply the identity.** Set [`EngineConfig::identity`] to this
+//!    device's [`crate::identity::SharedIdentity`] (its id is the session
+//!    scope). Every room, LAN or hosted, admits only current members of the
+//!    identity, after a mutual signature handshake ([`auth`]); a device
+//!    only follows a LAN leader that proves membership (or the coordinator
+//!    whose key the identity pinned). The engine merges what peers sync into
+//!    the shared identity and reports [`Output::IdentityChanged`]: persist
+//!    it. When the actor changes it (an invite, a removal, credential sync,
+//!    the coordinator), send [`Input::IdentityChanged`]. With `None` the
+//!    engine neither serves nor follows anyone and advertises nothing. A
+//!    coordinator URL is used only when [`auth::coordinator_url_check`]
+//!    passes: `wss://`, or `ws://` to the loopback, or `ws://` to a private
+//!    host when [`EngineConfig::allow_insecure_coordinator`] is set from the
 //!    `connect.allowInsecureCoordinator` setting
-//!    ([`Input::SetAllowInsecureCoordinator`] on change) — never in a LAN
-//!    `Hello`.
+//!    ([`Input::SetAllowInsecureCoordinator`] on change).
 //! 8. **Persist [`Engine::known_scrobbled`]** next to the sync base (it is
 //!    small: at most 500 `(track, startedAt, device)` triples) and hand it
 //!    back through [`Engine::restore_known_scrobbled`] right after
@@ -115,7 +110,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{EpochMs, Ms, SessionDocument, SessionId};
 
 pub use engine::{DocChange, Engine, EngineConfig, Input, Output, ResumeOfferDraft, SyncBase};
-pub use room::{LanAuth, Room, RoomConfig, RoomInput, RoomOutput};
+pub use room::{Room, RoomAuth, RoomConfig, RoomInput, RoomOutput};
 pub use session_adapter::RealReducer;
 pub use wire::{Msg, SessionOp, WireMessage};
 

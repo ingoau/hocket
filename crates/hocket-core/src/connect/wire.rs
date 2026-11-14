@@ -45,10 +45,14 @@ use crate::api::{
 /// (AutoMix's analysis messages and `Welcome.analysis_store` were added
 /// without a bump: they are optional, and peers ignore what they don't know.)
 /// 4 = track references: every track id names its source (`TrackRef`), so a
-/// queue can mix accounts.
-pub const PROTOCOL: u32 = 4;
+/// queue can mix accounts. 5 = identities: rooms are keyed by a Hocket
+/// identity, every handshake (LAN and coordinator) is a mutual device
+/// signature over nonces with the member list's head, `Hello` carries no
+/// credential, and pairing, identity sync and coordinator claims ride the
+/// protocol. AutoMix records are keyed by a provider-aware fingerprint.
+pub const PROTOCOL: u32 = 5;
 /// Hard floor. The handshake refuses anything older.
-pub const PROTOCOL_MIN: u32 = 4;
+pub const PROTOCOL_MIN: u32 = 5;
 
 /// Extra fields preserved verbatim. Typeshare never sees it.
 pub type Extra = HashMap<String, Value>;
@@ -136,68 +140,8 @@ pub fn negotiate(their_min: u32, their_max: u32) -> Result<u32, WireError> {
 // Handshake payloads
 // ---------------------------------------------------------------------------
 
-/// What the coordinator proxies to Navidrome to verify a client. Subsonic
-/// token+salt (or an API key when the server supports it), never a password.
-/// The coordinator forwards it once in a `ping` and forgets it.
-#[typeshare]
-#[derive(Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Credential {
-    pub server_url: String,
-    pub username: String,
-    /// `md5(password + salt)` as hex.
-    pub token: Option<String>,
-    pub salt: Option<String>,
-    /// OpenSubsonic `apiKey` when the server advertises `apiKeyAuthentication`.
-    pub api_key: Option<String>,
-    /// Subsonic `c` (client name) parameter.
-    pub client: String,
-    /// Subsonic `v` parameter.
-    pub api_version: String,
-}
-
-/// Never prints the token, salt or API key: this type travels inside `Msg`,
-/// engine inputs/outputs and room outputs, all of which get logged.
-impl std::fmt::Debug for Credential {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact = |v: &Option<String>| v.as_ref().map(|_| "<redacted>");
-        f.debug_struct("Credential")
-            .field("server_url", &self.server_url)
-            .field("username", &self.username)
-            .field("token", &redact(&self.token))
-            .field("salt", &redact(&self.salt))
-            .field("api_key", &redact(&self.api_key))
-            .field("client", &self.client)
-            .field("api_version", &self.api_version)
-            .finish()
-    }
-}
-
-impl Credential {
-    /// Query parameters for a Subsonic `ping` (`f=json` included).
-    pub fn ping_params(&self) -> Vec<(String, String)> {
-        let mut p = vec![
-            ("u".to_string(), self.username.clone()),
-            ("c".to_string(), self.client.clone()),
-            ("v".to_string(), self.api_version.clone()),
-            ("f".to_string(), "json".to_string()),
-        ];
-        if let Some(key) = &self.api_key {
-            p.push(("apiKey".to_string(), key.clone()));
-        } else {
-            if let Some(t) = &self.token {
-                p.push(("t".to_string(), t.clone()));
-            }
-            if let Some(s) = &self.salt {
-                p.push(("s".to_string(), s.clone()));
-            }
-        }
-        p
-    }
-}
-
-/// Session scope key: the Navidrome identity a session belongs to. Every
-/// device derives it the same way so rooms key on it.
+/// A Navidrome login's key (`url|user`, normalised): what its account id
+/// ([`account_id_for_scope`]) is derived from on every device.
 pub fn scope_key(server_url: &str, username: &str) -> String {
     format!("{}|{username}", server_key(server_url))
 }
@@ -828,31 +772,42 @@ pub struct ReportGrant {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum Msg {
     // -- handshake ------------------------------------------------------
-    /// Either direction, LAN rooms only. "Prove you know this scope's LAN
-    /// key": answer with [`Msg::Proof`] over this nonce. The joiner sends
-    /// one first (before anything else); the room answers with its own
-    /// proof and its own challenge. See [`crate::connect::auth`].
+    /// Either direction. "Prove you are a member of this identity": answer
+    /// with [`Msg::Proof`] over this nonce. The joiner sends one first (before
+    /// anything else, naming the identity and its member-list heads); the
+    /// room answers with its own proof and its own challenge. See
+    /// [`crate::connect::auth`].
     Challenge {
         /// 32 random bytes, hex.
         nonce: String,
+        /// The identity the joiner wants (the first challenge only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<String>,
+        /// The sender's member-list heads, so the other side can send the
+        /// ops it lacks.
+        #[serde(default)]
+        heads: Vec<String>,
     },
-    /// Either direction, LAN rooms only. `mac` is
-    /// `HMAC-SHA256(lan_key, role || nonce || deviceId)` over the nonce the
-    /// other side issued, hex.
+    /// Either direction. `sig` is the device's ed25519 signature over
+    /// [`crate::identity::proof_bytes`] (role, identity, the other side's
+    /// nonce, its own device id and the digest of `heads`). `sync` carries
+    /// what the other side's heads showed it lacks; the receiver merges it
+    /// before checking the proof.
     Proof {
         device_id: DeviceId,
-        mac: String,
+        sig: String,
+        #[serde(default)]
+        heads: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sync: Option<Box<crate::identity::IdentitySync>>,
     },
-    /// → room. First message on a connection (on the LAN: first after the
-    /// mutual proof).
+    /// → room. First message after the mutual proof.
     Hello {
         device: DeviceInfo,
         protocol_min: u32,
         protocol_max: u32,
+        /// The identity id.
         scope: String,
-        /// Present only towards a hosted coordinator over TLS (the room
-        /// verifies it with one proxied ping). Never on the LAN, never stored.
-        credential: Option<Credential>,
         session_id: Option<SessionId>,
         session_revision: u32,
         /// The transport epoch this device last held, to reclaim inside the window.
@@ -1215,9 +1170,88 @@ pub enum Msg {
         records: Vec<AnalysisEntry>,
     },
 
+    // -- identity -------------------------------------------------------
+    /// Either direction, members only. The identity's shared state (member
+    /// list, key grants, credential blob, records); the receiver merges it
+    /// and a room passes on what changed.
+    IdentitySync {
+        sync: Box<crate::identity::IdentitySync>,
+    },
+    /// → room (a new device's first frame), relayed to the member that
+    /// offered the invite with `relay` set to the new device's socket. See
+    /// [`crate::identity::pairing`].
+    PairJoin {
+        identity: String,
+        join: crate::identity::pairing::PairJoin,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<String>,
+    },
+    /// The inviter's answer: → room with `relay`, which hands it to that
+    /// socket and closes it; or straight to the new device on the LAN.
+    PairAccept {
+        accept: Box<crate::identity::pairing::PairAccept>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<String>,
+    },
+    /// → room, a member's refusal of a relayed join: the room passes it to
+    /// the new device as a `Refuse` and closes it.
+    PairRefuse {
+        relay: String,
+        message: String,
+    },
+    /// → room, members only: joins for this invite go to me until it
+    /// expires.
+    PairOffer {
+        invite_id: String,
+        expires_at: EpochMs,
+    },
+
+    // -- coordinator ownership -----------------------------------------
+    /// → hosted coordinator, a socket's first frame: claim it with the code
+    /// `hocket-coordinator pair` printed. The identity becomes its owner.
+    CoordClaim {
+        code: String,
+        sync: Box<crate::identity::IdentitySync>,
+    },
+    /// → hosted coordinator, a socket's first frame: join it with an invite
+    /// its owner made.
+    CoordRedeem {
+        code: String,
+        sync: Box<crate::identity::IdentitySync>,
+    },
+    /// → client. The claim or redemption worked: pin these keys.
+    CoordAdmitted {
+        keys: crate::identity::crypto::PublicKeys,
+        owner: bool,
+    },
+    /// → hosted coordinator, the owner identity's members only.
+    CoordInviteCreate,
+    CoordInviteRevoke {
+        code: String,
+    },
+    CoordInviteList,
+    /// → client. The owner's invites (after any of the three above).
+    CoordInvites {
+        invites: Vec<CoordInvite>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        created: Option<String>,
+    },
+
     /// Anything this build does not know. Ignored.
     #[serde(other)]
     Unknown,
+}
+
+/// An invite to a hosted coordinator, as its owner sees it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordInvite {
+    pub code: String,
+    pub created_at: EpochMs,
+    pub expires_at: EpochMs,
+    /// The identity that used it, once used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redeemed_by: Option<String>,
 }
 
 impl Msg {
@@ -1270,6 +1304,18 @@ impl Msg {
         "analysisFetch",
         "analysisRecords",
         "analysisUpload",
+        "identitySync",
+        "pairJoin",
+        "pairAccept",
+        "pairOffer",
+        "pairRefuse",
+        "coordClaim",
+        "coordRedeem",
+        "coordAdmitted",
+        "coordInviteCreate",
+        "coordInviteRevoke",
+        "coordInviteList",
+        "coordInvites",
         "unknown",
     ];
 
@@ -1327,6 +1373,18 @@ impl Msg {
             Msg::AnalysisFetch { .. } => "analysisFetch",
             Msg::AnalysisRecords { .. } => "analysisRecords",
             Msg::AnalysisUpload { .. } => "analysisUpload",
+            Msg::IdentitySync { .. } => "identitySync",
+            Msg::PairJoin { .. } => "pairJoin",
+            Msg::PairAccept { .. } => "pairAccept",
+            Msg::PairOffer { .. } => "pairOffer",
+            Msg::PairRefuse { .. } => "pairRefuse",
+            Msg::CoordClaim { .. } => "coordClaim",
+            Msg::CoordRedeem { .. } => "coordRedeem",
+            Msg::CoordAdmitted { .. } => "coordAdmitted",
+            Msg::CoordInviteCreate => "coordInviteCreate",
+            Msg::CoordInviteRevoke { .. } => "coordInviteRevoke",
+            Msg::CoordInviteList => "coordInviteList",
+            Msg::CoordInvites { .. } => "coordInvites",
             Msg::Unknown => "unknown",
         }
     }
@@ -1630,7 +1688,6 @@ mod tests {
             protocol_min: 1,
             protocol_max: 1,
             scope: "s".into(),
-            credential: None,
             session_id: None,
             session_revision: 0,
             held_epoch: None,
@@ -1679,57 +1736,6 @@ mod tests {
         // version 1 peers (credential in every Hello) are refused
         assert!(negotiate(1, 1).is_err());
         assert!(negotiate(PROTOCOL + 1, PROTOCOL + 5).is_err());
-    }
-
-    #[test]
-    fn credential_debug_redacts_secrets() {
-        let c = Credential {
-            server_url: "https://x".into(),
-            username: "u".into(),
-            token: Some("secret-token".into()),
-            salt: Some("secret-salt".into()),
-            api_key: Some("secret-key".into()),
-            client: "hocket".into(),
-            api_version: "1.16.1".into(),
-        };
-        let s = format!("{c:?}");
-        assert!(!s.contains("secret"), "{s}");
-        assert!(s.contains("<redacted>"));
-        let m = format!(
-            "{:?}",
-            Msg::Hello {
-                device: device("a"),
-                protocol_min: PROTOCOL_MIN,
-                protocol_max: PROTOCOL,
-                scope: "s".into(),
-                credential: Some(c),
-                session_id: None,
-                session_revision: 0,
-                held_epoch: None,
-                extra: HashMap::new(),
-            }
-        );
-        assert!(!m.contains("secret"), "{m}");
-    }
-
-    #[test]
-    fn credential_ping_params_prefer_api_key() {
-        let mut c = Credential {
-            server_url: "https://x".into(),
-            username: "u".into(),
-            token: Some("t".into()),
-            salt: Some("s".into()),
-            api_key: None,
-            client: "hocket".into(),
-            api_version: "1.16.1".into(),
-        };
-        let p = c.ping_params();
-        assert!(p.iter().any(|(k, v)| k == "t" && v == "t"));
-        assert!(p.iter().any(|(k, v)| k == "s" && v == "s"));
-        c.api_key = Some("key".into());
-        let p = c.ping_params();
-        assert!(p.iter().any(|(k, _)| k == "apiKey"));
-        assert!(!p.iter().any(|(k, _)| k == "t"));
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub const INVITE_TTL_MS: f64 = 10.0 * 60_000.0;
 pub const LINK_PREFIX: &str = "hocket://pair?d=";
 
 /// Where the new device can reach the inviter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Rendezvous {
     /// The inviter's LAN listener(s), `ws://ip:port`.

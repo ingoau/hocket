@@ -2549,6 +2549,47 @@ pub enum Command {
     ProbeAccount {
         account_id: AccountId,
     },
+
+    // -- identity -----------------------------------------------------------
+    /// Make a pairing invite (QR / `hocket://pair` link, good for 10 minutes):
+    /// [`Event::PairingInvite`].
+    CreatePairingInvite,
+    /// Join the identity of the device that showed this invite link. This
+    /// device leaves its own identity (and session) behind:
+    /// [`Event::PairingFinished`] or [`Event::PairingFailed`].
+    PairWithInvite {
+        link: String,
+    },
+    /// Remove a device (or this one) from the identity. The others move to a
+    /// new group key and stop accepting it.
+    RemoveDevice {
+        device_id: DeviceId,
+    },
+    /// "Sync credentials": Navidrome passwords travel to every device,
+    /// sealed with the group key (the coordinator holds the key while on).
+    SetCredentialSync {
+        on: bool,
+    },
+    /// Start over with a new identity of this device alone.
+    ResetIdentity,
+    /// Claim a coordinator with the code `hocket-coordinator pair` printed
+    /// (`code` may be the whole `hocket://claim` link, then `url` may be
+    /// empty): [`Event::CoordinatorJoined`] or [`Event::CoordinatorFailed`].
+    ClaimCoordinator {
+        url: String,
+        code: String,
+    },
+    /// Join a coordinator with an invite its owner made.
+    RedeemCoordinatorInvite {
+        url: String,
+        code: String,
+    },
+    /// Owner only: [`Event::CoordinatorInvites`] with the new code.
+    CreateCoordinatorInvite,
+    RevokeCoordinatorInvite {
+        code: String,
+    },
+    ListCoordinatorInvites,
     /// `full` forces a reconcile that catches deletions.
     SyncLibrary {
         account_id: AccountId,
@@ -3117,6 +3158,7 @@ pub enum Query {
     /// Everything a freshly attached UI needs, in one round trip.
     Snapshot,
     Accounts,
+    Identity,
     Tracks {
         server_id: ServerId,
         filter: Option<FilterNode>,
@@ -3450,6 +3492,83 @@ pub struct Snapshot {
     pub network: Option<NetworkState>,
     pub battery_saver: BatterySaver,
     pub sync_progress: Option<SyncProgress>,
+    pub identity: IdentityInfo,
+}
+
+/// This device's Hocket identity: what sync is scoped to.
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityInfo {
+    pub id: String,
+    pub device_id: DeviceId,
+    /// Current members, this device first.
+    pub devices: Vec<IdentityDevice>,
+    /// This device was removed from the identity: it syncs with nobody until
+    /// it is reset (`ResetIdentity`) or paired again.
+    pub removed: bool,
+    /// "Sync credentials" (off by default).
+    pub credential_sync: bool,
+    pub coordinator: Option<CoordinatorInfo>,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityDevice {
+    pub id: DeviceId,
+    pub name: String,
+    pub is_self: bool,
+    /// When this device last synced with the identity, as far as any member
+    /// knows (coarse, about a minute).
+    pub last_synced: Option<EpochMs>,
+}
+
+/// The coordinator the identity claimed or was invited to.
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordinatorInfo {
+    pub url: String,
+    /// This identity claimed it: it can invite other identities.
+    pub owner: bool,
+    /// It holds the group key (credential sync is on).
+    pub holds_key: bool,
+}
+
+/// An invite to the coordinator this identity owns.
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordinatorInviteInfo {
+    pub code: String,
+    pub created_at: EpochMs,
+    pub expires_at: EpochMs,
+    /// Used by another identity already.
+    pub redeemed: bool,
+}
+
+/// An account a pairing invite named (no password).
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingAccount {
+    pub kind: AccountKind,
+    pub url: String,
+    pub username: String,
+    pub name: Option<String>,
+}
+
+/// A credential that arrived through credential sync: the platform keeps it
+/// in its credential store (the core already added the account).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncedAccountCredential {
+    pub account_id: AccountId,
+    pub url: String,
+    pub username: String,
+    pub password: Secret,
 }
 
 #[typeshare]
@@ -3458,6 +3577,7 @@ pub struct Snapshot {
 pub enum QueryResult {
     SnapshotResult(Snapshot),
     Accounts(Vec<AccountInfo>),
+    Identity(IdentityInfo),
     Tracks(TrackPage),
     Count(u32),
     TrackDetail(Option<Track>),
@@ -3732,6 +3852,46 @@ pub enum Event {
     },
     AccountsChanged {
         accounts: Vec<AccountInfo>,
+    },
+    IdentityChanged {
+        identity: IdentityInfo,
+    },
+    /// A pairing invite to show as a QR code (or share as a link).
+    PairingInvite {
+        link: String,
+        expires_at: EpochMs,
+    },
+    /// A device joined through an invite of this device.
+    DevicePaired {
+        device_id: DeviceId,
+        name: String,
+    },
+    /// This device joined another device's identity (`PairWithInvite`).
+    /// `accounts` are the invite's account configs this device doesn't have
+    /// yet: with credential sync off they need a password.
+    PairingFinished {
+        accounts: Vec<PairingAccount>,
+    },
+    PairingFailed {
+        message: String,
+    },
+    /// Credentials that arrived through credential sync, for the platform's
+    /// credential store.
+    CredentialsSynced {
+        credentials: Vec<SyncedAccountCredential>,
+    },
+    /// `ClaimCoordinator` / `RedeemCoordinatorInvite` worked.
+    CoordinatorJoined {
+        url: String,
+        owner: bool,
+    },
+    CoordinatorFailed {
+        message: String,
+    },
+    CoordinatorInvites {
+        invites: Vec<CoordinatorInviteInfo>,
+        /// The code `CreateCoordinatorInvite` just made.
+        created: Option<String>,
     },
     SyncProgress {
         progress: SyncProgress,

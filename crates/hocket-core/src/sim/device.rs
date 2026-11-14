@@ -13,7 +13,7 @@ use crate::api::{
 use crate::connect::discovery::PeerAdvert;
 use crate::connect::engine::{Engine, EngineConfig, Input, Output, ResumeOfferDraft};
 use crate::connect::session_adapter::RealReducer;
-use crate::connect::wire::{Credential, PlaylistEdit, TransportCommand, WireMessage};
+use crate::connect::wire::{PlaylistEdit, TransportCommand, WireMessage};
 use crate::connect::{PeerId, SessionOp, SyncPoint};
 use crate::sim::clock::{quantize, DeviceClock};
 use crate::util::Clock;
@@ -68,10 +68,6 @@ pub enum DeviceEffect {
     StartListener,
     StopListener,
     Advertise(Option<PeerAdvert>),
-    Verify {
-        peer: PeerId,
-        credential: Credential,
-    },
     /// Submit to the (fake) Navidrome.
     Scrobble {
         track_id: TrackId,
@@ -175,37 +171,24 @@ pub fn device_info(id: &str) -> DeviceInfo {
     }
 }
 
-/// The LAN key every honest simulated device holds (the app derives it with
-/// `auth::derive_lan_key`; here a fixed digest).
-pub fn sim_lan_key() -> crate::connect::auth::LanKey {
-    crate::connect::auth::test_key(b"hocket-sim-lan-key")
-}
-
 impl SimDevice {
+    /// `identity` is the device's (its id is the session scope); it
+    /// outlives the device across restarts, like the app's database.
     pub fn new(
         id: &str,
-        scope: &str,
+        identity: crate::identity::SharedIdentity,
         clock: Arc<DeviceClock>,
         library: Arc<Library>,
         coordinator_url: Option<String>,
         lan: bool,
         persisted: Option<Persisted>,
     ) -> Self {
+        let scope = identity.lock().id.clone();
+        let scope = scope.as_str();
         let mut cfg = EngineConfig::new(device_info(id), scope);
         cfg.coordinator_url = coordinator_url;
         cfg.lan_enabled = lan;
-        // Every honest device of the scope derives the same LAN key from the
-        // account password; the simulation uses a fixed digest instead.
-        cfg.lan_key = Some(sim_lan_key());
-        cfg.credential = Some(Credential {
-            server_url: "https://music.example".into(),
-            username: "user".into(),
-            token: Some("tok".into()),
-            salt: Some("salt".into()),
-            api_key: None,
-            client: "hocket-sim".into(),
-            api_version: "1.16.1".into(),
-        });
+        cfg.identity = Some(identity);
         let now = clock.now_ms();
         let (doc, sync_base, saved, stash, snoozes, outbox, known) = match persisted {
             Some(p) => (
@@ -448,9 +431,10 @@ impl SimDevice {
             Output::StartListener => self.effects.push(DeviceEffect::StartListener),
             Output::StopListener => self.effects.push(DeviceEffect::StopListener),
             Output::Advertise(a) => self.effects.push(DeviceEffect::Advertise(a)),
-            Output::VerifyCredential { peer, credential } => {
-                self.effects.push(DeviceEffect::Verify { peer, credential })
-            }
+            Output::IdentityChanged => self.note("identity changed".into()),
+            Output::Paired { device_id, name } => self.note(format!("paired {name} ({device_id})")),
+            Output::PairFailed { message } => self.note(format!("pairing refused: {message}")),
+            Output::CoordinatorInvites { .. } | Output::CoordinatorUnreachable => {}
             Output::DocumentChanged {
                 document,
                 cause,

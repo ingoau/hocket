@@ -188,7 +188,10 @@ pub(crate) struct Actor {
     /// Accounts added but not yet verified by a probe.
     pub pending_accounts: HashMap<AccountId, super::PendingAccount>,
     pub engine: Option<Engine>,
+    /// The session's scope: the identity id while a session is open.
     pub scope: Option<String>,
+    /// This device's identity (shared with the engine; persisted on change).
+    pub identity: crate::identity::SharedIdentity,
     pub queued_inputs: VecDeque<Input>,
     /// Effects the reducer reported for the local op being submitted.
     pub pending_effects: Option<Vec<crate::session::Effect>>,
@@ -296,6 +299,12 @@ impl Actor {
             .map_err(|e| CoreError::Other(format!("open database: {e}")))?;
         let open_report = db.open_report().clone();
         let clock = deps.clock.clone();
+        let identity = Arc::new(Mutex::new(crate::core::handlers::identity::load_identity(
+            &db,
+            &cfg.device_id,
+            &cfg.device_name,
+            clock.now_ms(),
+        )));
         let settings_store = DbSettingsStore {
             db: db.clone(),
             clock: clock.clone(),
@@ -499,6 +508,7 @@ impl Actor {
             pending_accounts: HashMap::new(),
             engine: None,
             scope: None,
+            identity,
             queued_inputs: VecDeque::new(),
             pending_effects: None,
             last_doc: None,
@@ -674,9 +684,7 @@ impl Actor {
                     self.engine_input(Input::PeerLost { device_id });
                 }
             },
-            Internal::CredentialVerified { peer, ok } => {
-                self.engine_input(Input::CredentialVerified { peer, ok });
-            }
+            Internal::Exchange(r) => self.on_exchange(r),
             Internal::Autoplay {
                 engine,
                 picks,
@@ -813,7 +821,7 @@ impl Actor {
             }
             Err(e) => self.error(ErrorKind::Storage, "load accounts", Some(e.to_string())),
         }
-        if self.accounts.primary().is_some() && self.engine.is_none() {
+        if self.engine.is_none() {
             self.open_session();
         }
         // Jobs and outbox.
@@ -1354,6 +1362,7 @@ impl Actor {
             sleep_timer: self.sleep.state(),
             network: self.network.clone(),
             battery_saver: self.battery_saver.clone(),
+            identity: self.identity_info(),
             sync_progress: self.sync_progress.clone(),
         }
     }

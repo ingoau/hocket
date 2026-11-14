@@ -12,7 +12,7 @@ use crate::connect::engine::{
     DocChange, Engine, EngineConfig, Input, Output, PersistedConnectState,
 };
 use crate::connect::session_adapter::RealReducer;
-use crate::connect::wire::{scope_key, SessionOp, TransportCommand};
+use crate::connect::wire::{SessionOp, TransportCommand};
 use crate::core::actor::{Actor, AUTOPLAY_BATCH};
 use crate::core::state::SavedPosition;
 use crate::session::reducer::{
@@ -65,15 +65,10 @@ impl Resolver for DbResolver<'_> {
 impl Actor {
     // -- session setup ----------------------------------------------------------
 
-    /// Open (or create) the session for the attached server's scope and
-    /// build the Connect engine around it.
+    /// Open (or create) the session for this device's identity and build
+    /// the Connect engine around it.
     pub(crate) fn open_session(&mut self) {
-        let Some(server) = self.accounts.primary() else {
-            return;
-        };
-        let scope = scope_key(&server.info.url, &server.info.username);
-        let credential = server.credential.clone();
-        let lan_key = server.lan_key.clone();
+        let scope = self.identity.lock().id.clone();
         let doc = match self.db.saved_state_get_raw(&format!("session:{scope}")) {
             Ok(Some(json)) => match crate::session::load(&json) {
                 Ok(d) if crate::session::validate(&d).is_ok() && d.scope == scope => d,
@@ -108,10 +103,8 @@ impl Actor {
             is_self: true,
         };
         let mut cfg = EngineConfig::new(device, scope.clone());
-        cfg.credential = credential;
-        // Mutual LAN auth (connect/mod.rs rule 7): without the scope's key
-        // this device neither serves nor follows LAN peers.
-        cfg.lan_key = lan_key;
+        // Rooms admit members of this identity only (connect/mod.rs rule 7).
+        cfg.identity = Some(self.identity.clone());
         cfg.allow_insecure_coordinator = self
             .settings
             .get_bool(crate::settings::keys::CONNECT_ALLOW_INSECURE_COORDINATOR);
@@ -443,7 +436,26 @@ impl Actor {
             Output::StartListener => self.io_start_listener(),
             Output::StopListener => self.io_stop_listener(),
             Output::Advertise(a) => self.io_advertise(a),
-            Output::VerifyCredential { peer, credential } => self.io_verify(peer, credential),
+            Output::IdentityChanged => self.identity_changed_by_peer(),
+            Output::Paired { device_id, name } => self.on_paired(device_id, name),
+            Output::PairFailed { message } => self.emit(Event::PairingFailed { message }),
+            Output::CoordinatorInvites { invites, created } => {
+                self.emit(Event::CoordinatorInvites {
+                    invites: invites
+                        .into_iter()
+                        .map(|i| CoordinatorInviteInfo {
+                            code: i.code,
+                            created_at: i.created_at,
+                            expires_at: i.expires_at,
+                            redeemed: i.redeemed_by.is_some(),
+                        })
+                        .collect(),
+                    created,
+                })
+            }
+            Output::CoordinatorUnreachable => self.emit(Event::CoordinatorFailed {
+                message: "Not connected to the coordinator right now.".into(),
+            }),
             Output::DocumentChanged {
                 document,
                 cause,

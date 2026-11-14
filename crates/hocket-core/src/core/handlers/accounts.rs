@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::api::*;
-use crate::connect::auth::{derive_lan_key, LanKey};
-use crate::connect::engine::Input;
-use crate::connect::wire::{scope_key, Credential as WireCredential};
+use crate::connect::wire::scope_key;
 use crate::core::actor::Actor;
 use crate::core::state::AccountState;
 use crate::core::{ActorMsg, Internal, PendingAccount, PresetServer};
@@ -16,7 +14,7 @@ use crate::downloads::DownloadRunner;
 use crate::jobs::{JobSpec, RetryAction};
 use crate::outbox::OutboxFlushRunner;
 use crate::provider::{NavidromeProvider, Provider};
-use crate::subsonic::auth::{self, AuthMode};
+use crate::subsonic::auth::AuthMode;
 use crate::subsonic::{Client, ClientConfig, ReqwestTransport, SubsonicApi};
 
 /// Deterministic server id from the identity the device authenticated with.
@@ -104,10 +102,6 @@ impl Actor {
             },
         );
         let client = Arc::new(Client::new(cfg, transport));
-        let credential = wire_credential(&url, &username, password.expose());
-        // Mutual LAN auth: peers of this scope prove knowledge of a key
-        // stretched from the same password (see `connect::auth`).
-        let lan_key = derive_lan_key(&scope_key(&url, &username), password.expose());
         // An account this device already authenticated with (persisted row,
         // capabilities known): install it now so downloads play offline, and
         // verify in the background. A failed probe keeps it installed.
@@ -127,8 +121,7 @@ impl Actor {
                 info,
                 client.clone() as Arc<dyn SubsonicApi>,
                 Some(client),
-                credential,
-                lan_key,
+                Some(password),
                 false,
             );
             self.probe_account(&id);
@@ -151,8 +144,7 @@ impl Actor {
             PendingAccount {
                 info,
                 client: client.clone(),
-                credential,
-                lan_key,
+                password,
             },
         );
         self.spawn_probe(id, client);
@@ -190,16 +182,8 @@ impl Actor {
             reachable: true,
             ..Default::default()
         };
-        let credential = wire_credential(&preset.url, &username, &preset.password);
-        let lan_key = derive_lan_key(&scope_key(&preset.url, &username), &preset.password);
-        self.install_account(info, preset.api, None, credential, lan_key, true);
-    }
-
-    /// The scope key of the account sessions belong to.
-    fn primary_scope(&self) -> Option<String> {
-        self.accounts
-            .primary()
-            .map(|a| scope_key(&a.info.url, &a.info.username))
+        let password = Secret(preset.password.clone());
+        self.install_account(info, preset.api, None, Some(password), true);
     }
 
     /// Close the session (the engine, and everything keyed on its scope).
@@ -218,16 +202,16 @@ impl Actor {
         self.last_doc = None;
     }
 
-    /// After the accounts changed: when the session's account (the
-    /// highest-priority Navidrome one) is no longer the one the open
-    /// session belongs to, close it and open the new one's.
-    fn rescope_session(&mut self) {
-        let want = self.primary_scope();
+    /// The session belongs to the identity: when the identity changed (a
+    /// pairing joined another, or a reset made a new one), close the old
+    /// session and open the new one's.
+    pub(crate) fn rescope_session(&mut self) {
+        let want = Some(self.identity.lock().id.clone());
         let open = self.scope.clone().filter(|_| self.engine.is_some());
         if open.is_some() && open != want {
-            self.close_session(false);
+            self.close_session(true);
         }
-        if self.engine.is_none() && want.is_some() {
+        if self.engine.is_none() && self.started {
             self.open_session();
         }
     }
@@ -237,27 +221,11 @@ impl Actor {
         mut info: AccountInfo,
         api: Arc<dyn SubsonicApi>,
         client: Option<Arc<Client>>,
-        credential: WireCredential,
-        lan_key: LanKey,
+        password: Option<Secret>,
         reachable: bool,
     ) {
         let provider: Arc<dyn Provider> = Arc::new(NavidromeProvider::new(api.clone()));
         info.features = provider.capabilities();
-        let is_primary_now = self
-            .accounts
-            .primary()
-            .is_some_and(|p| p.info.id == info.id);
-        // The LAN key is fixed at engine construction: a new password for the
-        // session's account rebuilds the engine (after flushing the document).
-        let rekeyed = is_primary_now
-            && self.engine.is_some()
-            && self
-                .accounts
-                .get(&info.id)
-                .is_some_and(|s| s.lan_key.as_ref() != Some(&lan_key));
-        if rekeyed {
-            self.close_session(true);
-        }
         if let Err(e) = self.db.upsert_account(&info, self.now()) {
             self.error(ErrorKind::Storage, "save account", Some(e.to_string()));
         }
@@ -269,8 +237,9 @@ impl Actor {
         state.info.reachable = reachable;
         state.provider = Some(provider);
         state.client = client;
-        state.credential = Some(credential.clone());
-        state.lan_key = Some(lan_key);
+        if password.is_some() {
+            state.password = password;
+        }
         let tx = self.tx.clone();
         let sync = LibrarySync::new(
             self.db.clone(),
@@ -300,13 +269,9 @@ impl Actor {
                 }
             })
             .unwrap_or_default();
-        let id = state.info.id.clone();
         self.accounts.insert(state);
         self.providers_changed();
-        self.rescope_session();
-        if self.scope_account().as_deref() == Some(id.as_str()) && self.engine.is_some() {
-            self.engine_input(Input::SetCredential(Some(credential)));
-        }
+        self.credentials_changed();
         let accounts = self.account_infos();
         self.emit(Event::AccountsChanged { accounts });
         if self.started {
@@ -342,16 +307,7 @@ impl Actor {
         let Some(removed) = self.accounts.take(&account_id) else {
             return;
         };
-        let was_primary = self.engine.is_some()
-            && self.scope.as_deref()
-                == Some(scope_key(&removed.info.url, &removed.info.username).as_str());
-        if was_primary {
-            self.close_session(false);
-            for key in ["session", "connect", "position"] {
-                let scope = scope_key(&removed.info.url, &removed.info.username);
-                let _ = self.db.saved_state_delete(&format!("{key}:{scope}"));
-            }
-        } else if self
+        if self
             .playback
             .track
             .as_ref()
@@ -375,7 +331,7 @@ impl Actor {
             self.error(ErrorKind::Storage, "remove account", Some(e.to_string()));
         }
         self.persist_priorities();
-        self.rescope_session();
+        self.credentials_changed();
         if self.started {
             self.register_job_runners();
         }
@@ -386,7 +342,6 @@ impl Actor {
         self.accounts.reorder(&ids);
         self.persist_priorities();
         self.providers_changed();
-        self.rescope_session();
         if self.started {
             self.register_job_runners();
         }
@@ -444,8 +399,7 @@ impl Actor {
                         info,
                         client.clone() as Arc<dyn SubsonicApi>,
                         Some(client),
-                        pending.credential,
-                        pending.lan_key,
+                        Some(pending.password),
                         true,
                     );
                 }
@@ -913,19 +867,6 @@ impl Actor {
         if state.kind != NetworkKind::Offline {
             self.clear_offline_skips();
         }
-    }
-}
-
-fn wire_credential(url: &str, username: &str, password: &str) -> WireCredential {
-    let salt = auth::random_salt();
-    WireCredential {
-        server_url: url.to_string(),
-        username: username.to_string(),
-        token: Some(auth::token(password, &salt)),
-        salt: Some(salt),
-        api_key: None,
-        client: auth::CLIENT_NAME.to_string(),
-        api_version: auth::API_VERSION.to_string(),
     }
 }
 

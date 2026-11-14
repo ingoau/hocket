@@ -1,56 +1,40 @@
-//! LAN room authentication: a mutual HMAC challenge/response keyed from the
-//! account password, so a room on the LAN only admits devices that know the
-//! Subsonic password for its scope, and a device only follows a LAN leader
-//! that can prove the same. Nothing secret ever crosses the wire: each side
-//! answers the other's random nonce with `HMAC-SHA256(key, role || nonce ||
-//! device_id)`.
+//! Room authentication: a mutual device-signature handshake over nonces.
+//!
+//! Every device in an identity has an ed25519 key on the identity's member
+//! list ([`crate::identity`]). A room (a LAN leader, or the hosted
+//! coordinator with its own key, pinned when it was claimed) and a joiner
+//! each sign the other's nonce, together with the identity, their own
+//! device id and the digest of their member-list heads:
 //!
 //! ```text
-//!   joiner                                   leader (room)
-//!     │── Challenge{nonce: Nj} ─────────────────▶│
-//!     │◀─ Proof{leader_id, mac(leader, Nj)} ─────│
-//!     │◀─ Challenge{nonce: Nr} ──────────────────│
-//!     │   verify: only then                      │
-//!     │── Proof{joiner_id, mac(joiner, Nr)} ────▶│
-//!     │── Hello (no credential) ────────────────▶│  verify, then admit
-//!     │◀─ Welcome ───────────────────────────────│
+//!   joiner                                         leader (room)
+//!     │── Challenge{Nj, identity, heads} ──────────────▶│
+//!     │◀─ Proof{leader, sig(leader, Nj), heads, ops} ───│  ops: what our heads lack
+//!     │◀─ Challenge{Nr} ────────────────────────────────│
+//!     │   merge ops, then verify: only then             │
+//!     │── Proof{joiner, sig(joiner, Nr), heads, ops} ──▶│  merge, verify membership
+//!     │── Hello ───────────────────────────────────────▶│  admit
+//!     │◀─ Welcome ──────────────────────────────────────│
 //! ```
 //!
-//! The joiner sends nothing but a nonce until the leader has proved itself,
-//! so a rogue listener that won the election learns nothing (not even a MAC
-//! sample). A rogue joiner gets one MAC sample from an honest leader and
-//! nothing else; the key is stretched ([`derive_lan_key`]) so that sample is
-//! not a cheap offline oracle. Roles are bound into the MAC so a proof can
-//! never be reflected back at the side that produced it.
+//! The joiner sends nothing but a nonce and its heads until the leader has
+//! proved it is a current member (or the pinned coordinator). Each side
+//! merges the ops the other sent before checking, so a peer with an older
+//! list catches up before it admits or follows anyone; the list is a
+//! grow-only union, so an old or replayed list never undoes a removal.
+//! Roles are bound into the signature so a proof can never be reflected.
 //!
 //! Known limit: without TLS there is no channel binding, so a rogue that
 //! wins the election could relay both handshakes between two honest devices
-//! and sit in the middle of that session (it still cannot obtain any
-//! credential, and cannot be admitted anywhere itself).
-//!
-//! # What the actor must supply
-//!
-//! [`EngineConfig::lan_key`](crate::connect::EngineConfig) must be
-//! `Some(derive_lan_key(&scope, &password))` where `scope` is
-//! [`scope_key`](crate::connect::wire::scope_key)`(server_url, username)`
-//! and `password` the account password the user entered (the same one the
-//! Subsonic token is minted from). Without it the engine neither serves nor
-//! follows LAN peers.
+//! and sit in the middle of that session. It learns session data, but can't
+//! be admitted anywhere itself, and the group key never travels unsealed.
 
-use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
+use crate::identity::{self, log::MemberState};
 
-type HmacSha256 = Hmac<Sha256>;
-
-/// Key derivation label; bump when the derivation changes.
-const KEY_LABEL: &str = "hocket-lan-v1";
-/// PBKDF2 rounds for the key stretch. A few milliseconds once per session
-/// open; makes a captured MAC sample an expensive password oracle.
-pub const KEY_ROUNDS: u32 = 20_000;
 /// Nonce length in bytes.
 pub const NONCE_LEN: usize = 32;
 
-/// Who is proving: bound into every MAC so proofs cannot be reflected.
+/// Who is proving: bound into every signature so proofs cannot be reflected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     /// The side that connected inbound and wants to be admitted.
@@ -60,56 +44,76 @@ pub enum Role {
 }
 
 impl Role {
-    fn tag(self) -> &'static [u8] {
+    pub fn tag(self) -> &'static str {
         match self {
-            Role::Joiner => b"joiner",
-            Role::Leader => b"leader",
+            Role::Joiner => "joiner",
+            Role::Leader => "leader",
         }
     }
 }
 
-/// The shared LAN key for one scope. Never printed.
-#[derive(Clone, PartialEq, Eq)]
-pub struct LanKey(pub [u8; 32]);
-
-impl std::fmt::Debug for LanKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LanKey(<redacted>)")
-    }
+/// The digest a proof signs for a list of heads.
+pub fn heads_digest(heads: &[String]) -> String {
+    let mut c = identity::crypto::Canon::new("hocket-heads");
+    c.list(heads);
+    identity::crypto::sha256_hex(c.finish())
 }
 
-impl From<[u8; 32]> for LanKey {
-    fn from(b: [u8; 32]) -> Self {
-        LanKey(b)
-    }
+/// Sign a proof: `secret` is the prover's device (or coordinator) key.
+pub fn prove(
+    secret: &identity::crypto::DeviceSecret,
+    role: Role,
+    identity_id: &str,
+    nonce: &str,
+    device_id: &str,
+    heads: &[String],
+) -> String {
+    secret.sign(&identity::proof_bytes(
+        role.tag(),
+        identity_id,
+        nonce,
+        device_id,
+        &heads_digest(heads),
+    ))
 }
 
-/// Derive the shared LAN key for a scope from the account password
-/// (PBKDF2-HMAC-SHA256, salt = label || scope).
-pub fn derive_lan_key(scope: &str, password: &str) -> LanKey {
-    let mut salt = Vec::with_capacity(KEY_LABEL.len() + 1 + scope.len());
-    salt.extend_from_slice(KEY_LABEL.as_bytes());
-    salt.push(b'|');
-    salt.extend_from_slice(scope.as_bytes());
-    LanKey(pbkdf2_sha256(password.as_bytes(), &salt, KEY_ROUNDS))
+/// Check a proof against a known signing key.
+pub fn verify_with_key(
+    sign_pk: &str,
+    role: Role,
+    identity_id: &str,
+    nonce: &str,
+    device_id: &str,
+    heads: &[String],
+    sig: &str,
+) -> bool {
+    identity::crypto::verify(
+        sign_pk,
+        &identity::proof_bytes(
+            role.tag(),
+            identity_id,
+            nonce,
+            device_id,
+            &heads_digest(heads),
+        ),
+        sig,
+    )
 }
 
-/// PBKDF2 with HMAC-SHA256, one 32-byte block.
-fn pbkdf2_sha256(password: &[u8], salt: &[u8], rounds: u32) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(password).expect("hmac accepts any key length");
-    mac.update(salt);
-    mac.update(&1u32.to_be_bytes());
-    let mut u: [u8; 32] = mac.finalize().into_bytes().into();
-    let mut out = u;
-    for _ in 1..rounds.max(1) {
-        let mut mac = HmacSha256::new_from_slice(password).expect("hmac accepts any key length");
-        mac.update(&u);
-        u = mac.finalize().into_bytes().into();
-        for (o, b) in out.iter_mut().zip(u.iter()) {
-            *o ^= b;
-        }
-    }
-    out
+/// Check a member's proof: `device_id` must be a current member of
+/// `state`, and the proof signed with its key.
+pub fn verify_member(
+    state: &MemberState,
+    role: Role,
+    identity_id: &str,
+    nonce: &str,
+    device_id: &str,
+    heads: &[String],
+    sig: &str,
+) -> bool {
+    state
+        .sign_key(device_id)
+        .is_some_and(|k| verify_with_key(k, role, identity_id, nonce, device_id, heads, sig))
 }
 
 /// A fresh random nonce, hex encoded (what travels in `Msg::Challenge`).
@@ -125,44 +129,7 @@ pub fn nonce_valid(nonce: &str) -> bool {
     nonce.len() == NONCE_LEN * 2 && nonce.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// `HMAC-SHA256(key, role || nonce || device_id)`, hex encoded.
-pub fn prove(key: &LanKey, role: Role, nonce: &str, device_id: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(&key.0).expect("hmac accepts any key length");
-    mac.update(role.tag());
-    mac.update(b"|");
-    mac.update(nonce.as_bytes());
-    mac.update(b"|");
-    mac.update(device_id.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
-}
-
-/// Constant-time check of a proof against the nonce we issued.
-pub fn verify(key: &LanKey, role: Role, nonce: &str, device_id: &str, mac: &str) -> bool {
-    let Ok(given) = hex::decode(mac) else {
-        return false;
-    };
-    let mut m = HmacSha256::new_from_slice(&key.0).expect("hmac accepts any key length");
-    m.update(role.tag());
-    m.update(b"|");
-    m.update(nonce.as_bytes());
-    m.update(b"|");
-    m.update(device_id.as_bytes());
-    m.verify_slice(&given).is_ok()
-}
-
-/// SHA-256 of arbitrary bytes (a small helper for callers that need a
-/// stable 32-byte digest, e.g. the simulation deriving a key from its scope).
-pub fn sha256(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
-}
-
-/// A key straight from a digest: tests and the simulation, never the app
-/// (which stretches the password with [`derive_lan_key`]).
-pub fn test_key(label: &[u8]) -> LanKey {
-    LanKey(sha256(label))
-}
-
-/// Whether a coordinator URL may carry the account credential: `wss://`
+/// Whether a coordinator URL may be used: `wss://`
 /// always; `ws://` only to the loopback host, or to a private/link-local
 /// host when `allow_insecure` (the `connect.allowInsecureCoordinator`
 /// setting) is on. Anything else, or any URL with userinfo or an unknown
@@ -261,45 +228,76 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_is_deterministic_and_scope_bound() {
-        let a = derive_lan_key("https://music.example|alice", "pw");
-        let b = derive_lan_key("https://music.example|alice", "pw");
-        let c = derive_lan_key("https://music.example|bob", "pw");
-        let d = derive_lan_key("https://music.example|alice", "pw2");
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-        assert_ne!(a, d);
-    }
-
-    #[test]
-    fn pbkdf2_matches_known_vector() {
-        // RFC 6070-style vector for PBKDF2-HMAC-SHA256("password", "salt", 1).
-        let out = pbkdf2_sha256(b"password", b"salt", 1);
-        assert_eq!(
-            hex::encode(out),
-            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
-        );
-        let out = pbkdf2_sha256(b"password", b"salt", 2);
-        assert_eq!(
-            hex::encode(out),
-            "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43"
-        );
-    }
-
-    #[test]
-    fn proof_round_trips_and_binds_role_nonce_and_device() {
-        let key = derive_lan_key("s", "pw");
+    fn proofs_bind_role_nonce_device_and_heads() {
+        let a = identity::Identity::create("a", "A", 1.0);
+        let heads = a.heads();
         let nonce = new_nonce();
         assert!(nonce_valid(&nonce));
-        let mac = prove(&key, Role::Joiner, &nonce, "dev-a");
-        assert!(verify(&key, Role::Joiner, &nonce, "dev-a", &mac));
-        assert!(!verify(&key, Role::Leader, &nonce, "dev-a", &mac));
-        assert!(!verify(&key, Role::Joiner, &nonce, "dev-b", &mac));
-        assert!(!verify(&key, Role::Joiner, &new_nonce(), "dev-a", &mac));
-        let other = derive_lan_key("s", "other");
-        assert!(!verify(&other, Role::Joiner, &nonce, "dev-a", &mac));
-        assert!(!verify(&key, Role::Joiner, &nonce, "dev-a", "zz"));
-        assert!(!verify(&key, Role::Joiner, &nonce, "dev-a", ""));
+        let sig = prove(a.secret(), Role::Joiner, &a.id, &nonce, "a", &heads);
+        let st = a.member_state();
+        assert!(verify_member(
+            &st,
+            Role::Joiner,
+            &a.id,
+            &nonce,
+            "a",
+            &heads,
+            &sig
+        ));
+        assert!(!verify_member(
+            &st,
+            Role::Leader,
+            &a.id,
+            &nonce,
+            "a",
+            &heads,
+            &sig
+        ));
+        assert!(!verify_member(
+            &st,
+            Role::Joiner,
+            &a.id,
+            &new_nonce(),
+            "a",
+            &heads,
+            &sig
+        ));
+        assert!(!verify_member(
+            &st,
+            Role::Joiner,
+            "other",
+            &nonce,
+            "a",
+            &heads,
+            &sig
+        ));
+        assert!(!verify_member(
+            &st,
+            Role::Joiner,
+            &a.id,
+            &nonce,
+            "b",
+            &heads,
+            &sig
+        ));
+        assert!(!verify_member(
+            &st,
+            Role::Joiner,
+            &a.id,
+            &nonce,
+            "a",
+            &[],
+            &sig
+        ));
+        assert!(!verify_member(
+            &st,
+            Role::Joiner,
+            &a.id,
+            &nonce,
+            "a",
+            &heads,
+            "zz"
+        ));
     }
 
     #[test]
@@ -307,13 +305,6 @@ mod tests {
         assert_ne!(new_nonce(), new_nonce());
         assert!(!nonce_valid("abc"));
         assert!(!nonce_valid(&"g".repeat(64)));
-    }
-
-    #[test]
-    fn key_debug_is_redacted() {
-        let k = derive_lan_key("s", "pw");
-        assert_eq!(format!("{k:?}"), "LanKey(<redacted>)");
-        assert!(!format!("{:?}", Some(k)).contains('['));
     }
 
     #[test]

@@ -37,6 +37,9 @@ use log::{LogError, MemberDevice, MemberLog, MemberState, OpBody};
 
 pub use log::MemberOp;
 
+/// The identity as the actor and the Connect engine share it.
+pub type SharedIdentity = std::sync::Arc<parking_lot::Mutex<Identity>>;
+
 /// `saved_state` key of this device's [`Identity`].
 pub const STORAGE_KEY: &str = "identity";
 /// The device id grants to the coordinator are addressed to.
@@ -302,8 +305,15 @@ impl SharedState {
         ch.members = added > 0;
         let state = self.log.state().clone();
         let id = self.identity().to_string();
+        let coordinator_holds = self.credential_sync_on() || other.credential_sync_on();
         for g in other.grants {
-            if !self.grants.contains(&g) && self.grants.len() < 4 * log::MAX_OPS {
+            let wanted = Some(&g.key_id) == state.key_id.as_ref()
+                && (state.is_member(&g.to) || (coordinator_holds && g.to == COORDINATOR_ID))
+                && !self
+                    .grants
+                    .iter()
+                    .any(|o| o.key_id == g.key_id && o.to == g.to);
+            if wanted && self.grants.len() < 4 * log::MAX_OPS {
                 self.grants.push(g);
                 ch.other = true;
             }
@@ -331,16 +341,21 @@ impl SharedState {
             }
         }
         if let Some(theirs) = other.blob {
+            // Only a key holder can seal one under the current key, and
+            // those rank first; the author is informational.
             let better = match &self.blob {
                 None => true,
                 Some(ours) => blob_rank(&theirs, &state) > blob_rank(ours, &state),
             };
-            if better && state.is_member(&theirs.author) {
+            if better {
                 self.blob = Some(theirs);
                 ch.other = true;
             }
         }
         for (d, t) in other.last_synced {
+            if !state.is_member(&d) && !state.removed.contains(&d) {
+                continue;
+            }
             let e = self.last_synced.entry(d).or_insert(0.0);
             if t > *e {
                 *e = t;
@@ -399,6 +414,21 @@ impl SharedState {
                 self.coordinator.is_some(),
                 self.last_synced.len(),
             )
+    }
+
+    /// Note that `device` was in touch now (coarse: at most once a minute
+    /// counts as a change).
+    pub fn touch(&mut self, device: &str, now: EpochMs) -> bool {
+        if !self.log.state().is_member(device) {
+            return false;
+        }
+        let e = self.last_synced.entry(device.into()).or_insert(0.0);
+        if now - *e > 60_000.0 {
+            *e = now;
+            true
+        } else {
+            false
+        }
     }
 
     /// The group key, if `holder` can open a grant for it.
@@ -738,17 +768,7 @@ impl Identity {
 
     /// Note that `device` was in touch now.
     pub fn touch(&mut self, device: &str, now: EpochMs) -> bool {
-        if !self.shared.log.compute_state().is_member(device) {
-            return false;
-        }
-        let e = self.shared.last_synced.entry(device.into()).or_insert(0.0);
-        // Coarse on purpose: a touch every minute is plenty for "last synced".
-        if now - *e > 60_000.0 {
-            *e = now;
-            true
-        } else {
-            false
-        }
+        self.shared.touch(device, now)
     }
 
     fn new_key(&mut self) -> String {
@@ -811,6 +831,33 @@ impl Identity {
         }
         if !self.state().is_member(device_id) {
             return Err("not a member".into());
+        }
+        // Records the removed device signed stand: the remover vouches for
+        // them, so pruning the removed author doesn't drop them.
+        let me = self.device_id.clone();
+        if let Some(r) = self.shared.coordinator.clone() {
+            if r.author == device_id {
+                self.shared.coordinator = Some(Signed::new(
+                    &self.id,
+                    "coordinator",
+                    r.value,
+                    &me,
+                    now.max(r.at),
+                    &self.secret,
+                ));
+            }
+        }
+        if let Some(r) = self.shared.credential_sync.clone() {
+            if r.author == device_id {
+                self.shared.credential_sync = Some(Signed::new(
+                    &self.id,
+                    "credentialSync",
+                    r.value,
+                    &me,
+                    now.max(r.at),
+                    &self.secret,
+                ));
+            }
         }
         let kid = self.new_key();
         let op = self.shared.log.append(
@@ -942,11 +989,13 @@ fn truncate(name: &str) -> String {
     name.chars().take(60).collect()
 }
 
-#[cfg(test)]
-mod tests {
+/// Helpers for tests and the simulation: deterministic devices and an
+/// in-process pairing.
+#[cfg(any(test, feature = "sim"))]
+pub mod testing {
     use super::*;
 
-    pub(crate) fn device(id: &str) -> (MemberDevice, DeviceSecret) {
+    pub fn device(id: &str) -> (MemberDevice, DeviceSecret) {
         let s = DeviceSecret::from_seed(id.as_bytes());
         (
             MemberDevice {
@@ -959,7 +1008,7 @@ mod tests {
     }
 
     /// Pair `id` into `inviter`'s identity the way pairing does.
-    pub(crate) fn pair(inviter: &mut Identity, id: &str, now: EpochMs) -> Identity {
+    pub fn pair(inviter: &mut Identity, id: &str, now: EpochMs) -> Identity {
         let (d, s) = device(id);
         let (_op, grant) = inviter.add_device(d, now).unwrap();
         let mut shared = inviter.sync();
@@ -970,6 +1019,12 @@ mod tests {
         }
         Identity::joined(id, s, shared).unwrap()
     }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::testing::*;
+    use super::*;
 
     fn exchange(a: &mut Identity, b: &mut Identity) {
         for _ in 0..2 {

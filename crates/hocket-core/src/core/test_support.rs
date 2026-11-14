@@ -121,7 +121,7 @@ impl Core {
         upstream: Arc<dyn StreamUpstream>,
     ) -> Result<Core, CoreError> {
         let io: Arc<dyn ConnectIo> = match &opts.net {
-            Some(net) => net.io(&config.device_id, true),
+            Some(net) => net.io(&config.device_id),
             None => Arc::new(NoNet),
         };
         let mut servers: Vec<PresetServer> = opts
@@ -197,12 +197,6 @@ impl ConnectIo for NoNet {
     }
     fn discovery(&self) -> Box<dyn crate::connect::discovery::Discovery> {
         Box::new(crate::connect::discovery::NoDiscovery)
-    }
-    fn verify(
-        &self,
-        _credential: crate::connect::wire::Credential,
-    ) -> futures::future::BoxFuture<'static, bool> {
-        Box::pin(async { true })
     }
 }
 

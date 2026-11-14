@@ -35,6 +35,24 @@ impl Actor {
             Command::RemoveAccount { account_id } => self.remove_account(account_id),
             Command::ReorderAccounts { account_ids } => self.reorder_accounts(account_ids),
             Command::ProbeAccount { account_id } => self.probe_account(&account_id),
+            Command::CreatePairingInvite => self.create_pairing_invite(),
+            Command::PairWithInvite { link } => self.pair_with_invite(link),
+            Command::RemoveDevice { device_id } => self.remove_device(device_id),
+            Command::SetCredentialSync { on } => self.set_credential_sync(on),
+            Command::ResetIdentity => self.reset_identity(),
+            Command::ClaimCoordinator { url, code } => self.join_coordinator(url, code, true),
+            Command::RedeemCoordinatorInvite { url, code } => {
+                self.join_coordinator(url, code, false)
+            }
+            Command::CreateCoordinatorInvite => {
+                self.coordinator_request(crate::connect::wire::Msg::CoordInviteCreate)
+            }
+            Command::RevokeCoordinatorInvite { code } => {
+                self.coordinator_request(crate::connect::wire::Msg::CoordInviteRevoke { code })
+            }
+            Command::ListCoordinatorInvites => {
+                self.coordinator_request(crate::connect::wire::Msg::CoordInviteList)
+            }
             Command::SyncLibrary { account_id, full } => {
                 self.maybe_start_sync_for(&account_id, full, true);
             }
