@@ -15,6 +15,7 @@
 //! table-by-table while the mirror builds. It runs as `JobKind::LibrarySync`
 //! via [`LibrarySyncRunner`].
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -403,7 +404,7 @@ impl LibrarySync {
         c.last_track_count = Some(tracks);
         self.save_cursor(&c)?;
         self.db
-            .set_server_last_sync(self.server_id(), finished_at)?;
+            .set_account_last_sync(self.server_id(), finished_at)?;
         // A finished sync has covered the whole library: report it as complete, not the
         // reset cursor offset (which read "0 of N" in the job list).
         self.report(obs, &c, tracks, Some(tracks), true);
@@ -699,24 +700,45 @@ impl SyncCursor {
 #[serde(rename_all = "camelCase", default)]
 pub struct SyncJobPayload {
     pub full: bool,
+    /// The account to sync (`None`: the first one the runner knows).
+    pub account_id: Option<String>,
 }
 
-/// `JobRunner` adapter: `payload = {"full": bool}`.
+/// `JobRunner` adapter: `payload = {"full": bool, "accountId": ".."}`. Holds
+/// the sync of every account with credentials.
 pub struct LibrarySyncRunner {
-    sync: Arc<LibrarySync>,
+    syncs: HashMap<String, Arc<LibrarySync>>,
 }
 
 impl LibrarySyncRunner {
-    pub fn new(sync: Arc<LibrarySync>) -> Self {
-        LibrarySyncRunner { sync }
+    pub fn new(syncs: HashMap<String, Arc<LibrarySync>>) -> Self {
+        LibrarySyncRunner { syncs }
+    }
+
+    pub fn single(sync: Arc<LibrarySync>) -> Self {
+        let id = sync.server_id().to_string();
+        LibrarySyncRunner {
+            syncs: [(id, sync)].into(),
+        }
     }
 }
 
 impl JobRunner for LibrarySyncRunner {
     fn run(&self, ctx: JobContext) -> BoxFuture<'static, JobResult<()>> {
-        let sync = self.sync.clone();
+        let payload: SyncJobPayload = serde_json::from_str(&ctx.payload).unwrap_or_default();
+        let sync = match &payload.account_id {
+            Some(id) => self.syncs.get(id).cloned(),
+            None => {
+                let mut ids: Vec<&String> = self.syncs.keys().collect();
+                ids.sort();
+                ids.first().and_then(|id| self.syncs.get(*id).cloned())
+            }
+        };
         Box::pin(async move {
-            let payload: SyncJobPayload = serde_json::from_str(&ctx.payload).unwrap_or_default();
+            // The account was removed (or lost its credentials) meanwhile.
+            let Some(sync) = sync else {
+                return Err(JobError::Cancelled);
+            };
             sync.run(payload.full, &ctx)
                 .await
                 .map(|_| ())
@@ -861,7 +883,7 @@ mod tests {
             (12, Some(12))
         );
         assert!(
-            db.servers().unwrap().is_empty(),
+            db.accounts().unwrap().is_empty(),
             "sync doesn't create server rows"
         );
     }
@@ -1016,7 +1038,7 @@ mod tests {
         q.register(
             api::JobKind::LibrarySync,
             1,
-            Arc::new(LibrarySyncRunner::new(sync.clone())),
+            Arc::new(LibrarySyncRunner::single(sync.clone())),
         );
         let id = q
             .submit(JobSpec::new(api::JobKind::LibrarySync, "Sync").payload(r#"{"full":true}"#))

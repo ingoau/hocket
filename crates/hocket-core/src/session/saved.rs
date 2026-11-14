@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use md5::{Digest, Md5};
 
-use crate::api::{ContextKind, EpochMs, Ms, QueueContext, SavedQueue, SessionDocument};
+use crate::api::{ContextKind, EpochMs, Ms, QueueContext, SavedQueue, SessionDocument, TrackRef};
 
 /// Unpinned entries the document keeps. A protocol constant (every replica
 /// and the coordinator evict alike); the `queue.savedCap` setting only
@@ -72,13 +72,15 @@ pub fn context_identity(ctx: &QueueContext) -> String {
         ContextKind::AdHoc { .. } => format!("adhoc:{}", track_hash(&ctx.tracks)),
         ContextKind::Autoplay => format!("autoplay:{}", track_hash(&ctx.tracks)),
     };
-    format!("{}|{}|{:?}", ctx.server_id, kind, ctx.sort)
+    format!("{}|{}|{:?}", ctx.source, kind, ctx.sort)
 }
 
-fn track_hash(tracks: &[String]) -> String {
+fn track_hash(tracks: &[TrackRef]) -> String {
     let mut h = Md5::new();
     for t in tracks {
-        h.update(t.as_bytes());
+        h.update(t.source.as_bytes());
+        h.update([1u8]);
+        h.update(t.id.as_bytes());
         h.update([0u8]);
     }
     hex::encode(h.finalize())
@@ -318,11 +320,15 @@ mod tests {
 
     fn ctx(kind: ContextKind, tracks: &[&str]) -> QueueContext {
         QueueContext {
-            server_id: "srv".into(),
+            source: "srv".into(),
             kind,
             label: "L".into(),
             sort: SortOrder::Default,
-            tracks: tracks.iter().map(|s| s.to_string()).collect(),
+            tracks: tracks
+                .iter()
+                .map(|s| s.to_string())
+                .map(crate::api::TrackRef::from)
+                .collect(),
         }
     }
 
@@ -375,7 +381,7 @@ mod tests {
     fn item(key: &str, track: &str, index: u32) -> QueueItem {
         QueueItem {
             key: key.into(),
-            track_id: track.into(),
+            track: track.into(),
             source: QueueSource::Context { index },
             unavailable: false,
             added: false,

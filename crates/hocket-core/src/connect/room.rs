@@ -15,7 +15,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackId, TransportLease};
+use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackRef, TransportLease};
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::diagnostics;
 use crate::connect::lease::{
@@ -183,7 +183,7 @@ struct Unknown {
 /// on local judgement after the grace ([`Room::confirm_scrobble`]).
 #[derive(Debug, Clone)]
 struct UnconfirmedScrobble {
-    track_id: TrackId,
+    track_id: TrackRef,
     started_at: EpochMs,
     device_id: DeviceId,
     /// Loopback queries waiting for the verdict.
@@ -326,7 +326,7 @@ impl Room {
 
     /// Pre-load the dedupe log with pairs the host already knows were
     /// scrobbled (the log follows the session when the LAN role moves).
-    pub fn seed_scrobbles(&mut self, pairs: &[(crate::api::TrackId, EpochMs, DeviceId)]) {
+    pub fn seed_scrobbles(&mut self, pairs: &[(crate::api::TrackRef, EpochMs, DeviceId)]) {
         let now = self.now();
         for (track_id, started_at, device_id) in pairs {
             self.replica
@@ -336,7 +336,7 @@ impl Room {
 
     /// Whether our own device's claim on this pair still waits for a member
     /// to acknowledge it (see [`UnconfirmedScrobble`]).
-    pub fn is_unconfirmed_scrobble(&self, track_id: &str, started_at: EpochMs) -> bool {
+    pub fn is_unconfirmed_scrobble(&self, track_id: &TrackRef, started_at: EpochMs) -> bool {
         self.unconfirmed_index(track_id, started_at).is_some()
     }
 
@@ -364,7 +364,11 @@ impl Room {
     /// The host judged a pair on its own after the grace: the claim stands
     /// without an acknowledgement. Loopback queries are not answered (the
     /// host already has its verdict); held member queries are.
-    pub fn confirm_scrobble(&mut self, track_id: &str, started_at: EpochMs) -> Vec<RoomOutput> {
+    pub fn confirm_scrobble(
+        &mut self,
+        track_id: &TrackRef,
+        started_at: EpochMs,
+    ) -> Vec<RoomOutput> {
         let now = self.now();
         if let Some(i) = self.unconfirmed_index(track_id, started_at) {
             let c = self.unconfirmed.remove(i);
@@ -373,10 +377,10 @@ impl Room {
         self.flush()
     }
 
-    fn unconfirmed_index(&self, track_id: &str, started_at: EpochMs) -> Option<usize> {
+    fn unconfirmed_index(&self, track_id: &TrackRef, started_at: EpochMs) -> Option<usize> {
         self.unconfirmed
             .iter()
-            .position(|c| c.track_id == track_id && same_start(c.started_at, started_at))
+            .position(|c| &c.track_id == track_id && same_start(c.started_at, started_at))
     }
 
     /// Members other than the loopback.
@@ -431,7 +435,7 @@ impl Room {
         peer: &str,
         device_id: &str,
         query_id: String,
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         now: EpochMs,
     ) {
@@ -2020,7 +2024,6 @@ mod tests {
 
     fn play_op() -> SessionOp {
         SessionOp::PlayTracks {
-            server_id: "srv".into(),
             track_ids: vec!["t1".into(), "t2".into(), "t3".into()],
             start_index: 0,
             label: "sel".into(),
@@ -2066,10 +2069,7 @@ mod tests {
             matches!(sent(&outs_b, "p2")[0], Msg::OpReject { reason: RejectReason::Stale, current_revision: 2, document, .. } if document.revision == 2)
         );
         assert_eq!(r.revision(), 2);
-        assert_eq!(
-            r.replica().document.current.as_ref().unwrap().track_id,
-            "t2"
-        );
+        assert_eq!(r.replica().document.current.as_ref().unwrap().track, "t2");
     }
 
     #[test]
@@ -2470,7 +2470,7 @@ mod tests {
             }],
             "the member hears of the claim"
         );
-        assert!(r.is_unconfirmed_scrobble("t", 100.0));
+        assert!(r.is_unconfirmed_scrobble(&crate::api::TrackRef::from("t"), 100.0));
         // the leader's retry re-announces it (a lossy link ate the first)
         let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
         assert!(answers(&outs, LOOPBACK).is_empty());
@@ -2482,7 +2482,7 @@ mod tests {
         let outs = r.handle(scrobble_submitted("p1", "leader"));
         assert_eq!(answers(&outs, LOOPBACK), vec![("q1".to_string(), false)]);
         assert_eq!(answers(&outs, "p1"), vec![("m1".to_string(), true)]);
-        assert!(!r.is_unconfirmed_scrobble("t", 100.0));
+        assert!(!r.is_unconfirmed_scrobble(&crate::api::TrackRef::from("t"), 100.0));
         // settled: a later retry is answered at once
         let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q2"));
         assert_eq!(answers(&outs, LOOPBACK), vec![("q2".to_string(), false)]);
@@ -2531,7 +2531,7 @@ mod tests {
         let mut r = leader_room();
         r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
         r.handle(scrobble_query("p1", "a", "m1"));
-        let outs = r.confirm_scrobble("t", 100.0);
+        let outs = r.confirm_scrobble(&crate::api::TrackRef::from("t"), 100.0);
         assert!(answers(&outs, LOOPBACK).is_empty());
         assert_eq!(answers(&outs, "p1"), vec![("m1".to_string(), true)]);
         assert_eq!(r.replica().scrobbles[0].device_id, "leader");

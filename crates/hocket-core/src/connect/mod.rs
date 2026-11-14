@@ -57,7 +57,7 @@
 //!    the Subsonic token is minted with a per-device random salt, so only
 //!    the password is the same on every device of the account (the key is
 //!    PBKDF2-HMAC-SHA256, [`auth::KEY_ROUNDS`] rounds, salt
-//!    `"hocket-lan-v1|" || scope`). Derive it once per `AddServer` (it costs
+//!    `"hocket-lan-v1|" || scope`). Derive it once per `AddAccount` (it costs
 //!    a few ms), keep it in memory with the server, and push a new one with
 //!    [`Input::SetLanKey`] when the password changes (`None` closes the
 //!    LAN). LAN rooms admit only devices that prove knowledge of this key

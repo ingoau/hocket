@@ -54,7 +54,7 @@ impl Actor {
             self.preview_toggle();
             return;
         }
-        let Some(track) = self.track_or_bare(&track_id) else {
+        let Some(track) = self.track_or_bare(&self.track_ref_of(&track_id)) else {
             return;
         };
         let duration_ms = track.duration_ms;

@@ -54,6 +54,7 @@
 //! player's buffer refills.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -70,10 +71,9 @@ use url::Url;
 use crate::api::TranscodingProfile;
 use crate::downloads::spans::SpanSet;
 use crate::downloads::{
-    stream_options, CacheRow, Downloads, EntryKey, MergeOutcome, StreamMinter, StreamTarget,
-    TrackKey,
+    CacheRow, Downloads, EntryKey, MergeOutcome, StreamMinter, StreamTarget, TrackKey,
 };
-use crate::subsonic::SubsonicApi;
+use crate::provider::{Provider, ProviderError, ProviderSet, StreamRequest};
 use crate::util::Clock;
 
 /// URL prefix of media sources served by the reader.
@@ -333,7 +333,7 @@ struct Shared {
     clock: Arc<dyn Clock>,
     upstream: Arc<dyn StreamUpstream>,
     notify: CacheNotify,
-    api: RwLock<Option<Arc<dyn SubsonicApi>>>,
+    providers: RwLock<ProviderSet>,
     tokens: Mutex<HashMap<String, Token>>,
     handles: Mutex<Handles>,
     stopped: CancellationToken,
@@ -358,7 +358,7 @@ impl StreamReader {
                 clock,
                 upstream,
                 notify,
-                api: RwLock::new(None),
+                providers: RwLock::new(ProviderSet::default()),
                 tokens: Mutex::new(HashMap::new()),
                 handles: Mutex::new(Handles::default()),
                 stopped: CancellationToken::new(),
@@ -366,15 +366,15 @@ impl StreamReader {
         }
     }
 
-    /// The server client upstream fetches use. A different server (or
-    /// none) revokes every token minted for another one.
-    pub fn set_api(&self, api: Option<Arc<dyn SubsonicApi>>) {
-        let sid = api.as_ref().map(|a| a.server_id().to_string());
-        *self.shared.api.write() = api;
+    /// The providers upstream fetches use, by source. Tokens minted for a
+    /// source no provider serves any more are revoked.
+    pub fn set_providers(&self, providers: ProviderSet) {
+        let sources = providers.sources();
+        *self.shared.providers.write() = providers;
         self.shared
             .tokens
             .lock()
-            .retain(|_, t| Some(&t.server_id) == sid.as_ref());
+            .retain(|_, t| sources.contains(&t.server_id));
     }
 
     /// Refuse further opens, forget every token and close every handle.
@@ -756,11 +756,7 @@ impl StreamReader {
             let traffic = (!background).then(|| sh.clone());
             return open_file(p, token.mime_type.clone(), offset, length, traffic).await;
         }
-        let api = sh
-            .api
-            .read()
-            .clone()
-            .filter(|a| a.server_id() == token.server_id);
+        let api = sh.providers.read().for_source(&token.server_id).cloned();
         let mut src = CacheSource::new(sh.clone(), token.clone(), api, offset, length, background);
         // 2. A complete stream-cache copy (held while open), else 3. the
         // partial spans earlier reads left.
@@ -1049,12 +1045,14 @@ struct EntryState {
     _guard: ReaderGuard,
 }
 
+type SegmentResult = Result<(UpstreamRequest, Option<u64>), StreamError>;
+
 /// A stream served from the cache where it has the bytes and from the
 /// server where it does not, writing what it fetches into the cache.
 struct CacheSource {
     sh: Arc<Shared>,
     token: Token,
-    api: Option<Arc<dyn SubsonicApi>>,
+    api: Option<Arc<dyn Provider>>,
     /// What the bytes are (the token's profile, or the original standing in
     /// for a transcode): gap fetches ask the server for exactly this.
     profile: Option<TranscodingProfile>,
@@ -1086,7 +1084,7 @@ impl CacheSource {
     fn new(
         sh: Arc<Shared>,
         token: Token,
-        api: Option<Arc<dyn SubsonicApi>>,
+        api: Option<Arc<dyn Provider>>,
         offset: u64,
         length: Option<u64>,
         background: bool,
@@ -1369,7 +1367,7 @@ impl CacheSource {
             let Some(from) = self.fill_from() else {
                 return PumpStep::Done;
             };
-            return match self.segment_request(from) {
+            return match self.segment_request(from).await {
                 Ok((request, gap_end)) => PumpStep::Open(PendingOpen {
                     from,
                     gap_end,
@@ -1557,16 +1555,16 @@ impl CacheSource {
         pos: u64,
         cancel: &CancellationToken,
     ) -> Result<(), StreamError> {
-        let (request, gap_end) = self.segment_request(pos)?;
+        let (request, gap_end) = self.segment_request(pos).await?;
         let up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
         self.attach_segment(pos, gap_end, up)
     }
 
     /// The request for the gap at `pos`, and where the gap ends.
-    fn segment_request(&self, pos: u64) -> Result<(UpstreamRequest, Option<u64>), StreamError> {
-        let Some(api) = self.api.clone() else {
-            return Err(StreamError::NoServer);
-        };
+    /// The request for the gap at `pos`, and where the gap ends. Resolving
+    /// the provider's stream happens outside `self` (a handle isn't `Sync`).
+    fn segment_request(&self, pos: u64) -> impl Future<Output = SegmentResult> + Send + 'static {
+        let api = self.api.clone();
         let gap_end = match (self.known.next_start_after(pos), self.end) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -1579,8 +1577,26 @@ impl CacheSource {
             (p, Some(e)) => Some(format!("bytes={p}-{}", e.max(p + 1) - 1)),
         };
         tracing::debug!(target: "hocket::stream", track = %self.token.track_id, ?range, "fetching from the server");
-        let url = api.stream_url(&self.token.track_id, &stream_options(self.profile.as_ref()));
-        Ok((UpstreamRequest { url, range }, gap_end))
+        let req = StreamRequest {
+            profile: self.profile.clone(),
+            offset_s: None,
+            suffix: self.token.suffix.clone(),
+        };
+        let track_id = self.token.track_id.clone();
+        async move {
+            let Some(api) = api else {
+                return Err(StreamError::NoServer);
+            };
+            let url = api
+                .resolve_stream(&track_id, &req)
+                .await
+                .map_err(|e| match e {
+                    ProviderError::Network(m) => StreamError::Network(m),
+                    other => StreamError::Io(other.to_string()),
+                })?
+                .url;
+            Ok((UpstreamRequest { url, range }, gap_end))
+        }
     }
 
     /// Start reading the server's answer to the gap fetch at `pos`.
@@ -2085,7 +2101,9 @@ mod tests {
             upstream.clone(),
             Arc::new(|_| {}),
         );
-        r.set_api(Some(Arc::new(server)));
+        r.set_providers(crate::provider::ProviderSet::single(Arc::new(
+            server.provider(),
+        )));
         (dir, dl, r, upstream)
     }
 

@@ -595,7 +595,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!((servers, tracks), (0, 0));
-        assert!(db.servers().unwrap().is_empty());
+        assert!(db.accounts().unwrap().is_empty());
     }
 
     #[test]

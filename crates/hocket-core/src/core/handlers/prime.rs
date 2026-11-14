@@ -45,7 +45,7 @@ pub const PRIME_MAX_PER_WINDOW: usize = 20;
 pub const PRIME_WINDOW_MS: f64 = 10.0 * 60_000.0;
 
 pub(crate) struct PrimeRunning {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub generation: u64,
     pub cancel: CancellationToken,
 }
@@ -54,7 +54,7 @@ pub(crate) struct PrimeRunning {
 pub(crate) struct PrimeState {
     /// Waiting for the running prime (or a queue prefetch) to finish; a
     /// newer request replaces it.
-    pub pending: Option<TrackId>,
+    pub pending: Option<TrackRef>,
     pub running: Option<PrimeRunning>,
     /// When recent primes started (the rate limit's window).
     pub started: VecDeque<f64>,
@@ -67,7 +67,7 @@ impl Actor {
         match self.db.album_tracks(&album_id) {
             Ok(tracks) => {
                 if let Some(first) = tracks.into_iter().next() {
-                    self.request_prime(first.id);
+                    self.request_prime(TrackRef::new(first.server_id, first.id));
                 }
             }
             Err(e) => self.log("debug", format!("prime album {album_id}: {e}")),
@@ -76,7 +76,7 @@ impl Actor {
 
     /// `Command::PrimeTrack` (and the album's first track): ask the device
     /// that owns playback to prime it.
-    pub(crate) fn request_prime(&mut self, track_id: TrackId) {
+    pub(crate) fn request_prime(&mut self, track_id: TrackRef) {
         if self.cfg.platform == Platform::Coordinator {
             return;
         }
@@ -88,7 +88,7 @@ impl Actor {
     }
 
     /// Prime a track on this device (the engine decided it is the one).
-    pub(crate) fn prime_here(&mut self, track_id: TrackId) {
+    pub(crate) fn prime_here(&mut self, track_id: TrackRef) {
         if !self.prime_allowed() {
             self.log("debug", format!("prime of {track_id} not allowed here"));
             return;
@@ -97,8 +97,8 @@ impl Actor {
             return;
         };
         let running = self.prime.running.as_ref().map(|r| r.track_id.clone());
-        if running.as_deref() == Some(track_id.as_str())
-            || self.prime.pending.as_deref() == Some(track_id.as_str())
+        if running.as_ref() == Some(&track_id)
+            || self.prime.pending.as_ref() == Some(&track_id)
             || !self.prime_needed(&track)
         {
             return;
@@ -115,7 +115,7 @@ impl Actor {
     fn prime_allowed(&self) -> bool {
         if self.cfg.platform == Platform::Coordinator
             || self.stream_reader.is_none()
-            || self.api().is_none()
+            || !self.any_provider()
             || self.shutting_down
         {
             return false;
@@ -197,7 +197,10 @@ impl Actor {
             self.log("debug", format!("prime of {} rate-limited", track.id));
             return;
         }
-        let (Some(reader), Some(api)) = (self.stream_reader.clone(), self.api()) else {
+        let (Some(reader), Some(api)) = (
+            self.stream_reader.clone(),
+            self.provider_for(&track.server_id),
+        ) else {
             return;
         };
         let source = match self.downloads.resolve_with(
@@ -227,7 +230,7 @@ impl Actor {
         let generation = self.prime.generation;
         let cancel = CancellationToken::new();
         self.prime.running = Some(PrimeRunning {
-            track_id: track.id.clone(),
+            track_id: TrackRef::new(track.server_id.clone(), track.id.clone()),
             generation,
             cancel: cancel.clone(),
         });

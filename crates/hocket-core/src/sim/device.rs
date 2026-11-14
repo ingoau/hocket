@@ -272,7 +272,7 @@ impl SimDevice {
         for (t, s) in outbox {
             d.outbox.push((t.clone(), s));
             d.handle(Input::ScrobbleReached {
-                track_id: t,
+                track_id: crate::api::TrackRef::from(t),
                 started_at: s,
             });
         }
@@ -328,6 +328,9 @@ impl SimDevice {
     /// The listed stash, as track ids in order.
     pub fn stash_tracks(&self) -> Vec<TrackId> {
         crate::stash::track_ids(&self.stash)
+            .into_iter()
+            .map(|t| t.id)
+            .collect()
     }
 
     /// The entry id listed at `index`.
@@ -372,15 +375,23 @@ impl SimDevice {
     /// Track ids snoozed right now.
     pub fn snoozed_tracks(&self) -> Vec<TrackId> {
         crate::snooze::active_ids(&self.snoozes, self.now())
+            .into_iter()
+            .map(|t| t.id)
+            .collect()
     }
 
     /// What the actor does for a snooze: edit its copy, then hand the engine the whole set.
     pub fn edit_snooze(&mut self, track: &str, until: Option<EpochMs>, removed: bool) {
         let now = self.now();
         if removed {
-            crate::snooze::clear(&mut self.snoozes, track, now);
+            crate::snooze::clear(&mut self.snoozes, &crate::api::TrackRef::from(track), now);
         } else {
-            crate::snooze::set(&mut self.snoozes, track, until, now);
+            crate::snooze::set(
+                &mut self.snoozes,
+                &crate::api::TrackRef::from(track),
+                until,
+                now,
+            );
         }
         self.handle(Input::SnoozesChanged(self.snoozes.clone()));
     }
@@ -448,7 +459,7 @@ impl SimDevice {
                 self.note(format!(
                     "doc rev {} ({cause:?}) current={:?}",
                     document.revision,
-                    document.current.as_ref().map(|c| &c.track_id)
+                    document.current.as_ref().map(|c| &c.track)
                 ));
                 if self.owns() {
                     let key = document.current.as_ref().map(|c| c.key.clone());
@@ -457,7 +468,7 @@ impl SimDevice {
                         match document.current.clone() {
                             Some(item) => self.load(
                                 item.key,
-                                item.track_id,
+                                (item.track).id,
                                 start_position_ms,
                                 0,
                                 self.engine.now_session_ms(),
@@ -479,7 +490,7 @@ impl SimDevice {
                         if let Some(item) = self.engine.document().current.clone() {
                             self.load(
                                 item.key,
-                                item.track_id,
+                                (item.track).id,
                                 0,
                                 0,
                                 self.engine.now_session_ms(),
@@ -508,7 +519,7 @@ impl SimDevice {
                 ));
                 self.load(
                     key,
-                    track_id,
+                    (track_id).id,
                     position_ms,
                     played_ms,
                     started_at,
@@ -539,7 +550,7 @@ impl SimDevice {
                         self.engine
                     ));
                     self.effects.push(DeviceEffect::Scrobble {
-                        track_id,
+                        track_id: track_id.id,
                         started_at,
                     });
                 } else {
@@ -678,7 +689,7 @@ impl SimDevice {
         let p = &self.playback;
         let input = Input::LocalStamp {
             key: p.key.clone(),
-            track_id: p.track_id.clone(),
+            track_id: p.track_id.clone().map(crate::api::TrackRef::from),
             position: PositionStamp {
                 position_ms: p.position_ms,
                 taken_at: p.position_at,
@@ -714,7 +725,7 @@ impl SimDevice {
             self.scrobbles_reached.push((t.clone(), s));
             self.outbox.push((t.clone(), s));
             self.queued.push(Input::ScrobbleReached {
-                track_id: t,
+                track_id: crate::api::TrackRef::from(t),
                 started_at: s,
             });
             self.stamp();

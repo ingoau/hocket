@@ -41,8 +41,8 @@ use hocket_core::automix::analysis::Analyser;
 use hocket_core::automix::record::compact;
 use hocket_core::automix::store::fingerprint_of;
 use hocket_core::connect::wire::server_key;
-use hocket_core::subsonic::convert::track_from_child;
-use hocket_core::subsonic::{Search3Page, SubsonicApi};
+use hocket_core::provider::{NavidromeProvider, Provider, ResolvedStream};
+use hocket_core::subsonic::SubsonicApi;
 
 use crate::analysis::{AnalysisStore, PutOutcome};
 
@@ -309,7 +309,8 @@ pub struct PassStats {
 }
 
 pub struct Worker {
-    api: Arc<dyn SubsonicApi>,
+    /// The worker's account, behind the provider seam.
+    api: Arc<dyn Provider>,
     store: Arc<AnalysisStore>,
     /// The store's key for this server.
     server_key: String,
@@ -350,7 +351,7 @@ impl Worker {
             ..Default::default()
         });
         Worker {
-            api,
+            api: Arc::new(NavidromeProvider::new(api)),
             store,
             server_key: server_key(server_url),
             pause,
@@ -401,20 +402,18 @@ impl Worker {
         loop {
             let page = self
                 .api
-                .search3("", Search3Page::songs(PAGE_SIZE, offset))
+                .library_page(offset, PAGE_SIZE)
                 .await
-                .map_err(|e| anyhow::anyhow!("search3 at {offset}: {e}"))?;
-            let n = page.song.len() as u32;
-            out.extend(
-                page.song
-                    .iter()
-                    .filter(|c| !c.is_dir)
-                    .map(|c| track_from_child("", c)),
-            );
-            if n < PAGE_SIZE {
-                return Ok(out);
+                .map_err(|e| anyhow::anyhow!("library page at {offset}: {e}"))?;
+            out.extend(page.tracks.into_iter().map(|mut t| {
+                // The store keys records by server, not by account.
+                t.server_id = String::new();
+                t
+            }));
+            match page.next_offset {
+                Some(next) => offset = next,
+                None => return Ok(out),
             }
-            offset += n;
         }
     }
 
@@ -597,11 +596,10 @@ impl Worker {
         let mut analysed = 0;
         while !cancel.is_cancelled() {
             let Some(id) = self.priority.pop() else { break };
-            let song = match self.api.song(&id).await {
-                Ok(song) if !song.is_dir => song,
-                Ok(_) => {
-                    self.priority.mark_failed(&id);
-                    continue;
+            let song = match self.api.track(&id).await {
+                Ok(mut song) => {
+                    song.server_id = String::new();
+                    song
                 }
                 Err(
                     e @ (SubsonicError::NotFound(_)
@@ -619,7 +617,7 @@ impl Worker {
                     break;
                 }
             };
-            let track = track_from_child("", &song);
+            let track = song;
             if !self.analysable(&track) {
                 self.priority.mark_failed(&track.id);
                 continue;
@@ -690,9 +688,21 @@ impl Worker {
         track: &Track,
         path: &Path,
     ) -> Result<hocket_core::api::AnalysisRecord, OneError> {
-        let url = self.api.download_url(&track.id);
+        let url = self.api.download_url(&track.id).ok_or_else(|| {
+            OneError::Transport(anyhow::anyhow!("download: the account offers no files"))
+        })?;
+        let stream = ResolvedStream {
+            url,
+            headers: Default::default(),
+            expires_at: None,
+            container: track.suffix.clone(),
+            codec: None,
+            gain_db: None,
+            range_capable: true,
+            transcoded: false,
+        };
         self.api
-            .download_to_file(url, path)
+            .download_to_file(&stream, path)
             .await
             .map_err(|e| OneError::Transport(anyhow::anyhow!("download: {e}")))?;
         // The song's size was checked before; the server may have lied.

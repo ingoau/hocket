@@ -106,13 +106,16 @@ fn pick() -> impl Strategy<Value = Pick> {
 
 fn album(n: usize, tag: u64) -> QueueContext {
     QueueContext {
-        server_id: "srv".into(),
+        source: "srv".into(),
         kind: ContextKind::Album {
             id: format!("al{}", tag % 3),
         },
         label: "Album".into(),
         sort: SortOrder::Default,
-        tracks: (0..n).map(|i| format!("t{i}")).collect(),
+        tracks: (0..n)
+            .map(|i| format!("t{i}"))
+            .map(crate::api::TrackRef::from)
+            .collect(),
     }
 }
 
@@ -143,19 +146,25 @@ fn resolve(doc: &SessionDocument, p: &Pick, salt: usize) -> Option<QueueOp> {
             key,
             queued,
         } => QueueOp::PlayNext {
-            server_id: "srv".into(),
-            track_ids: new_tracks(*tracks, salt),
+            track_ids: (new_tracks(*tracks, salt))
+                .into_iter()
+                .map(crate::api::TrackRef::from)
+                .collect::<Vec<_>>(),
             keys: keys(key),
             queued: *queued,
         },
         Pick::AddToQueue { tracks, key } => QueueOp::AddToQueue {
-            server_id: "srv".into(),
-            track_ids: new_tracks(*tracks, salt),
+            track_ids: (new_tracks(*tracks, salt))
+                .into_iter()
+                .map(crate::api::TrackRef::from)
+                .collect::<Vec<_>>(),
             keys: keys(key),
         },
         Pick::PlayLater { tracks, key } => QueueOp::PlayLater {
-            server_id: "srv".into(),
-            track_ids: new_tracks(*tracks, salt),
+            track_ids: (new_tracks(*tracks, salt))
+                .into_iter()
+                .map(crate::api::TrackRef::from)
+                .collect::<Vec<_>>(),
             keys: keys(key),
         },
         Pick::Jump(i) => QueueOp::JumpToQueueItem {
@@ -187,7 +196,7 @@ fn resolve(doc: &SessionDocument, p: &Pick, salt: usize) -> Option<QueueOp> {
         Pick::AppendAutoplay(n) => QueueOp::AppendAutoplay {
             items: (0..*n)
                 .map(|i| AutoplayItem {
-                    track_id: format!("auto{salt}-{i}"),
+                    track: format!("auto{salt}-{i}").into(),
                     provider: AutoplayProvider::Random,
                     reason: "r".into(),
                     score: None,

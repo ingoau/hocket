@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{
     AlbumResumeEntry, ConnectionState, ConnectionTier, DeviceId, DeviceInfo, DeviceVolume, EpochMs,
     LibraryItemState, Ms, PositionStamp, QueueKey, SavedQueue, SessionDocument, Setting, Snooze,
-    StashEntry, TrackId, TransportLease, TransportState, UndoEntry,
+    StashEntry, TrackRef, TransportLease, TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
@@ -216,7 +216,7 @@ impl EngineConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownScrobble {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub started_at: EpochMs,
     pub device_id: DeviceId,
     /// Set on an entry that is *not* a scrobble: a shared play of this
@@ -292,7 +292,7 @@ pub enum Input {
     /// (from [`Engine::now_session_ms`] or a `TakeTransport`).
     LocalStamp {
         key: Option<QueueKey>,
-        track_id: Option<TrackId>,
+        track_id: Option<TrackRef>,
         position: PositionStamp,
         played_ms: Ms,
         started_at: EpochMs,
@@ -313,7 +313,7 @@ pub enum Input {
     /// Prime a track's first seconds on whichever device owns playback
     /// (this one when nobody else holds a live lease).
     PrimeRequest {
-        track_id: TrackId,
+        track_id: TrackRef,
     },
 
     // -- handoff -----------------------------------------------------------
@@ -339,7 +339,7 @@ pub enum Input {
 
     // -- scrobbling, LWW sets, undo ---------------------------------------
     ScrobbleReached {
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
     },
     SavedQueuesChanged(Vec<SavedQueue>),
@@ -382,7 +382,7 @@ pub enum Input {
     /// [`Output::AnalysisStore`] last said `true`). Answered with
     /// [`Output::AnalysisRecords`].
     FetchAnalysis {
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
     },
     /// Share records this device produced with the coordinator (dropped
     /// unless [`Output::AnalysisStore`] last said `true`).
@@ -412,7 +412,7 @@ pub struct ResumeOfferDraft {
     pub device_id: DeviceId,
     pub device_name: String,
     pub key: QueueKey,
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub position_ms: Ms,
     pub played_ms: Ms,
     pub started_at: EpochMs,
@@ -478,14 +478,14 @@ pub enum Output {
 
     PreBuffer {
         key: QueueKey,
-        track_id: TrackId,
+        track_id: TrackRef,
         position_ms: Ms,
     },
     DiscardPreBuffer,
     /// This device now owns transport and should play from here.
     TakeTransport {
         key: QueueKey,
-        track_id: TrackId,
+        track_id: TrackRef,
         position_ms: Ms,
         played_ms: Ms,
         started_at: EpochMs,
@@ -505,11 +505,11 @@ pub enum Output {
     TransportCommand(TransportCommand),
     /// Prime this track's first seconds into the stream cache here.
     Prime {
-        track_id: TrackId,
+        track_id: TrackRef,
     },
     /// Verdict on a `ScrobbleReached`.
     Scrobble {
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         allowed: bool,
     },
@@ -610,7 +610,7 @@ struct Remote {
 #[derive(Debug, Clone)]
 struct CurrentStamp {
     key: Option<QueueKey>,
-    track_id: Option<TrackId>,
+    track_id: Option<TrackRef>,
     /// Session clock.
     position: PositionStamp,
     played_ms: Ms,
@@ -625,7 +625,7 @@ struct CurrentStamp {
 #[derive(Debug, Clone)]
 struct Picker {
     key: QueueKey,
-    track_id: TrackId,
+    track_id: TrackRef,
     targets: Vec<(DeviceId, bool)>,
 }
 
@@ -639,7 +639,7 @@ struct PreBuffer {
 #[derive(Debug, Clone)]
 struct TakeInfo {
     key: QueueKey,
-    track_id: TrackId,
+    track_id: TrackRef,
     position_ms: Ms,
     played_ms: Ms,
     started_at: EpochMs,
@@ -648,7 +648,7 @@ struct TakeInfo {
 
 #[derive(Debug, Clone)]
 struct DeferredScrobble {
-    track_id: TrackId,
+    track_id: TrackRef,
     started_at: EpochMs,
     since: EpochMs,
     /// A shared play: waits for a room another holder can reach too, and
@@ -659,7 +659,7 @@ struct DeferredScrobble {
 /// An outstanding dedupe query.
 #[derive(Debug, Clone)]
 struct ScrobbleQuery {
-    track_id: TrackId,
+    track_id: TrackRef,
     started_at: EpochMs,
     /// When it was last sent (retries after [`SCROBBLE_QUERY_RETRY_MS`]).
     sent_at: EpochMs,
@@ -766,11 +766,11 @@ pub struct Engine {
     /// [`SCROBBLE_QUERY_RETRY_MS`] without an answer.
     scrobble_queries: BTreeMap<String, ScrobbleQuery>,
     /// Scrobbles decided locally while cut off; told to the room on rejoin.
-    unreported_scrobbles: Vec<(TrackId, EpochMs)>,
+    unreported_scrobbles: Vec<(TrackRef, EpochMs)>,
     /// Every `(track, startedAt)` this device knows was scrobbled by someone:
     /// seeds our own room's dedupe log when we host it (LAN leadership moves
     /// the room between devices; the log must move with the session).
-    known_scrobbled: Vec<(TrackId, EpochMs, DeviceId)>,
+    known_scrobbled: Vec<(TrackRef, EpochMs, DeviceId)>,
     /// `startedAt` of every play identity this device has seen another
     /// device hold (its stamps, a handoff either way, a resume). A play of
     /// ours with one of these is *shared*: another device may reach its
@@ -779,7 +779,7 @@ pub struct Engine {
     /// Shared plays whose verdict was still deferred when the state was
     /// persisted: `(track, startedAt, waiting since)`, until the outbox asks
     /// about them again.
-    restored_waits: Vec<(TrackId, EpochMs, EpochMs)>,
+    restored_waits: Vec<(TrackRef, EpochMs, EpochMs)>,
     saved_queues: Vec<SavedQueue>,
     settings: Vec<Setting>,
     stash: Vec<StashEntry>,
@@ -1057,7 +1057,7 @@ impl Engine {
     /// outbox asks about them again their wait resumes where it was.
     pub fn restore_known_scrobbled(&mut self, known: Vec<KnownScrobble>) {
         let me = self.cfg.device.id.clone();
-        let mut seed: Vec<(TrackId, EpochMs, DeviceId)> = vec![];
+        let mut seed: Vec<(TrackRef, EpochMs, DeviceId)> = vec![];
         for k in known {
             if let Some(since) = k.awaiting_since {
                 self.mark_shared(k.started_at);
@@ -1809,8 +1809,13 @@ impl Engine {
     /// likely our own reach coming back around: recording it under the
     /// peer's name would have us announce "the peer did it" and then get
     /// our own query answered "duplicate", and nobody would submit.
-    fn learn_scrobbled_from_peer(&mut self, track_id: &str, started_at: EpochMs, device_id: &str) {
-        let same = |t: &TrackId, s: EpochMs| t == track_id && (s - started_at).abs() < 1000.0;
+    fn learn_scrobbled_from_peer(
+        &mut self,
+        track_id: &TrackRef,
+        started_at: EpochMs,
+        device_id: &str,
+    ) {
+        let same = |t: &TrackRef, s: EpochMs| t == track_id && (s - started_at).abs() < 1000.0;
         let own_pending = self
             .deferred_scrobbles
             .iter()
@@ -1824,14 +1829,14 @@ impl Engine {
         }
     }
 
-    fn learn_scrobbled(&mut self, track_id: &str, started_at: EpochMs, device_id: &str) {
+    fn learn_scrobbled(&mut self, track_id: &TrackRef, started_at: EpochMs, device_id: &str) {
         if !self
             .known_scrobbled
             .iter()
             .any(|(t, s, _)| t == track_id && (s - started_at).abs() < 1000.0)
         {
             self.known_scrobbled
-                .push((track_id.to_string(), started_at, device_id.to_string()));
+                .push((track_id.clone(), started_at, device_id.to_string()));
             if self.known_scrobbled.len() > 500 {
                 self.known_scrobbled.remove(0);
             }
@@ -2740,7 +2745,7 @@ impl Engine {
                         .clone()
                         .filter(|c| Some(c.key.as_str()) == key.as_deref())
                     {
-                        self.learn_scrobbled_from_peer(&item.track_id, started_at, &device_id);
+                        self.learn_scrobbled_from_peer(&item.track, started_at, &device_id);
                     }
                 }
                 if let Some(r) = &mut self.resume {
@@ -3092,13 +3097,13 @@ impl Engine {
     /// grace.
     fn on_leader_claimed_scrobble(
         &mut self,
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         device_id: DeviceId,
     ) {
-        let same = |t: &TrackId, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
+        let same = |t: &TrackRef, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
         self.learn_scrobbled(&track_id, started_at, &device_id);
-        let mut ours: Vec<(TrackId, EpochMs)> = vec![];
+        let mut ours: Vec<(TrackRef, EpochMs)> = vec![];
         self.deferred_scrobbles.retain(|d| {
             let hit = same(&d.track_id, d.started_at);
             if hit {
@@ -4439,7 +4444,7 @@ impl Engine {
         };
         Some(TakeInfo {
             key: current.key.clone(),
-            track_id: current.track_id.clone(),
+            track_id: current.track.clone(),
             position_ms,
             played_ms,
             started_at: stamp.started_at,
@@ -4484,8 +4489,8 @@ impl Engine {
 
     // -- scrobbling -------------------------------------------------------------
 
-    fn on_scrobble_reached(&mut self, track_id: TrackId, started_at: EpochMs) {
-        let same = |t: &TrackId, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
+    fn on_scrobble_reached(&mut self, track_id: TrackRef, started_at: EpochMs) {
+        let same = |t: &TrackRef, s: EpochMs| t == &track_id && (s - started_at).abs() < 1000.0;
         let me = self.cfg.device.id.clone();
         // What we know, and what our own room judged for other devices (a
         // LAN leader that has since moved on to the coordinator still knows
@@ -4555,7 +4560,7 @@ impl Engine {
 
     fn query_scrobble(
         &mut self,
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         since: EpochMs,
         shared: bool,
@@ -4584,7 +4589,7 @@ impl Engine {
     /// Re-ask queries a lossy link swallowed. Same id: a late first answer
     /// settles it and the second is ignored.
     fn retry_scrobble_queries(&mut self, now: EpochMs) {
-        let due: Vec<(String, TrackId, EpochMs)> = self
+        let due: Vec<(String, TrackRef, EpochMs)> = self
             .scrobble_queries
             .iter()
             .filter(|(_, q)| now - q.sent_at >= SCROBBLE_QUERY_RETRY_MS)
@@ -5053,7 +5058,6 @@ mod tests {
 
     fn play_op() -> SessionOp {
         SessionOp::PlayTracks {
-            server_id: "srv".into(),
             track_ids: vec!["t1".into(), "t2".into(), "t3".into()],
             start_index: 0,
             label: "sel".into(),
@@ -5084,7 +5088,7 @@ mod tests {
             }
         ));
         assert_eq!(e.document().revision, 1);
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t1");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t1");
         assert_eq!(e.room().revision(), 1);
         assert!(e.pending.is_empty());
         assert!(wire_outs(&outs).is_empty());
@@ -5093,7 +5097,7 @@ mod tests {
             op: SessionOp::Next,
         });
         assert!(outs.iter().any(|o| matches!(o, Output::ReplicaChanged(_))));
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
     }
 
     #[test]
@@ -5642,7 +5646,7 @@ mod tests {
             "an identical queue must not be filed: {outs:?}"
         );
         assert_eq!(e.document().session_id, "sid-c");
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t1");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t1");
     }
 
     #[test]
@@ -5651,7 +5655,7 @@ mod tests {
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 2;
         room_doc.context = Some(crate::api::QueueContext {
-            server_id: "srv".into(),
+            source: "srv".into(),
             kind: crate::api::ContextKind::AdHoc { label: "x".into() },
             label: "x".into(),
             sort: Default::default(),
@@ -5659,7 +5663,7 @@ mod tests {
         });
         room_doc.current = Some(crate::api::QueueItem {
             key: "k1".into(),
-            track_id: "t1".into(),
+            track: "t1".into(),
             source: crate::api::QueueSource::Context { index: 0 },
             unavailable: false,
             added: false,
@@ -5669,7 +5673,7 @@ mod tests {
         room_doc.upcoming = vec![
             crate::api::QueueItem {
                 key: "k2".into(),
-                track_id: "t2".into(),
+                track: "t2".into(),
                 source: crate::api::QueueSource::Context { index: 1 },
                 unavailable: false,
                 added: false,
@@ -5678,7 +5682,7 @@ mod tests {
             },
             crate::api::QueueItem {
                 key: "k3".into(),
-                track_id: "t3".into(),
+                track: "t3".into(),
                 source: crate::api::QueueSource::Context { index: 2 },
                 unavailable: false,
                 added: false,
@@ -5701,7 +5705,7 @@ mod tests {
             op: SessionOp::Next,
         });
         assert_eq!(e.unsynced.len(), 2);
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t3");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t3");
         // reconnect: room still at revision 2 → replay
         clock.0.store(100_000, Ordering::SeqCst);
         e.handle(Input::Tick);
@@ -5747,7 +5751,7 @@ mod tests {
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t3");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t3");
     }
 
     #[test]
@@ -5767,11 +5771,11 @@ mod tests {
                 position_ms: 0,
             }),
         });
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t1");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t1");
         e.handle(Input::LocalOp {
             op: SessionOp::Next,
         });
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
         assert_eq!(e.pending.len(), 1);
         // b's next commits at revision 3 before ours is answered
         let outs = e.handle(Input::WireIn {
@@ -5794,7 +5798,7 @@ mod tests {
         )));
         assert!(e.pending.is_empty());
         // one skip, not two
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
         assert_eq!(e.document().revision, 3);
         // the late reject for ours is a no-op
         let outs = e.handle(Input::WireIn {
@@ -5820,8 +5824,10 @@ mod tests {
             peer: "up".into(),
             msg: WireMessage::new(Msg::OpCommitted {
                 op: SessionOp::PlayTracks {
-                    server_id: "srv".into(),
-                    track_ids: (1..=5).map(|i| format!("t{i}")).collect(),
+                    track_ids: (1..=5)
+                        .map(|i| format!("t{i}"))
+                        .map(crate::api::TrackRef::from)
+                        .collect(),
                     start_index: 0,
                     label: "sel".into(),
                     shuffle: false,
@@ -5841,7 +5847,8 @@ mod tests {
         e.document()
             .upcoming
             .iter()
-            .map(|i| i.track_id.clone())
+            .map(|i| i.track.clone())
+            .map(|t| t.id)
             .collect()
     }
 
@@ -6083,7 +6090,7 @@ mod tests {
         };
         // The playing device's track ends first: what we removed is now current.
         commit_from_b(&mut e, SessionOp::Next, 3);
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
         let outs = reject(&mut e, op_id, 3);
         assert!(
             wire_outs(&outs)
@@ -6091,7 +6098,7 @@ mod tests {
                 .all(|(_, m)| !matches!(m, Msg::Op { .. })),
             "not replayed"
         );
-        assert_eq!(e.document().current.as_ref().unwrap().track_id, "t2");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
     }
 
     #[test]
@@ -6880,7 +6887,7 @@ mod tests {
         room_doc.revision = 1;
         room_doc.current = Some(crate::api::QueueItem {
             key: "k".into(),
-            track_id: "t".into(),
+            track: "t".into(),
             source: crate::api::QueueSource::Inserted,
             unavailable: false,
             added: false,
@@ -6972,7 +6979,7 @@ mod tests {
         room_doc.revision = 1;
         room_doc.current = Some(crate::api::QueueItem {
             key: "k".into(),
-            track_id: "t".into(),
+            track: "t".into(),
             source: crate::api::QueueSource::Inserted,
             unavailable: false,
             added: false,
@@ -7177,7 +7184,7 @@ mod tests {
         room_doc.revision = 1;
         room_doc.current = Some(crate::api::QueueItem {
             key: "k".into(),
-            track_id: "t".into(),
+            track: "t".into(),
             source: crate::api::QueueSource::Inserted,
             unavailable: false,
             added: false,
@@ -8326,7 +8333,7 @@ mod tests {
         let started_at = 5_000.0;
         // we reached the play; our query is out, the verdict not back yet
         let outs = e.handle(Input::ScrobbleReached {
-            track_id: current.track_id.clone(),
+            track_id: current.track.clone(),
             started_at,
         });
         assert!(wire_outs(&outs)
@@ -8359,7 +8366,7 @@ mod tests {
         assert!(
             !e.known_scrobbled()
                 .iter()
-                .any(|k| k.track_id == current.track_id && k.device_id == "b"),
+                .any(|k| k.track_id == current.track && k.device_id == "b"),
             "not credited to b"
         );
         // with nothing of ours pending, the flag is knowledge as before
@@ -8383,7 +8390,7 @@ mod tests {
         assert!(other
             .known_scrobbled()
             .iter()
-            .any(|k| k.track_id == current.track_id && k.device_id == "b"));
+            .any(|k| k.track_id == current.track && k.device_id == "b"));
     }
 
     #[test]
@@ -8722,7 +8729,7 @@ mod tests {
         room_doc.revision = 1;
         room_doc.current = Some(crate::api::QueueItem {
             key: "k".into(),
-            track_id: "t".into(),
+            track: "t".into(),
             source: crate::api::QueueSource::Inserted,
             unavailable: false,
             added: false,
@@ -8984,14 +8991,6 @@ mod tests {
         assert_eq!(verdicts, vec![true]);
     }
 
-    #[test]
-    fn old_known_scrobble_rows_still_load() {
-        let k: KnownScrobble =
-            serde_json::from_str(r#"{"trackId":"t","startedAt":1.0,"deviceId":"d"}"#).unwrap();
-        assert_eq!(k.awaiting_since, None);
-        let json = serde_json::to_string(&k).unwrap();
-        assert!(!json.contains("awaitingSince"), "{json}");
-    }
     // -- keepalive cadence ------------------------------------------------------
 
     fn tick_at(e: &mut Engine, clock: &TestClock, t: u64) -> Vec<Output> {

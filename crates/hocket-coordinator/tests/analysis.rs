@@ -95,6 +95,8 @@ struct Host {
     transport: WsTransport,
     ids: Arc<PeerIds>,
     outputs: Vec<Output>,
+    /// The scope's account: the source its track references name.
+    account: String,
 }
 
 impl Host {
@@ -112,6 +114,7 @@ impl Host {
             transport: WsTransport,
             ids: Arc::new(PeerIds::default()),
             outputs: vec![],
+            account: hocket_core::connect::wire::account_id_for_scope(&scope),
         }
     }
 
@@ -185,7 +188,10 @@ impl Host {
     async fn fetch(&mut self, ids: &[&str]) -> Vec<AnalysisEntry> {
         self.outputs.clear();
         self.handle(Input::FetchAnalysis {
-            track_ids: ids.iter().map(|s| s.to_string()).collect(),
+            track_ids: ids
+                .iter()
+                .map(|s| hocket_core::api::TrackRef::new(self.account.clone(), *s))
+                .collect(),
         })
         .await;
         self.run(500).await;
@@ -200,11 +206,12 @@ impl Host {
     }
 
     async fn upload(&mut self, records: Vec<(&str, AnalysisRecord)>) {
+        let account = self.account.clone();
         self.handle(Input::UploadAnalysis {
             records: records
                 .into_iter()
                 .map(|(id, record)| AnalysisEntry {
-                    track_id: id.into(),
+                    track_id: hocket_core::api::TrackRef::new(account.clone(), id),
                     record,
                 })
                 .collect(),

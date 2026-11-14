@@ -14,7 +14,7 @@ fn ids(v: &[&str]) -> Vec<String> {
 
 async fn snoozed(t: &TestCore) -> Vec<String> {
     match t.query(Query::Snoozes).await {
-        QueryResult::SnoozeItems(items) => items.into_iter().map(|i| i.track_id).collect(),
+        QueryResult::SnoozeItems(items) => items.into_iter().map(|i| i.track_ref.id).collect(),
         other => panic!("{other:?}"),
     }
 }
@@ -29,11 +29,14 @@ fn queue_ids(q: &QueueView) -> Vec<String> {
 
 fn context(server: &str, kind: ContextKind, tracks: &[&str]) -> QueueContext {
     QueueContext {
-        server_id: server.into(),
+        source: server.into(),
         kind,
         label: "queue".into(),
         sort: SortOrder::Default,
-        tracks: ids(tracks),
+        tracks: (ids(tracks))
+            .into_iter()
+            .map(hocket_core::api::TrackRef::from)
+            .collect::<Vec<_>>(),
     }
 }
 
@@ -62,7 +65,7 @@ async fn snooze_undo_and_each_queue() {
         QueryResult::SnoozeItems(items) => items,
         other => panic!("{other:?}"),
     };
-    assert_eq!(items[0].track_id, "b");
+    assert_eq!(items[0].track_ref.id, "b");
     let week = 7.0 * 24.0 * 3600.0 * 1000.0;
     let until = items[0].until.expect("a week ends");
     assert!((until - (t.clock.now_ms() + week)).abs() < 1.0);
@@ -389,7 +392,7 @@ async fn a_restored_playlist_queue_still_leaves_snoozed_songs_out() {
         .unwrap()
         .history
         .iter()
-        .map(|i| i.track_id.clone())
+        .map(|i| i.track.id.clone())
         .collect::<Vec<_>>();
     played.extend(before.iter().cloned());
     assert_eq!(made, played);

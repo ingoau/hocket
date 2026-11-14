@@ -30,7 +30,8 @@ impl Actor {
     /// it; otherwise the legacy cached file or server stream URL. With
     /// ReplayGain folded into `gain_db`.
     pub(crate) fn media_source_for(&self, key: &str, track: &Track) -> Option<MediaSource> {
-        let api = self.api()?;
+        // The track's own account resolves it (a queue mixes accounts).
+        let provider = self.provider_for(&track.server_id)?;
         let reader = self
             .stream_reader
             .as_ref()
@@ -40,10 +41,10 @@ impl Actor {
             let cannot_play =
                 crate::downloads::receivers::cannot_play(r, &self.renderer_formats, track);
             self.downloads
-                .resolve_remote(api.as_ref(), key, track, cannot_play)
+                .resolve_remote(provider.as_ref(), key, track, cannot_play)
         } else {
             self.downloads
-                .resolve_with(api.as_ref(), key, track, reader)
+                .resolve_with(provider.as_ref(), key, track, reader)
         };
         let mut source = match resolved {
             Ok(s) => s,
@@ -104,7 +105,7 @@ impl Actor {
             .filter(|i| {
                 !offline
                     || self
-                        .track_or_bare(&i.track_id)
+                        .track_or_bare(&i.track)
                         .is_some_and(|t| self.playable_offline(&t))
             })
             .take(n)
@@ -123,11 +124,9 @@ impl Actor {
     /// [`Self::with_mix`]).
     fn next_source(&self, upcoming: &[QueueItem], locked: Option<Ms>) -> Option<MediaSource> {
         let item = upcoming.first()?;
-        let track = self.track_or_bare(&item.track_id)?;
+        let track = self.track_or_bare(&item.track)?;
         let source = self.media_source_for(&item.key, &track)?;
-        let following = upcoming
-            .get(1)
-            .and_then(|i| self.track_or_bare(&i.track_id));
+        let following = upcoming.get(1).and_then(|i| self.track_or_bare(&i.track));
         Some(self.with_mix(source, &track, following.as_ref(), locked))
     }
 
@@ -240,7 +239,7 @@ impl Actor {
         // index (`ctx-N`), and an edit ahead of one hands its key to another
         // track: the preload stays only if the track is the same too (#62).
         let same_track = match (next, &self.playback.next) {
-            (Some(i), Some(n)) => n.track.id == i.track_id,
+            (Some(i), Some(n)) => names(&n.track, &i.track),
             _ => false,
         };
         let locked = self.locked_tail_start();
@@ -291,9 +290,12 @@ impl Actor {
                 ids.push(tid);
             }
         }
-        let mut all: Vec<String> = vec![];
+        let mut all: Vec<TrackRef> = vec![];
         for (server_id, ids) in by_server {
-            all.extend(ids.iter().cloned());
+            all.extend(
+                ids.iter()
+                    .map(|id| TrackRef::new(server_id.clone(), id.clone())),
+            );
             self.emit(Event::LibraryChanged {
                 server_id,
                 tables: vec!["tracks".into()],
@@ -308,7 +310,7 @@ impl Actor {
             d.current
                 .iter()
                 .chain(d.upcoming.iter())
-                .any(|i| all.contains(&i.track_id))
+                .any(|i| all.contains(&i.track))
                 || d.context
                     .as_ref()
                     .is_some_and(|c| c.tracks.iter().any(|t| all.contains(t)))
@@ -329,7 +331,7 @@ impl Actor {
         carried: Option<(Ms, EpochMs, bool)>,
     ) {
         self.playback.pending_load = None;
-        let Some(track) = self.track_or_bare(&item.track_id) else {
+        let Some(track) = self.track_or_bare(&item.track) else {
             return;
         };
         if self.skip_if_unavailable_offline(item, &track) {
@@ -353,7 +355,7 @@ impl Actor {
                 .playback
                 .next
                 .as_ref()
-                .is_some_and(|n| n.track.id == item.track_id);
+                .is_some_and(|n| names(&n.track, &item.track));
         // Gapless (or at an AutoMix handover): the backend already moved on
         // to this track.
         let transitioned = is_next && self.playback.awaiting_transition;
@@ -431,7 +433,7 @@ impl Actor {
             source.mix_in = None;
             source.mix_out_ms = upcoming
                 .first()
-                .and_then(|i| self.track_or_bare(&i.track_id))
+                .and_then(|i| self.track_or_bare(&i.track))
                 .and_then(|next| self.mix_out_for(&track, Some(&next)));
             self.playback.doc_key = Some(item.key.clone());
             self.playback.backend_key = Some(item.key.clone());
@@ -502,7 +504,7 @@ impl Actor {
                 }
             }
         }
-        let track = self.track_or_bare(&item.track_id);
+        let track = self.track_or_bare(&item.track);
         let position_ms = match &track {
             Some(t) if t.duration_ms > 0 => position_ms.min(t.duration_ms),
             _ => position_ms,
@@ -722,7 +724,7 @@ impl Actor {
     pub(crate) fn take_transport(
         &mut self,
         key: QueueKey,
-        track_id: TrackId,
+        track_id: TrackRef,
         position_ms: Ms,
         played_ms: Ms,
         started_at: EpochMs,
@@ -741,7 +743,7 @@ impl Actor {
             })
             .unwrap_or(QueueItem {
                 key: key.clone(),
-                track_id: track_id.clone(),
+                track: track_id.clone(),
                 source: QueueSource::Inserted,
                 unavailable: false,
                 added: false,
@@ -758,7 +760,7 @@ impl Actor {
         self.clear_player_notice();
     }
 
-    pub(crate) fn pre_buffer(&mut self, key: QueueKey, track_id: TrackId, position_ms: Ms) {
+    pub(crate) fn pre_buffer(&mut self, key: QueueKey, track_id: TrackRef, position_ms: Ms) {
         let Some(track) = self.track_or_bare(&track_id) else {
             return;
         };
@@ -1221,7 +1223,7 @@ impl Actor {
         let p = &self.playback;
         let input = Input::LocalStamp {
             key: p.doc_key.clone(),
-            track_id: p.track_id().map(str::to_string),
+            track_id: p.track_ref(),
             position: PositionStamp {
                 position_ms: p.position_now(now),
                 taken_at: now,
@@ -1646,7 +1648,9 @@ impl Actor {
                     {
                         continue;
                     }
-                    let Some(server_id) = self.server_id() else {
+                    // The playing track's own account hears about it.
+                    let Some(server_id) = self.playback.track.as_ref().map(|t| t.server_id.clone())
+                    else {
                         continue;
                     };
                     if let Err(e) = self
@@ -1666,9 +1670,11 @@ impl Actor {
                     // across a handoff) before submitting.
                     self.playback.scrobbled = true;
                     let started_at = self.playback.started_at;
-                    let Some(server_id) = self.server_id() else {
+                    let Some(server_id) = self.playback.track.as_ref().map(|t| t.server_id.clone())
+                    else {
                         continue;
                     };
+                    let track = TrackRef::new(server_id.clone(), track_id.clone());
                     // The play's ORIGINAL start (its identity, on the session
                     // clock), not when this device resumed it: every device
                     // that ever submits this play sends the same Subsonic
@@ -1688,11 +1694,11 @@ impl Actor {
                         played_ms,
                     };
                     self.pending_submits
-                        .insert((track_id.clone(), started_at.to_bits()), pending.clone());
+                        .insert((track.clone(), started_at.to_bits()), pending.clone());
                     if self.engine.is_none() {
                         // No session to ask (between servers): nobody else
                         // could have scrobbled this play.
-                        self.on_scrobble_verdict(track_id, started_at, true);
+                        self.on_scrobble_verdict(track, started_at, true);
                         continue;
                     }
                     // Durable before the engine is asked (its verdict may come
@@ -1700,7 +1706,7 @@ impl Actor {
                     self.store_pending_scrobble(&pending);
                     self.stamp();
                     self.engine_input(Input::ScrobbleReached {
-                        track_id,
+                        track_id: track,
                         started_at,
                     });
                     // An unanswered ask is a wait the engine persists with its
@@ -1721,7 +1727,7 @@ impl Actor {
         let now = self.now();
         let r = self.db.with_tx(|tx| {
             let mut list = load_pending_scrobbles(tx, &key)?;
-            list.retain(|p| !p.is(&pending.track_id, pending.started_at));
+            list.retain(|p| !p.is(&pending.track(), pending.started_at));
             list.push(pending.clone());
             save_pending_scrobbles(tx, &key, &list, now)
         });
@@ -1748,7 +1754,7 @@ impl Actor {
             }
         };
         for p in list {
-            let (track_id, started_at) = (p.track_id.clone(), p.started_at);
+            let (track_id, started_at) = (p.track(), p.started_at);
             self.pending_submits
                 .insert((track_id.clone(), started_at.to_bits()), p);
             self.engine_input(Input::ScrobbleReached {
@@ -1769,7 +1775,7 @@ impl Actor {
 
     pub(crate) fn on_scrobble_verdict(
         &mut self,
-        track_id: TrackId,
+        track: TrackRef,
         started_at: EpochMs,
         allowed: bool,
     ) {
@@ -1777,13 +1783,13 @@ impl Actor {
         self.mark_doc_dirty();
         let pending = self
             .pending_submits
-            .remove(&(track_id.clone(), started_at.to_bits()));
+            .remove(&(track.clone(), started_at.to_bits()));
+        let track_id = track.id.clone();
         let (server_id, played_at, played_ms) = match pending {
             Some(p) => (p.server_id, p.played_at, p.played_ms),
             None => {
-                let Some(server_id) = self.server_id() else {
-                    return;
-                };
+                // The play's own account (a queue mixes accounts).
+                let server_id = track.source.clone();
                 let played_ms = self.scrobbler.played_ms();
                 let played_at = if started_at > 0.0 {
                     started_at
@@ -1824,7 +1830,7 @@ impl Actor {
                 };
                 let mut list = load_pending_scrobbles(tx, key)?;
                 let before = list.len();
-                list.retain(|p| !p.is(&track_id, started_at));
+                list.retain(|p| !p.is(&track, started_at));
                 if list.len() != before {
                     save_pending_scrobbles(tx, key, &list, now)?;
                 }
@@ -1847,17 +1853,14 @@ impl Actor {
     #[cfg(feature = "sim")]
     pub(crate) fn scrobble_command(
         &mut self,
-        track_id: TrackId,
+        track: TrackRef,
         played_at: EpochMs,
         submission: bool,
     ) {
-        let Some(server_id) = self.server_id() else {
-            return;
-        };
         let r = self.outbox.enqueue(
-            &server_id,
+            &track.source,
             crate::outbox::Mutation::Scrobble {
-                track_id,
+                track_id: track.id,
                 played_at,
                 submission,
                 history_id: None,
@@ -1922,10 +1925,10 @@ impl Actor {
             Some(actions),
         );
         if let Some(meta) = state.metadata.as_mut() {
-            if let Some(id) = meta.track_id.as_deref() {
+            if let Some(current) = self.playback.track_ref() {
                 meta.stashed = crate::stash::live(&self.stash)
                     .iter()
-                    .any(|entry| entry.track_id == id);
+                    .any(|entry| entry.track == current);
             }
         }
         state
@@ -1971,7 +1974,7 @@ impl Actor {
                 return path.clone();
             }
         }
-        let server_id = self.server_id()?;
+        let server_id = queue.current.as_ref()?.track.server_id.clone();
         match self.caches.artwork_cached(&server_id, &cover, size) {
             Ok(Some(p)) => {
                 let path = p.to_string_lossy().into_owned();
@@ -1979,17 +1982,19 @@ impl Actor {
                 Some(path)
             }
             _ => {
-                self.fetch_artwork(cover, size);
+                self.fetch_artwork(&server_id, cover, size);
                 None
             }
         }
     }
 
-    pub(crate) fn fetch_artwork(&mut self, id: String, size: u32) {
+    pub(crate) fn fetch_artwork(&mut self, source: &str, id: String, size: u32) {
         if self.media_art_pending.as_ref() == Some(&(id.clone(), size)) {
             return;
         }
-        let Some(api) = self.api() else { return };
+        let Some(api) = self.provider_for(source) else {
+            return;
+        };
         self.media_art_pending = Some((id.clone(), size));
         let caches = self.caches.clone();
         let tx = self.tx.clone();
@@ -2026,7 +2031,7 @@ impl Actor {
             return;
         };
         let size = self.media_art_size();
-        let Some(server_id) = self.server_id() else {
+        let Some(server_id) = self.playback.track.as_ref().map(|t| t.server_id.clone()) else {
             return;
         };
         if matches!(
@@ -2035,7 +2040,7 @@ impl Actor {
         ) {
             return;
         }
-        self.fetch_artwork(cover, size);
+        self.fetch_artwork(&server_id, cover, size);
     }
 
     pub(crate) fn media_session_command(&mut self, action: MediaSessionAction, value: Option<f64>) {
@@ -2044,22 +2049,21 @@ impl Actor {
         let state = self.media_session_state(&queue, &transport);
         // Stash toggles: a song already in the stash comes out. `command_for`
         // only knows the track, not the entries listing it, so this lives here.
-        if action == MediaSessionAction::Stash {
-            if let Some(meta) = state.metadata.as_ref().filter(|m| m.stashed) {
-                let Some(id) = meta.track_id.as_deref() else {
-                    return;
-                };
-                let entry_ids: Vec<String> = self
-                    .stash
-                    .iter()
-                    .filter(|e| !e.removed && e.track_id == id)
-                    .map(|e| e.entry_id.clone())
-                    .collect();
-                if !entry_ids.is_empty() {
-                    self.handle_command(Command::StashRemove { entry_ids });
-                }
+        if action == MediaSessionAction::Stash && state.metadata.as_ref().is_some_and(|m| m.stashed)
+        {
+            let Some(current) = self.playback.track_ref() else {
                 return;
+            };
+            let entry_ids: Vec<String> = self
+                .stash
+                .iter()
+                .filter(|e| !e.removed && e.track == current)
+                .map(|e| e.entry_id.clone())
+                .collect();
+            if !entry_ids.is_empty() {
+                self.handle_command(Command::StashRemove { entry_ids });
             }
+            return;
         }
         if let Some(cmd) = command_for(action, value, &state) {
             self.handle_command(cmd);
@@ -2135,4 +2139,9 @@ fn save_pending_scrobbles(
         rusqlite::params![key, json, now],
     )?;
     Ok(())
+}
+
+/// Whether a summary is the track a reference names.
+pub(crate) fn names(summary: &TrackSummary, track: &TrackRef) -> bool {
+    summary.id == track.id && summary.server_id == track.source
 }

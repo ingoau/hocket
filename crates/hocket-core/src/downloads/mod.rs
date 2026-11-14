@@ -62,8 +62,9 @@ use crate::api::{
 };
 use crate::db::{Db, DbError, DbResult};
 use crate::jobs::{JobContext, JobError, JobResult, JobRunner, JobSpec, RetryAction};
+use crate::provider::{Provider, ProviderSet, ResolvedStream, StreamRequest};
 use crate::subsonic::client::StreamOptions;
-use crate::subsonic::{SubsonicApi, SubsonicError};
+use crate::subsonic::SubsonicError;
 use crate::util::Clock;
 
 /// Free-space source, injected so tests can simulate a full disk.
@@ -991,7 +992,7 @@ impl Downloads {
     /// a track never write the same file concurrently.
     pub async fn fetch_track(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         server_id: &str,
         track_id: &str,
         transcode: bool,
@@ -999,7 +1000,7 @@ impl Downloads {
         let track = self
             .inner
             .db
-            .track(track_id)?
+            .track_ref(&api::TrackRef::new(server_id, track_id))?
             .ok_or_else(|| DownloadError::UnknownTrack(track_id.into()))?;
         let profile = if transcode {
             self.profile_for_downloads()
@@ -1015,20 +1016,37 @@ impl Downloads {
                 return Err(DownloadError::OutOfSpace { needed, free });
             }
         }
-        let (url, suffix) = match &profile {
-            Some(p) => (
-                api.stream_url(
-                    track_id,
-                    &StreamOptions {
-                        format: p.format.clone(),
-                        max_bit_rate: p.max_bit_rate,
-                        ..Default::default()
-                    },
-                ),
-                p.format.clone().or(track.suffix.clone()),
-            ),
-            None => (api.download_url(track_id), track.suffix.clone()),
+        // The original file when the provider offers one, else its stream
+        // (in the profile, when transcoding).
+        let original = profile
+            .is_none()
+            .then(|| provider.download_url(track_id))
+            .flatten();
+        let stream = match original {
+            Some(url) => ResolvedStream {
+                url,
+                headers: HashMap::new(),
+                expires_at: None,
+                container: track.suffix.clone(),
+                codec: None,
+                gain_db: None,
+                range_capable: true,
+                transcoded: false,
+            },
+            None => {
+                provider
+                    .resolve_stream(
+                        track_id,
+                        &StreamRequest {
+                            profile: profile.clone(),
+                            offset_s: None,
+                            suffix: track.suffix.clone(),
+                        },
+                    )
+                    .await?
+            }
         };
+        let suffix = stream.container.clone().or(track.suffix.clone());
         let dest = self.download_path(server_id, track_id, suffix.as_deref());
         debug_assert!(dest.starts_with(self.downloads_dir(server_id)));
         loop {
@@ -1061,7 +1079,7 @@ impl Downloads {
         let (dest, suffix, result) = match adopted {
             Some((path, suffix, out)) => (path, suffix, Ok(out)),
             None => {
-                let result = api.download_to_file(url, &dest).await;
+                let result = provider.download_to_file(&stream, &dest).await;
                 (dest, suffix, result)
             }
         };
@@ -1595,11 +1613,11 @@ impl Downloads {
     /// uses [`resolve_with`](Self::resolve_with) and a proxy.
     pub fn resolve(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         key: &str,
         track: &api::Track,
     ) -> DbResult<MediaSource> {
-        self.resolve_with(api, key, track, None)
+        self.resolve_with(provider, key, track, None)
     }
 
     /// Resolve how to play a track: a completed download is a `file://`
@@ -1609,7 +1627,7 @@ impl Downloads {
     /// to a cached `file://` or the server's stream URL.
     pub fn resolve_with(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         key: &str,
         track: &api::Track,
         proxy: Option<&dyn StreamMinter>,
@@ -1699,12 +1717,12 @@ impl Downloads {
                 mix_out_ms: None,
             });
         }
-        let opts = stream_options(profile.as_ref());
+        let stream = resolve_now(provider, &track.id, profile.as_ref(), track.suffix.clone())?;
         Ok(MediaSource {
             key: key.into(),
             track: summary,
-            url: api.stream_url(&track.id, &opts).to_string(),
-            headers: HashMap::new(),
+            url: stream.url.to_string(),
+            headers: stream.headers,
             mime_type: mime,
             gain_db,
             transcoded,
@@ -1724,7 +1742,7 @@ impl Downloads {
     /// otherwise.
     pub fn resolve_remote(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         key: &str,
         track: &api::Track,
         cannot_play: bool,
@@ -1745,8 +1763,8 @@ impl Downloads {
         Ok(MediaSource {
             key: key.into(),
             track: crate::subsonic::convert::summary_of(track),
-            url: api
-                .stream_url(&track.id, &stream_options(profile.as_ref()))
+            url: resolve_now(provider, &track.id, profile.as_ref(), track.suffix.clone())?
+                .url
                 .to_string(),
             headers: HashMap::new(),
             mime_type,
@@ -1756,7 +1774,8 @@ impl Downloads {
             artwork_url: track
                 .cover_art
                 .as_deref()
-                .map(|id| api.cover_art_url(id, Some(REMOTE_ARTWORK_SIZE)).to_string()),
+                .and_then(|id| provider.cover_art_url(id, Some(REMOTE_ARTWORK_SIZE)))
+                .map(|u| u.to_string()),
             mix_in: None,
             mix_out_ms: None,
         })
@@ -1933,6 +1952,30 @@ fn default_transcode_format(platform: Platform) -> &'static str {
     }
 }
 
+/// A provider's stream for a track, resolved on the spot. Navidrome's is
+/// ready at once (a URL with credentials); a provider that must ask its
+/// service first is played through the stream reader, which awaits it.
+fn resolve_now(
+    provider: &dyn Provider,
+    id: &str,
+    profile: Option<&TranscodingProfile>,
+    suffix: Option<String>,
+) -> DbResult<ResolvedStream> {
+    use futures::FutureExt;
+    let req = StreamRequest {
+        profile: profile.cloned(),
+        offset_s: None,
+        suffix,
+    };
+    match provider.resolve_stream(id, &req).now_or_never() {
+        Some(Ok(s)) => Ok(s),
+        Some(Err(e)) => Err(DbError::Io(std::io::Error::other(e.to_string()))),
+        None => Err(DbError::Io(std::io::Error::other(
+            "this provider's streams play through the stream reader",
+        ))),
+    }
+}
+
 fn mime_for(format: &str) -> String {
     match format.to_ascii_lowercase().as_str() {
         "mp3" => "audio/mpeg",
@@ -2040,22 +2083,32 @@ pub fn file_url(p: &Path) -> String {
 /// silently unpinning.
 pub struct DownloadRunner {
     downloads: Downloads,
-    api: Arc<dyn SubsonicApi>,
+    providers: ProviderSet,
 }
 
 impl DownloadRunner {
-    pub fn new(downloads: Downloads, api: Arc<dyn SubsonicApi>) -> Self {
-        DownloadRunner { downloads, api }
+    pub fn new(downloads: Downloads, providers: ProviderSet) -> Self {
+        DownloadRunner {
+            downloads,
+            providers,
+        }
     }
 }
 
 impl JobRunner for DownloadRunner {
     fn run(&self, ctx: JobContext) -> BoxFuture<'static, JobResult<()>> {
         let dl = self.downloads.clone();
-        let api = self.api.clone();
+        let providers = self.providers.clone();
         Box::pin(async move {
             let payload: DownloadJobPayload = serde_json::from_str(&ctx.payload)
                 .map_err(|e| JobError::Failed(format!("bad payload: {e}")))?;
+            // The pin's account: its provider fetches every track of it.
+            let Some(provider) = providers.for_source(&payload.server_id).cloned() else {
+                return Err(JobError::Failed(format!(
+                    "account {} is not signed in",
+                    payload.server_id
+                )));
+            };
             let items = ctx.pending_items()?;
             let total = items.len() as u32;
             let mut done = 0u32;
@@ -2068,7 +2121,7 @@ impl JobRunner for DownloadRunner {
                 }
                 match dl
                     .fetch_track(
-                        api.as_ref(),
+                        provider.as_ref(),
                         &payload.server_id,
                         &it.item,
                         payload.transcode,
@@ -2264,7 +2317,7 @@ mod tests {
             2,
             Arc::new(DownloadRunner::new(
                 f.dl.clone(),
-                Arc::new(f.server.clone()),
+                crate::provider::ProviderSet::single(Arc::new(f.server.provider())),
             )),
         );
         let id = q.submit(spec).unwrap();
@@ -2341,7 +2394,7 @@ mod tests {
         assert_eq!(peak, Some(0.7));
         // The resolved source levels with the measured gain.
         let track = f.db.track("u1").unwrap().unwrap();
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert_eq!(s.gain_db, -7.5);
     }
 
@@ -2413,7 +2466,7 @@ mod tests {
         assert_eq!(pinned, 0);
         // The resolved source levels with the measured gain.
         let track = f.db.track("u2").unwrap().unwrap();
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert_eq!(s.gain_db, -6.0);
     }
 
@@ -2589,7 +2642,7 @@ mod tests {
             1,
             Arc::new(DownloadRunner::new(
                 f.dl.clone(),
-                Arc::new(f.server.clone()),
+                crate::provider::ProviderSet::single(Arc::new(f.server.provider())),
             )),
         );
         let id = q.submit(spec).unwrap();
@@ -2865,11 +2918,13 @@ mod tests {
             .unwrap();
         assert!(f
             .dl
-            .resolve(&f.server, "k1", &track)
+            .resolve(&f.server.provider(), "k1", &track)
             .unwrap()
             .url
             .starts_with("file://"));
-        let s = f.dl.resolve_remote(&f.server, "k1", &track, false).unwrap();
+        let s =
+            f.dl.resolve_remote(&f.server.provider(), "k1", &track, false)
+                .unwrap();
         assert!(
             s.url.starts_with("https://srv.fake/rest/stream?id=t0"),
             "{}",
@@ -2883,7 +2938,7 @@ mod tests {
     async fn resolve_prefers_download_then_cache_then_stream() {
         let f = fixture();
         let track = f.db.track("t0").unwrap().unwrap();
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(
             s.url.starts_with("https://srv.fake/rest/stream?id=t0"),
             "{}",
@@ -2917,7 +2972,7 @@ mod tests {
             metered: true,
             network_id: None,
         }));
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(s.transcoded && s.url.contains("format=opus") && s.url.contains("maxBitRate=96"));
         assert_eq!(s.mime_type.as_deref(), Some("audio/ogg"));
         // wifi with no profile → original
@@ -2926,7 +2981,12 @@ mod tests {
             metered: false,
             network_id: Some("home".into()),
         }));
-        assert!(!f.dl.resolve(&f.server, "k1", &track).unwrap().transcoded);
+        assert!(
+            !f.dl
+                .resolve(&f.server.provider(), "k1", &track)
+                .unwrap()
+                .transcoded
+        );
         // per-network-id override wins
         f.dl.set_transcoding_profile(
             Some("home".into()),
@@ -2938,7 +2998,7 @@ mod tests {
         );
         assert!(f
             .dl
-            .resolve(&f.server, "k1", &track)
+            .resolve(&f.server.provider(), "k1", &track)
             .unwrap()
             .url
             .contains("format=mp3"));
@@ -2953,7 +3013,7 @@ mod tests {
         // platform can't decode APE → forced transcode even on wifi
         let mut ape = track.clone();
         ape.suffix = Some("ape".into());
-        let s = f.dl.resolve(&f.server, "k1", &ape).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &ape).unwrap();
         assert!(s.transcoded && s.url.contains("format=flac"), "{}", s.url);
         // cached file wins over streaming
         let p = f.dl.cache_path("srv", "t0", None, Some("flac"));
@@ -2961,7 +3021,7 @@ mod tests {
         std::fs::write(&p, b"abc").unwrap();
         f.dl.cache_put("srv", "t0", None, &p, 3.0, Some("audio/flac"))
             .unwrap();
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(
             s.url.starts_with("file://") && s.url.ends_with("t0.flac"),
             "{}",
@@ -2977,7 +3037,7 @@ mod tests {
         .await;
         f.dl.set_gain("srv", "t0", Some(-6.0), None).unwrap();
         let track = f.db.track("t0").unwrap().unwrap();
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(s.url.contains("/downloads/srv/"), "{}", s.url);
         assert_eq!(s.gain_db, -6.0);
         assert_eq!(track.offline, OfflineState::Downloaded);
@@ -3126,13 +3186,18 @@ mod tests {
             },
         );
         cfg.max_concurrent = 4;
-        let api: Arc<dyn SubsonicApi> =
+        let api: Arc<dyn crate::subsonic::SubsonicApi> =
             Arc::new(crate::subsonic::Client::new(cfg, transport.clone()));
         let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
         q.register(
             api::JobKind::Download,
             2,
-            Arc::new(DownloadRunner::new(f.dl.clone(), api)),
+            Arc::new(DownloadRunner::new(
+                f.dl.clone(),
+                crate::provider::ProviderSet::single(Arc::new(
+                    crate::provider::NavidromeProvider::new(api),
+                )),
+            )),
         );
         let album = PinTarget::Album { id: "al0".into() };
         let playlist = PinTarget::Playlist { id: "pl".into() };
@@ -3211,13 +3276,13 @@ mod tests {
             1,
         );
         let e =
-            f.dl.fetch_track(&f.server, "srv", "t1", false)
+            f.dl.fetch_track(&f.server.provider(), "srv", "t1", false)
                 .await
                 .unwrap_err();
         assert!(matches!(e, DownloadError::Server(_)), "{e}");
         assert!(p.exists(), "the earlier complete download is not removed");
         assert_eq!(
-            f.dl.fetch_track(&f.server, "srv", "t1", false)
+            f.dl.fetch_track(&f.server.provider(), "srv", "t1", false)
                 .await
                 .unwrap(),
             1000
@@ -3229,7 +3294,7 @@ mod tests {
         // an unpinned track is reported as such rather than fetched
         f.dl.unpin("srv", &target).unwrap();
         assert!(matches!(
-            f.dl.fetch_track(&f.server, "srv", "t1", false)
+            f.dl.fetch_track(&f.server.provider(), "srv", "t1", false)
                 .await
                 .unwrap_err(),
             DownloadError::NotPinned(_)

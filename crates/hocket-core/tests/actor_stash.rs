@@ -191,7 +191,7 @@ async fn media_session_stash_toggles_the_playing_track() {
     t.run(Command::PlayContext {
         args: PlayContextArgs {
             context: QueueContext {
-                server_id: sid,
+                source: sid,
                 kind: ContextKind::Album { id: "al0".into() },
                 label: String::new(),
                 sort: SortOrder::Default,

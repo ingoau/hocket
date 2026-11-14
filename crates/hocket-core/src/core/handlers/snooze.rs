@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use crate::api::{Command, Event, Snooze, SnoozeFor, SnoozeItem, TrackId};
+use crate::api::{Command, Event, Snooze, SnoozeFor, SnoozeItem, TrackRef};
 use crate::connect::engine::Input;
 use crate::core::actor::Actor;
 use crate::snooze;
@@ -61,12 +61,12 @@ impl Actor {
     }
 
     pub(crate) fn snooze_items(&self) -> Vec<SnoozeItem> {
-        snooze::items(&self.snoozes, self.now(), |ids| {
-            self.db.tracks_by_ids(ids).unwrap_or_default()
+        snooze::items(&self.snoozes, self.now(), |refs| {
+            self.db.tracks_by_refs(refs).unwrap_or_default()
         })
     }
 
-    pub(crate) fn snoozed_ids(&self) -> Vec<TrackId> {
+    pub(crate) fn snoozed_ids(&self) -> Vec<TrackRef> {
         snooze::active_ids(&self.snoozes, self.now())
     }
 
@@ -136,7 +136,13 @@ impl Actor {
                     (false, SnoozeFor::Indefinite) => format!("Snoozed {} indefinitely", songs(n)),
                     (false, d) => format!("Snoozed {} for {}", songs(n), duration_label(d)),
                 };
-                self.write_snoozes(track_ids, Some(until), "snooze", "Snooze", Some(message));
+                self.write_snoozes(
+                    self.refs_of(&track_ids),
+                    Some(until),
+                    "snooze",
+                    "Snooze",
+                    Some(message),
+                );
             }
             Command::SnoozeUntil { track_ids, until } => {
                 if until <= self.now() {
@@ -150,7 +156,7 @@ impl Actor {
                     format!("Snoozed {}", songs(n))
                 };
                 self.write_snoozes(
-                    track_ids,
+                    self.refs_of(&track_ids),
                     Some(Some(until)),
                     "snooze",
                     "Snooze",
@@ -164,7 +170,13 @@ impl Actor {
                 } else {
                     format!("Unsnoozed {}", songs(n))
                 };
-                self.write_snoozes(track_ids, None, "unsnooze", "Unsnooze", Some(message));
+                self.write_snoozes(
+                    self.refs_of(&track_ids),
+                    None,
+                    "unsnooze",
+                    "Unsnooze",
+                    Some(message),
+                );
             }
             _ => {}
         }
@@ -173,7 +185,7 @@ impl Actor {
     /// `until == None` unsnoozes. `Some(end)` snoozes until `end` (`None` inside doesn't end).
     fn write_snoozes(
         &mut self,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         until: Option<Option<f64>>,
         kind: &str,
         label: &str,
@@ -214,7 +226,7 @@ impl Actor {
     }
 
     /// The inverse of a snooze, from the undo stack. Not itself undoable.
-    pub(crate) fn apply_snooze_states(&mut self, states: Vec<(String, Option<Option<f64>>)>) {
+    pub(crate) fn apply_snooze_states(&mut self, states: Vec<(TrackRef, Option<Option<f64>>)>) {
         if states.is_empty() {
             return;
         }
@@ -234,11 +246,11 @@ impl Actor {
     /// Leave snoozed songs out of a context as it becomes a queue. See [`snooze::filter_context`].
     pub(crate) fn filter_snoozed_context(
         &self,
-        tracks: &[TrackId],
+        tracks: &[TrackRef],
         kind: &crate::api::ContextKind,
         start: Option<u32>,
-    ) -> (Vec<TrackId>, Option<u32>) {
-        let snoozed: HashSet<TrackId> = self.snoozed_ids().into_iter().collect();
+    ) -> (Vec<TrackRef>, Option<u32>) {
+        let snoozed: HashSet<TrackRef> = self.snoozed_ids().into_iter().collect();
         snooze::filter_context(tracks, kind, start, &snoozed)
     }
 
@@ -249,7 +261,7 @@ impl Actor {
         &self,
         server_id: &str,
         kind: &crate::api::ContextKind,
-    ) -> Vec<TrackId> {
+    ) -> Vec<TrackRef> {
         let tracks = self.resolve_context_tracks(server_id, kind);
         self.filter_snoozed_context(&tracks, kind, None).0
     }

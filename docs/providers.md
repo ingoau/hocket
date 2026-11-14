@@ -357,3 +357,57 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
 - **Long-lived branch.** Expect merge conflicts with `main`. Rebase often.
 - **Wrong dedup merges** hide songs. Mitigated by a strict matcher, manual unlinking and fixtures.
 - **Stolen device.** A stolen device can remove the others from the identity. This is accepted, and recovery is a new identity.
+
+## Phase 1 notes
+
+*Written while implementing Phase 1. Calls made where the plan was silent or didn't fit the code.*
+
+- **Provider seam.** `crates/hocket-core/src/provider/` defines `Provider` (capabilities, a paged
+  `library_page`, `search`, `album`/`artist`/`track` browse, `resolve_stream`, `download_url`,
+  `cover_art_url`, `download_to_file`, `write`, `report_play`, `lyrics`, `radio`, `home_shelves`)
+  and `ProviderSet` (the installed providers, routed by account or source). The stream descriptor is
+  `ResolvedStream`. Methods a provider can't serve answer `ProviderError::Unsupported`; the error type
+  is `SubsonicError` re-exported, since its variants (auth, network, not found, …) are already the
+  generic set the outbox, jobs and problems classify.
+- **What stays Subsonic.** `NavidromeProvider` wraps `SubsonicApi`, and `Provider::navidrome()` hands
+  the client to work that is Subsonic through and through: the mirror sync's endpoint walk
+  (`LibrarySync`), smart playlists over the native API, the outbox's playlist edits by index, the
+  play-queue save and the capability probe. Every caller first picks the provider by the track's (or
+  target's) account, so nothing reaches a server through the session's account by default any more.
+  Scrobbles go through `report_play`, playback and downloads through `resolve_stream`/`download_url`,
+  lyrics through `lyrics`, artwork through `cover_art_url`, the coordinator worker through
+  `library_page`/`track`/`download_url`.
+- **`resolve_stream` is async; `Downloads::resolve_with` isn't.** Navidrome's answer is ready at once,
+  so `resolve_with` takes it with `now_or_never` and a provider that must go to the network plays
+  through the stream reader (which awaits it). Phase 4 revisits this with the googlevideo reader.
+- **Track references.** `TrackRef {source, id}` is in queue items, the session context's `tracks`,
+  saved queues, ops on the wire (`PlayTracks`… carry refs, not `server_id` + ids), autoplay items,
+  stash entries, snoozes, undo, scrobble dedupe records, prime/handoff messages, AutoMix entries and
+  pending scrobbles. Album resume entries carry a `source` beside their album and track ids. The
+  outbox, play history, pins and the stream cache were already keyed `(server_id, track_id)`, which
+  is the reference. `QueueContext` keeps a `source` for its own id (album, artist, playlist).
+- **Platform-facing ids stay bare in Phase 1.** Commands and queries the UI sends name tracks by id
+  (`PlayTracks {server_id, track_ids}`, `Query::Track {id}`, `ActionTarget::Tracks {ids}`, stash and
+  snooze commands…). The core turns them into references: a list command's `server_id` is a hint, and
+  a track that account's mirror doesn't have is the one the account that has it means; a bare id
+  resolves to the playing track, else the highest-priority account whose mirror has it. Two accounts
+  with the *same* id (the same files on two servers) can therefore resolve to the higher-priority
+  copy from a UI action. Phase 3's groups replace this; changing every platform call site for an edge
+  case that dedup removes wasn't worth it now.
+- **Unified library.** List queries (`Tracks`, `Albums`, `Artists`, `Genres`, `Playlists`, `Search`,
+  `PlaylistMembership`) cover every account when they name the session's account or none, and one
+  account when they name another. Platforms keep passing the first account's id and get the union;
+  the source filter chip (Phase 3) can name one. Album and artist pages show the owner's tracks
+  (highest priority when ids collide). Filters and smart playlists stay on the session's account.
+- **Accounts.** `AccountInfo` replaces `ServerInfo` (adds `kind`, `priority`, `source`, `features`);
+  `AddAccount {setup: AccountSetup::Navidrome {…}}`, `RemoveAccount`, `ReorderAccounts`,
+  `ProbeAccount`, `SyncLibrary {account_id}`; `AccountsChanged` and `Query::Accounts`. Library syncs
+  run one account at a time through one runner that holds every account's sync. The outbox flushes
+  each account's rows to its provider; an offline account defers its own rows only.
+- **Session scope.** The session belongs to the highest-priority Navidrome account. Reordering or
+  removing it closes that session and opens the new first account's; the stash, snoozes and album
+  resume points follow the session as before. The coordinator's analysis store only keeps and serves
+  records whose source is the room's account.
+- **Schema.** Migrations 0002–0010 are squashed into `schema.sql` as version 11 (with `accounts`,
+  `tracks.kind` and `tracks.resume_position`). A database older than that is backed up and recreated
+  rather than migrated. `PROTOCOL` is 4 and so is the floor.

@@ -1,7 +1,7 @@
 //! Offline launch: a server this device already authenticated with is
 //! installed immediately from its persisted row (downloads play with no
 //! network), verified in the background, and re-probed when the network
-//! comes back. Plus: `AddServer` rejects URLs that are not plain http(s).
+//! comes back. Plus: `AddAccount` rejects URLs that are not plain http(s).
 
 #![cfg(feature = "sim")]
 
@@ -71,8 +71,8 @@ fn network(kind: NetworkKind) -> Command {
 async fn wait_for_probe_result(t: &TestCore, want_reachable: bool) {
     for _ in 0..400 {
         t.core.settle().await;
-        let servers = match t.query(Query::Servers).await {
-            QueryResult::Servers(s) => s,
+        let servers = match t.query(Query::Accounts).await {
+            QueryResult::Accounts(s) => s,
             other => panic!("{other:?}"),
         };
         let reached = servers.first().is_some_and(|s| s.reachable);
@@ -136,22 +136,24 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
     let TestCore { dir, .. } = t;
 
     // Second run, offline, the way a platform starts: the persisted row is
-    // there but no API until the keystore replays `AddServer`.
+    // there but no API until the keystore replays `AddAccount`.
     online.store(false, Ordering::SeqCst);
     let t =
         TestCore::start_in_with("second", server, None, 1, clock, dir, false, &url, "secret").await;
     t.run(network(NetworkKind::Offline)).await;
     t.events.clear();
-    t.run(Command::AddServer {
-        url: url.clone(),
-        username: "alice".into(),
-        password: "secret".into(),
-        name: None,
+    t.run(Command::AddAccount {
+        setup: AccountSetup::Navidrome {
+            url: url.clone(),
+            username: "alice".into(),
+            password: "secret".into(),
+            name: None,
+        },
     })
     .await;
     // Installed at once, marked unreachable, announced.
-    let servers = match t.query(Query::Servers).await {
-        QueryResult::Servers(s) => s,
+    let servers = match t.query(Query::Accounts).await {
+        QueryResult::Accounts(s) => s,
         other => panic!("{other:?}"),
     };
     assert_eq!(servers.len(), 1);
@@ -161,7 +163,7 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
         .events
         .all()
         .iter()
-        .any(|e| matches!(e, Event::ServersChanged { servers } if servers.len() == 1)));
+        .any(|e| matches!(e, Event::AccountsChanged { accounts: servers } if servers.len() == 1)));
     // The pinned download plays with no network at all.
     match t
         .query(Query::MediaSource {
@@ -186,8 +188,8 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
     // The background probe fails (stub is down): an error, but the server
     // stays installed.
     wait_for_probe_result(&t, false).await;
-    let servers = match t.query(Query::Servers).await {
-        QueryResult::Servers(s) => s,
+    let servers = match t.query(Query::Accounts).await {
+        QueryResult::Accounts(s) => s,
         other => panic!("{other:?}"),
     };
     assert_eq!(servers.len(), 1, "a failed probe keeps the server");
@@ -199,17 +201,15 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
     t.events.clear();
     t.run(network(NetworkKind::Wifi)).await;
     wait_for_probe_result(&t, true).await;
-    let servers = match t.query(Query::Servers).await {
-        QueryResult::Servers(s) => s,
+    let servers = match t.query(Query::Accounts).await {
+        QueryResult::Accounts(s) => s,
         other => panic!("{other:?}"),
     };
     assert!(servers[0].reachable);
     assert!(servers[0].capabilities.open_subsonic);
-    assert!(t
-        .events
-        .all()
-        .iter()
-        .any(|e| matches!(e, Event::ServersChanged { servers } if servers[0].reachable)));
+    assert!(t.events.all().iter().any(
+        |e| matches!(e, Event::AccountsChanged { accounts: servers } if servers[0].reachable)
+    ));
     t.core.shutdown().await;
 }
 
@@ -225,11 +225,13 @@ async fn add_server_rejects_urls_that_are_not_plain_http() {
         "not a url",
     ] {
         t.events.clear();
-        t.run(Command::AddServer {
-            url: url.into(),
-            username: "alice".into(),
-            password: "pw".into(),
-            name: None,
+        t.run(Command::AddAccount {
+            setup: AccountSetup::Navidrome {
+                url: url.into(),
+                username: "alice".into(),
+                password: "pw".into(),
+                name: None,
+            },
         })
         .await;
         t.core.settle().await;
@@ -245,13 +247,13 @@ async fn add_server_rejects_urls_that_are_not_plain_http() {
             !t.events
                 .all()
                 .iter()
-                .any(|e| matches!(e, Event::ServersChanged { .. } | Event::Error { .. })),
+                .any(|e| matches!(e, Event::AccountsChanged { .. } | Event::Error { .. })),
             "{url}: nothing was probed or installed"
         );
     }
     // The preset server is untouched.
-    match t.query(Query::Servers).await {
-        QueryResult::Servers(s) => {
+    match t.query(Query::Accounts).await {
+        QueryResult::Accounts(s) => {
             assert_eq!(s.len(), 1);
             assert_eq!(s[0].id, "srv");
         }

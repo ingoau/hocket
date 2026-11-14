@@ -793,8 +793,10 @@ impl World {
         match action {
             Action::PlayTracks { tracks, .. } => {
                 let op = SessionOp::PlayTracks {
-                    server_id: "srv".into(),
-                    track_ids: tracks,
+                    track_ids: (tracks)
+                        .into_iter()
+                        .map(crate::api::TrackRef::from)
+                        .collect::<Vec<_>>(),
                     start_index: 0,
                     label: "selection".into(),
                     shuffle: false,
@@ -811,8 +813,10 @@ impl World {
             }),
             Action::PlayNext { tracks, .. } => self.devices[i].handle(Input::LocalOp {
                 op: SessionOp::PlayNext {
-                    server_id: "srv".into(),
-                    track_ids: tracks,
+                    track_ids: (tracks)
+                        .into_iter()
+                        .map(crate::api::TrackRef::from)
+                        .collect::<Vec<_>>(),
                     keys: vec![],
                     queued: true,
                 },

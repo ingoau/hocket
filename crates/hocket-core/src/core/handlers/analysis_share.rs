@@ -41,13 +41,17 @@ impl Actor {
     pub(crate) fn analysis_store_available(&self) -> bool {
         self.engine.is_some()
             && self.share.available_for.is_some()
-            && self.share.available_for == self.server_id()
+            && self.share.available_for == self.scope_account()
     }
 
     /// `Output::AnalysisStore`.
     pub(crate) fn on_analysis_store(&mut self, available: bool) {
         tracing::debug!(target: "hocket::automix", available, "coordinator analysis store");
-        self.share.available_for = if available { self.server_id() } else { None };
+        self.share.available_for = if available {
+            self.scope_account()
+        } else {
+            None
+        };
         if !available {
             self.forget_in_flight_fetch();
             return;
@@ -71,7 +75,8 @@ impl Actor {
 
     /// The tracks of an unanswered fetch may be asked for again.
     fn forget_in_flight_fetch(&mut self) {
-        if let (Some((_, ids)), Some(server)) = (self.share.in_flight.take(), self.server_id()) {
+        if let (Some((_, ids)), Some(server)) = (self.share.in_flight.take(), self.scope_account())
+        {
             for id in ids {
                 self.share.asked.remove(&(server.clone(), id));
             }
@@ -87,12 +92,12 @@ impl Actor {
         {
             return;
         }
-        let Some(server_id) = self.server_id() else {
+        let Some(server_id) = self.scope_account() else {
             return;
         };
         let mut tracks: Vec<Track> = self.playback.track.iter().cloned().collect();
         for item in self.upcoming_playable(FETCH_AHEAD) {
-            if let Some(t) = self.track_or_bare(&item.track_id) {
+            if let Some(t) = self.track_or_bare(&item.track) {
                 tracks.push(t);
             }
         }
@@ -119,7 +124,11 @@ impl Actor {
         }
         tracing::debug!(target: "hocket::automix", count = ids.len(), "fetching analysis records");
         self.share.in_flight = Some((now, ids.clone()));
-        self.engine_input(Input::FetchAnalysis { track_ids: ids });
+        let track_ids = ids
+            .into_iter()
+            .map(|id| TrackRef::new(server_id.clone(), id))
+            .collect();
+        self.engine_input(Input::FetchAnalysis { track_ids });
     }
 
     /// `Output::AnalysisRecords`: the coordinator's answer.
@@ -142,14 +151,14 @@ impl Actor {
     ) {
         self.share
             .uploads
-            .retain(|(s, e)| !(s == server_id && &e.track_id == track_id));
+            .retain(|(s, e)| !(s == server_id && &e.track_id.id == track_id));
         if self.share.uploads.len() >= UPLOAD_QUEUE_MAX {
             self.share.uploads.remove(0);
         }
         self.share.uploads.push((
             server_id.to_string(),
             AnalysisEntry {
-                track_id: track_id.clone(),
+                track_id: TrackRef::new(server_id, track_id.clone()),
                 record: record.clone(),
             },
         ));
@@ -160,7 +169,7 @@ impl Actor {
         if !self.analysis_store_available() || self.share.uploads.is_empty() {
             return;
         }
-        let Some(server_id) = self.server_id() else {
+        let Some(server_id) = self.scope_account() else {
             return;
         };
         // Records of another server have nowhere to go: this room is this server's.

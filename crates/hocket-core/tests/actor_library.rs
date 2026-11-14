@@ -96,7 +96,7 @@ async fn library_sync_reports_ready_tables_in_order_and_fills_the_mirror() {
         QueryResult::Count(n) => assert_eq!(n, 3),
         other => panic!("{other:?}"),
     }
-    let servers = t.snapshot().await.servers;
+    let servers = t.snapshot().await.accounts;
     assert!(servers[0].last_sync.is_some());
     assert!(servers[0].reachable);
 }
@@ -401,6 +401,7 @@ async fn synced_with_http(name: &str, server: FakeServer, http: Arc<dyn LyricsHt
         TestOptions {
             backend,
             api: Some(Arc::new(server.clone())),
+            more_apis: vec![],
             server_url: "https://music.example/".into(),
             password: "pw".into(),
             net: None,
@@ -912,7 +913,7 @@ async fn playlist_remove_and_move_undo_are_compare_and_swap() {
         vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
     );
     t.run(Command::SyncLibrary {
-        server_id: t.server_id.clone(),
+        account_id: t.server_id.clone(),
         full: true,
     })
     .await;

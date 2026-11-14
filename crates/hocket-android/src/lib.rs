@@ -503,7 +503,7 @@ mod ffi_tests {
         let listener = Arc::new(FailingListener(AtomicUsize::new(0)));
         c.set_listener(listener.clone());
         c.dispatch(r#"{"type":"start"}"#.into()).unwrap();
-        let first = futures::executor::block_on(c.query(r#"{"type":"servers"}"#.into()));
+        let first = futures::executor::block_on(c.query(r#"{"type":"accounts"}"#.into()));
         assert!(
             first.is_ok(),
             "the actor answers after a failing callback: {first:?}"

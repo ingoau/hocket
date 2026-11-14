@@ -46,10 +46,91 @@ pub const PROTOCOL_VERSION: u32 = crate::connect::wire::PROTOCOL;
 // Identity
 // ---------------------------------------------------------------------------
 
+/// A Navidrome account's id (the `server_id` on library rows). The same as its [`AccountId`].
 #[typeshare]
 pub type ServerId = String;
+/// A music account: a Navidrome login today. Deterministic on every device: for Navidrome it
+/// is `server_id_for(url, user)`.
+#[typeshare]
+pub type AccountId = String;
+/// Where a track id is valid. For Navidrome the account id; for YouTube Music the global
+/// [`YTM_SOURCE`], because video ids are the same for every account.
+#[typeshare]
+pub type SourceId = String;
 #[typeshare]
 pub type TrackId = String;
+/// The source YouTube Music tracks will use (reserved; no provider yet).
+pub const YTM_SOURCE: &str = "ytm";
+
+/// A track, named by where its id is valid. Every track crossing a subsystem or session boundary
+/// (queue items, history, saved queues, stash, snoozes, AutoMix records, the outbox) is one.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackRef {
+    pub source: SourceId,
+    pub id: TrackId,
+}
+
+impl TrackRef {
+    pub fn new(source: impl Into<SourceId>, id: impl Into<TrackId>) -> TrackRef {
+        TrackRef {
+            source: source.into(),
+            id: id.into(),
+        }
+    }
+}
+
+/// Tests name tracks by bare id, with no source.
+#[cfg(any(test, feature = "sim"))]
+impl From<&str> for TrackRef {
+    fn from(id: &str) -> TrackRef {
+        TrackRef::new("", id)
+    }
+}
+
+#[cfg(any(test, feature = "sim"))]
+impl From<String> for TrackRef {
+    fn from(id: String) -> TrackRef {
+        TrackRef::new("", id)
+    }
+}
+
+/// Tests compare a reference with a bare id.
+#[cfg(any(test, feature = "sim"))]
+impl PartialEq<&str> for TrackRef {
+    fn eq(&self, other: &&str) -> bool {
+        self.id == *other
+    }
+}
+
+#[cfg(any(test, feature = "sim"))]
+impl PartialEq<String> for TrackRef {
+    fn eq(&self, other: &String) -> bool {
+        &self.id == other
+    }
+}
+
+#[cfg(any(test, feature = "sim"))]
+impl PartialEq<TrackRef> for String {
+    fn eq(&self, other: &TrackRef) -> bool {
+        self == &other.id
+    }
+}
+
+#[cfg(any(test, feature = "sim"))]
+impl PartialEq<str> for TrackRef {
+    fn eq(&self, other: &str) -> bool {
+        self.id == other
+    }
+}
+
+impl std::fmt::Display for TrackRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.source, self.id)
+    }
+}
+
 #[typeshare]
 pub type AlbumId = String;
 #[typeshare]
@@ -414,14 +495,72 @@ pub struct ServerCapabilities {
     pub meets_floor: bool,
 }
 
+/// What kind of service an account is.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountKind {
+    #[default]
+    Navidrome,
+}
+
+impl AccountKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AccountKind::Navidrome => "navidrome",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<AccountKind> {
+        match s {
+            "navidrome" => Some(AccountKind::Navidrome),
+            _ => None,
+        }
+    }
+}
+
+/// What a provider can do. Platforms hide controls for what it can't; the core answers
+/// requests for the rest with a capability error.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCapabilities {
+    pub library_sync: bool,
+    pub search: bool,
+    pub browse: bool,
+    pub stream: bool,
+    /// Original files can be downloaded (otherwise pins keep the stream).
+    pub download: bool,
+    pub transcode: bool,
+    pub cover_art: bool,
+    pub star: bool,
+    pub rate: bool,
+    pub playlists: bool,
+    pub smart_playlists: bool,
+    pub report_play: bool,
+    pub lyrics: bool,
+    pub radio: bool,
+    pub home_shelves: bool,
+    pub share: bool,
+}
+
+/// One music account as the platforms list it (Settings → Accounts).
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ServerInfo {
-    pub id: ServerId,
+pub struct AccountInfo {
+    pub id: AccountId,
+    pub kind: AccountKind,
+    /// Lower plays first; the user's drag order.
+    pub priority: u32,
+    /// The source its track ids are valid in.
+    pub source: SourceId,
     pub url: String,
     pub username: String,
     pub name: String,
+    /// What its provider can do.
+    pub features: ProviderCapabilities,
+    /// Navidrome's probed server capabilities.
     pub capabilities: ServerCapabilities,
     pub last_sync: Option<EpochMs>,
     /// Tracks in the library after the last completed sync.
@@ -594,7 +733,9 @@ pub enum SortOrder {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueContext {
-    pub server_id: ServerId,
+    /// Where the context's own id (its album, artist or playlist) is valid. Its `tracks` name
+    /// their own source: a queue can mix accounts.
+    pub source: SourceId,
     pub kind: ContextKind,
     pub label: String,
     pub sort: SortOrder,
@@ -602,7 +743,7 @@ pub struct QueueContext {
     /// snapshot too large to store whole omits it (and its entries) for ID-referenced contexts
     /// and re-resolves on restore.
     #[serde(default)]
-    pub tracks: Vec<TrackId>,
+    pub tracks: Vec<TrackRef>,
 }
 
 /// Where a queue entry came from: the context, a user action, or autoplay.
@@ -627,7 +768,7 @@ pub enum QueueSource {
 pub struct QueueItem {
     /// Stable for the entry's life: every op names entries by key, never by index.
     pub key: QueueKey,
-    pub track_id: TrackId,
+    pub track: TrackRef,
     pub source: QueueSource,
     /// Marked when a device could not play it; skipped, never scrobbled.
     #[serde(default)]
@@ -750,6 +891,9 @@ pub struct SavedQueue {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumResumeEntry {
+    /// Where `album_id` and `track_id` are valid.
+    #[serde(default)]
+    pub source: SourceId,
     pub album_id: AlbumId,
     pub track_id: TrackId,
     /// Index into the album's track list when this was saved.
@@ -770,6 +914,8 @@ pub struct AlbumResumeEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumResumePoint {
+    #[serde(default)]
+    pub source: SourceId,
     pub album_id: AlbumId,
     pub track_id: TrackId,
     pub track_index: u32,
@@ -788,8 +934,7 @@ pub struct StashEntry {
     /// Unique per stash action (device + time + track), not per track: two devices stashing the
     /// same song at once both keep their entry, and the list shows the first.
     pub entry_id: String,
-    pub track_id: TrackId,
-    pub server_id: ServerId,
+    pub track: TrackRef,
     /// Position: entries sort by this, then by `entryId`. Moving one gives it a key between its
     /// new neighbours, so a move never rewrites the others.
     pub sort_key: f64,
@@ -846,7 +991,7 @@ pub enum SnoozeFor {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Snooze {
-    pub track_id: TrackId,
+    pub track: TrackRef,
     /// When the snooze ends. Absent when it lasts until unsnoozed.
     pub until: Option<EpochMs>,
     /// LWW clock.
@@ -860,7 +1005,7 @@ pub struct Snooze {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SnoozeItem {
-    pub track_id: TrackId,
+    pub track_ref: TrackRef,
     /// When it ends. Absent when the snooze doesn't end.
     pub until: Option<EpochMs>,
     pub track: Track,
@@ -2338,6 +2483,20 @@ pub struct Renderer {
     pub name: String,
 }
 
+/// What `AddAccount` needs for each kind of account.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "type", content = "data")]
+pub enum AccountSetup {
+    /// `url` must be `http(s)://` with a host and no embedded credentials.
+    Navidrome {
+        url: String,
+        username: String,
+        password: Secret,
+        name: Option<String>,
+    },
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
@@ -2369,27 +2528,30 @@ pub enum Command {
         enabled: bool,
     },
 
-    // -- servers ----------------------------------------------------------
-    /// `url` must be `http(s)://` with a host and no embedded credentials.
-    /// Naming a server that is already persisted (same url + username)
-    /// installs it immediately from the stored capabilities (so downloads
-    /// play offline) and probes in the background; a new server is only
-    /// installed once the probe accepts the credentials.
-    AddServer {
-        url: String,
-        username: String,
-        password: Secret,
-        name: Option<String>,
+    // -- accounts ---------------------------------------------------------
+    /// Add (or re-authenticate) an account. Naming an account that is
+    /// already persisted installs it immediately from the stored
+    /// capabilities (so downloads play offline) and probes in the background;
+    /// a new account is only installed once the probe accepts the credentials.
+    /// A new account goes last in the priority order.
+    AddAccount {
+        setup: AccountSetup,
     },
-    RemoveServer {
-        server_id: ServerId,
+    /// Forget an account: its mirror, pins, outbox and history go with it.
+    RemoveAccount {
+        account_id: AccountId,
     },
-    ProbeServer {
-        server_id: ServerId,
+    /// The user's drag order, highest priority first. Accounts not named keep
+    /// their relative order after the named ones.
+    ReorderAccounts {
+        account_ids: Vec<AccountId>,
+    },
+    ProbeAccount {
+        account_id: AccountId,
     },
     /// `full` forces a reconcile that catches deletions.
     SyncLibrary {
-        server_id: ServerId,
+        account_id: AccountId,
         full: bool,
     },
     SetTranscodingProfile {
@@ -2659,7 +2821,7 @@ pub enum Command {
     /// only acted on with the `sim` feature (it bypasses the threshold, session dedupe
     /// and the scrobble setting); a release core ignores it.
     Scrobble {
-        track_id: TrackId,
+        track: TrackRef,
         played_at: EpochMs,
         submission: bool,
     },
@@ -2926,7 +3088,7 @@ pub enum Command {
 }
 
 impl Command {
-    /// The variant name as it appears on the wire (`"addServer"`), for logs
+    /// The variant name as it appears on the wire (`"addAccount"`), for logs
     /// that must never carry the payload.
     pub fn kind(&self) -> String {
         serde_json::to_value(self)
@@ -2954,7 +3116,7 @@ pub struct Page {
 pub enum Query {
     /// Everything a freshly attached UI needs, in one round trip.
     Snapshot,
-    Servers,
+    Accounts,
     Tracks {
         server_id: ServerId,
         filter: Option<FilterNode>,
@@ -3271,7 +3433,7 @@ pub struct ExportedAudio {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
-    pub servers: Vec<ServerInfo>,
+    pub accounts: Vec<AccountInfo>,
     pub session: Option<SessionDocument>,
     pub queue: QueueView,
     pub transport: TransportState,
@@ -3295,7 +3457,7 @@ pub struct Snapshot {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum QueryResult {
     SnapshotResult(Snapshot),
-    Servers(Vec<ServerInfo>),
+    Accounts(Vec<AccountInfo>),
     Tracks(TrackPage),
     Count(u32),
     TrackDetail(Option<Track>),
@@ -3568,8 +3730,8 @@ pub enum Event {
     Snapshot {
         snapshot: Snapshot,
     },
-    ServersChanged {
-        servers: Vec<ServerInfo>,
+    AccountsChanged {
+        accounts: Vec<AccountInfo>,
     },
     SyncProgress {
         progress: SyncProgress,
@@ -3796,7 +3958,7 @@ pub struct ConfigDocument {
     pub settings: Vec<Setting>,
     pub filters: Vec<Filter>,
     pub shortcuts: Vec<Shortcut>,
-    pub servers: Vec<ServerInfo>,
+    pub servers: Vec<AccountInfo>,
     /// Only present when exported with secrets; encrypted at rest by the platform keystore otherwise.
     pub secrets: Option<HashMap<String, String>>,
     pub audio: AudioSettings,
@@ -3811,16 +3973,18 @@ mod redaction_tests {
 
     #[test]
     fn command_debug_never_shows_the_password_and_kind_is_the_wire_tag() {
-        let cmd = Command::AddServer {
-            url: "https://music.example/".into(),
-            username: "alice".into(),
-            password: "hunter2".into(),
-            name: None,
+        let cmd = Command::AddAccount {
+            setup: AccountSetup::Navidrome {
+                url: "https://music.example/".into(),
+                username: "alice".into(),
+                password: "hunter2".into(),
+                name: None,
+            },
         };
         let dbg = format!("{cmd:?}");
         assert!(!dbg.contains("hunter2"), "{dbg}");
         assert!(dbg.contains("<redacted>"), "{dbg}");
-        assert_eq!(cmd.kind(), "addServer");
+        assert_eq!(cmd.kind(), "addAccount");
         assert_eq!(Command::Start.kind(), "start");
         // The wire shape is unchanged: a plain string.
         let json = serde_json::to_string(&cmd).unwrap();

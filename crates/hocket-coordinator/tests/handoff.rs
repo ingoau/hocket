@@ -172,7 +172,7 @@ impl Host {
                 track_id,
                 position_ms,
                 ..
-            } => Some((track_id.clone(), *position_ms)),
+            } => Some((track_id.id.clone(), *position_ms)),
             _ => None,
         })
     }
@@ -234,7 +234,6 @@ async fn two_engines_hand_off_through_the_coordinator() {
     // laptop plays a selection and takes transport
     a.handle(Input::LocalOp {
         op: SessionOp::PlayTracks {
-            server_id: "srv".into(),
             track_ids: vec!["t1".into(), "t2".into(), "t3".into()],
             start_index: 0,
             label: "Selection".into(),
@@ -253,7 +252,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             .document()
             .current
             .as_ref()
-            .map(|c| c.track_id.as_str()),
+            .map(|c| c.track.id.as_str()),
         Some("t1")
     );
     assert_eq!(app.live_owner(&scope).as_deref(), Some("laptop"));
@@ -287,7 +286,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             .document()
             .current
             .as_ref()
-            .map(|c| c.track_id.as_str()),
+            .map(|c| c.track.id.as_str()),
         Some("t2")
     );
     assert_eq!(
@@ -295,7 +294,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             .document()
             .current
             .as_ref()
-            .map(|c| c.track_id.as_str()),
+            .map(|c| c.track.id.as_str()),
         Some("t2")
     );
     let key = a.engine.document().current.as_ref().unwrap().key.clone();
@@ -321,7 +320,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
     a.run(400).await;
     b.run(400).await;
     let prepared = b.outputs.iter().find_map(|o| match o {
-        Output::PreBuffer { key, track_id, .. } => Some((key.clone(), track_id.clone())),
+        Output::PreBuffer { key, track_id, .. } => Some((key.clone(), track_id.id.clone())),
         _ => None,
     });
     assert_eq!(
@@ -359,7 +358,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             .document
             .current
             .as_ref()
-            .map(|c| c.track_id.as_str()),
+            .map(|c| c.track.id.as_str()),
         Some("t2")
     );
     let json = serde_json::to_string(&replica).unwrap();

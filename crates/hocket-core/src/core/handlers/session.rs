@@ -27,14 +27,22 @@ pub(crate) struct DbResolver<'a> {
 }
 
 impl Resolver for DbResolver<'_> {
-    fn track_for_key(&self, key: &QueueKey) -> Option<TrackId> {
+    fn track_for_key(&self, key: &QueueKey) -> Option<TrackRef> {
         let doc = self.actor.engine.as_ref()?.document();
         doc.history
             .iter()
             .chain(doc.current.iter())
             .chain(doc.upcoming.iter())
             .find(|i| &i.key == key)
-            .map(|i| i.track_id.clone())
+            .map(|i| i.track.clone())
+    }
+
+    fn track_ref(&self, id: &TrackId, fallback: &str) -> TrackRef {
+        self.actor.ref_for_id(id, fallback)
+    }
+
+    fn source_of(&self, kind: &ContextKind) -> Option<SourceId> {
+        self.actor.source_of_context(kind)
     }
 
     fn is_upcoming(&self, key: &QueueKey) -> bool {
@@ -45,7 +53,7 @@ impl Resolver for DbResolver<'_> {
         doc.upcoming.iter().any(|i| &i.key == key)
     }
 
-    fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
+    fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackRef> {
         self.actor.resolve_context_tracks(server_id, kind)
     }
 
@@ -60,7 +68,9 @@ impl Actor {
     /// Open (or create) the session for the attached server's scope and
     /// build the Connect engine around it.
     pub(crate) fn open_session(&mut self) {
-        let Some(server) = &self.server else { return };
+        let Some(server) = self.accounts.primary() else {
+            return;
+        };
         let scope = scope_key(&server.info.url, &server.info.username);
         let credential = server.credential.clone();
         let lan_key = server.lan_key.clone();
@@ -153,7 +163,7 @@ impl Actor {
         }
         if let Some(cur) = doc.current.as_ref() {
             self.playback.doc_key = Some(cur.key.clone());
-            self.playback.track = self.track_or_bare(&cur.track_id);
+            self.playback.track = self.track_or_bare(&cur.track);
         }
         // Plays still waiting for a scrobble verdict when the app stopped.
         self.resume_pending_scrobbles(&scope);
@@ -350,6 +360,14 @@ impl Actor {
         // Queue section setting's call, made here so every replica agrees.
         if let SessionOp::PlayNext { queued, .. } = &mut op {
             *queued = self.settings.get_bool(crate::settings::keys::QUEUE_SECTION);
+        }
+        if let SessionOp::PlayTracks { track_ids, .. }
+        | SessionOp::PlayNext { track_ids, .. }
+        | SessionOp::AddToQueue { track_ids, .. }
+        | SessionOp::PlayLater { track_ids, .. }
+        | SessionOp::InsertTracks { track_ids, .. } = &mut op
+        {
+            self.fix_refs(track_ids);
         }
         let label = command_label(&cmd);
         self.undoable_op(op, &label, command_kind(&cmd));
@@ -598,8 +616,8 @@ impl Actor {
             && old
                 .as_ref()
                 .and_then(|d| d.current.as_ref())
-                .map(|c| &c.track_id)
-                == document.current.as_ref().map(|c| &c.track_id);
+                .map(|c| &c.track)
+                == document.current.as_ref().map(|c| &c.track);
         if rekeyed {
             tracing::debug!(target: "hocket::player", from = ?old_key, to = ?new_key, "the room re-keyed the current item: keeping it playing");
             if let Some((k, _)) = self.playback.restore_position.as_mut() {
@@ -665,7 +683,7 @@ impl Actor {
             None
         };
         let resume_at = if key_changed {
-            self.take_pending_resume(document.current.as_ref().map(|c| c.track_id.as_str()))
+            self.take_pending_resume(document.current.as_ref().map(|c| &c.track))
         } else {
             None
         };
@@ -705,7 +723,7 @@ impl Actor {
                     {
                         // Nobody is playing and the user pressed play here.
                         self.playback.doc_key = Some(item.key.clone());
-                        self.playback.track = self.track_or_bare(&item.track_id);
+                        self.playback.track = self.track_or_bare(&item.track);
                         self.playback.restore_position = Some((item.key.clone(), position));
                         self.queue_input(Input::ClaimTransport { takeover: false });
                     } else {
@@ -715,7 +733,7 @@ impl Actor {
                         // had loaded.
                         self.render_only();
                         self.playback.doc_key = Some(item.key.clone());
-                        self.playback.track = self.track_or_bare(&item.track_id);
+                        self.playback.track = self.track_or_bare(&item.track);
                         self.playback.position_ms = position;
                         self.playback.position_at = self.now();
                     }
@@ -743,7 +761,7 @@ impl Actor {
         // document's bookkeeping is done (below), so it is persisted and
         // announced even when that op does not apply.
         let resolve_tracks = resolve
-            .map(|context| self.resolve_queued_context_tracks(&context.server_id, &context.kind))
+            .map(|context| self.resolve_queued_context_tracks(&context.source, &context.kind))
             .filter(|tracks| !tracks.is_empty());
         if needs_autoplay && owns && resolve_tracks.is_none() {
             self.autoplay_advance = true;
@@ -852,35 +870,48 @@ impl Actor {
             self.autoplay_wanted = true;
             return;
         };
-        let Some(api) = self.api() else {
+        let Some(doc) = self.doc().cloned() else {
             self.autoplay = Some(engine);
             return;
         };
-        let Some(doc) = self.doc().cloned() else {
+        // Autoplay stays within one account: the seed's (what plays now).
+        let seed_source = doc
+            .current
+            .as_ref()
+            .map(|c| c.track.source.clone())
+            .or_else(|| self.scope_account())
+            .unwrap_or_default();
+        let Some(api) = self.subsonic_for(&seed_source) else {
             self.autoplay = Some(engine);
             return;
         };
         self.autoplay_wanted = false;
         self.autoplay_generation += 1;
         let generation = self.autoplay_generation;
-        let mut recent_ids: Vec<TrackId> = vec![];
+        let mut recent_ids: Vec<TrackRef> = vec![];
         if let Some(c) = &doc.current {
-            recent_ids.push(c.track_id.clone());
+            recent_ids.push(c.track.clone());
         }
-        recent_ids.extend(doc.history.iter().rev().map(|i| i.track_id.clone()));
+        recent_ids.extend(doc.history.iter().rev().map(|i| i.track.clone()));
         let recent: Vec<TrackSummary> = recent_ids
             .iter()
             .take(20)
             .map(|id| self.summary_or_bare(id))
             .collect();
-        let mut exclude: Vec<TrackId> = doc
+        let mut exclude: Vec<TrackRef> = doc
             .context
             .as_ref()
             .map(|c| c.tracks.clone())
             .unwrap_or_default();
-        exclude.extend(doc.upcoming.iter().map(|i| i.track_id.clone()));
+        exclude.extend(doc.upcoming.iter().map(|i| i.track.clone()));
         exclude.extend(recent_ids);
         exclude.extend(self.snoozed_ids());
+        // Picks come from the seed's account: only its ids can collide.
+        let exclude: Vec<TrackId> = exclude
+            .into_iter()
+            .filter(|t| t.source == seed_source)
+            .map(|t| t.id)
+            .collect();
         let seeds = crate::autoplay::SeedInput {
             recent,
             context: doc
@@ -908,7 +939,7 @@ impl Actor {
         let source = crate::core::handlers::library::DbAutoplaySource {
             api,
             db: self.db.clone(),
-            server_id: self.server_id().unwrap_or_default(),
+            server_id: seed_source,
             now: self.now(),
             filters: self.filters(),
         };
@@ -968,7 +999,11 @@ impl Actor {
         let snoozed = self.snoozed_ids();
         let picks: Vec<_> = picks
             .into_iter()
-            .filter(|p| !snoozed.iter().any(|id| id == &p.track.id))
+            .filter(|p| {
+                !snoozed
+                    .iter()
+                    .any(|t| t.id == p.track.id && t.source == p.track.server_id)
+            })
             .collect();
         if picks.is_empty() {
             if !advance {
@@ -985,7 +1020,7 @@ impl Actor {
         let items = picks
             .iter()
             .map(|p| crate::connect::wire::AutoplayOpItem {
-                track_id: p.track.id.clone(),
+                track_id: TrackRef::new(p.track.server_id.clone(), p.track.id.clone()),
                 provider: p.provider,
                 reason: p.reason.clone(),
                 score: p.score,
@@ -1015,16 +1050,28 @@ impl Actor {
     // -- public queue commands ----------------------------------------------------
 
     pub(crate) fn play_context(&mut self, mut args: PlayContextArgs) {
+        // An album, artist or playlist is its owner's: platforms name the
+        // unified library's account for every list.
+        if let Some(owner) = self.owner_of_context(&args.context.source, &args.context.kind) {
+            args.context.source = owner;
+        }
+        // A track named without a source is the context's account's.
+        for t in args.context.tracks.iter_mut() {
+            if t.source.is_empty() {
+                t.source = args.context.source.clone();
+            }
+        }
+        self.fix_refs(&mut args.context.tracks);
         if args.context.tracks.is_empty() && saved::is_id_referenced(&args.context.kind) {
             args.context.tracks =
-                self.resolve_context_tracks(&args.context.server_id, &args.context.kind);
+                self.resolve_context_tracks(&args.context.source, &args.context.kind);
         }
         let (tracks, start) =
             self.filter_snoozed_context(&args.context.tracks, &args.context.kind, args.start_index);
         args.context.tracks = tracks;
         args.start_index = start;
         if args.context.label.is_empty() {
-            args.context.label = self.context_label(&args.context.server_id, &args.context.kind);
+            args.context.label = self.context_label(&args.context.source, &args.context.kind);
         }
         if args.context.tracks.is_empty() {
             self.pending_resume_at = None;
@@ -1042,7 +1089,7 @@ impl Actor {
             return;
         };
         let tracks = if saved::needs_resolution(&sq) {
-            let t = self.resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
+            let t = self.resolve_queued_context_tracks(&sq.context.source, &sq.context.kind);
             if t.is_empty() {
                 None
             } else {
@@ -1097,10 +1144,7 @@ impl Actor {
         let Some(doc) = self.doc().cloned() else {
             return;
         };
-        let Some(server_id) = self.server_id() else {
-            return;
-        };
-        let ids: Vec<TrackId> = match saved_queue_id {
+        let refs: Vec<TrackRef> = match saved_queue_id {
             Some(id) => {
                 let Some(sq) = doc.saved_queues.iter().find(|q| q.id == id) else {
                     self.toast("That saved queue is gone", None);
@@ -1113,7 +1157,7 @@ impl Actor {
                     let mut tracks = sq.context.tracks.clone();
                     if tracks.is_empty() {
                         tracks = self
-                            .resolve_queued_context_tracks(&sq.context.server_id, &sq.context.kind);
+                            .resolve_queued_context_tracks(&sq.context.source, &sq.context.kind);
                     }
                     tracks
                 } else {
@@ -1121,7 +1165,7 @@ impl Actor {
                         .iter()
                         .chain(sq.current.iter())
                         .chain(sq.upcoming.iter())
-                        .map(|i| i.track_id.clone())
+                        .map(|i| i.track.clone())
                         .collect()
                 }
             }
@@ -1130,13 +1174,20 @@ impl Actor {
                 .iter()
                 .chain(doc.current.iter())
                 .chain(doc.upcoming.iter())
-                .map(|i| i.track_id.clone())
+                .map(|i| i.track.clone())
                 .collect(),
         };
-        if ids.is_empty() {
+        // A playlist lives on one account: the first song's. Songs from
+        // another account can't be on it (a Mixed playlist is Phase 3).
+        let Some(server_id) = refs.first().map(|t| t.source.clone()) else {
             self.toast("Nothing to save", None);
             return;
-        }
+        };
+        let ids: Vec<TrackId> = refs
+            .into_iter()
+            .filter(|t| t.source == server_id)
+            .map(|t| t.id)
+            .collect();
         self.create_playlist(server_id, name, ids);
     }
 
@@ -1235,8 +1286,8 @@ impl Actor {
     }
 
     fn resolve_view(&self, derived: crate::session::DerivedQueue) -> QueueView {
-        let mut seen: HashSet<&TrackId> = HashSet::new();
-        let mut ids: Vec<TrackId> = vec![];
+        let mut seen: HashSet<&TrackRef> = HashSet::new();
+        let mut ids: Vec<TrackRef> = vec![];
         for i in derived
             .entries
             .iter()
@@ -1245,8 +1296,8 @@ impl Actor {
             .chain(derived.wrap_next.iter())
             .chain(derived.previous.iter())
         {
-            if seen.insert(&i.track_id) {
-                ids.push(i.track_id.clone());
+            if seen.insert(&i.track) {
+                ids.push(i.track.clone());
             }
         }
         let map = self.summaries(&ids);
@@ -1263,7 +1314,7 @@ impl Actor {
         let history_count = doc.history.len() as u32;
         QueueView {
             current: doc.current.as_ref().map(|item| QueueEntry {
-                track: self.summary_or_bare(&item.track_id),
+                track: self.summary_or_bare(&item.track),
                 item: item.clone(),
                 in_group: false,
                 autoplay: matches!(item.source, QueueSource::Autoplay { .. }),
@@ -1289,13 +1340,13 @@ impl Actor {
     /// item on each change (a Next on a long playlist): rows read once are
     /// kept until any track row changes, so only new ids hit the database.
     /// Ids the mirror lacks are absent (and asked for again next time).
-    pub(crate) fn summaries(&self, ids: &[TrackId]) -> HashMap<TrackId, TrackSummary> {
+    pub(crate) fn summaries(&self, ids: &[TrackRef]) -> HashMap<TrackRef, TrackSummary> {
         let mut map = HashMap::with_capacity(ids.len());
         if ids.is_empty() {
             return map;
         }
         let generation = self.db.tracks_generation();
-        let mut missing: Vec<TrackId> = vec![];
+        let mut missing: Vec<TrackRef> = vec![];
         {
             let mut cache = self.summary_cache.lock();
             if cache.generation != generation {
@@ -1314,7 +1365,7 @@ impl Actor {
         if missing.is_empty() {
             return map;
         }
-        if let Ok(list) = self.db.summaries_by_ids(&missing) {
+        if let Ok(list) = self.db.summaries_by_refs(&missing) {
             let mut cache = self.summary_cache.lock();
             // A row changed while we read: keep the answer, not the copy.
             let keep = cache.generation == generation;
@@ -1322,30 +1373,131 @@ impl Actor {
                 cache.map.clear();
             }
             for s in list {
+                let r = TrackRef::new(s.server_id.clone(), s.id.clone());
                 if keep {
-                    cache.map.insert(s.id.clone(), s.clone());
+                    cache.map.insert(r.clone(), s.clone());
                 }
-                map.insert(s.id.clone(), s);
+                map.insert(r, s);
             }
         }
         map
     }
 
-    pub(crate) fn summary_or_bare(&self, id: &str) -> TrackSummary {
-        self.summaries(std::slice::from_ref(&id.to_string()))
-            .remove(id)
-            .unwrap_or_else(|| bare_summary(id))
+    pub(crate) fn summary_or_bare(&self, track: &TrackRef) -> TrackSummary {
+        self.summaries(std::slice::from_ref(track))
+            .remove(track)
+            .unwrap_or_else(|| bare_summary(track))
     }
 
-    pub(crate) fn track_or_bare(&self, id: &str) -> Option<Track> {
-        match self.db.track(id) {
+    pub(crate) fn track_or_bare(&self, track: &TrackRef) -> Option<Track> {
+        match self.db.track_ref(track) {
             Ok(Some(t)) => Some(t),
             _ => Some(Track {
-                id: id.to_string(),
-                server_id: self.server_id().unwrap_or_default(),
-                title: id.to_string(),
+                id: track.id.clone(),
+                server_id: track.source.clone(),
+                title: track.id.clone(),
                 ..Default::default()
             }),
+        }
+    }
+
+    /// A bare track id from a UI target, named by its account: the
+    /// highest-priority account whose mirror has it, else `fallback`.
+    pub(crate) fn ref_for_id(&self, id: &str, fallback: &str) -> TrackRef {
+        self.db
+            .ref_for_id(id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| TrackRef::new(fallback, id))
+    }
+
+    /// Platforms name a list's tracks by one account: the unified library's
+    /// (the session's account) or none. A track the named account's mirror
+    /// doesn't have is the one the account that has it means.
+    pub(crate) fn fix_refs(&self, refs: &mut [TrackRef]) {
+        if self.accounts.len() < 2 && refs.iter().all(|t| !t.source.is_empty()) {
+            return;
+        }
+        let known: HashSet<TrackRef> = self
+            .db
+            .tracks_by_refs(refs)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| TrackRef::new(t.server_id, t.id))
+            .collect();
+        for t in refs.iter_mut() {
+            if !known.contains(t) {
+                let found = self.track_ref_of(&t.id);
+                if t.source.is_empty() || self.db.track_ref(&found).ok().flatten().is_some() {
+                    *t = found;
+                }
+            }
+        }
+    }
+
+    /// The library a list query covers: every account for the session's
+    /// account or none (the unified library), else the one named.
+    pub(crate) fn library_scope(&self, server_id: String) -> String {
+        if server_id.is_empty() || self.scope_account().as_deref() == Some(server_id.as_str()) {
+            String::new()
+        } else {
+            server_id
+        }
+    }
+
+    /// [`Actor::track_ref_of`] for each id.
+    pub(crate) fn refs_of(&self, ids: &[TrackId]) -> Vec<TrackRef> {
+        ids.iter().map(|id| self.track_ref_of(id)).collect()
+    }
+
+    /// [`Actor::ref_for_id`] with the session's account as the fallback.
+    /// The playing track wins when it has this id: what the UI shows is it.
+    pub(crate) fn track_ref_of(&self, id: &str) -> TrackRef {
+        if let Some(t) = self.playback.track.as_ref().filter(|t| t.id == id) {
+            return TrackRef::new(t.server_id.clone(), id);
+        }
+        let fallback = self.scope_account().unwrap_or_default();
+        self.ref_for_id(id, &fallback)
+    }
+
+    /// The account a context's id belongs to, when `source` (what the
+    /// platform named) doesn't have it.
+    pub(crate) fn owner_of_context(&self, source: &str, kind: &ContextKind) -> Option<SourceId> {
+        let (table, id) = match kind {
+            ContextKind::Album { id } => ("albums", id),
+            ContextKind::Artist { id } => ("artists", id),
+            ContextKind::Playlist { id } => ("playlists", id),
+            _ => return None,
+        };
+        if self.db.has_entity(table, source, id).unwrap_or(false) {
+            return None;
+        }
+        self.source_of_context(kind)
+    }
+
+    /// The account a bare song, album, playlist or artist id belongs to.
+    pub(crate) fn source_of_any_id(&self, id: &str) -> Option<SourceId> {
+        if let Ok(Some(t)) = self.db.track(id) {
+            return Some(t.server_id);
+        }
+        [
+            ContextKind::Album { id: id.into() },
+            ContextKind::Playlist { id: id.into() },
+            ContextKind::Artist { id: id.into() },
+        ]
+        .iter()
+        .find_map(|k| self.source_of_context(k))
+    }
+
+    /// The account an album, artist or playlist id belongs to.
+    pub(crate) fn source_of_context(&self, kind: &ContextKind) -> Option<SourceId> {
+        match kind {
+            ContextKind::Album { id } => self.db.album(id).ok().flatten().map(|a| a.server_id),
+            ContextKind::Artist { id } => self.db.artist(id).ok().flatten().map(|a| a.server_id),
+            ContextKind::Playlist { id } => {
+                self.db.playlist(id).ok().flatten().map(|p| p.server_id)
+            }
+            _ => None,
         }
     }
 
@@ -1356,7 +1508,7 @@ impl Actor {
             .chain(doc.current.iter())
             .chain(doc.upcoming.iter())
             .find(|i| &i.key == key)
-            .map(|i| i.track_id.clone());
+            .map(|i| i.track.clone());
         match id {
             Some(id) => self.summary_or_bare(&id).title,
             None => "a track".into(),
@@ -1439,7 +1591,7 @@ impl Actor {
     pub(crate) fn state_view(&self) -> StateView {
         let doc = self.doc();
         let current = doc.and_then(|d| d.current.as_ref());
-        let current_track = current.map(|c| self.summary_or_bare(&c.track_id));
+        let current_track = current.map(|c| self.summary_or_bare(&c.track));
         let album_id = current_track.as_ref().and_then(|t| t.album_id.clone());
         let artist_id = current_track.as_ref().and_then(|t| t.artist_id.clone());
         let (peer_count, has_resume) = match &self.engine {
@@ -1450,7 +1602,7 @@ impl Actor {
             None => (0, false),
         };
         StateView {
-            server_id: self.server_id(),
+            server_id: self.scope_account(),
             has_session: doc.is_some_and(|d| d.context.is_some()),
             has_current: current.is_some(),
             is_playing: self.playback.playing
@@ -1464,7 +1616,8 @@ impl Actor {
             shuffle: doc.is_some_and(|d| d.shuffle),
             repeat: doc.map(|d| d.repeat).unwrap_or_default(),
             autoplay: doc.is_some_and(|d| d.autoplay),
-            current_track_id: current.map(|c| c.track_id.clone()),
+            current_track_id: current.map(|c| c.track.id.clone()),
+            current_track: current.map(|c| c.track.clone()),
             current_album_id: album_id,
             current_artist_id: artist_id,
             current_loved: current_track.as_ref().map(|t| t.loved).unwrap_or(false),
@@ -1492,7 +1645,7 @@ impl Actor {
                 }
             },
             volume_unknown: self.volume_control().0.is_none(),
-            snoozed_tracks: self.snoozed_ids(),
+            snoozed_tracks: self.snoozed_ids().into_iter().map(|t| t.id).collect(),
             library_pins: crate::actions::LibraryPin::list_from(
                 &self
                     .settings
@@ -1510,21 +1663,34 @@ impl Actor {
 
     // -- context resolution -----------------------------------------------------
 
-    pub(crate) fn resolve_context_tracks(
-        &self,
-        server_id: &str,
-        kind: &ContextKind,
-    ) -> Vec<TrackId> {
-        let ids = |r: Result<Vec<Track>, crate::db::DbError>| -> Vec<TrackId> {
-            r.map(|v| v.into_iter().map(|t| t.id).collect())
-                .unwrap_or_default()
+    /// A context's tracks. `source` is where the context's own id is valid;
+    /// the tracks name their own (an album's or playlist's are the account's).
+    pub(crate) fn resolve_context_tracks(&self, source: &str, kind: &ContextKind) -> Vec<TrackRef> {
+        let refs = |r: Result<Vec<Track>, crate::db::DbError>| -> Vec<TrackRef> {
+            r.map(|v| {
+                v.into_iter()
+                    .map(|t| TrackRef::new(t.server_id, t.id))
+                    .collect()
+            })
+            .unwrap_or_default()
+        };
+        let of_source = |ids: Vec<TrackId>| -> Vec<TrackRef> {
+            ids.into_iter()
+                .map(|id| TrackRef::new(source, id))
+                .collect()
         };
         match kind {
-            ContextKind::Album { id } => ids(self.db.album_tracks(id)),
-            ContextKind::Artist { id } => ids(self.db.artist_tracks(id)),
-            ContextKind::Playlist { id } => self.db.playlist_track_ids(id).unwrap_or_default(),
-            ContextKind::Genre { name } => ids(self.db.genre_tracks(server_id, name)),
-            ContextKind::Filter { filter } => self.filter_track_ids(filter, server_id),
+            ContextKind::Album { id } => refs(self.db.album_tracks(id)),
+            ContextKind::Artist { id } => refs(self.db.artist_tracks(id)),
+            ContextKind::Playlist { id } => {
+                of_source(self.db.playlist_track_ids(id).unwrap_or_default())
+            }
+            // A genre spans the unified library.
+            ContextKind::Genre { name } => refs(
+                self.db
+                    .genre_tracks(&self.library_scope(source.to_string()), name),
+            ),
+            ContextKind::Filter { filter } => of_source(self.filter_track_ids(filter, source)),
             ContextKind::AdHoc { .. } | ContextKind::Autoplay => vec![],
         }
     }
@@ -1571,32 +1737,17 @@ impl Actor {
             _ => ctx
                 .tracks
                 .first()
-                .and_then(|t| self.db.track(t).ok().flatten())
+                .and_then(|t| self.db.track_ref(t).ok().flatten())
                 .and_then(|t| t.cover_art),
-        }
-    }
-
-    pub(crate) fn server_infos(&self) -> Vec<ServerInfo> {
-        match &self.server {
-            Some(s) => {
-                let mut info = s.info.clone();
-                info.reachable = s.api.is_some() && s.info.reachable;
-                if let Ok(Some(c)) = self.db.saved_state_get::<crate::db::sync::SyncCursor>(
-                    &crate::db::sync::SyncCursor::key(&info.id),
-                ) {
-                    info.last_sync_tracks = c.last_track_count;
-                }
-                vec![info]
-            }
-            None => vec![],
         }
     }
 }
 
-pub(crate) fn bare_summary(id: &str) -> TrackSummary {
+pub(crate) fn bare_summary(track: &TrackRef) -> TrackSummary {
     TrackSummary {
-        id: id.to_string(),
-        title: id.to_string(),
+        id: track.id.clone(),
+        server_id: track.source.clone(),
+        title: track.id.clone(),
         ..Default::default()
     }
 }
