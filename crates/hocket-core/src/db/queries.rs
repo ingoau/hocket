@@ -664,24 +664,96 @@ impl Db {
             .collect())
     }
 
+    /// An album's songs: the representative copy's, then any song only a
+    /// linked copy of the album (another account's) has, each song once.
     pub fn album_tracks(&self, album_id: &str) -> DbResult<Vec<Track>> {
-        self.with_conn(|c| {
+        let mut rows = self.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
                 "SELECT {TRACK_COLUMNS} FROM tracks WHERE album_id = ?1 AND server_id = {ALBUM_OWNER} ORDER BY disc_number ASC, track_number ASC, title COLLATE NOCASE ASC"
             ))?;
             let rows = st.query_map([album_id], track_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })
+        })?;
+        for (src, id) in self.linked_ids(LinkKind::Album, album_id)? {
+            if rows.first().is_some_and(|t| t.server_id == src) {
+                continue;
+            }
+            rows.extend(self.with_conn(|c| {
+                let mut st = c.prepare_cached(&format!(
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE album_id = ?2 AND server_id = ?1 ORDER BY disc_number ASC, track_number ASC, title COLLATE NOCASE ASC"
+                ))?;
+                let rows = st.query_map([&src, &id], track_from_row)?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })?);
+        }
+        self.one_per_song(rows)
     }
 
+    /// An artist's songs, with those of linked copies of the artist (other
+    /// accounts'), each song once.
     pub fn artist_tracks(&self, artist_id: &str) -> DbResult<Vec<Track>> {
-        self.with_conn(|c| {
+        let mut rows = self.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
                 "SELECT {TRACK_COLUMNS} FROM tracks WHERE artist_id = ?1 AND server_id = {ARTIST_OWNER} ORDER BY year ASC, album COLLATE NOCASE ASC, disc_number ASC, track_number ASC"
             ))?;
             let rows = st.query_map([artist_id], track_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })
+        })?;
+        for (src, id) in self.linked_ids(LinkKind::Artist, artist_id)? {
+            if rows.first().is_some_and(|t| t.server_id == src) {
+                continue;
+            }
+            rows.extend(self.with_conn(|c| {
+                let mut st = c.prepare_cached(&format!(
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE artist_id = ?2 AND server_id = ?1 ORDER BY year ASC, album COLLATE NOCASE ASC, disc_number ASC, track_number ASC"
+                ))?;
+                let rows = st.query_map([&src, &id], track_from_row)?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })?);
+        }
+        self.one_per_song(rows)
+    }
+
+    /// Every copy (source, id) linked with an album or artist of this id,
+    /// on any account, representative first; empty when it is in no group.
+    pub fn linked_ids(&self, kind: LinkKind, id: &str) -> DbResult<Vec<(String, String)>> {
+        let owner: Option<String> = self.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT source FROM links WHERE kind = ?1 AND id = ?2 ORDER BY rep DESC LIMIT 1",
+                [kind.as_str(), id],
+                |r| r.get(0),
+            )
+            .optional()?)
+        })?;
+        match owner {
+            Some(src) => self.entity_members(kind, &src, id),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// `tracks` with later copies of a song already listed (linked) left
+    /// out.
+    fn one_per_song(&self, tracks: Vec<Track>) -> DbResult<Vec<Track>> {
+        if tracks.iter().all(|t| t.server_id == tracks[0].server_id) {
+            return Ok(tracks);
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(tracks.len());
+        for t in tracks {
+            let group: Option<String> = self.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT group_id FROM links WHERE kind = 'track' AND source = ?1 AND id = ?2",
+                    [&t.server_id, &t.id],
+                    |r| r.get(0),
+                )
+                .optional()?)
+            })?;
+            let key = group.unwrap_or_else(|| format!("{}\u{1}{}", t.server_id, t.id));
+            if seen.insert(key) {
+                out.push(t);
+            }
+        }
+        Ok(out)
     }
 
     pub fn genre_tracks(&self, server_id: &str, genre: &str) -> DbResult<Vec<Track>> {
@@ -796,8 +868,9 @@ impl Db {
 
     pub fn albums(&self, q: &AlbumQuery) -> DbResult<Vec<Album>> {
         let seed = self.random_seed();
+        let artists = self.artist_copies(q)?;
         self.with_conn(|c| {
-            let (where_sql, params) = album_where(q);
+            let (where_sql, params) = album_where(q, &artists);
             let sql = format!(
                 "SELECT {ALBUM_COLUMNS} FROM albums WHERE {where_sql} ORDER BY {}{}",
                 album_order(q.sort, q.descending, seed),
@@ -807,6 +880,13 @@ impl Db {
             let rows = st.query_map(params_from_iter(params.iter()), album_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
+    }
+
+    fn artist_copies(&self, q: &AlbumQuery) -> DbResult<Vec<(String, String)>> {
+        match &q.artist_id {
+            Some(a) => self.linked_ids(LinkKind::Artist, a),
+            None => Ok(vec![]),
+        }
     }
 
     pub fn album_page(&self, q: &AlbumQuery) -> DbResult<api::AlbumPage> {
@@ -820,8 +900,9 @@ impl Db {
     }
 
     pub fn album_count(&self, q: &AlbumQuery) -> DbResult<u32> {
+        let artists = self.artist_copies(q)?;
         self.with_conn(|c| {
-            let (where_sql, params) = album_where(q);
+            let (where_sql, params) = album_where(q, &artists);
             let n: i64 = c.query_row(
                 &format!("SELECT count(*) FROM albums WHERE {where_sql}"),
                 params_from_iter(params.iter()),
@@ -1593,7 +1674,9 @@ fn track_where(server_id: &str, filter: &Option<WhereClause>) -> (String, Vec<Va
     (sql, params)
 }
 
-fn album_where(q: &AlbumQuery) -> (String, Vec<Value>) {
+/// `artists`: the copies of `q.artist_id` on other accounts
+/// ([`Db::linked_ids`]).
+fn album_where(q: &AlbumQuery, artists: &[(String, String)]) -> (String, Vec<Value>) {
     let mut params = vec![Value::Text(q.server_id.clone())];
     let mut sql = format!(
         "(server_id = ?1 OR (?1 = '' AND NOT {}))",
@@ -1601,7 +1684,18 @@ fn album_where(q: &AlbumQuery) -> (String, Vec<Value>) {
     );
     if let Some(a) = &q.artist_id {
         params.push(Value::Text(a.clone()));
-        sql.push_str(&format!(" AND artist_id = ?{}", params.len()));
+        sql.push_str(&format!(" AND (artist_id = ?{}", params.len()));
+        // The artist's albums on every account it is linked across.
+        for (src, id) in artists {
+            params.push(Value::Text(src.clone()));
+            params.push(Value::Text(id.clone()));
+            sql.push_str(&format!(
+                " OR (server_id = ?{} AND artist_id = ?{})",
+                params.len() - 1,
+                params.len()
+            ));
+        }
+        sql.push(')');
     }
     if let Some(g) = &q.genre {
         params.push(Value::Text(g.clone()));

@@ -481,6 +481,55 @@ async fn mixed_playlists_hold_any_account_s_songs() {
     );
 }
 
+/// An artist or album on two accounts (linked) shows what either account
+/// has: the album's songs from both copies (each song once), and the
+/// artist's albums from both accounts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_linked_album_and_artist_show_both_accounts_songs() {
+    let song = |id: &str, title: &str, album: &str, album_name: &str, artist: &str, track: u32| {
+        let mut c = FakeServer::song(id, title, album, artist, 200.0 + track as f64 * 10.0);
+        c.album = Some(album_name.into());
+        c.artist = Some("Shared Artist".into());
+        c.track = Some(track);
+        c
+    };
+    let a = FakeServer::new(A, "alice");
+    a.add_song(song("a1", "Song One", "xa", "Shared Album", "ra", 1));
+    a.add_song(song("a2", "Song Two", "xa", "Shared Album", "ra", 2));
+    let b = FakeServer::new(B, "bob");
+    b.add_song(song("b2", "Song Two", "xb", "Shared Album", "rb", 2));
+    b.add_song(song("b3", "Song Three", "xb", "Shared Album", "rb", 3));
+    b.add_song(song("b9", "Elsewhere", "yb", "Only on B", "rb", 1));
+    let t = TestCore::start_accounts("dedup-linked-pages", a, vec![b]).await;
+    wait_synced(&t, &[A, B]).await;
+    t.run_for(2_000.0).await;
+    let ids = |l: Vec<Track>| l.into_iter().map(|t| t.id).collect::<Vec<_>>();
+    match t.query(Query::AlbumTracks { id: "xa".into() }).await {
+        QueryResult::TrackList(l) => assert_eq!(ids(l), ["a1", "a2", "b3"]),
+        other => panic!("{other:?}"),
+    }
+    match t
+        .query(Query::Albums {
+            server_id: String::new(),
+            artist_id: Some("ra".into()),
+            genre: None,
+            sort: SortOrder::Title,
+            descending: false,
+            page: Page {
+                offset: 0,
+                limit: 50,
+            },
+        })
+        .await
+    {
+        QueryResult::Albums(p) => {
+            let names: Vec<String> = p.items.into_iter().map(|a| a.name).collect();
+            assert_eq!(names, ["Only on B", "Shared Album"]);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 /// Converting deletes the provider's playlist: one whose songs haven't
 /// loaded yet is refused, not converted empty.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
