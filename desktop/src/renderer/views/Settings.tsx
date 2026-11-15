@@ -4,7 +4,7 @@
 // for sidebar / context menu / media session), keyboard shortcuts editor,
 // config backup, diagnostics, about.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
+import type { AccountKind, ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
 import { TransitionModeValues } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
@@ -38,6 +38,7 @@ const SECTION_GROUPS: { title: Parameters<typeof t>[0]; sections: Section[] }[] 
   { title: "settings.group.devicesAndControls", sections: ["connect", "customisation", "shortcuts"] },
   { title: "settings.group.app", sections: ["backup", "diagnostics", "advanced", "about"] },
 ];
+const ACCOUNT_KIND_LABEL: Record<AccountKind, Parameters<typeof t>[0]> = { navidrome: "settings.accounts.kind.navidrome", youtubeMusic: "settings.accounts.kind.youtubeMusic" };
 const SECTION_ICONS: Record<Section, string> = { general: "tune", audio: "equalizer", transcoding: "transcode", connect: "connectCast", storage: "cached", lyrics: "lyrics", appearance: "palette", customisation: "customise", shortcuts: "keyboard", backup: "backup", diagnostics: "bug", advanced: "code", about: "info" };
 
 export function Settings({ section }: { section?: string }) {
@@ -171,7 +172,7 @@ function General() {
       {servers.map((s, i) => (
         <div key={s.id} className="setting-row" data-testid="server-row">
           <div className="label">
-            <div className="title">{s.name} <span className="muted small">{t("settings.accounts.kind.navidrome")} · {s.url} · {s.username}</span></div>
+            <div className="title">{s.name} <span className="muted small" data-testid="server-row-kind">{[t(ACCOUNT_KIND_LABEL[s.kind]), s.url, s.username].filter(Boolean).join(" · ")}</span></div>
             <div className="desc">{s.capabilities.serverVersion ? t("settings.serverVersion", { version: s.capabilities.serverVersion }) : ""}{!s.capabilities.meetsFloor ? ` · ${t("settings.serverBelowFloor")}` : ""}{!s.reachable ? ` · ${t("settings.serverUnreachable")}` : ""}{s.lastSync ? ` · ${t("sync.done")} ${fmtRelative(s.lastSync)}` : ""}</div>
           </div>
           <div className="control">
