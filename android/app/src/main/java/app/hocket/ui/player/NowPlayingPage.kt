@@ -231,7 +231,6 @@ internal fun FullPlayer(
     val collapse = remember(scope) { ControlsCollapse(scope) }
     collapse.range = with(density) { COLLAPSE_SCROLL.toPx() }
     val reducedMotion = LocalReducedMotion.current
-    LaunchedEffect(mode) { if (mode != PlayerMode.Queue) collapse.animateTo(0f, instant = reducedMotion) }
     /** Opens the song menu ([pull] when a swipe brings it up); false when there is no song. */
     val openMenu = { pull: app.hocket.ui.components.SheetPull? ->
         // The song menu is hosted at the app level, not in this (moving) sheet; the player adds
@@ -290,6 +289,12 @@ internal fun FullPlayer(
         hero.artAbove = artAbove
         val folding = !wide && mode == PlayerMode.Queue
         val fold = { if (wide) 0f else collapse.fraction }
+        // Out of the queue (or the upright layout, or with nothing queued: nothing left to scroll
+        // back) the controls unfold; straight away where the page changes shape.
+        LaunchedEffect(folding, track == null) { if (!folding || track == null) collapse.animateTo(0f, instant = reducedMotion || wide) }
+        // Narrow screens (display size "largest" leaves ~320 dp): a lower transport.
+        // (And beside the artwork on a short page: a phone on its side.)
+        val transportHeight = if (pageWidth < 360.dp || (wide && viewport < 480.dp)) 68.dp else TRANSPORT_HEIGHT
         // What the action row leaves when it has folded away: the navigation bar's room.
         val navBottom = if (asPanel) 0.dp else WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         Box(Modifier.fillMaxSize().verticalScroll(scroll, overscrollEffect = null).testTag("player.page")) {
@@ -300,6 +305,7 @@ internal fun FullPlayer(
                 hero = hero,
                 fold = fold,
                 foldedBottom = navBottom + 12.dp,
+                transportHeight = transportHeight,
                 // The artwork is drawn over the page: under an immersive one (or one sliding in
                 // during a skip swipe) the page keeps the handle's room (invisible) and the real one
                 // goes on top.
@@ -316,17 +322,13 @@ internal fun FullPlayer(
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
                     val buffering by client.buffering.collectAsStateWithLifecycle()
-                    // Narrow screens (display size "largest" leaves ~320 dp): a lower transport.
                     TransportRow(
                         playing = playing,
                         buffering = buffering,
                         onPrevious = { client.dispatch(Command.Previous) },
                         onToggle = { client.dispatch(Command.TogglePlay) },
                         onNext = { client.dispatch(Command.Next) },
-                        // (And beside the artwork on a short page: a phone on its side.)
-                        height = (if (pageWidth < 360.dp || (wide && viewport < 480.dp)) 68.dp else TRANSPORT_HEIGHT).let { h ->
-                            androidx.compose.ui.unit.lerp(h, h * FOLDED_TRANSPORT, fold())
-                        },
+                        height = foldedTransport(transportHeight, fold()),
                         modifier = Modifier.padding(horizontal = PAGE_PADDING),
                     )
                 },
@@ -410,7 +412,10 @@ private val TRANSPORT_HEIGHT = 84.dp
 /** The transport's height folded under a scrolled queue, as a share of its own. */
 private const val FOLDED_TRANSPORT = 0.66f
 /** What the seek bar gives up as the controls fold (the room its times took). */
-private val SEEK_FOLD = 22.dp
+private val SEEK_FOLD = 20.dp
+/** The transport's height [fold]ed (never below a touch target). */
+private fun foldedTransport(height: Dp, fold: Float): Dp =
+    androidx.compose.ui.unit.lerp(height, (height * FOLDED_TRANSPORT).coerceAtLeast(48.dp).coerceAtMost(height), fold.coerceIn(0f, 1f))
 /** How far the queue scrolls to fold the controls away ([ControlsCollapse]). */
 private val COLLAPSE_SCROLL = 160.dp
 
@@ -450,6 +455,7 @@ private fun PlayerLayout(
     hero: HeroGeometry,
     fold: () -> Float,
     foldedBottom: Dp,
+    transportHeight: Dp,
     header: @Composable () -> Unit,
     area: @Composable () -> Unit,
     title: @Composable () -> Unit,
@@ -458,7 +464,7 @@ private fun PlayerLayout(
     actions: @Composable () -> Unit,
 ) {
     if (wide) PlayerLayoutWide(minHeight, hero, artAbove, header, area, title, seek, transport, actions)
-    else PlayerLayoutTall(minHeight, hero, fold, foldedBottom, header, area, title, seek, transport, actions)
+    else PlayerLayoutTall(minHeight, hero, fold, foldedBottom, transportHeight, header, area, title, seek, transport, actions)
 }
 
 @Composable
@@ -467,6 +473,7 @@ private fun PlayerLayoutTall(
     hero: HeroGeometry,
     fold: () -> Float,
     foldedBottom: Dp,
+    transportHeight: Dp,
     header: @Composable () -> Unit,
     area: @Composable () -> Unit,
     title: @Composable () -> Unit,
@@ -474,9 +481,6 @@ private fun PlayerLayoutTall(
     transport: @Composable () -> Unit,
     actions: @Composable () -> Unit,
 ) {
-    // The seek bar's, the transport's and the action row's heights and the times' baseline unfolded:
-    // the page is laid out for those (the artwork's size, the gaps), the fold only moving the room.
-    val unfolded = remember { IntArray(4) }
     Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
         val k = fold().coerceIn(0f, 1f)
         val full = constraints.maxWidth
@@ -506,11 +510,13 @@ private fun PlayerLayoutTall(
         val below = tp.firstOrNull()?.get(TitleBottom)?.takeIf { it != AlignmentLine.Unspecified }?.let { height(tp) - it } ?: 0
         val wave = sp.firstOrNull()?.get(SeekWaveTop)?.takeIf { it != AlignmentLine.Unspecified } ?: 0
         val timesNow = sp.firstOrNull()?.get(SeekTimesBaseline)?.takeIf { it != AlignmentLine.Unspecified } ?: shNow
-        if (k == 0f) { unfolded[0] = shNow; unfolded[1] = xhNow; unfolded[2] = ahNow; unfolded[3] = timesNow }
-        val sh = if (k == 0f) shNow else unfolded[0]
-        val xh = if (k == 0f) xhNow else unfolded[1]
-        val ah = if (k == 0f) ahNow else unfolded[2]
-        val times = if (k == 0f) timesNow else unfolded[3]
+        // The page is laid out for the seek bar's and the transport's unfolded heights (the
+        // artwork's size, the gaps), the fold only moving the room they give up. (The action row
+        // and the times' baseline don't change with it.)
+        val sh = if (shNow > 0) shNow + (SEEK_FOLD * k).roundToPx() else 0
+        val xh = if (xhNow > 0) transportHeight.roundToPx() else 0
+        val ah = ahNow
+        val times = timesNow
         val gapX = if (xh > 0) TRANSPORT_GAP.roundToPx() else 0
         val gapA = if (ah > 0) ACTIONS_GAP.roundToPx() else 0
         // With a share s on each of the transport's and the actions' gaps and under the actions,
@@ -812,8 +818,9 @@ private fun PlayerSeek(position: () -> Long, fold: () -> Float = { 0f }) {
     Column(
         Modifier
             .fillMaxWidth()
-            // Folding: the times fade out and the bar gives up the room they sat in (its touch
-            // area runs on under the transport, which takes the taps there).
+            // Folding: the times fade out and the bar gives up the room they sat in (clipped there,
+            // so its touch area doesn't reach the gaps between the transport's buttons).
+            .clipToBounds()
             .layout { m, c ->
                 val p = m.measure(c)
                 layout(p.width, p.height - (SEEK_FOLD * fold().coerceIn(0f, 1f)).roundToPx()) { p.place(0, 0) }

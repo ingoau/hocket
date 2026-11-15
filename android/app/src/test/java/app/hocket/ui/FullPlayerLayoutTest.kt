@@ -193,6 +193,35 @@ class FullPlayerLayoutTest {
         assertControlsLayout()
     }
 
+    /**
+     * Scrolling the queue folds the controls under it: a lower transport, the action row gone (the
+     * queue taking the room); scrolling back brings them back where they were.
+     */
+    @Test
+    fun scrollingTheQueueFoldsTheControlsAndScrollingBackUnfoldsThem() {
+        startExpanded()
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { exists("queue.list") }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        val play = bounds("player.playPause")
+        val panel = bounds("player.panel")
+        assertTrue(displayed("player.mode.queue"))
+        compose.onNodeWithTag("queue.list").performTouchInput { swipe(Offset(centerX, height * 0.8f), Offset(centerX, height * 0.2f), 400) }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        val folded = bounds("player.playPause")
+        assertEquals("a lower transport", play.height * 0.66f, folded.height, 1f * dp)
+        assertTrue("the action row gone", !displayed("player.mode.queue"))
+        assertTrue("the queue taking the room (${bounds("player.panel")} vs $panel)", bounds("player.panel").height > panel.height + 80f * dp)
+        compose.onNodeWithTag("queue.list").performTouchInput { swipe(Offset(centerX, height * 0.2f), Offset(centerX, height * 0.8f), 400) }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        assertTrue("the action row back", displayed("player.mode.queue"))
+        assertEquals(play, bounds("player.playPause"))
+        assertEquals(panel, bounds("player.panel"))
+    }
+
     /** The add button shares the thumbnail's centre line: the title + artist pair's, in every mode, with or without the stars. */
     @Test
     fun theAddButtonCentresOnTheTitleAndArtist() {
