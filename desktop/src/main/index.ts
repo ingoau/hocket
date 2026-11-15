@@ -252,6 +252,13 @@ async function main(): Promise<void> {
       applyBattery();
       pushNetwork(net.isOnline());
     }
+    if (event.type === "credentialsSynced") {
+      // Credential sync brought passwords (the core already added the accounts): keep them as if typed here.
+      const synced = event.data.credentials;
+      void credentialsOpen.then((c) => {
+        for (const s of synced) void c.remember(s.url, s.username, s.password);
+      });
+    }
     if (event.type === "accountsChanged") {
       const accounts = event.data.accounts;
       void credentialsOpen.then((c) => c.retainOnly(accounts));

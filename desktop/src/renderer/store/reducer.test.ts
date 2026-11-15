@@ -3,6 +3,7 @@ import type { Event, Snapshot } from "@core/api";
 import { SAVER_OFF, applySnapshot, dismissToast, initialCoreState, reduce, saverEngaged, saverHas, settingValue } from "./reducer";
 
 const snapshot: Snapshot = {
+  identity: { id: "i", deviceId: "me", devices: [], removed: false, credentialSync: false, coordinator: undefined },
   accounts: [],
   session: undefined,
   queue: { contextLabel: "Album", entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: true, repeat: "all", autoplay: true },

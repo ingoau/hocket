@@ -27,32 +27,26 @@ describe("deep links", () => {
   });
 });
 
-describe("setup links", () => {
-  it("round-trips every field in the form Android writes", () => {
-    // The same link as SetupLinkTest.roundTripsEveryField on Android.
-    const text = "hocket://setup?server=https%3A%2F%2Fmusic.example.net%2Fnavidrome&user=ada%20lovelace&password=p%26ss%3Dw0rd%2B%C3%BC&coordinator=wss%3A%2F%2Fcoord.example.net";
-    const link = parseDeepLink(text);
-    expect(link).toEqual({ kind: "setup", server: "https://music.example.net/navidrome", user: "ada lovelace", password: "p&ss=w0rd+ü", coordinator: "wss://coord.example.net" });
-    expect(formatDeepLink(link!)).toBe(text);
+describe("pairing and claim links", () => {
+  it("keeps a pairing invite whole", () => {
+    const text = "hocket://pair?d=eyJpZGVudGl0eSI6ImFiYyJ9_-x";
+    expect(parseDeepLink(text)).toEqual({ kind: "pair", data: "eyJpZGVudGl0eSI6ImFiYyJ9_-x" });
+    expect(formatDeepLink(parseDeepLink(text)!)).toBe(text);
   });
 
-  it("leaves out what the link leaves out and normalises the server", () => {
-    expect(parseDeepLink("HOCKET://setup?user=ada&server=Https%3A%2F%2Fmusic.example.net%2F&extra=1")).toEqual({ kind: "setup", server: "https://music.example.net", user: "ada" });
-    expect(formatDeepLink({ kind: "setup", server: "https://x", user: "ada" })).toBe("hocket://setup?server=https%3A%2F%2Fx&user=ada");
+  it("rejects a pairing link that isn't one", () => {
+    expect(parseDeepLink("hocket://pair")).toBeUndefined();
+    expect(parseDeepLink("hocket://pair?d=a%20b")).toBeUndefined();
+    expect(parseDeepLink("hocket://pair/x?d=eyJpZGVudGl0eSI6ImFiYyJ9")).toBeUndefined();
+    expect(parseDeepLink("hocket://setup?server=https%3A%2F%2Fx&user=ada")).toBeUndefined();
   });
 
-  it("carries packed settings, dropping a value that isn't packed", () => {
-    const link = { kind: "setup", server: "https://x", user: "ada", settings: "eNqrVg_-" } as const;
-    expect(formatDeepLink(link)).toBe("hocket://setup?server=https%3A%2F%2Fx&user=ada&settings=eNqrVg_-");
-    expect(parseDeepLink(formatDeepLink(link))).toEqual(link);
-    expect(parseDeepLink("hocket://setup?server=https%3A%2F%2Fx&user=ada&settings=a%20b")).toEqual({ kind: "setup", server: "https://x", user: "ada" });
-  });
-
-  it("rejects setup links without a usable server or user", () => {
-    expect(parseDeepLink("hocket://setup?user=ada")).toBeUndefined();
-    expect(parseDeepLink("hocket://setup?server=ftp%3A%2F%2Fx&user=ada")).toBeUndefined();
-    expect(parseDeepLink("hocket://setup?server=https%3A%2F%2Fx&user=%20")).toBeUndefined();
-    expect(parseDeepLink("hocket://setup?server=https%3A%2F%2Fx&user=ada%ZZ")).toBeUndefined();
-    expect(parseDeepLink("hocket://setup/x?server=https%3A%2F%2Fx&user=ada")).toBeUndefined();
+  it("reads a coordinator claim", () => {
+    const text = "hocket://claim?url=wss%3A%2F%2Fc.example%2Fws&code=ABCD-EFGH";
+    expect(parseDeepLink(text)).toEqual({ kind: "claim", url: "wss://c.example/ws", code: "ABCD-EFGH" });
+    expect(formatDeepLink(parseDeepLink(text)!)).toBe(text);
+    expect(parseDeepLink("hocket://claim?code=ABCD-EFGH")).toEqual({ kind: "claim", url: "", code: "ABCD-EFGH" });
+    expect(parseDeepLink("hocket://claim?url=https%3A%2F%2Fx&code=ABCD")).toBeUndefined();
+    expect(parseDeepLink("hocket://claim?url=wss%3A%2F%2Fx")).toBeUndefined();
   });
 });

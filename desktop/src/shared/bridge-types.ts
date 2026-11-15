@@ -173,12 +173,6 @@ export interface HocketBridge {
      */
     import(): Promise<boolean>;
   };
-  /**
-   * Another device's setup code (Set up another device): main builds the
-   * `hocket://setup` link for this server and user, and puts the password in
-   * from the credential store only when [SetupLinkRequest.includePassword].
-   */
-  setupLink(req: SetupLinkRequest): Promise<SetupLinkResult>;
   clipboard: {
     writeText(text: string): void;
   };
@@ -259,7 +253,6 @@ export const IPC = {
   dialogOpenText: "hocket:dialog:open-text",
   configExport: "hocket:config:export",
   configImport: "hocket:config:import",
-  setupLink: "hocket:setup-link",
   clipboardWrite: "hocket:clipboard:write",
   deepLink: "hocket:deep-link",
   prefsGet: "hocket:prefs:get",
@@ -304,19 +297,3 @@ export type WindowTheme = "light" | "dark";
 /** The theme setting: a theme, or the system's. */
 export type ThemeChoice = WindowTheme | "system";
 
-export interface SetupLinkRequest {
-  server: string;
-  user: string;
-  coordinator?: string;
-  /** Packed settings (shared/setup-settings), for a device without a coordinator. */
-  settings?: string;
-  includePassword: boolean;
-}
-
-export interface SetupLinkResult {
-  link: string;
-  /** What the QR code shows: [link], or without its settings when they'd make the code too dense to scan. */
-  codeLink: string;
-  /** Whether the credential store has this login's password (so it can be included). */
-  passwordAvailable: boolean;
-}

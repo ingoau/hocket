@@ -26,6 +26,7 @@ import { warnChoices } from "../lib/storage-warn";
 import { SettingsSearch, useSettingsJump } from "../components/SettingsSearch";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../lib/settings-index";
 import { startAddAccount } from "./Setup";
+import { IdentitySettings } from "../components/IdentitySettings";
 import { CROSSFADE_MAX, CROSSFADE_MIN, DEFAULT_TRANSITIONS, isTransitionMode, withCrossfade, withMode } from "../lib/transitions";
 
 const SECTIONS = SETTINGS_SECTIONS;
@@ -108,7 +109,7 @@ function AccountCard() {
       <div className="settings-account-links">
         <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "stats" })} data-testid="settings-account-stats"><Icon name="stats" size={18} />{t("settings.account.stats")}</button>
         <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "settings", param: "connect" }, true)} data-testid="settings-account-devices"><Icon name="devices" size={18} />{t("settings.account.devices")}</button>
-        <button type="button" className="btn settings-account-link" onClick={() => openDialog({ kind: "setupDevice" })} data-testid="settings-account-setup-device"><Icon name="qr" size={18} />{t("settings.account.setUpDevice")}</button>
+        <button type="button" className="btn settings-account-link" onClick={() => openDialog({ kind: "pairDevice" })} data-testid="settings-account-setup-device"><Icon name="qr" size={18} />{t("settings.account.setUpDevice")}</button>
       </div>
     </div>
   );
@@ -455,6 +456,7 @@ function Connect() {
         {connection.tier === "coordinator" && connection.connected ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "disconnectCoordinator" })}>{t("settings.coordinatorDisconnect")}</button> : <button type="button" className="btn sm" onClick={() => { bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } }); bridge().dispatch({ type: "connectCoordinator" }); }} disabled={!url.trim()}>{t("settings.coordinatorConnect")}</button>}
       </Row>
       <Toggle anchor="lanDiscovery" settingKey={SK.connectLanDiscovery} title={t("settings.lanDiscovery")} />
+      <IdentitySettings />
       <h2 className="section-title">{t("connect.title")}</h2>
       {devices.map((d) => <div key={d.id} className="setting-row"><div className="label"><div className="title">{d.name}{d.isSelf ? <span className="badge">{t("connect.thisDevice")}</span> : null}{d.playing ? <span className="badge ok">{t("connect.playing")}</span> : null}</div><div className="desc">{d.platform} · {d.appVersion} · {fmtRelative(d.lastSeen)}</div></div><div className="control" /></div>)}
     </>

@@ -11,7 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  TrackRef,
+  TrackRef, IdentityInfo, CoordinatorInviteInfo,
   ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
@@ -118,6 +118,8 @@ export class FakeCore implements CoreHandle {
   private readonly opts: Required<FakeOptions>;
   private lib: FakeLibrary | undefined;
   private servers: AccountInfo[] = [];
+  private identity!: IdentityInfo;
+  private coordinatorInvites: CoordinatorInviteInfo[] = [];
   private session: SessionState = { list: [], ptr: 0, shuffle: false, repeat: "off", autoplay: true, revision: 1 };
   private transport: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 0.8, muted: false, volumeDevice: undefined };
   /** Each device's own volume (Connect: the control drives the device playing). */
@@ -180,6 +182,7 @@ export class FakeCore implements CoreHandle {
 
   constructor(config: CoreConfig, opts: FakeOptions = {}) {
     this.config = config;
+    this.identity = this.freshIdentity();
     this.opts = { timeScale: opts.timeScale ?? 1, seed: opts.seed ?? 7, trackCount: opts.trackCount ?? 3200 };
     this.audio = {
       replayGain: "auto",
@@ -833,6 +836,50 @@ export class FakeCore implements CoreHandle {
         return;
       case "storeAnalysisRecord":
         return;
+      case "createPairingInvite":
+        this.emit({ type: "pairingInvite", data: { link: "hocket://pair?d=ZmFrZS1wYWlyaW5nLWludml0ZQ", expires_at: Date.now() + 600_000 } });
+        return;
+      case "pairWithInvite":
+        this.emit({ type: "pairingFinished", data: { accounts: [] } });
+        return;
+      case "removeDevice": {
+        const self = cmd.data.device_id === this.config.deviceId;
+        this.identity = self
+          ? this.freshIdentity()
+          : { ...this.identity, devices: this.identity.devices.filter((d) => d.id !== cmd.data.device_id) };
+        this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        return;
+      }
+      case "resetIdentity":
+        this.identity = this.freshIdentity();
+        this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        return;
+      case "setCredentialSync":
+        this.identity = { ...this.identity, credentialSync: cmd.data.on };
+        this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        return;
+      case "claimCoordinator":
+      case "redeemCoordinatorInvite": {
+        const owner = cmd.type === "claimCoordinator";
+        const url = cmd.data.url || "wss://coordinator.example/ws";
+        this.identity = { ...this.identity, coordinator: { url, owner, holdsKey: this.identity.credentialSync } };
+        this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        this.emit({ type: "coordinatorJoined", data: { url, owner } });
+        return;
+      }
+      case "createCoordinatorInvite": {
+        const code = `FAKE-${String(this.coordinatorInvites.length + 1).padStart(4, "0")}`;
+        this.coordinatorInvites.push({ code, createdAt: Date.now(), expiresAt: Date.now() + 7 * 86_400_000, redeemed: false });
+        this.emit({ type: "coordinatorInvites", data: { invites: this.coordinatorInvites, created: code } });
+        return;
+      }
+      case "revokeCoordinatorInvite":
+        this.coordinatorInvites = this.coordinatorInvites.filter((i) => i.code !== cmd.data.code);
+        this.emit({ type: "coordinatorInvites", data: { invites: this.coordinatorInvites, created: undefined } });
+        return;
+      case "listCoordinatorInvites":
+        this.emit({ type: "coordinatorInvites", data: { invites: this.coordinatorInvites, created: undefined } });
+        return;
       default: {
         const never: never = cmd;
         void never;
@@ -983,8 +1030,20 @@ export class FakeCore implements CoreHandle {
     this.emit({ type: "started", data: { snapshot: s } });
   }
 
+  private freshIdentity(): IdentityInfo {
+    return {
+      id: "fake-identity",
+      deviceId: this.config.deviceId,
+      devices: [{ id: this.config.deviceId, name: this.config.deviceName, isSelf: true, lastSynced: Date.now() }],
+      removed: false,
+      credentialSync: false,
+      coordinator: undefined,
+    };
+  }
+
   private snapshot(): Snapshot {
     return {
+      identity: this.identity,
       accounts: this.servers,
       session: this.sessionDocument(),
       queue: this.queueView(),
@@ -2996,6 +3055,8 @@ export class FakeCore implements CoreHandle {
         return { type: "snoozeItems", data: this.snoozeItems() };
       case "albumResume":
         return { type: "albumResumeState", data: this.albumResumes.find((x) => x.albumId === q.data.id) };
+      case "identity":
+        return { type: "identity", data: this.identity };
       default: {
         const never: never = q;
         void never;

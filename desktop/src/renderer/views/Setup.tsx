@@ -1,5 +1,5 @@
 // Setup: the entire first screen, nothing else. "Where's your music?" offers a
-// card per source (a Navidrome server, or another device's setup link); the
+// card per source (a Navidrome server, or pairing with another device); the
 // Navidrome card's form takes the server's address, then username and password.
 // Once the server answers, the card turns into what was found (the Navidrome
 // version, who is signed in where, which features it offers) while the first
@@ -11,8 +11,7 @@ import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { normaliseServerUrl } from "../lib/server-url";
-import { parseDeepLink, type SetupLink } from "@shared/deep-link";
-import { unpackSetupSettings } from "@shared/setup-settings";
+import { parseDeepLink } from "@shared/deep-link";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { Icon } from "../components/Icon";
 import { BrandMark } from "../components/BrandMark";
@@ -91,19 +90,23 @@ export function Setup() {
 
 /**
  * "Where's your music?": a card per kind of source. The Navidrome card is the
- * sign-in form itself; the other device's card points at it, since a setup link
- * pasted into Server URL fills the form in.
+ * sign-in form itself; the other device's card pairs with it (a pairing link
+ * from its Add a device). Once paired, the form asks for the passwords of the
+ * accounts the other device named (unless credential sync brought them).
  */
 function Sources({ adding = false }: { adding?: boolean }) {
   const [fromDevice, setFromDevice] = useState(false);
-  const pickDevice = () => {
-    setFromDevice(true);
-    document.querySelector<HTMLInputElement>("[data-testid='setup-url']")?.focus();
-  };
+  const finished = useApp((s) => s.pairing.finished);
+  const pendingPair = useApp((s) => s.pendingPair);
+  useEffect(() => {
+    if (pendingPair) setFromDevice(true);
+  }, [pendingPair]);
+  const pickDevice = () => setFromDevice(true);
+  const waiting = finished?.[0];
   return (
     <div className="setup-sources" data-testid="setup-sources">
       <h1 className="setup-heading">{adding ? t("setup.sources.addTitle") : t("setup.sources.title")}</h1>
-      <ConnectForm fromDevice={fromDevice} adding={adding} />
+      {fromDevice && finished === undefined ? <PairForm /> : <ConnectForm adding={adding} initial={waiting && { url: waiting.url, username: waiting.username }} />}
       {adding ? (
         <div className="setup-buttons">
           <button type="button" className="btn tonal" onClick={() => setSummary(false)} data-testid="setup-cancel">{t("setup.sources.cancel")}</button>
@@ -137,9 +140,42 @@ function AddAnother() {
   );
 }
 
-function ConnectForm({ fromDevice, adding }: { fromDevice: boolean; adding: boolean }) {
-  const [url, setUrl] = useState("");
-  const [username, setUsername] = useState("");
+/** Paste (or open) another device's pairing link; the core does the exchange. */
+function PairForm() {
+  const [link, setLink] = useState("");
+  const [busy, setBusy] = useState(false);
+  const error = useApp((s) => s.pairing.error);
+  const pendingPair = useApp((s) => s.pendingPair);
+  const join = (value: string) => {
+    const at = value.search(/hocket:\/\/pair\?/i);
+    const parsed = at >= 0 ? parseDeepLink(value.slice(at).trim()) : undefined;
+    if (parsed?.kind !== "pair") return;
+    setBusy(true);
+    bridge().dispatch({ type: "pairWithInvite", data: { link: value.slice(at).trim() } });
+  };
+  useEffect(() => {
+    if (!pendingPair) return;
+    useApp.getState().setPendingPair(undefined);
+    setLink(pendingPair);
+    join(pendingPair);
+  }, [pendingPair]);
+  useEffect(() => {
+    if (error) setBusy(false);
+  }, [error]);
+  return (
+    <form className="setup-card" onSubmit={(e) => { e.preventDefault(); join(link); }} aria-labelledby="setup-title" aria-describedby="setup-subtitle" data-testid="setup-pair">
+      <h2 id="setup-title" className="setup-title">{t("setup.device.title")}</h2>
+      <p className="setup-subtitle" id="setup-subtitle">{t("setup.device.subtitle")}</p>
+      <label className="setup-field">{t("setup.device.link")}<input className="input" placeholder="hocket://pair?d=…" value={link} onChange={(e) => setLink(e.target.value)} autoFocus data-testid="setup-pair-link" /></label>
+      {error && !busy ? <div className="error" role="alert" data-testid="setup-error"><Icon name="warn" size={18} filled />{error}</div> : null}
+      <button type="submit" className="btn connect primary" disabled={busy || !/hocket:\/\/pair\?/i.test(link)} data-testid="setup-pair-join">{busy ? <Icon name="spinner" size={20} className="spin" /> : null}{busy ? t("setup.device.joining") : t("setup.device.join")}</button>
+    </form>
+  );
+}
+
+function ConnectForm({ adding, initial }: { adding: boolean; initial?: { url: string; username: string } }) {
+  const [url, setUrl] = useState(initial?.url ?? "");
+  const [username, setUsername] = useState(initial?.username ?? "");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -156,11 +192,7 @@ function ConnectForm({ fromDevice, adding }: { fromDevice: boolean; adding: bool
   }, [lastError, submittedAt, busy]);
 
   const cleartext = /^http:\/\/./i.test(url.trim());
-  // The coordinator, or else the (packed) settings, from a pasted setup link: applied as the form
-  // connects, and dropped once the person types a server or user of their own.
-  const [linkCoordinator, setLinkCoordinator] = useState<string | undefined>(undefined);
-  const [linkSettings, setLinkSettings] = useState<string | undefined>(undefined);
-  const connect = (rawUrl: string, user: string, pass: string, coordinator = linkCoordinator, settings = linkSettings) => {
+  const connect = (rawUrl: string, user: string, pass: string) => {
     const u = normaliseServerUrl(rawUrl);
     if (!u) return setError(t("setup.errorUrl"));
     if (!user.trim() || !pass) return setError(t("setup.errorCredentials"));
@@ -168,66 +200,31 @@ function ConnectForm({ fromDevice, adding }: { fromDevice: boolean; adding: bool
     setBusy(true);
     setSubmittedAt(Date.now());
     setSummary(true);
-    if (coordinator) {
-      bridge().dispatch({ type: "setCoordinatorUrl", data: { url: coordinator } });
-      bridge().dispatch({ type: "connectCoordinator" });
-    }
-    if (settings) {
-      void unpackSetupSettings(settings).then((json) => {
-        if (json) bridge().dispatch({ type: "applySetupSettings", data: { settings: json } });
-      });
-    }
     bridge().dispatch({ type: "addAccount", data: { setup: { type: "navidrome", data: { url: u, username: user.trim(), password: pass, name: undefined } } } });
   };
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     connect(url, username, password);
   };
-  // Another device's setup code (Set up another device): fills the form (its
-  // coordinator or settings are applied as the form connects). Pasted here
-  // (fromHere) with the password, it connects straight away. A hocket:// link
-  // opened from outside (any web page can open one) only fills in the server and
-  // user and waits for Connect: its coordinator and settings are dropped, since
-  // neither shows in the form and a coordinator receives the account's
-  // credential when the device joins it.
-  const applySetupLink = (link: SetupLink, fromHere: boolean) => {
-    setUrl(link.server);
-    setUsername(link.user);
-    setPassword(link.password ?? "");
-    setLinkCoordinator(fromHere ? link.coordinator : undefined);
-    setLinkSettings(fromHere ? link.settings : undefined);
-    setError(undefined);
-    if (fromHere && link.password && !busy) connect(link.server, link.user, link.password, link.coordinator, link.settings);
-  };
-  const pendingSetup = useApp((s) => s.pendingSetup);
-  useEffect(() => {
-    if (!pendingSetup) return;
-    useApp.getState().setPendingSetup(undefined);
-    applySetupLink(pendingSetup, false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- applies each link once, as it arrives
-  }, [pendingSetup]);
   const onUrl = (value: string) => {
-    // A pasted setup link, rather than an address (even pasted into a field that holds one).
-    const at = value.search(/hocket:\/\/setup\?/i);
-    const link = at >= 0 ? parseDeepLink(value.slice(at).trim()) : undefined;
-    if (link?.kind === "setup") return applySetupLink(link, true);
+    // A pasted pairing link, rather than an address: pair with that device instead.
+    const at = value.search(/hocket:\/\/pair\?/i);
+    if (at >= 0 && parseDeepLink(value.slice(at).trim())?.kind === "pair") {
+      useApp.getState().setPendingPair(value.slice(at).trim());
+      return;
+    }
     setUrl(value);
-    forgetLink();
   };
-  function forgetLink() {
-    setLinkCoordinator(undefined);
-    setLinkSettings(undefined);
-  }
   const ready = !!url.trim() && !!username.trim() && !!password;
   return (
     <form className="setup-card" onSubmit={submit} aria-labelledby="setup-title" aria-describedby="setup-subtitle">
-      <h2 id="setup-title" className="setup-title">{fromDevice ? t("setup.device.title") : t("setup.sources.navidrome")}</h2>
-      <p className="setup-subtitle" id="setup-subtitle">{fromDevice ? t("setup.device.subtitle") : t("setup.subtitle")}</p>
+      <h2 id="setup-title" className="setup-title">{t("setup.sources.navidrome")}</h2>
+      <p className="setup-subtitle" id="setup-subtitle">{initial ? t("setup.device.password", { user: initial.username, host: initial.url.replace(/^https?:\/\//, "") }) : t("setup.subtitle")}</p>
       <CredentialWarning />
       <label className="setup-field">{t("setup.url")}<input className="input" type="url" aria-required="true" aria-invalid={error === t("setup.errorUrl") || undefined} aria-describedby={[error ? "setup-error" : "", "setup-url-hint", cleartext ? "setup-cleartext" : ""].filter(Boolean).join(" ")} placeholder={t("setup.urlPlaceholder")} value={url} onChange={(e) => onUrl(e.target.value)} autoFocus data-testid="setup-url" /><span className="setup-hint" id="setup-url-hint">{t("setup.urlHint")}</span></label>
       {cleartext ? <div className="setup-cleartext" id="setup-cleartext" data-testid="setup-cleartext"><Icon name="warn" size={18} />{t("setup.cleartext")}</div> : null}
       <div className="setup-pair">
-        <label className="setup-field">{t("setup.username")}<input className="input" aria-required="true" value={username} onChange={(e) => { setUsername(e.target.value); forgetLink(); }} autoComplete="username" data-testid="setup-username" /></label>
+        <label className="setup-field">{t("setup.username")}<input className="input" aria-required="true" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" data-testid="setup-username" /></label>
         <label className="setup-field">{t("setup.password")}
           <span className="setup-password">
             <input className="input" type={showPassword ? "text" : "password"} aria-required="true" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" data-testid="setup-password" />

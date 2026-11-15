@@ -65,15 +65,22 @@ export function App() {
   useWindowChrome(fullscreen);
   useGlobalKeyboard(true);
   useDeepLinks();
+  useIdentityToasts();
   useQueueDropReveal();
-  // A setup link that arrived before the servers loaded (a cold start from the link): turned away
-  // once this device turns out to be signed in, rather than waiting for a sign-out.
-  const pendingSetup = useApp((s) => !!s.pendingSetup);
+  // A pairing link that arrived before the accounts loaded (a cold start from the link): once this
+  // device turns out to be set up, it asks before leaving its own devices for theirs.
+  const pendingPair = useApp((s) => s.pendingPair);
   useEffect(() => {
-    if (!ready || !hasServer || setupSummary || !pendingSetup) return;
-    useApp.getState().setPendingSetup(undefined);
-    showToast(t("setupDevice.alreadySetUp"));
-  }, [ready, hasServer, setupSummary, pendingSetup]);
+    if (!ready || !hasServer || setupSummary || !pendingPair) return;
+    useApp.getState().setPendingPair(undefined);
+    useApp.getState().openDialog({
+      kind: "confirm",
+      title: t("pairDevice.joinTitle"),
+      message: t("pairDevice.joinBody"),
+      confirmLabel: t("pairDevice.joinConfirm"),
+      onConfirm: () => bridge().dispatch({ type: "pairWithInvite", data: { link: pendingPair } }),
+    });
+  }, [ready, hasServer, setupSummary, pendingPair]);
 
   if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
   if (!hasServer || setupSummary) return <Setup />;
@@ -215,6 +222,18 @@ async function confirmDeepLinkTrack(id: string): Promise<void> {
   }
 }
 
+/** Toasts for pairing and the coordinator, as their answers arrive. */
+function useIdentityToasts() {
+  const paired = useApp((s) => s.pairing.paired);
+  const finished = useApp((s) => s.pairing.finished);
+  const joined = useApp((s) => s.coordinator.joined);
+  const error = useApp((s) => s.pairing.error);
+  useEffect(() => { if (paired) showToast(t("pairDevice.paired", { name: paired.name })); }, [paired]);
+  useEffect(() => { if (finished) showToast(t("pairDevice.joined")); }, [finished]);
+  useEffect(() => { if (joined) showToast(joined.owner ? t("identity.claimed") : t("identity.joinedCoordinator")); }, [joined]);
+  useEffect(() => { if (error && useApp.getState().dialog?.kind !== "pairDevice") showToast(t("pairDevice.failed", { message: error })); }, [error]);
+}
+
 function useDeepLinks() {
   const navigate = useApp((s) => s.navigate);
   useEffect(() => {
@@ -223,10 +242,28 @@ function useDeepLinks() {
       // Main already validated and canonicalised the link.
       const link = parseDeepLink(url);
       if (!link || link.kind === "open") return;
-      if (link.kind === "setup") {
-        // Another device's setup code: the setup form applies it; a signed-in device turns it away.
-        if (useApp.getState().accounts.length > 0) showToast(t("setupDevice.alreadySetUp"));
-        else useApp.getState().setPendingSetup(link);
+      if (link.kind === "pair") {
+        // Another device's pairing invite: the setup screen joins with it; a set-up device asks first
+        // (it leaves its own devices and queue for theirs).
+        if (useApp.getState().accounts.length === 0) return useApp.getState().setPendingPair(url);
+        useApp.getState().openDialog({
+          kind: "confirm",
+          title: t("pairDevice.joinTitle"),
+          message: t("pairDevice.joinBody"),
+          confirmLabel: t("pairDevice.joinConfirm"),
+          onConfirm: () => bridge().dispatch({ type: "pairWithInvite", data: { link: url } }),
+        });
+        return;
+      }
+      if (link.kind === "claim") {
+        // A coordinator's claim code: never claimed without asking.
+        useApp.getState().openDialog({
+          kind: "confirm",
+          title: t("identity.claim"),
+          message: `${link.url} · ${link.code}`,
+          confirmLabel: t("identity.claim"),
+          onConfirm: () => bridge().dispatch({ type: "claimCoordinator", data: { url: link.url, code: link.code } }),
+        });
         return;
       }
       if (link.kind === "track") {

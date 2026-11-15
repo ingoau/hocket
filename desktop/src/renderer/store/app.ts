@@ -5,7 +5,6 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
 import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/bridge-types";
-import type { SetupLink } from "@shared/deep-link";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
@@ -83,7 +82,9 @@ export type DialogState =
   | { kind: "albumInfo"; albumId: string }
   /** Save to Coordinator; `allDevices` as the diagnostics page's bundle options. */
   | { kind: "report"; allDevices: boolean }
-  | { kind: "setupDevice" };
+  | { kind: "pairDevice" }
+  /** Remove a device from this identity (with the password-change prompt). */
+  | { kind: "removeDevice"; deviceId: string; name: string; self: boolean };
 
 /** The Add to playlist picker opened on its own (a "+" button, the shortcut), beside what opened it. */
 export interface PlaylistPickerState {
@@ -107,8 +108,8 @@ export interface UiState {
   contextMenu: ContextMenuState | undefined;
   playlistPicker: PlaylistPickerState | undefined;
   dialog: DialogState | undefined;
-  /** Another device's setup link (hocket://setup) waiting for the setup form to apply it. */
-  pendingSetup: SetupLink | undefined;
+  /** A pairing link (hocket://pair) opened from outside, for the setup screen to join with. */
+  pendingPair: string | undefined;
   selection: Selection;
   /** View id the selection belongs to; a route change clears it. */
   selectionScope: string;
@@ -155,7 +156,7 @@ export interface AppStore extends CoreState, UiState {
   closePlaylistPicker(): void;
   openDialog(dialog: DialogState): void;
   closeDialog(): void;
-  setPendingSetup(link: SetupLink | undefined): void;
+  setPendingPair(link: string | undefined): void;
   setSelection(selection: Selection, scope: string, kind?: SelectionKind): void;
   clearSelection(): void;
   setSearchQuery(q: string): void;
@@ -209,7 +210,7 @@ export const useApp = create<AppStore>((set, get) => ({
   contextMenu: undefined,
   playlistPicker: undefined,
   dialog: undefined,
-  pendingSetup: undefined,
+  pendingPair: undefined,
   selection: EMPTY_SELECTION,
   selectionScope: "",
   selectionKind: undefined,
@@ -289,8 +290,8 @@ export const useApp = create<AppStore>((set, get) => ({
   closeDialog() {
     set({ dialog: undefined });
   },
-  setPendingSetup(pendingSetup) {
-    set({ pendingSetup });
+  setPendingPair(pendingPair) {
+    set({ pendingPair });
   },
   setSelection(selection, scope, kind) {
     set({ selection, selectionScope: scope, selectionKind: kind });

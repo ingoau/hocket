@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, BatterySaver, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, AccountInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem, SaverFeature,
+  AudioSettings, BatterySaver, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, AccountInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem, SaverFeature, IdentityInfo, PairingAccount, CoordinatorInviteInfo,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -72,7 +72,25 @@ export interface CoreState {
   roomDiagnostics: RoomDiagnosticsStatus | undefined;
   /** The Save to Coordinator upload, for the bar across the top of the window. */
   reportUpload: ReportUploadStatus | undefined;
+  /** This device's Hocket identity: its devices, credential sync, the coordinator. */
+  identity: IdentityInfo;
+  /** Pairing: the invite this device shows, and how the last exchange ended. */
+  pairing: PairingState;
+  /** The coordinator's invites (owner only), and how the last claim or request ended. */
+  coordinator: { invites: CoordinatorInviteInfo[]; created: string | undefined; joined: { url: string; owner: boolean } | undefined; error: string | undefined };
 }
+
+export interface PairingState {
+  invite: { link: string; expiresAt: number } | undefined;
+  /** A device that just joined through this device's invite. */
+  paired: { deviceId: string; name: string } | undefined;
+  /** This device joined another's identity: the accounts it still needs passwords for. */
+  finished: PairingAccount[] | undefined;
+  error: string | undefined;
+}
+
+export const EMPTY_IDENTITY: IdentityInfo = { id: "", deviceId: "", devices: [], removed: false, credentialSync: false, coordinator: undefined };
+export const EMPTY_PAIRING: PairingState = { invite: undefined, paired: undefined, finished: undefined, error: undefined };
 
 export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: false, repeat: "off", autoplay: false };
 
@@ -120,6 +138,9 @@ export const initialCoreState: CoreState = {
   exported: undefined,
   roomDiagnostics: undefined,
   reportUpload: undefined,
+  identity: EMPTY_IDENTITY,
+  pairing: EMPTY_PAIRING,
+  coordinator: { invites: [], created: undefined, joined: undefined, error: undefined },
   announcedUndo: [],
   queueReplacingUndo: [],
 };
@@ -130,6 +151,7 @@ export function applySnapshot(state: CoreState, s: Snapshot): CoreState {
     ...state,
     ready: true,
     accounts: s.accounts,
+    identity: s.identity ?? state.identity,
     session: s.session,
     queue: s.queue,
     transport: s.transport,
@@ -164,6 +186,24 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return applySnapshot(state, e.data.snapshot);
     case "accountsChanged":
       return { ...state, accounts: e.data.accounts };
+    case "identityChanged":
+      return { ...state, identity: e.data.identity };
+    case "pairingInvite":
+      return { ...state, pairing: { ...EMPTY_PAIRING, invite: { link: e.data.link, expiresAt: e.data.expires_at } } };
+    case "devicePaired":
+      return { ...state, pairing: { ...state.pairing, invite: undefined, paired: { deviceId: e.data.device_id, name: e.data.name } } };
+    case "pairingFinished":
+      return { ...state, pairing: { ...EMPTY_PAIRING, finished: e.data.accounts } };
+    case "pairingFailed":
+      return { ...state, pairing: { ...state.pairing, error: e.data.message } };
+    case "credentialsSynced": // main stores them
+      return state;
+    case "coordinatorJoined":
+      return { ...state, coordinator: { ...state.coordinator, joined: { url: e.data.url, owner: e.data.owner }, error: undefined } };
+    case "coordinatorFailed":
+      return { ...state, coordinator: { ...state.coordinator, error: e.data.message } };
+    case "coordinatorInvites":
+      return { ...state, coordinator: { ...state.coordinator, invites: e.data.invites, created: e.data.created ?? undefined, error: undefined } };
     case "syncProgress":
       return { ...state, syncProgress: e.data.progress, libraryVersion: e.data.progress.finished ? state.libraryVersion + 1 : state.libraryVersion };
     case "libraryChanged":
