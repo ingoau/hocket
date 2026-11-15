@@ -104,6 +104,32 @@ class CoreHostReplayTest {
         replay = kotlinx.coroutines.CoroutineScope(coroutineContext + Job()).launch(start = CoroutineStart.UNDISPATCHED) { CoreHost.replayCredentials(core, store) }
     }
 
+    private fun ytm(): AccountInfo {
+        val features = ProviderCapabilities(true, true, true, true, false, false, true, true, false, true, false, true, true, true, true, true)
+        return AccountInfo("UCme", AccountKind.YoutubeMusic, 1u, "ytm", YtmLogin.URL, "Test User", "YouTube Music (Test User)", features, caps, null, reachable = true)
+    }
+
+    @Test
+    fun youTubeMusicSignInIsKeptUnderItsKeyAndReplayedWithItsCookies() = runBlocking {
+        startReplay()
+        core.emit(started(emptyList()))
+        CoreHost.ytmLogin(core::dispatch, "SAPISID=abc")
+        assertTrue("not stored before the core accepts it", store.keys().isEmpty())
+        core.emit(serversChanged(listOf(ytm())))
+        assertEquals(listOf(YtmLogin.KEY), store.keys())
+        // The next core start replays it with its cookies.
+        replay?.cancel()
+        CoreHost.resetForTests()
+        core = ScriptedCore()
+        startReplay()
+        core.emit(started(listOf(ytm())))
+        val setup = core.dispatched.filterIsInstance<Command.AddAccount>().single().data.setup as AccountSetup.YoutubeMusic
+        assertEquals("SAPISID=abc", setup.data.cookies)
+        // Signing out forgets it.
+        CoreHost.removeAccount(core::dispatch, ytm())
+        assertTrue(store.keys().isEmpty())
+    }
+
     @Test
     fun storedLoginIsReplayedOnceAndSnapshotsNeverReplay() = runBlocking {
         store.save(credential)

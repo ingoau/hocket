@@ -18,6 +18,7 @@ import app.hocket.core.api.Platform
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.AccountInfo
+import app.hocket.core.api.AccountKind
 import app.hocket.core.fake.FakeCore
 import java.io.File
 import java.util.UUID
@@ -202,8 +203,13 @@ object CoreHost {
                         val stored = lookups.values.mapNotNull { (it as? CredentialLookup.Found)?.credential }
                         val toReplay = if (known.isEmpty()) stored else stored.filter { c -> known.any { matches(it, c) } }
                         toReplay.forEach { c ->
-                            Log.i(TAG, "replaying credentials for ${c.username}@${c.url}")
-                            core.dispatch(Commands.addNavidrome(c.url, c.username, c.password, c.name))
+                            if (YtmLogin.isYtm(c)) {
+                                Log.i(TAG, "replaying the YouTube Music sign-in")
+                                core.dispatch(Commands.addYoutubeMusic(c.password.ifEmpty { null }))
+                            } else {
+                                Log.i(TAG, "replaying credentials for ${c.username}@${c.url}")
+                                core.dispatch(Commands.addNavidrome(c.url, c.username, c.password, c.name))
+                            }
                         }
                         refreshLogins(lookups)
                         _credentialsReplayed.value = true
@@ -222,8 +228,10 @@ object CoreHost {
                         }
                     }
                     // Only after the replay: the start-up list is what the replay is keyed on. An
-                    // emptied list (RemoveAccount) drops everything.
-                    if (replayed) store.retainOnly(servers.map { it.url.trimEnd('/') to it.username })
+                    // emptied list (RemoveAccount) drops everything. YouTube Music keeps one sign-in
+                    // per device under a fixed key while any of its accounts is installed.
+                    if (replayed) store.retainOnly(servers.filter { it.kind != AccountKind.YoutubeMusic }.map { it.url.trimEnd('/') to it.username } +
+                        listOfNotNull(YtmLogin.KEY.takeIf { servers.any { it.kind == AccountKind.YoutubeMusic } }))
                     refreshLogins(store)
                 }
                 // Credential sync brought passwords (the core already added the accounts): keep them
@@ -249,7 +257,8 @@ object CoreHost {
     }
 
     private fun matches(server: AccountInfo, c: ServerCredential) =
-        server.id == ServerCredentialStore.key(c.url, c.username)
+        if (YtmLogin.isYtm(c)) server.kind == AccountKind.YoutubeMusic
+        else server.id == ServerCredentialStore.key(c.url, c.username)
 
     private fun refreshLogins(store: ServerCredentialStore) = refreshLogins(store.lookupAll())
 
@@ -280,8 +289,22 @@ object CoreHost {
      */
     fun removeAccount(dispatch: (Command) -> Unit, server: AccountInfo) {
         pendingLogin = null
-        credentials?.let { it.remove(server.url, server.username); refreshLogins(it) }
+        credentials?.let {
+            if (server.kind == AccountKind.YoutubeMusic) it.remove(YtmLogin.KEY.first, YtmLogin.KEY.second)
+            else it.remove(server.url, server.username)
+            refreshLogins(it)
+        }
         dispatch(Commands.removeAccount(server.id))
+    }
+
+    /**
+     * YouTube Music on this device: signed in with [cookies] from the sign-in WebView, or anonymous
+     * (null). Held like a Navidrome login until the core lists a YouTube Music account, then kept
+     * under one fixed key (its account id, a channel id, is only known once the core checked it).
+     */
+    fun ytmLogin(dispatch: (Command) -> Unit, cookies: String?) {
+        pendingLogin = YtmLogin.credential(cookies)
+        dispatch(Commands.addYoutubeMusic(cookies))
     }
 
     /** Clears the login bookkeeping between tests (the object is process-global). */

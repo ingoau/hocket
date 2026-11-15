@@ -78,7 +78,7 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 
 /** Where setup is: the welcome, the sign-in form, or the summary of the server just connected. */
-private enum class SetupStep { Welcome, Form, Summary, Another }
+private enum class SetupStep { Welcome, Form, Summary, Another, Ytm }
 
 /**
  * Server setup is the entire first screen (design: empty states, the Setup board): a welcome (the
@@ -108,6 +108,9 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     var another by rememberSaveable { mutableStateOf(false) }
     // The other device's card: the form says to paste its setup link.
     var fromDevice by rememberSaveable { mutableStateOf(false) }
+    // YouTube Music's card: sign in, or carry on without an account.
+    var ytm by rememberSaveable { mutableStateOf(false) }
+    var ytmError by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(existing?.id) { if (addingFrom != null && existing != null && existing.id != addingFrom) addingFrom = null }
     // Pairing with another device (its link scanned, pasted or opened), until the core answers.
     var pairing by rememberSaveable { mutableStateOf(false) }
@@ -120,6 +123,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
 
     val step = when {
         another -> SetupStep.Another
+        ytm -> SetupStep.Ytm
         addingFrom != null -> SetupStep.Form
         existing != null && summary -> SetupStep.Summary
         started -> SetupStep.Form
@@ -173,15 +177,30 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
         app.hocket.AppLinks.consumePair(link)
         pairWith(link)
     }
+    val ytmSignIn = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
+        val cookies = result.data?.getStringExtra(app.hocket.YtmSignInActivity.EXTRA_COOKIES)
+        if (result.resultCode == android.app.Activity.RESULT_OK && cookies != null) {
+            ytm = false
+            addingFrom = null
+            onConnecting()
+            CoreHost.ytmLogin(client::dispatch, cookies)
+        } else ytmError = true
+    }
+    fun ytmAnonymous() {
+        ytm = false
+        addingFrom = null
+        onConnecting()
+        CoreHost.ytmLogin(client::dispatch, null)
+    }
     val cleartext = url.trim().startsWith("http://", ignoreCase = true)
     val ground = Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainer))
 
     BoxWithConstraints(Modifier.fillMaxSize().background(ground)) {
         val tooOld = existing != null && !existing.capabilities.meetsFloor
         // The mark: centred and large on the welcome, small over the form, mid-size over the summary.
-        val tile by animateDpAsState(when (step) { SetupStep.Welcome -> 104.dp; SetupStep.Form -> 72.dp; SetupStep.Summary, SetupStep.Another -> 104.dp }, label = "setupTile")
-        val mark by animateDpAsState(when (step) { SetupStep.Welcome -> 40.dp; SetupStep.Form -> 26.dp; SetupStep.Summary, SetupStep.Another -> 30.dp }, label = "setupMark")
-        val top by animateDpAsState(when (step) { SetupStep.Welcome -> maxHeight * 0.14f; SetupStep.Form -> 40.dp; SetupStep.Summary, SetupStep.Another -> 72.dp }, label = "setupTop")
+        val tile by animateDpAsState(when (step) { SetupStep.Welcome -> 104.dp; SetupStep.Form -> 72.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm -> 104.dp }, label = "setupTile")
+        val mark by animateDpAsState(when (step) { SetupStep.Welcome -> 40.dp; SetupStep.Form -> 26.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm -> 30.dp }, label = "setupMark")
+        val top by animateDpAsState(when (step) { SetupStep.Welcome -> maxHeight * 0.14f; SetupStep.Form -> 40.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm -> 72.dp }, label = "setupTop")
         Column(Modifier.fillMaxWidth().systemBarsPadding().padding(top = top).alpha(if (tooOld) 0.45f else 1f), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(if (step == SetupStep.Welcome) 28.dp else 14.dp)) {
             AppTile(tile)
@@ -192,6 +211,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
             SetupStep.Welcome -> Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 480.dp).systemBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(stringResource(R.string.setup_sources_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).semantics { heading() })
                 SourceCard(HocketIcons.Filled.LibraryMusic, stringResource(R.string.setup_source_navidrome), stringResource(R.string.setup_source_navidrome_body), "setup.start") { fromDevice = false; started = true }
+                SourceCard(HocketIcons.Filled.PlayCircle, stringResource(R.string.setup_source_ytm), stringResource(R.string.setup_source_ytm_body), "setup.ytm") { ytmError = false; ytm = true }
                 SourceCard(HocketIcons.Filled.Devices, stringResource(R.string.setup_source_device), stringResource(R.string.setup_source_device_body), "setup.device") {
                     fromDevice = true
                     if (app.hocket.SetupScanner.available) scan() else started = true
@@ -205,6 +225,11 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                     addingFrom = existing?.id ?: ""
                     another = false
                     started = true
+                }
+                SourceCard(HocketIcons.Filled.PlayCircle, stringResource(R.string.setup_source_ytm), stringResource(R.string.setup_source_ytm_body), "setup.another.ytm") {
+                    another = false
+                    ytmError = false
+                    ytm = true
                 }
                 Button(onClick = { another = false; onContinue() }, shapes = ButtonDefaults.shapes(), modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.LargeContainerHeight).padding(top = 8.dp).testTag("setup.done"),
                     contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.LargeContainerHeight)) { Text(stringResource(R.string.setup_another_done), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight)) }
@@ -284,12 +309,26 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                     if (addingFrom != null && existing != null && !connecting) TextButton(onClick = { addingFrom = null; onContinue() }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp).heightIn(min = 48.dp).testTag("setup.cancel")) { Text(stringResource(R.string.setup_cancel)) }
                 }
             }
+            SetupStep.Ytm -> Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 480.dp).systemBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.setup_ytm_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().semantics { heading() })
+                Text(stringResource(R.string.setup_ytm_body), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
+                if (ytmError) Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().testTag("setup.error")) {
+                    Text(stringResource(R.string.setup_ytm_cancelled), color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+                Button(onClick = { ytmError = false; ytmSignIn.launch(android.content.Intent(context, app.hocket.YtmSignInActivity::class.java)) }, shapes = ButtonDefaults.shapes(),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.LargeContainerHeight).testTag("setup.ytm.signIn"), contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.LargeContainerHeight)) {
+                    Text(stringResource(R.string.setup_ytm_sign_in), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
+                }
+                TextButton(onClick = ::ytmAnonymous, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.anonymous")) { Text(stringResource(R.string.setup_ytm_anonymous)) }
+                TextButton(onClick = { ytm = false; if (existing != null && summary) another = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.back")) { Text(stringResource(R.string.setup_cancel)) }
+            }
             SetupStep.Summary -> existing?.let { server ->
                 Column(
                     Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, top = 72.dp + 104.dp + 14.dp + 48.dp, bottom = 32.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    ServerSummary(server, sync, onContinue = { another = true }, onDifferentServer = { CoreHost.removeAccount(client::dispatch, server); started = true })
+                    if (server.kind == app.hocket.core.api.AccountKind.YoutubeMusic) YtmSummary(server, sync, onContinue = { another = true }, onRemove = { CoreHost.removeAccount(client::dispatch, server); ytm = true })
+                    else ServerSummary(server, sync, onContinue = { another = true }, onDifferentServer = { CoreHost.removeAccount(client::dispatch, server); started = true })
                 }
             }
         }
@@ -369,7 +408,36 @@ private fun ServerSummary(server: AccountInfo, sync: app.hocket.core.api.SyncPro
     }
 }
 
-/** One kind of source on "Where's your music?": its icon, name and what it is, as a tonal card. */
+/**
+ * A YouTube Music account just added: who is signed in (or nobody), what it offers, its first sync
+ * when signed in, and Continue.
+ */
+@Composable
+private fun YtmSummary(account: AccountInfo, sync: app.hocket.core.api.SyncProgress?, onContinue: () -> Unit, onRemove: () -> Unit) {
+    val signedIn = account.features.librarySync
+    Column(Modifier.fillMaxWidth().widthIn(max = 480.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(stringResource(R.string.setup_ytm_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        Text(if (signedIn) stringResource(R.string.setup_ytm_who, account.username.ifEmpty { account.name }) else stringResource(R.string.setup_ytm_anon),
+            style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp).testTag("setup.ytm.who"))
+        FlowRow(Modifier.padding(top = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            CapChip(stringResource(R.string.setup_ytm_cap_search), true)
+            CapChip(stringResource(R.string.setup_caps_lyrics), true)
+            CapChip(stringResource(R.string.setup_ytm_cap_library), signedIn)
+            CapChip(stringResource(R.string.setup_ytm_cap_premium), account.capabilities.serverVersion == "premium")
+        }
+        if (signedIn) {
+            val s = sync?.takeIf { it.serverId == account.id }
+            Text(when { s == null -> stringResource(R.string.setup_sync_starting); s.finished -> stringResource(R.string.setup_synced); else -> stringResource(R.string.setup_syncing, s.phase) }, style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 28.dp).semantics { liveRegion = LiveRegionMode.Polite })
+        }
+        Spacer(Modifier.height(40.dp))
+        Button(onClick = onContinue, shapes = ButtonDefaults.shapes(), modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.LargeContainerHeight).testTag("setup.continue"),
+            contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.LargeContainerHeight)) { Text(stringResource(R.string.setup_continue), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight)) }
+        TextButton(onClick = onRemove, modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp).testTag("setup.differentServer")) { Text(stringResource(R.string.setup_remove_server)) }
+    }
+}
+
+/** One kind of source on "Where's your music?: its icon, name and what it is, as a tonal card. */
 @Composable
 private fun SourceCard(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, body: String, tag: String, onClick: () -> Unit) {
     Surface(onClick = onClick, color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).testTag(tag)) {

@@ -23,6 +23,10 @@ object Commands {
     fun setPowerSave(enabled: Boolean) = Command.SetPowerSave(CommandSetPowerSaveInner(enabled))
     fun addNavidrome(url: String, username: String, password: String, name: String? = null) =
         Command.AddAccount(CommandAddAccountInner(AccountSetup.Navidrome(AccountSetupNavidromeInner(url, username, password, name))))
+    /** YouTube Music on this device: signed in with [cookies] (a `Cookie:` header for music.youtube.com), or anonymous. */
+    fun addYoutubeMusic(cookies: String?) =
+        Command.AddAccount(CommandAddAccountInner(AccountSetup.YoutubeMusic(AccountSetupYoutubeMusicInner(cookies, false))))
+    fun setInLibrary(tracks: List<TrackRef>, added: Boolean) = Command.SetInLibrary(CommandSetInLibraryInner(tracks, added))
     fun removeAccount(accountId: AccountId) = Command.RemoveAccount(CommandRemoveAccountInner(accountId))
     fun reorderAccounts(accountIds: List<AccountId>) = Command.ReorderAccounts(CommandReorderAccountsInner(accountIds))
     fun probeAccount(accountId: AccountId) = Command.ProbeAccount(CommandProbeAccountInner(accountId))

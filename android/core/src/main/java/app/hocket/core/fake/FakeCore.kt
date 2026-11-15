@@ -839,7 +839,10 @@ class FakeCore(
             is Command.SetVisibility -> Unit
             is Command.SetPowerSave -> if (powerSave != c.data.enabled) { powerSave = c.data.enabled; refreshBatterySaver() }
 
-            is Command.AddAccount -> when (val setup = c.data.setup) { is AccountSetup.Navidrome -> addServer(setup.data) }
+            is Command.AddAccount -> when (val setup = c.data.setup) {
+                is AccountSetup.Navidrome -> addServer(setup.data)
+                is AccountSetup.YoutubeMusic -> addYoutubeMusic(setup.data.cookies != null)
+            }
             is Command.ReorderAccounts -> {
                 val order = c.data.account_ids
                 val sorted = servers.sortedBy { order.indexOf(it.id) }.mapIndexed { i, a -> a.copy(priority = i.toUInt()) }
@@ -1210,6 +1213,7 @@ class FakeCore(
                 emitInvites(code)
             }
             is Command.RevokeCoordinatorInvite -> { coordinatorInvites.removeAll { it.code == c.data.code }; emitInvites() }
+            is Command.YtmJsAnswer -> Unit
             Command.ListCoordinatorInvites -> emitInvites()
         }
     }
@@ -1485,6 +1489,19 @@ class FakeCore(
             ProviderCapabilities(librarySync = true, search = true, browse = true, stream = true, download = true, transcode = true, coverArt = true, star = true,
                 rate = true, playlists = true, smartPlaylists = caps.nativeApi, reportPlay = true, lyrics = true, radio = true, homeShelves = false, share = true),
             caps, lastSync, lastSyncTracks, reachable = true)
+
+    /** YouTube Music, anonymous or signed in, after any other account (the fake has no YouTube Music library). */
+    private fun addYoutubeMusic(signedIn: Boolean) {
+        val caps = ServerCapabilities(null, false, emptyList(), false, false, false, false, false, false, false, false)
+        val account = AccountInfo(if (signedIn) "UCfakeChannel" else "ytm:anon", AccountKind.YoutubeMusic, servers.size.toUInt(), "ytm", "https://music.youtube.com",
+            if (signedIn) "Test User" else "", if (signedIn) "YouTube Music (Test User)" else "YouTube Music",
+            ProviderCapabilities(librarySync = signedIn, search = true, browse = true, stream = true, download = false, transcode = false, coverArt = true, star = signedIn,
+                rate = false, playlists = signedIn, smartPlaylists = false, reportPlay = signedIn, lyrics = true, radio = true, homeShelves = true, share = true, libraryEdit = signedIn),
+            caps, null, null, reachable = true)
+        servers.removeAll { it.kind == AccountKind.YoutubeMusic }
+        servers += account
+        emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
+    }
 
     private fun startSync(full: Boolean) {
         val total = library.tracks.size

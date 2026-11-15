@@ -98,6 +98,11 @@
              handed the query to search (MediaSearchActivity; plays directly only with "Allow control
              by other apps" on). -->
         <activity
+            android:name="app.hocket.YtmSignInActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|smallestScreenSize"
+            android:theme="@style/Theme.Hocket" />
+        <activity
             android:name="app.hocket.MediaSearchActivity"
             android:excludeFromRecents="true"
             android:exported="true"
