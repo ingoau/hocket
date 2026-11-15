@@ -444,7 +444,9 @@ impl SimDevice {
             Output::IdentityChanged => self.note("identity changed".into()),
             Output::Paired { device_id, name } => self.note(format!("paired {name} ({device_id})")),
             Output::PairFailed { message } => self.note(format!("pairing refused: {message}")),
-            Output::CoordinatorInvites { .. } | Output::CoordinatorUnreachable => {}
+            Output::CoordinatorInvites { .. }
+            | Output::CoordinatorYtm { .. }
+            | Output::CoordinatorUnreachable => {}
             Output::DocumentChanged {
                 document,
                 cause,

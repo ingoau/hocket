@@ -53,6 +53,12 @@ impl Actor {
             Command::ListCoordinatorInvites => {
                 self.coordinator_request(crate::connect::wire::Msg::CoordInviteList)
             }
+            Command::SignCoordinatorInToYoutubeMusic { cookies } => {
+                self.sign_coordinator_in_to_ytm(cookies)
+            }
+            Command::CoordinatorYtmStatus => {
+                self.coordinator_request(crate::connect::wire::Msg::CoordYtmQuery)
+            }
             Command::SyncLibrary { account_id, full } => {
                 self.maybe_start_sync_for(&account_id, full, true);
             }

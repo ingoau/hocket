@@ -808,7 +808,7 @@ pub fn spawn(
 
 /// Lower this thread's priority (Linux: the nice value is per thread, and
 /// the inference pool the analyser creates on it inherits it).
-fn lower_priority(nice: i32) {
+pub(crate) fn lower_priority(nice: i32) {
     if nice <= 0 {
         return;
     }

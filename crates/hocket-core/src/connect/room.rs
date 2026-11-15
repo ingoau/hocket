@@ -1292,6 +1292,9 @@ impl Room {
             | Msg::CoordInviteRevoke { .. }
             | Msg::CoordInviteList
             | Msg::CoordInvites { .. }
+            | Msg::CoordYtmSignIn { .. }
+            | Msg::CoordYtmQuery
+            | Msg::CoordYtmStatus { .. }
             | Msg::Unknown => {}
             Msg::IdentitySync { sync } => {
                 if peer != LOOPBACK {

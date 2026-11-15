@@ -110,6 +110,7 @@ pub mod analysis;
 pub mod identities;
 pub mod reports;
 pub mod worker;
+pub mod ytm;
 
 /// Epoch milliseconds now; injectable so tests can move time (grant expiry,
 /// retention).
@@ -170,6 +171,10 @@ pub struct Args {
     /// memory without a data dir) for clients to share.
     #[arg(long, default_value_t = false)]
     pub no_analysis_store: bool,
+    /// Analyse YouTube Music tracks clients ask for (anonymously, or with the
+    /// session the owner signs it in with from a device). Off when not given.
+    #[arg(long, default_value_t = false)]
+    pub analysis_ytm: bool,
     /// Most AutoMix records kept per provider (one Navidrome server); the
     /// least recently updated go first.
     #[arg(long, default_value_t = 400_000)]
@@ -237,6 +242,7 @@ impl Args {
             no_reports: false,
             reports_quota_mb: 20480,
             no_analysis_store: false,
+            analysis_ytm: false,
             analysis_records_per_server: 400_000,
             analysis_mb_per_server: 2048,
             analysis_quota_mb: 8192,
@@ -399,6 +405,8 @@ pub struct App {
     /// Tracks clients missed in the store, for the worker to analyse first;
     /// `None` without `--analysis-server`.
     worker_priority: Option<Arc<worker::PriorityQueue>>,
+    /// YouTube Music analysis, with `--analysis-ytm`.
+    ytm: Option<Arc<ytm::YtmAnalysis>>,
     clock: Clock,
     started: Instant,
 }
@@ -410,6 +418,16 @@ impl App {
 
     /// [`App::new`] with another clock (tests).
     pub fn with_clock(args: Args, clock: Clock) -> anyhow::Result<Arc<App>> {
+        App::with_ytm_http(args, clock, None)
+    }
+
+    /// [`App::with_clock`] with another InnerTube transport (tests; `None`:
+    /// the real one).
+    pub fn with_ytm_http(
+        args: Args,
+        clock: Clock,
+        ytm_http: Option<Arc<dyn hocket_core::ytm::http::YtmHttp>>,
+    ) -> anyhow::Result<Arc<App>> {
         let store: Arc<dyn ReplicaStore> = match &args.data_dir {
             Some(dir) => Arc::new(FileReplicaStore::new(dir)?),
             None => Arc::new(MemoryReplicaStore::new()),
@@ -441,6 +459,26 @@ impl App {
             .analysis_server
             .as_deref()
             .map(|server| Arc::new(worker::PriorityQueue::new(server)));
+        if args.analysis_ytm && analysis.is_none() {
+            anyhow::bail!("--analysis-ytm needs the analysis store: drop --no-analysis-store");
+        }
+        let ytm = if args.analysis_ytm {
+            let http = match ytm_http {
+                Some(h) => h,
+                None => Arc::new(
+                    hocket_core::ytm::http::ReqwestYtmHttp::new().map_err(anyhow::Error::msg)?,
+                ),
+            };
+            let ytm_clock: Arc<dyn hocket_core::util::Clock> =
+                Arc::new(hocket_core::util::WallClock);
+            Some(Arc::new(ytm::YtmAnalysis::open(
+                http,
+                ytm_clock,
+                args.data_dir.as_deref(),
+            )))
+        } else {
+            None
+        };
         Ok(Arc::new(App {
             args,
             rooms: Mutex::new(HashMap::new()),
@@ -454,6 +492,7 @@ impl App {
             analysis,
             worker_status: Arc::new(Mutex::new(None)),
             worker_priority,
+            ytm,
             clock,
             started: Instant::now(),
         }))
@@ -485,6 +524,52 @@ impl App {
     /// `--analysis-server`).
     pub fn worker_priority(&self) -> Option<Arc<worker::PriorityQueue>> {
         self.worker_priority.clone()
+    }
+
+    /// YouTube Music analysis, with `--analysis-ytm`.
+    pub fn ytm(&self) -> Option<Arc<ytm::YtmAnalysis>> {
+        self.ytm.clone()
+    }
+
+    /// The owner's `CoordYtmSignIn` (with `envelope`) or `CoordYtmQuery`.
+    async fn answer_ytm(
+        &self,
+        tx: &mpsc::UnboundedSender<Message>,
+        sign_in: Option<Option<hocket_core::identity::crypto::Envelope>>,
+    ) {
+        let Some(y) = self.ytm.clone() else {
+            send_frame(
+                tx,
+                Msg::CoordYtmStatus {
+                    enabled: false,
+                    signed_in: false,
+                    account: None,
+                    error: sign_in.map(|_| {
+                        "YouTube Music analysis is off on this coordinator (--analysis-ytm).".into()
+                    }),
+                },
+            );
+            return;
+        };
+        let (status, error) = match sign_in {
+            None => (y.status(), None),
+            Some(envelope) => match y.sign_in(self.identities.secret(), envelope.as_ref()).await {
+                Ok(s) => (s, None),
+                Err(e) => {
+                    warn!(error = %e, "YouTube Music sign-in refused");
+                    (y.status(), Some(e))
+                }
+            },
+        };
+        send_frame(
+            tx,
+            Msg::CoordYtmStatus {
+                enabled: true,
+                signed_in: status.signed_in,
+                account: status.account,
+                error,
+            },
+        );
     }
 
     /// Where the analysis worker reports its progress.
@@ -533,6 +618,17 @@ impl App {
             Ok(Ok(found)) => {
                 // Misses go to the worker, if it analyses that provider: no
                 // record, or one it would replace (no beat grid, not its own).
+                if let Some(y) = &self.ytm {
+                    let missed = asked.iter().filter(|w| {
+                        !found
+                            .iter()
+                            .any(|(k, r)| *k == w.key && analysis::complete(r))
+                    });
+                    let added = y.push(missed.map(|w| &w.key));
+                    if added > 0 {
+                        debug!(added, queued = y.queued(), "YouTube Music misses queued");
+                    }
+                }
                 if let Some(queue) = &self.worker_priority {
                     let missed: Vec<String> = asked
                         .iter()
@@ -1206,6 +1302,19 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
                     }
                 } else {
                     debug!(peer, msg = msg.msg.name(), "analysis message dropped");
+                }
+                continue;
+            }
+            Msg::CoordYtmSignIn { .. } | Msg::CoordYtmQuery => {
+                // The owner identity's members only; never relayed.
+                if member() && app.identities.is_owner(&current_scope) {
+                    let sign_in = match &msg.msg {
+                        Msg::CoordYtmSignIn { envelope } => Some(envelope.clone()),
+                        _ => None,
+                    };
+                    app.answer_ytm(&tx, sign_in).await;
+                } else {
+                    debug!(peer, "YouTube Music analysis request from a non-owner");
                 }
                 continue;
             }

@@ -451,6 +451,17 @@ impl Actor {
                     created,
                 })
             }
+            Output::CoordinatorYtm {
+                enabled,
+                signed_in,
+                account,
+                error,
+            } => self.emit(Event::CoordinatorYtmStatus {
+                enabled,
+                signed_in,
+                account,
+                error,
+            }),
             Output::CoordinatorUnreachable => self.emit(Event::CoordinatorFailed {
                 message: "Not connected to the coordinator right now.".into(),
             }),

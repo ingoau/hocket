@@ -447,6 +447,13 @@ pub enum Output {
         invites: Vec<crate::connect::wire::CoordInvite>,
         created: Option<String>,
     },
+    /// The hosted coordinator's YouTube Music analysis (`Msg::CoordYtmStatus`).
+    CoordinatorYtm {
+        enabled: bool,
+        signed_in: bool,
+        account: Option<String>,
+        error: Option<String>,
+    },
     /// [`Input::ToCoordinator`] while not attached to the coordinator.
     CoordinatorUnreachable,
     /// A pairing request for an invite we don't hold, or a broken one.
@@ -3369,6 +3376,19 @@ impl Engine {
                 self.out
                     .push(Output::CoordinatorInvites { invites, created });
             }
+            Msg::CoordYtmStatus {
+                enabled,
+                signed_in,
+                account,
+                error,
+            } if !from_loopback => {
+                self.out.push(Output::CoordinatorYtm {
+                    enabled,
+                    signed_in,
+                    account,
+                    error,
+                });
+            }
             Msg::PairJoin {
                 join,
                 relay: Some(relay),
@@ -3388,6 +3408,9 @@ impl Engine {
             | Msg::CoordInviteRevoke { .. }
             | Msg::CoordInviteList
             | Msg::CoordInvites { .. }
+            | Msg::CoordYtmSignIn { .. }
+            | Msg::CoordYtmQuery
+            | Msg::CoordYtmStatus { .. }
             | Msg::Op { .. }
             | Msg::SyncRequest
             | Msg::LeaseHeartbeat { .. }

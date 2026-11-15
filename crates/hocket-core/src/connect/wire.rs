@@ -190,6 +190,9 @@ pub struct AnalysisKey {
     pub fingerprint: String,
 }
 
+/// The envelope context a coordinator's YouTube Music session is sealed under.
+pub const COORD_YTM_CONTEXT: &[u8] = b"hocket-coordinator-ytm-v1";
+
 /// The longest provider or fingerprint the coordinator keeps.
 pub const ANALYSIS_KEY_MAX: usize = 512;
 
@@ -1292,6 +1295,29 @@ pub enum Msg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         created: Option<String>,
     },
+    /// → hosted coordinator, the owner identity's members only: sign the
+    /// coordinator's own YouTube Music analysis in with a session of its
+    /// own (`envelope`: the `Cookie:` header, sealed to the coordinator's
+    /// key under [`COORD_YTM_CONTEXT`]), or out (`None`). Answered with
+    /// [`Msg::CoordYtmStatus`].
+    CoordYtmSignIn {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        envelope: Option<crate::identity::crypto::Envelope>,
+    },
+    /// → hosted coordinator, the owner identity's members only: answer with
+    /// [`Msg::CoordYtmStatus`].
+    CoordYtmQuery,
+    /// → client. The coordinator's YouTube Music analysis: `enabled` with
+    /// `--analysis-ytm`; signed in as `account`, or anonymous; `error` when
+    /// the last sign-in was refused.
+    CoordYtmStatus {
+        enabled: bool,
+        signed_in: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 
     /// Anything this build does not know. Ignored.
     #[serde(other)]
@@ -1373,6 +1399,9 @@ impl Msg {
         "coordInviteRevoke",
         "coordInviteList",
         "coordInvites",
+        "coordYtmSignIn",
+        "coordYtmQuery",
+        "coordYtmStatus",
         "unknown",
     ];
 
@@ -1443,6 +1472,9 @@ impl Msg {
             Msg::CoordInviteRevoke { .. } => "coordInviteRevoke",
             Msg::CoordInviteList => "coordInviteList",
             Msg::CoordInvites { .. } => "coordInvites",
+            Msg::CoordYtmSignIn { .. } => "coordYtmSignIn",
+            Msg::CoordYtmQuery => "coordYtmQuery",
+            Msg::CoordYtmStatus { .. } => "coordYtmStatus",
             Msg::Unknown => "unknown",
         }
     }

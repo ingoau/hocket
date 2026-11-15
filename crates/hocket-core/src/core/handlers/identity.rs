@@ -517,7 +517,7 @@ impl Actor {
             .is_some_and(|p| p.owner);
         if !owner {
             self.emit(Event::CoordinatorFailed {
-                message: "Only the identity that claimed the coordinator can invite others.".into(),
+                message: "Only the identity that claimed the coordinator can do that.".into(),
             });
             return;
         }
@@ -525,6 +525,40 @@ impl Actor {
             return;
         }
         self.engine_input(Input::ToCoordinator(msg));
+    }
+
+    /// `Command::SignCoordinatorInToYoutubeMusic`: the session sealed to the
+    /// pinned coordinator's key, so only it can open it.
+    pub(crate) fn sign_coordinator_in_to_ytm(&mut self, cookies: Option<Secret>) {
+        let kx = self
+            .identity
+            .lock()
+            .shared
+            .coordinator_pin()
+            .map(|p| p.keys.kx.clone());
+        let envelope = match (cookies, kx) {
+            (None, _) => None,
+            (Some(c), Some(kx)) => match crate::identity::crypto::envelope(
+                &kx,
+                crate::connect::wire::COORD_YTM_CONTEXT,
+                c.expose().as_bytes(),
+            ) {
+                Some(e) => Some(e),
+                None => {
+                    self.emit(Event::CoordinatorFailed {
+                        message: "The coordinator's key is broken: claim it again.".into(),
+                    });
+                    return;
+                }
+            },
+            (Some(_), None) => {
+                self.emit(Event::CoordinatorFailed {
+                    message: "No coordinator: claim one first.".into(),
+                });
+                return;
+            }
+        };
+        self.coordinator_request(Msg::CoordYtmSignIn { envelope });
     }
 }
 

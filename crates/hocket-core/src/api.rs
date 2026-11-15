@@ -2716,6 +2716,16 @@ pub enum Command {
         code: String,
     },
     ListCoordinatorInvites,
+    /// Owner only: sign the coordinator's YouTube Music analysis in with a
+    /// session of its own (`cookies`: a `Cookie:` header from a fresh
+    /// sign-in on this device, never this device's own session), or back to
+    /// anonymous (`None`). Sealed to the coordinator's key; answered with
+    /// [`Event::CoordinatorYtmStatus`].
+    SignCoordinatorInToYoutubeMusic {
+        cookies: Option<Secret>,
+    },
+    /// Owner only: ask for [`Event::CoordinatorYtmStatus`].
+    CoordinatorYtmStatus,
     /// `full` forces a reconcile that catches deletions.
     SyncLibrary {
         account_id: AccountId,
@@ -4069,6 +4079,14 @@ pub enum Event {
     },
     CoordinatorFailed {
         message: String,
+    },
+    /// The coordinator's YouTube Music analysis: on (`--analysis-ytm`),
+    /// signed in as `account` or anonymous; `error` when a sign-in was refused.
+    CoordinatorYtmStatus {
+        enabled: bool,
+        signed_in: bool,
+        account: Option<String>,
+        error: Option<String>,
     },
     CoordinatorInvites {
         invites: Vec<CoordinatorInviteInfo>,
