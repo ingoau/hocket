@@ -1108,27 +1108,35 @@ impl Db {
     pub fn playlist_membership(
         &self,
         server_id: &str,
-        track_ids: &[String],
+        tracks: &[(api::TrackRef, String)],
     ) -> DbResult<Vec<api::PlaylistMembership>> {
         let playlists = self.playlists(server_id)?;
-        let wanted: std::collections::HashSet<&str> =
-            track_ids.iter().map(String::as_str).collect();
+        // A song (or a copy of it) as the entry names it: the asked-for id.
+        let wanted: HashMap<(&str, &str), &str> = tracks
+            .iter()
+            .map(|(r, asked)| ((r.source.as_str(), r.id.as_str()), asked.as_str()))
+            .collect();
         let mut entries: std::collections::HashMap<String, Vec<api::PlaylistEntryRef>> =
             std::collections::HashMap::new();
         if !wanted.is_empty() {
             self.with_conn(|c| {
                 let mut st = c.prepare_cached(
-                    "SELECT playlist_id, track_id, ROW_NUMBER() OVER (PARTITION BY playlist_id ORDER BY position) - 1 \
+                    "SELECT playlist_id, track_id, ROW_NUMBER() OVER (PARTITION BY playlist_id ORDER BY position) - 1, COALESCE(track_source, server_id) \
                      FROM playlist_tracks WHERE (?1 = '' OR server_id = ?1)",
                 )?;
                 let rows = st.query_map([server_id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
                 })?;
                 for row in rows {
-                    let (playlist, track, index) = row?;
-                    if wanted.contains(track.as_str()) {
+                    let (playlist, track, index, source) = row?;
+                    if let Some(asked) = wanted.get(&(source.as_str(), track.as_str())) {
                         entries.entry(playlist).or_default().push(api::PlaylistEntryRef {
-                            track_id: track,
+                            track_id: asked.to_string(),
                             index: index.max(0) as u32,
                         });
                     }
@@ -2466,14 +2474,18 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let m = db.playlist_membership("s", &["1".into()]).unwrap();
+        let m = db
+            .playlist_membership("s", &[(api::TrackRef::new("s", "1"), "1".into())])
+            .unwrap();
         let by = |id: &str| m.iter().find(|p| p.playlist_id == id).unwrap();
         assert_eq!(m.len(), 2, "every playlist, holding the track or not");
         let idx = |id: &str| by(id).entries.iter().map(|e| e.index).collect::<Vec<_>>();
         assert_eq!(idx("pl"), vec![1]);
         assert_eq!(idx("pl2"), vec![0, 2], "twice: both copies, by index");
         assert!(by("pl2").synced);
-        let none = db.playlist_membership("s", &["9".into()]).unwrap();
+        let none = db
+            .playlist_membership("s", &[(api::TrackRef::new("s", "9"), "9".into())])
+            .unwrap();
         assert!(none.iter().all(|p| p.entries.is_empty()));
     }
 

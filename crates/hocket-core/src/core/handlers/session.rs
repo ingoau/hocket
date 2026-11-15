@@ -1463,14 +1463,11 @@ impl Actor {
         }
     }
 
-    /// The library a list query covers: every account for the session's
-    /// account or none (the unified library), else the one named.
+    /// The library a list query covers: every account (the unified library,
+    /// one row per dedup group) for none, else the one named (the source
+    /// filter chip).
     pub(crate) fn library_scope(&self, server_id: String) -> String {
-        if server_id.is_empty() || self.scope_account().as_deref() == Some(server_id.as_str()) {
-            String::new()
-        } else {
-            server_id
-        }
+        server_id
     }
 
     /// [`Actor::ref_for_id`] with the session's account as the fallback.

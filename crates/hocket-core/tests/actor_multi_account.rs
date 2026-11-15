@@ -97,8 +97,7 @@ async fn two_accounts_share_one_library_and_one_mixed_queue() {
         other => panic!("{other:?}"),
     }
 
-    // Platforms name the session's account for the unified library: the
-    // same list.
+    // An account named is that account's library (the source filter).
     match t
         .query(Query::TrackCount {
             server_id: A.into(),
@@ -106,7 +105,7 @@ async fn two_accounts_share_one_library_and_one_mixed_queue() {
         })
         .await
     {
-        QueryResult::Count(n) => assert_eq!(n, 8),
+        QueryResult::Count(n) => assert_eq!(n, 4),
         other => panic!("{other:?}"),
     }
 
@@ -124,10 +123,8 @@ async fn two_accounts_share_one_library_and_one_mixed_queue() {
         keys: vec![],
     })
     .await;
-    // A list named by the session's account with another account's song
-    // in it: the song is the account's that has it.
     t.run(Command::PlayLater {
-        tracks: TrackRef::list(A, ["b3"]),
+        tracks: TrackRef::list(B, ["b3"]),
         keys: vec![],
     })
     .await;

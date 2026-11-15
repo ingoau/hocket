@@ -3340,11 +3340,13 @@ pub enum Query {
         id: PlaylistId,
         page: Page,
     },
-    /// Which of the server's playlists hold any of `track_ids`, and at which indices: the add to
-    /// playlist picker's ticks, ×2 badges and "Remove one". Every playlist is listed, in name order.
+    /// Which of the server's playlists (every account's and the Mixed ones for the unified
+    /// library) hold any of `tracks` or a copy of one, and at which indices: the add to playlist
+    /// picker's ticks, ×2 badges and "Remove one". Every playlist is listed, in name order. An
+    /// entry's `trackId` is the asked-for song's.
     PlaylistMembership {
         server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     /// Local-first; server results, when requested, arrive in a second [`Event::SearchResults`].
     Search {

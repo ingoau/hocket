@@ -169,14 +169,21 @@ impl Actor {
                     },
                 ))
             }
-            Query::PlaylistMembership {
-                server_id,
-                track_ids,
-            } => QueryResult::Membership(
-                self.db
-                    .playlist_membership(&self.library_scope(server_id), &track_ids)
-                    .unwrap_or_default(),
-            ),
+            Query::PlaylistMembership { server_id, tracks } => {
+                let wanted: Vec<(TrackRef, String)> = tracks
+                    .iter()
+                    .flat_map(|t| {
+                        self.copies_of(t)
+                            .into_iter()
+                            .map(move |c| (c, t.id.clone()))
+                    })
+                    .collect();
+                QueryResult::Membership(
+                    self.db
+                        .playlist_membership(&self.library_scope(server_id), &wanted)
+                        .unwrap_or_default(),
+                )
+            }
             Query::Search {
                 server_id,
                 query,
