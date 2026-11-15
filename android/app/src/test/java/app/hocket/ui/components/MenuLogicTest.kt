@@ -50,9 +50,10 @@ class MenuLogicTest {
             history = listOf(entry("k0", "a")), current = entry("k1", "b"),
             group = listOf(entry("k2", "c")), rest = listOf(entry("k3", "d"), entry("k4", "c")),
         )
-        assertEquals(listOf("d", "c", "a"), snoozeTrackIds(Commands.queueItems(listOf("k3", "k2", "k4", "k0")), null, queue))
-        assertEquals(listOf("x"), snoozeTrackIds(Commands.queueItems(listOf("gone")), "x", queue))
-        assertEquals(listOf("y"), snoozeTrackIds(Commands.tracks(listOf("y")), null, queue))
+        val ids = { refs: List<app.hocket.core.api.TrackRef> -> refs.map { it.id } }
+        assertEquals(listOf("d", "c", "a"), ids(snoozeTrackRefs(Commands.queueItems(listOf("k3", "k2", "k4", "k0")), null, queue)))
+        assertEquals(listOf("x"), ids(snoozeTrackRefs(Commands.queueItems(listOf("gone")), app.hocket.core.api.TrackRef("s", "x"), queue)))
+        assertEquals(listOf("y"), ids(snoozeTrackRefs(Commands.tracks(listOf(app.hocket.core.api.TrackRef("s", "y"))), null, queue)))
     }
 
     @Test
@@ -173,7 +174,7 @@ class MenuLogicTest {
         val ids = listOf("late", "sunday", "run")
         assertEquals(1 to 1, e.pending(ids))
         assertEquals(3, e.inCount(ids))
-        assertEquals(listOf(Commands.playlistAdd("run", listOf("t", "t")), Commands.playlistRemove("sunday", listOf(7))), e.commands())
+        assertEquals(listOf(Commands.playlistAdd("run", (listOf("t", "t")).map { TrackRef("", it) }), Commands.playlistRemove("sunday", listOf(7))), e.commands())
         assertEquals(PickerOutcome.AddedAndRemoved(1, 1), e.outcome(mapOf()))
         // Ticking again after unticking puts back what was there: no change.
         val untouched = PickerEdits.of(listOf("t"), membership("late" to listOf("t" to 4)))
@@ -206,7 +207,7 @@ class MenuLogicTest {
         assertEquals(Tick.Mixed, e.row(p).tick)
         e = (e.tap("p") as PickerTap.Changed).edits
         assertEquals(PickerRow(Tick.On, null, PickerNote.Adding, 21), e.row(p))
-        assertEquals(listOf(Commands.playlistAdd("p", listOf("b"))), e.commands())
+        assertEquals(listOf(Commands.playlistAdd("p", (listOf("b")).map { TrackRef("", it) })), e.commands())
         // On -> off removes every copy of the songs; off -> back to what it held.
         e = (e.tap("p") as PickerTap.Changed).edits
         assertEquals(Tick.Off, e.row(p).tick)
@@ -215,8 +216,8 @@ class MenuLogicTest {
         assertEquals(Tick.Mixed, e.row(p).tick)
         assertEquals(emptyList<Any>(), e.commands())
         // Another copy of each (a and c: a second copy; b: its first), in one add.
-        assertEquals(listOf(Commands.playlistAdd("p", listOf("a", "b", "c"))), e.addCopy("p").commands())
+        assertEquals(listOf(Commands.playlistAdd("p", (listOf("a", "b", "c")).map { TrackRef("", it) })), e.addCopy("p").commands())
         // Two more of each: the copies go in rounds.
-        assertEquals(listOf(Commands.playlistAdd("p", listOf("a", "b", "c", "a", "b", "c"))), e.addCopy("p").addCopy("p").commands())
+        assertEquals(listOf(Commands.playlistAdd("p", (listOf("a", "b", "c", "a", "b", "c")).map { TrackRef("", it) })), e.addCopy("p").addCopy("p").commands())
     }
 }

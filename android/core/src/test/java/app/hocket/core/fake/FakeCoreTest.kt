@@ -154,17 +154,17 @@ class FakeCoreTest {
         val server = core.library.serverId
         val ids = core.library.tracks.map { it.id }
         val group0 = core.queue().groupEntries.map { it.item.key }
-        core.dispatchAndWait(Commands.addToQueue(server, listOf(ids[10])))
+        core.dispatchAndWait(Commands.addToQueue((listOf(ids[10])).map { TrackRef(server, it) }))
         var q = core.queue()
         // Add to queue: the end of the group.
         assertEquals(group0 + q.groupEntries.last().item.key, q.groupEntries.map { it.item.key })
         assertEquals(ids[10], q.groupEntries.last().track.id)
-        core.dispatchAndWait(Commands.playNext(server, listOf(ids[11])))
+        core.dispatchAndWait(Commands.playNext((listOf(ids[11])).map { TrackRef(server, it) }))
         q = core.queue()
         // Play next: straight after the current song, ahead of the group, in it.
         assertEquals(ids[11], q.groupEntries.first().track.id)
         assertEquals(group0.size + 2, q.groupCount.toInt())
-        core.dispatchAndWait(Commands.playLater(server, listOf(ids[12])))
+        core.dispatchAndWait(Commands.playLater((listOf(ids[12])).map { TrackRef(server, it) }))
         q = core.queue()
         // Play later: the end of the whole list, not queued but added.
         val last = q.entries.last()
@@ -177,7 +177,7 @@ class FakeCoreTest {
     @Test
     fun clearAndStashTheGroup() = runTest {
         val core = core()
-        core.dispatchAndWait(Commands.addToQueue(core.library.serverId, listOf(core.library.tracks[20].id)))
+        core.dispatchAndWait(Commands.addToQueue((listOf(core.library.tracks[20].id)).map { TrackRef(core.library.serverId, it) }))
         val total = core.queue().total
         core.dispatchAndWait(Command.ClearQueueGroup)
         assertEquals(0u, core.queue().groupCount)
@@ -194,7 +194,7 @@ class FakeCoreTest {
     @Test
     fun theQueueSectionSettingHidesAddToQueue() = runTest {
         val core = core()
-        val target = Commands.tracks(listOf(core.library.tracks[0].id))
+        val target = Commands.tracks((listOf(core.library.tracks[0].id)).map { TrackRef("fake-server", it) })
         suspend fun ids() = (core.query(Queries.actions("contextMenu", target)) as QueryResult.Actions).data.map { it.id }
         assertTrue(ActionIds.ADD_TO_QUEUE in ids())
         core.dispatchAndWait(Commands.setSetting(SettingKeys.QUEUE_SECTION, "false"))
@@ -203,7 +203,7 @@ class FakeCoreTest {
         // Off, a group already there stays, and Play next joins it at its head.
         val group = core.queue().groupCount
         assertTrue(group > 0u)
-        core.dispatchAndWait(Commands.playNext(core.library.serverId, listOf(core.library.tracks[1].id)))
+        core.dispatchAndWait(Commands.playNext((listOf(core.library.tracks[1].id)).map { TrackRef(core.library.serverId, it) }))
         assertEquals(group + 1u, core.queue().groupCount)
         assertEquals(core.library.tracks[1].id, core.queue().groupEntries.first().track.id)
         // A drag inside it keeps the song in it (the sender's in_group decides).
@@ -212,7 +212,7 @@ class FakeCoreTest {
         assertEquals(listOf(keys[1], keys[0]) + keys.drop(2), core.queue().groupEntries.map { it.item.key })
         // With no group, Play next starts none.
         core.dispatchAndWait(Command.ClearQueueGroup)
-        core.dispatchAndWait(Commands.playNext(core.library.serverId, listOf(core.library.tracks[2].id)))
+        core.dispatchAndWait(Commands.playNext((listOf(core.library.tracks[2].id)).map { TrackRef(core.library.serverId, it) }))
         assertEquals(0u, core.queue().groupCount)
         assertEquals(core.library.tracks[2].id, core.queue().restEntries.first().track.id)
     }
@@ -226,18 +226,18 @@ class FakeCoreTest {
         val group = q0.groupEntries.map { it.item.key }
         val rest = q0.restEntries.map { it.item.key }
         // In the group after its first entry.
-        core.dispatchAndWait(Commands.insertTracks(server, listOf(ids[30], ids[31]), after = group[0], inGroup = true))
+        core.dispatchAndWait(Commands.insertTracks((listOf(ids[30], ids[31])).map { TrackRef(server, it) }, after = group[0], inGroup = true))
         var q = core.queue()
         assertEquals(listOf(ids[30], ids[31]), q.groupEntries.drop(1).take(2).map { it.track.id })
         assertEquals(group.size + 2, q.groupCount.toInt())
         assertTrue(q.groupEntries.drop(1).take(2).all { it.item.added == true })
         // Out of the group but aimed inside it: just after the group.
-        core.dispatchAndWait(Commands.insertTracks(server, listOf(ids[32]), after = group[0], inGroup = false))
+        core.dispatchAndWait(Commands.insertTracks((listOf(ids[32])).map { TrackRef(server, it) }, after = group[0], inGroup = false))
         q = core.queue()
         assertEquals(ids[32], q.restEntries.first().track.id)
         assertEquals(group.size + 2, q.groupCount.toInt())
         // An entry ahead moves (by key); in the group past its end lands at its end.
-        core.dispatchAndWait(Commands.insertTracks(server, emptyList(), after = rest[1], inGroup = true, keys = listOf(rest[2])))
+        core.dispatchAndWait(Commands.insertTracks(emptyList(), after = rest[1], inGroup = true, keys = listOf(rest[2])))
         q = core.queue()
         assertEquals(rest[2], q.groupEntries.last().item.key)
         assertEquals(1, q.entries.count { it.item.key == rest[2] })
@@ -247,7 +247,7 @@ class FakeCoreTest {
     fun theViewIsAWindowAndQueueRangePagesTheRest() = runTest {
         val core = core()
         val many = core.library.tracks.take(400).map { it.id }
-        core.dispatchAndWait(Command.PlayTracks(CommandPlayTracksInner(core.library.serverId, many, 250u, "Many", false)))
+        core.dispatchAndWait(Command.PlayTracks(CommandPlayTracksInner((many).map { TrackRef(core.library.serverId, it) }, 250u, "Many", false)))
         val q = core.queue()
         assertEquals(250u, q.currentIndex)
         assertEquals(250u, q.historyCount)
@@ -269,7 +269,7 @@ class FakeCoreTest {
         assertEquals(251u, kept.currentIndex)
         assertEquals(many.take(352), kept.entries.map { it.track.id })
         // An edit that changes the list: they don't.
-        core.dispatchAndWait(Commands.playNext(core.library.serverId, listOf(many[0])))
+        core.dispatchAndWait(Commands.playNext((listOf(many[0])).map { TrackRef(core.library.serverId, it) }))
         assertNull(QueueWindows.realign(core.queue(), merged))
     }
 
@@ -303,7 +303,7 @@ class FakeCoreTest {
     fun playTracksStartsAtTheRequestedPosition() = runTest {
         val core = core()
         val id = core.queue().restEntries.first().track.id
-        core.dispatchAndWait(Command.PlayTracks(CommandPlayTracksInner(core.library.serverId, listOf(id), 0u, "Lyric", false, 42_000u)))
+        core.dispatchAndWait(Command.PlayTracks(CommandPlayTracksInner((listOf(id)).map { TrackRef(core.library.serverId, it) }, 0u, "Lyric", false, 42_000u)))
         val t = core.snapshot().transport
         assertEquals(id, core.queue().current!!.track.id)
         assertEquals(42_000u, t.position.positionMs)
@@ -327,7 +327,7 @@ class FakeCoreTest {
     fun ratingIsUndoableAndChangesLibrary() = runTest {
         val core = core()
         val track = core.library.tracks[10]
-        core.dispatchAndWait(Commands.rateTrack(track.id, 4))
+        core.dispatchAndWait(Commands.rateTrack(TrackRef("fake-server", track.id), 4))
         assertEquals(4u, core.library.track(track.id)!!.rating)
         core.dispatchAndWait(Command.Undo)
         assertEquals(track.rating, core.library.track(track.id)!!.rating)
@@ -384,7 +384,7 @@ class FakeCoreTest {
     fun actionsAreOrderedPerCustomisation() = runTest {
         val core = core()
         core.dispatchAndWait(Commands.setActionOrder("contextMenu", listOf("love", "play")))
-        val actions = (core.query(Queries.actions("contextMenu", Commands.tracks(listOf("t1")))) as QueryResult.Actions).data
+        val actions = (core.query(Queries.actions("contextMenu", Commands.tracks((listOf("t1")).map { TrackRef("fake-server", it) }))) as QueryResult.Actions).data
         assertEquals("love", actions[0].id)
         assertEquals("play", actions[1].id)
     }
@@ -398,7 +398,7 @@ class FakeCoreTest {
     fun primeCommandsAreRecordedInOrder() = runTest {
         val core = core()
         core.dispatchAndWait(Commands.primeAlbum("al1"))
-        core.dispatchAndWait(Commands.primeTrack("t9"))
+        core.dispatchAndWait(Commands.primeTrack(TrackRef("fake-server", "t9")))
         assertEquals(listOf("album:al1", "track:t9"), core.primeRequests)
     }
 

@@ -1,5 +1,7 @@
 package app.hocket.realcore
 
+import app.hocket.core.api.TrackRef
+
 import app.hocket.core.Commands
 import app.hocket.core.NativeCore
 import app.hocket.core.api.AudioMode
@@ -163,7 +165,7 @@ class RealServerTest {
         val info = waitFor(60_000, "a reachable server") { e -> (e as? Event.AccountsChanged)?.takeIf { it.data.accounts.any { s -> s.reachable && s.capabilities.serverVersion != null } } }.data.accounts.first()
         waitFor(600_000, "the library sync to finish") { e -> (e as? Event.SyncProgress)?.takeIf { it.data.progress.finished } }
 
-        c.dispatch(Commands.playTracks(info.id, listOf(TALLY), 0, "Stream test"))
+        c.dispatch(Commands.playTracks((listOf(TALLY)).map { TrackRef(info.id, it) }, 0, "Stream test"))
         val backend = waitFor(60_000, "a Load for Tally") { e -> (e as? Event.Backend)?.takeIf { (it.data.command as? app.hocket.core.api.BackendCommand.Load)?.data?.source?.track?.id == TALLY } }
         val load = (backend.data.command as app.hocket.core.api.BackendCommand.Load).data.source
         assertTrue("a core stream: ${mask(load.url.take(20))}", load.url.startsWith("hocket-stream://"))

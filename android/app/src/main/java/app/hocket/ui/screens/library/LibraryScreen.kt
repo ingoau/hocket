@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.library
 
+import app.hocket.ui.components.SourceChips
+import app.hocket.ui.components.rememberLibrarySource
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.ScrollToTopOnReselect
 import androidx.compose.foundation.layout.Box
@@ -59,6 +61,7 @@ import app.hocket.ui.nav.route
 import app.hocket.ui.nav.label
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
+import app.hocket.core.ref
 import app.hocket.core.Queries
 import app.hocket.core.api.Filter
 import app.hocket.core.api.FilterField
@@ -343,7 +346,10 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
             if (generation < 0) return@produceState
             // One batch lookup, back in pin order.
             val ids = pinnedIds.take(PINNED_LIMIT)
-            val byId = (client.query(Queries.tracksByIds(ids)) as? QueryResult.TrackList)?.data.orEmpty().associateBy { it.id }
+            val source = client.server.value?.id.orEmpty()
+            val refs = LibraryPins.parse(client.settings.value[app.hocket.core.SettingKeys.LIBRARY_PINS]?.value)
+                .filter { it.pinKind == PinKind.Track && it.id in ids }.map { it.trackRef(source) }
+            val byId = (client.query(Queries.tracksByIds(refs)) as? QueryResult.TrackList)?.data.orEmpty().associateBy { it.id }
             value = ids.mapNotNull { byId[it]?.toSummary() }
         }
         // With the Available offline chip on, the groups too keep only what plays offline.
@@ -368,9 +374,9 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
             if (control != null) listGroups(groups, R.string.library_all_songs, control, { it.id }) { track, group ->
                 // A pinned or recent song plays its group from there.
                 TrackRow(track, onClick = {
-                    client.dispatch(Commands.playTracks(serverId, group.map { it.id }, group.indexOf(track).coerceAtLeast(0), if (group === groups.pinned) pinnedLabel else recentLabel))
+                    client.dispatch(Commands.playTracks(group.map { it.ref }, group.indexOf(track).coerceAtLeast(0), if (group === groups.pinned) pinnedLabel else recentLabel))
                 }, onMore = { songMenu.open(track) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
-                    onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
+                    onToggleSelect = { client.toggleSelected(track.ref) }, nowPlaying = nowPlaying?.track?.id == track.id)
             }
             if (onOfflineOnlyChange != null) item(key = "chips") {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
@@ -394,10 +400,10 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
                     TrackRow(track.toSummary(), onClick = {
                         // Play the sorted list as an ad-hoc context starting here: the visible page's ids are known, the rest resolve in the core.
                         val loaded = state.pages.toSortedMap().values.flatten()
-                        val ctx = Commands.adHocContext(serverId, listLabel, loaded.map { it.id }, effectiveSort)
+                        val ctx = Commands.adHocContext(serverId, listLabel, loaded.map { it.ref }, effectiveSort)
                         client.dispatch(Commands.playContext(ctx, startIndex = loaded.indexOfFirst { it.id == track.id }.coerceAtLeast(0)))
                     }, onMore = { songMenu.open(track.toSummary()) }, selected = selecting && selection.contains(track.id), selectionActive = selecting,
-                        onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, track.id) }, nowPlaying = nowPlaying?.track?.id == track.id)
+                        onToggleSelect = { client.toggleSelected(track.ref) }, nowPlaying = nowPlaying?.track?.id == track.id)
                 } else TrackRowSkeleton()
             }
         }
@@ -412,7 +418,7 @@ internal fun GenresTab(serverId: String, control: SortControl, open: (DetailTarg
     var genres by remember { mutableStateOf<List<Genre>?>(null) }
     LaunchedEffect(serverId, libraryGen) {
         if (libraryGen < 0) return@LaunchedEffect
-        genres = (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data ?: genres ?: emptyList()
+        genres = (client.query(Queries.genres("")) as? QueryResult.Genres)?.data ?: genres ?: emptyList()
     }
     val list = genres
     val pinnedIds = rememberPinnedIds(PinKind.Genre)
@@ -420,8 +426,9 @@ internal fun GenresTab(serverId: String, control: SortControl, open: (DetailTarg
     // The history's songs carry no genre: the most recent ones are looked up whole.
     val played by produceState(emptyList<Track>(), history) {
         if (history == null) return@produceState
-        val ids = recentTracks(history.orEmpty(), RECENT_GENRE_SONGS).map { it.id }
-        val byId = (client.query(Queries.tracksByIds(ids)) as? QueryResult.TrackList)?.data.orEmpty().associateBy { it.id }
+        val recent = recentTracks(history.orEmpty(), RECENT_GENRE_SONGS)
+        val ids = recent.map { it.id }
+        val byId = (client.query(Queries.tracksByIds(recent.map { it.ref })) as? QueryResult.TrackList)?.data.orEmpty().associateBy { it.id }
         value = ids.mapNotNull { byId[it] }
     }
     val sorted = remember(list, control.sort) { list?.let { sortGenres(it, control.sort) } }
@@ -508,20 +515,23 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
                         title = { Text(stringResource(list.title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
                         navigationIcon = { if (fromLibrary) IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                         actions = { AccountButton() },
+                        subtitle = if (list == LibraryList.Genres) null else ({ SourceChips(mixed = list == LibraryList.Playlists) }),
                         scrollBehavior = scroll,
                     )
                 },
             ) { padding ->
                 val top = padding.calculateTopPadding()
+                // The source chip's account ("" for all of them, the unified library).
+                val source = rememberLibrarySource(mixed = list == LibraryList.Playlists)
                 Box(Modifier.fillMaxSize()) {
                     ShimmerHost {
                         when (list) {
-                            LibraryList.Albums -> AlbumsTab(serverId, control, ::open, top)
-                            LibraryList.Artists -> ArtistsTab(serverId, control, ::open, top)
-                            LibraryList.Playlists -> PlaylistsTab(serverId, control, ::open, top)
+                            LibraryList.Albums -> AlbumsTab(source, control, ::open, top)
+                            LibraryList.Artists -> ArtistsTab(source, control, ::open, top)
+                            LibraryList.Playlists -> PlaylistsTab(source, control, ::open, top)
                             LibraryList.Songs -> {
                                 var offlineOnly by rememberSaveable { mutableStateOf(false) }
-                                SongsTab(serverId, sort.order, sort.coreDescending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top, control = control)
+                                SongsTab(source, sort.order, sort.coreDescending, nav, offlineOnly, onOfflineOnlyChange = { offlineOnly = it }, topPadding = top, control = control)
                             }
                             LibraryList.Genres -> GenresTab(serverId, control, ::open, top)
                         }

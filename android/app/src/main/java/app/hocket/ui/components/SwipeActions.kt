@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.hocket.core.ActionIds
+import app.hocket.core.ref
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
 import app.hocket.core.SwipeOptions
@@ -125,7 +126,7 @@ fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAd
             SwipeAction(id, actionLabel(id), HocketIcons.Filled.Headphones, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false) {
                 // The preview stops when that menu closes. Don't start one
                 // there is no menu to show it in.
-                if (menu?.open(track, target) == true) client.dispatch(Commands.previewStart(track.id))
+                if (menu?.open(track, target) == true) client.dispatch(Commands.previewStart(track.ref))
             }
         }
         ActionIds.DOWNLOAD -> if (track.offline == OfflineState.Downloaded) null

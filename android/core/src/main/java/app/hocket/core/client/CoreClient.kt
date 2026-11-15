@@ -355,11 +355,31 @@ class CoreClient(
 
     private fun unavailable(): Nothing = throw IllegalStateException("the core did not answer")
 
+    /**
+     * The source filter chip: the account the library lists, search and playlists show ("" for
+     * every account, [app.hocket.core.MIXED_SOURCE] for the Mixed playlists). This device's own.
+     */
+    val librarySource = MutableStateFlow("")
+
     // -- selection ---------------------------------------------------------------------------------
     private val _selection = MutableStateFlow(Selection())
     val selection: StateFlow<Selection> = _selection.asStateFlow()
     private val _selectionKind = MutableStateFlow(SelectionKind.Tracks)
     val selectionKind: StateFlow<SelectionKind> = _selectionKind.asStateFlow()
+
+    /** Selected songs' references by id: the selection lists ids, commands name references. */
+    private val selectedRefs = mutableMapOf<String, TrackRef>()
+
+    /** Toggle a song in the selection (it remembers the song's account). */
+    fun toggleSelected(track: TrackRef) {
+        selectedRefs[track.id] = track
+        toggleSelected(SelectionKind.Tracks, track.id)
+    }
+
+    private fun trackRefs(ids: List<String>): List<TrackRef> {
+        val fallback = accounts.value.firstOrNull()?.id.orEmpty()
+        return ids.map { selectedRefs[it] ?: TrackRef(fallback, it) }
+    }
 
     fun toggleSelected(kind: SelectionKind, id: String) {
         if (_selectionKind.value != kind && _selection.value.active) clearSelection()
@@ -388,7 +408,7 @@ class CoreClient(
         val sel = _selection.value
         val ids = sel.ids.toList()
         val target = if (!sel.active) ActionTarget.None else when (_selectionKind.value) {
-            SelectionKind.Tracks -> Commands.tracks(ids)
+            SelectionKind.Tracks -> Commands.tracks(trackRefs(ids))
             SelectionKind.Albums -> Commands.albums(ids)
             SelectionKind.Artists -> Commands.artists(ids)
             SelectionKind.Playlists -> Commands.playlists(ids)
@@ -401,7 +421,7 @@ class CoreClient(
     fun selectionTarget(): ActionTarget {
         val ids = _selection.value.ids.toList()
         return when (_selectionKind.value) {
-            SelectionKind.Tracks -> Commands.tracks(ids)
+            SelectionKind.Tracks -> Commands.tracks(trackRefs(ids))
             SelectionKind.Albums -> Commands.albums(ids)
             SelectionKind.Artists -> Commands.artists(ids)
             SelectionKind.Playlists -> Commands.playlists(ids)

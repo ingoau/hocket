@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import app.hocket.core.groupEntries
 import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
@@ -111,7 +113,7 @@ class NowPlayingSheetTest {
     private fun playOnlyOneTrack(core: TestCore): String {
         val track = core.client.nowPlaying.value!!.track.id
         core.client.dispatch(Commands.setAutoplay(false))
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "One track"))
+        core.client.dispatch(Commands.playTracks((listOf(track)).map { TrackRef(core.fake.library.serverId, it) }, 0, "One track"))
         compose.waitUntil(5_000) { core.client.queue.value.restEntries.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
         return track
     }
@@ -138,7 +140,7 @@ class NowPlayingSheetTest {
         compose.waitForIdle()
         assertFalse(displayed("miniPlayer"))
         // And it comes back for the next thing played.
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "Again"))
+        core.client.dispatch(Commands.playTracks((listOf(track)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Again"))
         compose.waitUntil(5_000) { displayed("miniPlayer") }
         expand()
         collapseByDrag()

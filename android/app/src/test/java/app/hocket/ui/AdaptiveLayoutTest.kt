@@ -202,11 +202,12 @@ class AdaptiveLayoutTest {
 
     // --- Home ---
 
-    /** Home with only New in library, as a grid; how many cells its first row holds. */
+    /** Home with only the account's Recently added shelf (Continue listening off too), as a grid; how many cells its first row holds. */
     private fun homeGridColumns(): Int {
         val core = TestCore(startPlaying = false)
         core.start()
-        core.client.dispatch(Commands.setSetting(SettingKeys.HOME_SECTIONS, HomeSections.encode(listOf(SectionPref("newInLibrary", true, "grid")))))
+        val shelf = "shelf:${core.client.accounts.value.first().id}/recentlyAdded"
+        core.client.dispatch(Commands.setSetting(SettingKeys.HOME_SECTIONS, HomeSections.encode(listOf(SectionPref("spotlight", false, "hero"), SectionPref(shelf, true, "grid")) + HomeSections.DEFAULT.filter { it.id != "spotlight" }.map { it.copy(on = false) })))
         compose.setThemedContent(core) { HomeScreen(rememberNavController()) }
         val inGrid: SemanticsMatcher = hasTestTag("home.item") and hasAnyAncestor(hasTestTag("home.grid"))
         compose.waitUntil(5_000) { compose.onAllNodes(inGrid).fetchSemanticsNodes().isNotEmpty() }

@@ -1,5 +1,7 @@
 package app.hocket.realcore
 
+import app.hocket.core.api.TrackRef
+
 import app.hocket.core.Commands
 import app.hocket.core.NativeCore
 import app.hocket.core.Queries
@@ -184,7 +186,7 @@ class RealCoreEndToEndTest {
 
         // A rating goes through the outbox to the server and is undoable.
         events.clear()
-        core.dispatch(Commands.rateTrack("s1", 4))
+        core.dispatch(Commands.rateTrack(TrackRef(info.id, "s1"), 4))
         try {
             withTimeout(30_000) { while (server.ratings["s1"] != 4) kotlinx.coroutines.delay(50) }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -201,10 +203,10 @@ class RealCoreEndToEndTest {
             val problems = (core.query(app.hocket.core.api.Query.Problems) as? QueryResult.Problems)?.data
             val jobs = (core.query(app.hocket.core.api.Query.Jobs) as? QueryResult.Jobs)?.data
             val undoNow = (core.query(app.hocket.core.api.Query.UndoState) as? QueryResult.Undo)?.data
-            val track = (core.query(Queries.track("s1")) as QueryResult.TrackDetail).data
+            val track = (core.query(Queries.track(TrackRef(info.id, "s1"))) as QueryResult.TrackDetail).data
             throw AssertionError("undo of the rating never reached the server: server rating=${server.ratings["s1"]} local rating=${track?.rating} setRating calls=${server.calls.count { it == "setRating" }} getSong calls=${server.calls.count { it == "getSong" }} recent calls=${server.calls.takeLast(12)} undo=${undoNow?.undoLabel}/${undoNow?.redoLabel}/${undoNow?.history?.map { it.label + ":" + it.note }} problems=${problems?.map { it.summary + ": " + it.detail }} jobs=${jobs?.map { it.label + "/" + it.state + "/" + it.failed }} toasts=${events.filterIsInstance<Event.Toast>().map { it.data.toast.message }} errors=${events.filterIsInstance<Event.Error>().map { it.data.message + ": " + it.data.detail }}")
         }
-        val track = (core.query(Queries.track("s1")) as QueryResult.TrackDetail).data
+        val track = (core.query(Queries.track(TrackRef(info.id, "s1"))) as QueryResult.TrackDetail).data
         assertEquals(0u, track!!.rating)
     }
 
@@ -259,7 +261,7 @@ class RealCoreEndToEndTest {
 
         // The whole read is now in the stream cache (reported as Cached).
         withTimeout(20_000) {
-            while ((core.query(Queries.track(trackId)) as QueryResult.TrackDetail).data?.offline != app.hocket.core.api.OfflineState.Cached) kotlinx.coroutines.delay(50)
+            while ((core.query(Queries.track(TrackRef(info.id, trackId))) as QueryResult.TrackDetail).data?.offline != app.hocket.core.api.OfflineState.Cached) kotlinx.coroutines.delay(50)
         }
 
         // Seek: ExoPlayer closes and opens again at the new position (here with a bounded length).

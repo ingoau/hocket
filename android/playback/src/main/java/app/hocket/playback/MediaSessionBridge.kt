@@ -24,6 +24,7 @@ import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import app.hocket.core.Commands
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSessionAction
 import app.hocket.core.api.MediaSessionState
@@ -92,11 +93,11 @@ class MediaSessionBridge(
          * unset heart unlove), stars and percentages rate out of five (unset clears the rating).
          * Null for a rating type there is no meaning for.
          */
-        fun ratingCommand(trackId: String, rating: Rating): Command? = when (rating) {
-            is HeartRating -> Commands.loveTrack(trackId, rating.isRated && rating.isHeart)
-            is ThumbRating -> Commands.loveTrack(trackId, rating.isRated && rating.isThumbsUp)
-            is StarRating -> Commands.rateTrack(trackId, if (rating.isRated) (rating.starRating / rating.maxStars * 5).roundToInt().coerceIn(0, 5) else 0)
-            is PercentageRating -> Commands.rateTrack(trackId, if (rating.isRated) (rating.percent / 20f).roundToInt().coerceIn(0, 5) else 0)
+        fun ratingCommand(track: TrackRef, rating: Rating): Command? = when (rating) {
+            is HeartRating -> Commands.loveTrack(track, rating.isRated && rating.isHeart)
+            is ThumbRating -> Commands.loveTrack(track, rating.isRated && rating.isThumbsUp)
+            is StarRating -> Commands.rateTrack(track, if (rating.isRated) (rating.starRating / rating.maxStars * 5).roundToInt().coerceIn(0, 5) else 0)
+            is PercentageRating -> Commands.rateTrack(track, if (rating.isRated) (rating.percent / 20f).roundToInt().coerceIn(0, 5) else 0)
             else -> null
         }
     }
@@ -326,7 +327,9 @@ class MediaSessionBridge(
 
     /** Dispatches [rating] for [trackId] ([ratingCommand]); a bad value when either is unusable. */
     private fun rate(trackId: String?, rating: Rating): SessionResult {
-        val command = trackId?.let { ratingCommand(it, rating) } ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
+        // The playing song names its account; another (a browsed row) is the core's to resolve.
+        val source = player.state.metadata?.takeIf { it.trackId == trackId }?.source.orEmpty()
+        val command = trackId?.let { ratingCommand(TrackRef(source, it), rating) } ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
         dispatch(command)
         return SessionResult(SessionResult.RESULT_SUCCESS)
     }

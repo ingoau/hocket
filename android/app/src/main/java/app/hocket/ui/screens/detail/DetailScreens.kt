@@ -76,6 +76,7 @@ import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.delay
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.ref
 import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
@@ -270,7 +271,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         tracks = t ?: tracks ?: emptyList()
         // The artist's other releases, for "More by" under the tracks.
         val artistId = (a ?: album)?.artistId
-        if (artistId != null) more = ((client.query(Queries.albums((a ?: album)!!.serverId, Page(0u, 50u), app.hocket.core.api.SortOrder.Year, artistId = artistId)) as? QueryResult.Albums)?.data?.items ?: more).filter { it.id != id }
+        if (artistId != null) more = ((client.query(Queries.albums("", Page(0u, 50u), app.hocket.core.api.SortOrder.Year, artistId = artistId)) as? QueryResult.Albums)?.data?.items ?: more).filter { it.id != id }
     }
     val a = album
     if (a == null) {
@@ -343,7 +344,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
                     }
                     Spacer(Modifier.width(4.dp))
                 },
-                selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) }, nowPlaying = playing,
+                selected = selecting && selection.contains(t.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(t.ref) }, nowPlaying = playing,
                 // The artist under the title where it isn't the album's (a feature, a compilation), or on every track by the setting.
                 segment = i to list.size, showSubtitle = allArtists || !sameArtist(t.artist, a.artist), nowPlayingMark = false, modifier = Modifier.segmentItem(i))
         }
@@ -466,7 +467,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     LaunchedEffect(id, libraryGen, server?.id) {
         val detail = client.query(Queries.artist(id)) as? QueryResult.ArtistDetail
         val ar = detail?.data
-        val al = server?.id?.let { sid -> (client.query(Queries.albums(sid, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, artistId = id)) as? QueryResult.Albums)?.data?.items }
+        val al = server?.id?.let { sid -> (client.query(Queries.albums("", Page(0u, 200u), app.hocket.core.api.SortOrder.Year, artistId = id)) as? QueryResult.Albums)?.data?.items }
         val fe = (client.query(Queries.artistAppearsOn(id)) as? QueryResult.Albums)?.data?.items
         // Together, so the header and the albums do not pop in one after another.
         albums = al ?: albums
@@ -503,7 +504,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val releaseMeta = @Composable { al: Album -> listOfNotNull(al.year?.takeIf { it > 0u }?.toString(), pluralStringResource(R.plurals.saved_tracks, al.songCount.toInt(), al.songCount.toInt())).joinToString(dot) }
     // Featured on names whose album it is.
     val featuredMeta = { al: Album -> listOfNotNull(al.artist, al.year?.takeIf { it > 0u }?.toString()).joinToString(dot) }
-    val playTop = { i: Int -> top?.let { list -> client.dispatch(Commands.playTracks(list[i].serverId, list.map { it.id }, i, ar.name)) } }
+    val playTop = { i: Int -> top?.let { list -> client.dispatch(Commands.playTracks(list.map { it.ref }, i, ar.name)) } }
     val topRow = @Composable { i: Int, t: Track, segment: Pair<Int, Int>, modifier: Modifier ->
         TrackRow(t.toSummary(), onClick = { playTop(i) }, onMore = { songMenu.open(t.toSummary()) }, nowPlaying = nowPlaying?.track?.id == t.id, segment = segment, rank = i + 1,
             subtitle = listOfNotNull(t.album, formatClock(t.durationMs.toLong())).joinToString(dot), showDuration = false, nowPlayingMark = false, modifier = modifier)
@@ -793,7 +794,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
                         replaces = ActionIds.REMOVE_FROM_PLAYLIST)) else emptyList()
                     songMenu.open(t.toSummary(), extras = extras, context = p.name)
                 },
-                    selected = selecting && selection.contains(t.id), selectionActive = choosing, onToggleSelect = { client.toggleSelected(SelectionKind.Tracks, t.id) },
+                    selected = selecting && selection.contains(t.id), selectionActive = choosing, onToggleSelect = { client.toggleSelected(t.ref) },
                     nowPlaying = nowPlaying?.track?.id == t.id,
                     segment = i to list.size, subtitle = listOfNotNull(t.artist, formatClock(t.durationMs.toLong())).joinToString(dot), showDuration = false,
                     modifier = Modifier.segmentItem(i),
@@ -852,8 +853,8 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     var albums by rememberCachedState<List<Album>?>(listOf("detail.genreAlbums", serverId, name)) { null }
     var tracks by rememberCachedState<List<Track>?>(listOf("detail.genreTracks", serverId, name)) { null }
     LaunchedEffect(name, libraryGen) {
-        val al = (client.query(Queries.albums(serverId, Page(0u, 200u), app.hocket.core.api.SortOrder.Year, genre = name)) as? QueryResult.Albums)?.data?.items
-        val t = (client.query(Queries.tracks(serverId, Page(0u, 500u), app.hocket.core.api.SortOrder.Title, filter = app.hocket.core.api.FilterNode.Rule(app.hocket.core.api.FilterRule(app.hocket.core.api.FilterField.Genre, app.hocket.core.api.FilterOp.Is, app.hocket.core.api.FilterValue.Text(name))))) as? QueryResult.Tracks)?.data?.items
+        val al = (client.query(Queries.albums("", Page(0u, 200u), app.hocket.core.api.SortOrder.Year, genre = name)) as? QueryResult.Albums)?.data?.items
+        val t = (client.query(Queries.tracks("", Page(0u, 500u), app.hocket.core.api.SortOrder.Title, filter = app.hocket.core.api.FilterNode.Rule(app.hocket.core.api.FilterRule(app.hocket.core.api.FilterField.Genre, app.hocket.core.api.FilterOp.Is, app.hocket.core.api.FilterValue.Text(name))))) as? QueryResult.Tracks)?.data?.items
         albums = al ?: albums ?: emptyList()
         tracks = t ?: tracks ?: emptyList()
     }

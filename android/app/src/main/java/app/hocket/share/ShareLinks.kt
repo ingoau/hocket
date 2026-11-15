@@ -72,7 +72,7 @@ fun geniusSearch(title: String, artist: String?): String? {
  * service's link, not a search, so the core finds the item on Deezer first.
  */
 fun songLinkQuery(subject: MenuSubject, target: ActionTarget): Query? = when (subject.kind) {
-    MenuKind.Song -> (subject.trackId ?: (target as? ActionTarget.Tracks)?.data?.ids?.singleOrNull())
+    MenuKind.Song -> (subject.trackId ?: (target as? ActionTarget.Tracks)?.data?.tracks?.singleOrNull()?.id)
         ?.takeIf { it.isNotEmpty() }?.let { Queries.songLink(trackId = it) }
     MenuKind.Album -> ((target as? ActionTarget.Albums)?.data?.ids?.singleOrNull() ?: subject.albumId)
         ?.takeIf { it.isNotEmpty() }?.let { Queries.songLink(albumId = it) }
@@ -107,7 +107,7 @@ object ShareActions {
         MenuKind.Album -> (target as? ActionTarget.Albums)?.data?.ids.orEmpty()
         MenuKind.Playlist -> (target as? ActionTarget.Playlists)?.data?.ids.orEmpty()
         MenuKind.Song, MenuKind.Songs -> when (target) {
-            is ActionTarget.Tracks -> target.data.ids
+            is ActionTarget.Tracks -> target.data.tracks.map { it.id }
             else -> resolveTrackIds(client, target)
         }
         else -> emptyList()
@@ -168,7 +168,7 @@ object ShareActions {
 
     private suspend fun shareFile(context: Context, client: CoreClient, request: ShareRequest) {
         val trackId = request.subject.trackId
-            ?: (request.target as? ActionTarget.Tracks)?.data?.ids?.singleOrNull()
+            ?: (request.target as? ActionTarget.Tracks)?.data?.tracks?.singleOrNull()?.id
         val exported = trackId?.let { (client.query(Queries.exportAudio(it)) as? QueryResult.AudioFile)?.data }
         val src = exported?.path?.let(::File)?.takeIf { it.isFile }
         currentCoroutineContext().ensureActive()

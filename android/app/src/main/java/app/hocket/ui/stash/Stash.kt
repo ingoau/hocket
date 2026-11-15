@@ -85,6 +85,7 @@ import app.hocket.R
 import app.hocket.core.ActionIds
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
+import app.hocket.core.ref
 import app.hocket.core.api.Command
 import app.hocket.core.api.CommandStashMoveInner
 import app.hocket.core.api.CommandStashRemoveInner
@@ -268,10 +269,9 @@ fun StashSheet(onDismiss: () -> Unit) {
     val live = items.map { it.entryId }.toSet()
     val selection = items.filter { it.entryId in picked && it.entryId in live }
     val acting = selection.ifEmpty { items }
-    val ids = acting.map { it.track.id }
-    val serverId = items.firstOrNull()?.track?.serverId ?: ""
+    val ids = acting.map { it.track.ref }
     val title = stringResource(R.string.stash_title)
-    fun play(shuffle: Boolean, from: Int = 0, list: List<String> = ids) = client.dispatch(Commands.playTracks(serverId, list, from, title, shuffle))
+    fun play(shuffle: Boolean, from: Int = 0, list: List<app.hocket.core.api.TrackRef> = ids) = client.dispatch(Commands.playTracks(list, from, title, shuffle))
     val section = app.hocket.ui.components.queueSectionOn()
     fun queue(action: String) {
         client.dispatch(Commands.runAction(action, Commands.tracks(ids)))
@@ -323,7 +323,7 @@ fun StashSheet(onDismiss: () -> Unit) {
                 items = items,
                 picked = picked,
                 onToggle = { id -> picked = if (id in picked) picked - id else picked + id; haptics.performHapticFeedback(HapticFeedbackType.SegmentTick) },
-                onPlayFrom = { list, i -> play(false, i, list) },
+                onPlayFrom = { list, i -> play(false, i, list.map { id -> items.firstOrNull { it.track.id == id }?.track?.ref ?: app.hocket.core.api.TrackRef("", id) }) },
                 onRemove = { id -> client.dispatch(Command.StashRemove(CommandStashRemoveInner(listOf(id)))) },
                 onMove = { id, to -> client.dispatch(Command.StashMove(CommandStashMoveInner(id, to.toUInt()))) },
             )
@@ -333,7 +333,7 @@ fun StashSheet(onDismiss: () -> Unit) {
         }
     }
     if (playlistPicker) CompositionLocalProvider(LocalAppSnackbar provides snackbar) { PlaylistPicker(Commands.tracks(ids), onDismiss = { playlistPicker = false }) }
-    if (naming) NewPlaylistDialog(onCreate = { name -> naming = false; client.dispatch(Commands.createPlaylist(serverId, name, ids)) }, onDismiss = { naming = false })
+    if (naming) NewPlaylistDialog(onCreate = { name, account -> naming = false; client.dispatch(Commands.createPlaylist(account, name, ids)) }, onDismiss = { naming = false }, songs = ids)
 }
 
 @Composable

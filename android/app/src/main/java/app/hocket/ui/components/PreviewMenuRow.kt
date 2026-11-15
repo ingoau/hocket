@@ -58,7 +58,8 @@ private val EDGE = 24.dp
  * to the menu's scroll.
  */
 @Composable
-fun PreviewMenuRow(action: ActionDescriptor, trackId: String?, target: ActionTarget, shape: Shape, tag: String) {
+fun PreviewMenuRow(action: ActionDescriptor, track: app.hocket.core.api.TrackRef?, target: ActionTarget, shape: Shape, tag: String) {
+    val trackId = track?.id
     val client = LocalCoreClient.current
     val preview by client.preview.collectAsStateWithLifecycle()
     val sample = preview?.takeIf { trackId == null || it.trackId == trackId }
@@ -123,7 +124,7 @@ fun PreviewMenuRow(action: ActionDescriptor, trackId: String?, target: ActionTar
             }
             .clickable(enabled = action.enabled) {
                 if (sample == null) {
-                    if (trackId != null) client.dispatch(Commands.previewStart(trackId))
+                    if (track != null) client.dispatch(Commands.previewStart(track))
                     else client.dispatch(Commands.runAction(action.id, target))
                 } else {
                     client.dispatch(Command.PreviewToggle)

@@ -31,7 +31,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], application = Application::class)
 class ConnectRoutesTest {
     private fun state(owns: Boolean, loaded: Boolean = true) = MediaSessionState(
-        if (loaded) MediaSessionMetadata("Song", "Artist", "Album", 200_000u, null, "t1", false, 0u) else null, true,
+        if (loaded) MediaSessionMetadata("Song", "Artist", "Album", 200_000u, null, "t1", null, false, 0u) else null, true,
         PositionStamp(1000u, 0.0, 1.0, true), false, RepeatMode.Off, 1.0, false,
         listOf(MediaSessionAction.Play, MediaSessionAction.Pause), owns,
     )

@@ -1,5 +1,7 @@
 package app.hocket.ui.screens.search
 
+import app.hocket.ui.components.SourceChips
+import app.hocket.ui.components.SourceFilter
 import app.hocket.ui.components.maxWidthListPadding
 import androidx.compose.foundation.layout.BoxWithConstraints
 import app.hocket.ui.icons.HocketIcons
@@ -73,6 +75,7 @@ import app.hocket.R
 import app.hocket.ui.nav.AccountButton
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.Commands
+import app.hocket.core.ref
 import app.hocket.core.Queries
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.LyricHit
@@ -129,7 +132,7 @@ fun SearchScreen(nav: NavHostController) {
             // Back on the tab with the results still showing for this query: keep them, no re-search.
             if (restored) { restored = false; if (local?.query == text) return@collect }
             val id = "s${requestCounter++}"
-            val res = (client.query(Queries.search(serverId, text, 25, includeServer = true, requestId = id)) as? QueryResult.Search)?.data
+            val res = (client.query(Queries.search(client.librarySource.value.let { s -> SourceFilter.current(s, SourceFilter.options(client.accounts.value, false)) }, text, 25, includeServer = true, requestId = id)) as? QueryResult.Search)?.data
             local = res
             remote = null
             pendingRemote = true
@@ -200,6 +203,7 @@ fun SearchScreen(nav: NavHostController) {
         )
         val empty = counts.values.all { it == 0 }
         val show = { k: SearchKind -> (kind == SearchKind.All || kind == k) && (counts[k] ?: 0) > 0 }
+        SourceChips()
         // The kinds to narrow to, each with its count; one with nothing found can't be picked.
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 6.dp).testTag("search.kinds")) {
             items(SearchKind.entries.toList(), key = { it.name }) { k ->
@@ -234,7 +238,7 @@ fun SearchScreen(nav: NavHostController) {
                         val n = shown.size + if (more) 1 else 0
                         item(key = "h.songs") { SearchSectionLabel(stringResource(R.string.search_songs)) }
                         itemsIndexed(shown, key = { _, t -> "t" + t.id }) { i, t ->
-                            TrackRow(t, onClick = { rememberQuery(); client.dispatch(Commands.playTracks(serverId, results.tracks.map { it.id }, results.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) },
+                            TrackRow(t, onClick = { rememberQuery(); client.dispatch(Commands.playTracks(results.tracks.map { it.ref }, results.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) },
                                 nowPlaying = nowPlaying?.track?.id == t.id, segment = i to n, subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
                                 modifier = Modifier.segmentItem(i))
                         }
@@ -257,7 +261,7 @@ fun SearchScreen(nav: NavHostController) {
                         itemsIndexed(shown, key = { _, h -> "ly" + h.track.id }) { i, h ->
                             LyricHitRow(h, onClick = {
                                 rememberQuery()
-                                client.dispatch(Commands.playTracks(serverId, hits.map { it.track.id }, hits.indexOf(h), query, startPositionMs = h.startMs?.toLong() ?: 0))
+                                client.dispatch(Commands.playTracks(hits.map { it.track.ref }, hits.indexOf(h), query, startPositionMs = h.startMs?.toLong() ?: 0))
                             }, nowPlaying = nowPlaying?.track?.id == h.track.id, segment = i to n, modifier = Modifier.segmentItem(i))
                         }
                         if (more) item(key = "lyrics.more") {
@@ -298,7 +302,7 @@ fun SearchScreen(nav: NavHostController) {
                         val tracks = if (kind == SearchKind.All || kind == SearchKind.Songs) r.tracks else emptyList()
                         val artists = if (kind == SearchKind.All || kind == SearchKind.Artists) r.artists else emptyList()
                         val n = tracks.size + artists.size
-                        itemsIndexed(tracks, key = { _, t -> "rt" + t.id }) { i, t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(serverId, r.tracks.map { it.id }, r.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) }, segment = i to n, modifier = Modifier.segmentItem(i)) }
+                        itemsIndexed(tracks, key = { _, t -> "rt" + t.id }) { i, t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(r.tracks.map { it.ref }, r.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) }, segment = i to n, modifier = Modifier.segmentItem(i)) }
                         if (r.albums.isNotEmpty() && (kind == SearchKind.All || kind == SearchKind.Albums)) item(key = "ralbums") { AlbumStrip(r.albums, Modifier.animateItem().padding(vertical = 8.dp)) { a -> nav.navigate(Route.Album(a.id)) } }
                         itemsIndexed(artists, key = { _, ar -> "rar" + ar.id }) { i, ar -> ArtistRow(ar, onClick = { nav.navigate(Route.Artist(ar.id)) }, segment = (tracks.size + i) to n, modifier = Modifier.segmentItem(tracks.size + i)) }
                     }

@@ -439,7 +439,7 @@ class FakeCore(
     private fun mediaSessionState(): MediaSessionState {
         val t = current?.let { library.track(it.trackId) }
         return MediaSessionState(
-            metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.loved, it.rating, stash.any { s -> s.second == it.id }) },
+            metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.serverId, it.loved, it.rating, stash.any { s -> s.second == it.id }) },
             isPlaying = stamp.isPlaying, position = stamp, shuffle = shuffle, repeat = repeat, volume = volumeOf(volumeTarget()).first, muted = volumeOf(volumeTarget()).second,
             actions = orderedMediaActions(), ownsTransport = transportOwner == deviceId,
         )
@@ -872,7 +872,7 @@ class FakeCore(
             is Command.SeekBy -> { startPlayback((positionNow() + c.data.delta_ms).coerceAtLeast(0), stamp.isPlaying); emitTransport() }
             is Command.SetVolume -> { volumes[volumeTarget()] = c.data.volume.coerceIn(0.0, 1.0) to false; emitTransport() }
             is Command.SetMuted -> { volumes[volumeTarget()] = volumeOf(volumeTarget()).first to c.data.muted; emitTransport() }
-            is Command.PreviewStart -> previewStart(c.data.track_id)
+            is Command.PreviewStart -> previewStart(c.data.track.id)
             Command.PreviewToggle -> previewToggle()
             is Command.PreviewSeek -> previewSeek(c.data.position_ms)
             Command.PreviewStop -> previewStop(true)
@@ -903,14 +903,14 @@ class FakeCore(
             is Command.PlayTracks -> {
                 val before = captureSession()
                 saveOutgoingQueue()
-                setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.track_ids.map(::ref)), c.data.track_ids, c.data.start_index.toInt(), c.data.shuffle)
+                setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.tracks), c.data.tracks.map { it.id }, c.data.start_index.toInt(), c.data.shuffle)
                 startPlayback(c.data.start_position_ms?.toLong() ?: 0, true)
                 pushUndo("Play ${c.data.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
             }
-            is Command.PlayNext -> queueCommand(c.data.track_ids, c.data.keys.orEmpty(), Placement.Next)
-            is Command.AddToQueue -> queueCommand(c.data.track_ids, c.data.keys.orEmpty(), Placement.Group)
-            is Command.PlayLater -> queueCommand(c.data.track_ids, c.data.keys.orEmpty(), Placement.Later)
+            is Command.PlayNext -> queueCommand(c.data.tracks.map { it.id }, c.data.keys.orEmpty(), Placement.Next)
+            is Command.AddToQueue -> queueCommand(c.data.tracks.map { it.id }, c.data.keys.orEmpty(), Placement.Group)
+            is Command.PlayLater -> queueCommand(c.data.tracks.map { it.id }, c.data.keys.orEmpty(), Placement.Later)
             is Command.JumpToQueueItem -> jumpTo(c.data.key)
             is Command.RemoveQueueItems -> {
                 val before = captureSession()
@@ -924,7 +924,7 @@ class FakeCore(
                 emitQueue(); emitTransport()
             }
             is Command.MoveQueueItem -> { lastQueueMove = c.data; moveItem(c.data.key, c.data.after, c.data.in_group) }
-            is Command.InsertTracks -> insertItems(c.data.track_ids, c.data.keys.orEmpty(), c.data.after, c.data.in_group)
+            is Command.InsertTracks -> insertItems(c.data.tracks.map { it.id }, c.data.keys.orEmpty(), c.data.after, c.data.in_group)
             Command.ClearQueue -> { val before = captureSession(); while (list.size > ptr + 1) list.removeAt(list.size - 1); pushUndo("Clear queue") { restoreSession(before) }; toast("Queue cleared", "Undo", Command.Undo); emitQueue() }
             Command.ClearQueueGroup -> clearGroup(stash = false)
             Command.StashQueueGroup -> clearGroup(stash = true)
@@ -968,7 +968,7 @@ class FakeCore(
             }
             is Command.SetSavedQueueCap -> { savedQueueCap = c.data.cap.toInt(); setSetting(SettingKeys.QUEUE_SAVED_CAP, savedQueueCap.toString()); emitSaved() }
 
-            is Command.StashAdd -> stashAdd(c.data.track_ids)
+            is Command.StashAdd -> stashAdd(c.data.tracks.map { it.id })
             is Command.StashRemove -> {
                 val ids = c.data.entry_ids.toSet()
                 val gone = stash.withIndex().filter { it.value.first in ids }
@@ -996,11 +996,11 @@ class FakeCore(
                 back.forEach { (id, at) -> if (stash.none { it.second == at.second }) stash.add(at.first.coerceIn(0, stash.size), id to at.second) }
                 if (back.isNotEmpty()) emitStash()
             }
-            is Command.Snooze -> applySnooze(c.data.track_ids, untilFor(c.data.duration), false)
+            is Command.Snooze -> applySnooze(c.data.tracks.map { it.id }, untilFor(c.data.duration), false)
             is Command.SnoozeUntil ->
                 if (c.data.until <= now()) toast("Pick a time in the future to snooze until")
-                else applySnooze(c.data.track_ids, c.data.until, false)
-            is Command.Unsnooze -> applySnooze(c.data.track_ids, null, true)
+                else applySnooze(c.data.tracks.map { it.id }, c.data.until, false)
+            is Command.Unsnooze -> applySnooze(c.data.tracks.map { it.id }, null, true)
 
             Command.Undo -> undo()
             Command.Redo -> redo()
@@ -1012,8 +1012,10 @@ class FakeCore(
 
             is Command.SetRating -> setRating(c.data.targets, c.data.rating.toInt())
             is Command.SetLoved -> setLoved(c.data.targets, c.data.loved)
+            // One library on one account: nothing to link, convert or keep apart.
+            is Command.LinkTracks, is Command.UnlinkTrack, is Command.SetInLibrary, is Command.ConvertPlaylistToMixed -> Unit
             is Command.SetArtistLoved -> { library.updateArtist(c.data.artist_id) { it.copy(loved = c.data.loved) }; emitLibrary(listOf(c.data.artist_id), "artists") }
-            is Command.CreatePlaylist -> { createPlaylist(c.data.name, c.data.track_ids); toast("Created “${c.data.name}”") }
+            is Command.CreatePlaylist -> { createPlaylist(c.data.name, c.data.tracks.map { it.id }); toast("Created “${c.data.name}”") }
             is Command.DeletePlaylist -> { library.playlists.removeAll { it.id == c.data.playlist_id }; library.playlistTracks.remove(c.data.playlist_id); emitLibrary(listOf(c.data.playlist_id), "playlists"); toast("Playlist deleted") }
             is Command.RenamePlaylist -> {
                 val i = library.playlists.indexOfFirst { it.id == c.data.playlist_id }
@@ -1024,7 +1026,7 @@ class FakeCore(
                 val list = library.playlistTracks.getOrPut(c.data.playlist_id) { mutableListOf() }
                 val prior = list.toList()
                 val at = c.data.at_index?.toInt()?.coerceIn(0, list.size) ?: list.size
-                list.addAll(at, c.data.track_ids)
+                list.addAll(at, c.data.tracks.map { it.id })
                 library.refreshPlaylist(c.data.playlist_id)
                 pushUndo("Add to playlist") { list.clear(); list.addAll(prior); library.refreshPlaylist(c.data.playlist_id); emitLibrary(listOf(c.data.playlist_id), "playlists") }
                 emitLibrary(listOf(c.data.playlist_id), "playlists")
@@ -1049,7 +1051,7 @@ class FakeCore(
 
             is Command.Pin -> pin(c.data.target, c.data.transcode)
             is Command.PrimeAlbum -> primed += "album:${c.data.album_id}"
-            is Command.PrimeTrack -> primed += "track:${c.data.track_id}"
+            is Command.PrimeTrack -> primed += "track:${c.data.track.id}"
             is Command.Unpin -> { pins.removeAll { it.target == c.data.target }; emitPins(); toast("Download removed") }
             Command.ClearStreamCache -> { storage = storage.copy(cacheBytes = 0.0, partialCacheBytes = 0.0); emit(Event.StorageChanged(EventStorageChangedInner(storage))); toast("Stream cache cleared") }
             // The fake plays nothing through a backend: stream capabilities change nothing here.
@@ -1166,8 +1168,8 @@ class FakeCore(
                 MediaSessionAction.Stop -> handle(Command.Stop)
                 MediaSessionAction.Shuffle -> handle(Command.SetShuffle(CommandSetShuffleInner(!shuffle)))
                 MediaSessionAction.Repeat -> handle(Command.SetRepeat(CommandSetRepeatInner(when (repeat) { RepeatMode.Off -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off })))
-                MediaSessionAction.Love -> currentTrack()?.let { setLoved(listOf(RatingTarget.Track(RatingTargetTrackInner(it.id))), !it.loved) }
-                MediaSessionAction.Rate -> currentTrack()?.let { t -> setRating(listOf(RatingTarget.Track(RatingTargetTrackInner(t.id))), c.data.value?.toInt() ?: 0) }
+                MediaSessionAction.Love -> currentTrack()?.let { setLoved(listOf(RatingTarget.Track(RatingTargetTrackInner(it.id, it.serverId))), !it.loved) }
+                MediaSessionAction.Rate -> currentTrack()?.let { t -> setRating(listOf(RatingTarget.Track(RatingTargetTrackInner(t.id, t.serverId))), c.data.value?.toInt() ?: 0) }
                 MediaSessionAction.Stash -> currentTrack()?.let { t ->
                     val listed = stash.filter { it.second == t.id }.map { it.first }
                     if (listed.isEmpty()) stashAdd(listOf(t.id)) else handle(Command.StashRemove(CommandStashRemoveInner(listed)))
@@ -1609,7 +1611,7 @@ class FakeCore(
         val id = canonical(actionId)
         if (id in ActionIds.UI_HANDLED) return // the platform performs these; the core yields no command
         val trackIds: List<TrackId> = when (target) {
-            is ActionTarget.Tracks -> target.data.ids
+            is ActionTarget.Tracks -> target.data.tracks.map { it.id }
             is ActionTarget.Albums -> target.data.ids.flatMap { library.albumTracks(it) }.map { it.id }
             is ActionTarget.Artists -> target.data.ids.flatMap { a -> library.artistAlbums(a).flatMap { library.albumTracks(it.id) } }.map { it.id }
             is ActionTarget.Playlists -> target.data.ids.flatMap { library.playlistTracks[it] ?: emptyList() }
@@ -1620,9 +1622,9 @@ class FakeCore(
         val label = when (target) { is ActionTarget.Albums -> library.album(target.data.ids.first())?.name; is ActionTarget.Artists -> library.artist(target.data.ids.first())?.name; is ActionTarget.Playlists -> library.playlist(target.data.ids.first())?.name; else -> null } ?: "${trackIds.size} tracks"
         val rateMatch = Regex("rate([0-5])").matchEntire(id)
         when {
-            rateMatch != null -> setRating(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, rateMatch.groupValues[1].toInt())
-            id == ActionIds.PLAY -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, false)))
-            id == ActionIds.PLAY_SHUFFLED -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, true)))
+            rateMatch != null -> setRating(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, rateMatch.groupValues[1].toInt())
+            id == ActionIds.PLAY -> handle(Command.PlayTracks(CommandPlayTracksInner(trackIds.map(::ref), 0u, label, false)))
+            id == ActionIds.PLAY_SHUFFLED -> handle(Command.PlayTracks(CommandPlayTracksInner(trackIds.map(::ref), 0u, label, true)))
             id == ActionIds.PLAY_NEXT || id == ActionIds.ADD_TO_QUEUE || id == ActionIds.PLAY_LATER -> {
                 // Queue rows are named by key so the ones still to play move rather than repeat.
                 val keys = (target as? ActionTarget.QueueItems)?.data?.keys
@@ -1635,8 +1637,8 @@ class FakeCore(
             id == ActionIds.PREVIEW -> trackIds.firstOrNull()?.let { previewStart(it) }
             id == ActionIds.STASH -> stashAdd(trackIds)
             id == ActionIds.CLEAR_STASH -> handle(Command.StashClear)
-            id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, true)
-            id == ActionIds.UNLOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, false)
+            id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, true)
+            id == ActionIds.UNLOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, false)
             id == ActionIds.DOWNLOAD -> when (target) {
                 is ActionTarget.Albums -> target.data.ids.forEach { pin(PinTarget.Album(PinTargetAlbumInner(it)), false) }
                 is ActionTarget.Playlists -> target.data.ids.forEach { pin(PinTarget.Playlist(PinTargetPlaylistInner(it)), false) }
@@ -1704,7 +1706,7 @@ class FakeCore(
         is ActionTarget.Albums -> target.data.ids.singleOrNull()?.let { "album" to it }
         is ActionTarget.Artists -> target.data.ids.singleOrNull()?.let { "artist" to it }
         is ActionTarget.Playlists -> target.data.ids.singleOrNull()?.let { "playlist" to it }
-        is ActionTarget.Tracks -> target.data.ids.singleOrNull()?.let { "track" to it }
+        is ActionTarget.Tracks -> target.data.tracks.singleOrNull()?.let { "track" to it.id }
         else -> null
     }
 
@@ -1714,11 +1716,11 @@ class FakeCore(
         // As the core's `visible` hook: "Add to queue" only with the Queue section setting on.
         val addToQueue = if (queueSection) listOf(d(ActionIds.ADD_TO_QUEUE, "Add to queue", "queue_music", "queue")) else emptyList()
         // And Shuffle isn't offered for one song: shuffling it is just playing it.
-        val shuffle = if (target is ActionTarget.Tracks && target.data.ids.size == 1) emptyList() else listOf(d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"))
+        val shuffle = if (target is ActionTarget.Tracks && target.data.tracks.size == 1) emptyList() else listOf(d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"))
         val library = listOf(
             d(ActionIds.PLAY, "Play", "play_arrow", "playback"), *shuffle.toTypedArray(),
             d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"), *addToQueue.toTypedArray(), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
-            d(ActionIds.PREVIEW, "Preview", "headphones", "playback", undoable = false, enabled = (target is ActionTarget.Tracks && target.data.ids.size == 1) || (target is ActionTarget.QueueItems && target.data.keys.size == 1)),
+            d(ActionIds.PREVIEW, "Preview", "headphones", "playback", undoable = false, enabled = (target is ActionTarget.Tracks && target.data.tracks.size == 1) || (target is ActionTarget.QueueItems && target.data.keys.size == 1)),
             d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false),
             d(ActionIds.STASH, "Stash", "stash", "queue", undoable = false),
             d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.UNLOVE, "Unlove", "heart_minus", "library"),
@@ -1734,7 +1736,7 @@ class FakeCore(
         ) else emptyList()
         val base: List<ActionDescriptor> = pins + when (target) {
             is ActionTarget.Tracks -> {
-                val ids = target.data.ids
+                val ids = target.data.tracks.map { it.id }
                 val snoozed = ids.any { it in snoozes }
                 val fresh = ids.any { it !in snoozes }
                 library + listOf(
@@ -1772,8 +1774,14 @@ class FakeCore(
             QueryResult.Tracks(TrackPage(sorted.drop(off).take(q.data.page.limit.toInt()), off.toUInt(), sorted.size.toUInt()))
         }
         is Query.TrackCount -> QueryResult.Count((q.data.filter?.let { f -> library.tracks.count { matches(it, f) } } ?: library.tracks.size).toUInt())
-        is Query.Track -> QueryResult.TrackDetail(library.track(q.data.id))
-        is Query.TracksByIds -> QueryResult.TrackList(q.data.ids.mapNotNull { library.track(it) })
+        is Query.Track -> QueryResult.TrackDetail(library.track(q.data.track.id))
+        is Query.TrackSources -> QueryResult.TrackSources(library.track(q.data.track.id)?.let { t ->
+            listOf(TrackSource(t, t.serverId, servers.firstOrNull { it.id == t.serverId }?.name.orEmpty(), true, false, true))
+        }.orEmpty())
+        // One library on one account: nothing to link to.
+        is Query.LinkCandidates -> QueryResult.TrackList(emptyList())
+        Query.HomeShelves -> QueryResult.HomeShelves(homeShelves())
+        is Query.TracksByIds -> QueryResult.TrackList(q.data.tracks.mapNotNull { library.track(it.id) })
         is Query.Albums -> {
             val all = library.albums.filter { (q.data.artist_id == null || it.artistId == q.data.artist_id) && (q.data.genre == null || it.genre == q.data.genre) }
             val sorted = library.sortedAlbums(all, q.data.sort, q.data.descending)
@@ -1810,7 +1818,7 @@ class FakeCore(
             val off = q.data.page.offset.toInt()
             QueryResult.Tracks(TrackPage(ids.drop(off).take(q.data.page.limit.toInt()).mapNotNull { library.track(it) }, off.toUInt(), ids.size.toUInt()))
         }
-        is Query.PlaylistMembership -> QueryResult.Membership(playlistMembership(q.data.track_ids))
+        is Query.PlaylistMembership -> QueryResult.Membership(playlistMembership(q.data.tracks.map { it.id }))
         is Query.Search -> search(q.data)
         Query.Queue -> QueryResult.Queue(queueView())
         is Query.QueueRange -> QueryResult.Queue(queueView(q.data.start.toInt(), q.data.count.toInt().coerceAtMost(2 * QUEUE_VIEW_SIDE + 1)))
@@ -1866,6 +1874,20 @@ class FakeCore(
     }
 
     /** As the native core: every playlist, in name order, with the indices holding any of [trackIds]. */
+    /** Like the core's: Continue listening, then the account's Recently added, Most played and Recently played. */
+    private fun homeShelves(): List<HomeShelf> {
+        val account = servers.firstOrNull()?.id ?: serverId
+        fun shelf(id: String, title: String, albums: List<Album>, on: Boolean, owner: String?) =
+            HomeShelf(id, owner, title, HomeShelfKind.Albums, albums.take(20), emptyList(), emptyList(), on)
+        val recent = library.albums.take(6)
+        return listOf(
+            shelf("hocket/continueListening", "Continue listening", recent, true, null),
+            shelf("$account/recentlyAdded", "Recently added", library.sortedAlbums(library.albums, SortOrder.DateAdded, true), true, account),
+            shelf("$account/mostPlayed", "Most played", library.sortedAlbums(library.albums, SortOrder.PlayCount, true), false, account),
+            shelf("$account/recentlyPlayed", "Recently played", recent, false, account),
+        )
+    }
+
     private fun playlistMembership(trackIds: List<TrackId>): List<PlaylistMembership> {
         val wanted = trackIds.toSet()
         return library.playlists.sortedBy { it.name.lowercase() }.map { p ->

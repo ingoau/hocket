@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
@@ -80,7 +82,7 @@ class LyricsMotionScreenshotTest {
         compose.setThemedContent(core) { LyricsPage(visible = true) }
         core.start()
         advanceUntil("the core to start") { core.client.started.value }
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "Lyrics motion"))
+        core.client.dispatch(Commands.playTracks((listOf(track)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Lyrics motion"))
         advanceUntil("the track") { core.client.nowPlaying.value?.track?.id == track }
         advanceUntil("the lyrics") { exists("lyrics.line.0") }
         return doc
@@ -138,7 +140,7 @@ class LyricsMotionScreenshotTest {
         compose.setThemedContent(core) { LyricsPage(visible = true) }
         core.start()
         advanceUntil("the core to start") { core.client.started.value }
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "Lyrics motion"))
+        core.client.dispatch(Commands.playTracks((listOf(track)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Lyrics motion"))
         advanceUntil("the track") { core.client.nowPlaying.value?.track?.id == track }
         advanceUntil("the lyrics") { exists("lyrics.line.0") }
         val end = doc!!.lines[8].endMs!!.toLong()

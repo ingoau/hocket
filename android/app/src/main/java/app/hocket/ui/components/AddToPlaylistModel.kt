@@ -1,7 +1,9 @@
 package app.hocket.ui.components
 
 import app.hocket.core.Commands
+import app.hocket.core.MIXED_SOURCE
 import app.hocket.core.api.Command
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.PlaylistMembership
 
@@ -144,7 +146,7 @@ data class PickerEdits(
      * (highest first: the last copies of a song go first, and the indices stay valid as they are
      * removed), then one `PlaylistAdd` with an entry per added copy.
      */
-    fun commands(): List<Command> = target.keys.sorted().filter(::changed).flatMap { id ->
+    fun commands(refOf: (String) -> TrackRef = { TrackRef("", it) }): List<Command> = target.keys.sorted().filter(::changed).flatMap { id ->
         val held = held(id)
         val wanted = wanted(id)
         val removed = tracks.flatMap { t ->
@@ -155,7 +157,7 @@ data class PickerEdits(
         val added = (1..rounds).flatMap { round -> tracks.filter { t -> wanted.getValue(t) - held.getValue(t) >= round } }
         listOfNotNull(
             removed.takeIf { it.isNotEmpty() }?.let { Commands.playlistRemove(id, it) },
-            added.takeIf { it.isNotEmpty() }?.let { Commands.playlistAdd(id, it) },
+            added.takeIf { it.isNotEmpty() }?.let { Commands.playlistAdd(id, it.map(refOf)) },
         )
     }
 
@@ -200,4 +202,20 @@ sealed interface PickerOutcome {
     data class AddedToMany(val playlists: Int) : PickerOutcome
     data class RemovedFromMany(val playlists: Int) : PickerOutcome
     data class AddedAndRemoved(val added: Int, val removed: Int) : PickerOutcome
+}
+
+/** Where the New playlist dialog puts a playlist unless the listener picks another account. */
+object NewPlaylistChoice {
+    /**
+     * The songs' own account when they share one this device has; Mixed when they come from
+     * several; otherwise the first account ("" with none).
+     */
+    fun initial(accounts: List<String>, songs: List<TrackRef>): String {
+        val sources = songs.map { it.source }.distinct()
+        return when {
+            sources.size == 1 && sources[0] in accounts -> sources[0]
+            sources.size > 1 && accounts.size > 1 -> MIXED_SOURCE
+            else -> accounts.firstOrNull().orEmpty()
+        }
+    }
 }

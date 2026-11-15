@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -46,7 +48,7 @@ class SelectionToolbarTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         val ids = core.fake.library.tracks.take(3).map { it.id }
-        core.client.dispatch(app.hocket.core.Commands.rateTrack(ids[0], if (core.fake.library.track(ids[1])!!.rating.toInt() == 2) 3 else 2))
+        core.client.dispatch(app.hocket.core.Commands.rateTrack(TrackRef("fake-server", ids[0]), if (core.fake.library.track(ids[1])!!.rating.toInt() == 2) 3 else 2))
         compose.runOnIdle { ids.forEach { core.client.toggleSelected(SelectionKind.Tracks, it) } }
         compose.waitUntil(5_000) { present("selection.more") }
         compose.onNodeWithTag("selection.more").performSemanticsAction(SemanticsActions.OnClick)

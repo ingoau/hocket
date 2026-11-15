@@ -102,8 +102,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.ref
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
+import app.hocket.core.Queries
+import app.hocket.core.api.HomeShelf
+import app.hocket.core.api.QueryResult
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Filter
@@ -161,8 +165,17 @@ fun HomeScreen(nav: NavHostController) {
     val resumePoints = client.albumResumes.collectAsStateWithLifecycle().value
     // Spotlight's Resume slide: re-read when an album gains or loses its resume point.
     val resumeAlbums = resumePoints.map { it.albumId }.toSet()
-    val prefs = remember(settings[SettingKeys.HOME_SECTIONS]?.value) { HomeSections.parse(settings[SettingKeys.HOME_SECTIONS]?.value) }
-    val shown = prefs.filter { it.on && it.section != null }
+    // The core's shelves (Continue listening and each account's) are sections too.
+    var shelves by rememberCachedState<List<HomeShelf>?>(listOf("home.shelves", serverId)) { null }
+    LaunchedEffect(serverId, libraryGen, nowPlayingId) {
+        if (libraryGen < 0) return@LaunchedEffect
+        shelves = (client.query(Queries.homeShelves) as? QueryResult.HomeShelves)?.data.orEmpty()
+    }
+    val prefs = remember(settings[SettingKeys.HOME_SECTIONS]?.value, shelves) {
+        HomeSections.shelves = shelves.orEmpty()
+        HomeSections.parse(settings[SettingKeys.HOME_SECTIONS]?.value)
+    }
+    val shown = prefs.filter { it.on && it.known }
     val shownSet = shown.mapNotNull { it.section }.toSet()
     // Starts from the last feed, so coming back to Home (a pop from a page opened here) shows its
     // rows on the first frame — the artwork that flew out has somewhere to fly back to.
@@ -322,6 +335,21 @@ fun HomeScreen(nav: NavHostController) {
                         }
                     }
                     shown.forEach { pref ->
+                        val shelf = pref.shelf
+                        if (shelf != null) {
+                            if (shelf.albums.isEmpty()) return@forEach
+                            any = true
+                            val step = order++
+                            item(key = "h.${pref.id}", contentType = "sectionHeader") {
+                                HomeSectionHeader(shelf.title, Modifier.animateItem().homeEntrance(reveal, step).testTag("home.section.${pref.id}"), onMenu = { sectionMenu = pref })
+                            }
+                            item(key = "s.${pref.id}", contentType = "section.${pref.resolvedStyle.id}") {
+                                Box(Modifier.animateItem().homeEntrance(reveal, step)) {
+                                    SectionBody(null, SectionContent.Albums(shelf.albums.take(SECTION_ITEMS)), pref.resolvedStyle, filters, saved, nav, serverId, sheets, label = shelf.title, onSongMore = { songMenu.open(it) })
+                                }
+                            }
+                            return@forEach
+                        }
                         val section = pref.section ?: return@forEach
                         if (section == HomeSection.Spotlight) return@forEach
                         val content = loaded[section]
@@ -348,7 +376,7 @@ fun HomeScreen(nav: NavHostController) {
                         }
                         item(key = "s.${pref.id}", contentType = "section.${pref.resolvedStyle.id}") {
                             Box(Modifier.animateItem().homeEntrance(reveal, step)) {
-                                SectionBody(section, content, pref.resolvedStyle, filters, saved, nav, serverId, sheets, onSongMore = { songMenu.open(it) })
+                                SectionBody(section, content, pref.resolvedStyle, filters, saved, nav, serverId, sheets, label = stringResource(section.title), onSongMore = { songMenu.open(it) })
                             }
                         }
                     }
@@ -378,6 +406,7 @@ fun HomeScreen(nav: NavHostController) {
     if (customising) CustomiseHomeSheet(onDismiss = { customising = false })
     sectionMenu?.let { pref ->
         val section = pref.section
+        pref.shelf?.let { shelf -> SectionMenuSheet(pref, shelf.title, onDismiss = { sectionMenu = null }, onHide = { hide(pref, shelf.title) }, onCustomise = { customising = true }) }
         if (section != null) {
             val title = feed?.get(section)?.let { sectionTitle(section, it) } ?: stringResource(section.title)
             SectionMenuSheet(pref, title, onDismiss = { sectionMenu = null }, onHide = { hide(pref, title) }, onCustomise = { customising = true })
@@ -458,7 +487,7 @@ private fun HomeSectionHeader(title: String, modifier: Modifier = Modifier, onMe
 /** One section's items in its style. */
 @Composable
 private fun SectionBody(
-    section: HomeSection,
+    section: HomeSection?,
     content: SectionContent,
     style: SectionStyle,
     filters: List<Filter>,
@@ -466,6 +495,7 @@ private fun SectionBody(
     nav: NavHostController,
     serverId: String,
     sheets: HomeSheets,
+    label: String,
     onSongMore: (TrackSummary) -> Unit,
 ) {
     val client = LocalCoreClient.current
@@ -477,14 +507,13 @@ private fun SectionBody(
         content is SectionContent.Tracks -> content.items.mapIndexed { i, t -> HomeItem.TrackItem(t, content.items, i) }
         else -> emptyList()
     }
-    val label = stringResource(section.title)
     val actions = remember(items, serverId) {
         HomeItemActions(
             open = { item ->
                 when (item) {
                     is HomeItem.AlbumItem -> nav.navigate(Route.Album(item.album.id))
                     is HomeItem.ArtistItem -> nav.navigate(Route.Artist(item.artist.id))
-                    is HomeItem.TrackItem -> client.dispatch(Commands.playTracks(serverId, item.all.map { it.id }, item.index, label))
+                    is HomeItem.TrackItem -> client.dispatch(Commands.playTracks(item.all.map { it.ref }, item.index, label))
                     is HomeItem.FilterItem -> client.dispatch(Commands.playContext(Commands.filterContext(serverId, item.filter)))
                     is HomeItem.QueueItem -> client.dispatch(Commands.restoreSavedQueue(item.queue.id))
                 }

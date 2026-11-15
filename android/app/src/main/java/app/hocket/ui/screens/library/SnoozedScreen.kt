@@ -26,6 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.core.Commands
+import app.hocket.core.ref
 import app.hocket.core.toSummary
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.brand.brandTitleStyle
@@ -74,7 +75,7 @@ fun SnoozedScreen(nav: NavHostController) {
                             item.track.toSummary(),
                             onClick = {
                                 val serverId = server?.id ?: return@TrackRow
-                                client.dispatch(Commands.playTracks(serverId, listOf(item.trackRef.id), 0, item.track.title))
+                                client.dispatch(Commands.playTracks(listOf(item.trackRef), 0, item.track.title))
                             },
                             onMore = { songMenu.open(item.track.toSummary()) },
                             subtitle = subtitle,

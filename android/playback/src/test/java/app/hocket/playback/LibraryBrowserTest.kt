@@ -113,7 +113,7 @@ class LibraryBrowserTest {
         val ids = fake.library.tracks.take(3).map { MediaId.Track(server, it.id).format() }
         assertTrue(browser.playNow(ids, 1))
         val play = sent.single() as Command.PlayTracks
-        assertEquals(fake.library.tracks.take(3).map { it.id }, play.data.track_ids)
+        assertEquals(fake.library.tracks.take(3).map { it.id }, play.data.tracks.map { it.id })
         assertEquals(1u, play.data.start_index)
     }
 
@@ -121,10 +121,10 @@ class LibraryBrowserTest {
     fun enqueueingAnAlbumAddsItsTracks() = runBlocking {
         val album = fake.library.albums.first()
         assertTrue(browser.enqueueNow(listOf(MediaId.Album(server, album.id).format()), next = true))
-        assertEquals(fake.library.albumTracks(album.id).map { it.id }, (sent.single() as Command.PlayNext).data.track_ids)
+        assertEquals(fake.library.albumTracks(album.id).map { it.id }, (sent.single() as Command.PlayNext).data.tracks.map { it.id })
         val t = fake.library.tracks.first()
         assertTrue(browser.enqueueNow(listOf(MediaId.Track(server, t.id).format()), next = false))
-        assertEquals(listOf(t.id), (sent.last() as Command.PlayLater).data.track_ids)
+        assertEquals(listOf(t.id), (sent.last() as Command.PlayLater).data.tracks.map { it.id })
         assertFalse("artists are too broad to enqueue", browser.enqueueNow(listOf(MediaId.Artist(server, "ar0").format()), next = false))
     }
 

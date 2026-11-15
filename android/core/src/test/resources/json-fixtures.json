@@ -20,10 +20,15 @@
   "command.playNext": {
     "type": "playNext",
     "data": {
-      "server_id": "srv",
-      "track_ids": [
-        "a",
-        "b"
+      "tracks": [
+        {
+          "source": "srv",
+          "id": "a"
+        },
+        {
+          "source": "srv",
+          "id": "b"
+        }
       ],
       "keys": []
     }
@@ -31,9 +36,11 @@
   "command.playTracks": {
     "type": "playTracks",
     "data": {
-      "server_id": "srv",
-      "track_ids": [
-        "a"
+      "tracks": [
+        {
+          "source": "srv",
+          "id": "a"
+        }
       ],
       "start_index": 0,
       "label": "Search: hello",
@@ -70,7 +77,8 @@
         {
           "type": "track",
           "data": {
-            "id": "t1"
+            "id": "t1",
+            "source": "srv"
           }
         },
         {
@@ -167,8 +175,11 @@
       "target": {
         "type": "tracks",
         "data": {
-          "ids": [
-            "t1"
+          "tracks": [
+            {
+              "source": "srv",
+              "id": "t1"
+            }
           ]
         }
       }
@@ -396,7 +407,8 @@
           "musicBrainzId": null,
           "explicit": false,
           "comment": null,
-          "artists": []
+          "artists": [],
+          "isrc": null
         }
       ],
       "offset": 0,
@@ -855,6 +867,7 @@
           "durationMs": 213000,
           "artworkPath": "/cache/al1-640.jpg",
           "trackId": "t1",
+          "source": "srv",
           "loved": false,
           "rating": 0,
           "stashed": false

@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
@@ -127,7 +129,7 @@ class ImmersiveMotionScreenshotTest {
             val controls = listOf("player.title", "player.addToPlaylist", "player.seekBar", "player.playPause", "player.mode.queue", "player.more")
             for ((current, next) in listOf(3 to 1, 1 to 3, 1 to 0)) {
                 client.dispatch(Commands.setAutoplay(false))
-                client.dispatch(Commands.playTracks(fake.library.serverId, listOf(track(current), track(next)), 0, "Pair"))
+                client.dispatch(Commands.playTracks((listOf(track(current), track(next))).map { TrackRef(fake.library.serverId, it) }, 0, "Pair"))
                 settle()
                 compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
                 settle()
@@ -180,7 +182,7 @@ class ImmersiveMotionScreenshotTest {
         }
         for ((current, next) in listOf(1 to 0, 0 to 1, 2 to 3)) {
             client.dispatch(Commands.setAutoplay(false))
-            client.dispatch(Commands.playTracks(fake.library.serverId, listOf(track(current), track(next)), 0, "Pair"))
+            client.dispatch(Commands.playTracks((listOf(track(current), track(next))).map { TrackRef(fake.library.serverId, it) }, 0, "Pair"))
             settle()
             val collapsedTop = sheetTop()
             compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)

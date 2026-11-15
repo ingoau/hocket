@@ -1246,16 +1246,12 @@
     <string name="home_section_favourite_artists_desc">The artists you play most</string>
     <string name="home_section_top_genre">A genre you\'ve been playing</string>
     <string name="home_section_top_genre_desc">Albums from the genre you play most lately</string>
-    <string name="home_section_new">New in your library</string>
-    <string name="home_section_new_desc">The albums added most recently</string>
     <string name="home_section_more_from_artist">More from an artist you play a lot</string>
     <string name="home_section_more_from_artist_desc">Top songs from the artist you play most lately</string>
     <string name="home_section_more_from_named">More from %1$s</string>
     <string name="home_section_top_genre_named">More %1$s</string>
     <string name="home_section_on_repeat">On repeat</string>
     <string name="home_section_on_repeat_desc">The albums you play most lately</string>
-    <string name="home_section_recently_played">Recently played</string>
-    <string name="home_section_recently_played_desc">Albums you played</string>
     <string name="home_section_recent_queues">Recent queues</string>
     <string name="home_section_recent_queues_desc">Queues you saved</string>
     <string name="home_section_stats">Your listening</string>
@@ -1516,4 +1512,18 @@
         <item quantity="one">Playing %d song next</item>
         <item quantity="other">Playing %d songs next</item>
     </plurals>
+    <!-- Several accounts (docs/providers.md, Phase 3) -->
+    <string name="playlist_keep_on">Keep it on</string>
+    <string name="source_all">All</string>
+    <string name="source_mixed">Mixed</string>
+    <string name="source_filter">Source</string>
+    <string name="sources_title">Sources</string>
+    <string name="sources_preferred">Plays from here</string>
+    <string name="sources_linked_by_hand">Linked by hand</string>
+    <string name="sources_not_here">Not on this device</string>
+    <string name="sources_not_same">Not the same song</string>
+    <string name="sources_link_to">Link to…</string>
+    <string name="sources_link_search">Find the same song on another account</string>
+    <string name="sources_no_candidates">No matching songs on your other accounts</string>
+    <string name="home_section_shelf_desc">A shelf from your music service</string>
 </resources>
