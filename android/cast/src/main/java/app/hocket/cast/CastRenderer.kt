@@ -11,6 +11,7 @@ import app.hocket.core.api.BackendReport
 import app.hocket.core.api.BackendReportBufferingInner
 import app.hocket.core.api.BackendReportEndedInner
 import app.hocket.core.api.BackendReportErrorInner
+import app.hocket.core.api.BackendReportLoadAppliedInner
 import app.hocket.core.api.BackendReportPausedInner
 import app.hocket.core.api.BackendReportPlayingInner
 import app.hocket.core.api.BackendReportPositionInner
@@ -159,6 +160,11 @@ internal class CastRenderer(
     }
 
     override fun handle(command: BackendCommand) {
+        // First, session or not, and whether or not this is the renderer playing: the core drops what
+        // it hears about items between a `Load` and this, and the `Load` came here.
+        if (command is BackendCommand.Load) {
+            dispatch(Commands.backendReport(BackendReport.LoadApplied(BackendReportLoadAppliedInner(command.data.load_id))))
+        }
         val client = client
         if (client == null) {
             PlaybackLog.w("cast: no session for ${command::class.simpleName}")

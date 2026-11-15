@@ -1609,11 +1609,14 @@ impl std::fmt::Debug for MediaSource {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum BackendCommand {
     /// Replace what is loaded. `next` is the gapless follow-up to preload.
+    /// The backend answers [`BackendReport::LoadApplied`] with `load_id`
+    /// before any other report about what it loaded.
     Load {
         source: MediaSource,
         next: Option<MediaSource>,
         position_ms: Ms,
         play: bool,
+        load_id: u32,
     },
     /// Update only the preloaded follow-up.
     SetNext {
@@ -1670,6 +1673,15 @@ pub enum BackendCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum BackendReport {
+    /// The backend applied [`BackendCommand::Load`] `load_id`: every report
+    /// sent before this one is about what was loaded before it. Reports and
+    /// commands cross on the way, and a key alone can't tell them apart (a
+    /// reload of the item that was playing, a transition into the item that
+    /// is `next` again), so reports about items that arrive between a `Load`
+    /// and its acknowledgement are dropped.
+    LoadApplied {
+        load_id: u32,
+    },
     Ready {
         key: QueueKey,
         duration_ms: Option<Ms>,
@@ -3855,6 +3867,7 @@ mod redaction_tests {
             next: None,
             position_ms: 0,
             play: true,
+            load_id: 1,
         };
         assert!(!format!("{cmd:?}").contains("abc123"));
         assert_eq!(redact_url("file:///tmp/a.flac"), "file:///tmp/a.flac");

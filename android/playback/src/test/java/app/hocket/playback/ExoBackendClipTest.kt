@@ -82,7 +82,7 @@ class ExoBackendClipTest {
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
 
     private fun load(positionMs: UInt) =
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a", mixIn = false), source("b"), positionMs, false)))
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a", mixIn = false), source("b"), positionMs, false, 1u)))
 
     @Before
     fun setUp() {
@@ -137,7 +137,7 @@ class ExoBackendClipTest {
 
     @Test
     fun aLoadWithoutAPlanIsNotClipped() {
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a", mixIn = false), source("b", mixIn = false), 0u, false)))
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a", mixIn = false), source("b", mixIn = false), 0u, false, 1u)))
         assertEquals(C.TIME_END_OF_SOURCE, clipEnd())
     }
 

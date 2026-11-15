@@ -1619,7 +1619,9 @@ impl Actor {
                 self.stamp();
                 self.emit_transport();
             }
-            BackendReport::PreviewReady { .. }
+            // The external bridge consumes acknowledgements.
+            BackendReport::LoadApplied { .. }
+            | BackendReport::PreviewReady { .. }
             | BackendReport::PreviewProgress { .. }
             | BackendReport::PreviewEnded
             | BackendReport::PreviewFailed

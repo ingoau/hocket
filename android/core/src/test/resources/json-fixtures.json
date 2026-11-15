@@ -99,6 +99,17 @@
       }
     }
   },
+  "command.backendReport.loadApplied": {
+    "type": "backendReport",
+    "data": {
+      "report": {
+        "type": "loadApplied",
+        "data": {
+          "load_id": 7
+        }
+      }
+    }
+  },
   "command.backendReport.position": {
     "type": "backendReport",
     "data": {
@@ -775,7 +786,8 @@
           },
           "next": null,
           "position_ms": 0,
-          "play": true
+          "play": true,
+          "load_id": 7
         }
       }
     }
