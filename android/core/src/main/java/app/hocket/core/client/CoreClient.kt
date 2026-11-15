@@ -684,7 +684,7 @@ class CoreClient(
             is Event.Backend -> Unit // consumed by the playback service
             is Event.Error -> _errors.tryEmit(event.data)
             is Event.Log -> Unit
-            // No JS host is offered (js_host false); the core toasts an expired sign-in itself.
+            // CoreHost answers the JS host (a hidden WebView); the core toasts an expired sign-in itself.
             is Event.YtmJsRequest, is Event.YtmSignInExpired -> Unit
         }
     }

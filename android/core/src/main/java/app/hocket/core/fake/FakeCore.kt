@@ -1784,6 +1784,8 @@ class FakeCore(
     private fun answer(q: Query): QueryResult = when (q) {
         Query.Snapshot -> QueryResult.SnapshotResult(snapshot())
         Query.Accounts -> QueryResult.Accounts(servers.toList())
+        // The fake never sends YtmJsRequest.
+        Query.YtmJsHostScript -> QueryResult.Text("")
         is Query.Tracks -> {
             val all = q.data.filter?.let { f -> library.tracks.filter { matches(it, f) } } ?: library.tracks
             val sorted = library.sorted(all, q.data.sort, q.data.descending)

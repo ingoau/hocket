@@ -26,6 +26,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlin.system.exitProcess
 
 /**
@@ -93,6 +95,7 @@ object CoreHost {
     val bindToken: String = UUID.randomUUID().toString()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var ytmJsJob: Job? = null
     private var replayJob: Job? = null
     private var pendingShutdown: Job? = null
 
@@ -139,9 +142,36 @@ object CoreHost {
         // UNDISPATCHED: the collector is subscribed before Start is dispatched, so the first
         // `Started` cannot slip past it.
         replayJob = scope.launch(start = CoroutineStart.UNDISPATCHED) { replayCredentials(core, store) }
+        ytmJsJob?.cancel()
+        ytmJsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) { serveYtmJs(core, app) }
         start(core)
         _handle.value = core
         return core
+    }
+
+    /**
+     * Answers the core's `YtmJsRequest`s (YouTube Music's web client: signature, `n`, PO token) from
+     * a hidden WebView ([YtmJsHost]), for as long as this core runs.
+     */
+    private suspend fun serveYtmJs(core: CoreHandle, app: Context) {
+        val host = YtmJsHost(
+            scope,
+            open = { WebViewJsPage.open(app) },
+            script = {
+                when (val r = core.query(Query.YtmJsHostScript)) {
+                    is QueryResult.Text -> r.data
+                    else -> error("the core has no JS host script")
+                }
+            },
+            dispatch = core::dispatch,
+        )
+        try {
+            core.events.collect { event ->
+                if (event is Event.YtmJsRequest) scope.launch { host.handle(event.data.request_id, event.data.request) }
+            }
+        } finally {
+            withContext(NonCancellable) { host.close() }
+        }
     }
 
     /**

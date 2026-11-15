@@ -25,7 +25,7 @@ object Commands {
         Command.AddAccount(CommandAddAccountInner(AccountSetup.Navidrome(AccountSetupNavidromeInner(url, username, password, name))))
     /** YouTube Music on this device: signed in with [cookies] (a `Cookie:` header for music.youtube.com), or anonymous. */
     fun addYoutubeMusic(cookies: String?) =
-        Command.AddAccount(CommandAddAccountInner(AccountSetup.YoutubeMusic(AccountSetupYoutubeMusicInner(cookies, false))))
+        Command.AddAccount(CommandAddAccountInner(AccountSetup.YoutubeMusic(AccountSetupYoutubeMusicInner(cookies, true))))
     fun setInLibrary(tracks: List<TrackRef>, added: Boolean) = Command.SetInLibrary(CommandSetInLibraryInner(tracks, added))
     fun removeAccount(accountId: AccountId) = Command.RemoveAccount(CommandRemoveAccountInner(accountId))
     fun reorderAccounts(accountIds: List<AccountId>) = Command.ReorderAccounts(CommandReorderAccountsInner(accountIds))
