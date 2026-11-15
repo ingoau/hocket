@@ -91,6 +91,7 @@
 //! real (mDNS, tokio-tungstenite) implementations that the simulation fakes.
 
 pub mod auth;
+pub mod channel;
 pub mod clock;
 pub mod diagnostics;
 pub mod discovery;

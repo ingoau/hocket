@@ -155,6 +155,7 @@ pub async fn try_join(
         nonce: nonce.clone(),
         identity: Some(me.id.clone()),
         heads: me.heads(),
+        eph: None,
     }))
     .await
     .unwrap();
@@ -171,6 +172,7 @@ pub async fn try_join(
                 sig,
                 heads,
                 sync,
+                ..
             } => {
                 if let Some(s) = sync {
                     me.merge((**s).clone(), f64::INFINITY).unwrap();
@@ -210,6 +212,7 @@ pub async fn try_join(
         ),
         heads,
         sync: Some(Box::new(me.shared.sync_for(&leader_heads))),
+        eph: None,
     }))
     .await
     .unwrap();

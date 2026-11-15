@@ -32,6 +32,7 @@ use crate::api::{
     StashEntry, TrackRef, TransportLease, TransportState, UndoEntry,
 };
 use crate::connect::auth::{self, Role};
+use crate::connect::channel::{self, Channel, End, Ephemeral};
 use crate::connect::clock::{extrapolate, resume_position, ClockSample, OffsetEstimator};
 use crate::connect::diagnostics::{self, ReplyPart};
 use crate::connect::discovery::{scope_hash, PeerAdvert};
@@ -614,6 +615,10 @@ struct LanHandshake {
     their_nonce: Option<String>,
     /// Our proof and Hello went out.
     hello_sent: bool,
+    /// On the LAN: our ephemeral key for the sealed channel, and the
+    /// leader's once its proof named it.
+    eph: Option<Ephemeral>,
+    leader_eph: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -810,6 +815,10 @@ pub struct Engine {
     /// LAN peers that failed the mutual proof (or refused us), with the
     /// local time until which the election ignores them.
     lan_blocklist: BTreeMap<DeviceId, EpochMs>,
+    /// The sealed LAN channel to our leader's socket, from our proof on.
+    /// Kept until the end of the `handle` that loses the socket, so frames
+    /// queued for it before are still sealed.
+    upstream_channel: Option<(PeerId, Channel)>,
     /// Consecutive pre-proof turn-aways per LAN leader (see [`LAN_STRIKES`])
     /// and how many blocks that earned so far (doubling the next one).
     lan_strikes: BTreeMap<DeviceId, (u32, u32)>,
@@ -882,6 +891,8 @@ impl Engine {
         let now = clock.now_ms();
         let mut room_cfg = RoomConfig::new(cfg.scope.clone());
         room_cfg.auth = cfg.room_auth();
+        // Our room is reached on the LAN only, over plain ws://.
+        room_cfg.require_channel = true;
         room_cfg.session_id = Some(document.session_id.clone());
         let known_members: BTreeSet<DeviceId> = cfg
             .identity
@@ -959,6 +970,7 @@ impl Engine {
             library_records: vec![],
             lan_peers: vec![],
             lan_blocklist: BTreeMap::new(),
+            upstream_channel: None,
             lan_strikes: BTreeMap::new(),
             lan_deferred: false,
             lan_settle_until: now + LAN_SETTLE_MS,
@@ -1588,6 +1600,7 @@ impl Engine {
             Input::Tick => self.on_tick(),
         }
         self.drain_loops();
+        self.seal_upstream();
         std::mem::take(&mut self.out)
     }
 
@@ -2323,8 +2336,10 @@ impl Engine {
             self.emit_connection();
             return;
         };
-        let _ = tier;
+        let eph = (tier == ConnectionTier::Lan).then(Ephemeral::new);
         let nonce = auth::new_nonce();
+        let our_eph = eph.as_ref().map(|e| e.public.clone());
+        self.upstream_channel = None;
         if let Some(r) = &mut self.remote {
             r.handshake = Some(LanHandshake {
                 our_nonce: nonce.clone(),
@@ -2332,6 +2347,8 @@ impl Engine {
                 leader_heads: vec![],
                 their_nonce: None,
                 hello_sent: false,
+                eph,
+                leader_eph: None,
             });
         }
         self.out.push(Output::WireOut {
@@ -2340,6 +2357,7 @@ impl Engine {
                 nonce,
                 identity: Some(self.cfg.scope.clone()),
                 heads,
+                eph: our_eph,
             }),
         });
     }
@@ -2444,6 +2462,7 @@ impl Engine {
                 sig,
                 heads,
                 sync,
+                eph,
             } => {
                 // Ops self-authenticate, so a peer with an older list than the
                 // leader's checks the proof against its list plus the ops it
@@ -2454,6 +2473,23 @@ impl Engine {
                     if h.leader_proven || heads.len() > 64 {
                         false
                     } else if lan {
+                        // The leader must answer our channel key with its
+                        // own, bound into its proof.
+                        let (Some(ours), Some(theirs)) = (&h.eph, eph) else {
+                            drop(id);
+                            reject(self, "it didn't set up a sealed channel");
+                            return true;
+                        };
+                        if !channel::valid_key(theirs) {
+                            drop(id);
+                            reject(self, "it sent a bad channel key");
+                            return true;
+                        }
+                        h.leader_eph = Some(theirs.clone());
+                        let signed = auth::bind_nonce(
+                            &h.our_nonce,
+                            &channel::leader_binding(&ours.public, theirs, &h.our_nonce, device_id),
+                        );
                         let mut log = id.shared.log.clone();
                         if let Some(sync) = sync {
                             if !sync.log.is_empty() {
@@ -2466,7 +2502,7 @@ impl Engine {
                                 log.state(),
                                 Role::Leader,
                                 &scope,
-                                &h.our_nonce,
+                                &signed,
                                 device_id,
                                 heads,
                                 sig,
@@ -2535,14 +2571,35 @@ impl Engine {
                 return true;
             }
         }
+        let mut channel = None;
+        let peer_for_channel = peer.clone();
         if h.leader_proven && !h.hello_sent {
             if let Some(theirs) = h.their_nonce.clone() {
                 let me = self.cfg.device.id.clone();
+                // On the LAN the proof binds the whole transcript, and the
+                // channel keys come from it.
+                let mut signed = theirs.clone();
+                if let (Some(ours), Some(leader_eph), Some(l)) = (&h.eph, &h.leader_eph, &leader) {
+                    let t = channel::joiner_binding(
+                        &ours.public,
+                        leader_eph,
+                        &h.our_nonce,
+                        &theirs,
+                        l,
+                        &me,
+                    );
+                    signed = auth::bind_nonce(&theirs, &t);
+                    channel = Channel::new(End::Joiner, ours, leader_eph, &t);
+                    if channel.is_none() {
+                        reject(self, "its channel key didn't agree");
+                        return true;
+                    }
+                }
                 let (sig, heads, sync) = {
                     let id = identity.lock();
                     let heads = id.heads();
                     (
-                        auth::prove(id.secret(), Role::Joiner, &id.id, &theirs, &me, &heads),
+                        auth::prove(id.secret(), Role::Joiner, &id.id, &signed, &me, &heads),
                         heads,
                         id.shared.sync_for(&h.leader_heads),
                     )
@@ -2554,18 +2611,24 @@ impl Engine {
                         sig,
                         heads,
                         sync: Some(Box::new(sync)),
+                        eph: None,
                     }),
                 });
+                // Everything from here on is sealed (the Hello included).
                 let hello = self.hello_msg();
-                self.out.push(Output::WireOut {
-                    peer,
-                    msg: WireMessage::new(hello),
-                });
+                let mut hello = WireMessage::new(hello);
+                if let Some(ch) = &mut channel {
+                    hello = ch.seal(&hello);
+                }
+                self.out.push(Output::WireOut { peer, msg: hello });
                 h.hello_sent = true;
             }
         }
         if let Some(r) = &mut self.remote {
             r.handshake = Some(h);
+        }
+        if let Some(ch) = channel {
+            self.upstream_channel = Some((peer_for_channel, ch));
         }
         true
     }
@@ -2840,6 +2903,35 @@ impl Engine {
         }
     }
 
+    /// Seal what goes to a LAN leader we have a channel with (everything
+    /// but the handshake frames, which went out before it).
+    fn seal_upstream(&mut self) {
+        let Some((up, ch)) = &mut self.upstream_channel else {
+            return;
+        };
+        for o in &mut self.out {
+            if let Output::WireOut { peer, msg } = o {
+                if peer == up
+                    && !matches!(
+                        msg.msg,
+                        Msg::Sealed { .. } | Msg::Proof { .. } | Msg::Challenge { .. }
+                    )
+                {
+                    *msg = ch.seal(msg);
+                }
+            }
+        }
+        // Its socket is gone (or going): what was queued for it is sealed,
+        // and the channel goes with it.
+        let still = matches!(
+            &self.remote,
+            Some(Remote { state: RemoteState::Attached { peer: p } | RemoteState::Handshaking { peer: p, .. }, .. }) if p == up
+        );
+        if !still {
+            self.upstream_channel = None;
+        }
+    }
+
     fn on_wire_in(&mut self, peer: PeerId, msg: WireMessage) {
         if self.inbound.contains(&peer) {
             let was_serving = self.is_serving();
@@ -2859,6 +2951,17 @@ impl Engine {
         if !is_upstream {
             return;
         }
+        // From a sealed LAN leader, only its next sealed frame counts.
+        let msg = match &mut self.upstream_channel {
+            Some((p, ch)) if *p == peer => ch.open(&msg),
+            _ => Some(msg),
+        };
+        let Some(msg) = msg.filter(|m| !matches!(m.msg, Msg::Sealed { .. })) else {
+            self.log("warn", "the LAN leader sent a frame that didn't open");
+            self.out.push(Output::Disconnect { peer });
+            self.on_upstream_lost(Some("bad sealed frame".into()));
+            return;
+        };
         self.last_upstream_msg_at = self.now_local_ms();
         self.on_upstream_message(msg, false);
     }
@@ -3404,6 +3507,7 @@ impl Engine {
             } => self.on_pair_join(None, Some(relay), join),
             Msg::Hello { .. }
             | Msg::Challenge { .. }
+            | Msg::Sealed { .. }
             | Msg::Proof { .. }
             | Msg::PairJoin { .. }
             | Msg::PairAccept { .. }
@@ -5427,23 +5531,31 @@ mod tests {
             crate::identity::COORDINATOR_ID,
             &[],
         );
-        e.handle(Input::WireIn {
-            peer: peer.into(),
-            msg: WireMessage::new(Msg::Proof {
-                device_id: crate::identity::COORDINATOR_ID.into(),
-                sig,
-                heads: vec![],
-                sync: None,
-            }),
-        });
-        e.handle(Input::WireIn {
-            peer: peer.into(),
-            msg: WireMessage::new(Msg::Challenge {
-                nonce: auth::new_nonce(),
-                identity: None,
-                heads: vec![],
-            }),
-        })
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: peer.into(),
+                msg: WireMessage::new(Msg::Proof {
+                    device_id: crate::identity::COORDINATOR_ID.into(),
+                    sig,
+                    heads: vec![],
+                    sync: None,
+                    eph: None,
+                }),
+            },
+        );
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: peer.into(),
+                msg: WireMessage::new(Msg::Challenge {
+                    nonce: auth::new_nonce(),
+                    identity: None,
+                    heads: vec![],
+                    eph: None,
+                }),
+            },
+        )
     }
 
     /// A joiner's proof for our room's challenge `nonce`, as member `id`.
@@ -5454,6 +5566,7 @@ mod tests {
             sig: auth::prove(me.secret(), Role::Joiner, "scope", nonce, id, &me.heads()),
             heads: me.heads(),
             sync: None,
+            eph: None,
         })
     }
 
@@ -5485,43 +5598,92 @@ mod tests {
     /// connected upstream on `peer`; returns the engine's outputs after its
     /// Hello went out.
     fn lan_leader_proves(e: &mut Engine, peer: &str, leader: &str) -> Vec<Output> {
+        LAN.with(|l| l.borrow_mut().remove(peer));
         let outs = e.handle(Input::Connected {
             peer: peer.into(),
             url: "ws://10.0.0.2:5/".into(),
         });
         let w = wire_outs(&outs);
         assert_eq!(w.len(), 1, "only a challenge goes out first: {w:?}");
-        let nonce = match &w[0].1 {
-            Msg::Challenge { nonce, .. } => nonce.clone(),
-            other => panic!("expected a challenge, got {other:?}"),
+        let (nonce, joiner_eph) = match &w[0].1 {
+            Msg::Challenge {
+                nonce,
+                eph: Some(k),
+                ..
+            } => (nonce.clone(), k.clone()),
+            other => panic!("expected a challenge with a channel key, got {other:?}"),
         };
         let l = test_identity(leader);
+        let ours = Ephemeral::new();
         let sig = auth::prove(
             l.secret(),
             Role::Leader,
             "scope",
-            &nonce,
+            &auth::bind_nonce(
+                &nonce,
+                &channel::leader_binding(&joiner_eph, &ours.public, &nonce, leader),
+            ),
             leader,
             &l.heads(),
         );
+        let outs = lan_in(
+            e,
+            Input::WireIn {
+                peer: peer.into(),
+                msg: WireMessage::new(Msg::Proof {
+                    device_id: leader.into(),
+                    sig,
+                    heads: l.heads(),
+                    sync: None,
+                    eph: Some(ours.public.clone()),
+                }),
+            },
+        );
+        assert!(wire_outs(&outs).is_empty(), "{outs:?}");
+        let leader_nonce = auth::new_nonce();
+        let me = e.cfg.device.id.clone();
+        let t = channel::joiner_binding(
+            &joiner_eph,
+            &ours.public,
+            &nonce,
+            &leader_nonce,
+            leader,
+            &me,
+        );
+        let ch = Channel::new(End::Leader, &ours, &joiner_eph, &t).unwrap();
+        lan_channel(peer, ch.clone(), ch);
         let outs = e.handle(Input::WireIn {
             peer: peer.into(),
-            msg: WireMessage::new(Msg::Proof {
-                device_id: leader.into(),
-                sig,
-                heads: l.heads(),
-                sync: None,
-            }),
-        });
-        assert!(wire_outs(&outs).is_empty(), "{outs:?}");
-        e.handle(Input::WireIn {
-            peer: peer.into(),
             msg: WireMessage::new(Msg::Challenge {
-                nonce: auth::new_nonce(),
+                nonce: leader_nonce.clone(),
                 identity: None,
                 heads: vec![],
+                eph: None,
             }),
-        })
+        });
+        // Its proof binds the transcript; everything after it is sealed.
+        let w = wire_outs(&outs);
+        match &w[0].1 {
+            Msg::Proof {
+                device_id,
+                sig,
+                heads,
+                ..
+            } => assert!(auth::verify_member(
+                &l.member_state(),
+                Role::Joiner,
+                "scope",
+                &auth::bind_nonce(&leader_nonce, &t),
+                device_id,
+                heads,
+                sig,
+            )),
+            other => panic!("expected a proof, got {other:?}"),
+        }
+        assert!(outs.iter().any(
+            |o| matches!(o, Output::WireOut { msg, .. } if matches!(msg.msg, Msg::Sealed { .. }))
+        ));
+        outs
     }
 
     fn play_op() -> SessionOp {
@@ -5535,13 +5697,53 @@ mod tests {
         }
     }
 
+    thread_local! {
+        /// The test's end of each sealed LAN channel, by peer.
+        static LAN: std::cell::RefCell<HashMap<String, (Channel, Channel)>> =
+            Default::default();
+    }
+
+    /// Remember the test's end of the channel with `peer` (`recv` opens
+    /// what the engine sends; `send` seals what the test sends).
+    fn lan_channel(peer: &str, send: Channel, recv: Channel) {
+        LAN.with(|l| {
+            l.borrow_mut().insert(peer.into(), (send, recv));
+        });
+    }
+
+    /// `e.handle`, sealing a frame to a peer the test has a channel with.
+    fn lan_in(e: &mut Engine, input: Input) -> Vec<Output> {
+        let input = match input {
+            Input::WireIn { peer, msg } => {
+                let msg = LAN.with(|l| match l.borrow_mut().get_mut(&peer) {
+                    Some((ch, _)) => ch.seal(&msg),
+                    None => msg,
+                });
+                Input::WireIn { peer, msg }
+            }
+            other => other,
+        };
+        e.handle(input)
+    }
+
+    /// Every frame `outs` sends, opened when sealed to a peer the test has
+    /// a channel with.
     fn wire_outs(outs: &[Output]) -> Vec<(PeerId, Msg)> {
         outs.iter()
             .filter_map(|o| match o {
-                Output::WireOut { peer, msg } => Some((peer.clone(), msg.msg.clone())),
+                Output::WireOut { peer, msg } => Some((peer.clone(), open_out(peer, msg))),
                 _ => None,
             })
             .collect()
+    }
+
+    fn open_out(peer: &str, msg: &WireMessage) -> Msg {
+        LAN.with(|l| {
+            l.borrow()
+                .get(peer)
+                .and_then(|(_, recv)| recv.peek(msg))
+                .map_or_else(|| msg.msg.clone(), |m| m.msg)
+        })
     }
 
     #[test]
@@ -5598,17 +5800,20 @@ mod tests {
             ))),
             vec![dev("phone")],
         );
-        let outs = owner.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted {
-                op,
-                revision: 1,
-                device_id: "phone".into(),
-                op_id: "phone-1".into(),
-                at: 1.0,
-                position_ms: 0,
-            }),
-        });
+        let outs = lan_in(
+            &mut owner,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpCommitted {
+                    op,
+                    revision: 1,
+                    device_id: "phone".into(),
+                    op_id: "phone-1".into(),
+                    at: 1.0,
+                    position_ms: 0,
+                }),
+            },
+        );
         assert!(
             outs.iter().any(|o| matches!(
                 o,
@@ -5656,17 +5861,20 @@ mod tests {
             .any(|o| matches!(o, Output::Prime { track_id } if track_id == "t1")));
         // b holds a live lease in the room: the request goes to it.
         attach(&mut e, None, vec![]);
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("b".into()),
-                    epoch: 3,
-                    expires_at: 1_000_000.0,
-                },
-                ack_of: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("b".into()),
+                        epoch: 3,
+                        expires_at: 1_000_000.0,
+                    },
+                    ack_of: None,
+                }),
+            },
+        );
         let outs = e.handle(Input::PrimeRequest {
             track_id: "t2".into(),
         });
@@ -5674,26 +5882,32 @@ mod tests {
         assert!(wire_outs(&outs).iter().any(|(p, m)| p == "up"
             && matches!(m, Msg::PrimeRequest { track_id, from } if track_id == "t2" && from == "a")));
         // Not the owner: a relayed request is ignored.
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::PrimeRequest {
-                track_id: "t3".into(),
-                from: "c".into(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::PrimeRequest {
+                    track_id: "t3".into(),
+                    from: "c".into(),
+                }),
+            },
+        );
         assert!(!outs.iter().any(|o| matches!(o, Output::Prime { .. })));
         // The lease lapsed: prime here again.
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("b".into()),
-                    epoch: 3,
-                    expires_at: 1.0,
-                },
-                ack_of: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("b".into()),
+                        epoch: 3,
+                        expires_at: 1.0,
+                    },
+                    ack_of: None,
+                }),
+            },
+        );
         let outs = e.handle(Input::PrimeRequest {
             track_id: "t4".into(),
         });
@@ -5714,17 +5928,20 @@ mod tests {
             matches!(&w[0], (p, Msg::Proof { device_id, .. }) if p == "up" && device_id == "a")
         );
         assert!(matches!(&w[1], (p, Msg::Hello { session_revision: 1, .. }) if p == "up"));
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 500_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: None,
-                members: vec![],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 500_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: None,
+                    members: vec![],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         let w = wire_outs(&outs);
         assert!(w.iter().any(|(_, m)| matches!(m, Msg::ClockPing { .. })));
         assert!(w.iter().any(|(_, m)| matches!(
@@ -5739,22 +5956,28 @@ mod tests {
         assert_eq!(e.connection_state().tier, ConnectionTier::Coordinator);
         // provisional offset until the first pong
         assert_eq!(e.offset_ms(), 490_000.0);
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::ClockPong {
-                t0: 10_000.0,
-                t1: 500_040.0,
-                t2: 500_040.0,
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::ClockPong {
+                    t0: 10_000.0,
+                    t1: 500_040.0,
+                    t2: 500_040.0,
+                }),
+            },
+        );
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::ConnectionChanged(s) if s.round_trip_ms.is_some())));
         let op_id = e.pending.back().unwrap().op_id.clone();
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpAck { op_id, revision: 1 }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpAck { op_id, revision: 1 }),
+            },
+        );
         assert!(
             outs.is_empty()
                 || !outs
@@ -5783,17 +6006,20 @@ mod tests {
             vec![dev("b"), dev("c")],
         );
         src.handle(Input::ClaimTransport { takeover: false });
-        src.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 1,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        lan_in(
+            &mut src,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 1,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         src.handle(Input::LocalStamp {
             key: Some("k".into()),
             track_id: Some("t".into()),
@@ -5898,17 +6124,20 @@ mod tests {
         assert!(wire_outs(&e.handle(fetch())).is_empty());
         e.handle(Input::SetCoordinatorUrl(Some("wss://c/".into())));
         coordinator_proves(&mut e, "up");
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 10_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: None,
-                members: vec![],
-                analysis_store: true,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 10_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: None,
+                    members: vec![],
+                    analysis_store: true,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(outs.contains(&Output::AnalysisStore(true)));
         let w = wire_outs(&e.handle(fetch()));
         assert!(
@@ -5947,12 +6176,15 @@ mod tests {
             records: vec![entry.clone()],
         }));
         assert!(matches!(&w[..], [(_, Msg::AnalysisUpload { records })] if records.len() == 1));
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::AnalysisRecords {
-                records: vec![entry.clone()],
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::AnalysisRecords {
+                    records: vec![entry.clone()],
+                }),
+            },
+        );
         assert!(outs.contains(&Output::AnalysisRecords(vec![entry])));
         // The connection drops: withdrawn, and fetches stop.
         let outs = e.handle(Input::Disconnected { peer: "up".into() });
@@ -5982,17 +6214,20 @@ mod tests {
     ) -> Vec<Output> {
         e.handle(Input::SetCoordinatorUrl(Some("wss://c/".into())));
         coordinator_proves(e, "up");
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 10_000.0,
-                accepted_protocol: PROTOCOL,
-                replica,
-                members,
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        })
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 10_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica,
+                    members,
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        )
     }
 
     fn replica_with(doc: SessionDocument) -> ReplicaState {
@@ -6070,19 +6305,22 @@ mod tests {
 
         // c pushes its queue into the room: every replica, b included, now
         // carries c's session id, exactly as the room does.
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted {
-                op: SessionOp::Replace {
-                    document: theirs.clone(),
-                },
-                revision: 1,
-                device_id: "c".into(),
-                op_id: "c-9".into(),
-                at: 10_000.0,
-                position_ms: 0,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpCommitted {
+                    op: SessionOp::Replace {
+                        document: theirs.clone(),
+                    },
+                    revision: 1,
+                    device_id: "c".into(),
+                    op_id: "c-9".into(),
+                    at: 10_000.0,
+                    position_ms: 0,
+                }),
+            },
+        );
         assert_eq!(e.document().session_id, "sid-c");
         assert_eq!(e.document().revision, 1);
         assert_eq!(e.sync_base().unwrap().session_id, "sid-c");
@@ -6092,17 +6330,20 @@ mod tests {
         let mut room_doc = theirs;
         room_doc.revision = 1;
         coordinator_proves(&mut e, "up2");
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 10_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: Some(replica_with(room_doc)),
-                members: vec![dev("c")],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 10_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: Some(replica_with(room_doc)),
+                    members: vec![dev("c")],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(
             !outs
                 .iter()
@@ -6177,17 +6418,20 @@ mod tests {
         clock.0.store(100_000, Ordering::SeqCst);
         e.handle(Input::Tick);
         coordinator_proves(&mut e, "up2");
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 100_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: Some(replica_with(room_doc)),
-                members: vec![],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 100_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: Some(replica_with(room_doc)),
+                    members: vec![],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         let ops: Vec<&Msg> = outs
             .iter()
             .filter_map(|o| match o {
@@ -6224,17 +6468,20 @@ mod tests {
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 1;
         attach(&mut e, Some(replica_with(room_doc)), vec![dev("b")]);
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted {
-                op: play_op(),
-                revision: 2,
-                device_id: "b".into(),
-                op_id: "b-1".into(),
-                at: 1.0,
-                position_ms: 0,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpCommitted {
+                    op: play_op(),
+                    revision: 2,
+                    device_id: "b".into(),
+                    op_id: "b-1".into(),
+                    at: 1.0,
+                    position_ms: 0,
+                }),
+            },
+        );
         assert_eq!(e.document().current.as_ref().unwrap().track, "t1");
         e.handle(Input::LocalOp {
             op: SessionOp::Next,
@@ -6242,17 +6489,20 @@ mod tests {
         assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
         assert_eq!(e.pending.len(), 1);
         // b's next commits at revision 3 before ours is answered
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted {
-                op: SessionOp::Next,
-                revision: 3,
-                device_id: "b".into(),
-                op_id: "b-2".into(),
-                at: 2.0,
-                position_ms: 0,
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpCommitted {
+                    op: SessionOp::Next,
+                    revision: 3,
+                    device_id: "b".into(),
+                    op_id: "b-2".into(),
+                    at: 2.0,
+                    position_ms: 0,
+                }),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(
             o,
             Output::DocumentChanged {
@@ -6265,15 +6515,19 @@ mod tests {
         assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
         assert_eq!(e.document().revision, 3);
         // the late reject for ours is a no-op
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpReject {
-                op_id: "a-2".into(),
-                current_revision: 3,
-                reason: RejectReason::Stale,
-                document: e.document().clone(),
-            }),
-        });
+        let document = e.document().clone();
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpReject {
+                    op_id: "a-2".into(),
+                    current_revision: 3,
+                    reason: RejectReason::Stale,
+                    document,
+                }),
+            },
+        );
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::DocumentChanged { .. })));
@@ -6284,27 +6538,30 @@ mod tests {
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 1;
         attach(e, Some(replica_with(room_doc)), vec![dev("b")]);
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted {
-                op: SessionOp::PlayTracks {
-                    track_ids: (1..=5)
-                        .map(|i| format!("t{i}"))
-                        .map(crate::api::TrackRef::from)
-                        .collect(),
-                    start_index: 0,
-                    label: "sel".into(),
-                    shuffle: false,
-                    save_outgoing: false,
-                    start_position_ms: 0,
-                },
-                revision: 2,
-                device_id: "b".into(),
-                op_id: "b-1".into(),
-                at: 1.0,
-                position_ms: 0,
-            }),
-        });
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpCommitted {
+                    op: SessionOp::PlayTracks {
+                        track_ids: (1..=5)
+                            .map(|i| format!("t{i}"))
+                            .map(crate::api::TrackRef::from)
+                            .collect(),
+                        start_index: 0,
+                        label: "sel".into(),
+                        shuffle: false,
+                        save_outgoing: false,
+                        start_position_ms: 0,
+                    },
+                    revision: 2,
+                    device_id: "b".into(),
+                    op_id: "b-1".into(),
+                    at: 1.0,
+                    position_ms: 0,
+                }),
+            },
+        );
     }
 
     fn upcoming_tracks(e: &Engine) -> Vec<String> {
@@ -6332,41 +6589,50 @@ mod tests {
     }
 
     fn commit_from_b(e: &mut Engine, op: SessionOp, revision: u32) -> Vec<Output> {
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpCommitted {
-                op,
-                revision,
-                device_id: "b".into(),
-                op_id: format!("b-{revision}"),
-                at: 2.0,
-                position_ms: 0,
-            }),
-        })
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpCommitted {
+                    op,
+                    revision,
+                    device_id: "b".into(),
+                    op_id: format!("b-{revision}"),
+                    at: 2.0,
+                    position_ms: 0,
+                }),
+            },
+        )
     }
 
     fn reject(e: &mut Engine, op_id: &str, revision: u32) -> Vec<Output> {
         let mut document = e.confirmed.clone();
         document.revision = revision;
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpReject {
-                op_id: op_id.into(),
-                current_revision: revision,
-                reason: RejectReason::Stale,
-                document,
-            }),
-        })
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpReject {
+                    op_id: op_id.into(),
+                    current_revision: revision,
+                    reason: RejectReason::Stale,
+                    document,
+                }),
+            },
+        )
     }
 
     fn ack(e: &mut Engine, op_id: &str, revision: u32) -> Vec<Output> {
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpAck {
-                op_id: op_id.into(),
-                revision,
-            }),
-        })
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpAck {
+                    op_id: op_id.into(),
+                    revision,
+                }),
+            },
+        )
     }
 
     fn move_op(e: &Engine, upcoming: usize, to_index: u32) -> SessionOp {
@@ -6435,15 +6701,18 @@ mod tests {
         // The room took someone's op we have not heard of yet.
         room_doc.repeat = crate::api::RepeatMode::One;
         room_doc.revision = 3;
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpReject {
-                op_id: first[0].1.clone(),
-                current_revision: 3,
-                reason: RejectReason::Stale,
-                document: room_doc,
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpReject {
+                    op_id: first[0].1.clone(),
+                    current_revision: 3,
+                    reason: RejectReason::Stale,
+                    document: room_doc,
+                }),
+            },
+        );
         let again = sent_moves(&outs);
         assert_eq!(again.len(), 1, "the move is sent again");
         assert_eq!(again[0].0, 3);
@@ -6572,26 +6841,32 @@ mod tests {
         room_doc.revision = 1;
         attach(&mut e, Some(replica_with(room_doc.clone())), vec![]);
         e.handle(Input::LocalOp { op: play_op() });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpAck {
-                op_id: "a-2".into(),
-                revision: 2,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpAck {
+                    op_id: "a-2".into(),
+                    revision: 2,
+                }),
+            },
+        );
         e.handle(Input::ClaimTransport { takeover: false });
         let lease = TransportLease {
             owner: Some("a".into()),
             epoch: 1,
             expires_at: 30_000.0,
         };
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease,
-                ack_of: None,
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease,
+                    ack_of: None,
+                }),
+            },
+        );
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::LeaseChanged { owns: true, .. })));
@@ -6615,17 +6890,20 @@ mod tests {
             epoch: 3,
             expires_at: 999_999.0,
         };
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 200_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: Some(rep),
-                members: vec![dev("b")],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 200_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: Some(rep),
+                    members: vec![dev("b")],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
@@ -6637,17 +6915,20 @@ mod tests {
                 ..
             }
         )));
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::LeaseFenced {
-                current_epoch: 3,
-                lease: TransportLease {
-                    owner: Some("b".into()),
-                    epoch: 3,
-                    expires_at: 999_999.0,
-                },
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::LeaseFenced {
+                    current_epoch: 3,
+                    lease: TransportLease {
+                        owner: Some("b".into()),
+                        epoch: 3,
+                        expires_at: 999_999.0,
+                    },
+                }),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
         assert!(outs
             .iter()
@@ -6667,26 +6948,32 @@ mod tests {
         room_doc.revision = 1;
         attach(&mut e, Some(replica_with(room_doc)), vec![]);
         e.handle(Input::LocalOp { op: play_op() });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpAck {
-                op_id: "a-2".into(),
-                revision: 2,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpAck {
+                    op_id: "a-2".into(),
+                    revision: 2,
+                }),
+            },
+        );
         e.handle(Input::ClaimTransport { takeover: false });
         let lease = TransportLease {
             owner: Some("a".into()),
             epoch: 305,
             expires_at: 999_999.0,
         };
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: lease.clone(),
-                ack_of: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: lease.clone(),
+                    ack_of: None,
+                }),
+            },
+        );
         assert_eq!(e.held_epoch(), Some(305));
         let synced = e.confirmed.clone();
 
@@ -6707,17 +6994,20 @@ mod tests {
         coordinator_proves(&mut e, "up2");
         let mut rep = replica_with(synced);
         rep.transport_lease = lease.clone();
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 11_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: Some(rep),
-                members: vec![],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 11_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: Some(rep),
+                    members: vec![],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         let w = wire_outs(&outs);
         assert!(w.iter().any(|(_, m)| matches!(
             m,
@@ -6801,17 +7091,20 @@ mod tests {
         room_doc.revision = 1;
         attach(&mut e, Some(replica_with(room_doc)), vec![]);
         e.handle(Input::ClaimTransport { takeover: false });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 316,
-                    expires_at: 30_000.0,
-                },
-                ack_of: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 316,
+                        expires_at: 30_000.0,
+                    },
+                    ack_of: None,
+                }),
+            },
+        );
         assert_eq!(e.held_epoch(), Some(316));
 
         // The link stalls: heartbeats and a stamp go out, nothing comes back.
@@ -6837,17 +7130,20 @@ mod tests {
         assert!(e.owns_transport() && e.is_detached());
 
         // It comes back: first the coordinator's lapse.
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: None,
-                    epoch: 317,
-                    expires_at: 30_000.0,
-                },
-                ack_of: None,
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: None,
+                        epoch: 317,
+                        expires_at: 30_000.0,
+                    },
+                    ack_of: None,
+                }),
+            },
+        );
         assert!(!outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
         assert!(e.owns_transport());
         let sent_at = wire_outs(&outs)
@@ -6863,32 +7159,38 @@ mod tests {
             .expect("claims the lease back");
 
         // A fence for a stuck heartbeat, answered before the claim.
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseFenced {
-                current_epoch: 317,
-                lease: TransportLease {
-                    owner: None,
-                    epoch: 317,
-                    expires_at: 30_000.0,
-                },
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseFenced {
+                    current_epoch: 317,
+                    lease: TransportLease {
+                        owner: None,
+                        epoch: 317,
+                        expires_at: 30_000.0,
+                    },
+                }),
+            },
+        );
         assert!(!outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
         assert!(e.owns_transport());
 
         // The claim is granted: our stamp goes out again under the new epoch.
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 318,
-                    expires_at: 50_000.0,
-                },
-                ack_of: Some(sent_at),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 318,
+                        expires_at: 50_000.0,
+                    },
+                    ack_of: Some(sent_at),
+                }),
+            },
+        );
         assert_eq!(e.held_epoch(), Some(318));
         assert!(!e.is_detached());
         let stamps: Vec<_> = wire_outs(&outs)
@@ -6902,32 +7204,38 @@ mod tests {
 
         // A fence for something sent before the grant arrived names us at
         // the epoch we now hold: no reason to stop.
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseFenced {
-                current_epoch: 318,
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 318,
-                    expires_at: 50_000.0,
-                },
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseFenced {
+                    current_epoch: 318,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 318,
+                        expires_at: 50_000.0,
+                    },
+                }),
+            },
+        );
         assert!(!outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
         assert!(e.owns_transport());
 
         // Had another device taken the lease meanwhile, we would stop.
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseFenced {
-                current_epoch: 319,
-                lease: TransportLease {
-                    owner: Some("b".into()),
-                    epoch: 319,
-                    expires_at: 70_000.0,
-                },
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseFenced {
+                    current_epoch: 319,
+                    lease: TransportLease {
+                        owner: Some("b".into()),
+                        epoch: 319,
+                        expires_at: 70_000.0,
+                    },
+                }),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
         assert!(!e.owns_transport());
     }
@@ -6940,17 +7248,20 @@ mod tests {
         room_doc.revision = 1;
         attach(&mut e, Some(replica_with(room_doc)), vec![]);
         e.handle(Input::ClaimTransport { takeover: false });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 316,
-                    expires_at: 30_000.0,
-                },
-                ack_of: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 316,
+                        expires_at: 30_000.0,
+                    },
+                    ack_of: None,
+                }),
+            },
+        );
         e.handle(Input::LocalStamp {
             key: Some("k2".into()),
             track_id: Some("t2".into()),
@@ -6990,10 +7301,13 @@ mod tests {
     #[test]
     fn paused_owner_lets_a_lapsed_lease_go() {
         let (mut e, _) = owner_after_a_stall(false);
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: lapse(317),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: lapse(317),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(o, Output::ReleaseTransport)));
         assert!(!wire_outs(&outs)
             .iter()
@@ -7017,17 +7331,20 @@ mod tests {
         };
         attach(&mut e, Some(replica_with(room_doc)), vec![]);
         e.handle(Input::ClaimTransport { takeover: false });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 316,
-                    expires_at: 30_000.0,
-                },
-                ack_of: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 316,
+                        expires_at: 30_000.0,
+                    },
+                    ack_of: None,
+                }),
+            },
+        );
         e.handle(Input::LocalStamp {
             key: Some("k2".into()),
             track_id: Some("t2".into()),
@@ -7043,10 +7360,13 @@ mod tests {
             volume: None,
             renderer: None,
         });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: lapse(317),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: lapse(317),
+            },
+        );
         assert!(!e.owns_transport());
         clock.0.store(600_000, Ordering::SeqCst);
         let t = e.transport();
@@ -7070,17 +7390,20 @@ mod tests {
         };
         attach(&mut e, Some(replica_with(room_doc)), vec![]);
         e.handle(Input::ClaimTransport { takeover: false });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 316,
-                    expires_at: 30_000.0,
-                },
-                ack_of: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 316,
+                        expires_at: 30_000.0,
+                    },
+                    ack_of: None,
+                }),
+            },
+        );
         e.handle(Input::LocalStamp {
             key: Some("k2".into()),
             track_id: Some("t2".into()),
@@ -7129,10 +7452,13 @@ mod tests {
     #[test]
     fn a_reclaim_granted_after_letting_go_is_given_back() {
         let (mut e, clock) = owner_after_a_stall(true);
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: lapse(317),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: lapse(317),
+            },
+        );
         let sent_at = wire_outs(&outs)
             .iter()
             .find_map(|(_, m)| match m {
@@ -7148,26 +7474,32 @@ mod tests {
             epoch: 318,
             expires_at: 50_000.0,
         };
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: granted.clone(),
-                ack_of: Some(sent_at),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: granted.clone(),
+                    ack_of: Some(sent_at),
+                }),
+            },
+        );
         assert!(wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::LeaseRelease { epoch: 318 })));
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::LeaseChanged { owns: true, .. })));
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: granted,
-                ack_of: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: granted,
+                    ack_of: None,
+                }),
+            },
+        );
         assert!(!e.owns_transport());
 
         // A later claim of ours is granted as usual.
@@ -7180,17 +7512,20 @@ mod tests {
                 _ => None,
             })
             .expect("claims");
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 320,
-                    expires_at: 51_000.0,
-                },
-                ack_of: Some(sent_at),
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 320,
+                        expires_at: 51_000.0,
+                    },
+                    ack_of: Some(sent_at),
+                }),
+            },
+        );
         assert!(e.owns_transport());
     }
 
@@ -7210,10 +7545,13 @@ mod tests {
                 .expect("claims")
         }
         let (mut e, clock) = owner_after_a_stall(true);
-        let reclaim = claim_sent_at(&e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: lapse(317),
-        }));
+        let reclaim = claim_sent_at(&lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: lapse(317),
+            },
+        ));
         clock.0.store(30_500, Ordering::SeqCst);
         e.handle(Input::ReleaseTransport);
         clock.0.store(31_000, Ordering::SeqCst);
@@ -7228,31 +7566,43 @@ mod tests {
                 ack_of: Some(ack),
             })
         };
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: granted(reclaim),
-        });
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: granted(play),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: granted(reclaim),
+            },
+        );
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: granted(play),
+            },
+        );
         assert!(!e.owns_transport(), "318 is on its way back");
         let again = claim_sent_at(&outs);
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: lapse(319),
-        });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 320,
-                    expires_at: 51_000.0,
-                },
-                ack_of: Some(again),
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: lapse(319),
+            },
+        );
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 320,
+                        expires_at: 51_000.0,
+                    },
+                    ack_of: Some(again),
+                }),
+            },
+        );
         assert!(e.owns_transport());
         assert_eq!(e.held_epoch(), Some(320));
     }
@@ -7269,13 +7619,16 @@ mod tests {
         // the puller
         let (mut b, _) = engine("b");
         attach(&mut b, None, vec![dev("a")]);
-        b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: lease_a.clone(),
-            }),
-        });
+        lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: lease_a.clone(),
+                }),
+            },
+        );
         assert!(!b.owns_transport());
         let outs = b.handle(Input::HandoffTo {
             device_id: "b".into(),
@@ -7295,13 +7648,16 @@ mod tests {
         let (mut a, _) = engine("a");
         attach(&mut a, None, vec![dev("b")]);
         a.handle(Input::ClaimTransport { takeover: false });
-        a.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: lease_a,
-            }),
-        });
+        lan_in(
+            &mut a,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: lease_a,
+                }),
+            },
+        );
         a.handle(Input::LocalStamp {
             key: Some("k".into()),
             track_id: Some("t".into()),
@@ -7317,13 +7673,16 @@ mod tests {
             volume: None,
             renderer: None,
         });
-        let outs = a.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::HandoffRequest {
-                target: "b".into(),
-                from: "b".into(),
-            }),
-        });
+        let outs = lan_in(
+            &mut a,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::HandoffRequest {
+                    target: "b".into(),
+                    from: "b".into(),
+                }),
+            },
+        );
         assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(
             m,
             Msg::HandoffTakeover { target, key, track_id, epoch: 1, .. }
@@ -7354,36 +7713,42 @@ mod tests {
             alts: vec![],
         });
         attach(&mut b, Some(replica_with(room_doc)), vec![dev("a")]);
-        b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("a".into()),
+        lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 1,
+                        expires_at: 30_000.0,
+                    },
+                }),
+            },
+        );
+        lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::TransportStamp {
+                    device_id: "a".into(),
+                    key: Some("k".into()),
+                    position: PositionStamp {
+                        position_ms: 50_000,
+                        taken_at: 60_000.0,
+                        rate: 1.0,
+                        is_playing: true,
+                    },
+                    played_ms: 50_000,
+                    started_at: 7.0,
+                    scrobbled: false,
                     epoch: 1,
-                    expires_at: 30_000.0,
-                },
-            }),
-        });
-        b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::TransportStamp {
-                device_id: "a".into(),
-                key: Some("k".into()),
-                position: PositionStamp {
-                    position_ms: 50_000,
-                    taken_at: 60_000.0,
-                    rate: 1.0,
-                    is_playing: true,
-                },
-                played_ms: 50_000,
-                started_at: 7.0,
-                scrobbled: false,
-                epoch: 1,
-                volume: None,
-                renderer: None,
-            }),
-        });
+                    volume: None,
+                    renderer: None,
+                }),
+            },
+        );
         // a minute on: the lease b knows "expired" 40 s ago
         clock.0.store(70_000, Ordering::SeqCst);
         let outs = b.handle(Input::HandoffTo {
@@ -7403,17 +7768,20 @@ mod tests {
         assert!(wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::LeaseClaim { takeover: true, .. })));
-        let outs = b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("b".into()),
-                    epoch: 2,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        let outs = lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("b".into()),
+                        epoch: 2,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(
             o,
             Output::TakeTransport { key, track_id, position_ms, played_ms, started_at, play: true, .. }
@@ -7468,17 +7836,20 @@ mod tests {
         assert!(wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::LeaseClaim { takeover: true, .. })));
-        let outs = b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("b".into()),
-                    epoch: 1,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        let outs = lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("b".into()),
+                        epoch: 1,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(
             o,
             Output::TakeTransport {
@@ -7500,17 +7871,20 @@ mod tests {
             vec![dev("b"), dev("c")],
         );
         src.handle(Input::ClaimTransport { takeover: false });
-        src.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 1,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        lan_in(
+            &mut src,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 1,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         src.handle(Input::LocalStamp {
             key: Some("k".into()),
             track_id: Some("t".into()),
@@ -7540,15 +7914,18 @@ mod tests {
         assert!(outs.iter().any(
             |o| matches!(o, Output::PickerChanged { open: true, targets } if targets.len() == 2)
         ));
-        let outs = src.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::HandoffReady {
-                from: "a".into(),
-                target: "b".into(),
-                key: "k".into(),
-                ready: true,
-            }),
-        });
+        let outs = lan_in(
+            &mut src,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::HandoffReady {
+                    from: "a".into(),
+                    target: "b".into(),
+                    key: "k".into(),
+                    ready: true,
+                }),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(o, Output::PickerChanged { targets, .. } if targets.iter().any(|d| d.id == "b" && d.ready))));
         let outs = src.handle(Input::HandoffTo {
             device_id: "b".into(),
@@ -7561,16 +7938,19 @@ mod tests {
         // target side
         let (mut tgt, _) = engine("b");
         attach(&mut tgt, Some(replica_with(room_doc)), vec![dev("a")]);
-        let outs = tgt.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::HandoffPrepare {
-                from: "a".into(),
-                target: "b".into(),
-                key: "k".into(),
-                track_id: "t".into(),
-                position_ms: 1000,
-            }),
-        });
+        let outs = lan_in(
+            &mut tgt,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::HandoffPrepare {
+                    from: "a".into(),
+                    target: "b".into(),
+                    key: "k".into(),
+                    track_id: "t".into(),
+                    position_ms: 1000,
+                }),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(
             o,
             Output::PreBuffer {
@@ -7582,25 +7962,28 @@ mod tests {
         assert!(wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::HandoffReady { ready: true, .. })));
-        let outs = tgt.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::HandoffTakeover {
-                from: "a".into(),
-                target: "b".into(),
-                key: "k".into(),
-                track_id: "t".into(),
-                position_ms: 1500,
-                played_ms: 1500,
-                started_at: 5.0,
-                scrobbled: false,
-                epoch: 1,
-                lease: Some(TransportLease {
-                    owner: Some("b".into()),
-                    epoch: 2,
-                    expires_at: 99_999.0,
+        let outs = lan_in(
+            &mut tgt,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::HandoffTakeover {
+                    from: "a".into(),
+                    target: "b".into(),
+                    key: "k".into(),
+                    track_id: "t".into(),
+                    position_ms: 1500,
+                    played_ms: 1500,
+                    started_at: 5.0,
+                    scrobbled: false,
+                    epoch: 1,
+                    lease: Some(TransportLease {
+                        owner: Some("b".into()),
+                        epoch: 2,
+                        expires_at: 99_999.0,
+                    }),
                 }),
-            }),
-        });
+            },
+        );
         assert!(outs.iter().any(|o| matches!(
             o,
             Output::TakeTransport {
@@ -7619,16 +8002,19 @@ mod tests {
         let (mut e, clock) = engine("b");
         e.cfg.upstream_idle_ms = 1e12;
         attach(&mut e, None, vec![dev("a")]);
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::HandoffPrepare {
-                from: "a".into(),
-                target: "b".into(),
-                key: "k".into(),
-                track_id: "t".into(),
-                position_ms: 0,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::HandoffPrepare {
+                    from: "a".into(),
+                    target: "b".into(),
+                    key: "k".into(),
+                    track_id: "t".into(),
+                    position_ms: 0,
+                }),
+            },
+        );
         clock.0.store(10_000 + 61_000, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
         assert!(outs.iter().any(|o| matches!(o, Output::DiscardPreBuffer)));
@@ -7683,17 +8069,20 @@ mod tests {
         assert!(wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::LeaseClaim { takeover: true, .. })));
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 4,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 4,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         assert!(outs.iter().any(|o| matches!(
             o,
             Output::TakeTransport {
@@ -7739,13 +8128,16 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::ScrobbleDedupeAnswer {
-                query_id: qid,
-                duplicate: true,
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::ScrobbleDedupeAnswer {
+                    query_id: qid,
+                    duplicate: true,
+                }),
+            },
+        );
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::Scrobble { allowed: false, .. })));
@@ -7877,17 +8269,20 @@ mod tests {
                 },
             }),
         };
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 1,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 1,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         e.handle(Input::Disconnected { peer: "up".into() });
         // Offline, the next track starts: only our own room hears of it.
         clock.0.store(15_000, Ordering::SeqCst);
@@ -7910,17 +8305,20 @@ mod tests {
         clock.0.store(20_000, Ordering::SeqCst);
         e.handle(Input::Tick);
         coordinator_proves(&mut e, "up2");
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 520_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: None,
-                members: vec![],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 520_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: None,
+                    members: vec![],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::LeaseClaim { .. })));
@@ -7992,17 +8390,20 @@ mod tests {
         let (mut e, clock) = engine("a");
         attach(&mut e, None, vec![]);
         e.handle(Input::ClaimTransport { takeover: false });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 1,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 1,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         clock.0.store(15_100, Ordering::SeqCst);
         let outs = e.handle(Input::Tick);
         assert!(wire_outs(&outs)
@@ -8063,40 +8464,7 @@ mod tests {
         // inbound peer joins our room: challenge, proof, then Hello
         e.handle(Input::ListenerStarted { port: 7 });
         e.handle(Input::PeerConnected { peer: "in1".into() });
-        let nonce = auth::new_nonce();
-        let outs = e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: WireMessage::new(Msg::Challenge {
-                nonce: nonce.clone(),
-                identity: Some("scope".into()),
-                heads: vec![],
-            }),
-        });
-        let w = wire_outs(&outs);
-        assert!(
-            matches!(&w[0], (p, Msg::Proof { device_id, sig, heads, .. }) if p == "in1" && device_id == "m" && auth::verify_member(&test_identity("m").member_state(), Role::Leader, "scope", &nonce, "m", heads, sig))
-        );
-        let their_nonce = match &w[1].1 {
-            Msg::Challenge { nonce, .. } => nonce.clone(),
-            other => panic!("expected a challenge, got {other:?}"),
-        };
-        e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: member_proof("q", &their_nonce),
-        });
-        let outs = e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: WireMessage::new(Msg::Hello {
-                device: dev("q"),
-                protocol_min: PROTOCOL_MIN,
-                protocol_max: PROTOCOL,
-                scope: "scope".into(),
-                session_id: None,
-                session_revision: 0,
-                held_epoch: None,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_handshake(&mut e, "in1", "q");
         assert!(wire_outs(&outs)
             .iter()
             .any(|(p, m)| p == "in1" && matches!(m, Msg::Welcome { .. })));
@@ -8107,19 +8475,22 @@ mod tests {
         assert_eq!(e.last_advert.as_ref().map(|a| a.serving), Some(true));
         // a peer that skips the proof is refused
         e.handle(Input::PeerConnected { peer: "in2".into() });
-        let outs = e.handle(Input::WireIn {
-            peer: "in2".into(),
-            msg: WireMessage::new(Msg::Hello {
-                device: dev("r"),
-                protocol_min: PROTOCOL_MIN,
-                protocol_max: PROTOCOL,
-                scope: "scope".into(),
-                session_id: None,
-                session_revision: 0,
-                held_epoch: None,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "in2".into(),
+                msg: WireMessage::new(Msg::Hello {
+                    device: dev("r"),
+                    protocol_min: PROTOCOL_MIN,
+                    protocol_max: PROTOCOL,
+                    scope: "scope".into(),
+                    session_id: None,
+                    session_revision: 0,
+                    held_epoch: None,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(wire_outs(&outs).iter().any(|(p, m)| p == "in2"
             && matches!(
                 m,
@@ -8154,17 +8525,20 @@ mod tests {
         ));
         assert_eq!(w.len(), 2);
         // and the welcome attaches us as usual
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 10_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: None,
-                members: vec![],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 10_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: None,
+                    members: vec![],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(e.is_connected());
         assert_eq!(e.lan_leader().map(String::as_str), Some("z"));
         assert!(wire_outs(&outs).iter().any(|(_, m)| matches!(
@@ -8195,17 +8569,20 @@ mod tests {
             other => panic!("{other:?}"),
         };
         // the rogue skips the proof and sends a Welcome to fish for the document
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 0.0,
-                accepted_protocol: PROTOCOL,
-                replica: None,
-                members: vec![],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 0.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: None,
+                    members: vec![],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(!wire_outs(&outs)
             .iter()
             .any(|(p, m)| p == "up" && !matches!(m, Msg::Bye { .. })));
@@ -8232,15 +8609,19 @@ mod tests {
             other => panic!("{other:?}"),
         };
         let wrong = crate::identity::crypto::DeviceSecret::from_seed(b"rogue2");
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::Proof {
-                device_id: "rogue2".into(),
-                sig: auth::prove(&wrong, Role::Leader, "scope", &nonce2, "rogue2", &[]),
-                heads: vec![],
-                sync: None,
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::Proof {
+                    device_id: "rogue2".into(),
+                    sig: auth::prove(&wrong, Role::Leader, "scope", &nonce2, "rogue2", &[]),
+                    heads: vec![],
+                    sync: None,
+                    eph: None,
+                }),
+            },
+        );
         assert!(!wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::Hello { .. } | Msg::Proof { .. })));
@@ -8262,22 +8643,26 @@ mod tests {
             Msg::Challenge { nonce, .. } => nonce.clone(),
             other => panic!("{other:?}"),
         };
-        let outs = e.handle(Input::WireIn {
-            peer: "up3".into(),
-            msg: WireMessage::new(Msg::Proof {
-                device_id: "honest".into(),
-                sig: auth::prove(
-                    test_identity("honest").secret(),
-                    Role::Leader,
-                    "scope",
-                    &nonce3,
-                    "honest",
-                    &test_identity("honest").heads(),
-                ),
-                heads: test_identity("honest").heads(),
-                sync: None,
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up3".into(),
+                msg: WireMessage::new(Msg::Proof {
+                    device_id: "honest".into(),
+                    sig: auth::prove(
+                        test_identity("honest").secret(),
+                        Role::Leader,
+                        "scope",
+                        &nonce3,
+                        "honest",
+                        &test_identity("honest").heads(),
+                    ),
+                    heads: test_identity("honest").heads(),
+                    sync: None,
+                    eph: None,
+                }),
+            },
+        );
         assert!(!wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::Hello { .. } | Msg::Proof { .. })));
@@ -8296,12 +8681,15 @@ mod tests {
                 url: "ws://10.0.0.2:5/".into(),
             });
             assert!(matches!(&wire_outs(&o)[0].1, Msg::Challenge { .. }));
-            outs = e.handle(Input::WireIn {
-                peer,
-                msg: WireMessage::new(Msg::Bye {
-                    reason: "not serving".into(),
-                }),
-            });
+            outs = lan_in(
+                e,
+                Input::WireIn {
+                    peer,
+                    msg: WireMessage::new(Msg::Bye {
+                        reason: "not serving".into(),
+                    }),
+                },
+            );
             if i + 1 < n {
                 // wait out the backoff: the engine knocks again
                 clock.0.fetch_add(40_000, Ordering::SeqCst);
@@ -8364,14 +8752,18 @@ mod tests {
         e.handle(Input::ListenerStarted { port: 7 });
         assert!(e.advert().is_none());
         e.handle(Input::PeerConnected { peer: "in1".into() });
-        let outs = e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: WireMessage::new(Msg::Challenge {
-                nonce: auth::new_nonce(),
-                identity: Some("scope".into()),
-                heads: vec![],
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "in1".into(),
+                msg: WireMessage::new(Msg::Challenge {
+                    nonce: auth::new_nonce(),
+                    identity: Some("scope".into()),
+                    heads: vec![],
+                    eph: None,
+                }),
+            },
+        );
         assert!(wire_outs(&outs)
             .iter()
             .any(|(_, m)| matches!(m, Msg::Refuse { .. })));
@@ -8438,41 +8830,50 @@ mod tests {
             |o| matches!(o, Output::Connect { candidates } if candidates[0] == "ws://10.0.0.2:5/")
         ));
         lan_leader_proves(&mut e, "lan", "a");
-        e.handle(Input::WireIn {
-            peer: "lan".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 40_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: Some(replica_with(room_doc.clone())),
-                members: vec![dev("a")],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "lan".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 40_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: Some(replica_with(room_doc.clone())),
+                    members: vec![dev("a")],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(e.is_connected());
         assert_eq!(e.lan_leader().map(String::as_str), Some("a"));
         // the LAN session moves on: the leader's op, and one of ours
-        e.handle(Input::WireIn {
-            peer: "lan".into(),
-            msg: WireMessage::new(Msg::OpCommitted {
-                op: play_op(),
-                revision: 3,
-                device_id: "a".into(),
-                op_id: "a-1".into(),
-                at: 1.0,
-                position_ms: 0,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "lan".into(),
+                msg: WireMessage::new(Msg::OpCommitted {
+                    op: play_op(),
+                    revision: 3,
+                    device_id: "a".into(),
+                    op_id: "a-1".into(),
+                    at: 1.0,
+                    position_ms: 0,
+                }),
+            },
+        );
         e.handle(Input::LocalOp {
             op: SessionOp::Next,
         });
-        e.handle(Input::WireIn {
-            peer: "lan".into(),
-            msg: WireMessage::new(Msg::OpAck {
-                op_id: "b-2".into(),
-                revision: 4,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "lan".into(),
+                msg: WireMessage::new(Msg::OpAck {
+                    op_id: "b-2".into(),
+                    revision: 4,
+                }),
+            },
+        );
         assert_eq!(e.document().revision, 4);
         // the coordinator point is untouched and nothing is queued for replay
         assert_eq!(e.sync_base().unwrap().revision, 2);
@@ -8485,17 +8886,20 @@ mod tests {
             .iter()
             .any(|o| matches!(o, Output::Connect { candidates } if candidates[0] == "wss://c/")));
         coordinator_proves(&mut e, "up2");
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 200_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: Some(replica_with(room_doc)),
-                members: vec![],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 200_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: Some(replica_with(room_doc)),
+                    members: vec![],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
@@ -8529,68 +8933,43 @@ mod tests {
         e.handle(Input::PeerDiscovered(advert("q", 0)));
         assert!(e.remote.is_none(), "we lead the LAN");
         // we serve the LAN: a member's op lands in our room
-        e.handle(Input::ListenerStarted { port: 7 });
-        e.handle(Input::PeerConnected { peer: "in1".into() });
-        let nonce = auth::new_nonce();
-        let outs = e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: WireMessage::new(Msg::Challenge {
-                nonce,
-                identity: Some("scope".into()),
-                heads: vec![],
-            }),
-        });
-        let theirs = match &wire_outs(&outs)[1].1 {
-            Msg::Challenge { nonce, .. } => nonce.clone(),
-            other => panic!("{other:?}"),
-        };
-        e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: member_proof("q", &theirs),
-        });
-        e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: WireMessage::new(Msg::Hello {
-                device: dev("q"),
-                protocol_min: PROTOCOL_MIN,
-                protocol_max: PROTOCOL,
-                scope: "scope".into(),
-                session_id: None,
-                session_revision: 0,
-                held_epoch: None,
-                extra: Default::default(),
-            }),
-        });
+        admit_inbound(&mut e, "in1", "q");
         assert!(e.is_serving());
-        e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: WireMessage::new(Msg::Op {
-                base_revision: 2,
-                op: play_op(),
-                device_id: "q".into(),
-                op_id: "q-1".into(),
-                epoch: None,
-                at: 1.0,
-                position_ms: 0,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "in1".into(),
+                msg: WireMessage::new(Msg::Op {
+                    base_revision: 2,
+                    op: play_op(),
+                    device_id: "q".into(),
+                    op_id: "q-1".into(),
+                    epoch: None,
+                    at: 1.0,
+                    position_ms: 0,
+                }),
+            },
+        );
         assert_eq!(e.document().revision, 3);
         assert!(e.unsynced_overflow);
         // back on the coordinator, still at 2: one Replace carries the LAN state
         clock.0.store(100_000, Ordering::SeqCst);
         e.handle(Input::Tick);
         coordinator_proves(&mut e, "up2");
-        let outs = e.handle(Input::WireIn {
-            peer: "up2".into(),
-            msg: WireMessage::new(Msg::Welcome {
-                session_clock_ms: 100_000.0,
-                accepted_protocol: PROTOCOL,
-                replica: Some(replica_with(room_doc)),
-                members: vec![],
-                analysis_store: false,
-                extra: Default::default(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up2".into(),
+                msg: WireMessage::new(Msg::Welcome {
+                    session_clock_ms: 100_000.0,
+                    accepted_protocol: PROTOCOL,
+                    replica: Some(replica_with(room_doc)),
+                    members: vec![],
+                    analysis_store: false,
+                    extra: Default::default(),
+                }),
+            },
+        );
         assert!(!outs
             .iter()
             .any(|o| matches!(o, Output::FilePreviousStateAsSavedQueue { .. })));
@@ -8609,38 +8988,218 @@ mod tests {
     fn admit_inbound(e: &mut Engine, peer: &str, id: &str) {
         e.handle(Input::ListenerStarted { port: 7 });
         e.handle(Input::PeerConnected { peer: peer.into() });
+        let outs = lan_handshake(e, peer, id);
+        assert!(wire_outs(&outs)
+            .iter()
+            .any(|(p, m)| p == peer && matches!(m, Msg::Welcome { .. })));
+    }
+
+    /// Run a LAN joiner's side of the handshake as `id` on inbound socket
+    /// `peer` (connected already) against `e`'s room: the sealed channel,
+    /// the proof and a Hello. Returns the outputs of the Hello.
+    fn lan_handshake(e: &mut Engine, peer: &str, id: &str) -> Vec<Output> {
+        LAN.with(|l| l.borrow_mut().remove(peer));
+        let ours = Ephemeral::new();
+        let nonce = auth::new_nonce();
+        let outs = lan_in(
+            e,
+            Input::WireIn {
+                peer: peer.into(),
+                msg: WireMessage::new(Msg::Challenge {
+                    nonce: nonce.clone(),
+                    identity: Some("scope".into()),
+                    heads: vec![],
+                    eph: Some(ours.public.clone()),
+                }),
+            },
+        );
+        let w = wire_outs(&outs);
+        let leader = e.cfg.device.id.clone();
+        let leader_eph = match &w[0].1 {
+            Msg::Proof {
+                device_id,
+                sig,
+                heads,
+                eph: Some(k),
+                ..
+            } => {
+                assert!(auth::verify_member(
+                    &test_identity(&leader).member_state(),
+                    Role::Leader,
+                    "scope",
+                    &auth::bind_nonce(
+                        &nonce,
+                        &channel::leader_binding(&ours.public, k, &nonce, &leader)
+                    ),
+                    device_id,
+                    heads,
+                    sig,
+                ));
+                k.clone()
+            }
+            other => panic!("expected a proof with a channel key, got {other:?}"),
+        };
+        let theirs = match &w[1].1 {
+            Msg::Challenge { nonce, .. } => nonce.clone(),
+            other => panic!("{other:?}"),
+        };
+        let t = channel::joiner_binding(&ours.public, &leader_eph, &nonce, &theirs, &leader, id);
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: peer.into(),
+                msg: member_proof(id, &auth::bind_nonce(&theirs, &t)),
+            },
+        );
+        let ch = Channel::new(End::Joiner, &ours, &leader_eph, &t).unwrap();
+        lan_channel(peer, ch.clone(), ch);
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: peer.into(),
+                msg: WireMessage::new(Msg::Hello {
+                    device: dev(id),
+                    protocol_min: PROTOCOL_MIN,
+                    protocol_max: PROTOCOL,
+                    scope: "scope".into(),
+                    session_id: None,
+                    session_revision: 0,
+                    held_epoch: None,
+                    extra: Default::default(),
+                }),
+            },
+        )
+    }
+
+    /// Our LAN room talks only over the sealed channel: a challenge without
+    /// a channel key (a relay stripping it) is refused, and once sealed, a
+    /// plain frame or one sealed under other keys ends the connection.
+    #[test]
+    fn the_lan_room_requires_and_enforces_the_sealed_channel() {
+        let (mut e, _) = engine("m");
+        e.handle(Input::ListenerStarted { port: 7 });
+        e.handle(Input::PeerConnected { peer: "in0".into() });
         let outs = e.handle(Input::WireIn {
-            peer: peer.into(),
+            peer: "in0".into(),
             msg: WireMessage::new(Msg::Challenge {
                 nonce: auth::new_nonce(),
                 identity: Some("scope".into()),
                 heads: vec![],
+                eph: None,
             }),
         });
-        let theirs = match &wire_outs(&outs)[1].1 {
-            Msg::Challenge { nonce, .. } => nonce.clone(),
-            other => panic!("{other:?}"),
-        };
-        e.handle(Input::WireIn {
-            peer: peer.into(),
-            msg: member_proof(id, &theirs),
-        });
+        assert!(wire_outs(&outs).iter().any(|(p, m)| p == "in0"
+            && matches!(
+                m,
+                Msg::Refuse {
+                    reason: RefuseReason::Unauthorised,
+                    ..
+                }
+            )));
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::Proof { .. })));
+        // A sealed member sends a plain frame: dropped.
+        admit_inbound(&mut e, "in1", "q");
         let outs = e.handle(Input::WireIn {
-            peer: peer.into(),
-            msg: WireMessage::new(Msg::Hello {
-                device: dev(id),
-                protocol_min: PROTOCOL_MIN,
-                protocol_max: PROTOCOL,
-                scope: "scope".into(),
-                session_id: None,
-                session_revision: 0,
-                held_epoch: None,
-                extra: Default::default(),
-            }),
+            peer: "in1".into(),
+            msg: WireMessage::new(Msg::ClockPing { t0: 0.0 }),
         });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Disconnect { peer } if peer == "in1")));
+        assert!(!wire_outs(&outs)
+            .iter()
+            .any(|(_, m)| matches!(m, Msg::ClockPong { .. })));
+        // One sealed under keys the room doesn't share (a relay's): dropped.
+        admit_inbound(&mut e, "in2", "r");
+        let (a, b) = (Ephemeral::new(), Ephemeral::new());
+        let mut other = Channel::new(End::Joiner, &a, &b.public, "t").unwrap();
+        let outs = e.handle(Input::WireIn {
+            peer: "in2".into(),
+            msg: other.seal(&WireMessage::new(Msg::ClockPing { t0: 0.0 })),
+        });
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, Output::Disconnect { peer } if peer == "in2")));
+        // Everything the room sends a sealed member is sealed.
+        admit_inbound(&mut e, "in3", "s");
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "in3".into(),
+                msg: WireMessage::new(Msg::ClockPing { t0: 0.0 }),
+            },
+        );
+        let to_in3: Vec<&WireMessage> = outs
+            .iter()
+            .filter_map(|o| match o {
+                Output::WireOut { peer, msg } if peer == "in3" => Some(msg),
+                _ => None,
+            })
+            .collect();
+        assert!(!to_in3.is_empty());
+        assert!(to_in3.iter().all(|m| matches!(m.msg, Msg::Sealed { .. })));
         assert!(wire_outs(&outs)
             .iter()
-            .any(|(p, m)| p == peer && matches!(m, Msg::Welcome { .. })));
+            .any(|(p, m)| p == "in3" && matches!(m, Msg::ClockPong { .. })));
+    }
+
+    /// As a LAN joiner: a leader that doesn't answer our channel key, or a
+    /// relay that swaps it for its own, fails the proof.
+    #[test]
+    fn a_lan_leader_must_bind_our_channel_key() {
+        for swap in [false, true] {
+            let (mut e, _) = engine("m");
+            e.handle(Input::SetLanDiscovery(true));
+            e.handle(Input::PeerDiscovered(advert("z", 9)));
+            let outs = e.handle(Input::Connected {
+                peer: "up".into(),
+                url: "ws://10.0.0.2:5/".into(),
+            });
+            let (nonce, ej) = match &wire_outs(&outs)[0].1 {
+                Msg::Challenge {
+                    nonce,
+                    eph: Some(k),
+                    ..
+                } => (nonce.clone(), k.clone()),
+                other => panic!("{other:?}"),
+            };
+            let l = test_identity("z");
+            let relay = Ephemeral::new();
+            let leader = Ephemeral::new();
+            // The leader signs what it saw: the relay's key in place of ours.
+            let seen = if swap { relay.public.clone() } else { ej };
+            let sig = auth::prove(
+                l.secret(),
+                Role::Leader,
+                "scope",
+                &auth::bind_nonce(
+                    &nonce,
+                    &channel::leader_binding(&seen, &leader.public, &nonce, "z"),
+                ),
+                "z",
+                &l.heads(),
+            );
+            let outs = e.handle(Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::Proof {
+                    device_id: "z".into(),
+                    sig,
+                    heads: l.heads(),
+                    sync: None,
+                    eph: if swap {
+                        Some(leader.public.clone())
+                    } else {
+                        None
+                    },
+                }),
+            });
+            assert!(!wire_outs(&outs)
+                .iter()
+                .any(|(_, m)| matches!(m, Msg::Hello { .. } | Msg::Proof { .. })));
+            assert!(e.lan_blocklist.contains_key("z"), "swap={swap}");
+        }
     }
 
     #[test]
@@ -8648,15 +9207,18 @@ mod tests {
         // a LAN leader's room judges a member's scrobble
         let (mut e, _) = engine("m");
         admit_inbound(&mut e, "in1", "q");
-        let outs = e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
-                query_id: "q-1".into(),
-                track_id: "t".into(),
-                started_at: 5_000.0,
-                device_id: "q".into(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "in1".into(),
+                msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
+                    query_id: "q-1".into(),
+                    track_id: "t".into(),
+                    started_at: 5_000.0,
+                    device_id: "q".into(),
+                }),
+            },
+        );
         assert!(wire_outs(&outs).iter().any(|(p, m)| p == "in1"
             && matches!(
                 m,
@@ -8675,15 +9237,18 @@ mod tests {
         let (mut fresh, _) = engine("m");
         fresh.restore_known_scrobbled(known);
         admit_inbound(&mut fresh, "in2", "r");
-        let outs = fresh.handle(Input::WireIn {
-            peer: "in2".into(),
-            msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
-                query_id: "r-1".into(),
-                track_id: "t".into(),
-                started_at: 5_000.0,
-                device_id: "r".into(),
-            }),
-        });
+        let outs = lan_in(
+            &mut fresh,
+            Input::WireIn {
+                peer: "in2".into(),
+                msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
+                    query_id: "r-1".into(),
+                    track_id: "t".into(),
+                    started_at: 5_000.0,
+                    device_id: "r".into(),
+                }),
+            },
+        );
         let duplicate = wire_outs(&outs)
             .into_iter()
             .find_map(|(p, m)| match m {
@@ -8778,13 +9343,16 @@ mod tests {
         room_doc.revision = 1;
         attach(&mut e, Some(replica_with(room_doc)), vec![dev("b")]);
         e.handle(Input::LocalOp { op: play_op() });
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpAck {
-                op_id: "a-1".into(),
-                revision: 2,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpAck {
+                    op_id: "a-1".into(),
+                    revision: 2,
+                }),
+            },
+        );
         let current = e.document().current.clone().expect("playing");
         let started_at = 5_000.0;
         // we reached the play; our query is out, the verdict not back yet
@@ -8815,10 +9383,13 @@ mod tests {
                 renderer: None,
             })
         };
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: stamp("b", &current.key),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: stamp("b", &current.key),
+            },
+        );
         assert!(
             !e.known_scrobbled()
                 .iter()
@@ -8831,18 +9402,24 @@ mod tests {
         room_doc.revision = 1;
         attach(&mut other, Some(replica_with(room_doc)), vec![dev("b")]);
         other.handle(Input::LocalOp { op: play_op() });
-        other.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::OpAck {
-                op_id: "c-1".into(),
-                revision: 2,
-            }),
-        });
+        lan_in(
+            &mut other,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::OpAck {
+                    op_id: "c-1".into(),
+                    revision: 2,
+                }),
+            },
+        );
         let key = other.document().current.clone().unwrap().key;
-        other.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: stamp("b", &key),
-        });
+        lan_in(
+            &mut other,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: stamp("b", &key),
+            },
+        );
         assert!(other
             .known_scrobbled()
             .iter()
@@ -8853,15 +9430,18 @@ mod tests {
     fn a_lan_leader_carries_its_members_scrobbles_to_the_coordinator() {
         let (mut e, _) = engine("m");
         admit_inbound(&mut e, "in1", "q");
-        e.handle(Input::WireIn {
-            peer: "in1".into(),
-            msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
-                query_id: "q-1".into(),
-                track_id: "t".into(),
-                started_at: 5_000.0,
-                device_id: "q".into(),
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "in1".into(),
+                msg: WireMessage::new(Msg::ScrobbleDedupeQuery {
+                    query_id: "q-1".into(),
+                    track_id: "t".into(),
+                    started_at: 5_000.0,
+                    device_id: "q".into(),
+                }),
+            },
+        );
         // the leader takes the play over and reaches it itself: q has it
         let outs = e.handle(Input::ScrobbleReached {
             track_id: "t".into(),
@@ -8888,10 +9468,13 @@ mod tests {
     }
 
     fn member_says(e: &mut Engine, peer: &str, msg: Msg) -> Vec<Output> {
-        e.handle(Input::WireIn {
-            peer: peer.into(),
-            msg: WireMessage::new(msg),
-        })
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: peer.into(),
+                msg: WireMessage::new(msg),
+            },
+        )
     }
 
     #[test]
@@ -8999,14 +9582,17 @@ mod tests {
             track_id: "t".into(),
             started_at: 5_000.0,
         });
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::ScrobbleSubmitted {
-                track_id: "t".into(),
-                started_at: 5_000.3,
-                device_id: "m".into(),
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::ScrobbleSubmitted {
+                    track_id: "t".into(),
+                    started_at: 5_000.3,
+                    device_id: "m".into(),
+                }),
+            },
+        );
         assert!(wire_outs(&outs).iter().any(|(p, m)| p == "up"
             && matches!(m, Msg::ScrobbleSubmitted { device_id, started_at, .. } if device_id == "m" && *started_at == 5_000.3)));
         assert_eq!(
@@ -9062,15 +9648,21 @@ mod tests {
     fn unknown_wire_messages_are_ignored() {
         let (mut e, _) = engine("a");
         attach(&mut e, None, vec![]);
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::Unknown),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::Unknown),
+            },
+        );
         assert!(outs.is_empty());
-        let outs = e.handle(Input::WireIn {
-            peer: "stranger".into(),
-            msg: WireMessage::new(Msg::SyncRequest),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "stranger".into(),
+                msg: WireMessage::new(Msg::SyncRequest),
+            },
+        );
         assert!(outs.is_empty());
     }
 
@@ -9094,12 +9686,15 @@ mod tests {
             updated_at: 9.0,
             ..s.clone()
         };
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::SettingsSync {
-                settings: vec![newer],
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::SettingsSync {
+                    settings: vec![newer],
+                }),
+            },
+        );
         assert!(outs
             .iter()
             .any(|o| matches!(o, Output::SettingsMerged(m) if m[0].value == "2")));
@@ -9108,12 +9703,15 @@ mod tests {
             updated_at: 1.0,
             ..s
         };
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::SettingsSync {
-                settings: vec![older],
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::SettingsSync {
+                    settings: vec![older],
+                }),
+            },
+        );
         assert!(!outs.iter().any(|o| matches!(o, Output::SettingsMerged(_))));
         assert_eq!(e.settings()[0].value, "2");
     }
@@ -9168,10 +9766,13 @@ mod tests {
     fn a_play_taken_over_by_handoff_is_shared() {
         let (mut b, _) = engine("b");
         attach(&mut b, None, vec![dev("a")]);
-        let outs = b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: takeover_msg(5_000.0),
-        });
+        let outs = lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: takeover_msg(5_000.0),
+            },
+        );
         assert!(outs.iter().any(
             |o| matches!(o, Output::TakeTransport { started_at, .. } if *started_at == 5_000.0)
         ));
@@ -9211,17 +9812,20 @@ mod tests {
         attach(&mut e, Some(rep), vec![]);
         assert!(e.resume_offer().is_some());
         e.handle(Input::ResumeHere);
-        let outs = e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 4,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 4,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         assert!(outs.iter().any(
             |o| matches!(o, Output::TakeTransport { started_at, .. } if *started_at == 7_000.0)
         ));
@@ -9233,17 +9837,20 @@ mod tests {
         let (mut src, _) = engine("a");
         attach(&mut src, None, vec![dev("b")]);
         src.handle(Input::ClaimTransport { takeover: false });
-        src.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::LeaseGranted {
-                ack_of: None,
-                lease: TransportLease {
-                    owner: Some("a".into()),
-                    epoch: 1,
-                    expires_at: 99_999.0,
-                },
-            }),
-        });
+        lan_in(
+            &mut src,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::LeaseGranted {
+                    ack_of: None,
+                    lease: TransportLease {
+                        owner: Some("a".into()),
+                        epoch: 1,
+                        expires_at: 99_999.0,
+                    },
+                }),
+            },
+        );
         src.handle(Input::LocalStamp {
             key: Some("k".into()),
             track_id: Some("t".into()),
@@ -9277,25 +9884,28 @@ mod tests {
         // has loaded, or what the other device was playing).
         let (mut e, _) = engine("a");
         attach(&mut e, None, vec![dev("b")]);
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::TransportStamp {
-                device_id: "b".into(),
-                key: Some("k".into()),
-                position: PositionStamp {
-                    position_ms: 1000,
-                    taken_at: 10_000.0,
-                    rate: 1.0,
-                    is_playing: true,
-                },
-                played_ms: 1000,
-                started_at: 8_000.0,
-                scrobbled: false,
-                epoch: 1,
-                volume: None,
-                renderer: None,
-            }),
-        });
+        lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::TransportStamp {
+                    device_id: "b".into(),
+                    key: Some("k".into()),
+                    position: PositionStamp {
+                        position_ms: 1000,
+                        taken_at: 10_000.0,
+                        rate: 1.0,
+                        is_playing: true,
+                    },
+                    played_ms: 1000,
+                    started_at: 8_000.0,
+                    scrobbled: false,
+                    epoch: 1,
+                    volume: None,
+                    renderer: None,
+                }),
+            },
+        );
         alone_defers_shared_but_not_origin(&mut e, 8_000.0);
         e.handle(Input::ClaimTransport { takeover: true });
         assert!(e.owns_transport());
@@ -9329,10 +9939,13 @@ mod tests {
     fn a_shared_play_waits_alone_and_the_regained_room_finds_the_duplicate() {
         let (mut b, clock) = engine("b");
         attach(&mut b, None, vec![dev("a")]);
-        b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: takeover_msg(5_000.0),
-        });
+        lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: takeover_msg(5_000.0),
+            },
+        );
         b.handle(Input::DisconnectCoordinator);
         assert!(reach(&mut b, "t", 5_000.0).is_empty());
         // Well past the ordinary grace: still waiting.
@@ -9357,13 +9970,16 @@ mod tests {
             })
             .expect("the deferred shared play is asked for on the welcome");
         // a scrobbled it while we were apart
-        let outs = b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(Msg::ScrobbleDedupeAnswer {
-                query_id: qid,
-                duplicate: true,
-            }),
-        });
+        let outs = lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::ScrobbleDedupeAnswer {
+                    query_id: qid,
+                    duplicate: true,
+                }),
+            },
+        );
         assert_eq!(scrobble_verdicts(&outs), vec![false], "not sent");
         for _ in 0..70 {
             clock.0.fetch_add(60_000, Ordering::SeqCst);
@@ -9375,10 +9991,13 @@ mod tests {
     fn a_shared_play_nobody_can_judge_is_sent_once_after_the_long_grace() {
         let (mut b, clock) = engine("b");
         attach(&mut b, None, vec![dev("a")]);
-        b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: takeover_msg(5_000.0),
-        });
+        lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: takeover_msg(5_000.0),
+            },
+        );
         b.handle(Input::DisconnectCoordinator);
         assert!(reach(&mut b, "t", 5_000.0).is_empty());
         let mut verdicts = vec![];
@@ -9399,10 +10018,13 @@ mod tests {
     fn a_deferred_shared_play_keeps_waiting_across_a_restart() {
         let (mut b, clock) = engine("b");
         attach(&mut b, None, vec![dev("a")]);
-        b.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: takeover_msg(5_000.0),
-        });
+        lan_in(
+            &mut b,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: takeover_msg(5_000.0),
+            },
+        );
         b.handle(Input::DisconnectCoordinator);
         assert!(reach(&mut b, "t", 5_000.0).is_empty());
         clock.0.fetch_add(1_800_000, Ordering::SeqCst);
@@ -9456,10 +10078,13 @@ mod tests {
     }
 
     fn from_up(e: &mut Engine, msg: Msg) -> Vec<Output> {
-        e.handle(Input::WireIn {
-            peer: "up".into(),
-            msg: WireMessage::new(msg),
-        })
+        lan_in(
+            e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(msg),
+            },
+        )
     }
 
     fn pings(outs: &[Output]) -> usize {

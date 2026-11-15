@@ -66,6 +66,7 @@ async fn refused_sockets_persist_nothing_and_open_no_lasting_room() {
                 nonce: auth::new_nonce(),
                 identity: Some(stranger.id.clone()),
                 heads: stranger.heads(),
+                eph: None,
             })],
         )
         .await;

@@ -360,6 +360,7 @@ async fn an_unadmitted_socket_cannot_read_or_write_records() {
             nonce: hocket_core::connect::auth::new_nonce(),
             identity: Some(id.clone()),
             heads: vec![],
+            eph: None,
         });
         let fetch = WireMessage::new(Msg::AnalysisFetch {
             wants: vec![AnalysisWant {

@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackRef, TransportLease};
 use crate::connect::auth::{self, Role};
+use crate::connect::channel::{self, Channel, End, Ephemeral};
 use crate::connect::diagnostics;
 use crate::connect::lease::{
     cadence_slack_ms, clamp_cadence, lease_window_ms, LeaseError, LeaseEvent, LeaseMachine,
@@ -104,6 +105,10 @@ pub struct RoomConfig {
     /// The host keeps AutoMix analysis records (the hosted coordinator with
     /// its store): `Welcome.analysis_store`.
     pub analysis_store: bool,
+    /// Joiners must set up the sealed LAN channel
+    /// ([`crate::connect::channel`]): a device's own LAN room. The hosted
+    /// coordinator is reached over TLS and doesn't.
+    pub require_channel: bool,
 }
 
 impl RoomConfig {
@@ -114,6 +119,7 @@ impl RoomConfig {
             session_id: None,
             auth: RoomAuth::Open,
             analysis_store: false,
+            require_channel: false,
         }
     }
 }
@@ -182,6 +188,9 @@ struct Unknown {
     proven: Option<DeviceId>,
     /// Waiting for a pairing answer from this member.
     pairing_with: Option<DeviceId>,
+    /// The LAN channel being set up: our ephemeral key, the joiner's, and
+    /// the nonce it challenged us with.
+    lan: Option<(Ephemeral, String, String)>,
 }
 
 /// A member's standing invite: joins for it are relayed to that member.
@@ -226,6 +235,8 @@ pub struct Room {
     offers: Vec<Offer>,
     /// Sockets connected but not yet admitted.
     unknown: Vec<Unknown>,
+    /// Sealed LAN channels by peer: everything to and from them is sealed.
+    channels: HashMap<PeerId, Channel>,
     dirty: bool,
     touched: bool,
     /// Some peer was admitted since this room was opened (or restored).
@@ -278,6 +289,7 @@ impl Room {
             identity: None,
             offers: vec![],
             unknown: vec![],
+            channels: HashMap::new(),
             dirty: false,
             touched: false,
             admitted_any: false,
@@ -518,6 +530,11 @@ impl Room {
 
     /// Outputs of a direct call (as [`Room::handle`] returns them).
     fn flush(&mut self) -> Vec<RoomOutput> {
+        for o in &self.out {
+            if let RoomOutput::Close(p) = o {
+                self.channels.remove(p);
+            }
+        }
         if self.dirty {
             self.dirty = false;
             self.touched = false;
@@ -673,10 +690,26 @@ impl Room {
                         nonce: None,
                         proven: None,
                         pairing_with: None,
+                        lan: None,
                     });
                 }
             }
-            RoomInput::Message(peer, msg) => self.on_message(peer, msg),
+            RoomInput::Message(peer, msg) => {
+                // A sealed peer sends only the next sealed frame; anything
+                // else (plain, replayed, forged) ends the connection.
+                let msg = match self.channels.get_mut(&peer) {
+                    None => Some(msg),
+                    Some(ch) => ch.open(&msg),
+                };
+                match msg {
+                    Some(m) if !matches!(m.msg, Msg::Sealed { .. }) => self.on_message(peer, m),
+                    _ => {
+                        tracing::info!(scope = %self.cfg.scope, peer, "bad sealed frame");
+                        self.on_disconnected(&peer);
+                        self.out.push(RoomOutput::Close(peer));
+                    }
+                }
+            }
             RoomInput::Disconnected(peer) => self.on_disconnected(&peer),
             RoomInput::Tick => self.on_tick(),
         }
@@ -694,8 +727,11 @@ impl Room {
     // -- helpers ------------------------------------------------------------
 
     fn send(&mut self, peer: &str, msg: Msg) {
-        self.out
-            .push(RoomOutput::Send(peer.to_string(), WireMessage::new(msg)));
+        let mut wire = WireMessage::new(msg);
+        if let Some(ch) = self.channels.get_mut(peer) {
+            wire = ch.seal(&wire);
+        }
+        self.out.push(RoomOutput::Send(peer.to_string(), wire));
     }
 
     fn broadcast(&mut self, msg: Msg, except: Option<&str>) {
@@ -829,14 +865,16 @@ impl Room {
                 nonce,
                 identity,
                 heads,
+                eph,
             } if self.member_by_peer(&peer).is_none() => {
-                self.on_challenge(&peer, nonce, identity, heads)
+                self.on_challenge(&peer, nonce, identity, heads, eph)
             }
             Msg::Proof {
                 device_id,
                 sig,
                 heads,
                 sync,
+                ..
             } if self.member_by_peer(&peer).is_none() => {
                 self.on_proof(&peer, device_id, sig, heads, sync.map(|s| *s))
             }
@@ -861,6 +899,7 @@ impl Room {
         nonce: String,
         identity: Option<String>,
         heads: Vec<String>,
+        eph: Option<String>,
     ) {
         let RoomAuth::Identity { device_id, secret } = self.cfg.auth.clone() else {
             if self.cfg.auth == RoomAuth::Closed {
@@ -882,6 +921,24 @@ impl Room {
             self.refuse(peer, RefuseReason::Unauthorised, "bad challenge");
             return;
         }
+        // A LAN room only talks over the sealed channel: a challenge without
+        // a key (or with a bad one) may be a relay stripping it.
+        let lan = match eph {
+            Some(k) if channel::valid_key(&k) => Some((Ephemeral::new(), k, nonce.clone())),
+            Some(_) => {
+                self.refuse(peer, RefuseReason::Unauthorised, "bad channel key");
+                return;
+            }
+            None if self.cfg.require_channel => {
+                self.refuse(
+                    peer,
+                    RefuseReason::Unauthorised,
+                    "this room needs a sealed channel",
+                );
+                return;
+            }
+            None => None,
+        };
         if identity.as_deref().is_some_and(|i| i != self.cfg.scope) {
             self.refuse(peer, RefuseReason::ScopeMismatch, "another identity");
             return;
@@ -892,17 +949,26 @@ impl Room {
         };
         let ours = auth::new_nonce();
         let my_heads = shared.log.heads();
+        let signed_nonce = match &lan {
+            Some((e, theirs, _)) => auth::bind_nonce(
+                &nonce,
+                &channel::leader_binding(theirs, &e.public, &nonce, &device_id),
+            ),
+            None => nonce.clone(),
+        };
         let sig = auth::prove(
             &secret,
             Role::Leader,
             &self.cfg.scope,
-            &nonce,
+            &signed_nonce,
             &device_id,
             &my_heads,
         );
         let sync = shared.sync_for(&heads);
+        let our_eph = lan.as_ref().map(|(e, _, _)| e.public.clone());
         if let Some(u) = self.unknown.iter_mut().find(|u| u.peer == peer) {
             u.nonce = Some(ours.clone());
+            u.lan = lan;
         }
         self.send(
             peer,
@@ -911,6 +977,7 @@ impl Room {
                 sig,
                 heads: my_heads,
                 sync: Some(Box::new(sync)),
+                eph: our_eph,
             },
         );
         self.send(
@@ -919,6 +986,7 @@ impl Room {
                 nonce: ours,
                 identity: None,
                 heads: vec![],
+                eph: None,
             },
         );
     }
@@ -949,12 +1017,30 @@ impl Room {
         let Some(u) = self.unknown.iter().find(|u| u.peer == peer) else {
             return;
         };
-        let (nonce, already) = (u.nonce.clone(), u.proven.is_some());
+        let (nonce, already, lan) = (u.nonce.clone(), u.proven.is_some(), u.lan.clone());
         let scope = self.cfg.scope.clone();
+        // With a LAN channel, the proof binds the whole transcript, and the
+        // keys come from it.
+        let transcript = match (&lan, &nonce) {
+            (Some((e, theirs, their_nonce)), Some(n)) => Some(channel::joiner_binding(
+                theirs,
+                &e.public,
+                their_nonce,
+                n,
+                &ours,
+                &device_id,
+            )),
+            _ => None,
+        };
+        let signed_nonce = match (&transcript, &nonce) {
+            (Some(t), Some(n)) => Some(auth::bind_nonce(n, t)),
+            (None, n) => n.clone(),
+            (Some(_), None) => None,
+        };
         // Check the proof against our list plus the ops it sent (they are
         // signed, so a peer with a newer list than ours still proves), and
         // take nothing from it until it has proved it is a member.
-        let ok = match (&nonce, self.identity.as_ref()) {
+        let ok = match (&signed_nonce, self.identity.as_ref()) {
             (Some(nonce), Some(shared)) => {
                 let mut log = shared.log.clone();
                 if let Some(sync) = &sync {
@@ -978,7 +1064,15 @@ impl Room {
             }
             _ => false,
         };
+        let channel = match (&lan, &transcript) {
+            (Some((e, theirs, _)), Some(t)) => Channel::new(End::Leader, e, theirs, t),
+            _ => None,
+        };
+        let ok = ok && (lan.is_none() || channel.is_some());
         if ok {
+            if let Some(ch) = channel {
+                self.channels.insert(peer.to_string(), ch);
+            }
             if let Some(sync) = sync {
                 self.merge_identity(sync, None);
             }
@@ -1250,6 +1344,7 @@ impl Room {
 
     fn on_disconnected(&mut self, peer: &str) {
         self.unknown.retain(|u| u.peer != peer);
+        self.channels.remove(peer);
         let Some(idx) = self.members.iter().position(|m| m.peer == peer) else {
             return;
         };
@@ -1288,6 +1383,7 @@ impl Room {
         match msg {
             Msg::Hello { .. }
             | Msg::Challenge { .. }
+            | Msg::Sealed { .. }
             | Msg::Proof { .. }
             | Msg::Welcome { .. }
             | Msg::Refuse { .. }
@@ -2991,6 +3087,7 @@ mod tests {
                 nonce: nonce.clone(),
                 identity: Some("scope".into()),
                 heads: me.heads(),
+                eph: None,
             }),
         ));
         let msgs = sent(&outs, peer);
@@ -3001,6 +3098,7 @@ mod tests {
                 sig,
                 heads,
                 sync,
+                ..
             } => {
                 assert_eq!(device_id, "leader");
                 if let Some(sync) = sync {
@@ -3030,6 +3128,7 @@ mod tests {
             sig: auth::prove(me.secret(), role, "scope", nonce, as_id, &me.heads()),
             heads: me.heads(),
             sync: Some(Box::new(me.sync())),
+            eph: None,
         })
     }
 
@@ -3070,6 +3169,7 @@ mod tests {
                 ),
                 heads: leader.heads(),
                 sync: Some(Box::new(sync)),
+                eph: None,
             }),
         ));
         assert!(matches!(sent(&outs, "p1")[0], Msg::Refuse { .. }));
@@ -3158,6 +3258,7 @@ mod tests {
                 nonce: "short".into(),
                 identity: None,
                 heads: vec![],
+                eph: None,
             }),
         ));
         assert!(matches!(sent(&outs, "p5")[0], Msg::Refuse { .. }));
@@ -3283,6 +3384,7 @@ mod tests {
                 nonce: auth::new_nonce(),
                 identity: None,
                 heads: vec![],
+                eph: None,
             }),
         ));
         assert!(matches!(

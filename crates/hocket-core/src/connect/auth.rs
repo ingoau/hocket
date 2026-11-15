@@ -24,10 +24,11 @@
 //! grow-only union, so an old or replayed list never undoes a removal.
 //! Roles are bound into the signature so a proof can never be reflected.
 //!
-//! Known limit: without TLS there is no channel binding, so a rogue that
-//! wins the election could relay both handshakes between two honest devices
-//! and sit in the middle of that session. It learns session data, but can't
-//! be admitted anywhere itself, and the group key never travels unsealed.
+//! On the LAN (plain `ws://`) both sides also send an ephemeral X25519 key
+//! and sign the transcript with it ([`bind_nonce`]), and every frame after
+//! the handshake is sealed with keys from that exchange
+//! ([`crate::connect::channel`]), so a relay in the middle can neither read
+//! nor inject. The coordinator is reached over TLS and pinned by key.
 
 use crate::identity::{self, log::MemberState};
 
@@ -57,6 +58,12 @@ pub fn heads_digest(heads: &[String]) -> String {
     let mut c = identity::crypto::Canon::new("hocket-heads");
     c.list(heads);
     identity::crypto::sha256_hex(c.finish())
+}
+
+/// The nonce a proof signs when it also binds a LAN channel transcript
+/// ([`crate::connect::channel`]): the nonce and the binding together.
+pub fn bind_nonce(nonce: &str, binding: &str) -> String {
+    format!("{nonce}.{binding}")
 }
 
 /// Sign a proof: `secret` is the prover's device (or coordinator) key.

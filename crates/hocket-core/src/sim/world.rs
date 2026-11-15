@@ -925,7 +925,8 @@ impl World {
         };
         let now = self.now();
         if target != COORDINATOR_NODE {
-            if let Msg::Hello { .. } = &msg.msg {
+            // A LAN Hello is a joiner's first sealed frame.
+            if let Msg::Hello { .. } | Msg::Sealed { seq: 0, .. } = &msg.msg {
                 self.lan_hellos += 1;
             }
         }

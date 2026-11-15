@@ -51,9 +51,12 @@ use crate::library::LibraryRecord;
 /// signature over nonces with the member list's head, `Hello` carries no
 /// credential, and pairing, identity sync and coordinator claims ride the
 /// protocol. AutoMix records are keyed by a provider-aware fingerprint.
-pub const PROTOCOL: u32 = 5;
+/// 6 = the LAN channel: the handshake exchanges ephemeral X25519 keys bound
+/// into both proofs, and every LAN frame after it is [`Msg::Sealed`]
+/// ([`crate::connect::channel`]). Version 5 peers would talk in the clear.
+pub const PROTOCOL: u32 = 6;
 /// Hard floor. The handshake refuses anything older.
-pub const PROTOCOL_MIN: u32 = 5;
+pub const PROTOCOL_MIN: u32 = 6;
 
 /// Extra fields preserved verbatim. Typeshare never sees it.
 pub type Extra = HashMap<String, Value>;
@@ -841,6 +844,10 @@ pub enum Msg {
         /// ops it lacks.
         #[serde(default)]
         heads: Vec<String>,
+        /// A LAN joiner's ephemeral X25519 key (hex): the room answers with
+        /// its own in its proof, and frames after the handshake are sealed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eph: Option<String>,
     },
     /// Either direction. `sig` is the device's ed25519 signature over
     /// [`crate::identity::proof_bytes`] (role, identity, the other side's
@@ -854,6 +861,18 @@ pub enum Msg {
         heads: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sync: Option<Box<crate::identity::IdentitySync>>,
+        /// A LAN room's ephemeral X25519 key (hex), answering the joiner's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eph: Option<String>,
+    },
+    /// Either direction on the LAN, after the handshake: the next frame,
+    /// sealed with the channel key ([`crate::connect::channel`]).
+    Sealed {
+        seq: u64,
+        /// 12 bytes, hex.
+        nonce: String,
+        /// Ciphertext and tag, base64.
+        ct: String,
     },
     /// → room. First message after the mutual proof.
     Hello {
@@ -1414,6 +1433,7 @@ impl Msg {
         match self {
             Msg::Challenge { .. } => "challenge",
             Msg::Proof { .. } => "proof",
+            Msg::Sealed { .. } => "sealed",
             Msg::Hello { .. } => "hello",
             Msg::Welcome { .. } => "welcome",
             Msg::Refuse { .. } => "refuse",
