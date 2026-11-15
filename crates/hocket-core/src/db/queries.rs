@@ -1468,10 +1468,11 @@ impl Db {
                 let caps: String = r.get(7)?;
                 let features: String = r.get(8)?;
                 let id: String = r.get(0)?;
+                let kind = api::AccountKind::parse(&kind).unwrap_or_default();
                 Ok(api::AccountInfo {
-                    source: id.clone(),
+                    source: crate::provider::source_of(kind, &id),
                     id,
-                    kind: api::AccountKind::parse(&kind).unwrap_or_default(),
+                    kind,
                     url: r.get(2)?,
                     username: r.get(3)?,
                     name: r.get(4)?,

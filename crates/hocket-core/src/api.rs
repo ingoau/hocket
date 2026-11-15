@@ -514,18 +514,21 @@ pub struct ServerCapabilities {
 pub enum AccountKind {
     #[default]
     Navidrome,
+    YoutubeMusic,
 }
 
 impl AccountKind {
     pub fn as_str(self) -> &'static str {
         match self {
             AccountKind::Navidrome => "navidrome",
+            AccountKind::YoutubeMusic => "youtubeMusic",
         }
     }
 
     pub fn parse(s: &str) -> Option<AccountKind> {
         match s {
             "navidrome" => Some(AccountKind::Navidrome),
+            "youtubeMusic" => Some(AccountKind::YoutubeMusic),
             _ => None,
         }
     }

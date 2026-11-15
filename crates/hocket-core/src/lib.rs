@@ -12,6 +12,7 @@
 pub mod api;
 pub mod core;
 pub mod util;
+pub mod ytm;
 
 pub mod actions;
 pub mod album_resume;

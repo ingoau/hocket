@@ -1032,6 +1032,9 @@ impl Downloads {
                 gain_db: None,
                 range_capable: true,
                 transcoded: false,
+                max_range: None,
+                content_length: None,
+                variant: String::new(),
             },
             None => {
                 provider

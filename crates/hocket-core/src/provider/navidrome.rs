@@ -8,7 +8,7 @@ use url::Url;
 
 use super::{
     unsupported, HomeShelf, LibraryPage, Provider, ProviderFuture, ProviderWrite, ResolvedStream,
-    StreamRequest,
+    StreamRequest, WriteOutcome,
 };
 use crate::api::{self, AccountKind, EpochMs, ProviderCapabilities};
 use crate::subsonic::convert::{album_from_id3, artist_from_id3, track_from_child};
@@ -204,6 +204,9 @@ impl Provider for NavidromeProvider {
             // Navidrome ignores `Range` on a transcode and may on the original.
             range_capable: !transcoded,
             transcoded,
+            max_range: None,
+            content_length: None,
+            variant: String::new(),
         };
         Box::pin(async move { Ok(stream) })
     }
@@ -224,19 +227,26 @@ impl Provider for NavidromeProvider {
         self.api.download_to_file(stream.url.clone(), dest)
     }
 
-    fn write(&self, write: ProviderWrite) -> ProviderFuture<'_, ()> {
+    fn write(&self, write: ProviderWrite) -> ProviderFuture<'_, WriteOutcome> {
         Box::pin(async move {
-            match write {
+            let done = match write {
                 ProviderWrite::Star(t) => self.api.star(&star_targets(&t)).await,
                 ProviderWrite::Unstar(t) => self.api.unstar(&star_targets(&t)).await,
                 ProviderWrite::Rate { id, rating } => self.api.set_rating(&id, rating).await,
-                ProviderWrite::CreatePlaylist { name, track_ids } => self
-                    .api
-                    .create_playlist(&name, &track_ids)
-                    .await
-                    .map(|_| ()),
+                ProviderWrite::CreatePlaylist { name, track_ids } => {
+                    let p = self.api.create_playlist(&name, &track_ids).await?;
+                    return Ok(WriteOutcome::Created(p.playlist.id));
+                }
                 ProviderWrite::DeletePlaylist { id } => self.api.delete_playlist(&id).await,
-            }
+                // Playlist edits by index and the rest go through the
+                // outbox's Subsonic path (`Provider::navidrome`).
+                other => {
+                    return Err(super::ProviderError::Unsupported(format!(
+                        "{other:?} on Navidrome goes through the Subsonic client"
+                    )))
+                }
+            };
+            done.map(|_| WriteOutcome::Done)
         })
     }
 

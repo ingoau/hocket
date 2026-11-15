@@ -462,6 +462,9 @@ impl Actor {
                     gain_db: None,
                     range_capable: true,
                     transcoded: false,
+                    max_range: None,
+                    content_length: None,
+                    variant: String::new(),
                 };
                 api.download_to_file(&stream, &dest).await.ok()?;
                 Some(dest.to_string_lossy().into_owned())

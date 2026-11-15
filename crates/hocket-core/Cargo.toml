@@ -49,6 +49,7 @@ uuid.workspace = true
 md-5.workspace = true
 hmac.workspace = true
 sha2.workspace = true
+sha1.workspace = true
 hex.workspace = true
 ed25519-dalek.workspace = true
 x25519-dalek.workspace = true

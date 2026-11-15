@@ -40,6 +40,15 @@ pub use crate::subsonic::SubsonicError as ProviderError;
 pub type ProviderResult<T> = Result<T, ProviderError>;
 pub type ProviderFuture<'a, T> = BoxFuture<'a, ProviderResult<T>>;
 
+/// The source an account's track ids are valid in: Navidrome's own id, one
+/// global `ytm` for every YouTube Music account.
+pub fn source_of(kind: AccountKind, account_id: &str) -> SourceId {
+    match kind {
+        AccountKind::Navidrome => account_id.to_string(),
+        AccountKind::YoutubeMusic => crate::ytm::SOURCE.to_string(),
+    }
+}
+
 /// The capability error for a method the provider doesn't offer.
 pub fn unsupported<'a, T: Send + 'a>(what: &str) -> ProviderFuture<'a, T> {
     let e = ProviderError::Unsupported(what.to_string());
@@ -67,6 +76,14 @@ pub struct ResolvedStream {
     pub range_capable: bool,
     /// Whether the bytes are a transcode (so tags and lengths are estimates).
     pub transcoded: bool,
+    /// The largest range to ask for in one request (googlevideo throttles
+    /// open-ended and large requests); `None`: any.
+    pub max_range: Option<u64>,
+    /// The stream's real length, when the provider knows it up front.
+    pub content_length: Option<u64>,
+    /// What identifies these bytes beyond the track (`"140"`: the itag), so a
+    /// cache entry of another variant isn't mixed in. Empty for Navidrome.
+    pub variant: String,
 }
 
 impl std::fmt::Debug for ResolvedStream {
@@ -78,6 +95,8 @@ impl std::fmt::Debug for ResolvedStream {
             .field("container", &self.container)
             .field("range_capable", &self.range_capable)
             .field("transcoded", &self.transcoded)
+            .field("max_range", &self.max_range)
+            .field("variant", &self.variant)
             .finish()
     }
 }
@@ -113,7 +132,18 @@ pub struct HomeShelf {
     pub playlists: Vec<api::Playlist>,
 }
 
-/// A write a provider applies to the user's library.
+/// What a library add or remove names.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LibraryTarget {
+    Track { id: String },
+    Album { id: String },
+    Artist { id: String },
+    Playlist { id: String },
+}
+
+/// A write a provider applies to the user's library. Playlist positions
+/// are indices into the playlist as Hocket lists it (the provider's visible
+/// entries); a provider that hides entries maps them onto its own order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderWrite {
     Star(Vec<api::RatingTarget>),
@@ -129,6 +159,65 @@ pub enum ProviderWrite {
     DeletePlaylist {
         id: String,
     },
+    RenamePlaylist {
+        id: String,
+        name: String,
+    },
+    PlaylistAdd {
+        id: String,
+        track_ids: Vec<TrackId>,
+        at_index: Option<u32>,
+    },
+    PlaylistRemove {
+        id: String,
+        track_ids: Vec<TrackId>,
+        indices: Vec<u32>,
+    },
+    PlaylistMove {
+        id: String,
+        track_id: TrackId,
+        from_index: u32,
+        to_index: u32,
+    },
+    LibraryAdd(LibraryTarget),
+    LibraryRemove(LibraryTarget),
+}
+
+/// What a write produced.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum WriteOutcome {
+    #[default]
+    Done,
+    /// A new playlist's id.
+    Created(String),
+}
+
+/// One entry of a provider playlist.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaylistEntry {
+    pub track: api::Track,
+    /// The provider's id for this entry (YouTube Music's `setVideoId`).
+    pub entry_id: Option<String>,
+    /// Hocket lists it (YouTube Music hides videos: songs only).
+    pub visible: bool,
+}
+
+/// A playlist and its entries, hidden ones included, in the provider's order.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PlaylistContents {
+    pub playlist: api::Playlist,
+    pub entries: Vec<PlaylistEntry>,
+}
+
+impl PlaylistContents {
+    /// The ids Hocket lists, in order.
+    pub fn visible_ids(&self) -> Vec<TrackId> {
+        self.entries
+            .iter()
+            .filter(|e| e.visible)
+            .map(|e| e.track.id.clone())
+            .collect()
+    }
 }
 
 /// A music service account, as the core uses it.
@@ -163,7 +252,7 @@ pub trait Provider: Send + Sync + 'static {
     ) -> ProviderFuture<'a, DownloadOutcome>;
 
     // -- writes and reports --------------------------------------------------
-    fn write(&self, write: ProviderWrite) -> ProviderFuture<'_, ()>;
+    fn write(&self, write: ProviderWrite) -> ProviderFuture<'_, WriteOutcome>;
     /// A play: `submission` false is "now playing", true a finished scrobble.
     fn report_play(
         &self,
@@ -177,6 +266,20 @@ pub trait Provider: Send + Sync + 'static {
     /// Tracks like this one (autoplay, "radio").
     fn radio(&self, seed: &str, count: u32) -> ProviderFuture<'_, Vec<api::Track>>;
     fn home_shelves(&self) -> ProviderFuture<'_, Vec<HomeShelf>>;
+
+    /// The account's playlists (providers whose mirror sync isn't Subsonic's).
+    fn playlists(&self) -> ProviderFuture<'_, Vec<api::Playlist>> {
+        unsupported("playlists")
+    }
+
+    /// One playlist with every entry, hidden ones included.
+    fn playlist(&self, _id: &str) -> ProviderFuture<'_, PlaylistContents> {
+        unsupported("playlist")
+    }
+
+    /// A URL `resolve_stream` handed out was refused (`status`: 403, 410…)
+    /// or ran out: forget it, so the next resolve fetches a fresh one.
+    fn stream_failed(&self, _id: &str, _status: u16) {}
 
     /// The Subsonic client behind a Navidrome provider: for the work that is
     /// Subsonic through and through (mirror sync, smart playlists, playlist

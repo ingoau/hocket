@@ -253,6 +253,9 @@ impl Caches {
             gain_db: None,
             range_capable: false,
             transcoded: false,
+            max_range: None,
+            content_length: None,
+            variant: String::new(),
         };
         let out = match provider.download_to_file(&stream, &dest).await {
             Ok(o) => o,
