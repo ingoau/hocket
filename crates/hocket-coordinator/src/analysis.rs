@@ -1,8 +1,11 @@
 //! The coordinator's AutoMix analysis store (`docs/automix.md` → *Sharing
-//! records*): the preferred [`AnalysisRecord`] per (Navidrome server, track
-//! id) in `<data-dir>/automix.sqlite` (in memory without a data dir). Any
-//! client verified for a server reads and writes that server's records,
-//! whoever its user; the opt-in worker ([`crate::worker`]) writes them too.
+//! records*): the preferred [`AnalysisRecord`] per provider-aware
+//! fingerprint ([`hocket_core::connect::wire::AnalysisKey`]: the provider
+//! instance, such as one Navidrome server, and the file within it) in
+//! `<data-dir>/analysis.sqlite` (in memory without a data dir). Every
+//! admitted identity's devices read and write them, whoever their account;
+//! the opt-in worker ([`crate::worker`]) writes them too. The `server` and
+//! `track_id` columns hold the key's provider and fingerprint.
 //!
 //! A record replaces the stored one only when it is preferred
 //! ([`preference`]: version, beats, producer, age) or describes another file
@@ -20,17 +23,16 @@ use hocket_core::api::{AnalysisProducer, AnalysisRecord, SourceFingerprint, Trac
 use hocket_core::automix::record::{
     compact, fingerprint_matches, has_beats, is_usable, preference, ANALYSIS_VERSION,
 };
-use hocket_core::connect::wire::AnalysisEntry;
-
-/// The store's file name in `--data-dir`.
-pub const STORE_FILE: &str = "automix.sqlite";
+/// The store's file name in `--data-dir` (records keyed by `(server,
+/// track)` lived in `automix.sqlite`; they are not read any more).
+pub const STORE_FILE: &str = "analysis.sqlite";
 
 /// Upload limits. A five-minute track has ~600 beats and 600 points per
 /// curve; these leave room for a three-hour mix at 200 bpm and refuse junk.
 pub const MAX_BEATS: usize = 40_000;
 pub const MAX_CURVE_POINTS: usize = 2_000;
 pub const MAX_DURATION_MS: u32 = 6 * 3_600_000;
-pub const MAX_TRACK_ID_LEN: usize = 256;
+pub const MAX_TRACK_ID_LEN: usize = hocket_core::connect::wire::ANALYSIS_KEY_MAX;
 pub const MAX_TEXT_LEN: usize = 64;
 /// A record's JSON may be at most this long. A typical one is ~10 KB and a
 /// three-hour mix ~350 KB; this keeps a full `AnalysisRecords` batch
@@ -284,7 +286,7 @@ pub struct AnalysisStore {
 }
 
 impl AnalysisStore {
-    /// Open (or create) `<dir>/automix.sqlite`.
+    /// Open (or create) `<dir>/analysis.sqlite`.
     pub fn open(dir: &Path) -> anyhow::Result<AnalysisStore> {
         std::fs::create_dir_all(dir)?;
         let conn = Connection::open(dir.join(STORE_FILE))?;
@@ -366,11 +368,13 @@ impl AnalysisStore {
 
     /// The records of this analysis version among `track_ids`; the rest are
     /// left out.
+    /// The usable records among `track_ids` (fingerprints) of `server` (a
+    /// provider), with the fingerprint each answers.
     pub fn get_many(
         &self,
         server: &str,
         track_ids: &[TrackId],
-    ) -> anyhow::Result<Vec<AnalysisEntry>> {
+    ) -> anyhow::Result<Vec<(String, AnalysisRecord)>> {
         let inner = self.conn.lock();
         let mut stmt = inner.conn.prepare_cached(
             "SELECT json FROM records WHERE server = ?1 AND track_id = ?2 AND version = ?3",
@@ -383,14 +387,29 @@ impl AnalysisStore {
                 })
                 .optional()?;
             if let Some(record) = json.and_then(|j| serde_json::from_str(&j).ok()) {
-                // The caller names the source (the room's account).
-                out.push(AnalysisEntry {
-                    track_id: hocket_core::api::TrackRef::new("", id.clone()),
-                    record,
-                });
+                out.push((id.clone(), record));
             }
         }
         Ok(out)
+    }
+
+    /// The record of any file of `track_id` (a fingerprint starting with
+    /// `track_id|`): diagnostics and tests.
+    pub fn get_track(
+        &self,
+        server: &str,
+        track_id: &str,
+    ) -> anyhow::Result<Option<AnalysisRecord>> {
+        let inner = self.conn.lock();
+        let json: Option<String> = inner
+            .conn
+            .query_row(
+                "SELECT json FROM records WHERE server = ?1 AND substr(track_id, 1, ?3) = ?2 LIMIT 1",
+                rusqlite::params![server, format!("{track_id}|"), track_id.len() as i64 + 1],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(json.and_then(|j| serde_json::from_str(&j).ok()))
     }
 
     /// Keep `record` if it is preferred over the stored one. The caller has
@@ -732,10 +751,10 @@ mod tests {
         let ids = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
         let a = s.get_many("a", &ids).unwrap();
         assert_eq!(a.len(), 1);
-        assert_eq!(a[0].track_id, "t1");
+        assert_eq!(a[0].0, "t1");
         let b = s.get_many("b", &ids).unwrap();
         assert_eq!(b.len(), 1);
-        assert_eq!(b[0].track_id, "t2");
+        assert_eq!(b[0].0, "t2");
         assert!(s.get_many("c", &ids).unwrap().is_empty());
         assert!(s.covers("a", "t1", &fp(1000.0)).unwrap());
         assert!(!s.covers("b", "t1", &fp(1000.0)).unwrap());
@@ -781,7 +800,7 @@ mod tests {
         assert!(validate("t1", &good).is_ok());
         assert!(validate("t1", &rec(AnalysisProducer::Device, false, 1.0)).is_ok());
         assert!(validate("", &good).is_err());
-        assert!(validate(&"x".repeat(300), &good).is_err());
+        assert!(validate(&"x".repeat(MAX_TRACK_ID_LEN + 1), &good).is_err());
         let bad: Vec<fn(&mut AnalysisRecord)> = vec![
             |r| r.version = ANALYSIS_VERSION + 1,
             |r| r.version = 0,

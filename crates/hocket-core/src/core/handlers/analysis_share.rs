@@ -7,12 +7,17 @@
 //! loudness-only record) are uploaded; while there is no such coordinator
 //! they wait in a short in-memory queue. Offline nothing changes: planning
 //! only ever reads the local store.
+//!
+//! Records are keyed by a provider-aware fingerprint ([`AnalysisKey`]): the
+//! provider instance and the file, never the account or the identity.
 
 use std::collections::HashMap;
 
 use crate::api::*;
 use crate::connect::engine::Input;
-use crate::connect::wire::{AnalysisEntry, ANALYSIS_BATCH_MAX, ANALYSIS_FETCH_MAX};
+use crate::connect::wire::{
+    AnalysisEntry, AnalysisKey, AnalysisWant, ANALYSIS_BATCH_MAX, ANALYSIS_FETCH_MAX,
+};
 use crate::core::actor::Actor;
 
 /// Tracks after the current one that are fetched ahead.
@@ -26,32 +31,23 @@ const UPLOAD_QUEUE_MAX: usize = 64;
 
 #[derive(Default)]
 pub(crate) struct ShareState {
-    /// The server whose coordinator said it keeps records; `None` otherwise.
-    available_for: Option<String>,
-    /// The one outstanding fetch: when it went out and what it asked for.
-    in_flight: Option<(f64, Vec<TrackId>)>,
-    /// (server, track) → asked until (epoch ms).
-    asked: HashMap<(String, TrackId), f64>,
-    /// (server, record) waiting to be uploaded, oldest first.
-    uploads: Vec<(String, AnalysisEntry)>,
+    /// The coordinator keeps records.
+    available: bool,
+    /// The fetch waiting for an answer: when it went out and what it asked.
+    in_flight: Option<(f64, Vec<TrackRef>)>,
+    /// Tracks asked for, until when they are not asked again.
+    asked: HashMap<TrackRef, f64>,
+    uploads: Vec<AnalysisEntry>,
 }
 
 impl Actor {
-    /// Whether the attached coordinator keeps records for the current server.
     pub(crate) fn analysis_store_available(&self) -> bool {
-        self.engine.is_some()
-            && self.share.available_for.is_some()
-            && self.share.available_for == self.scope_account()
+        self.engine.is_some() && self.share.available
     }
 
-    /// `Output::AnalysisStore`.
     pub(crate) fn on_analysis_store(&mut self, available: bool) {
         tracing::debug!(target: "hocket::automix", available, "coordinator analysis store");
-        self.share.available_for = if available {
-            self.scope_account()
-        } else {
-            None
-        };
+        self.share.available = available;
         if !available {
             self.forget_in_flight_fetch();
             return;
@@ -60,7 +56,6 @@ impl Actor {
         self.fetch_analysis_records(self.now());
     }
 
-    /// From the analysis tick.
     pub(crate) fn analysis_share_tick(&mut self, now: f64) {
         if let Some((sent, _)) = &self.share.in_flight {
             if now - sent > FETCH_TIMEOUT_MS {
@@ -73,18 +68,23 @@ impl Actor {
         self.fetch_analysis_records(now);
     }
 
-    /// The tracks of an unanswered fetch may be asked for again.
     fn forget_in_flight_fetch(&mut self) {
-        if let (Some((_, ids)), Some(server)) = (self.share.in_flight.take(), self.scope_account())
-        {
-            for id in ids {
-                self.share.asked.remove(&(server.clone(), id));
+        if let Some((_, refs)) = self.share.in_flight.take() {
+            for r in refs {
+                self.share.asked.remove(&r);
             }
         }
     }
 
-    /// Ask the coordinator for the records the window lacks, when it keeps
-    /// them, the mode is AutoMix and no fetch is outstanding.
+    /// The provider instance a track's source belongs to (`None` for a
+    /// source no account here serves).
+    fn analysis_provider_url(&self, source: &str) -> Option<String> {
+        self.accounts
+            .for_source(source)
+            .filter(|a| a.info.kind == AccountKind::Navidrome)
+            .map(|a| a.info.url.clone())
+    }
+
     fn fetch_analysis_records(&mut self, now: f64) {
         if !self.analysis_store_available()
             || self.share.in_flight.is_some()
@@ -92,46 +92,45 @@ impl Actor {
         {
             return;
         }
-        let Some(server_id) = self.scope_account() else {
-            return;
-        };
         let mut tracks: Vec<Track> = self.playback.track.iter().cloned().collect();
         for item in self.upcoming_playable(FETCH_AHEAD) {
             if let Some(t) = self.track_or_bare(&item.track) {
                 tracks.push(t);
             }
         }
-        let mut ids: Vec<TrackId> = vec![];
+        let mut wants: Vec<AnalysisWant> = vec![];
         for t in tracks {
-            let key = (server_id.clone(), t.id.clone());
-            if t.server_id != server_id
-                || ids.contains(&t.id)
-                || self.share.asked.get(&key).is_some_and(|until| *until > now)
+            let track_id = TrackRef::new(t.server_id.clone(), t.id.clone());
+            if wants.iter().any(|w| w.track_id == track_id)
+                || self
+                    .share
+                    .asked
+                    .get(&track_id)
+                    .is_some_and(|until| *until > now)
                 || !self.needs_analysis(&t)
             {
                 continue;
             }
-            ids.push(t.id);
+            let Some(url) = self.analysis_provider_url(&t.server_id) else {
+                continue;
+            };
+            let key = AnalysisKey::navidrome(&url, &t.id, t.size_bytes, t.suffix.as_deref());
+            wants.push(AnalysisWant { track_id, key });
         }
-        ids.truncate(ANALYSIS_FETCH_MAX);
-        if ids.is_empty() {
+        wants.truncate(ANALYSIS_FETCH_MAX);
+        if wants.is_empty() {
             return;
         }
-        for id in &ids {
+        for w in &wants {
             self.share
                 .asked
-                .insert((server_id.clone(), id.clone()), now + ASKED_TTL_MS);
+                .insert(w.track_id.clone(), now + ASKED_TTL_MS);
         }
-        tracing::debug!(target: "hocket::automix", count = ids.len(), "fetching analysis records");
-        self.share.in_flight = Some((now, ids.clone()));
-        let track_ids = ids
-            .into_iter()
-            .map(|id| TrackRef::new(server_id.clone(), id))
-            .collect();
-        self.engine_input(Input::FetchAnalysis { track_ids });
+        tracing::debug!(target: "hocket::automix", count = wants.len(), "fetching analysis records");
+        self.share.in_flight = Some((now, wants.iter().map(|w| w.track_id.clone()).collect()));
+        self.engine_input(Input::FetchAnalysis { wants });
     }
 
-    /// `Output::AnalysisRecords`: the coordinator's answer.
     pub(crate) fn on_analysis_records(&mut self, records: Vec<AnalysisEntry>) {
         self.share.in_flight = None;
         tracing::debug!(target: "hocket::automix", count = records.len(), "analysis records fetched");
@@ -141,27 +140,32 @@ impl Actor {
         self.fetch_analysis_records(self.now());
     }
 
-    /// A record this device produced: upload it now or once a coordinator
-    /// that keeps records is reachable.
+    /// Queue a record this device produced for the coordinator.
     pub(crate) fn share_analysis_record(
         &mut self,
         server_id: &str,
         track_id: &TrackId,
         record: &AnalysisRecord,
     ) {
-        self.share
-            .uploads
-            .retain(|(s, e)| !(s == server_id && &e.track_id.id == track_id));
+        let Some(url) = self.analysis_provider_url(server_id) else {
+            return;
+        };
+        let track_ref = TrackRef::new(server_id, track_id.clone());
+        let key = AnalysisKey::navidrome(
+            &url,
+            track_id,
+            record.source.size_bytes,
+            record.source.suffix.as_deref(),
+        );
+        self.share.uploads.retain(|e| e.track_id != track_ref);
         if self.share.uploads.len() >= UPLOAD_QUEUE_MAX {
             self.share.uploads.remove(0);
         }
-        self.share.uploads.push((
-            server_id.to_string(),
-            AnalysisEntry {
-                track_id: TrackRef::new(server_id, track_id.clone()),
-                record: record.clone(),
-            },
-        ));
+        self.share.uploads.push(AnalysisEntry {
+            track_id: track_ref,
+            key,
+            record: record.clone(),
+        });
         self.flush_analysis_uploads();
     }
 
@@ -169,15 +173,7 @@ impl Actor {
         if !self.analysis_store_available() || self.share.uploads.is_empty() {
             return;
         }
-        let Some(server_id) = self.scope_account() else {
-            return;
-        };
-        // Records of another server have nowhere to go: this room is this server's.
-        let records: Vec<AnalysisEntry> = std::mem::take(&mut self.share.uploads)
-            .into_iter()
-            .filter(|(s, _)| *s == server_id)
-            .map(|(_, e)| e)
-            .collect();
+        let records: Vec<AnalysisEntry> = std::mem::take(&mut self.share.uploads);
         tracing::debug!(target: "hocket::automix", count = records.len(), "uploading analysis records");
         for chunk in records.chunks(ANALYSIS_BATCH_MAX) {
             self.engine_input(Input::UploadAnalysis {

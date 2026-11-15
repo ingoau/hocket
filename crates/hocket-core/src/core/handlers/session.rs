@@ -138,6 +138,11 @@ impl Actor {
                 self.engine_input(Input::SettingChanged(s));
             }
         }
+        // Peers already seen (a reopened session's engine starts blind).
+        let adverts: Vec<_> = self.lan_adverts.values().cloned().collect();
+        for a in adverts {
+            self.engine_input(Input::PeerDiscovered(a));
+        }
         self.load_stash();
         self.load_snoozes();
         self.load_album_resumes();

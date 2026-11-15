@@ -1,48 +1,26 @@
 //! Save to Coordinator (`docs/reports.md`): grants on the diagnostics answer
-//! for report users only, the upload API with its limits, quota, retention
-//! and the `reports` CLI.
+//! for the owner identity's devices only, the upload API with its limits,
+//! quota, retention and the `reports` CLI.
 
-use std::net::SocketAddr;
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::routing::get;
-use axum::Router;
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use hocket_coordinator::{reports, serve, App, Args};
-use hocket_core::api::{DeviceInfo, Platform};
-use hocket_core::connect::diagnostics::{COORDINATOR, HELLO_FLAG, ROOM};
-use hocket_core::connect::wire::{scope_key, Credential, Msg, ReportGrant, WireMessage};
-use hocket_core::connect::wire::{PROTOCOL, PROTOCOL_MIN};
-
-type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+use hocket_core::connect::diagnostics::{COORDINATOR, ROOM};
+use hocket_core::connect::wire::{Msg, ReportGrant, WireMessage};
+use hocket_core::identity::Identity;
 
 const T0: u64 = 1_793_541_600_000; // 2026-11-01T14:00:00Z
 const HOUR: u64 = 3_600_000;
 const DAY: u64 = 24 * HOUR;
-
-/// A Subsonic that accepts the token `good-token` for anyone.
-async fn fake_subsonic() -> SocketAddr {
-    let ping = |q: axum::extract::Query<std::collections::HashMap<String, String>>| async move {
-        let ok = q.get("t").map(|t| t == "good-token").unwrap_or(false);
-        let status = if ok { "ok" } else { "failed" };
-        axum::Json(json!({ "subsonic-response": { "status": status } }))
-    };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/rest/ping.view", get(ping)))
-            .await
-            .unwrap();
-    });
-    addr
-}
 
 /// A running coordinator with a clock the test moves.
 struct Coord {
@@ -50,6 +28,8 @@ struct Coord {
     http: String,
     app: Arc<App>,
     clock: Arc<AtomicU64>,
+    /// The owner identity (its device "alice").
+    alice: parking_lot::Mutex<Identity>,
     _stop: tokio::sync::oneshot::Sender<()>,
 }
 
@@ -72,19 +52,21 @@ async fn start(args: Args) -> Coord {
     })
     .await
     .unwrap();
+    let ws = format!("ws://{addr}/ws");
+    let alice = common::owner(&app, &ws, "alice").await;
     Coord {
-        ws: format!("ws://{addr}/ws"),
+        ws,
         http: format!("http://{addr}"),
         app,
         clock,
+        alice: parking_lot::Mutex::new(alice),
         _stop: stop_tx,
     }
 }
 
-/// Args for a coordinator that keeps reports for `alice` on `server`.
-fn report_args(server: &str, data: &Path) -> Args {
+/// Args for a coordinator that keeps reports (for its owner, `alice`).
+fn report_args(data: &Path) -> Args {
     let mut args = Args::for_tests();
-    args.diagnostics_users = vec![format!("alice@{server}")];
     args.data_dir = Some(data.to_path_buf());
     args
 }
@@ -93,70 +75,16 @@ fn send(m: Msg) -> Message {
     Message::text(WireMessage::new(m).encode().unwrap())
 }
 
-async fn join(url: &str, server: &str, user: &str, device: &str) -> Ws {
-    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-    ws.send(send(Msg::Hello {
-        device: DeviceInfo {
-            id: device.into(),
-            name: format!("Device {device}"),
-            platform: Platform::Linux,
-            app_version: "test".into(),
-            playing: false,
-            ready: false,
-            last_seen: 0.0,
-            is_self: true,
-        },
-        protocol_min: PROTOCOL_MIN,
-        protocol_max: PROTOCOL,
-        scope: scope_key(server, user),
-        credential: Some(Credential {
-            server_url: server.into(),
-            username: user.into(),
-            token: Some("good-token".into()),
-            salt: Some("s".into()),
-            api_key: None,
-            client: "hocket-test".into(),
-            api_version: "1.16.1".into(),
-        }),
-        session_id: None,
-        session_revision: 0,
-        held_epoch: None,
-        extra: [(HELLO_FLAG.to_string(), Value::Bool(true))]
-            .into_iter()
-            .collect(),
-    }))
-    .await
-    .unwrap();
-    let got = until(&mut ws, |m| matches!(m, Msg::Welcome { .. })).await;
-    assert!(matches!(got.last(), Some(Msg::Welcome { .. })), "{got:?}");
-    ws
-}
-
-async fn until(ws: &mut Ws, stop: impl Fn(&Msg) -> bool) -> Vec<Msg> {
-    let mut got = vec![];
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while let Ok(Some(Ok(frame))) = tokio::time::timeout_at(deadline, ws.next()).await {
-        if let Message::Text(t) = frame {
-            if let Ok(m) = WireMessage::decode(&t) {
-                let done = stop(&m.msg);
-                got.push(m.msg);
-                if done {
-                    break;
-                }
-            }
-        }
-    }
-    got
-}
-
-/// Ask for diagnostics as `user`; every coordinator part's `(part, grant)`.
-async fn coordinator_grants(
-    c: &Coord,
-    server: &str,
-    user: &str,
-    device: &str,
-) -> Vec<(u32, Option<ReportGrant>)> {
-    let mut ws = join(&c.ws, server, user, device).await;
+/// Ask for diagnostics as alice's device, or as one of another identity
+/// (`bob`); every coordinator part's `(part, grant)`.
+async fn coordinator_grants(c: &Coord, bob: bool) -> Vec<(u32, Option<ReportGrant>)> {
+    let (mut me, device) = if bob {
+        let owner = c.alice.lock().id.clone();
+        (common::invited(&c.app, &c.ws, &owner, "bob").await, "bob")
+    } else {
+        (c.alice.lock().clone(), "alice")
+    };
+    let mut ws = common::join(&c.app, &c.ws, &mut me).await;
     ws.send(send(Msg::DiagnosticsRequest {
         request_id: "r".into(),
         from: device.into(),
@@ -191,8 +119,8 @@ async fn coordinator_grants(
     out
 }
 
-async fn grant_for_alice(c: &Coord, server: &str) -> String {
-    let parts = coordinator_grants(c, server, "alice", "a").await;
+async fn grant_for_alice(c: &Coord) -> String {
+    let parts = coordinator_grants(c, false).await;
     parts[0].1.clone().expect("alice gets a grant").token
 }
 
@@ -271,13 +199,11 @@ fn report_json(data: &Path, id: &str) -> Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn report_users_get_a_grant_on_part_zero_and_nobody_else_does() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
+    let c = start(report_args(data.path())).await;
     assert!(c.app.reports_enabled());
 
-    let alice = coordinator_grants(&c, &server, "alice", "a").await;
+    let alice = coordinator_grants(&c, false).await;
     let grant = alice
         .iter()
         .find(|(p, _)| *p == 0)
@@ -293,41 +219,37 @@ async fn report_users_get_a_grant_on_part_zero_and_nobody_else_does() {
         "{alice:?}"
     );
 
-    let bob = coordinator_grants(&c, &server, "bob", "b").await;
+    let bob = coordinator_grants(&c, true).await;
     assert!(bob.iter().all(|(_, g)| g.is_none()), "{bob:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn no_grant_without_a_data_dir_or_with_no_reports() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
 
-    let mut args = report_args(&server, data.path());
+    let mut args = report_args(data.path());
     args.no_reports = true;
     let c = start(args).await;
     assert!(!c.app.reports_enabled());
-    let parts = coordinator_grants(&c, &server, "alice", "a").await;
+    let parts = coordinator_grants(&c, false).await;
     assert!(parts.iter().all(|(_, g)| g.is_none()), "{parts:?}");
     let (s, v) = create(&c, "whatever", bundle_only(1)).await;
     assert_eq!((s, v["error"].as_str()), (503, Some("disabled")));
     assert!(!data.path().join("reports").exists());
 
-    let mut args = report_args(&server, data.path());
+    let mut args = report_args(data.path());
     args.data_dir = None;
     let c = start(args).await;
     assert!(!c.app.reports_enabled());
-    let parts = coordinator_grants(&c, &server, "alice", "a").await;
+    let parts = coordinator_grants(&c, false).await;
     assert!(parts.iter().all(|(_, g)| g.is_none()), "{parts:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_report_uploads_in_chunks_resumes_and_completes() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
-    let token = grant_for_alice(&c, &server).await;
+    let c = start(report_args(data.path())).await;
+    let token = grant_for_alice(&c).await;
 
     let bundle: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
     let shot: Vec<u8> = vec![7; 1000];
@@ -435,7 +357,10 @@ async fn a_report_uploads_in_chunks_resumes_and_completes() {
     assert_eq!(meta["createdAt"], T0);
     assert!(meta["completedAt"].as_u64().is_some());
     assert_eq!(meta["username"], "alice");
-    assert_eq!(meta["serverUrl"], server.as_str());
+    assert_eq!(
+        meta["serverUrl"],
+        format!("identity:{}", c.alice.lock().id).as_str()
+    );
     assert_eq!(meta["note"], "Queue jumped back two songs\nafter unlocking");
     assert_eq!(meta["client"], "Hocket Test 1.0");
     assert_eq!(meta["device"], "Pixel 7 Pro");
@@ -455,11 +380,9 @@ async fn a_report_uploads_in_chunks_resumes_and_completes() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bad_tokens_and_keys_are_refused() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
-    let token = grant_for_alice(&c, &server).await;
+    let c = start(report_args(data.path())).await;
+    let token = grant_for_alice(&c).await;
 
     let (s, v) = create(&c, &"0".repeat(64), bundle_only(10)).await;
     assert_eq!((s, v["error"].as_str()), (401, Some("unauthorized")), "{v}");
@@ -500,11 +423,9 @@ async fn bad_tokens_and_keys_are_refused() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn limits_are_enforced() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
-    let token = grant_for_alice(&c, &server).await;
+    let c = start(report_args(data.path())).await;
+    let token = grant_for_alice(&c).await;
     let bundle = json!({ "kind": "bundle", "size": 10 });
     let shot = json!({ "kind": "screenshot", "size": 10, "name": "s.jpg" });
     let rec = json!({ "kind": "recording", "size": 10, "name": "r.mp4" });
@@ -625,11 +546,9 @@ async fn limits_are_enforced() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn twenty_reports_an_hour_per_account() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
-    let token = grant_for_alice(&c, &server).await;
+    let c = start(report_args(data.path())).await;
+    let token = grant_for_alice(&c).await;
     for i in 0..20 {
         let (s, v) = create(&c, &token, bundle_only(10)).await;
         assert_eq!(s, 201, "report {i}: {v}");
@@ -638,7 +557,7 @@ async fn twenty_reports_an_hour_per_account() {
     let (s, v) = create(&c, &token, bundle_only(10)).await;
     assert_eq!((s, v["error"].as_str()), (429, Some("rateLimited")), "{v}");
     // a fresh grant is the same account
-    let other = grant_for_alice(&c, &server).await;
+    let other = grant_for_alice(&c).await;
     let (s, _) = create(&c, &other, bundle_only(10)).await;
     assert_eq!(s, 429);
     c.advance(HOUR);
@@ -648,13 +567,11 @@ async fn twenty_reports_an_hour_per_account() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_quota_deletes_the_oldest_finished_reports() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let mut args = report_args(&server, data.path());
+    let mut args = report_args(data.path());
     args.reports_quota_mb = 1;
     let c = start(args).await;
-    let token = grant_for_alice(&c, &server).await;
+    let token = grant_for_alice(&c).await;
 
     let (a, _) = complete_report(&c, &token, 300_000).await;
     c.advance(1000);
@@ -690,11 +607,9 @@ async fn the_quota_deletes_the_oldest_finished_reports() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_client_deletes_an_unfinished_report_with_its_key_only() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
-    let token = grant_for_alice(&c, &server).await;
+    let c = start(report_args(data.path())).await;
+    let token = grant_for_alice(&c).await;
     let delete = |id: String, key: String| {
         let url = format!("{}/reports/{id}", c.http);
         async move {
@@ -727,11 +642,9 @@ async fn a_client_deletes_an_unfinished_report_with_its_key_only() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retention_deletes_recordings_then_reports_and_unfinished_ones_early() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
-    let token = grant_for_alice(&c, &server).await;
+    let c = start(report_args(data.path())).await;
+    let token = grant_for_alice(&c).await;
 
     let (s, v) = create(
         &c,
@@ -778,11 +691,9 @@ async fn retention_deletes_recordings_then_reports_and_unfinished_ones_early() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_cli_lists_and_shows_reports() {
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
-    let token = grant_for_alice(&c, &server).await;
+    let c = start(report_args(data.path())).await;
+    let token = grant_for_alice(&c).await;
 
     assert_eq!(reports::list(data.path()).unwrap(), "no reports\n");
     let (old, _) = complete_report(&c, &token, 10).await;
@@ -847,11 +758,9 @@ async fn the_core_uploader_saves_a_report_here() {
     use hocket_core::api::{ReportAttachment, ReportAttachmentKind};
     use hocket_core::reports as client_reports;
 
-    let subsonic = fake_subsonic().await;
-    let server = format!("http://{subsonic}");
     let data = tempfile::tempdir().unwrap();
-    let c = start(report_args(&server, data.path())).await;
-    let token = grant_for_alice(&c, &server).await;
+    let c = start(report_args(data.path())).await;
+    let token = grant_for_alice(&c).await;
 
     let files = tempfile::tempdir().unwrap();
     let shot = files.path().join("shot.jpg");

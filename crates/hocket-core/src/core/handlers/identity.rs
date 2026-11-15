@@ -24,12 +24,24 @@ const LAN_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 /// The claim link `hocket-coordinator pair --url` prints as a QR code.
 pub const CLAIM_LINK_PREFIX: &str = "hocket://claim?";
 
-/// This device's identity from the database, or a new one (first start, or
-/// a database from another device).
-pub(crate) fn load_identity(db: &Db, device_id: &str, device_name: &str, now: EpochMs) -> Identity {
+/// This device's identity from the database, or `fresh` / a new one (first
+/// start, or a database from another device).
+pub(crate) fn load_identity(
+    db: &Db,
+    device_id: &str,
+    device_name: &str,
+    now: EpochMs,
+    fresh: Option<Identity>,
+) -> Identity {
     match db.saved_state_get::<Identity>(STORAGE_KEY) {
         Ok(Some(i)) if i.device_id == device_id && i.shared.identity() == i.id => i,
-        _ => Identity::create(device_id, device_name, now),
+        _ => {
+            let i = fresh
+                .filter(|i| i.device_id == device_id)
+                .unwrap_or_else(|| Identity::create(device_id, device_name, now));
+            let _ = db.saved_state_set(STORAGE_KEY, &i, &crate::util::WallClock);
+            i
+        }
     }
 }
 
@@ -148,15 +160,10 @@ impl Actor {
     // -- pairing ------------------------------------------------------------
 
     pub(crate) fn create_pairing_invite(&mut self) {
-        let mut lan = vec![];
-        if let Some(port) = self.listener_port {
-            for ip in local_ips() {
-                lan.push(match ip {
-                    std::net::IpAddr::V4(a) => format!("ws://{a}:{port}"),
-                    std::net::IpAddr::V6(a) => format!("ws://[{a}]:{port}"),
-                });
-            }
-        }
+        let lan = self
+            .listener_port
+            .map(|port| self.io.lan_urls(port))
+            .unwrap_or_default();
         let coordinator = self
             .identity
             .lock()
@@ -554,25 +561,6 @@ async fn exchange(
             _ => continue,
         }
     }
-}
-
-/// This host's addresses another device on the LAN could reach: the source
-/// address of the default route, IPv4 and IPv6 (nothing is sent).
-pub(crate) fn local_ips() -> Vec<std::net::IpAddr> {
-    let mut out = vec![];
-    for (bind, target) in [("0.0.0.0:0", "192.0.2.1:9"), ("[::]:0", "[2001:db8::1]:9")] {
-        if let Ok(s) = std::net::UdpSocket::bind(bind) {
-            if s.connect(target).is_ok() {
-                if let Ok(a) = s.local_addr() {
-                    let ip = a.ip();
-                    if !ip.is_unspecified() && !ip.is_loopback() && !out.contains(&ip) {
-                        out.push(ip);
-                    }
-                }
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

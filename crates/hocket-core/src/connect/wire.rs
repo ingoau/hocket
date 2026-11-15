@@ -177,12 +177,61 @@ pub const ANALYSIS_FETCH_MAX: usize = 64;
 /// carries; the coordinator drops the rest of an upload.
 pub const ANALYSIS_BATCH_MAX: usize = 16;
 
+/// Where an analysis record is valid, independent of accounts and
+/// identities: the provider instance (`navidrome:<server>`, later `ytm`) and
+/// a fingerprint of the audio within it (for Navidrome the track id, file
+/// size and suffix). The coordinator's store is keyed by it, so every
+/// identity using the same server shares records.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisKey {
+    pub provider: String,
+    pub fingerprint: String,
+}
+
+/// The longest provider or fingerprint the coordinator keeps.
+pub const ANALYSIS_KEY_MAX: usize = 512;
+
+impl AnalysisKey {
+    /// A Navidrome track's key: the server (normalised URL) and the file.
+    pub fn navidrome(
+        server_url: &str,
+        track_id: &str,
+        size_bytes: Option<f64>,
+        suffix: Option<&str>,
+    ) -> AnalysisKey {
+        AnalysisKey {
+            provider: format!("navidrome:{}", server_key(server_url)),
+            fingerprint: format!(
+                "{track_id}|{}|{}",
+                size_bytes.map(|s| format!("{s:.0}")).unwrap_or_default(),
+                suffix.unwrap_or_default().to_ascii_lowercase()
+            ),
+        }
+    }
+
+    pub fn valid(&self) -> bool {
+        !self.provider.is_empty()
+            && !self.fingerprint.is_empty()
+            && self.provider.len() <= ANALYSIS_KEY_MAX
+            && self.fingerprint.len() <= ANALYSIS_KEY_MAX
+    }
+}
+
+/// A track the client wants a record for.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisWant {
+    pub track_id: TrackRef,
+    pub key: AnalysisKey,
+}
+
 /// One track's analysis record on the wire.
-#[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisEntry {
     pub track_id: TrackRef,
+    pub key: AnalysisKey,
     pub record: AnalysisRecord,
 }
 
@@ -1156,7 +1205,7 @@ pub enum Msg {
     /// [`Msg::AnalysisRecords`] (the answer is split to keep frames small;
     /// one empty one when nothing was found).
     AnalysisFetch {
-        track_ids: Vec<TrackRef>,
+        wants: Vec<AnalysisWant>,
     },
     /// → client. The usable records the coordinator has among those asked
     /// for; tracks it has nothing for are left out.
@@ -1533,13 +1582,20 @@ mod tests {
             "bpm": null, "beatsMs": [], "downbeatsMs": [], "beatConfidence": 0.0, "createdAt": 5.0
         }))
         .unwrap();
+        let key = AnalysisKey::navidrome("https://nd", "t1", Some(10.0), Some("FLAC"));
+        assert_eq!(key.provider, "navidrome:https://nd");
+        assert_eq!(key.fingerprint, "t1|10|flac");
         let entry = AnalysisEntry {
             track_id: "t1".into(),
+            key: key.clone(),
             record,
         };
         for msg in [
             Msg::AnalysisFetch {
-                track_ids: vec!["t1".into(), "t2".into()],
+                wants: vec![AnalysisWant {
+                    track_id: "t1".into(),
+                    key,
+                }],
             },
             Msg::AnalysisRecords {
                 records: vec![entry.clone()],

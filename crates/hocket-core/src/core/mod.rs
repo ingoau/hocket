@@ -337,6 +337,9 @@ pub(crate) struct Deps {
     pub stream_upstream: Option<Arc<dyn stream_reader::StreamUpstream>>,
     /// The session reducer Connect applies ops with (`None` = this build's).
     pub reducer: Option<crate::connect::ReducerHandle>,
+    /// The identity a device without one starts with (tests: cores on one
+    /// network share one; `None` = a new one).
+    pub identity: Option<crate::identity::Identity>,
 }
 
 impl Deps {
@@ -352,6 +355,7 @@ impl Deps {
             manual_tick: false,
             stream_upstream: None,
             reducer: None,
+            identity: None,
         }
     }
 }

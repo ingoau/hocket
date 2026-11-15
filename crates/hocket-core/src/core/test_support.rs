@@ -161,6 +161,10 @@ impl Core {
             manual_tick: true,
             stream_upstream: Some(upstream),
             reducer: opts.reducer,
+            identity: opts
+                .net
+                .as_ref()
+                .map(|net| net.identity_for(&config.device_id)),
         };
         let handle = tokio::runtime::Handle::current();
         Core::with_runtime(config, handle, None, deps)

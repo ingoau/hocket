@@ -1,21 +1,20 @@
 //! AutoMix analysis records through the coordinator: real engines over real
 //! WebSockets learn from the Welcome that the store exists, upload and
-//! fetch records shared by every verified user of a server (and nobody
-//! else), uploads are validated and only preferred records replace stored
-//! ones; and the opt-in worker walks a fake library, downloads a
+//! fetch records shared by every admitted identity using a server (keyed
+//! by provider-aware fingerprint), uploads are validated and only preferred
+//! records replace stored ones; and the opt-in worker walks a fake library, downloads a
 //! synthesised WAV, analyses it and stores the record.
 
-use std::net::SocketAddr;
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::routing::get;
-use axum::Router;
 use futures::{SinkExt, StreamExt};
 
 use hocket_coordinator::analysis::AnalysisStore;
-use hocket_coordinator::worker::Worker;
-use hocket_coordinator::{serve, App, Args};
+use hocket_coordinator::worker::{provider_of, Worker};
+use hocket_coordinator::{App, Args};
 use hocket_core::api::{
     AnalysisProducer, AnalysisRecord, DeviceInfo, LoudnessCurve, Platform, SourceFingerprint,
 };
@@ -23,56 +22,33 @@ use hocket_core::automix::ANALYSIS_VERSION;
 use hocket_core::connect::engine::{Engine, EngineConfig, Input, Output};
 use hocket_core::connect::session_adapter::RealReducer;
 use hocket_core::connect::transport::{connect_first, Connection, PeerIds, WsTransport};
-use hocket_core::connect::wire::{
-    scope_key, server_key, AnalysisEntry, Credential, Msg, WireMessage, PROTOCOL, PROTOCOL_MIN,
-};
+use hocket_core::connect::wire::{AnalysisEntry, AnalysisKey, AnalysisWant, Msg, WireMessage};
+use hocket_core::identity::{CoordinatorPin, Identity};
 use hocket_core::subsonic::fake::FakeServer;
 use hocket_core::util::WallClock;
 
-/// A Subsonic that accepts the token `good-token` for any user.
-async fn fake_subsonic() -> SocketAddr {
-    async fn ping(
-        q: axum::extract::Query<std::collections::HashMap<String, String>>,
-    ) -> axum::Json<serde_json::Value> {
-        let ok = q.get("t").map(|t| t == "good-token").unwrap_or(false);
-        let status = if ok { "ok" } else { "failed" };
-        axum::Json(
-            serde_json::json!({ "subsonic-response": { "status": status, "version": "1.16.1" } }),
-        )
-    }
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/rest/ping.view", get(ping)))
-            .await
-            .unwrap();
-    });
-    addr
+use common::start;
+
+/// A device of a new identity admitted to `app` (the owner's, or invited by
+/// it), with the coordinator pinned.
+async fn admitted(app: &App, url: &str, device_id: &str) -> Identity {
+    let mut me = match app.identities().owner() {
+        None => common::owner(app, url, device_id).await,
+        Some(owner) => common::invited(app, url, &owner, device_id).await,
+    };
+    me.set_coordinator(
+        Some(CoordinatorPin {
+            url: url.into(),
+            keys: app.identities().keys(),
+            owner: false,
+        }),
+        1.0,
+    );
+    me
 }
 
-fn credential(server: SocketAddr, user: &str, token: &str) -> Credential {
-    Credential {
-        server_url: format!("http://{server}"),
-        username: user.into(),
-        token: Some(token.into()),
-        salt: Some("s".into()),
-        api_key: None,
-        client: "hocket-test".into(),
-        api_version: "1.16.1".into(),
-    }
-}
-
-async fn start(args: Args) -> (Arc<App>, String, tokio::sync::oneshot::Sender<()>) {
-    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
-    std::env::set_var("no_proxy", "127.0.0.1,localhost");
-    let app = App::new(args).unwrap();
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let (addr, _server) = serve(app.clone(), "127.0.0.1:0".parse().unwrap(), async {
-        let _ = stop_rx.await;
-    })
-    .await
-    .unwrap();
-    (app, format!("ws://{addr}/ws"), stop_tx)
+fn fingerprint(id: &str) -> String {
+    AnalysisKey::navidrome("x", id, None, None).fingerprint
 }
 
 fn device(id: &str) -> DeviceInfo {
@@ -95,15 +71,17 @@ struct Host {
     transport: WsTransport,
     ids: Arc<PeerIds>,
     outputs: Vec<Output>,
-    /// The scope's account: the source its track references name.
+    /// The account its track references name, and its server.
     account: String,
+    server: String,
 }
 
 impl Host {
-    fn new(id: &str, server: SocketAddr, user: &str, ws_url: &str) -> Host {
-        let scope = scope_key(&format!("http://{server}"), user);
-        let mut cfg = EngineConfig::new(device(id), &scope);
-        cfg.credential = Some(credential(server, user, "good-token"));
+    fn new(identity: Identity, server: &str, ws_url: &str) -> Host {
+        let scope = identity.id.clone();
+        let id = identity.device_id.clone();
+        let mut cfg = EngineConfig::new(device(&id), &scope);
+        cfg.identity = Some(Arc::new(parking_lot::Mutex::new(identity)));
         cfg.coordinator_url = Some(ws_url.to_string());
         cfg.lan_enabled = false;
         let doc = hocket_core::session::new_document(&scope, format!("session-{id}"), 0.0);
@@ -114,7 +92,8 @@ impl Host {
             transport: WsTransport,
             ids: Arc::new(PeerIds::default()),
             outputs: vec![],
-            account: hocket_core::connect::wire::account_id_for_scope(&scope),
+            account: format!("{id}-account"),
+            server: server.to_string(),
         }
     }
 
@@ -187,13 +166,14 @@ impl Host {
     /// Fetch and return what came back (records from every answer).
     async fn fetch(&mut self, ids: &[&str]) -> Vec<AnalysisEntry> {
         self.outputs.clear();
-        self.handle(Input::FetchAnalysis {
-            track_ids: ids
-                .iter()
-                .map(|s| hocket_core::api::TrackRef::new(self.account.clone(), *s))
-                .collect(),
-        })
-        .await;
+        let wants = ids
+            .iter()
+            .map(|s| AnalysisWant {
+                track_id: hocket_core::api::TrackRef::new(self.account.clone(), *s),
+                key: AnalysisKey::navidrome(&self.server, s, None, None),
+            })
+            .collect();
+        self.handle(Input::FetchAnalysis { wants }).await;
         self.run(500).await;
         self.outputs
             .iter()
@@ -207,11 +187,13 @@ impl Host {
 
     async fn upload(&mut self, records: Vec<(&str, AnalysisRecord)>) {
         let account = self.account.clone();
+        let server = self.server.clone();
         self.handle(Input::UploadAnalysis {
             records: records
                 .into_iter()
                 .map(|(id, record)| AnalysisEntry {
                     track_id: hocket_core::api::TrackRef::new(account.clone(), id),
+                    key: AnalysisKey::navidrome(&server, id, None, None),
                     record,
                 })
                 .collect(),
@@ -266,16 +248,16 @@ fn record(producer: AnalysisProducer, beats: bool) -> AnalysisRecord {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn records_are_shared_by_the_users_of_a_server_and_nobody_else() {
-    let s1 = fake_subsonic().await;
-    let s2 = fake_subsonic().await;
+    let (s1, s2) = ("http://s1.example", "http://s2.example");
     let dir = tempfile::tempdir().unwrap();
     let mut args = Args::for_tests();
     args.data_dir = Some(dir.path().to_path_buf());
     let (app, url, _stop) = start(args).await;
 
-    let mut alice = Host::new("alice-desk", s1, "alice", &url);
-    let mut bob = Host::new("bob-phone", s1, "bob", &url);
-    let mut carol = Host::new("carol-desk", s2, "carol", &url);
+    // Three identities (alice owns the coordinator and invited the others).
+    let mut alice = Host::new(admitted(&app, &url, "alice-desk").await, s1, &url);
+    let mut bob = Host::new(admitted(&app, &url, "bob-phone").await, s1, &url);
+    let mut carol = Host::new(admitted(&app, &url, "carol-desk").await, s2, &url);
     for h in [&mut alice, &mut bob, &mut carol] {
         h.run(1_000).await;
         assert!(h.engine.is_connected());
@@ -295,10 +277,13 @@ async fn records_are_shared_by_the_users_of_a_server_and_nobody_else() {
             ("t2", future),
         ])
         .await;
-    let server1 = server_key(&format!("http://{s1}"));
+    let server1 = provider_of(s1);
     let store = app.analysis_store().unwrap();
-    assert!(store.get(&server1, "t1").unwrap().is_some());
-    assert!(store.get(&server1, "t2").unwrap().is_none(), "refused");
+    assert!(store.get(&server1, &fingerprint("t1")).unwrap().is_some());
+    assert!(
+        store.get(&server1, &fingerprint("t2")).unwrap().is_none(),
+        "refused"
+    );
 
     // bob, another user of the same server, gets it; misses are left out
     let got = bob.fetch(&["t1", "t2", "t3"]).await;
@@ -319,26 +304,33 @@ async fn records_are_shared_by_the_users_of_a_server_and_nobody_else() {
     carol
         .upload(vec![("t1", record(AnalysisProducer::Device, false))])
         .await;
-    let server2 = server_key(&format!("http://{s2}"));
+    let server2 = provider_of(s2);
     assert_eq!(
-        store.get(&server2, "t1").unwrap().unwrap().produced_by,
+        store
+            .get(&server2, &fingerprint("t1"))
+            .unwrap()
+            .unwrap()
+            .produced_by,
         AnalysisProducer::Device
     );
     assert_eq!(
-        store.get(&server1, "t1").unwrap().unwrap().produced_by,
+        store
+            .get(&server1, &fingerprint("t1"))
+            .unwrap()
+            .unwrap()
+            .produced_by,
         AnalysisProducer::Desktop
     );
-    assert!(dir.path().join("automix.sqlite").exists());
+    assert!(dir.path().join("analysis.sqlite").exists());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn without_the_store_the_welcome_says_so_and_nothing_is_answered() {
-    let s1 = fake_subsonic().await;
     let mut args = Args::for_tests();
     args.no_analysis_store = true;
     let (app, url, _stop) = start(args).await;
     assert!(app.analysis_store().is_none());
-    let mut h = Host::new("a", s1, "alice", &url);
+    let mut h = Host::new(admitted(&app, &url, "a").await, "http://s1.example", &url);
     h.run(1_000).await;
     assert!(h.engine.is_connected());
     assert_eq!(h.store_available(), None, "never said true");
@@ -347,57 +339,62 @@ async fn without_the_store_the_welcome_says_so_and_nothing_is_answered() {
 
 /// A socket that was not admitted gets nothing from the store, whatever it sends.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_unverified_socket_cannot_read_or_write_records() {
-    let s1 = fake_subsonic().await;
+async fn an_unadmitted_socket_cannot_read_or_write_records() {
     let (app, url, _stop) = start(Args::for_tests()).await;
-    let base = format!("http://{s1}");
+    let base = "http://s1.example";
     app.analysis_store()
         .unwrap()
         .put(
-            &server_key(&base),
-            "t1",
+            &provider_of(base),
+            &fingerprint("t1"),
             record(AnalysisProducer::Worker, true),
             1,
         )
         .unwrap();
-    let hello = WireMessage::new(Msg::Hello {
-        device: device("intruder"),
-        protocol_min: PROTOCOL_MIN,
-        protocol_max: PROTOCOL,
-        scope: scope_key(&base, "alice"),
-        credential: Some(credential(s1, "alice", "wrong")),
-        session_id: None,
-        session_revision: 0,
-        held_epoch: None,
-        extra: Default::default(),
-    });
-    let fetch = WireMessage::new(Msg::AnalysisFetch {
-        track_ids: vec!["t1".into()],
-    });
-    let upload = WireMessage::new(Msg::AnalysisUpload {
-        records: vec![AnalysisEntry {
-            track_id: "t9".into(),
-            record: record(AnalysisProducer::Worker, true),
-        }],
-    });
-    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
-    use tokio_tungstenite::tungstenite::Message;
-    for m in [&hello, &fetch, &upload] {
-        let _ = ws.send(Message::text(m.encode().unwrap())).await;
+    // an identity it never admitted, and one that is admitted but whose
+    // device proves nothing
+    let stranger = Identity::create("intruder", "Intruder", 1.0);
+    let admitted = admitted(&app, &url, "a").await;
+    for id in [&stranger.id, &admitted.id] {
+        let challenge = WireMessage::new(Msg::Challenge {
+            nonce: hocket_core::connect::auth::new_nonce(),
+            identity: Some(id.clone()),
+            heads: vec![],
+        });
+        let fetch = WireMessage::new(Msg::AnalysisFetch {
+            wants: vec![AnalysisWant {
+                track_id: "t1".into(),
+                key: AnalysisKey::navidrome(base, "t1", None, None),
+            }],
+        });
+        let upload = WireMessage::new(Msg::AnalysisUpload {
+            records: vec![AnalysisEntry {
+                track_id: "t9".into(),
+                key: AnalysisKey::navidrome(base, "t9", None, None),
+                record: record(AnalysisProducer::Worker, true),
+            }],
+        });
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        use tokio_tungstenite::tungstenite::Message;
+        for m in [&challenge, &fetch, &upload] {
+            let _ = ws.send(Message::text(m.encode().unwrap())).await;
+        }
+        let mut got = vec![];
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while let Ok(Some(Ok(Message::Text(t)))) =
+            tokio::time::timeout_at(deadline, ws.next()).await
+        {
+            got.push(WireMessage::decode(&t).unwrap().msg);
+        }
+        assert!(
+            !got.iter().any(|m| matches!(m, Msg::AnalysisRecords { .. })),
+            "{got:?}"
+        );
     }
-    let mut got = vec![];
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    while let Ok(Some(Ok(Message::Text(t)))) = tokio::time::timeout_at(deadline, ws.next()).await {
-        got.push(WireMessage::decode(&t).unwrap().msg);
-    }
-    assert!(
-        !got.iter().any(|m| matches!(m, Msg::AnalysisRecords { .. })),
-        "{got:?}"
-    );
     assert!(app
         .analysis_store()
         .unwrap()
-        .get(&server_key(&base), "t9")
+        .get(&provider_of(base), &fingerprint("t9"))
         .unwrap()
         .is_none());
 }
@@ -465,8 +462,8 @@ async fn the_worker_walks_the_library_and_stores_what_it_analysed() {
     let server = "https://music.example/";
     store
         .put(
-            &server_key(server),
-            "covered",
+            &provider_of(server),
+            &AnalysisKey::navidrome(server, "covered", Some(1000.0), Some("flac")).fingerprint,
             record(AnalysisProducer::Desktop, true),
             1,
         )
@@ -488,7 +485,10 @@ async fn the_worker_walks_the_library_and_stores_what_it_analysed() {
     assert_eq!(stats.analysed, 1);
     assert_eq!(stats.failed, 1);
 
-    let r = store.get(&server_key(server), "good").unwrap().unwrap();
+    let r = store
+        .get_track(&provider_of(server), "good")
+        .unwrap()
+        .unwrap();
     assert_eq!(r.produced_by, AnalysisProducer::Worker);
     assert_eq!(r.source.suffix.as_deref(), Some("wav"));
     assert_eq!(r.source.size_bytes, Some(click_wav(6.0).len() as f64));
@@ -546,11 +546,13 @@ async fn failed_downloads_are_retried_and_end_the_pass_when_they_pile_up() {
 
     // the server goes away: the pass ends after a few in a row, and nothing
     // is remembered
-    let key = server_key(server);
+    let key = provider_of(server);
     for id in ["a", "b", "c", "d"] {
-        let mut r = store.get(&key, id).unwrap().unwrap();
+        let mut r = store.get_track(&key, id).unwrap().unwrap();
         r.source.size_bytes = Some(1.0); // another file: wanted again
-        store.put(&key, id, r, 2).unwrap();
+        let size = Some(click_wav(3.0).len() as f64);
+        let fp = AnalysisKey::navidrome(server, id, size, Some("wav")).fingerprint;
+        store.put(&key, &fp, r, 2).unwrap();
     }
     let downloads = fake.calls_to("download");
     fake.fail_next(SubsonicError::Network("down".into()), 3);
@@ -589,30 +591,34 @@ async fn the_worker_leaves_long_and_large_files_alone() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fetch_misses_on_the_workers_server_are_queued_for_it() {
-    let s1 = fake_subsonic().await;
-    let s2 = fake_subsonic().await;
+    let (s1, s2) = ("http://s1.example", "http://s2.example");
     let mut args = Args::for_tests();
-    args.worker.analysis_server = Some(format!("http://{s1}"));
+    args.worker.analysis_server = Some(s1.into());
     let (app, url, _stop) = start(args).await;
     let queue = app.worker_priority().expect("worker on");
     *app.worker_status_slot().lock() = Some(Default::default());
 
-    let server1 = server_key(&format!("http://{s1}"));
+    let server1 = provider_of(s1);
     let store = app.analysis_store().unwrap();
     store
         .put(
             &server1,
-            "beats",
+            &fingerprint("beats"),
             record(AnalysisProducer::Desktop, true),
             1,
         )
         .unwrap();
     store
-        .put(&server1, "loud", record(AnalysisProducer::Device, false), 1)
+        .put(
+            &server1,
+            &fingerprint("loud"),
+            record(AnalysisProducer::Device, false),
+            1,
+        )
         .unwrap();
 
-    let mut bob = Host::new("bob-phone", s1, "bob", &url);
-    let mut carol = Host::new("carol-phone", s2, "carol", &url);
+    let mut bob = Host::new(admitted(&app, &url, "bob-phone").await, s1, &url);
+    let mut carol = Host::new(admitted(&app, &url, "carol-phone").await, s2, &url);
     for h in [&mut bob, &mut carol] {
         h.run(1_000).await;
         assert!(h.engine.is_connected());
@@ -646,7 +652,7 @@ async fn the_worker_analyses_what_clients_asked_for_first() {
     let store = Arc::new(AnalysisStore::in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let server = "https://music.example/";
-    let key = server_key(server);
+    let key = provider_of(server);
     let mut worker = Worker::new(
         fake.clone(),
         store.clone(),
@@ -661,8 +667,8 @@ async fn the_worker_analyses_what_clients_asked_for_first() {
     // looked up with getSong, not walked; an unknown id is dropped
     assert_eq!(queue.push(&key, ["c", "nope"]), 2);
     assert_eq!(worker.drain_priority(&cancel).await, 1);
-    assert!(store.get(&key, "c").unwrap().is_some());
-    assert!(store.get(&key, "a").unwrap().is_none());
+    assert!(store.get_track(&key, "c").unwrap().is_some());
+    assert!(store.get_track(&key, "a").unwrap().is_none());
     assert_eq!(fake.calls_to("search3"), 0);
     assert_eq!(fake.calls_to("download"), 1);
 
@@ -684,7 +690,7 @@ async fn the_worker_analyses_what_clients_asked_for_first() {
         "b went first, from the queue"
     );
     assert_eq!(fake.calls_to("download"), 3);
-    assert!(store.get(&key, "a").unwrap().is_some());
+    assert!(store.get_track(&key, "a").unwrap().is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -694,7 +700,7 @@ async fn a_queued_track_wakes_the_idle_worker() {
     let store = Arc::new(AnalysisStore::in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let server = "https://music.example/";
-    let key = server_key(server);
+    let key = provider_of(server);
     let status = Arc::new(parking_lot::Mutex::new(None));
     let worker = Worker::new(
         fake.clone(),
@@ -723,7 +729,9 @@ async fn a_queued_track_wakes_the_idle_worker() {
     // a song added after the walk, asked for by a client
     wav_song(&fake, "new");
     assert_eq!(queue.push(&key, ["new"]), 1);
-    until("analysed", &|| store.get(&key, "new").unwrap().is_some());
+    until("analysed", &|| {
+        store.get_track(&key, "new").unwrap().is_some()
+    });
     assert!(queue.is_empty());
     until("waiting again", &|| {
         status.lock().as_ref().unwrap().state == "waiting"

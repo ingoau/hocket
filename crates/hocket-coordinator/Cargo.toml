@@ -3,7 +3,7 @@ name = "hocket-coordinator"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Headless Hocket coordinator: relay and replica for Connect sessions. No UI, no audio, no credentials."
+description = "Headless Hocket coordinator: relay and replica for Connect sessions. No UI, no audio."
 
 [[bin]]
 name = "hocket-coordinator"
@@ -29,6 +29,8 @@ rand.workspace = true
 sha2.workspace = true
 hex.workspace = true
 rusqlite.workspace = true
+thiserror.workspace = true
+qrcode.workspace = true
 libc = "0.2"
 
 [dev-dependencies]

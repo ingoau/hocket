@@ -41,6 +41,36 @@ pub trait ConnectIo: Send + Sync {
     ) -> BoxFuture<'static, Result<Box<dyn Listener>, TransportError>>;
     /// A fresh discovery instance (started by the actor).
     fn discovery(&self) -> Box<dyn Discovery>;
+    /// Where a device on the LAN reaches our listener on `port` (a pairing
+    /// invite's rendezvous).
+    fn lan_urls(&self, port: u16) -> Vec<String> {
+        local_ips()
+            .into_iter()
+            .map(|ip| match ip {
+                std::net::IpAddr::V4(a) => format!("ws://{a}:{port}"),
+                std::net::IpAddr::V6(a) => format!("ws://[{a}]:{port}"),
+            })
+            .collect()
+    }
+}
+
+/// This host's addresses another device on the LAN could reach: the source
+/// address of the default route, IPv4 and IPv6 (nothing is sent).
+pub fn local_ips() -> Vec<std::net::IpAddr> {
+    let mut out = vec![];
+    for (bind, target) in [("0.0.0.0:0", "192.0.2.1:9"), ("[::]:0", "[2001:db8::1]:9")] {
+        if let Ok(s) = std::net::UdpSocket::bind(bind) {
+            if s.connect(target).is_ok() {
+                if let Ok(a) = s.local_addr() {
+                    let ip = a.ip();
+                    if !ip.is_unspecified() && !ip.is_loopback() && !out.contains(&ip) {
+                        out.push(ip);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Production I/O.
@@ -144,6 +174,8 @@ pub mod memory {
     #[derive(Default)]
     pub struct MemoryNet {
         hub: Mutex<Hub>,
+        identity: Mutex<Option<crate::identity::Identity>>,
+        isolated: Mutex<std::collections::HashSet<String>>,
     }
 
     impl MemoryNet {
@@ -186,6 +218,43 @@ pub mod memory {
                     let _ = cut.send(true);
                 }
             }
+        }
+
+        /// `device`'s copy of the identity every core on this network
+        /// shares (paired in as it first asks; earlier devices learn of it
+        /// in their handshakes, as real ones do).
+        pub fn identity_for(&self, device: &str) -> crate::identity::Identity {
+            if self.isolated.lock().contains(device) {
+                let (_, secret) = crate::identity::testing::device(device);
+                return crate::identity::Identity::create_with(
+                    &crate::identity::new_identity_id(),
+                    device,
+                    device,
+                    secret,
+                    0.0,
+                );
+            }
+            let mut root = self.identity.lock();
+            let root = root.get_or_insert_with(|| {
+                crate::identity::Identity::create_with(
+                    "0000000000000000000000000000beef",
+                    "net-root",
+                    "net-root",
+                    crate::identity::crypto::DeviceSecret::from_seed(b"net-root"),
+                    0.0,
+                )
+            });
+            if root.member_state().is_member(device) {
+                let (_, secret) = crate::identity::testing::device(device);
+                return crate::identity::Identity::joined(device, secret, root.sync())
+                    .expect("a member");
+            }
+            crate::identity::testing::pair(root, device, 0.0)
+        }
+
+        /// `device` starts with an identity of its own, not the network's.
+        pub fn isolate(&self, device: &str) {
+            self.isolated.lock().insert(device.to_string());
         }
 
         /// I/O for one device on this network.
@@ -474,6 +543,10 @@ pub mod memory {
                 };
                 Ok(Box::new(MemoryListener { net, port, rx }) as Box<dyn Listener>)
             })
+        }
+
+        fn lan_urls(&self, port: u16) -> Vec<String> {
+            vec![MemoryNet::url_for(port)]
         }
 
         fn discovery(&self) -> Box<dyn Discovery> {

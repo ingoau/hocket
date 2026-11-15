@@ -490,36 +490,18 @@ async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
     assert_eq!(last_load, 0);
 }
 
-/// Mutual LAN auth: the engine's LAN key is derived from the account
-/// password (`connect/mod.rs` rule 7), so a device on the same network with
-/// a different password for the same account never joins the room.
+/// Rooms admit members of the identity only (`connect/mod.rs` rule 7): a
+/// device of another identity on the same network never joins. Pairing by
+/// invite (no password anywhere in it) makes it one of them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_lan_peer_with_a_different_password_never_pairs() {
+async fn a_device_of_another_identity_joins_only_once_paired() {
     let server = seeded_server(6, 200.0);
     let net = MemoryNet::new();
     let clock = SimTime::new(1_700_000_000_000.0);
-    let start = |name: &'static str, seed: u64, password: &'static str| {
-        let server = server.clone();
-        let net = net.clone();
-        let clock = clock.clone();
-        async move {
-            let dir = tempfile::tempdir().unwrap();
-            TestCore::start_in_with(
-                name,
-                server,
-                Some(net),
-                seed,
-                clock,
-                dir,
-                true,
-                "https://music.example/",
-                password,
-            )
-            .await
-        }
-    };
-    let a = start("a", 1, "secret").await;
-    let b = start("b", 2, "wrong").await;
+    // b has an identity of its own.
+    net.isolate("dev-b");
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
     TestCore::run_all_for(&[&a, &b], 8_000.0).await;
     for c in [&a, &b] {
         let snap = c.snapshot().await;
@@ -537,11 +519,96 @@ async fn a_lan_peer_with_a_different_password_never_pairs() {
             snap.connection
         );
     }
-    // The same password on both sides is what `pair()` relies on.
-    let c = start("c", 3, "secret").await;
-    TestCore::run_all_for(&[&a, &b, &c], 8_000.0).await;
-    assert_eq!(a.snapshot().await.devices.len(), 2, "a and c pair");
-    assert_eq!(b.snapshot().await.devices.len(), 1, "b still alone");
+    // a shows an invite; b opens it.
+    a.run(Command::CreatePairingInvite).await;
+    let link = a
+        .events
+        .all()
+        .iter()
+        .find_map(|e| match e {
+            Event::PairingInvite { link, .. } => Some(link.clone()),
+            _ => None,
+        })
+        .expect("an invite");
+    assert!(link.starts_with("hocket://pair?d="));
+    assert!(!link.contains("secret"), "no password in the link");
+    b.run(Command::PairWithInvite { link }).await;
+    b.wait_until(10_000.0, |b| {
+        b.events.all().iter().any(|e| {
+            matches!(
+                e,
+                Event::PairingFinished { .. } | Event::PairingFailed { .. }
+            )
+        })
+    })
+    .await;
+    assert!(
+        b.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::PairingFinished { .. })),
+        "{:?}",
+        b.events
+            .all()
+            .iter()
+            .filter(|e| matches!(e, Event::PairingFailed { .. }))
+            .collect::<Vec<_>>()
+    );
+    assert!(a
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, Event::DevicePaired { device_id, .. } if device_id == &b.device_id)));
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    let (ia, ib) = (a.snapshot().await.identity, b.snapshot().await.identity);
+    assert_eq!(ia.id, ib.id, "one identity");
+    assert!(ia.devices.iter().any(|d| d.id == b.device_id));
+    let logs = |c: &TestCore| {
+        c.events
+            .all()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Log { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        a.snapshot().await.devices.len(),
+        2,
+        "a and b share a room: {:?}\n{:?}\n{:?}\n{:?}",
+        a.snapshot().await.connection,
+        b.snapshot().await.connection,
+        logs(&a),
+        logs(&b)
+    );
+    assert_eq!(b.snapshot().await.devices.len(), 2);
+}
+
+/// Removing a device: the others carry on, and the removed one is turned away.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removed_device_leaves_the_room() {
+    let (a, b) = pair().await;
+    a.run(Command::RemoveDevice {
+        device_id: b.device_id.clone(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    let ia = a.snapshot().await.identity;
+    assert!(!ia.devices.iter().any(|d| d.id == b.device_id));
+    assert!(b.snapshot().await.identity.removed);
+    assert!(!b.snapshot().await.connection.connected);
+    for _ in 0..30 {
+        if a.snapshot().await.devices.len() == 1 {
+            break;
+        }
+        TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    }
+    assert_eq!(
+        a.snapshot().await.devices.len(),
+        1,
+        "b is gone from a's room"
+    );
 }
 
 async fn play_on(owner: &TestCore, other: &TestCore) {

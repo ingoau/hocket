@@ -253,7 +253,7 @@ async fn downloads_and_the_outbox_go_to_each_tracks_account() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reordering_moves_the_session_to_the_new_first_account() {
+async fn reordering_keeps_the_identitys_session() {
     let (t, _b) = two_accounts("multi-order").await;
     t.run(Command::ReorderAccounts {
         account_ids: vec![B.into(), A.into()],
@@ -263,9 +263,10 @@ async fn reordering_moves_the_session_to_the_new_first_account() {
     let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
     assert_eq!(ids, vec![B, A]);
     assert_eq!(accounts[0].priority, 0);
-    // The session is B's now: its scope names B's server.
-    let doc = t.snapshot().await.session.expect("a session");
-    assert!(doc.scope.contains("srv-b"), "{}", doc.scope);
+    // The session belongs to the identity, not to an account.
+    let snap = t.snapshot().await;
+    let doc = snap.session.expect("a session");
+    assert_eq!(doc.scope, snap.identity.id);
 
     t.run(Command::RemoveAccount {
         account_id: B.into(),

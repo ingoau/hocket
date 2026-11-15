@@ -182,6 +182,9 @@ pub(crate) struct Actor {
     pub listener_port: Option<u16>,
     pub listener_stop: Option<tokio::sync::oneshot::Sender<()>>,
     pub discovery: Option<Box<dyn Discovery>>,
+    /// The LAN adverts seen and not lost, for a session opened later (a
+    /// pairing moved this device to another identity).
+    pub lan_adverts: HashMap<DeviceId, crate::connect::discovery::PeerAdvert>,
     pub lyrics_http: Option<Arc<dyn crate::lyrics::LyricsHttp>>,
 
     pub accounts: AccountRegistry,
@@ -304,6 +307,7 @@ impl Actor {
             &cfg.device_id,
             &cfg.device_name,
             clock.now_ms(),
+            deps.identity.clone(),
         )));
         let settings_store = DbSettingsStore {
             db: db.clone(),
@@ -503,6 +507,7 @@ impl Actor {
             listener_port: None,
             listener_stop: None,
             discovery: None,
+            lan_adverts: HashMap::new(),
             lyrics_http: deps.lyrics_http,
             accounts: AccountRegistry::default(),
             pending_accounts: HashMap::new(),
@@ -677,10 +682,12 @@ impl Actor {
             Internal::Discovery(ev) => match ev {
                 crate::connect::discovery::DiscoveryEvent::Found(a) => {
                     if a.device_id != self.cfg.device_id {
+                        self.lan_adverts.insert(a.device_id.clone(), a.clone());
                         self.engine_input(Input::PeerDiscovered(a));
                     }
                 }
                 crate::connect::discovery::DiscoveryEvent::Lost { device_id } => {
+                    self.lan_adverts.remove(&device_id);
                     self.engine_input(Input::PeerLost { device_id });
                 }
             },

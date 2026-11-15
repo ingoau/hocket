@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use hocket_core::api::*;
 use hocket_core::automix::store::fingerprint_of;
 use hocket_core::automix::ANALYSIS_VERSION;
-use hocket_core::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
+use hocket_core::connect::room::{Room, RoomAuth, RoomConfig, RoomInput, RoomOutput};
 use hocket_core::connect::session_adapter::RealReducer;
 use hocket_core::connect::transport::PeerIds;
 use hocket_core::connect::wire::{AnalysisEntry, Msg, WireMessage};
@@ -36,7 +36,8 @@ type Shared = Arc<Mutex<Fake>>;
 
 /// A coordinator with an analysis store on the in-memory network; its URL.
 async fn fake_coordinator(net: &Arc<MemoryNet>, clock: Arc<SimTime>, fake: Shared) -> String {
-    let io = net.io("coordinator", true);
+    let io = net.io("coordinator");
+    let secret = hocket_core::identity::crypto::DeviceSecret::from_seed(b"fake-coordinator");
     let mut listener = io.listen(Arc::new(PeerIds::default())).await.unwrap();
     let url = MemoryNet::coordinator_url_for(listener.port());
     let room: Arc<Mutex<Option<Room>>> = Arc::default();
@@ -44,8 +45,13 @@ async fn fake_coordinator(net: &Arc<MemoryNet>, clock: Arc<SimTime>, fake: Share
         Arc::default();
     tokio::spawn(async move {
         while let Some(mut conn) = listener.accept().await {
-            let (room, senders, fake, clock) =
-                (room.clone(), senders.clone(), fake.clone(), clock.clone());
+            let (room, senders, fake, clock, secret) = (
+                room.clone(),
+                senders.clone(),
+                fake.clone(),
+                clock.clone(),
+                secret.clone(),
+            );
             senders.lock().insert(conn.peer.clone(), conn.tx.clone());
             tokio::spawn(async move {
                 let peer = conn.peer.clone();
@@ -61,16 +67,17 @@ async fn fake_coordinator(net: &Arc<MemoryNet>, clock: Arc<SimTime>, fake: Share
                 };
                 while let Some(msg) = conn.rx.recv().await {
                     match msg.msg {
-                        Msg::AnalysisFetch { track_ids } => {
+                        Msg::AnalysisFetch { wants } => {
                             let records = {
                                 let mut f = fake.lock();
                                 f.fetches
-                                    .push(track_ids.iter().map(|t| t.id.clone()).collect());
-                                track_ids
+                                    .push(wants.iter().map(|w| w.track_id.id.clone()).collect());
+                                wants
                                     .iter()
-                                    .filter_map(|id| {
-                                        f.records.get(&id.id).map(|r| AnalysisEntry {
-                                            track_id: id.clone(),
+                                    .filter_map(|w| {
+                                        f.records.get(&w.track_id.id).map(|r| AnalysisEntry {
+                                            track_id: w.track_id.clone(),
+                                            key: w.key.clone(),
                                             record: r.clone(),
                                         })
                                     })
@@ -81,24 +88,28 @@ async fn fake_coordinator(net: &Arc<MemoryNet>, clock: Arc<SimTime>, fake: Share
                                 .send(WireMessage::new(Msg::AnalysisRecords { records }));
                         }
                         Msg::AnalysisUpload { records } => fake.lock().uploads.extend(records),
+                        // The device claims it: its identity gets a room.
+                        Msg::CoordClaim { sync, .. } => {
+                            let mut cfg = RoomConfig::new(sync.identity().to_string());
+                            cfg.analysis_store = true;
+                            cfg.auth = RoomAuth::Identity {
+                                device_id: hocket_core::identity::COORDINATOR_ID.into(),
+                                secret: secret.clone(),
+                            };
+                            let mut r = Room::new(cfg, clock.clone(), RealReducer::shared(), None);
+                            let _ = r.set_identity(*sync);
+                            *room.lock() = Some(r);
+                            let _ = conn.tx.send(WireMessage::new(Msg::CoordAdmitted {
+                                keys: secret.public(),
+                                owner: true,
+                            }));
+                        }
                         other => {
                             let outs = {
                                 let mut room = room.lock();
-                                if room.is_none() {
-                                    if let Msg::Hello { scope, .. } = &other {
-                                        let mut cfg = RoomConfig::new(scope.clone());
-                                        cfg.analysis_store = true;
-                                        *room = Some(Room::new(
-                                            cfg,
-                                            clock.clone(),
-                                            RealReducer::shared(),
-                                            None,
-                                        ));
-                                    }
-                                }
                                 let Some(r) = room.as_mut() else { continue };
                                 let mut outs = vec![];
-                                if matches!(other, Msg::Hello { .. }) {
+                                if matches!(other, Msg::Challenge { .. }) {
                                     outs.extend(r.handle(RoomInput::Connected(peer.clone())));
                                 }
                                 outs.extend(r.handle(RoomInput::Message(
@@ -191,7 +202,18 @@ async fn the_window_is_fetched_once_and_own_records_are_uploaded() {
     })
     .await;
     let url = fake_coordinator(&net, clock.clone(), fake.clone()).await;
-    t.run(Command::SetCoordinatorUrl { url: Some(url) }).await;
+    t.run(Command::ClaimCoordinator {
+        url: url.clone(),
+        code: "ANY".into(),
+    })
+    .await;
+    t.wait_until(5_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::CoordinatorJoined { .. }))
+    })
+    .await;
     t.run(Command::PlayTracks {
         server_id: t.server_id.clone(),
         track_ids: (0..8).map(|i| format!("t{i}")).collect(),

@@ -40,7 +40,17 @@ use hocket_core::api::{AnalysisProducer, SourceFingerprint, Track};
 use hocket_core::automix::analysis::Analyser;
 use hocket_core::automix::record::compact;
 use hocket_core::automix::store::fingerprint_of;
-use hocket_core::connect::wire::server_key;
+use hocket_core::connect::wire::AnalysisKey;
+
+/// The analysis store's provider key for a Navidrome server.
+pub fn provider_of(server_url: &str) -> String {
+    AnalysisKey::navidrome(server_url, "", None, None).provider
+}
+
+/// A track's fingerprint key within its provider.
+fn fingerprint_key(server_url: &str, t: &Track) -> String {
+    AnalysisKey::navidrome(server_url, &t.id, t.size_bytes, t.suffix.as_deref()).fingerprint
+}
 use hocket_core::provider::{NavidromeProvider, Provider, ResolvedStream};
 use hocket_core::subsonic::SubsonicApi;
 
@@ -68,9 +78,9 @@ pub const PASSWORD_ENV: &str = "HOCKET_ANALYSIS_PASSWORD";
 
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct WorkerArgs {
-    /// Run the AutoMix analysis worker against this Navidrome server. Off when
-    /// not given. Records are keyed by `--verify-url` when set, otherwise by
-    /// this URL, so it must be the one your clients use.
+    /// Run the AutoMix analysis worker against this Navidrome server, with
+    /// its own account. Off when not given. Records are keyed by this URL,
+    /// so it must be the one your clients use.
     #[arg(long, value_name = "URL")]
     pub analysis_server: Option<String>,
     /// The worker's Navidrome account (create a dedicated non-admin user).
@@ -95,23 +105,10 @@ pub struct WorkerArgs {
 
 impl WorkerArgs {
     /// The worker's settings, or `None` when it is off. Reads the password.
-    /// With `verify_url` (`--verify-url`) the worker's records are keyed by
-    /// it, as every client's are.
-    pub fn resolve(
-        &self,
-        tmp_dir: PathBuf,
-        verify_url: Option<&str>,
-    ) -> anyhow::Result<Option<WorkerSettings>> {
+    pub fn resolve(&self, tmp_dir: PathBuf) -> anyhow::Result<Option<WorkerSettings>> {
         let Some(server) = self.analysis_server.clone() else {
             return Ok(None);
         };
-        let key_url = verify_url.unwrap_or(&server).to_string();
-        if server_key(&key_url) != server_key(&server) {
-            warn!(
-                "--analysis-server differs from --verify-url: the worker's records are keyed by \
-                 --verify-url (what clients' records are keyed by); make sure both name the same server"
-            );
-        }
         let user = self
             .analysis_user
             .clone()
@@ -138,7 +135,6 @@ impl WorkerArgs {
             pause: Duration::from_secs(self.analysis_pause_secs),
             rescan: Duration::from_secs(self.analysis_rescan_hours.max(1) * 3600),
             max_file_bytes: self.analysis_max_file_mb.saturating_mul(1 << 20),
-            key_url,
             tmp_dir,
         }))
     }
@@ -154,8 +150,6 @@ pub struct WorkerSettings {
     pub pause: Duration,
     pub rescan: Duration,
     pub max_file_bytes: u64,
-    /// The URL the store keys this server's records by.
-    pub key_url: String,
     /// Downloads go here; emptied when the worker starts.
     pub tmp_dir: PathBuf,
 }
@@ -210,8 +204,8 @@ pub struct WorkerStatus {
 /// from a request, deduplicated, at most [`PRIORITY_MAX`] (oldest dropped),
 /// and only for the server the worker analyses.
 pub struct PriorityQueue {
-    /// The store's key for the worker's server.
-    server_key: String,
+    /// The store's provider key for the worker's server.
+    provider: String,
     inner: Mutex<PriorityInner>,
     wake: tokio::sync::Notify,
 }
@@ -226,19 +220,24 @@ struct PriorityInner {
 }
 
 impl PriorityQueue {
-    /// A queue for the server the store keys by `server_url`.
+    /// A queue for the worker's server.
     pub fn new(server_url: &str) -> PriorityQueue {
         PriorityQueue {
-            server_key: server_key(server_url),
+            provider: provider_of(server_url),
             inner: Mutex::new(PriorityInner::default()),
             wake: tokio::sync::Notify::new(),
         }
     }
 
-    /// Queue these ids if `server` (a store key) is the worker's; wakes the
+    /// The store's provider key this queue is for.
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    /// Queue these track ids if `provider` is the worker's; wakes the
     /// worker. Never blocks beyond a short lock. Returns how many were added.
-    pub fn push<'a>(&self, server: &str, ids: impl IntoIterator<Item = &'a str>) -> usize {
-        if server != self.server_key {
+    pub fn push<'a>(&self, provider: &str, ids: impl IntoIterator<Item = &'a str>) -> usize {
+        if provider != self.provider {
             return 0;
         }
         let mut added = 0;
@@ -312,8 +311,10 @@ pub struct Worker {
     /// The worker's account, behind the provider seam.
     api: Arc<dyn Provider>,
     store: Arc<AnalysisStore>,
-    /// The store's key for this server.
-    server_key: String,
+    /// The worker's server (what its records' keys are made from).
+    server_url: String,
+    /// The store's provider key for it.
+    provider: String,
     pause: Duration,
     tmp_dir: PathBuf,
     status: Arc<Mutex<Option<WorkerStatus>>>,
@@ -337,7 +338,7 @@ enum Outcome {
 }
 
 impl Worker {
-    /// `server_url` is what the store keys records by (see the module docs).
+    /// `server_url` is the worker's server (its records are keyed by it).
     pub fn new(
         api: Arc<dyn SubsonicApi>,
         store: Arc<AnalysisStore>,
@@ -353,7 +354,8 @@ impl Worker {
         Worker {
             api: Arc::new(NavidromeProvider::new(api)),
             store,
-            server_key: server_key(server_url),
+            server_url: server_url.to_string(),
+            provider: provider_of(server_url),
             pause,
             tmp_dir,
             status,
@@ -432,7 +434,10 @@ impl Worker {
         if self.failed.contains(&(t.id.clone(), fp_key(&fp))) {
             return false;
         }
-        match self.store.covers(&self.server_key, &t.id, &fp) {
+        match self
+            .store
+            .covers(&self.provider, &fingerprint_key(&self.server_url, t), &fp)
+        {
             Ok(has) => !has,
             Err(e) => {
                 warn!(error = %e, "analysis store read failed");
@@ -527,10 +532,7 @@ impl Worker {
         if !cancelled {
             self.update(|s| s.passes += 1);
         }
-        let counts = self
-            .store
-            .counts(Some(&self.server_key))
-            .unwrap_or_default();
+        let counts = self.store.counts(Some(&self.provider)).unwrap_or_default();
         info!(
             library = stats.library,
             analysed = stats.analysed,
@@ -673,8 +675,8 @@ impl Worker {
         let outcome = self
             .store
             .put(
-                &self.server_key,
-                &track.id,
+                &self.provider,
+                &fingerprint_key(&self.server_url, track),
                 record,
                 hocket_core::util::now_ms() as u64,
             )
@@ -766,7 +768,7 @@ pub fn spawn(
     let api = settings.client()?;
     info!(
         server = %settings.server,
-        key = %server_key(&settings.key_url),
+        key = %provider_of(&settings.server),
         user = %settings.user,
         nice = settings.nice,
         pause_s = settings.pause.as_secs(),
@@ -790,7 +792,7 @@ pub fn spawn(
             let worker = Worker::new(
                 api,
                 store,
-                &settings.key_url,
+                &settings.server,
                 settings.pause,
                 settings.tmp_dir.clone(),
                 status,
@@ -863,7 +865,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn records_are_keyed_by_the_verify_url_when_set() {
+    fn settings_resolve() {
         let dir = tempfile::tempdir().unwrap();
         let pw = dir.path().join("pw");
         std::fs::write(&pw, "secret\n").unwrap();
@@ -875,15 +877,9 @@ mod tests {
             ..Default::default()
         };
         let tmp = dir.path().join("tmp");
-        let s = args.resolve(tmp.clone(), None).unwrap().unwrap();
-        assert_eq!(s.key_url, "http://navidrome:4533");
+        let s = args.resolve(tmp).unwrap().unwrap();
+        assert_eq!(s.server, "http://navidrome:4533");
         assert_eq!(s.max_file_bytes, 10 << 20);
-        let s = args
-            .resolve(tmp, Some("https://music.example"))
-            .unwrap()
-            .unwrap();
-        assert_eq!(s.key_url, "https://music.example");
-        assert_eq!(s.server, "http://navidrome:4533", "still fetched from here");
     }
 }
 
@@ -894,7 +890,7 @@ mod priority_tests {
     #[test]
     fn the_priority_queue_is_bounded_deduplicated_and_for_one_server() {
         let q = PriorityQueue::new("https://music.example");
-        let key = server_key("https://music.example");
+        let key = provider_of("https://music.example");
         assert_eq!(q.push("another", ["a"]), 0);
         assert_eq!(
             q.push(&key, ["a", "a", "", &"x".repeat(PRIORITY_ID_MAX_LEN + 1)]),

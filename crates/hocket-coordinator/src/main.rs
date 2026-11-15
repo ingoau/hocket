@@ -10,6 +10,22 @@ use hocket_coordinator::{reports, serve, worker, App, Args, Command, ReportsComm
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if let Some(Command::Pair { url, minutes }) = &args.command {
+        let dir = args
+            .data_dir
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("pair needs --data-dir (the running coordinator's)"))?;
+        let claim = hocket_coordinator::identities::write_claim(
+            dir,
+            hocket_core::util::now_ms() as u64,
+            minutes.max(&1) * 60_000,
+        )?;
+        print!(
+            "{}",
+            hocket_coordinator::pair_text(&claim, url.as_deref(), *minutes)
+        );
+        return Ok(());
+    }
     if let Some(Command::Reports { action }) = &args.command {
         let dir = args
             .data_dir
@@ -33,10 +49,7 @@ async fn main() -> anyhow::Result<()> {
         None => std::env::temp_dir().join(format!("hocket-analysis-{}", std::process::id())),
     };
     let cancel = tokio_util::sync::CancellationToken::new();
-    let worker = match (
-        args.worker.resolve(tmp_dir, args.verify_url.as_deref())?,
-        app.analysis_store(),
-    ) {
+    let worker = match (args.worker.resolve(tmp_dir)?, app.analysis_store()) {
         (Some(settings), Some(store)) => Some(worker::spawn(
             settings,
             store.clone(),
@@ -66,7 +79,15 @@ async fn main() -> anyhow::Result<()> {
         info!("shutting down");
     };
     let (addr, handle) = serve(app.clone(), args.listen, shutdown).await?;
-    info!(%addr, data_dir = ?args.data_dir, verify = !args.no_verify, "hocket-coordinator listening");
+    info!(
+        %addr,
+        data_dir = ?args.data_dir,
+        owner = ?app.identities().owner(),
+        "hocket-coordinator listening"
+    );
+    if app.identities().owner().is_none() {
+        info!("not claimed yet: run `hocket-coordinator --data-dir <dir> pair` and enter the code in Hocket");
+    }
     handle.await?;
     // Flush every open room's replica on the way out.
     app.flush_all();

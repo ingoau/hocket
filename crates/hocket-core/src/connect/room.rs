@@ -3026,7 +3026,7 @@ mod tests {
         ));
         assert!(outs.contains(&RoomOutput::Close("p0".into())));
         // a device of another identity: refused at the proof
-        let mut stranger = Identity::create_with(
+        let stranger = Identity::create_with(
             "scope",
             "x",
             "X",

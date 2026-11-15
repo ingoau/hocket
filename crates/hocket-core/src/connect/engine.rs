@@ -373,7 +373,7 @@ pub enum Input {
     /// [`Output::AnalysisStore`] last said `true`). Answered with
     /// [`Output::AnalysisRecords`].
     FetchAnalysis {
-        track_ids: Vec<TrackRef>,
+        wants: Vec<crate::connect::wire::AnalysisWant>,
     },
     /// Share records this device produced with the coordinator (dropped
     /// unless [`Output::AnalysisStore`] last said `true`).
@@ -811,6 +811,8 @@ pub struct Engine {
     /// waited for before a lone leader judges scrobbles: an advert alone
     /// (a rogue's, say) earns no such patience.
     lan_proven: BTreeSet<DeviceId>,
+    /// The identity's members as last seen (to tell newly paired ones).
+    known_members: BTreeSet<DeviceId>,
     last_known_lan: HashMap<DeviceId, String>,
     last_advert: Option<PeerAdvert>,
     last_advert_at: EpochMs,
@@ -868,6 +870,11 @@ impl Engine {
         let mut room_cfg = RoomConfig::new(cfg.scope.clone());
         room_cfg.auth = cfg.room_auth();
         room_cfg.session_id = Some(document.session_id.clone());
+        let known_members: BTreeSet<DeviceId> = cfg
+            .identity
+            .as_ref()
+            .map(|i| i.lock().member_state().members.keys().cloned().collect())
+            .unwrap_or_default();
         let mut room = Room::new(room_cfg, clock.clone(), reducer.clone(), None);
         if let Some(id) = &cfg.identity {
             let _ = room.set_identity(id.lock().shared.clone());
@@ -942,6 +949,7 @@ impl Engine {
             lan_deferred: false,
             lan_settle_until: now + LAN_SETTLE_MS,
             lan_proven: BTreeSet::new(),
+            known_members,
             last_known_lan: HashMap::new(),
             last_advert: None,
             last_advert_at: 0.0,
@@ -1542,9 +1550,9 @@ impl Engine {
                 text,
                 declined,
             } => self.answer_diagnostics(request_id, to, text, declined),
-            Input::FetchAnalysis { track_ids } => {
-                if self.analysis_store && !track_ids.is_empty() {
-                    self.upstream_send(Msg::AnalysisFetch { track_ids });
+            Input::FetchAnalysis { wants } => {
+                if self.analysis_store && !wants.is_empty() {
+                    self.upstream_send(Msg::AnalysisFetch { wants });
                 }
             }
             Input::UploadAnalysis { records } => {
@@ -2623,6 +2631,20 @@ impl Engine {
         }
         self.lan_peers
             .retain(|p| state.is_member(&p.device_id) || !state.removed.contains(&p.device_id));
+        // A device we turned away may have been paired since: give members
+        // another chance (the handshake still checks them).
+        let newly: Vec<DeviceId> = state
+            .members
+            .keys()
+            .filter(|d| !self.known_members.contains(*d))
+            .cloned()
+            .collect();
+        self.known_members = state.members.keys().cloned().collect();
+        let blocked = self.lan_blocklist.len();
+        self.lan_blocklist.retain(|d, _| !newly.contains(d));
+        if self.lan_blocklist.len() != blocked {
+            self.reevaluate();
+        }
     }
 
     fn on_identity_changed(&mut self) {
@@ -5268,6 +5290,10 @@ mod tests {
         "a", "b", "c", "m", "owner", "honest", "q", "r", "s", "y", "z",
     ];
 
+    fn test_key() -> crate::connect::wire::AnalysisKey {
+        crate::connect::wire::AnalysisKey::navidrome("https://nd", "t1", None, None)
+    }
+
     fn coordinator_secret() -> crate::identity::crypto::DeviceSecret {
         crate::identity::crypto::DeviceSecret::from_seed(b"test-coordinator")
     }
@@ -5788,7 +5814,10 @@ mod tests {
         use crate::connect::wire::AnalysisEntry;
         let (mut e, _) = engine("a");
         let fetch = || Input::FetchAnalysis {
-            track_ids: vec!["t1".into()],
+            wants: vec![crate::connect::wire::AnalysisWant {
+                track_id: "t1".into(),
+                key: test_key(),
+            }],
         };
         // Nothing is attached: dropped.
         assert!(wire_outs(&e.handle(fetch())).is_empty());
@@ -5808,7 +5837,7 @@ mod tests {
         assert!(outs.contains(&Output::AnalysisStore(true)));
         let w = wire_outs(&e.handle(fetch()));
         assert!(
-            matches!(&w[..], [(p, Msg::AnalysisFetch { track_ids })] if p == "up" && track_ids == &["t1".to_string()])
+            matches!(&w[..], [(p, Msg::AnalysisFetch { wants })] if p == "up" && wants[0].track_id.id == "t1")
         );
         let record = crate::api::AnalysisRecord {
             version: crate::automix::ANALYSIS_VERSION,
@@ -5836,6 +5865,7 @@ mod tests {
         };
         let entry = AnalysisEntry {
             track_id: "t1".into(),
+            key: test_key(),
             record,
         };
         let w = wire_outs(&e.handle(Input::UploadAnalysis {
@@ -5862,7 +5892,10 @@ mod tests {
         let outs = attach(&mut e, None, vec![]);
         assert!(!outs.iter().any(|o| matches!(o, Output::AnalysisStore(_))));
         let outs = e.handle(Input::FetchAnalysis {
-            track_ids: vec!["t1".into()],
+            wants: vec![crate::connect::wire::AnalysisWant {
+                track_id: "t1".into(),
+                key: test_key(),
+            }],
         });
         assert!(wire_outs(&outs).is_empty());
     }
