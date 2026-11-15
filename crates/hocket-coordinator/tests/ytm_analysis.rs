@@ -57,10 +57,46 @@ fn click_wav(seconds: f64) -> Vec<u8> {
     out
 }
 
+/// The TV app's answer: the visionOS one with its 140 format ciphered (`s`
+/// into `sig`) and an `n` to transform, or `refused`.
+fn tv_player(visionos: &serde_json::Value, refused: bool) -> serde_json::Value {
+    if refused {
+        return serde_json::json!({"playabilityStatus": {"status": "LOGIN_REQUIRED", "reason": "Sign in to confirm you're not a bot"}});
+    }
+    let mut tv = visionos.clone();
+    for f in tv["streamingData"]["adaptiveFormats"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if let Some(url) = f["url"].as_str().map(str::to_string) {
+            let url = url.replace("c=VISIONOS", "c=TVHTML5") + "&n=abcd";
+            let cipher = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("s", "SIGxyz")
+                .append_pair("sp", "sig")
+                .append_pair("url", &url)
+                .finish();
+            let o = f.as_object_mut().unwrap();
+            o.remove("url");
+            o.insert("signatureCipher".into(), cipher.into());
+        }
+    }
+    tv
+}
+
+/// A player EJS has already preprocessed (the shape `jsc` reads back):
+/// reverse the signature, upper-case `n`.
+const PREPROCESSED: &str =
+    "_result.sig = (s) => s.split('').reverse().join(''); _result.n = (n) => n.toUpperCase() + '_ok';";
+
 /// InnerTube from the fixtures (the visionOS player answer, its 140 format
-/// resized to `media`), and googlevideo serving `media` in ranges. Logs the
-/// googlevideo URLs fetched.
+/// resized to `media`; the TV app's as [`tv_player`]), `iframe_api` naming
+/// the player `fakeplay`, and googlevideo serving `media` in ranges. Logs
+/// the googlevideo URLs fetched.
 fn transport(media: Vec<u8>) -> (FakeYtmHttp, Arc<Mutex<Vec<String>>>) {
+    transport_tv(media, false)
+}
+
+fn transport_tv(media: Vec<u8>, tv_refused: bool) -> (FakeYtmHttp, Arc<Mutex<Vec<String>>>) {
     let len = media.len();
     let mut player = fx("player_visionos");
     for f in player["streamingData"]["adaptiveFormats"]
@@ -76,10 +112,20 @@ fn transport(media: Vec<u8>) -> (FakeYtmHttp, Arc<Mutex<Vec<String>>>) {
             f["url"] = url.into();
         }
     }
-    let inner = fake(Arc::new(Mutex::new(vec![("VISIONOS", player)])));
+    let tv = tv_player(&player, tv_refused);
+    let inner = fake(Arc::new(Mutex::new(vec![
+        ("VISIONOS", player),
+        ("TVHTML5", tv),
+    ])));
     let fetched = Arc::new(Mutex::new(vec![]));
     let log = fetched.clone();
     let http = FakeYtmHttp::new(move |r: &HttpRequest| {
+        if r.url == "https://www.youtube.com/iframe_api" {
+            return Some(HttpResponse::json(
+                200,
+                r"var scriptUrl = 'https:\/\/www.youtube.com\/s\/player\/fakeplay\/www-widgetapi.vflset\/www-widgetapi.js';",
+            ));
+        }
         if !r.url.contains(".googlevideo.com/videoplayback") {
             return inner.answer(r);
         }
@@ -320,4 +366,91 @@ async fn a_members_youtube_music_miss_is_queued_by_video_id() {
     assert_eq!(app.ytm().unwrap().queued(), 1);
     // Only the video id travelled: no URL of the device's is ever taken.
     assert!(!http.endpoints().iter().any(|e| e == "player"));
+}
+
+/// The coordinator signed in, its session in `ytm-session.json`, its
+/// puzzles solved by the embedded EJS over [`PREPROCESSED`].
+fn signed_in(http: &FakeYtmHttp, dir: &std::path::Path) -> YtmAnalysis {
+    std::fs::write(
+        dir.join(SESSION_FILE),
+        r#"{"cookies":"SAPISID=abc; SID=x","channel":"UCme","name":"Test User"}"#,
+    )
+    .unwrap();
+    let http: Arc<dyn hocket_core::ytm::http::YtmHttp> = Arc::new(http.clone());
+    let clock: Arc<dyn hocket_core::util::Clock> = Arc::new(hocket_core::util::WallClock);
+    let js = hocket_coordinator::ytm_js::EmbeddedJsHost::new(http.clone(), clock.clone())
+        .with_preprocessed("fakeplay", 20_500, PREPROCESSED);
+    YtmAnalysis::open_with_js(http, clock, Some(dir), Arc::new(js))
+}
+
+fn player_calls(http: &FakeYtmHttp) -> Vec<HttpRequest> {
+    http.log
+        .lock()
+        .iter()
+        .filter(|r| r.url.contains("/youtubei/v1/player"))
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn signed_in_the_worker_streams_with_its_session_through_the_tv_app() {
+    let (http, fetched) = transport_tv(click_wav(6.0), false);
+    let dir = tempfile::tempdir().unwrap();
+    let ytm = signed_in(&http, dir.path());
+    assert!(ytm.status().signed_in);
+    let store = AnalysisStore::in_memory().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    ytm.analyse_one(&mut None, &store, VIDEO, tmp.path())
+        .await
+        .unwrap();
+    let key = AnalysisKey::ytm(VIDEO, 140);
+    assert!(store
+        .get(&key.provider, &key.fingerprint)
+        .unwrap()
+        .is_some());
+    // One player call: the TV app, with the session and the player's timestamp.
+    let calls = player_calls(&http);
+    assert_eq!(calls.len(), 1);
+    let body = calls[0].json();
+    assert_eq!(body["context"]["client"]["clientName"], "TVHTML5");
+    assert_eq!(
+        body["playbackContext"]["contentPlaybackContext"]["signatureTimestamp"],
+        20_500
+    );
+    assert_eq!(calls[0].header("Cookie"), Some("SAPISID=abc; SID=x"));
+    assert!(calls[0]
+        .header("Authorization")
+        .unwrap()
+        .starts_with("SAPISIDHASH "));
+    // Its own URL, signed and `n`-transformed in QuickJS.
+    let urls = fetched.lock().clone();
+    assert!(!urls.is_empty());
+    for u in &urls {
+        assert!(u.contains("c=TVHTML5") && u.contains("itag=140"), "{u}");
+        assert!(u.contains("&n=ABCD_ok") && u.contains("&sig=zyxGIS"), "{u}");
+    }
+}
+
+#[tokio::test]
+async fn signed_in_the_worker_falls_back_to_the_anonymous_chain_when_the_tv_app_refuses() {
+    let (http, fetched) = transport_tv(click_wav(6.0), true);
+    let dir = tempfile::tempdir().unwrap();
+    let ytm = signed_in(&http, dir.path());
+    let store = AnalysisStore::in_memory().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    ytm.analyse_one(&mut None, &store, VIDEO, tmp.path())
+        .await
+        .unwrap();
+    let clients: Vec<String> = player_calls(&http)
+        .iter()
+        .map(|r| {
+            r.json()["context"]["client"]["clientName"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(clients, ["TVHTML5", "VISIONOS"]);
+    assert!(player_calls(&http)[1].header("Cookie").is_none());
+    assert!(fetched.lock().iter().all(|u| u.contains("c=VISIONOS")));
 }

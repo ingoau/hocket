@@ -20,18 +20,24 @@ pub mod parse;
 pub mod player;
 pub mod provider;
 
-/// The platform JS host's script: yt-dlp's EJS solver (0.8.0, vendored from
-/// github.com/yt-dlp/ejs releases; Unlicense, with meriyah (ISC) and astring
-/// (MIT) bundled) and Hocket's `hocketYtm` on top (`js/host.js`).
-pub fn js_host_script() -> String {
+/// yt-dlp's EJS solver alone (0.8.0, vendored from github.com/yt-dlp/ejs
+/// releases; Unlicense, with meriyah (ISC) and astring (MIT) bundled): it
+/// defines `jsc(input)` and needs no browser, so the coordinator runs it in
+/// an embedded engine.
+pub fn ejs_solver_script() -> String {
     [
         include_str!("js/ejs-lib.min.js"),
         "\nObject.assign(globalThis, lib);\n",
         include_str!("js/ejs-core.min.js"),
         "\n",
-        include_str!("js/host.js"),
     ]
     .concat()
+}
+
+/// The platform JS host's script: the EJS solver and Hocket's `hocketYtm`
+/// on top (`js/host.js`).
+pub fn js_host_script() -> String {
+    ejs_solver_script() + include_str!("js/host.js")
 }
 
 pub use provider::{YtmProvider, ANON, SOURCE};

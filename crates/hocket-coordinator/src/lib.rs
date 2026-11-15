@@ -111,6 +111,7 @@ pub mod identities;
 pub mod reports;
 pub mod worker;
 pub mod ytm;
+pub mod ytm_js;
 
 /// Epoch milliseconds now; injectable so tests can move time (grant expiry,
 /// retention).

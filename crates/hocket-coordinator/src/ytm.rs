@@ -12,10 +12,13 @@
 //!   with a session of its own (`Msg::CoordYtmSignIn`): the `Cookie:`
 //!   header arrives sealed to the coordinator's key (the Phase 2 envelope),
 //!   is checked against the account menu, and is kept in
-//!   `<data-dir>/ytm-session.json` (owner-only permissions). The player
-//!   clients that need no JS never send a session, so signing in changes the
-//!   catalogue calls, not which streams resolve (see the Phase 4 follow-up
-//!   notes).
+//!   `<data-dir>/ytm-session.json` (owner-only permissions).
+//! - **Streams with the account.** Signed in, the worker resolves through
+//!   the TV app first, with the session (cookies, `SAPISIDHASH`), its
+//!   signature and `n` solved by yt-dlp's EJS in an embedded QuickJS
+//!   ([`crate::ytm_js`]), so uploads and account- or region-only tracks can
+//!   be analysed; when that's refused it falls back to the anonymous chain.
+//!   The no-JS clients never send the session.
 //! - **Priming.** Records are of the decoded audio with the MP4 edit list
 //!   applied (the 1600-frame AAC priming trimmed), as both platforms play it,
 //!   so they line up with what devices hear.
@@ -40,6 +43,7 @@ use hocket_core::util::Clock;
 use hocket_core::ytm::auth::Cookies;
 use hocket_core::ytm::client::InnerTube;
 use hocket_core::ytm::http::YtmHttp;
+use hocket_core::ytm::player::JsHost;
 use hocket_core::ytm::YtmProvider;
 
 use crate::analysis::AnalysisStore;
@@ -71,6 +75,7 @@ pub struct Status {
 pub struct YtmAnalysis {
     http: Arc<dyn YtmHttp>,
     clock: Arc<dyn Clock>,
+    js: Arc<dyn JsHost>,
     dir: Option<PathBuf>,
     session: Mutex<Option<Session>>,
     provider: RwLock<Arc<YtmProvider>>,
@@ -81,12 +86,15 @@ pub struct YtmAnalysis {
 fn provider_for(
     http: &Arc<dyn YtmHttp>,
     clock: &Arc<dyn Clock>,
+    js: &Arc<dyn JsHost>,
     session: Option<&Session>,
 ) -> Arc<YtmProvider> {
     let cookies = session.and_then(|s| Cookies::parse(&s.cookies));
     let id = session.map_or_else(|| "ytm:coordinator".to_string(), |s| s.channel.clone());
     let it = Arc::new(InnerTube::new(http.clone(), clock.clone(), cookies));
-    Arc::new(YtmProvider::new(id, it, clock.clone()))
+    let p = YtmProvider::new(id, it, clock.clone());
+    p.set_js_host(Some(js.clone()));
+    Arc::new(p)
 }
 
 /// A YouTube Music video id as clients send it (11 URL-safe characters).
@@ -98,18 +106,34 @@ fn video_id_ok(id: &str) -> bool {
 }
 
 impl YtmAnalysis {
-    /// Anonymous, or signed in with the session kept in `dir`.
+    /// Anonymous, or signed in with the session kept in `dir`; the TV app's
+    /// puzzles solved by the embedded EJS ([`crate::ytm_js`]).
     pub fn open(http: Arc<dyn YtmHttp>, clock: Arc<dyn Clock>, dir: Option<&Path>) -> YtmAnalysis {
+        let js = Arc::new(crate::ytm_js::EmbeddedJsHost::new(
+            http.clone(),
+            clock.clone(),
+        ));
+        YtmAnalysis::open_with_js(http, clock, dir, js)
+    }
+
+    /// [`YtmAnalysis::open`] with another JS host (tests).
+    pub fn open_with_js(
+        http: Arc<dyn YtmHttp>,
+        clock: Arc<dyn Clock>,
+        dir: Option<&Path>,
+        js: Arc<dyn JsHost>,
+    ) -> YtmAnalysis {
         let session = dir.and_then(|d| {
             let text = std::fs::read_to_string(d.join(SESSION_FILE)).ok()?;
             serde_json::from_str::<Session>(&text)
                 .map_err(|e| warn!(error = %e, "ytm-session.json unreadable; anonymous"))
                 .ok()
         });
-        let provider = provider_for(&http, &clock, session.as_ref());
+        let provider = provider_for(&http, &clock, &js, session.as_ref());
         YtmAnalysis {
             http,
             clock,
+            js,
             dir: dir.map(Path::to_path_buf),
             session: Mutex::new(session),
             provider: RwLock::new(provider),
@@ -210,7 +234,7 @@ impl YtmAnalysis {
                 }
             }
         }
-        *self.provider.write() = provider_for(&self.http, &self.clock, session.as_ref());
+        *self.provider.write() = provider_for(&self.http, &self.clock, &self.js, session.as_ref());
         *self.session.lock() = session;
         Ok(())
     }

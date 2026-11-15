@@ -32,6 +32,8 @@ rusqlite.workspace = true
 thiserror.workspace = true
 qrcode.workspace = true
 libc = "0.2"
+# The YouTube Music TV client's signature and `n` (yt-dlp's EJS solver), coordinator only.
+rquickjs = { version = "0.14", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
