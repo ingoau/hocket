@@ -26,6 +26,7 @@ import { AppTray, appIcon } from "./tray";
 import { installUpdater } from "./updater";
 import { Windows } from "./windows";
 import { openHiddenPage, YtmJsHost } from "./ytm-js-host";
+import { isSignInContents } from "./ytm-signin";
 
 // Chromium must not grab the media keys or publish its own media session:
 // audio comes out of Rust and the OS session is playwire's (design.md).
@@ -439,8 +440,12 @@ function installCsp(isDev: boolean): void {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, cb) => cb(false));
   app.on("web-contents-created", (_e, contents) => {
     contents.on("will-attach-webview", (e) => e.preventDefault());
+    // The YouTube Music sign-in window replaces this with its own (Google's pages only).
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
-    // No window (main, mini, anchor) ever navigates away from the app bundle.
-    contents.on("will-navigate", (e) => e.preventDefault());
+    // No app window (main, mini, anchor, the hidden JS host) ever navigates away from where it
+    // was loaded. The sign-in window has its own rule: Google's sign-in redirects must go ahead.
+    contents.on("will-navigate", (e) => {
+      if (!isSignInContents(contents)) e.preventDefault();
+    });
   });
 }

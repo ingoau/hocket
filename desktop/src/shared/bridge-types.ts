@@ -112,6 +112,9 @@ export interface ReportSendRequest {
 /** At most this many screenshots go with one report. */
 export const REPORT_MAX_SCREENSHOTS = 5;
 
+/** How a YouTube Music sign-in ended; "busy" when another sign-in window was already open (it is focused). */
+export type YtmSignInResult = "signedIn" | "cancelled" | "busy";
+
 export interface HocketBridge {
   prefs: {
     get(): Promise<AppPrefs>;
@@ -181,9 +184,9 @@ export interface HocketBridge {
      * Sign in to YouTube Music in a window of its own; once signed in, main
      * adds the account (the cookies never reach the renderer).
      */
-    signIn(): Promise<"signedIn" | "cancelled">;
+    signIn(): Promise<YtmSignInResult>;
     /** A fresh sign-in for the coordinator's own YouTube Music analysis (owner only). */
-    signInCoordinator(): Promise<"signedIn" | "cancelled">;
+    signInCoordinator(): Promise<YtmSignInResult>;
   };
   /**
    * Share one track's original audio file. Main resolves the file (a finished download, or a fresh

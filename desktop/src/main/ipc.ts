@@ -9,7 +9,7 @@ import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from "nod
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl, YtmSignInResult } from "@shared/bridge-types";
 import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
@@ -287,10 +287,12 @@ export function installIpc(deps: IpcDeps): void {
     return r.filePath;
   });
 
-  ipcMain.handle(IPC.ytmSignIn, async (e): Promise<"signedIn" | "cancelled" | undefined> => {
+  // One sign-in at a time: while one is open, another request focuses it and answers "busy".
+  ipcMain.handle(IPC.ytmSignIn, async (e): Promise<YtmSignInResult | undefined> => {
     if (!isOurs(windows, e.sender)) return undefined;
     const parent = BrowserWindow.fromWebContents(e.sender) ?? undefined;
     const cookies = await signInToYouTubeMusic(parent);
+    if (cookies === "busy") return "busy";
     if (!cookies) return "cancelled";
     dispatch({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies, js_host: true } } } });
     return "signedIn";
@@ -298,10 +300,11 @@ export function installIpc(deps: IpcDeps): void {
 
   // The coordinator's own YouTube Music session (owner only; the core seals it to the coordinator's
   // key): a fresh sign-in in the same cleared window, never this device's session.
-  ipcMain.handle(IPC.ytmSignInCoordinator, async (e): Promise<"signedIn" | "cancelled" | undefined> => {
+  ipcMain.handle(IPC.ytmSignInCoordinator, async (e): Promise<YtmSignInResult | undefined> => {
     if (!isOurs(windows, e.sender)) return undefined;
     const parent = BrowserWindow.fromWebContents(e.sender) ?? undefined;
     const cookies = await signInToYouTubeMusic(parent);
+    if (cookies === "busy") return "busy";
     if (!cookies) return "cancelled";
     dispatch({ type: "signCoordinatorInToYoutubeMusic", data: { cookies } });
     return "signedIn";

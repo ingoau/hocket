@@ -20,6 +20,9 @@ test.describe("YouTube Music setup", () => {
     await expect(page.getByTestId("setup-another")).toBeVisible();
     await page.getByTestId("setup-done").click();
     await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
+    // Settings names the account's kind (not "Navidrome").
+    await page.getByTestId("nav-settings").click();
+    await expect(page.getByTestId("server-row-kind")).toHaveText(/^YouTube Music/);
   });
 
   test("signing in adds the account and the sign-in is replayed after a restart", async () => {
@@ -41,6 +44,26 @@ test.describe("YouTube Music setup", () => {
       await expect
         .poll(async () => (await page.evaluate(() => window.hocket.query({ type: "accounts" }))) as unknown as { data: { kind: string }[] }, { timeout: 15_000 })
         .toMatchObject({ data: expect.arrayContaining([expect.objectContaining({ kind: "youtubeMusic" })]) });
+      await app.close();
+    } finally {
+      rmSync(userData, { recursive: true, force: true });
+    }
+  });
+
+  test("the coordinator's own sign-in shows it is signed in, with no error", async () => {
+    const userData = mkdtempSync(join(tmpdir(), "hocket-e2e-"));
+    try {
+      const { app, page } = await launchFake(userData, { HOCKET_FAKE_YTM_SIGNIN: "1" });
+      await completeSetup(page);
+      await page.getByTestId("nav-settings").click();
+      await page.getByTestId("settings-nav-connect").click();
+      await page.getByTestId("identity-coordinator-url").fill("wss://coordinator.example/ws");
+      await page.getByTestId("identity-coordinator-code").fill("ABCD-EFGH");
+      await page.getByTestId("identity-claim").click();
+      await expect(page.getByTestId("identity-coord-ytm")).toContainText("without an account");
+      await page.getByTestId("identity-coord-ytm-sign-in").click();
+      await expect(page.getByTestId("identity-coord-ytm")).toContainText("Signed in as Test User");
+      await expect(page.getByTestId("identity-coord-ytm-error")).toHaveCount(0);
       await app.close();
     } finally {
       rmSync(userData, { recursive: true, force: true });

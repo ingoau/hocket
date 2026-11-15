@@ -61,6 +61,7 @@ function Coordinator() {
       bridge().dispatch({ type: "coordinatorYtmStatus" });
     }
   }, [pin?.owner, pin?.url]);
+  const ytmSignIn = useCoordinatorYtmSignIn();
   const join = (claim: boolean) => bridge().dispatch(claim ? { type: "claimCoordinator", data: { url: url.trim(), code: code.trim() } } : { type: "redeemCoordinatorInvite", data: { url: url.trim(), code: code.trim() } });
   return (
     <>
@@ -108,12 +109,13 @@ function Coordinator() {
                 <div className="label">
                   <div className="desc" data-testid="identity-coord-ytm">{state.ytm.signedIn ? t("identity.coordYtmSignedIn", { name: state.ytm.account ?? "" }) : t("identity.coordYtmAnon")}</div>
                   {state.ytm.error ? <div className="desc error" role="alert">{state.ytm.error}</div> : null}
+                  {ytmSignIn.error ? <div className="desc error" role="alert" data-testid="identity-coord-ytm-error">{ytmSignIn.error}</div> : null}
                 </div>
                 <div className="control">
                   {state.ytm.signedIn ? (
                     <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "signCoordinatorInToYoutubeMusic", data: { cookies: undefined } })}>{t("identity.coordYtmSignOut")}</button>
                   ) : (
-                    <button type="button" className="btn sm" onClick={() => void window.hocket.ytm.signInCoordinator()} data-testid="identity-coord-ytm-sign-in">{t("identity.coordYtmSignIn")}</button>
+                    <button type="button" className="btn sm" disabled={ytmSignIn.busy} onClick={ytmSignIn.start} data-testid="identity-coord-ytm-sign-in">{ytmSignIn.busy ? <Icon name="spinner" size={16} className="spin" /> : null}{ytmSignIn.busy ? t("identity.coordYtmSigningIn") : t("identity.coordYtmSignIn")}</button>
                   )}
                 </div>
               </div>
@@ -123,4 +125,27 @@ function Coordinator() {
       ) : null}
     </>
   );
+}
+
+/** The coordinator's YouTube Music sign-in: one at a time, with what went wrong shown. */
+function useCoordinatorYtmSignIn() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const start = () => {
+    if (busy) return;
+    setBusy(true);
+    setError(undefined);
+    bridge()
+      .ytm.signInCoordinator()
+      .then((r) => {
+        // "signedIn": the status arrives as coordinatorYtmStatus. "busy": main focused the open window.
+        if (r === "cancelled") setError(t("setup.ytm.cancelled"));
+      })
+      .catch((err: unknown) => {
+        console.error("coordinator YouTube Music sign-in failed", err);
+        setError(t("identity.coordYtmFailed"));
+      })
+      .finally(() => setBusy(false));
+  };
+  return { busy, error, start };
 }
