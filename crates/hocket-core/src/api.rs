@@ -3307,6 +3307,13 @@ pub enum Query {
     Snapshot,
     Accounts,
     Identity,
+    /// The script a platform's YouTube Music JS host runs in its hidden
+    /// page on https://www.youtube.com before answering
+    /// [`Event::YtmJsRequest`]s (`QueryResult::Text`): it defines
+    /// `hocketYtm.prepare(videoId, visitorData)` and
+    /// `hocketYtm.decipher(videoId, formats)`, each resolving to the
+    /// [`YtmJsAnswer`] fields.
+    YtmJsHostScript,
     Tracks {
         server_id: ServerId,
         filter: Option<FilterNode>,

@@ -59,6 +59,11 @@ pub struct YtmProvider {
     chooser: StreamChooser,
     js: RwLock<Option<Arc<dyn JsHost>>>,
     premium: AtomicBool,
+    /// What the web client showed through the JS host: itag 141 offered
+    /// (Premium) or not. Overrides the account-menu heuristic once known.
+    premium_seen: Mutex<Option<bool>>,
+    /// No probe for 141 before this (the web client failed last time).
+    premium_probe_after: Mutex<f64>,
     clock: Arc<dyn Clock>,
     /// Resolved streams by video id, reused until shortly before they expire.
     streams: Mutex<HashMap<String, ChosenStream>>,
@@ -80,6 +85,8 @@ impl YtmProvider {
             chooser: StreamChooser::new(clock.clone()),
             js: RwLock::new(None),
             premium: AtomicBool::new(false),
+            premium_seen: Mutex::new(None),
+            premium_probe_after: Mutex::new(0.0),
             clock,
             streams: Mutex::default(),
             catalogue: Mutex::default(),
@@ -99,8 +106,12 @@ impl YtmProvider {
         self.premium.store(premium, Ordering::Relaxed);
     }
 
+    /// Premium: what the web client showed (141 offered), else the
+    /// account-menu heuristic.
     pub fn premium(&self) -> bool {
-        self.premium.load(Ordering::Relaxed)
+        self.premium_seen
+            .lock()
+            .unwrap_or_else(|| self.premium.load(Ordering::Relaxed))
     }
 
     pub fn set_name(&self, name: &str) {
@@ -150,15 +161,30 @@ impl YtmProvider {
             }
         }
         let js = self.js.read().clone();
+        // Signed in with a JS host and Premium not yet known: the web client
+        // goes first and its formats tell (141 is Premium only).
+        let probe = js.is_some()
+            && self.signed_in()
+            && self.premium_seen.lock().is_none()
+            && *self.premium_probe_after.lock() <= now;
         let s = self
             .chooser
             .choose(
                 &self.it,
                 js.as_ref(),
-                self.premium() && self.signed_in(),
+                (self.premium() || probe) && self.signed_in(),
                 id,
             )
             .await?;
+        if probe {
+            if s.client == super::clients::ClientKind::WebRemix {
+                let premium = s.itag == super::player::ITAG_AAC_256;
+                tracing::info!(target: "hocket::ytm", premium, "Premium, as the web client shows it");
+                *self.premium_seen.lock() = Some(premium);
+            } else {
+                *self.premium_probe_after.lock() = now + PREMIUM_PROBE_RETRY_MS;
+            }
+        }
         self.streams.lock().insert(id.to_string(), s.clone());
         Ok(s)
     }
@@ -1088,6 +1114,9 @@ impl YtmProvider {
         })
     }
 }
+
+/// After the web client failed to answer a Premium probe, try again after this.
+const PREMIUM_PROBE_RETRY_MS: f64 = 30.0 * 60_000.0;
 
 /// A chosen googlevideo stream as the core hands it on.
 fn resolved(s: &ChosenStream) -> ProviderResult<ResolvedStream> {

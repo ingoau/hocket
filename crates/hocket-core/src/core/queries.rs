@@ -20,6 +20,7 @@ impl Actor {
         let answer = match query {
             Query::Snapshot => QueryResult::SnapshotResult(self.snapshot()),
             Query::Accounts => QueryResult::Accounts(self.account_infos()),
+            Query::YtmJsHostScript => QueryResult::Text(crate::ytm::js_host_script()),
             Query::Identity => QueryResult::Identity(self.identity_info()),
             Query::Tracks {
                 server_id,

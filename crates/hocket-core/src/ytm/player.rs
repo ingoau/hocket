@@ -30,6 +30,9 @@ pub const EXPIRY_MARGIN_MS: f64 = 10.0 * 60_000.0;
 pub const ITAG_AAC_128: u32 = 140;
 /// AAC-LC 256 kbit/s: Premium only.
 pub const ITAG_AAC_256: u32 = 141;
+/// Set (to anything) to skip every client but the web one when a JS host
+/// is there: a developer switch for checking the JS path live.
+pub const FORCE_WEB_ENV: &str = "HOCKET_YTM_FORCE_WEB";
 
 /// What the platform's JS host is asked (a hidden WebView on Android, a
 /// hidden `BrowserWindow` on desktop).
@@ -98,6 +101,10 @@ impl StreamChooser {
 
     /// The order to try clients in now.
     pub fn order(&self, premium: bool, js: bool) -> Vec<ClientProfile> {
+        if js && std::env::var_os(FORCE_WEB_ENV).is_some() {
+            // The live check of the JS path (desktop e2e `ytm-js-live`).
+            return vec![WEB_REMIX];
+        }
         let now = self.clock.now_ms();
         let mut m = self.memory.lock();
         m.broken.retain(|_, until| *until > now);

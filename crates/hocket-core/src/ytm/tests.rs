@@ -349,6 +349,65 @@ impl JsHost for FakeJs {
     }
 }
 
+fn web_with_141() -> serde_json::Value {
+    let mut web = fx("player_visionos");
+    let formats = web["streamingData"]["adaptiveFormats"]
+        .as_array_mut()
+        .unwrap();
+    let mut f141 = formats.iter().find(|f| f["itag"] == 140).unwrap().clone();
+    f141["itag"] = 141.into();
+    f141.as_object_mut().unwrap().remove("url");
+    f141["signatureCipher"] =
+        "s=ABC&sp=sig&url=https%3A%2F%2Frr1.googlevideo.com%2Fvideoplayback%3Fitag%3D141".into();
+    formats.push(f141);
+    web
+}
+
+#[tokio::test]
+async fn premium_is_detected_by_the_web_client_offering_141() {
+    // The account menu said free; the web client (through the JS host) offers 141.
+    let http = fake(Arc::new(Mutex::new(vec![
+        ("WEB_REMIX", web_with_141()),
+        ("VISIONOS", fx("player_visionos")),
+    ])));
+    let p = provider_with(http.clone(), true);
+    p.set_js_host(Some(Arc::new(FakeJs(Arc::default()))));
+    assert!(!p.premium());
+    let s = p
+        .resolve_stream("4D7u5KF7SP8", &StreamRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(s.variant, "141");
+    assert!(p.premium());
+
+    // One that only offers 140 there is free, whatever the menu said.
+    let http = fake(Arc::new(Mutex::new(vec![
+        ("WEB_REMIX", fx("player_visionos")),
+        ("VISIONOS", fx("player_visionos")),
+    ])));
+    let p = provider_with(http.clone(), true);
+    p.set_js_host(Some(Arc::new(FakeJs(Arc::default()))));
+    p.set_premium(true);
+    let s = p
+        .resolve_stream("a", &StreamRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(s.variant, "140");
+    assert!(!p.premium());
+    let s = p
+        .resolve_stream("b", &StreamRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(s.variant, "140");
+}
+
+#[test]
+fn the_js_host_script_defines_the_solver_and_the_host() {
+    let s = crate::ytm::js_host_script();
+    assert!(s.contains("var lib=") && s.contains("var jsc="));
+    assert!(s.contains("globalThis.hocketYtm = { prepare, decipher }"));
+}
+
 #[tokio::test]
 async fn premium_takes_141_through_the_js_host_and_falls_back_to_140() {
     let mut web = fx("player_visionos");
