@@ -236,9 +236,12 @@ impl Actor {
         }
         // No account named: the first song's, else the session's.
         let account = if account_id.is_empty() {
+            // The first song's account (a source like `ytm` names no
+            // account: the one that provides it).
             tracks
                 .first()
-                .map(|t| t.source.clone())
+                .and_then(|t| self.accounts.for_source(&t.source))
+                .map(|a| a.info.id.clone())
                 .or_else(|| self.scope_account())
                 .unwrap_or_default()
         } else {

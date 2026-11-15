@@ -322,13 +322,16 @@ impl Actor {
         let Some(removed) = self.accounts.take(&account_id) else {
             return;
         };
+        // What plays came from the account going away (a track names its
+        // source; unless another account still provides that source).
+        let source = removed.info.source.clone();
+        let source_gone = self.accounts.for_source(&source).is_none();
         if self
             .playback
             .track
             .as_ref()
-            .is_some_and(|t| t.server_id == account_id)
+            .is_some_and(|t| t.server_id == account_id || (source_gone && t.server_id == source))
         {
-            // What plays came from the account going away.
             self.unload();
         }
         // Its syncs (and their problems) must not read as another account's.

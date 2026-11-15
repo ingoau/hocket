@@ -307,6 +307,56 @@ async fn signed_in_youtube_music_syncs_and_writes_back_through_the_outbox() {
         .json();
     assert_eq!(edit["actions"][0]["action"], "ACTION_MOVE_VIDEO_BEFORE");
     assert!(edit["actions"][0]["movedSetVideoIdSuccessor"].is_string());
+    drop(log);
+
+    // A new playlist with no account named goes to the first song's
+    // account (its source `ytm` names none).
+    t.events.clear();
+    t.run(Command::CreatePlaylist {
+        account_id: String::new(),
+        name: "New one".into(),
+        tracks: vec![TrackRef::new("ytm", "4D7u5KF7SP8")],
+    })
+    .await;
+    t.wait_until(30_000.0, |_| {
+        http.endpoints().iter().any(|x| x == "playlist/create")
+    })
+    .await;
+    assert!(!t
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, Event::Toast { toast } if toast.message.contains("Unknown server"))));
+
+    // Removing the account unloads its song that is playing.
+    t.run(Command::PlayTracks {
+        tracks: vec![TrackRef::new("ytm", "4D7u5KF7SP8")],
+        start_index: 0,
+        label: "x".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.wait_until(10_000.0, |t| {
+        t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, hocket_core::audio::scripted::ScriptedCall::Load { .. }))
+    })
+    .await;
+    let stops = |t: &TestCore| {
+        t.backend
+            .log()
+            .iter()
+            .filter(|c| matches!(c, hocket_core::audio::scripted::ScriptedCall::Stop))
+            .count()
+    };
+    let before = stops(&t);
+    t.run(Command::RemoveAccount {
+        account_id: "UCme".into(),
+    })
+    .await;
+    assert!(stops(&t) > before, "its song was unloaded");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
