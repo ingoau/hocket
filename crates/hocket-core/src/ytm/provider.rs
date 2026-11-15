@@ -752,24 +752,19 @@ impl Provider for YtmProvider {
 
     fn resolve_stream(&self, id: &str, _req: &StreamRequest) -> ProviderFuture<'_, ResolvedStream> {
         let id = id.to_string();
-        Box::pin(async move {
-            let s = self.stream(&id).await?;
-            let url = Url::parse(&s.url).map_err(|e| ProviderError::Protocol(e.to_string()))?;
-            Ok(ResolvedStream {
-                url,
-                headers: [("User-Agent".to_string(), s.user_agent.to_string())].into(),
-                expires_at: Some(s.expires_at as EpochMs),
-                container: Some("m4a".into()),
-                codec: Some("aac".into()),
-                // YouTube turns a track `loudnessDb` above its reference down by that much.
-                gain_db: s.loudness_db.map(|l| -l),
-                range_capable: true,
-                transcoded: false,
-                max_range: Some(MAX_RANGE),
-                content_length: s.content_length,
-                variant: s.itag.to_string(),
-            })
-        })
+        Box::pin(async move { resolved(&self.stream(&id).await?) })
+    }
+
+    fn resolves_live(&self) -> bool {
+        true
+    }
+
+    fn cached_stream(&self, id: &str) -> Option<ResolvedStream> {
+        let s = self.streams.lock().get(id).cloned()?;
+        if s.expires_at - EXPIRY_MARGIN_MS <= self.clock.now_ms() {
+            return None;
+        }
+        resolved(&s).ok()
     }
 
     fn stream_failed(&self, id: &str, status: u16) {
@@ -1092,4 +1087,23 @@ impl YtmProvider {
             bytes: at,
         })
     }
+}
+
+/// A chosen googlevideo stream as the core hands it on.
+fn resolved(s: &ChosenStream) -> ProviderResult<ResolvedStream> {
+    let url = Url::parse(&s.url).map_err(|e| ProviderError::Protocol(e.to_string()))?;
+    Ok(ResolvedStream {
+        url,
+        headers: [("User-Agent".to_string(), s.user_agent.to_string())].into(),
+        expires_at: Some(s.expires_at as EpochMs),
+        container: Some("m4a".into()),
+        codec: Some("aac".into()),
+        // YouTube turns a track `loudnessDb` above its reference down by that much.
+        gain_db: s.loudness_db.map(|l| -l),
+        range_capable: true,
+        transcoded: false,
+        max_range: Some(MAX_RANGE),
+        content_length: s.content_length,
+        variant: s.itag.to_string(),
+    })
 }

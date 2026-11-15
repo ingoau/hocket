@@ -145,6 +145,8 @@ pub(crate) struct Actor {
     /// Formats particular receivers turned out not to play
     /// (`Command::RendererFailed`), as saved.
     pub renderer_formats: crate::downloads::receivers::Learned,
+    /// Stream URLs the renderer waits for (live providers on a Cast device).
+    pub remote: super::handlers::remote_streams::RemoteStreams,
     /// Background prefetch of the next queue items (transport owner only).
     pub prefetch: super::handlers::prefetch::PrefetchState,
     /// AutoMix analysis on a miss (desktop).
@@ -495,6 +497,7 @@ impl Actor {
             core_stream,
             renderer: None,
             renderer_formats,
+            remote: Default::default(),
             prefetch: Default::default(),
             analysis: Default::default(),
             share: Default::default(),
@@ -679,6 +682,11 @@ impl Actor {
                 result,
             } => self.on_ytm_probed(cookies, js_host, result),
             Internal::YtmJs { request, reply } => self.on_ytm_js(request, reply),
+            Internal::RemoteStreamResolved {
+                source,
+                track_id,
+                error,
+            } => self.on_remote_stream_resolved(source, track_id, error),
             Internal::LiveHomeFetched { account_id } => self.on_live_home_fetched(account_id),
             Internal::Connected { peer, url, tx } => {
                 self.conns.insert(peer.clone(), tx);

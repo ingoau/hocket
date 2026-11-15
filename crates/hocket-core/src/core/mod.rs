@@ -113,6 +113,12 @@ pub enum Internal {
     LiveHomeFetched {
         account_id: AccountId,
     },
+    /// A stream URL for the remote renderer was fetched (`error`: or not).
+    RemoteStreamResolved {
+        source: String,
+        track_id: String,
+        error: Option<String>,
+    },
     /// The YouTube Music JS host is asked something; the reply goes back to
     /// the provider's resolve.
     YtmJs {

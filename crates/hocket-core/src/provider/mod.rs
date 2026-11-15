@@ -286,6 +286,19 @@ pub trait Provider: Send + Sync + 'static {
     /// or ran out: forget it, so the next resolve fetches a fresh one.
     fn stream_failed(&self, _id: &str, _status: u16) {}
 
+    /// Whether `resolve_stream` goes to the network (YouTube Music) rather
+    /// than building a URL on the spot (Navidrome). A remote renderer then
+    /// waits for [`Provider::cached_stream`] to hold one.
+    fn resolves_live(&self) -> bool {
+        false
+    }
+
+    /// A URL an earlier `resolve_stream` fetched that is still good, without
+    /// asking the network (`None` for providers that don't resolve live).
+    fn cached_stream(&self, _id: &str) -> Option<ResolvedStream> {
+        None
+    }
+
     /// The Subsonic client behind a Navidrome provider: for the work that is
     /// Subsonic through and through (mirror sync, smart playlists, playlist
     /// edits by index, the probe). `None` for every other kind.

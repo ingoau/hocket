@@ -4,4 +4,7 @@
     <string name="cast_unreachable">%1$s couldn\'t play from your server. It needs to reach the server address itself (not a VPN-only or .local address, and with a trusted certificate).</string>
     <string name="cast_connect_failed">Couldn\'t connect to %1$s</string>
     <string name="cast_disconnected">%1$s disconnected</string>
+    <string name="cast_ytm_mobile_data">%1$s couldn\'t play YouTube Music while this phone is on mobile data. YouTube Music links only work from the internet connection that fetched them: connect the phone to the same Wi-Fi as %1$s.</string>
+    <string name="cast_ytm_vpn">%1$s couldn\'t play YouTube Music while this phone is on a VPN. YouTube Music links only work from the address that fetched them: turn the VPN off, or leave Hocket out of it, while casting.</string>
+    <string name="cast_ytm_address">%1$s couldn\'t play YouTube Music. YouTube Music links only work from the address that fetched them, so %1$s has to reach the internet the same way as this phone: on the same network, and both over IPv4 or both over IPv6.</string>
 </resources>

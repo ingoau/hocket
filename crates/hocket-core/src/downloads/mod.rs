@@ -1777,6 +1777,39 @@ impl Downloads {
     /// `cannot_play`, see [`receivers`]), and transcodes to a format it
     /// can't, become mp3; the network's transcoding profile still applies
     /// otherwise.
+    /// [`Self::resolve_remote`] for a provider that resolves streams over
+    /// the network: the URL it already fetched (`stream`), as it is. Nothing
+    /// is transcoded; the receiver fetches the URL without its headers.
+    pub fn resolve_remote_live(
+        &self,
+        provider: &dyn Provider,
+        key: &str,
+        track: &api::Track,
+        stream: crate::provider::ResolvedStream,
+    ) -> DbResult<MediaSource> {
+        let mime_type = match stream.container.as_deref() {
+            Some(c) => mime_for(c),
+            None => track.content_type.clone().unwrap_or_else(|| mime_for("")),
+        };
+        Ok(MediaSource {
+            key: key.into(),
+            track: crate::subsonic::convert::summary_of(track),
+            url: stream.url.to_string(),
+            headers: HashMap::new(),
+            mime_type: Some(mime_type),
+            gain_db: stream.gain_db.unwrap_or(0.0),
+            transcoded: false,
+            local: false,
+            artwork_url: track
+                .cover_art
+                .as_deref()
+                .and_then(|id| provider.cover_art_url(id, Some(REMOTE_ARTWORK_SIZE)))
+                .map(|u| u.to_string()),
+            mix_in: None,
+            mix_out_ms: None,
+        })
+    }
+
     pub fn resolve_remote(
         &self,
         provider: &dyn Provider,

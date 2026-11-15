@@ -19,6 +19,7 @@ pub(crate) mod playback;
 pub(crate) mod prefetch;
 pub(crate) mod preview;
 pub(crate) mod prime;
+pub(crate) mod remote_streams;
 pub(crate) mod reports;
 pub(crate) mod session;
 pub(crate) mod settings;

@@ -37,7 +37,12 @@ impl Actor {
             .as_ref()
             .filter(|_| self.core_stream)
             .map(|r| r as &dyn crate::downloads::StreamMinter);
-        let resolved = if let Some(r) = &self.renderer {
+        let resolved = if self.renderer.is_some() && provider.resolves_live() {
+            // Fetched ahead (`want_remote_url`): nothing to hand over until then.
+            let stream = provider.cached_stream(&track.id)?;
+            self.downloads
+                .resolve_remote_live(provider.as_ref(), key, track, stream)
+        } else if let Some(r) = &self.renderer {
             let cannot_play =
                 crate::downloads::receivers::cannot_play(r, &self.renderer_formats, track);
             self.downloads
@@ -148,6 +153,22 @@ impl Actor {
             // Nothing here reads the stream cache while the renderer plays.
             self.cancel_prefetch();
         }
+        // A load waiting for the old renderer's URL loads anew for this one.
+        let waiting = self.remote.wait.take();
+        if let Some(w) = waiting.filter(|_| self.owns_transport()) {
+            if let Some(item) = self
+                .doc()
+                .and_then(|d| d.current.clone())
+                .filter(|i| i.key == w.key)
+            {
+                let play = w.play && self.playback.want_playing && !leaving;
+                self.load_item(&item, w.position_ms, play, w.carried);
+                if !play {
+                    self.playback.want_playing = false;
+                }
+                return;
+            }
+        }
         let reload =
             self.owns_transport() && self.playback.loaded && self.playback.pending_load.is_none();
         if reload {
@@ -182,6 +203,17 @@ impl Actor {
         let Some(renderer) = self.renderer.clone() else {
             return;
         };
+        if let Some(t) = self
+            .playback
+            .track
+            .clone()
+            .filter(|t| t.id == track_id && self.remote_live(t))
+        {
+            // A live stream (YouTube Music) is never transcoded: the
+            // reconnect's reload fetches a fresh URL instead.
+            self.evict_remote_url(&t);
+            return;
+        }
         let track = match self.db.track(track_id) {
             Ok(Some(t)) => t,
             Ok(None) => return,
@@ -252,6 +284,10 @@ impl Actor {
             if !replan || keep {
                 return;
             }
+        }
+        if let Some(t) = next.and_then(|i| self.track_for_item(i)) {
+            // On a renderer, the follow-up's URL is fetched now (it is set once it arrives).
+            self.want_remote_url(&t);
         }
         let source = self.next_source(&upcoming, locked);
         self.playback.next_doc_key = next_key;
@@ -333,6 +369,7 @@ impl Actor {
         carried: Option<(Ms, EpochMs, bool)>,
     ) {
         self.playback.pending_load = None;
+        self.remote.wait = None;
         let Some(track) = self.track_for_item(item) else {
             return;
         };
@@ -413,6 +450,10 @@ impl Actor {
             self.playback.adopted_at = Some(now);
             self.playback.loaded = true;
         } else {
+            if self.remote_live(&track) && !self.want_remote_url(&track) {
+                self.wait_for_remote_url(item, track, position_ms, play, carried);
+                return;
+            }
             let Some(source) = self.media_source_for(&item.key, &track) else {
                 tracing::info!(target: "hocket::player", key = %item.key, track = %track.id, "no source to play this from");
                 self.player_notice(
@@ -432,6 +473,9 @@ impl Actor {
             };
             // Loaded as current, a source never mixes in (a handoff starts
             // the incoming track unmixed); its mix-out comes from what follows.
+            if let Some(t) = upcoming.first().and_then(|i| self.track_for_item(i)) {
+                self.want_remote_url(&t);
+            }
             let mut source = source;
             source.mix_in = None;
             source.mix_out_ms = upcoming
@@ -884,6 +928,9 @@ impl Actor {
 
     fn ensure_loaded_then_play(&mut self) {
         if self.playback.loaded {
+            if self.refresh_remote_on_resume() {
+                return;
+            }
             self.set_playing(true);
         } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
             tracing::debug!(target: "hocket::player", key = %item.key, "play with nothing loaded: loading");
@@ -994,6 +1041,7 @@ impl Actor {
         self.playback.position_ms = self.playback.position_now(now);
         self.playback.position_at = now;
         self.playback.playing = playing;
+        self.remote.paused_at = (!playing).then_some(now);
         let r = if self.playback.pending_load.is_some() {
             // Nothing of this item is in the backend yet: the deferred load
             // starts it playing or paused.
@@ -1356,6 +1404,7 @@ impl Actor {
                 self.playback.position_at = self.now();
                 if self.playback.playing {
                     self.playback.playing = false;
+                    self.remote.paused_at = Some(self.now());
                     let actions = self.scrobbler.set_playing(false);
                     self.apply_scrobble_actions(actions);
                     self.save_position();
@@ -1541,6 +1590,11 @@ impl Actor {
                         let pos = self.playback.position_ms;
                         tracing::debug!(target: "hocket::player", key = %item.key, position_ms = pos, failures, "retrying after a playback error");
                         let play = self.playback.want_playing && !self.playback.focus_suspended;
+                        if let Some(t) = self.playback.track.clone().filter(|t| self.remote_live(t))
+                        {
+                            // The retry fetches a new URL (the receiver may hold a stale one).
+                            self.evict_remote_url(&t);
+                        }
                         self.load_item(&item, pos, play, None);
                         self.playback.load_failures = failures;
                     }
