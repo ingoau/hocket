@@ -1,6 +1,6 @@
 # Providers, then YouTube Music
 
-*Status: Phases 1–3 implemented (15 Nov 2026); later phases planned. Revised after review.*
+*Status: Phases 1–4 implemented (16 Nov 2026); later phases planned. Revised after review.*
 
 Hocket is built around one Navidrome server. This plan turns music sources into
 **providers**: first several Navidrome servers, then YouTube Music, and later
@@ -571,3 +571,100 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
 - **Not verified by hand:** two real servers with overlapping libraries on a phone and the
   desktop; the Android chip, Sources and New playlist sheet are covered by logic tests only (the
   fake cores keep one library).
+
+## Phase 4 notes
+
+*Written while implementing Phase 4. Calls made where the plan was silent or didn't fit the code.*
+
+- **Where things live.** `crates/hocket-core/src/ytm/`: `clients.rs` (every client profile in one
+  table: VISIONOS, ANDROID_VR, IOS, WEB_REMIX), `client.rs` (one call per InnerTube endpoint, with
+  `visitorData` from `sw.js_data` and, signed in, the cookies and `SAPISIDHASH`), `parse.rs` (pure
+  parsers that walk for the item renderers rather than fixed paths), `player.rs` (the client chain
+  and the `JsHost` callback), `provider.rs` (`YtmProvider`), `fixtures/` and `fake.rs` (recorded
+  answers and a fake transport). The actor side is `core/handlers/youtube_music.rs` (accounts, the
+  JS host bridge) and `catalogue.rs`; the mirror walk is `LibrarySync::for_provider`.
+- **Accounts.** `AccountSetup::YoutubeMusic { cookies, js_host }`. Anonymous installs at once as
+  `ytm:anon`; cookies are checked through `account/account_menu`, whose channel (`UC…`) becomes the
+  account id, then the anonymous account is removed. Every YouTube Music account has source `ytm`,
+  so mirror rows, pins, the stream cache, the outbox and queue items all name `ytm`; a list query
+  naming the account id reads the `ytm` mirror (`library_scope`), and the last account of a shared
+  source takes the source's rows with it. A refused session toasts "sign in again" and emits
+  `YtmSignInExpired`. Premium is a heuristic (no "Get Music Premium" upsell in the account menu,
+  shown as `capabilities.serverVersion = "premium"`); it needs checking against real accounts.
+- **Deviation: cookies are never credential-synced.** The brief said YouTube Music credentials ride
+  credential sync when it's on; the Decisions table says it never carries Google cookies and each
+  device signs in itself, and the Risks section warns against using one session on several
+  machines. The table won: `SecretKind` still has no YouTube Music kind. Each platform keeps its
+  sign-in OS-encrypted under one fixed key (`ytm`) and replays it on start.
+- **Library.** Liked songs (`VLLM`, starred), library songs (`FEmusic_liked_videos`) and uploads are
+  the tracks; saved albums and artists and the account's playlists (without Liked Music) are
+  mirrored. Each sync is a full walk (no incremental endpoint), paced by the existing sync interval.
+  The mirror lists songs only; edits by position are mapped onto the live, unfiltered order at
+  flush time (`setVideoId`s; inserts are an add then a move; a move to the end stays clear of hidden
+  entries), which is the "unfiltered index mapping" without storing it.
+- **Songs-only filter, found live:** YouTube Music labels many *album* tracks
+  `MUSIC_VIDEO_TYPE_OMV` (every track of the recorded album). Album pages therefore count all
+  their tracks as songs; elsewhere ATV, uploads and untyped items are songs and OMV/UGC/episodes
+  are hidden.
+- **Catalogue.** Search results, album and artist pages, home shelves and radio picks are kept in a
+  `catalogue` table (schema 13). `track_ref`/`tracks_by_refs` fall back to it, and album, artist,
+  artist-albums and top-songs queries answer from it or fetch live (album and artist ids are
+  recognised by shape: `MPRE…`, `UC…`). List queries never read it, so it isn't the library.
+  Provider answers are also TTL-cached in memory (30 min).
+- **Playback.** Streams go through the stream reader on both platforms: ranges are bounded (1 MiB
+  first, then 8 MiB; `ResolvedStream::max_range`), headers carry the resolving client's
+  User-Agent, and a 403/410 calls `Provider::stream_failed` (a 403 marks that client broken for
+  30 min) and re-resolves the same range. No transcoding profile applies. The cache stays keyed by
+  (source, track, profile): a different variant changes the content length or type, which already
+  discards cached spans rather than mixing them; `ResolvedStream::variant` (the itag) is carried but
+  not part of the key. `loudnessDb` becomes the track gain (negated) when nothing was scanned;
+  it's known once the reader resolved the stream, so the very first play of a track can miss it.
+  Pins of YouTube Music tracks keep the stream (`download_to_file` in bounded ranges, re-resolving
+  on a refusal).
+- **Client chain.** Order VISIONOS → ANDROID_VR → IOS → web (only with a JS host); the client that
+  answered last goes first. Premium with a JS host puts the web client first for itag 141 and falls
+  back to the chain for 140. Plain clients never send the session.
+- **JS host: core side only.** `JsHost`, `Event::YtmJsRequest` and `Command::YtmJsAnswer` are in
+  place and tested with a fake host, but neither platform implements the solver yet (both pass
+  `js_host: false`), so 141 is unreachable and Premium plays 140. Building the hidden
+  WebView/BrowserWindow solver needs a Premium account to develop against.
+- **Edit list.** `audio::padding::parse_mp4_edit_list` reads the single edit; the desktop decoder
+  skips `media_time` (1600 frames) and plays `segment_duration` frames when there's no iTunSMPB.
+  Media3 applies the edit list itself on Android; nothing is corrected there. AutoMix records are
+  keyed `AnalysisKey::ytm(videoId, 140)`; with both platforms trimming, the priming correction is 0.
+  The coordinator worker still analyses Navidrome only (its YouTube Music sign-in isn't built).
+- **Writes.** Like/unlike for songs, albums save via their `OLAK5uy_…` playlist, artists subscribe,
+  playlists create/rename/delete/add/remove/move; ratings and the play queue are no-ops. History is
+  a ping of the web player's `videostatsPlaybackUrl` on a finished scrobble. Signed in, "Add to
+  library" on a song is a like (the web app's own add needs per-item menu tokens a reference lacks).
+- **Hocket library UI.** New core actions "Add to library" / "Remove from library", shown only for
+  songs of an account without a library of its own (anonymous YouTube Music).
+- **Lyrics** come from the YouTube Music lyrics tab (plain text) before LRCLIB; **radio**
+  (`RDAMVM<id>`) feeds autoplay's similar-songs step and Related for YouTube Music seeds.
+- **Home.** Live shelves are fetched in the background, cached for 30 min and announced with
+  `LibraryChanged {tables: ["home"]}`; they're `<accountId>/<slug>` shelves, on by default.
+- **Platforms.** Desktop: a sign-in `BrowserWindow` (own partition, cleared each time, plain
+  Chrome UA) whose cookies main dispatches itself; the setup card and summary; `HOCKET_FAKE_YTM_SIGNIN`
+  for e2e. Android: `YtmSignInActivity` (WebView without `; wv`, cookies cleared first), the card,
+  the summary and the keystore replay (`YtmLogin`).
+- **Tests.** Recorded fixtures (search, album, artist, playlist with hidden videos, home, next,
+  lyrics, three player clients) in `ytm/tests.rs`; library and write answers are hand-made in the
+  web client's shapes (nothing signed in was recorded). Also: chain ordering and skipping, 141 via
+  a fake JS host, ranged downloads with a mid-stream refusal, the reader's re-resolve and bounded
+  ranges (`stream_reader::googlevideo_tests`), the catalogue table, the edit-list parser,
+  `tests/actor_ytm.rs` (anonymous catalogue, Hocket library, home; signed-in sync and outbox
+  writes; expired sign-in), desktop unit tests and `e2e/youtube-music.spec.ts`, Android
+  `YtmLoginTest` and a replay case in `CoreHostReplayTest`.
+- **Live smoke test** (`cargo test -p hocket-core --features decode --test ytm_live -- --ignored`),
+  16 Nov 2026 from the dev host: search 1.5 s (3 requests); resolve via VISIONOS, itag 140,
+  5,983,881 bytes, gain −3.14 dB, 0.28 s; first 1 MiB range 0.8 s; whole stream in bounded ranges
+  8.2 s; Symphonia decoded 369.6 s with the 1600-frame priming trimmed (the edit list's length).
+- **Not done / needs a person:**
+  - Google sign-in on a real Android device and in the desktop window (does Google accept them?),
+    and how long the cookies last; cookie rotation isn't handled.
+  - Premium detection, and itag 141 (needs the JS host on both platforms).
+  - Media3's priming handling on a device (`docs/spikes/manual.md`, 6).
+  - That a Like and history pings show up on music.youtube.com; playlist edits on a real playlist.
+  - The coordinator analysing YouTube Music, and its optional sign-in.
+  - Cast is Phase 5. Not verified: a mixed queue playing gaplessly and handing off between real
+    devices, and the Android UI flows beyond compile and unit tests.
