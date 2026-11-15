@@ -16,6 +16,10 @@ pub enum ClientKind {
     AndroidVr,
     /// iOS: often SABR-only (no URLs) anonymously.
     Ios,
+    /// The TV app (`TVHTML5`, yt-dlp's `tv_samsung`): takes the signed-in
+    /// session and needs no PO token, but its URLs need the player JS
+    /// (signature, `n`). The coordinator's way to stream with its account.
+    Tv,
 }
 
 /// One client profile.
@@ -35,8 +39,11 @@ pub struct ClientProfile {
     pub os_name: Option<&'static str>,
     pub os_version: Option<&'static str>,
     pub android_sdk: Option<u32>,
-    /// Its `player` answers need the platform's JS host (signature, `n`, PO token).
+    /// Its `player` answers need the platform's JS host (signature, `n`).
     pub needs_js: bool,
+    /// Its `player` call carries the signed-in session (cookies and
+    /// `SAPISIDHASH`), as the real app does.
+    pub session: bool,
 }
 
 pub const WEB_REMIX: ClientProfile = ClientProfile {
@@ -52,6 +59,7 @@ pub const WEB_REMIX: ClientProfile = ClientProfile {
     os_version: None,
     android_sdk: None,
     needs_js: true,
+    session: true,
 };
 
 pub const VISIONOS: ClientProfile = ClientProfile {
@@ -67,6 +75,7 @@ pub const VISIONOS: ClientProfile = ClientProfile {
     os_version: Some("26.5.23O471"),
     android_sdk: None,
     needs_js: false,
+    session: false,
 };
 
 pub const ANDROID_VR: ClientProfile = ClientProfile {
@@ -82,6 +91,7 @@ pub const ANDROID_VR: ClientProfile = ClientProfile {
     os_version: Some("12L"),
     android_sdk: Some(32),
     needs_js: false,
+    session: false,
 };
 
 pub const IOS: ClientProfile = ClientProfile {
@@ -97,10 +107,36 @@ pub const IOS: ClientProfile = ClientProfile {
     os_version: Some("18.3.2.22D82"),
     android_sdk: None,
     needs_js: false,
+    session: false,
+};
+
+/// The TV app as yt-dlp's `tv_samsung` poses (its first client for a
+/// signed-in session, Nov 2026): `TVHTML5` 5.x accepts cookies, its
+/// googlevideo URLs need no PO token (yt-dlp gives it no GVS policy), and
+/// the 7.x version is avoided because some sessions get DRM-only formats
+/// there (yt-dlp issue 12563). Its URLs are ciphered: signature and `n` come
+/// from the main player JS (`player_ias.vflset/en_US/base.js`).
+pub const TV: ClientProfile = ClientProfile {
+    kind: ClientKind::Tv,
+    name: "TVHTML5",
+    version: "5.20260707",
+    id: 7,
+    user_agent: "Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1",
+    host: "www.youtube.com",
+    device_make: Some("Samsung"),
+    device_model: Some("UKS9800"),
+    os_name: Some("Tizen"),
+    os_version: Some("2.4.0"),
+    android_sdk: None,
+    needs_js: true,
+    session: true,
 };
 
 /// The `player` fallback chain, in order (`docs/providers.md`, Decisions).
-pub const PLAYER_CHAIN: [ClientProfile; 4] = [VISIONOS, ANDROID_VR, IOS, WEB_REMIX];
+/// The JS clients take part only when the JS host offers them
+/// ([`super::player::JsHost::clients`]); a signed-in session moves the
+/// session-carrying TV client to the front.
+pub const PLAYER_CHAIN: [ClientProfile; 5] = [VISIONOS, ANDROID_VR, IOS, WEB_REMIX, TV];
 
 impl ClientProfile {
     pub fn by_kind(kind: ClientKind) -> ClientProfile {
@@ -109,6 +145,7 @@ impl ClientProfile {
             ClientKind::VisionOs => VISIONOS,
             ClientKind::AndroidVr => ANDROID_VR,
             ClientKind::Ios => IOS,
+            ClientKind::Tv => TV,
         }
     }
 

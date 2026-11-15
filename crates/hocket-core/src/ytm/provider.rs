@@ -163,7 +163,9 @@ impl YtmProvider {
         let js = self.js.read().clone();
         // Signed in with a JS host and Premium not yet known: the web client
         // goes first and its formats tell (141 is Premium only).
-        let probe = js.is_some()
+        let probe = js
+            .as_ref()
+            .is_some_and(|j| j.clients().contains(&super::clients::ClientKind::WebRemix))
             && self.signed_in()
             && self.premium_seen.lock().is_none()
             && *self.premium_probe_after.lock() <= now;

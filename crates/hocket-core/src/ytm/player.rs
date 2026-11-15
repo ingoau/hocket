@@ -2,9 +2,14 @@
 //! (AAC: itag 141 for Premium through the JS host, else 140) and the memory
 //! of which client last worked (`docs/providers.md`, Decisions).
 //!
-//! Order: `VISIONOS`, `ANDROID_VR`, `IOS`, then the web client through the
-//! platform's [`JsHost`] (signature, `n` and PO token). A Premium account
-//! tries the web client first, for 141, and falls back to the chain for 140.
+//! Order: `VISIONOS`, `ANDROID_VR`, `IOS`, then the JS clients the
+//! [`JsHost`] offers: the web client on the platforms' hidden pages
+//! (signature, `n` and PO token), the TV app on the coordinator's embedded
+//! engine (signature and `n`; it needs no PO token). A Premium account tries
+//! the web client first, for 141, and falls back to the chain for 140; a
+//! signed-in session tries the TV app first, since it streams with the
+//! account (uploads, region- and account-only tracks), and falls back to the
+//! anonymous chain.
 //! The first client that answers a usable AAC URL wins and is tried first
 //! next time; a client whose URL was refused (403 mid-stream) is skipped for
 //! [`BROKEN_FOR_MS`].
@@ -16,7 +21,7 @@ use futures::future::BoxFuture;
 use parking_lot::Mutex;
 
 use super::client::{InnerTube, WebPlayerParams};
-use super::clients::{ClientKind, ClientProfile, PLAYER_CHAIN, WEB_REMIX};
+use super::clients::{ClientKind, ClientProfile, PLAYER_CHAIN};
 use super::parse::{parse_player, AudioFormat, PlayerInfo};
 use crate::provider::{ProviderError, ProviderResult};
 use crate::util::Clock;
@@ -30,8 +35,9 @@ pub const EXPIRY_MARGIN_MS: f64 = 10.0 * 60_000.0;
 pub const ITAG_AAC_128: u32 = 140;
 /// AAC-LC 256 kbit/s: Premium only.
 pub const ITAG_AAC_256: u32 = 141;
-/// Set (to anything) to skip every client but the web one when a JS host
-/// is there: a developer switch for checking the JS path live.
+/// Set (to anything) to skip every client but the JS host's (the web one on
+/// the platforms, the TV one on the coordinator): a developer switch for
+/// checking the JS path live.
 pub const FORCE_WEB_ENV: &str = "HOCKET_YTM_FORCE_WEB";
 
 /// What the platform's JS host is asked (a hidden WebView on Android, a
@@ -59,9 +65,17 @@ pub struct JsAnswer {
     pub urls: Vec<String>,
 }
 
-/// The platform callback for the web client's puzzles.
+/// The callback for the JS clients' puzzles: the platform's hidden page, or
+/// the coordinator's embedded engine.
 pub trait JsHost: Send + Sync + 'static {
     fn solve(&self, req: JsRequest) -> BoxFuture<'static, Result<JsAnswer, String>>;
+
+    /// The JS clients this host can serve. The platforms' pages mint PO
+    /// tokens, which the web client needs; an engine that can't mint them
+    /// serves the TV app only.
+    fn clients(&self) -> &'static [ClientKind] {
+        &[ClientKind::WebRemix]
+    }
 }
 
 /// A resolved googlevideo URL.
@@ -99,11 +113,18 @@ impl StreamChooser {
         }
     }
 
-    /// The order to try clients in now.
-    pub fn order(&self, premium: bool, js: bool) -> Vec<ClientProfile> {
-        if js && std::env::var_os(FORCE_WEB_ENV).is_some() {
-            // The live check of the JS path (desktop e2e `ytm-js-live`).
-            return vec![WEB_REMIX];
+    /// The order to try clients in now. `js`: the JS clients the host
+    /// serves (none without a host); `signed_in`: a session is there.
+    pub fn order(&self, premium: bool, js: &[ClientKind], signed_in: bool) -> Vec<ClientProfile> {
+        let offered = |c: &ClientProfile| !c.needs_js || js.contains(&c.kind);
+        if !js.is_empty() && std::env::var_os(FORCE_WEB_ENV).is_some() {
+            // The live check of the JS path (desktop e2e `ytm-js-live`, the
+            // coordinator's `ytm_live`).
+            return PLAYER_CHAIN
+                .iter()
+                .copied()
+                .filter(|c| c.needs_js && offered(c))
+                .collect();
         }
         let now = self.clock.now_ms();
         let mut m = self.memory.lock();
@@ -111,18 +132,22 @@ impl StreamChooser {
         let mut order: Vec<ClientProfile> = PLAYER_CHAIN
             .iter()
             .copied()
-            .filter(|c| !c.needs_js || js)
+            .filter(offered)
             .filter(|c| !m.broken.contains_key(&c.kind))
             .collect();
-        if premium && js && !m.broken.contains_key(&ClientKind::WebRemix) {
+        let has = |kind: ClientKind| order.iter().any(|c| c.kind == kind);
+        let front = if premium && has(ClientKind::WebRemix) {
             // 141 comes only through the web client.
-            order.retain(|c| c.kind != ClientKind::WebRemix);
-            order.insert(0, WEB_REMIX);
-        } else if let Some(last) = m.last_good {
-            if let Some(i) = order.iter().position(|c| c.kind == last) {
-                let c = order.remove(i);
-                order.insert(0, c);
-            }
+            Some(ClientKind::WebRemix)
+        } else if signed_in && has(ClientKind::Tv) {
+            // The session streams through the TV app; the rest stay anonymous.
+            Some(ClientKind::Tv)
+        } else {
+            m.last_good
+        };
+        if let Some(i) = front.and_then(|k| order.iter().position(|c| c.kind == k)) {
+            let c = order.remove(i);
+            order.insert(0, c);
         }
         order
     }
@@ -154,10 +179,14 @@ impl StreamChooser {
         video_id: &str,
     ) -> ProviderResult<ChosenStream> {
         let mut last_err: Option<ProviderError> = None;
-        for profile in self.order(premium, js.is_some()) {
+        let js_clients = js.map_or(&[][..], |j| j.clients());
+        for profile in self.order(premium, js_clients, it.signed_in()) {
             let r = if profile.needs_js {
                 match js {
-                    Some(js) => self.try_web(it, js.as_ref(), premium, video_id).await,
+                    Some(js) => {
+                        self.try_js(it, js.as_ref(), profile, premium, video_id)
+                            .await
+                    }
                     None => continue,
                 }
             } else {
@@ -205,13 +234,17 @@ impl StreamChooser {
         Ok(self.chosen(profile, f.url.clone().unwrap_or_default(), &f, info))
     }
 
-    async fn try_web(
+    /// A JS client: the player's signature timestamp (and, for the web
+    /// client, a PO token) first, then the format's signature and `n`.
+    async fn try_js(
         &self,
         it: &InnerTube,
         js: &dyn JsHost,
+        profile: ClientProfile,
         premium: bool,
         video_id: &str,
     ) -> ProviderResult<ChosenStream> {
+        let web = profile.kind == ClientKind::WebRemix;
         let visitor_data = it.visitor_data().await?;
         let prep = js
             .solve(JsRequest::Prepare {
@@ -220,21 +253,24 @@ impl StreamChooser {
             })
             .await
             .map_err(ProviderError::Unsupported)?;
+        // Only the web client's URLs need the PO token.
+        let po_token = prep.po_token.filter(|_| web);
         let params = WebPlayerParams {
             signature_timestamp: prep.signature_timestamp,
-            po_token: prep.po_token.clone(),
+            po_token: po_token.clone(),
         };
-        let v = it.player(WEB_REMIX, video_id, Some(&params)).await?;
+        let v = it.player(profile, video_id, Some(&params)).await?;
         let info = parse_player(&v);
         check_playable(&info, it)?;
-        let f = pick_format(&info.formats, premium)
-            .ok_or_else(|| ProviderError::Unsupported("web: no AAC format".into()))?
+        // 141 only through the web client: everything else (and the
+        // coordinator's analysis key) is 140.
+        let f = pick_format(&info.formats, premium && web)
+            .ok_or_else(|| ProviderError::Unsupported(format!("{}: no AAC format", profile.name)))?
             .clone();
-        let raw = f
-            .url
-            .clone()
-            .or_else(|| f.cipher.clone())
-            .ok_or_else(|| ProviderError::Unsupported("web: SABR only".into()))?;
+        let raw =
+            f.url.clone().or_else(|| f.cipher.clone()).ok_or_else(|| {
+                ProviderError::Unsupported(format!("{}: SABR only", profile.name))
+            })?;
         let answer = js
             .solve(JsRequest::Decipher {
                 video_id: video_id.into(),
@@ -242,15 +278,14 @@ impl StreamChooser {
             })
             .await
             .map_err(ProviderError::Unsupported)?;
-        let mut url =
-            answer.urls.into_iter().next().ok_or_else(|| {
-                ProviderError::Unsupported("web: the JS host signed nothing".into())
-            })?;
-        if let Some(pot) = prep.po_token.as_deref().filter(|_| !url.contains("&pot=")) {
+        let mut url = answer.urls.into_iter().next().ok_or_else(|| {
+            ProviderError::Unsupported(format!("{}: the JS host signed nothing", profile.name))
+        })?;
+        if let Some(pot) = po_token.as_deref().filter(|_| !url.contains("&pot=")) {
             url.push_str("&pot=");
             url.push_str(&urlencode(pot));
         }
-        Ok(self.chosen(WEB_REMIX, url, &f, info))
+        Ok(self.chosen(profile, url, &f, info))
     }
 
     fn chosen(

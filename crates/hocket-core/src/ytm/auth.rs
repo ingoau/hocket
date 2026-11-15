@@ -56,13 +56,27 @@ impl Cookies {
             .filter(|v| !v.is_empty())
     }
 
-    /// `Authorization: SAPISIDHASH <ts>_<sha1(ts SAPISID origin)>`.
+    /// `Authorization: SAPISIDHASH <ts>_<sha1(ts SAPISID origin)>`, followed
+    /// by the `SAPISID1PHASH` / `SAPISID3PHASH` forms when the jar has
+    /// `__Secure-1PAPISID` / `__Secure-3PAPISID` (as the web app and yt-dlp send).
     pub fn authorization(&self, origin: &str, now_s: u64) -> Option<String> {
         let sapisid = self.sapisid()?;
-        Some(format!(
+        let mut parts = vec![format!(
             "SAPISIDHASH {now_s}_{}",
             sapisid_hash(now_s, sapisid, origin)
-        ))
+        )];
+        for (scheme, name) in [
+            ("SAPISID1PHASH", "__Secure-1PAPISID"),
+            ("SAPISID3PHASH", "__Secure-3PAPISID"),
+        ] {
+            if let Some(v) = self.get(name).filter(|v| !v.is_empty()) {
+                parts.push(format!(
+                    "{scheme} {now_s}_{}",
+                    sapisid_hash(now_s, v, origin)
+                ));
+            }
+        }
+        Some(parts.join(" "))
     }
 }
 
@@ -96,6 +110,12 @@ mod tests {
         assert_eq!(auth.len(), "SAPISIDHASH 1700000000_".len() + 40);
         assert!(!format!("{c:?}").contains("abc123"));
         let secure = Cookies::parse("__Secure-3PAPISID=zz").unwrap();
-        assert!(secure.authorization("o", 1).is_some());
+        assert_eq!(
+            secure.authorization("o", 1).unwrap(),
+            format!(
+                "SAPISIDHASH 1_{h} SAPISID3PHASH 1_{h}",
+                h = sapisid_hash(1, "zz", "o")
+            )
+        );
     }
 }

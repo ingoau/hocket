@@ -281,7 +281,7 @@ async fn the_chain_falls_through_sabr_only_clients_and_skips_a_refused_one() {
     assert_eq!(tried, ["VISIONOS", "ANDROID_VR"]);
     // The client that worked is tried first next time.
     assert_eq!(
-        p.chooser().order(false, false)[0].kind,
+        p.chooser().order(false, &[], false)[0].kind,
         ClientKind::AndroidVr
     );
     // googlevideo refuses its URL mid-stream: re-resolve skips android_vr.
@@ -312,7 +312,7 @@ async fn the_chain_falls_through_sabr_only_clients_and_skips_a_refused_one() {
         .unwrap();
     p.stream_failed("4D7u5KF7SP8", 410);
     assert_eq!(
-        p.chooser().order(false, false)[0].kind,
+        p.chooser().order(false, &[], false)[0].kind,
         ClientKind::VisionOs
     );
 }
@@ -761,5 +761,172 @@ async fn downloads_go_in_bounded_ranges_and_re_resolve_on_a_refusal() {
             .iter()
             .any(|(u, a, _)| u.ends_with("n=2") && *a == 1024 * 1024),
         "resumed at the same offset"
+    );
+}
+
+/// The coordinator's kind of JS host: no PO tokens, so the TV app only.
+struct TvJs(Arc<Mutex<Vec<JsRequest>>>);
+
+impl JsHost for TvJs {
+    fn solve(
+        &self,
+        req: JsRequest,
+    ) -> futures::future::BoxFuture<'static, Result<JsAnswer, String>> {
+        let inner = FakeJs(self.0.clone()).solve(req);
+        Box::pin(async move {
+            let mut a = inner.await?;
+            a.po_token = None;
+            Ok(a)
+        })
+    }
+
+    fn clients(&self) -> &'static [ClientKind] {
+        &[ClientKind::Tv]
+    }
+}
+
+fn player_clients(http: &FakeYtmHttp) -> Vec<String> {
+    http.log
+        .lock()
+        .iter()
+        .filter(|r| endpoint(r) == "player")
+        .map(|r| {
+            r.json()["context"]["client"]["clientName"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_signed_in_session_streams_through_the_tv_app_with_its_cookies() {
+    // The TV app offers 141 too (Premium): the coordinator still takes 140.
+    let http = fake(Arc::new(Mutex::new(vec![
+        ("TVHTML5", web_with_141()),
+        ("VISIONOS", fx("player_visionos")),
+    ])));
+    let p = provider_with(http.clone(), true);
+    let asked = Arc::new(Mutex::new(vec![]));
+    p.set_js_host(Some(Arc::new(TvJs(asked.clone()))));
+    p.set_premium(true);
+    let s = p
+        .resolve_stream("4D7u5KF7SP8", &StreamRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(s.variant, "140");
+    assert!(
+        s.url.as_str().contains("signed=1"),
+        "deciphered by the host"
+    );
+    assert!(!s.url.as_str().contains("pot="));
+    assert_eq!(player_clients(&http), ["TVHTML5"]);
+    let player = http
+        .log
+        .lock()
+        .iter()
+        .find(|r| endpoint(r) == "player")
+        .cloned()
+        .unwrap();
+    assert_eq!(player.header("Cookie"), Some("SAPISID=abc; SID=x"));
+    let auth = player.header("Authorization").unwrap();
+    assert!(auth.starts_with("SAPISIDHASH 1763200000_"), "{auth}");
+    assert_eq!(player.header("X-Origin"), Some("https://www.youtube.com"));
+    assert_eq!(player.header("X-YouTube-Client-Name"), Some("7"));
+    assert!(player.header("User-Agent").unwrap().contains("Tizen"));
+    let body = player.json();
+    assert_eq!(body["context"]["client"]["clientVersion"], "5.20260707");
+    assert_eq!(body["context"]["client"]["deviceMake"], "Samsung");
+    assert_eq!(
+        body["playbackContext"]["contentPlaybackContext"]["signatureTimestamp"],
+        20_400
+    );
+    assert!(body.get("serviceIntegrityDimensions").is_none());
+    assert!(matches!(asked.lock()[1], JsRequest::Decipher { .. }));
+    // Never the web client: this host can't mint its PO tokens.
+    assert_eq!(
+        p.chooser()
+            .order(true, &[ClientKind::Tv], true)
+            .iter()
+            .map(|c| c.kind)
+            .collect::<Vec<_>>(),
+        [
+            ClientKind::Tv,
+            ClientKind::VisionOs,
+            ClientKind::AndroidVr,
+            ClientKind::Ios
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_refused_session_falls_back_to_the_anonymous_chain() {
+    let refused = json!({"playabilityStatus": {"status": "LOGIN_REQUIRED", "reason": "Sign in to confirm you're not a bot"}});
+    let http = fake(Arc::new(Mutex::new(vec![
+        ("TVHTML5", refused),
+        ("VISIONOS", fx("player_visionos")),
+    ])));
+    let p = provider_with(http.clone(), true);
+    p.set_js_host(Some(Arc::new(TvJs(Arc::default()))));
+    let s = p
+        .resolve_stream("4D7u5KF7SP8", &StreamRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(s.variant, "140");
+    assert_eq!(player_clients(&http), ["TVHTML5", "VISIONOS"]);
+    let log = http.log.lock();
+    let visionos = log
+        .iter()
+        .find(|r| {
+            endpoint(r) == "player" && r.json()["context"]["client"]["clientName"] == "VISIONOS"
+        })
+        .unwrap();
+    assert!(visionos.header("Cookie").is_none() && visionos.header("Authorization").is_none());
+    drop(log);
+
+    // googlevideo refuses the TV URL mid-stream: the TV app is skipped for a while.
+    let http = fake(Arc::new(Mutex::new(vec![
+        ("TVHTML5", fx("player_visionos")),
+        ("VISIONOS", fx("player_visionos")),
+    ])));
+    let p = provider_with(http.clone(), true);
+    p.set_js_host(Some(Arc::new(TvJs(Arc::default()))));
+    p.resolve_stream("4D7u5KF7SP8", &StreamRequest::default())
+        .await
+        .unwrap();
+    p.stream_failed("4D7u5KF7SP8", 403);
+    http.log.lock().clear();
+    p.resolve_stream("4D7u5KF7SP8", &StreamRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(player_clients(&http), ["VISIONOS"]);
+}
+
+#[test]
+fn anonymous_the_tv_app_is_the_last_resort_and_the_web_client_needs_a_minting_host() {
+    let p = provider_with(fake(players(&[])), false);
+    let kinds =
+        |o: Vec<super::clients::ClientProfile>| o.iter().map(|c| c.kind).collect::<Vec<_>>();
+    assert_eq!(
+        kinds(p.chooser().order(false, &[ClientKind::Tv], false)),
+        [
+            ClientKind::VisionOs,
+            ClientKind::AndroidVr,
+            ClientKind::Ios,
+            ClientKind::Tv
+        ]
+    );
+    // The platforms' pages (the default `clients`) never get the TV app.
+    assert_eq!(
+        kinds(
+            p.chooser()
+                .order(false, FakeJs(Arc::default()).clients(), true)
+        ),
+        [
+            ClientKind::VisionOs,
+            ClientKind::AndroidVr,
+            ClientKind::Ios,
+            ClientKind::WebRemix
+        ]
     );
 }

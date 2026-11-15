@@ -2,7 +2,8 @@
 //! [`super::parse`] turns into items. Requests carry `visitorData` (fetched
 //! once and refreshed) and, when signed in, the cookies and `SAPISIDHASH`.
 //! `player` calls from the no-JS clients stay anonymous, so a session is
-//! only ever used the way the web app uses it.
+//! only ever used by the clients that carry one in the real apps (the web
+//! client and the TV app, [`ClientProfile::session`]).
 
 use std::sync::Arc;
 
@@ -10,7 +11,7 @@ use parking_lot::{Mutex, RwLock};
 use serde_json::{json, Value};
 
 use super::auth::Cookies;
-use super::clients::{ClientKind, ClientProfile, WEB_REMIX};
+use super::clients::{ClientProfile, WEB_REMIX};
 use super::http::{HttpMethod, HttpRequest, HttpResponse, YtmHttp};
 use crate::provider::{ProviderError, ProviderResult};
 use crate::util::Clock;
@@ -182,7 +183,8 @@ impl InnerTube {
         }
     }
 
-    /// One InnerTube call as `profile`. `auth`: send the session (web client only).
+    /// One InnerTube call as `profile`. `auth`: send the session (only for a
+    /// client that carries one, [`ClientProfile::session`]).
     pub async fn call(
         &self,
         profile: ClientProfile,
@@ -201,11 +203,12 @@ impl InnerTube {
             ("Origin".into(), origin.clone()),
             ("X-Goog-Visitor-Id".into(), visitor),
         ];
-        if auth && profile.kind == ClientKind::WebRemix {
+        if auth && profile.session {
             if let Some(c) = self.cookies.read().clone() {
                 let now_s = (self.clock.now_ms() / 1000.0) as u64;
                 if let Some(a) = c.authorization(&origin, now_s) {
                     headers.push(("Authorization".into(), a));
+                    headers.push(("X-Origin".into(), origin.clone()));
                 }
                 headers.push(("Cookie".into(), c.header().to_string()));
                 headers.push(("X-Goog-AuthUser".into(), "0".into()));
@@ -269,8 +272,9 @@ impl InnerTube {
         self.web("next", body).await
     }
 
-    /// `player` as `profile`. The web client also takes the JS host's
-    /// signature timestamp and PO token, and the session.
+    /// `player` as `profile`. The JS clients also take the JS host's
+    /// signature timestamp (and the web client its PO token), and the
+    /// session-carrying ones the session.
     pub async fn player(
         &self,
         profile: ClientProfile,
@@ -279,16 +283,16 @@ impl InnerTube {
     ) -> ProviderResult<Value> {
         let mut body = json!({ "videoId": video_id, "contentCheckOk": true, "racyCheckOk": true });
         if let Some(w) = web {
+            let mut ctx = json!({"html5Preference": "HTML5_PREF_WANTS"});
             if let Some(sts) = w.signature_timestamp {
-                body["playbackContext"] =
-                    json!({"contentPlaybackContext": {"signatureTimestamp": sts}});
+                ctx["signatureTimestamp"] = sts.into();
             }
+            body["playbackContext"] = json!({ "contentPlaybackContext": ctx });
             if let Some(pot) = &w.po_token {
                 body["serviceIntegrityDimensions"] = json!({ "poToken": pot });
             }
         }
-        let auth = profile.kind == ClientKind::WebRemix;
-        self.call(profile, "player", body, auth).await
+        self.call(profile, "player", body, profile.session).await
     }
 
     pub async fn account_menu(&self) -> ProviderResult<Value> {
