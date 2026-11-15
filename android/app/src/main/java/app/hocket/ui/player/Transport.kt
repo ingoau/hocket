@@ -285,7 +285,7 @@ private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, co
  * and `setProgress` for the screen reader's adjust gestures.
  */
 @Composable
-fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, stillWave: Boolean = false, advancing: Boolean = playing, centre: (@Composable () -> Unit)? = null) {
+fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, stillWave: Boolean = false, advancing: Boolean = playing, centre: (@Composable () -> Unit)? = null, timesFold: () -> Float = { 0f }) {
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
     val currentPosition by rememberUpdatedState(position)
@@ -414,7 +414,7 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
             )
         }
     }
-    SeekTimes(positionS * 1000, durationMs, centre)
+    SeekTimes(positionS * 1000, durationMs, centre, timesFold)
     }
 }
 
@@ -423,7 +423,7 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
  * The times are read by the seek bar's own node, so they stay out of the accessibility tree.
  */
 @Composable
-private fun SeekTimes(positionMs: Long, durationMs: Long, centre: (@Composable () -> Unit)?) {
+private fun SeekTimes(positionMs: Long, durationMs: Long, centre: (@Composable () -> Unit)?, fold: () -> Float) {
     val style = MaterialTheme.typography.labelMedium
     val color = MaterialTheme.colorScheme.onSurfaceVariant
     val remaining = stringResource(R.string.player_remaining, formatClock((durationMs - positionMs).coerceAtLeast(0)))
@@ -433,7 +433,7 @@ private fun SeekTimes(positionMs: Long, durationMs: Long, centre: (@Composable (
             // Up into the touch area's slack: the same 16 dp below the wave's centre line as ever.
             val pull = (48.dp - WAVE_TOP - WAVE_HEIGHT / 2 - 16.dp).roundToPx()
             layout(p.width, (p.height - pull).coerceAtLeast(0)) { p.place(0, -pull) }
-        },
+        }.graphicsLayer { alpha = (1f - 2f * fold()).coerceIn(0f, 1f) }, // Gone as the controls fold ([fold]).
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
