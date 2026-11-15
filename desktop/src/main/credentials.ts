@@ -89,6 +89,12 @@ export class ServerCredentialStore {
   private volatile = new Map<string, string>();
   /** Set by a RemoveAccount on its way to the core; the next AccountsChanged may then prune. */
   private removalPending = false;
+  /**
+   * Credentials the core hasn't listed yet: loaded from disk (replayed at
+   * startup) or just remembered. An AccountsChanged that predates their
+   * AddAccount must not prune them; only one after a RemoveAccount may.
+   */
+  private unconfirmed = new Set<string>();
 
   private constructor(
     private readonly path: string,
@@ -146,10 +152,12 @@ export class ServerCredentialStore {
     if (!this.usable) {
       console.warn("[credentials] OS encryption unavailable; password kept in memory for this session only");
       this.volatile.set(key, password);
+      this.unconfirmed.add(key);
       if (hadBlob) this.flush();
       return;
     }
     this.volatile.delete(key);
+    this.unconfirmed.add(key);
     const entry: KnownCredential = { url, username, name, password, kind };
     this.known.set(key, entry);
     // Off disk now, not once the new blob lands: a quit in between must not replay the old password.
@@ -179,9 +187,13 @@ export class ServerCredentialStore {
    */
   retainOnly(accounts: { id: string; kind?: string }[]): void {
     if (!accounts.length && !this.removalPending) return;
+    const removalPending = this.removalPending;
     this.removalPending = false;
     const keep = new Set(accounts.map((s) => s.id));
     if (accounts.some((a) => a.kind === "youtubeMusic")) keep.add(YTM_KEY);
+    for (const key of [...this.unconfirmed]) if (keep.has(key)) this.unconfirmed.delete(key);
+    if (removalPending) this.unconfirmed.clear();
+    else for (const key of this.unconfirmed) keep.add(key);
     let dropped = false;
     for (const map of [this.known, this.undecryptable])
       for (const key of [...map.keys()])
@@ -244,8 +256,10 @@ export class ServerCredentialStore {
     );
     for (const e of decrypted) {
       const key = ServerCredentialStore.key(e.url, e.username, e.kind);
-      if ("password" in e) this.known.set(key, e);
-      else this.undecryptable.set(key, e);
+      if ("password" in e) {
+        this.known.set(key, e);
+        this.unconfirmed.add(key);
+      } else this.undecryptable.set(key, e);
     }
     if (reEncrypted) this.flush();
   }

@@ -57,6 +57,22 @@ describe("ServerCredentialStore", () => {
     await vi.waitFor(() => expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: true } } } }]));
   });
 
+  it("an AccountsChanged from before the replay doesn't prune what is about to be replayed", async () => {
+    await (await open(dir)).remember("https://a.example", "alice", "pw");
+    (await open(dir)).intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SID=x", js_host: true } } } });
+    await vi.waitFor(() => expect(onDisk(dir)).toHaveLength(2));
+    const again = await open(dir);
+    // The core starts with only the Navidrome account it keeps itself.
+    again.retainOnly([{ id: accountIdFor("https://a.example", "alice") }]);
+    expect(again.replayCommands()).toHaveLength(2);
+    expect(onDisk(dir)).toHaveLength(2);
+    // Once the core has listed it, a later list without it (after a removal) prunes it.
+    again.retainOnly([{ id: accountIdFor("https://a.example", "alice") }, { id: "UCme", kind: "youtubeMusic" }]);
+    again.intercept({ type: "removeAccount", data: { account_id: "UCme" } });
+    again.retainOnly([{ id: accountIdFor("https://a.example", "alice") }]);
+    expect(again.replayCommands()).toHaveLength(1);
+  });
+
   it("treats the Linux basic_text backend as no encryption at all", async () => {
     expect(await encryptionUsable(fakeStorage("basic_text"), "linux")).toBe(false);
     expect(await encryptionUsable(fakeStorage("gnome_libsecret"), "linux")).toBe(true);
