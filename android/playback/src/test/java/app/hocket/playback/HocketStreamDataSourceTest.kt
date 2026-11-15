@@ -310,12 +310,12 @@ class HocketStreamDataSourceTest {
         val streams = FakeStreams(mapOf("good" to wav()))
         val backend = ExoBackend(ApplicationProvider.getApplicationContext(), scope, { dispatched += it }, streams = { streams })
         try {
-            backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a", "hocket-stream://good"), null, 0u, false)))
+            backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a", "hocket-stream://good"), null, 0u, false, 1u)))
             runUntil(describe = { "calls=${streams.calls} dispatched=$dispatched" }) { dispatched.any { (it as? Command.BackendReport)?.data?.report is BackendReport.Ready } }
             assertTrue(streams.calls.first().startsWith("open hocket-stream://good @0"))
 
             dispatched.clear()
-            backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("b", "hocket-stream://expired"), null, 0u, true)))
+            backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("b", "hocket-stream://expired"), null, 0u, true, 1u)))
             runUntil(describe = { "calls=${streams.calls} dispatched=$dispatched" }) { dispatched.any { (it as? Command.BackendReport)?.data?.report is BackendReport.Error } }
             val error = dispatched.mapNotNull { ((it as? Command.BackendReport)?.data?.report as? BackendReport.Error)?.data }.single()
             assertEquals("b", error.key)

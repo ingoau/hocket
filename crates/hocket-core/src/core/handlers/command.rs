@@ -334,10 +334,13 @@ impl Actor {
             }
 
             // -- from the platform --
-            Command::BackendReport { report } => match &self.external {
-                Some(ext) => ext.report(report),
-                None => self.on_backend_report(report),
-            },
+            // Filtered and acted on in one step: a `Load` issued in between
+            // would otherwise find the report already let through.
+            Command::BackendReport { report } => {
+                if self.external.as_ref().is_none_or(|ext| ext.admit(&report)) {
+                    self.on_backend_report(report);
+                }
+            }
             Command::MediaSessionCommand { action, value } => {
                 self.media_session_command(action, value)
             }

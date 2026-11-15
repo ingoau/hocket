@@ -62,7 +62,10 @@ fixture so serde/kotlinx drift fails a JVM test.
 `PlaybackService` (a Media3 `MediaLibraryService`, `foregroundServiceType="mediaPlayback"`) owns
 the one core for the process through `CoreHost`:
 
-- `Event.Backend(BackendCommand)` -> `ExoBackend` -> ExoPlayer. `Load` builds a per-item media
+- `Event.Backend(BackendCommand)` -> `ExoBackend` -> ExoPlayer. `Load` is first acknowledged with
+  `LoadApplied(load_id)` (the Cast renderer does the same): the core drops reports about items that
+  arrive between a `Load` and its acknowledgement, since they were sent about what was loaded before.
+  `Load` then builds a per-item media
   source through `DefaultMediaSourceFactory` over `CoreStreamDataSourceFactory` (each item carries its
   own headers) plus the gapless follow-up as a second playlist item; `SetNext` replaces everything after the current item; the transition is
   detected from `onMediaItemTransition(AUTO)`, reported as `Ended` (played item) then

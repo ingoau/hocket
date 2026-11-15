@@ -7,6 +7,7 @@ import app.hocket.core.api.AudioMode
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.BackendReport
 import app.hocket.core.api.BackendReportEndedInner
+import app.hocket.core.api.BackendReportLoadAppliedInner
 import app.hocket.core.api.BackendReportPlayingInner
 import app.hocket.core.api.BackendReportPositionInner
 import app.hocket.core.api.BackendReportReadyInner
@@ -172,6 +173,8 @@ class RealCoreEndToEndTest {
 
         // The backend reports back like ExoPlayer would; the core's transport follows.
         val key = loadCmd.data.source.key
+        // First the acknowledgement: the core drops reports about items until the player applied the Load.
+        core.dispatch(Commands.backendReport(BackendReport.LoadApplied(BackendReportLoadAppliedInner(loadCmd.data.load_id))))
         core.dispatch(Commands.backendReport(BackendReport.Ready(BackendReportReadyInner(key, 4000u))))
         core.dispatch(Commands.backendReport(BackendReport.Playing(BackendReportPlayingInner(key, 0u))))
         waitFor { e -> (e as? Event.TransportChanged)?.takeIf { it.data.transport.position.isPlaying } }

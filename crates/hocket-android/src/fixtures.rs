@@ -143,6 +143,12 @@ mod tests {
             }),
         );
         push(
+            "command.backendReport.loadApplied",
+            json!(Command::BackendReport {
+                report: BackendReport::LoadApplied { load_id: 7 }
+            }),
+        );
+        push(
             "command.backendReport.position",
             json!(Command::BackendReport {
                 report: BackendReport::Position {
@@ -459,6 +465,7 @@ mod tests {
                     next: None,
                     position_ms: 0,
                     play: true,
+                    load_id: 7,
                 }
             }),
         );

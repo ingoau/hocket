@@ -32,6 +32,7 @@ import app.hocket.core.api.BackendReportAudioFocusLostInner
 import app.hocket.core.api.BackendReportBufferingInner
 import app.hocket.core.api.BackendReportEndedInner
 import app.hocket.core.api.BackendReportErrorInner
+import app.hocket.core.api.BackendReportLoadAppliedInner
 import app.hocket.core.api.BackendReportPausedInner
 import app.hocket.core.api.BackendReportPlayingInner
 import app.hocket.core.api.BackendReportPositionInner
@@ -72,6 +73,8 @@ import kotlin.math.roundToInt
  * application thread).
  *
  * Mapping, as documented in `android/README.md`:
+ * - Every `Load` is acknowledged first with `LoadApplied(load_id)`, even while inactive: the core
+ *   drops reports about items between a `Load` and its acknowledgement.
  * - `Load` builds a per-item media source through `DefaultMediaSourceFactory` over
  *   [CoreStreamDataSourceFactory] (so each item carries its own headers) and, when `next` is given, a
  *   second one behind it; ExoPlayer's playlist transition is the gapless join. `hocket-stream://`
@@ -590,6 +593,8 @@ class ExoBackend(
         when (command) {
             is BackendCommand.Load -> {
                 val d = command.data
+                // First: whatever this player said before is about what it had loaded before.
+                acknowledge(d.load_id)
                 resetTransition()
                 sources.clear()
                 // Clipped only when a transition out of it is planned; a later plan finds it unclipped and plays gapless.
@@ -1172,6 +1177,12 @@ class ExoBackend(
     private fun report(report: BackendReport) {
         if (active || isPreview(report)) dispatch(Commands.backendReport(report))
     }
+
+    /**
+     * `LoadApplied`, whether or not this is the backend playing: the core drops what it hears about
+     * items between a `Load` and this, and the `Load` came here.
+     */
+    private fun acknowledge(loadId: UInt) = dispatch(Commands.backendReport(BackendReport.LoadApplied(BackendReportLoadAppliedInner(loadId))))
 
     private fun isPreview(report: BackendReport): Boolean = when (report) {
         is BackendReport.PreviewReady, is BackendReport.PreviewProgress, BackendReport.PreviewEnded,
