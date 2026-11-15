@@ -296,6 +296,17 @@ export function installIpc(deps: IpcDeps): void {
     return "signedIn";
   });
 
+  // The coordinator's own YouTube Music session (owner only; the core seals it to the coordinator's
+  // key): a fresh sign-in in the same cleared window, never this device's session.
+  ipcMain.handle(IPC.ytmSignInCoordinator, async (e): Promise<"signedIn" | "cancelled" | undefined> => {
+    if (!isOurs(windows, e.sender)) return undefined;
+    const parent = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    const cookies = await signInToYouTubeMusic(parent);
+    if (!cookies) return "cancelled";
+    dispatch({ type: "signCoordinatorInToYoutubeMusic", data: { cookies } });
+    return "signedIn";
+  });
+
   ipcMain.handle(IPC.configImport, async (e): Promise<boolean> => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win || !isOurs(windows, e.sender)) throw new Error("rejected");

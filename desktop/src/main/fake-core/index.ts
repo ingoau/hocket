@@ -120,6 +120,7 @@ export class FakeCore implements CoreHandle {
   private servers: AccountInfo[] = [];
   private identity!: IdentityInfo;
   private coordinatorInvites: CoordinatorInviteInfo[] = [];
+  private coordinatorYtm: string | undefined;
   private session: SessionState = { list: [], ptr: 0, shuffle: false, repeat: "off", autoplay: true, revision: 1 };
   private transport: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 0.8, muted: false, volumeDevice: undefined };
   /** Each device's own volume (Connect: the control drives the device playing). */
@@ -902,6 +903,14 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "coordinatorInvites", data: { invites: this.coordinatorInvites, created: undefined } });
         return;
       case "ytmJsAnswer":
+        return;
+      // A coordinator with YouTube Music analysis on: the sign-in is taken as given.
+      case "signCoordinatorInToYoutubeMusic":
+        this.coordinatorYtm = cmd.data.cookies ? "Test User" : undefined;
+        this.emit({ type: "coordinatorYtmStatus", data: { enabled: true, signed_in: !!this.coordinatorYtm, account: this.coordinatorYtm, error: undefined } });
+        return;
+      case "coordinatorYtmStatus":
+        this.emit({ type: "coordinatorYtmStatus", data: { enabled: true, signed_in: !!this.coordinatorYtm, account: this.coordinatorYtm, error: undefined } });
         return;
       default: {
         const never: never = cmd;

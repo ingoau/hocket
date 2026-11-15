@@ -56,7 +56,10 @@ function Coordinator() {
   const [url, setUrl] = useState("");
   const [code, setCode] = useState("");
   useEffect(() => {
-    if (pin?.owner) bridge().dispatch({ type: "listCoordinatorInvites" });
+    if (pin?.owner) {
+      bridge().dispatch({ type: "listCoordinatorInvites" });
+      bridge().dispatch({ type: "coordinatorYtmStatus" });
+    }
   }, [pin?.owner, pin?.url]);
   const join = (claim: boolean) => bridge().dispatch(claim ? { type: "claimCoordinator", data: { url: url.trim(), code: code.trim() } } : { type: "redeemCoordinatorInvite", data: { url: url.trim(), code: code.trim() } });
   return (
@@ -98,6 +101,24 @@ function Coordinator() {
               <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "createCoordinatorInvite" })} data-testid="identity-invite-create">{t("identity.inviteCreate")}</button>
             </div>
           </div>
+          {state.ytm?.enabled ? (
+            <>
+              <h2 className="section-title">{t("identity.coordYtm")}</h2>
+              <div className="setting-row">
+                <div className="label">
+                  <div className="desc" data-testid="identity-coord-ytm">{state.ytm.signedIn ? t("identity.coordYtmSignedIn", { name: state.ytm.account ?? "" }) : t("identity.coordYtmAnon")}</div>
+                  {state.ytm.error ? <div className="desc error" role="alert">{state.ytm.error}</div> : null}
+                </div>
+                <div className="control">
+                  {state.ytm.signedIn ? (
+                    <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "signCoordinatorInToYoutubeMusic", data: { cookies: undefined } })}>{t("identity.coordYtmSignOut")}</button>
+                  ) : (
+                    <button type="button" className="btn sm" onClick={() => void window.hocket.ytm.signInCoordinator()} data-testid="identity-coord-ytm-sign-in">{t("identity.coordYtmSignIn")}</button>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : null}
         </>
       ) : null}
     </>

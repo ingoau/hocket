@@ -182,6 +182,8 @@ export interface HocketBridge {
      * adds the account (the cookies never reach the renderer).
      */
     signIn(): Promise<"signedIn" | "cancelled">;
+    /** A fresh sign-in for the coordinator's own YouTube Music analysis (owner only). */
+    signInCoordinator(): Promise<"signedIn" | "cancelled">;
   };
   /**
    * Share one track's original audio file. Main resolves the file (a finished download, or a fresh
@@ -261,6 +263,7 @@ export const IPC = {
   configExport: "hocket:config:export",
   configImport: "hocket:config:import",
   ytmSignIn: "hocket:ytm:sign-in",
+  ytmSignInCoordinator: "hocket:ytm:sign-in-coordinator",
   clipboardWrite: "hocket:clipboard:write",
   deepLink: "hocket:deep-link",
   prefsGet: "hocket:prefs:get",

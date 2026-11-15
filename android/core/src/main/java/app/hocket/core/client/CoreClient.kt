@@ -592,6 +592,8 @@ class CoreClient(
             is Event.IdentityChanged -> _identity.value = event.data.identity
             is Event.PairingInvite -> _pairingInvite.value = event.data
             is Event.CoordinatorInvites -> _coordinatorInvites.value = event.data
+            // The coordinator's YouTube Music sign-in is set up from the desktop app for now.
+            is Event.CoordinatorYtmStatus -> Unit
             is Event.DevicePaired -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
             is Event.PairingFinished, is Event.PairingFailed, is Event.CredentialsSynced,
             is Event.CoordinatorJoined, is Event.CoordinatorFailed -> _identityEvents.tryEmit(event)

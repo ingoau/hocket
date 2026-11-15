@@ -1215,6 +1215,9 @@ class FakeCore(
             is Command.RevokeCoordinatorInvite -> { coordinatorInvites.removeAll { it.code == c.data.code }; emitInvites() }
             is Command.YtmJsAnswer -> Unit
             Command.ListCoordinatorInvites -> emitInvites()
+            // No coordinator YouTube Music analysis in the fake.
+            is Command.SignCoordinatorInToYoutubeMusic, Command.CoordinatorYtmStatus ->
+                emit(Event.CoordinatorYtmStatus(EventCoordinatorYtmStatusInner(enabled = false, signed_in = false)))
         }
     }
 

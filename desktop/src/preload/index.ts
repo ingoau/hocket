@@ -60,6 +60,7 @@ const bridge: HocketBridge = {
   },
   ytm: {
     signIn: () => ipcRenderer.invoke(IPC.ytmSignIn) as Promise<"signedIn" | "cancelled">,
+    signInCoordinator: () => ipcRenderer.invoke(IPC.ytmSignInCoordinator) as Promise<"signedIn" | "cancelled">,
   },
   config: {
     export: (document: string) => ipcRenderer.invoke(IPC.configExport, document) as Promise<string | undefined>,

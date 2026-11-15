@@ -77,7 +77,14 @@ export interface CoreState {
   /** Pairing: the invite this device shows, and how the last exchange ended. */
   pairing: PairingState;
   /** The coordinator's invites (owner only), and how the last claim or request ended. */
-  coordinator: { invites: CoordinatorInviteInfo[]; created: string | undefined; joined: { url: string; owner: boolean } | undefined; error: string | undefined };
+  coordinator: {
+    invites: CoordinatorInviteInfo[];
+    created: string | undefined;
+    joined: { url: string; owner: boolean } | undefined;
+    error: string | undefined;
+    /** Its YouTube Music analysis (`coordinatorYtmStatus`), once asked. */
+    ytm: { enabled: boolean; signedIn: boolean; account: string | undefined; error: string | undefined } | undefined;
+  };
 }
 
 export interface PairingState {
@@ -140,7 +147,7 @@ export const initialCoreState: CoreState = {
   reportUpload: undefined,
   identity: EMPTY_IDENTITY,
   pairing: EMPTY_PAIRING,
-  coordinator: { invites: [], created: undefined, joined: undefined, error: undefined },
+  coordinator: { invites: [], created: undefined, joined: undefined, error: undefined, ytm: undefined },
   announcedUndo: [],
   queueReplacingUndo: [],
 };
@@ -202,6 +209,11 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, coordinator: { ...state.coordinator, joined: { url: e.data.url, owner: e.data.owner }, error: undefined } };
     case "coordinatorFailed":
       return { ...state, coordinator: { ...state.coordinator, error: e.data.message } };
+    case "coordinatorYtmStatus":
+      return {
+        ...state,
+        coordinator: { ...state.coordinator, ytm: { enabled: e.data.enabled, signedIn: e.data.signed_in, account: e.data.account ?? undefined, error: e.data.error ?? undefined } },
+      };
     case "coordinatorInvites":
       return { ...state, coordinator: { ...state.coordinator, invites: e.data.invites, created: e.data.created ?? undefined, error: undefined } };
     case "syncProgress":
