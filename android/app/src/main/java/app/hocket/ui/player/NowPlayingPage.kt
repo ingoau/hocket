@@ -29,6 +29,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -223,6 +226,12 @@ internal fun FullPlayer(
     hero.artInset = with(density) { PAGE_PADDING.toPx() }
     hero.artMax = with(density) { MAX_ART.toPx() }
     hero.artPad = with(density) { ART_PAD.toPx() }
+    // Scrolling the queue folds the controls below it away (the upright layout only).
+    val scope = rememberCoroutineScope()
+    val collapse = remember(scope) { ControlsCollapse(scope) }
+    collapse.range = with(density) { COLLAPSE_SCROLL.toPx() }
+    val reducedMotion = LocalReducedMotion.current
+    LaunchedEffect(mode) { if (mode != PlayerMode.Queue) collapse.animateTo(0f, instant = reducedMotion) }
     /** Opens the song menu ([pull] when a swipe brings it up); false when there is no song. */
     val openMenu = { pull: app.hocket.ui.components.SheetPull? ->
         // The song menu is hosted at the app level, not in this (moving) sheet; the player adds
@@ -279,12 +288,18 @@ internal fun FullPlayer(
         // the queue for a slot above the title, not the thumbnail beside it.
         val artAbove = wide && viewport >= ART_ABOVE_MIN_HEIGHT
         hero.artAbove = artAbove
+        val folding = !wide && mode == PlayerMode.Queue
+        val fold = { if (wide) 0f else collapse.fraction }
+        // What the action row leaves when it has folded away: the navigation bar's room.
+        val navBottom = if (asPanel) 0.dp else WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         Box(Modifier.fillMaxSize().verticalScroll(scroll, overscrollEffect = null).testTag("player.page")) {
             PlayerLayout(
                 wide = wide,
                 artAbove = artAbove,
                 minHeight = viewport,
                 hero = hero,
+                fold = fold,
+                foldedBottom = navBottom + 12.dp,
                 // The artwork is drawn over the page: under an immersive one (or one sliding in
                 // during a skip swipe) the page keeps the handle's room (invisible) and the real one
                 // goes on top.
@@ -295,9 +310,9 @@ internal fun FullPlayer(
                             .then(if (immersive != null) Modifier.clearAndSetSemantics { } else Modifier),
                     ) { header() }
                 },
-                area = { ModeArea(mode, hero, lyricsVisible) },
+                area = { ModeArea(mode, hero, lyricsVisible, queueModifier = if (folding) Modifier.nestedScroll(collapse.connection) else Modifier) },
                 title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
-                seek = { PlayerSeek(position) },
+                seek = { PlayerSeek(position, fold) },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
                     val buffering by client.buffering.collectAsStateWithLifecycle()
@@ -309,7 +324,9 @@ internal fun FullPlayer(
                         onToggle = { client.dispatch(Command.TogglePlay) },
                         onNext = { client.dispatch(Command.Next) },
                         // (And beside the artwork on a short page: a phone on its side.)
-                        height = if (pageWidth < 360.dp || (wide && viewport < 480.dp)) 68.dp else TRANSPORT_HEIGHT,
+                        height = (if (pageWidth < 360.dp || (wide && viewport < 480.dp)) 68.dp else TRANSPORT_HEIGHT).let { h ->
+                            androidx.compose.ui.unit.lerp(h, h * FOLDED_TRANSPORT, fold())
+                        },
                         modifier = Modifier.padding(horizontal = PAGE_PADDING),
                     )
                 },
@@ -321,7 +338,10 @@ internal fun FullPlayer(
                         onSwitchQueue = { queues = true },
                         onConnect = { handoff = true },
                         onMore = { openMenu(null); Unit },
-                        modifier = Modifier.navigationBarsPadding().padding(start = PAGE_PADDING, end = PAGE_PADDING, bottom = 16.dp),
+                        // Folding away: fading as it slides off the bottom of the page.
+                        modifier = Modifier
+                            .graphicsLayer { alpha = (1f - 1.6f * fold()).coerceIn(0f, 1f) }
+                            .navigationBarsPadding().padding(start = PAGE_PADDING, end = PAGE_PADDING, bottom = 16.dp),
                     )
                 },
             )
@@ -387,6 +407,12 @@ private val ART_PAD = 8.dp
 private val MIN_AREA = 220.dp
 /** The transport's height (the skip buttons are this square). */
 private val TRANSPORT_HEIGHT = 84.dp
+/** The transport's height folded under a scrolled queue, as a share of its own. */
+private const val FOLDED_TRANSPORT = 0.66f
+/** What the seek bar gives up as the controls fold (the room its times took). */
+private val SEEK_FOLD = 22.dp
+/** How far the queue scrolls to fold the controls away ([ControlsCollapse]). */
+private val COLLAPSE_SCROLL = 160.dp
 
 /** The least gaps above the transport and the action row (the seek bar's follows the title's: see [PlayerLayout]). */
 private val TRANSPORT_GAP = 12.dp
@@ -422,6 +448,8 @@ private fun PlayerLayout(
     artAbove: Boolean,
     minHeight: Dp,
     hero: HeroGeometry,
+    fold: () -> Float,
+    foldedBottom: Dp,
     header: @Composable () -> Unit,
     area: @Composable () -> Unit,
     title: @Composable () -> Unit,
@@ -430,13 +458,15 @@ private fun PlayerLayout(
     actions: @Composable () -> Unit,
 ) {
     if (wide) PlayerLayoutWide(minHeight, hero, artAbove, header, area, title, seek, transport, actions)
-    else PlayerLayoutTall(minHeight, hero, header, area, title, seek, transport, actions)
+    else PlayerLayoutTall(minHeight, hero, fold, foldedBottom, header, area, title, seek, transport, actions)
 }
 
 @Composable
 private fun PlayerLayoutTall(
     minHeight: Dp,
     hero: HeroGeometry,
+    fold: () -> Float,
+    foldedBottom: Dp,
     header: @Composable () -> Unit,
     area: @Composable () -> Unit,
     title: @Composable () -> Unit,
@@ -444,7 +474,11 @@ private fun PlayerLayoutTall(
     transport: @Composable () -> Unit,
     actions: @Composable () -> Unit,
 ) {
+    // The seek bar's, the transport's and the action row's heights and the times' baseline unfolded:
+    // the page is laid out for those (the artwork's size, the gaps), the fold only moving the room.
+    val unfolded = remember { IntArray(4) }
     Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
+        val k = fold().coerceIn(0f, 1f)
         val full = constraints.maxWidth
         // On a wide page (a tablet held upright) the controls (and a card's area) keep to a centred
         // column, so the seek bar and the buttons don't stretch edge to edge; an immersive artwork
@@ -463,15 +497,20 @@ private fun PlayerLayoutTall(
         fun height(p: List<Placeable>) = p.maxOfOrNull { it.height } ?: 0
         val hh = height(hp)
         // The title row less what its folding stars have taken off: the area gets that back.
-        val fold = hero.titleFold.roundToInt()
-        val th = height(tp) + fold
-        val sh = height(sp)
-        val xh = height(xp)
-        val ah = height(ap)
+        val titleFold = hero.titleFold.roundToInt()
+        val th = height(tp) + titleFold
+        val shNow = height(sp)
+        val xhNow = height(xp)
+        val ahNow = height(ap)
         // How far the title block's visual bottom and the wave are from their rows' edges.
         val below = tp.firstOrNull()?.get(TitleBottom)?.takeIf { it != AlignmentLine.Unspecified }?.let { height(tp) - it } ?: 0
         val wave = sp.firstOrNull()?.get(SeekWaveTop)?.takeIf { it != AlignmentLine.Unspecified } ?: 0
-        val times = sp.firstOrNull()?.get(SeekTimesBaseline)?.takeIf { it != AlignmentLine.Unspecified } ?: sh
+        val timesNow = sp.firstOrNull()?.get(SeekTimesBaseline)?.takeIf { it != AlignmentLine.Unspecified } ?: shNow
+        if (k == 0f) { unfolded[0] = shNow; unfolded[1] = xhNow; unfolded[2] = ahNow; unfolded[3] = timesNow }
+        val sh = if (k == 0f) shNow else unfolded[0]
+        val xh = if (k == 0f) xhNow else unfolded[1]
+        val ah = if (k == 0f) ahNow else unfolded[2]
+        val times = if (k == 0f) timesNow else unfolded[3]
         val gapX = if (xh > 0) TRANSPORT_GAP.roundToPx() else 0
         val gapA = if (ah > 0) ACTIONS_GAP.roundToPx() else 0
         // With a share s on each of the transport's and the actions' gaps and under the actions,
@@ -500,18 +539,28 @@ private fun PlayerLayoutTall(
         // An immersive artwork from the top of the area (under the status bar and the handle: the
         // room there is its top strip), raised only as far as it must be to end above the title.
         hero.immersiveTop = minOf(0, areaH - areaW).toFloat()
-        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaH + fold)) }
-        val titleTop = hh + areaH + fold
-        val seekTop = hh + areaH + th + seekGap
-        val transportTop = seekTop + sh + gapX + share
-        val actionsTop = transportTop + xh + gapA + share
-        layout(full, maxOf(actionsTop + ah + share, view)) {
+        // Folding ([fold]): the gaps close, the seek bar and the transport take their folded heights
+        // and the action row leaves [foldedBottom]; the mode area grows by what they give up.
+        val shareK = (share * (1f - k)).roundToInt()
+        val seekGapK = (seekGap * (1f - k)).roundToInt()
+        val gapAK = (gapA * (1f - k)).roundToInt()
+        val ahK = androidx.compose.ui.util.lerp(ah, minOf(ah, foldedBottom.roundToPx()), k)
+        val controls = seekGap + sh + gapX + share + xh + gapA + share + ah + share
+        val controlsK = seekGapK + shNow + gapX + shareK + xhNow + gapAK + shareK + ahK + shareK
+        val areaK = areaH + (controls - controlsK).coerceAtLeast(0)
+        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaK + titleFold)) }
+        val titleTop = hh + areaK + titleFold
+        val seekTop = hh + areaK + th + seekGapK
+        val transportTop = seekTop + shNow + gapX + shareK
+        val actionsTop = transportTop + xhNow + gapAK + shareK
+        layout(full, maxOf(actionsTop + ahK + shareK, view)) {
             hp.forEach { it.place(0, 0) }
             mp.forEach { it.place(areaX, hh) }
             tp.forEach { it.place(x0, titleTop) }
             sp.forEach { it.place(x0, seekTop) }
             xp.forEach { it.place(x0, transportTop) }
-            ap.forEach { it.place(x0, actionsTop) }
+            // Folded all the way, the action row is gone (off the page, out of reach).
+            if (k < 1f) ap.forEach { it.place(x0, actionsTop) }
         }
     }
 }
@@ -624,7 +673,7 @@ private val HANDLE_AREA = 48.dp
  * bottom edges.
  */
 @Composable
-private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolean) {
+private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolean, queueModifier: Modifier = Modifier) {
     val reduced = LocalReducedMotion.current
     Box(Modifier.fillMaxSize().onGloballyPositioned { hero.area = hero.measure(it) }) {
         AnimatedContent(
@@ -640,7 +689,7 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
                 PlayerMode.Artwork, PlayerMode.About -> Spacer(Modifier.fillMaxSize())
                 // The rows' own 16 dp start padding plus 4 dp: aligned with the page's 20 dp margins.
                 PlayerMode.Queue -> ModeSlot {
-                    QueueList(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp))
+                    QueueList(Modifier.fillMaxSize().then(queueModifier), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp))
                 }
                 PlayerMode.Lyrics -> ModeSlot { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE_BOTTOM)) }
             }
@@ -752,7 +801,7 @@ private fun playingOn(remote: DeviceInfo?): String? {
 
 /** The wavy seek bar with elapsed and remaining time, and the status line between them ([SeekStatus]). */
 @Composable
-private fun PlayerSeek(position: () -> Long) {
+private fun PlayerSeek(position: () -> Long, fold: () -> Float = { 0f }) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -760,9 +809,20 @@ private fun PlayerSeek(position: () -> Long) {
     val track = entry?.track ?: return
     val syncing = rememberConnectSyncing()
     val saver by client.batterySaver.collectAsStateWithLifecycle()
-    Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING).graphicsLayer { alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f }) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            // Folding: the times fade out and the bar gives up the room they sat in (its touch
+            // area runs on under the transport, which takes the taps there).
+            .layout { m, c ->
+                val p = m.measure(c)
+                layout(p.width, p.height - (SEEK_FOLD * fold().coerceIn(0f, 1f)).roundToPx()) { p.place(0, 0) }
+            }
+            .padding(horizontal = PAGE_PADDING)
+            .graphicsLayer { alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f },
+    ) {
         WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) },
-            stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), advancing = playing, centre = { SeekStatus() })
+            stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), advancing = playing, centre = { SeekStatus() }, timesFold = fold)
     }
 }
 
