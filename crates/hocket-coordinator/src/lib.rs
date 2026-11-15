@@ -1036,7 +1036,7 @@ pub fn pair_text(claim: &identities::Claim, url: Option<&str>, minutes: u64) -> 
         })
         .unwrap_or_default();
     let mut out = format!(
-        "Claim code: {}\nGood for {minutes} minutes. In Hocket: Settings → Devices → Coordinator → Claim, then scan this or type the code{}.\n\n",
+        "Claim code: {}\nGood for {minutes} minutes. In Hocket: Settings → Connect → Coordinator → Claim, then scan this or type the code{}.\n\n",
         claim.code,
         if url.is_some() { "" } else { " and this coordinator's address" }
     );

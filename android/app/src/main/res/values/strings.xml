@@ -100,7 +100,7 @@
     <string name="setup_source_navidrome_body">Your own server, with your library</string>
     <string name="setup_source_device">I use Hocket on another device</string>
     <string name="setup_source_device_body">Pair with it: scan the code from its Add a device. No passwords needed in it.</string>
-    <string name="setup_source_device_paste">Paste the pairing link from your other device (Settings → Devices → Add a device) into Server URL, or scan its code. Both devices need the same network or the same coordinator.</string>
+    <string name="setup_source_device_paste">Paste the pairing link from your other device (Settings → Connect → Add a device) into Server URL, or scan its code. Both devices need the same network or the same coordinator.</string>
     <string name="setup_pairing">Pairing with your other device…</string>
     <string name="setup_paired_password">Paired. Enter the password for %1$s on %2$s to finish.</string>
     <string name="setup_another_title">Add another source?</string>
@@ -119,7 +119,7 @@
     <string name="setup_password">Password</string>
     <string name="setup_connect">Connect</string>
     <string name="setup_scan">Scan a pairing code</string>
-    <string name="setup_scan_invalid">That isn\'t a Hocket pairing code. On your other device, open Settings → Devices and choose Add a device.</string>
+    <string name="setup_scan_invalid">That isn\'t a Hocket pairing code. On your other device, open Settings → Connect and choose Add a device.</string>
     <string name="setup_scan_failed">The code scanner isn\'t available right now. Open the code\'s link instead, or type the details in.</string>
     <string name="setup_connecting">Connecting…</string>
     <string name="setup_show_password">Show password</string>

@@ -31,7 +31,7 @@ const STRINGS = {
   "setup.sources.deviceHint": "Pair with it: no passwords needed in the link",
   "setup.sources.cancel": "Cancel",
   "setup.device.title": "Pair with your other device",
-  "setup.device.subtitle": "On the other device, open Settings → Devices → Add a device and copy the link. Paste it here. Both devices need to be on the same network, or use the same coordinator.",
+  "setup.device.subtitle": "On the other device, open Settings → Connect → Add a device and copy the link. Paste it here. Both devices need to be on the same network, or use the same coordinator.",
   "setup.device.link": "Pairing link",
   "setup.device.join": "Pair",
   "setup.device.joining": "Pairing…",
