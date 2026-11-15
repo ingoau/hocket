@@ -158,7 +158,9 @@ async fn add_server_with_wrong_password_adds_nothing() {
         QueryResult::SnapshotResult(s) => s,
         other => panic!("{other:?}"),
     };
-    assert!(snap.session.is_none(), "no session was opened");
+    // The session is the identity's (open from the start), never the refused account's.
+    assert!(snap.accounts.is_empty());
+    assert_eq!(snap.session.map(|d| d.scope), Some(snap.identity.id));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
