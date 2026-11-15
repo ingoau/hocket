@@ -140,10 +140,10 @@ function AvailableOffline() {
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const filter = useApp((s) => s.filters.find((f) => f.id === AVAILABLE_OFFLINE_FILTER_ID)) ?? AVAILABLE_OFFLINE_FILTER;
   const fetchPage = useCallback(async (offset: number, limit: number) => {
-    const r = await bridge().query({ type: "tracks", data: { server_id: serverId, filter: AVAILABLE_OFFLINE_NODE, sort: filter.sort, descending: filter.descending, page: { offset, limit } } });
+    const r = await bridge().query({ type: "tracks", data: { server_id: "", filter: AVAILABLE_OFFLINE_NODE, sort: filter.sort, descending: filter.descending, page: { offset, limit } } });
     if (r.type !== "tracks") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
-  }, [serverId, filter.sort, filter.descending]);
+  }, [filter.sort, filter.descending]);
   const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [serverId, "offline", filter.sort, filter.descending]);
   const play = (startIndex: number) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "filter", data: { filter } }, label: t("downloads.tab.offline"), sort: filter.sort, tracks: [] }, startIndex, shuffle: false, saveOutgoing: true } } });
   return (

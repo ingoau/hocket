@@ -12,13 +12,15 @@ import { executeAction } from "../store/actions";
 import { Icon } from "../components/Icon";
 import { loadListSort, saveListSort, sortPlaylists, type ListSort } from "../lib/list-sort";
 import { recentPlaylists } from "../lib/list-groups";
+import { SourceChips, useLibrarySource } from "../components/SourceChips";
 
 /** Playlists: Pinned, the most recently changed, then all of them (the core hands them over whole, so they're sorted here). */
 export function Playlists() {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("playlists"));
-  const { data } = useQuery(() => ({ type: "playlists", data: { server_id: serverId } }), "playlists", [serverId]);
+  const source = useLibrarySource(true);
+  const { data } = useQuery(() => ({ type: "playlists", data: { server_id: source } }), "playlists", [source]);
   const sorted = useMemo(() => sortPlaylists(data ?? [], order.sort, order.descending), [data, order]);
   const items: GridItem[] = sorted.map((p) => ({ id: p.id, title: p.name, subtitle: playlistLine(p), coverArt: p.coverArt, badge: p.offline === "downloaded" ? "download" : undefined }));
   const play = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "playlist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
@@ -27,6 +29,7 @@ export function Playlists() {
     <div className="view" data-testid="view-playlists">
       <div className="view-header">
         <h1 className="brand-type">{t("playlists.title")}</h1>
+        <SourceChips mixed />
         <span className="muted count-chip">{items.length}</span>
         <div className="actions"><button type="button" className="btn tonal new-playlist" onClick={() => void executeAction("ui.newPlaylist")}><Icon name="plus" size={18} /> {t("playlists.new")}</button></div>
       </div>

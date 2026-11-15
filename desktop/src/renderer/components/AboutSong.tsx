@@ -5,15 +5,16 @@
 // those beside it already). Colours come from the surrounding tokens (--fg,
 // --fg-muted, …), so it reads on the theme's surfaces and on the fullscreen
 // player's artwork-coloured background alike.
-import type { Track } from "@core/api";
+import type { Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
-import { useApp, type Route } from "../store/app";
+import type { Route } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
 import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { Stars } from "./Stars";
+import { ratingTarget, refOf, type HasRef } from "../lib/track-ref";
 
 /** The format line: FLAC · 44.1 kHz · 24-bit … */
 export function formatLine(tr: Pick<Track, "suffix" | "bitRate" | "sampleRate" | "bitDepth" | "channels">, short = false): string {
@@ -26,8 +27,9 @@ export function formatLine(tr: Pick<Track, "suffix" | "bitRate" | "sampleRate" |
   ].filter(Boolean).join(" · ");
 }
 
-export function AboutSong({ trackId, onNavigate, variant }: { trackId: string | undefined; onNavigate: (route: Route) => void; variant: "side" | "fullscreen" }) {
-  const { data } = useQuery(() => (trackId ? { type: "track", data: { id: trackId } } : null), "trackDetail", [trackId]);
+export function AboutSong({ track, onNavigate, variant }: { track: TrackRef | undefined; onNavigate: (route: Route) => void; variant: "side" | "fullscreen" }) {
+  const trackId = track?.id;
+  const { data } = useQuery(() => (track ? { type: "track", data: { track } } : null), "trackDetail", [track?.source, trackId]);
   const tr = data as Track | undefined;
   const d = bridge().dispatch;
   if (!trackId) return <div className="empty">{t("player.nothingPlaying")}</div>;
@@ -72,7 +74,7 @@ export function AboutSong({ trackId, onNavigate, variant }: { trackId: string | 
         ))}
         <div className="about-fact">
           <dt>{t("about.rating")}</dt>
-          <dd><Stars value={tr.rating} size={18} label={t("a11y.ratingOf", { title: tr.title })} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: tr.id } }], rating: r } })} /></dd>
+          <dd><Stars value={tr.rating} size={18} label={t("a11y.ratingOf", { title: tr.title })} onChange={(r) => d({ type: "setRating", data: { targets: [ratingTarget(tr)], rating: r } })} /></dd>
         </div>
       </dl>
       {tr.path ? (
@@ -87,24 +89,23 @@ export function AboutSong({ trackId, onNavigate, variant }: { trackId: string | 
 }
 
 function Related({ trackId }: { trackId: string }) {
-  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const { data, loading } = useQuery(() => ({ type: "related", data: { track_id: trackId, count: 12 } }), "related", [trackId], { static: true });
   const providerLabel = (p: string) => t(`related.provider.${p}` as never);
-  const playNext = (id: string) => bridge().dispatch({ type: "playNext", data: { server_id: serverId, track_ids: [id] } });
+  const playNext = (tr: HasRef) => bridge().dispatch({ type: "playNext", data: { tracks: [refOf(tr)] } });
   return (
     <section className="about-related" aria-labelledby={`related-${trackId}`}>
       <h3 className="about-subheading" id={`related-${trackId}`}>{t("nowPlaying.similar")}</h3>
       {!loading && !data?.length ? <p className="about-muted">{t("fullscreen.relatedEmpty")}</p> : (
         <ul className="plain-list" aria-label={t("nowPlaying.similar")} data-testid="related-list">
           {(data ?? []).map((r) => (
-            <li key={r.track.id} className="related-row" onDoubleClick={() => playNext(r.track.id)}>
+            <li key={r.track.id} className="related-row" onDoubleClick={() => playNext(r.track)}>
               <Artwork id={r.track.coverArt} size={64} className="art" />
               <div className="grow" style={{ minWidth: 0 }}>
                 <div className="truncate">{r.track.title} <span className="about-muted">· {r.track.artist}</span></div>
                 <div className="why truncate">{providerLabel(r.provider)}{r.score !== undefined ? ` · ${t("related.score", { score: Math.round(r.score * 100) })}` : ""} · {r.reason}</div>
               </div>
               <span className="about-muted xs">{fmtTime(r.track.durationMs)}</span>
-              <button type="button" className="about-icon-btn" aria-label={`${t("action.playNext")}: ${r.track.title}`} title={t("action.playNext")} onClick={() => playNext(r.track.id)}><Icon name="playNext" size={18} /></button>
+              <button type="button" className="about-icon-btn" aria-label={`${t("action.playNext")}: ${r.track.title}`} title={t("action.playNext")} onClick={() => playNext(r.track)}><Icon name="playNext" size={18} /></button>
             </li>
           ))}
         </ul>

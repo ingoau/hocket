@@ -213,9 +213,9 @@ async function confirmDeepLinkTrack(id: string): Promise<void> {
   const serverId = useApp.getState().accounts[0]?.id;
   if (!serverId) return;
   try {
-    const r = await b.query({ type: "track", data: { id } });
+    const r = await b.query({ type: "track", data: { track: { source: serverId, id } } });
     if (r.type !== "trackDetail" || !r.data || r.data.serverId !== serverId) return;
-    const command: Command = { type: "playNext", data: { server_id: serverId, track_ids: [id] } };
+    const command: Command = { type: "playNext", data: { tracks: [{ source: serverId, id }] } };
     useApp.getState().applyEvent({ type: "toast", data: { toast: { id: `deeplink-${id}`, message: t("toast.deepLinkTrack", { title: r.data.title }), actionLabel: t("toast.deepLinkPlay"), actionCommand: JSON.stringify(command), durationMs: 8000 } } });
   } catch (err) {
     console.warn("deep link track lookup failed", err);

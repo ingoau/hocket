@@ -30,6 +30,7 @@ import { Stars } from "./Stars";
 import { Slider } from "./controls";
 import { Seek } from "./Seek";
 import { ConnectPill } from "./ConnectPill";
+import { ratingTarget } from "../lib/track-ref";
 
 export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const now = useApp((s) => s.nowPlaying);
@@ -68,7 +69,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
             <>
               <div className="title" title={track.title}><a href="#" onClick={(e) => { e.preventDefault(); if (track.albumId) navigate({ view: "album", id: track.albumId }); }}>{track.title}</a></div>
               <div className="artist"><ArtistChooser track={track} className="artist-chooser" onNavigate={navigate} testId="bar-artist" /></div>
-              {showRating ? <Stars value={track.rating} size={14} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /> : null}
+              {showRating ? <Stars value={track.rating} size={14} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [ratingTarget(track)], rating: r } })} /> : null}
             </>
           ) : (
             <>

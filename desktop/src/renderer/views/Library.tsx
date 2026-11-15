@@ -20,7 +20,7 @@ const RECENT_ALBUMS = 60;
 export function Library() {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
-  const recent = useQuery(() => ({ type: "albums", data: { server_id: serverId, artist_id: undefined, genre: undefined, sort: "dateAdded", descending: true, page: { offset: 0, limit: RECENT_ALBUMS } } }), "albums", [serverId]);
+  const recent = useQuery(() => ({ type: "albums", data: { server_id: "", artist_id: undefined, genre: undefined, sort: "dateAdded", descending: true, page: { offset: 0, limit: RECENT_ALBUMS } } }), "albums", [serverId]);
   // The Albums tile shows the covers of the three most played albums (this month, else this year).
   const month = useQuery(() => ({ type: "stats", data: { period_days: 30 } }), "stats", []);
   const year = useQuery(() => (month.data && !month.data.topAlbums.length ? { type: "stats", data: { period_days: 365 } } : null), "stats", [month.data?.topAlbums.length]);

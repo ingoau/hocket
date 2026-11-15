@@ -2,7 +2,7 @@
 // whose album, artist, playlist, song or filter is gone is left out (not removed: it may come back
 // after a sync).
 import { useEffect, useMemo, useState } from "react";
-import type { ActionTarget } from "@core/api";
+import type { ActionTarget, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
 import { useApp, useJsonSetting } from "../store/app";
@@ -43,7 +43,7 @@ export function useResolvedPins(kind?: PinKind): ResolvedPin[] | undefined {
           case "album": { const r = await bridge().query({ type: "album", data: { id: p.id } }); return r.type === "albumDetail" && r.data ? { pin: p, kind: "album", title: r.data.name, coverArt: r.data.coverArt, subtitle: r.data.artist, target: { type: "albums", data: { ids: [p.id] } } } : undefined; }
           case "artist": { const r = await bridge().query({ type: "artist", data: { id: p.id } }); return r.type === "artistDetail" && r.data ? { pin: p, kind: "artist", title: r.data.name, coverArt: r.data.coverArt, subtitle: r.data.albumCount === 1 ? t("artists.albumCount.one") : t("artists.albumCount.other", { n: r.data.albumCount }), target: { type: "artists", data: { ids: [p.id] } } } : undefined; }
           case "playlist": { const r = await bridge().query({ type: "playlist", data: { id: p.id } }); return r.type === "playlistDetail" && r.data ? { pin: p, kind: "playlist", title: r.data.name, coverArt: r.data.coverArt, subtitle: t("misc.tracks", { count: r.data.songCount }), target: { type: "playlists", data: { ids: [p.id] } } } : undefined; }
-          case "track": { const r = await bridge().query({ type: "track", data: { id: p.id } }); return r.type === "trackDetail" && r.data ? { pin: p, kind: "track", title: r.data.title, coverArt: r.data.coverArt, subtitle: r.data.artist, target: { type: "tracks", data: { ids: [p.id] } } } : undefined; }
+          case "track": { const r = await bridge().query({ type: "track", data: { track: pinTrack(p) } }); return r.type === "trackDetail" && r.data ? { pin: p, kind: "track", title: r.data.title, coverArt: r.data.coverArt, subtitle: r.data.artist, target: { type: "tracks", data: { tracks: [pinTrack(p)] } } } : undefined; }
           case "genre": return { pin: p, kind: "genre", title: p.id };
           case "filter": { const f = filters.find((x) => x.id === p.id); return f ? { pin: p, kind: "filter", title: filterName(f) } : undefined; }
         }
@@ -56,6 +56,12 @@ export function useResolvedPins(kind?: PinKind): ResolvedPin[] | undefined {
   return resolved;
 }
 
+/** A song pin's reference: its `source` (the account), else the first account's. */
+function pinTrack(p: LibraryPin): TrackRef {
+  const source = typeof p.source === "string" ? p.source : (useApp.getState().accounts[0]?.id ?? "");
+  return { source, id: p.id };
+}
+
 /** Does what clicking a pin does: open it, or play / shuffle it. */
 export function performPin(rp: ResolvedPin, tap: PinTap = pinTap(rp.pin)): void {
   const app = useApp.getState();
@@ -65,7 +71,7 @@ export function performPin(rp: ResolvedPin, tap: PinTap = pinTap(rp.pin)): void 
     bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: kind, data: { id } } as never, label: rp.title, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
   switch (rp.kind) {
     case "track":
-      bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: [id], start_index: 0, label: rp.title, shuffle: false } });
+      bridge().dispatch({ type: "playTracks", data: { tracks: [pinTrack(rp.pin)], start_index: 0, label: rp.title, shuffle: false } });
       return;
     case "album":
     case "artist":

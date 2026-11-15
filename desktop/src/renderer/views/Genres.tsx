@@ -11,13 +11,14 @@ import { ListGroups, ListSection, usePinnedIds, usePinsOf, useRecentHistory } fr
 import { SortMenu } from "../components/SortMenu";
 import { loadListSort, saveListSort, sortGenres, type ListSort } from "../lib/list-sort";
 import { recentGenres } from "../lib/list-groups";
+import { refOf, refKey } from "../lib/track-ref";
 
 /** Genres: Pinned, the genres of the songs played lately, then all of them (sorted here; the core hands them over whole). */
 export function Genres() {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("genres"));
-  const { data, loading } = useQuery(() => ({ type: "genres", data: { server_id: serverId } }), "genres", [serverId]);
+  const { data, loading } = useQuery(() => ({ type: "genres", data: { server_id: "" } }), "genres", [serverId]);
   const sorted = useMemo(() => sortGenres(data ?? [], order.sort, order.descending), [data, order]);
   const tile = (g: Genre, testId: string) => (
     <li key={g.name} onContextMenu={(e) => openItemsMenu(e, genreMenuItems(g.name, serverId))}>
@@ -50,8 +51,9 @@ function GenreGroups({ genres, tile }: { genres: Genre[]; tile: (g: Genre, testI
   const byName = useMemo(() => new Map(genres.map((g) => [g.name, g])), [genres]);
   const pinned = useMemo(() => pins.map((p) => byName.get(p.pin.id)).filter((g): g is Genre => !!g), [pins, byName]);
   // The history's songs don't carry their genre: read the songs (one query) for it.
-  const ids = useMemo(() => [...new Set((history ?? []).map((h) => h.track.id))], [history]);
-  const tracks = useQuery(() => (ids.length ? { type: "tracksByIds", data: { ids } } : null), "trackList", [ids.join(",")]);
+  const refs = useMemo(() => [...new Map((history ?? []).map((h) => [refKey(refOf(h.track)), refOf(h.track)])).values()], [history]);
+  const ids = useMemo(() => [...new Set(refs.map((r) => r.id))], [refs]);
+  const tracks = useQuery(() => (refs.length ? { type: "tracksByIds", data: { tracks: refs } } : null), "trackList", [refs.map(refKey).join(",")]);
   const recent = useMemo(() => {
     const genreOf = new Map((tracks.data ?? []).map((tr) => [tr.id, tr.genre]));
     return recentGenres(ids, genreOf, new Set(byName.keys()), pinnedIds).map((n) => byName.get(n)!);

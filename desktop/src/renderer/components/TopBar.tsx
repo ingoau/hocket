@@ -2,7 +2,7 @@
 // with server results appended below a divider, container never shrinking),
 // and the job/problems indicator with its popover.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Job, SearchResults, AccountInfo, SyncProgress } from "@core/api";
+import type { Job, SearchResults, AccountInfo, SyncProgress, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
@@ -14,6 +14,7 @@ import { StashChip } from "./Stash";
 import { fmtRelative } from "../lib/format";
 import { usePresence } from "../lib/presence";
 import { NARROW, useMediaQuery } from "../lib/media";
+import { refOf } from "../lib/track-ref";
 
 export function TopBar() {
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -86,7 +87,7 @@ function SearchBox() {
     const id = `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     reqId.current = id;
     const h = setTimeout(() => {
-      void bridge().query({ type: "search", data: { server_id: serverId, query: q, limit: 6, include_server: true, request_id: id } }).then((r) => {
+      void bridge().query({ type: "search", data: { server_id: "", query: q, limit: 6, include_server: true, request_id: id } }).then((r) => {
         if (reqId.current !== id || r.type !== "search") return;
         setLocal(r.data);
         setServer(undefined);
@@ -119,13 +120,12 @@ function SearchBox() {
   type Row = { key: string; kind: string; label: string; sub?: string; lyric?: { line: string; start: number; end: number }; cover?: string; go: () => void };
   const rows = (r: SearchResults | undefined): Row[] => {
     if (!r) return [];
-    const sid = serverId ?? "";
-    const playLyric = (id: string, startMs: number | undefined) => {
-      bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [id], start_index: 0, label: r.query, shuffle: false, start_position_ms: startMs ?? 0 } });
+    const playLyric = (track: TrackRef, startMs: number | undefined) => {
+      bridge().dispatch({ type: "playTracks", data: { tracks: [track], start_index: 0, label: r.query, shuffle: false, start_position_ms: startMs ?? 0 } });
     };
     return [
-      ...r.tracks.map((x) => ({ key: `t${x.id}`, kind: t("search.tracks"), label: x.title, sub: x.artist, cover: x.coverArt, go: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [x.id], start_index: 0, label: x.title, shuffle: false } }) })),
-      ...(r.lyrics ?? []).map((x) => ({ key: `ly${x.track.id}`, kind: t("search.lyrics"), label: x.track.title, sub: x.track.artist, lyric: { line: x.line, start: x.matchStart, end: x.matchEnd }, cover: x.track.coverArt, go: () => playLyric(x.track.id, x.startMs) })),
+      ...r.tracks.map((x) => ({ key: `t${x.id}`, kind: t("search.tracks"), label: x.title, sub: x.artist, cover: x.coverArt, go: () => bridge().dispatch({ type: "playTracks", data: { tracks: [refOf(x)], start_index: 0, label: x.title, shuffle: false } }) })),
+      ...(r.lyrics ?? []).map((x) => ({ key: `ly${x.track.id}`, kind: t("search.lyrics"), label: x.track.title, sub: x.track.artist, lyric: { line: x.line, start: x.matchStart, end: x.matchEnd }, cover: x.track.coverArt, go: () => playLyric(refOf(x.track), x.startMs) })),
       ...r.albums.map((x) => ({ key: `a${x.id}`, kind: t("search.albums"), label: x.name, sub: x.artist, cover: x.coverArt, go: () => navigate({ view: "album", id: x.id }) })),
       ...r.artists.map((x) => ({ key: `r${x.id}`, kind: t("search.artists"), label: x.name, cover: x.coverArt, go: () => navigate({ view: "artist", id: x.id }) })),
       ...r.playlists.map((x) => ({ key: `p${x.id}`, kind: t("search.playlists"), label: x.name, cover: x.coverArt, go: () => navigate({ view: "playlist", id: x.id }) })),

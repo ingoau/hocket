@@ -1,6 +1,6 @@
 // The song menu's Snooze flyout: 1 day, 3 days, 1 week, 1 month, indefinitely, or a custom date
 // and time (a dialog).
-import type { SnoozeFor } from "@core/api";
+import type { SnoozeFor, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
 import { useApp } from "../store/app";
@@ -17,7 +17,7 @@ const DURATIONS: { id: SnoozeFor; label: Parameters<typeof t>[0] }[] = [
 ];
 
 interface Props {
-  trackIds: string[];
+  tracks: TrackRef[];
   anchor: FlyoutAnchor;
   motion: string;
   exitProps: ExitProps<HTMLDivElement>;
@@ -25,16 +25,16 @@ interface Props {
   onClose: (then?: () => void) => void;
 }
 
-export function SnoozeSubmenu({ trackIds, ...flyout }: Props) {
+export function SnoozeSubmenu({ tracks, ...flyout }: Props) {
   const openDialog = useApp((s) => s.openDialog);
   const rows: FlyoutRow[] = [
     ...DURATIONS.map((d) => ({
       id: d.id,
       label: t(d.label),
       icon: "sleep",
-      run: () => bridge().dispatch({ type: "snooze", data: { track_ids: trackIds, duration: d.id } }),
+      run: () => bridge().dispatch({ type: "snooze", data: { tracks, duration: d.id } }),
     })),
-    { id: "custom", label: t("snooze.custom"), icon: "calendar", run: () => openDialog({ kind: "snoozeUntil", trackIds }) },
+    { id: "custom", label: t("snooze.custom"), icon: "calendar", run: () => openDialog({ kind: "snoozeUntil", tracks }) },
   ];
   return <MenuFlyout rows={rows} label={t("action.snooze")} testId="snooze-submenu" {...flyout} />;
 }

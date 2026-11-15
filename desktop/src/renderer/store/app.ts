@@ -3,7 +3,7 @@
 // `dispatch`/`query` which go straight to the bridge.
 import { useMemo } from "react";
 import { create } from "zustand";
-import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
+import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting, TrackRef } from "@core/api";
 import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/bridge-types";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
@@ -76,9 +76,11 @@ export type DialogState =
   | { kind: "confirm"; title: string; message: string; confirmLabel?: string; destructive?: boolean; onConfirm: () => void }
   | { kind: "sleepTimer" }
   /** Snooze songs until a chosen date and time (the Snooze submenu's Custom row). */
-  | { kind: "snoozeUntil"; trackIds: string[] }
+  | { kind: "snoozeUntil"; tracks: TrackRef[] }
   | { kind: "connect" }
-  | { kind: "trackInfo"; trackId: string }
+  | { kind: "trackInfo"; track: TrackRef }
+  /** Name a new playlist, and with several accounts pick where it lives (or Mixed). */
+  | { kind: "newPlaylist"; tracks: TrackRef[]; initial?: string }
   | { kind: "albumInfo"; albumId: string }
   /** Save to Coordinator; `allDevices` as the diagnostics page's bundle options. */
   | { kind: "report"; allDevices: boolean }
@@ -88,7 +90,7 @@ export type DialogState =
 
 /** The Add to playlist picker opened on its own (a "+" button, the shortcut), beside what opened it. */
 export interface PlaylistPickerState {
-  trackIds: string[];
+  tracks: TrackRef[];
   /** The button (or focused item) it opens from, in window coordinates. */
   anchor: { left: number; right: number; top: number; bottom: number };
 }
@@ -115,6 +117,8 @@ export interface UiState {
   selectionScope: string;
   /** What the selected ids are (track ids, album ids, queue keys…), for shortcuts that act on it. */
   selectionKind: SelectionKind | undefined;
+  /** A song selection's references (the list knows each row's account), when it is one. */
+  selectionRefs: TrackRef[] | undefined;
   searchQuery: string;
   searchFocusNonce: number;
   accent: string | undefined;
@@ -136,6 +140,9 @@ export interface UiState {
    * when the drag ends.
    */
   queueDropReveal: boolean;
+  /** The source filter chip: the account the library, search and playlists show ("" = all, `hocket` = Mixed playlists). */
+  librarySource: string;
+  setLibrarySource(source: string): void;
 }
 
 export interface AppStore extends CoreState, UiState {
@@ -157,7 +164,7 @@ export interface AppStore extends CoreState, UiState {
   openDialog(dialog: DialogState): void;
   closeDialog(): void;
   setPendingPair(link: string | undefined): void;
-  setSelection(selection: Selection, scope: string, kind?: SelectionKind): void;
+  setSelection(selection: Selection, scope: string, kind?: SelectionKind, refs?: TrackRef[]): void;
   clearSelection(): void;
   setSearchQuery(q: string): void;
   focusSearch(): void;
@@ -214,6 +221,7 @@ export const useApp = create<AppStore>((set, get) => ({
   selection: EMPTY_SELECTION,
   selectionScope: "",
   selectionKind: undefined,
+  selectionRefs: undefined,
   searchQuery: "",
   searchFocusNonce: 0,
   accent: undefined,
@@ -225,6 +233,7 @@ export const useApp = create<AppStore>((set, get) => ({
   editingPins: false,
   editPinsFrom: undefined,
   queueDropReveal: false,
+  librarySource: "",
 
   dispatch(command) {
     bridge().dispatch(command);
@@ -244,7 +253,7 @@ export const useApp = create<AppStore>((set, get) => ({
       if (get().paletteOpen) set({ paletteOpen: false, contextMenu: undefined, playlistPicker: undefined });
       return;
     }
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false }));
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, selectionRefs: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false }));
   },
   back() {
     const { history, route } = get();
@@ -293,8 +302,8 @@ export const useApp = create<AppStore>((set, get) => ({
   setPendingPair(pendingPair) {
     set({ pendingPair });
   },
-  setSelection(selection, scope, kind) {
-    set({ selection, selectionScope: scope, selectionKind: kind });
+  setSelection(selection, scope, kind, refs) {
+    set({ selection, selectionScope: scope, selectionKind: kind, selectionRefs: refs });
   },
   clearSelection() {
     set({ selection: EMPTY_SELECTION });
@@ -331,6 +340,9 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   setEditingPins(editingPins, from) {
     set({ editingPins, editPinsFrom: editingPins ? from : undefined });
+  },
+  setLibrarySource(librarySource) {
+    set({ librarySource });
   },
   setQueueDropReveal(queueDropReveal) {
     if (get().queueDropReveal === queueDropReveal) return;

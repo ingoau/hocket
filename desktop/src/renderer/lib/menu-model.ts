@@ -5,7 +5,7 @@
 // for one song, then
 // everything else in the registry's order with the destructive item last. Pure: the menu component
 // draws and runs what this returns.
-import type { ActionDescriptor } from "@core/api";
+import type { ActionDescriptor, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import type { MenuItem } from "../store/app";
 
@@ -27,6 +27,8 @@ export interface MenuFacts {
   header?: MenuHeader;
   /** The songs the target stands for: what the add to playlist submenu adds. */
   trackIds?: string[];
+  /** The same songs as references (their accounts too). */
+  trackRefs?: TrackRef[];
   /** How many of those songs are snoozed. */
   snoozed?: number;
   /** When the one song's snooze ends. Null means it doesn't; absent means it isn't snoozed. */

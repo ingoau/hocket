@@ -11,6 +11,7 @@ import { fmtDuration } from "../lib/format";
 import { usePlayIntent } from "../lib/use-prime";
 import { executeAction } from "../store/actions";
 import { trackTableHeight } from "../lib/track-row";
+import { primeKey } from "../lib/track-ref";
 
 export function PlaylistDetail({ id }: { id: string }) {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
@@ -34,7 +35,7 @@ export function PlaylistDetail({ id }: { id: string }) {
     <div className="view detail-page" data-testid="view-playlist">
       <DetailHead coverArt={p?.coverArt} icon="playlist" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} testId="playlist-head" actions={
         <>
-          <button type="button" className="btn primary fab" onClick={() => play()} {...primer.bind(rows[0]?.id)} data-testid="playlist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
+          <button type="button" className="btn primary fab" onClick={() => play()} {...primer.bind(primeKey(rows[0]))} data-testid="playlist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(undefined, true)} data-testid="playlist-shuffle"><Icon name="shuffle" size={24} /></button>
           {p ? <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(kept ? "unpin" : "download", { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-download"><Icon name="download" size={24} filled={kept} /></button> : null}
           <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => p && openMenuFromButton(e, { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-more"><Icon name="more" /></button>

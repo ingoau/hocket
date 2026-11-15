@@ -147,8 +147,8 @@ test.describe("context menu", () => {
       return r.data.items.map((x) => x.id);
     });
     await page.evaluate((ids) => {
-      for (const [i, id] of ids.entries()) window.hocket.dispatch({ type: "setLoved", data: { targets: [{ type: "track", data: { id } }], loved: i < 2 } });
-      for (const id of ids) window.hocket.dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id } }], rating: 0 } });
+      for (const [i, id] of ids.entries()) window.hocket.dispatch({ type: "setLoved", data: { targets: [{ type: "track", data: { id, source: "" } }], loved: i < 2 } });
+      for (const id of ids) window.hocket.dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id, source: "" } }], rating: 0 } });
     }, ids);
     const rows = page.getByTestId("track-row");
     await rows.nth(1).click({ position: onTitle });
@@ -183,7 +183,7 @@ test.describe("context menu", () => {
     await expect(menu.getByRole("menuitemradio", { name: "Rate all 3 songs 3 stars" })).toHaveAttribute("aria-checked", "false");
     // Different ratings read as Mixed, with the stars dashed and none checked.
     await page.keyboard.press("Escape");
-    await page.evaluate((id) => window.hocket.dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id } }], rating: 5 } }), ids[0]!);
+    await page.evaluate((id) => window.hocket.dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id, source: "" } }], rating: 5 } }), ids[0]!);
     await rows.nth(2).click({ position: onTitle, button: "right" });
     await expect(menu.getByRole("group", { name: /Rating/ })).toContainText("Mixed");
     await expect(menu.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveCount(0);

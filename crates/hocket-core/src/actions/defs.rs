@@ -413,11 +413,18 @@ fn pin_to_library(t: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Comm
     let mut pins = s.library_pins.clone();
     // A song plays when tapped; everything else opens.
     let tap = if kind == "track" { "play" } else { "open" };
+    let mut extra = serde_json::Map::new();
+    // A song's pin names its account too (`source`), as every song reference does.
+    if let ActionTarget::Tracks { tracks } = t {
+        if let Some(r) = tracks.first() {
+            extra.insert("source".into(), serde_json::Value::String(r.source.clone()));
+        }
+    }
     pins.push(super::LibraryPin {
         kind: kind.into(),
         id: id.into(),
         tap: tap.into(),
-        ..Default::default()
+        extra,
     });
     set_library_pins(pins)
 }

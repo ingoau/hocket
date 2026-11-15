@@ -15,6 +15,7 @@ import { fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { openContextMenu } from "./ContextMenu";
+import { refOf } from "../lib/track-ref";
 
 const count = (n: number) => (n === 1 ? t("stash.countOne") : t("stash.count", { count: n }));
 
@@ -118,11 +119,10 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
     if ([...selected].some((id) => !live.has(id))) setSelected(new Set([...selected].filter((id) => live.has(id))));
   }, [live, selected]);
   const acting = picked.length ? picked : items;
-  const ids = acting.map((i) => i.track.id);
-  const target: ActionTarget = { type: "tracks", data: { ids } };
-  const serverId = items[0]?.track.serverId ?? "";
+  const ids = acting.map((i) => refOf(i.track));
+  const target: ActionTarget = { type: "tracks", data: { tracks: ids } };
   const play = (shuffle: boolean, from = 0, list = ids) =>
-    bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: list, start_index: from, label: t("stash.title"), shuffle } });
+    bridge().dispatch({ type: "playTracks", data: { tracks: list, start_index: from, label: t("stash.title"), shuffle } });
   const queue = (next: boolean) => {
     useApp.getState().runAction(next ? "playNext" : "playLater", target);
     const n = ids.length;
@@ -186,12 +186,12 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
               data-entry={item.entryId}
               data-testid="stash-row"
               onClick={() => toggle(item.entryId)}
-              onDoubleClick={() => play(false, i, items.map((x) => x.track.id))}
+              onDoubleClick={() => play(false, i, items.map((x) => refOf(x.track)))}
               onKeyDown={(e) => {
                 // Enter and Space on the row's × button are the button's.
                 if (e.target !== e.currentTarget && (e.key === "Enter" || e.key === " ")) return;
                 if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeFromKeyboard(picked.length && on ? picked.map((p) => p.entryId) : [item.entryId]); }
-                else if (e.key === "Enter") { e.preventDefault(); play(false, i, items.map((x) => x.track.id)); }
+                else if (e.key === "Enter") { e.preventDefault(); play(false, i, items.map((x) => refOf(x.track))); }
                 else if (e.key === " ") { e.preventDefault(); toggle(item.entryId); }
                 else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                   e.preventDefault();
@@ -203,7 +203,7 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
                   } else sib?.focus();
                 }
               }}
-              onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { ids: on && picked.length ? picked.map((p) => p.track.id) : [item.track.id] } })}
+              onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { tracks: on && picked.length ? picked.map((p) => refOf(p.track)) : [refOf(item.track)] } })}
               onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", item.entryId); setDrag({ id: item.entryId, over: i }); }}
               onDragOver={(e) => {
                 if (!drag) return;

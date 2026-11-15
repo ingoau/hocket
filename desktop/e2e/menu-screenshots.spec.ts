@@ -55,7 +55,7 @@ test("context menu and add to playlist", async () => {
       // A few more playlists (they become Recent), one with a name long enough to truncate.
       await page.evaluate(async () => {
         const servers = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
-        for (const name of ["Road trip 2024 (the extended summer edition)", "Run club", "Focus"]) window.hocket.dispatch({ type: "createPlaylist", data: { server_id: servers.data[0]!.id, name, track_ids: [] } });
+        for (const name of ["Road trip 2024 (the extended summer edition)", "Run club", "Focus"]) window.hocket.dispatch({ type: "createPlaylist", data: { account_id: servers.data[0]!.id, name, tracks: [] } });
       });
       await openPlaylist(page, "Slow Sundays");
       // The new playlists toast for 5s; wait them out so they don't sit on the menu.

@@ -2,7 +2,7 @@
 // keyed by id; Ctrl+A selects the predicate ("all matching") using `total`.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
-import type { ActionTarget, SortOrder, Track } from "@core/api";
+import type { ActionTarget, SortOrder, Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { EMPTY_SELECTION, clearSelection, isSelected, navigate, selectAll, selectOnly, selectRange, selectionCount, toggle, typeAhead, type Selection } from "../store/selection";
@@ -18,6 +18,7 @@ import { OfflineBadge } from "./OfflineBadge";
 import type { Primer } from "../lib/use-prime";
 import { evictPages, materializePages } from "../lib/paged-window";
 import { dragFromControl, endLibraryDrag, startLibraryDrag } from "../lib/queue-drag";
+import { primeKey, ratingTarget, refOf } from "../lib/track-ref";
 
 export type ColumnId = "index" | "position" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
 
@@ -159,13 +160,19 @@ export function TrackTable(props: TrackTableProps) {
   const template = useMemo(() => columns.map((c) => COLUMNS[c].width).join(" "), [columns]);
   const idAt = useCallback((i: number) => tracks[i]?.id, [tracks]);
   const loadedIds = useMemo(() => tracks.map((x) => x?.id ?? ""), [tracks]);
+  // The selection is by row id; commands name songs by reference (their account too).
+  const refsFor = useCallback((ids: Iterable<string>): TrackRef[] => {
+    const byId = new Map<string, Track>();
+    for (const x of tracks) if (x && !byId.has(x.id)) byId.set(x.id, x);
+    return [...ids].map((id) => byId.get(id)).filter((x): x is Track => !!x).map(refOf);
+  }, [tracks]);
 
   const publish = useCallback((sel: Selection) => {
-    setSelection(sel, scope, "tracks");
+    setSelection(sel, scope, "tracks", sel.all ? undefined : refsFor(sel.ids));
     // Tell the core what the selection is so commands can snapshot it (undo restores it).
-    const target: ActionTarget = sel.all ? { type: "none" } : { type: "tracks", data: { ids: [...sel.ids] } };
+    const target: ActionTarget = sel.all ? { type: "none" } : { type: "tracks", data: { tracks: refsFor(sel.ids) } };
     bridge().dispatch({ type: "setSelection", data: { target } });
-  }, [setSelection, scope]);
+  }, [setSelection, scope, refsFor]);
 
   // A table shown in full on its page (album, playlist) doesn't scroll itself: the page does. Keeping
   // the focused row in view and sizing Page Up/Down then go by the page's scroller instead.
@@ -203,9 +210,10 @@ export function TrackTable(props: TrackTableProps) {
 
   const targetFor = (i: number): ActionTarget => {
     const id = idAt(i);
-    if (id && isSelected(selection, id) && selectionCount(selection) > 1 && !selection.all) return { type: "tracks", data: { ids: [...selection.ids] } };
-    if (selection.all) return { type: "tracks", data: { ids: tracks.filter((x): x is Track => !!x && !selection.ids.has(x.id)).map((x) => x.id) } };
-    return { type: "tracks", data: { ids: id ? [id] : [] } };
+    if (id && isSelected(selection, id) && selectionCount(selection) > 1 && !selection.all) return { type: "tracks", data: { tracks: refsFor(selection.ids) } };
+    if (selection.all) return { type: "tracks", data: { tracks: tracks.filter((x): x is Track => !!x && !selection.ids.has(x.id)).map(refOf) } };
+    const tr = tracks[i];
+    return { type: "tracks", data: { tracks: tr ? [refOf(tr)] : [] } };
   };
   const selectedIndices = (): number[] => tracks.map((x, i) => (x && isSelected(selection, x.id) ? i : -1)).filter((i) => i >= 0);
 
@@ -214,7 +222,8 @@ export function TrackTable(props: TrackTableProps) {
     if (id && !isSelected(selection, id)) {
       setFocusIdx(i);
       publish(selectOnly(id));
-      void openContextMenu(e, { type: "tracks", data: { ids: [id] } }, { ...context, indices: [i] });
+      const tr = tracks[i];
+      void openContextMenu(e, { type: "tracks", data: { tracks: tr ? [refOf(tr)] : [] } }, { ...context, indices: [i] });
       return;
     }
     void openContextMenu(e, targetFor(i), { ...context, indices: selectedIndices() });
@@ -328,8 +337,8 @@ export function TrackTable(props: TrackTableProps) {
                 tabIndex={focused ? 0 : -1}
                 data-index={vi.index}
                 style={{ gridTemplateColumns: template, transform: `translateY(${vi.start}px)`, height: vi.size }}
-                onFocus={(e) => { if (e.target !== e.currentTarget) return; if (vi.index !== focusIdx) setFocusIdx(vi.index); primer?.enter(tr?.id); }}
-                onBlur={(e) => { if (e.target === e.currentTarget) primer?.leave(tr?.id); }}
+                onFocus={(e) => { if (e.target !== e.currentTarget) return; if (vi.index !== focusIdx) setFocusIdx(vi.index); primer?.enter(primeKey(tr)); }}
+                onBlur={(e) => { if (e.target === e.currentTarget) primer?.leave(primeKey(tr)); }}
                 onClick={(e) => click(e, vi.index)}
                 onDoubleClick={() => tr && onPlay(vi.index, tr)}
                 onContextMenu={(e) => onContext(e, vi.index)}
@@ -382,7 +391,7 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist
         <div className={`${cls} index`} role="gridcell">
           {playing ? <><Icon name="play" size={12} filled style={{ color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : resume !== undefined ? <><ResumeRing fraction={resume} /><span className="sr-only">{col === "position" ? index + 1 : (track.trackNumber ?? index + 1)}</span></> : <span className="n">{col === "position" ? index + 1 : (track.trackNumber ?? index + 1)}</span>}
           {/* Pointer shortcut (Enter plays the focused row); resting on it primes the track. */}
-          {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(track.id)} data-testid="row-play"><Icon name="play" size={11} filled /></button> : null}
+          {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(primeKey(track))} data-testid="row-play"><Icon name="play" size={11} filled /></button> : null}
         </div>
       );
     case "art":
@@ -401,9 +410,9 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist
     case "genre":
       return <div className={`${cls} sub`} role="gridcell">{track.genre ?? ""}</div>;
     case "rating":
-      return <div className="td" role="gridcell"><Stars value={track.rating} tabbable={false} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /></div>;
+      return <div className="td" role="gridcell"><Stars value={track.rating} tabbable={false} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [ratingTarget(track)], rating: r } })} /></div>;
     case "love":
-      return <div className="td" role="gridcell"><Heart on={track.loved} size={13} tabbable={false} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} /></div>;
+      return <div className="td" role="gridcell"><Heart on={track.loved} size={13} tabbable={false} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [ratingTarget(track)], loved: !track.loved } })} /></div>;
     case "plays":
       return <div className={cls} role="gridcell">{track.playCount || ""}</div>;
     case "added":

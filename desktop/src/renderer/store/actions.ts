@@ -11,6 +11,8 @@ import { isNarrow, showSideView, toggleSideView, useApp, type DialogState, type 
 import { settingValue } from "./reducer";
 import { explicitIds } from "./selection";
 import { entryByKey } from "../lib/queue-view";
+import { refOf } from "../lib/track-ref";
+import type { TrackRef } from "@core/api";
 
 export interface ActionContext {
   playlistId?: string;
@@ -144,8 +146,8 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
         if (target.data.ids[0]) app.openDialog({ kind: "albumInfo", albumId: target.data.ids[0] });
         return;
       }
-      const ids = await resolveTrackIds(target);
-      if (ids[0]) app.openDialog({ kind: "trackInfo", trackId: ids[0] });
+      const refs = await resolveTrackRefs(target);
+      if (refs[0]) app.openDialog({ kind: "trackInfo", track: refs[0] });
       return;
     }
     case "addToPlaylist": {
@@ -154,20 +156,14 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
         app.closePlaylistPicker();
         return;
       }
-      const ids = target.type === "none" && app.nowPlaying ? [app.nowPlaying.track.id] : await resolveTrackIds(target);
-      if (ids.length) app.openPlaylistPicker({ trackIds: ids, anchor: pickerAnchor(ctx.anchor) });
+      const refs = target.type === "none" && app.nowPlaying ? [refOf(app.nowPlaying.track)] : await resolveTrackRefs(target);
+      if (refs.length) app.openPlaylistPicker({ tracks: refs, anchor: pickerAnchor(ctx.anchor) });
       return;
     }
     case "ui.newPlaylist": {
-      const ids = await resolveTrackIds(target);
-      const serverId = app.accounts[0]?.id;
-      if (!serverId) return;
-      app.openDialog({
-        kind: "prompt",
-        title: t("dialog.newPlaylist"),
-        label: t("dialog.playlistName"),
-        onConfirm: (name) => b.dispatch({ type: "createPlaylist", data: { server_id: serverId, name, track_ids: ids } }),
-      });
+      const tracks = await resolveTrackRefs(target);
+      if (!app.accounts.length) return;
+      app.openDialog({ kind: "newPlaylist", tracks });
       return;
     }
     case "removeFromPlaylist": {
@@ -196,7 +192,7 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
       return;
     }
     case "unpin": {
-      const pinTarget = target.type === "albums" && target.data.ids[0] ? { type: "album" as const, data: { id: target.data.ids[0] } } : target.type === "playlists" && target.data.ids[0] ? { type: "playlist" as const, data: { id: target.data.ids[0] } } : target.type === "tracks" && target.data.ids[0] ? { type: "track" as const, data: { id: target.data.ids[0] } } : undefined;
+      const pinTarget = target.type === "albums" && target.data.ids[0] ? { type: "album" as const, data: { id: target.data.ids[0] } } : target.type === "playlists" && target.data.ids[0] ? { type: "playlist" as const, data: { id: target.data.ids[0] } } : target.type === "tracks" && target.data.tracks[0] ? { type: "track" as const, data: { id: target.data.tracks[0].id } } : undefined;
       if (!pinTarget) return;
       app.openDialog({ kind: "confirm", title: t("action.removeDownload"), message: t("dialog.deleteDownload", { name: pinTarget.data.id }), confirmLabel: t("dialog.delete"), destructive: true, onConfirm: () => b.dispatch({ type: "unpin", data: { target: pinTarget } }) });
       return;
@@ -217,45 +213,49 @@ export function deletePlaylistsDialog(ids: string[], names: string[], deleteOne:
   return { kind: "confirm", title: t("action.deletePlaylist"), message, confirmLabel: t("dialog.delete"), destructive: true, onConfirm: () => ids.forEach(deleteOne) };
 }
 
-/** The songs a target stands for (an album's, a playlist's, the queue items'). */
+/** The songs a target stands for (an album's, a playlist's, the queue items'), by id. */
 export async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
+  return (await resolveTrackRefs(target)).map((r) => r.id);
+}
+
+/** The songs a target stands for (an album's, a playlist's, the queue items'). */
+export async function resolveTrackRefs(target: ActionTarget): Promise<TrackRef[]> {
   const b = bridge();
   switch (target.type) {
     case "tracks":
-      return target.data.ids;
+      return target.data.tracks;
     case "albums": {
-      const out: string[] = [];
+      const out: TrackRef[] = [];
       for (const id of target.data.ids) {
         const r = await b.query({ type: "albumTracks", data: { id } });
-        if (r.type === "trackList") out.push(...r.data.map((x) => x.id));
+        if (r.type === "trackList") out.push(...r.data.map(refOf));
       }
       return out;
     }
     case "artists": {
       // As the core resolves an artist: its albums oldest first, each in track order.
-      const out: string[] = [];
-      const serverId = useApp.getState().accounts[0]?.id ?? "";
+      const out: TrackRef[] = [];
       for (const id of target.data.ids) {
-        const r = await b.query({ type: "albums", data: { server_id: serverId, artist_id: id, genre: undefined, sort: "year", descending: false, page: { offset: 0, limit: 10_000 } } });
+        const r = await b.query({ type: "albums", data: { server_id: "", artist_id: id, genre: undefined, sort: "year", descending: false, page: { offset: 0, limit: 10_000 } } });
         if (r.type !== "albums") continue;
         for (const a of r.data.items) {
           const tr = await b.query({ type: "albumTracks", data: { id: a.id } });
-          if (tr.type === "trackList") out.push(...tr.data.map((x) => x.id));
+          if (tr.type === "trackList") out.push(...tr.data.map(refOf));
         }
       }
       return out;
     }
     case "playlists": {
-      const out: string[] = [];
+      const out: TrackRef[] = [];
       for (const id of target.data.ids) {
         const r = await b.query({ type: "playlistTracks", data: { id, page: { offset: 0, limit: 10_000 } } });
-        if (r.type === "tracks") out.push(...r.data.items.map((x) => x.id));
+        if (r.type === "tracks") out.push(...r.data.items.map(refOf));
       }
       return out;
     }
     case "queueItems": {
       const q = useApp.getState().queue;
-      return target.data.keys.map((k) => entryByKey(q, k)?.track.id).filter((x): x is string => !!x);
+      return target.data.keys.map((k) => entryByKey(q, k)?.item.track).filter((x): x is TrackRef => !!x);
     }
     default:
       return [];
@@ -263,14 +263,14 @@ export async function resolveTrackIds(target: ActionTarget): Promise<string[]> {
 }
 
 async function firstTrackField(target: ActionTarget, field: "albumId" | "artistId"): Promise<string | undefined> {
-  const ids = await resolveTrackIds(target);
-  if (!ids[0]) return undefined;
-  const r = await bridge().query({ type: "track", data: { id: ids[0] } });
+  const refs = await resolveTrackRefs(target);
+  if (!refs[0]) return undefined;
+  const r = await bridge().query({ type: "track", data: { track: refs[0] } });
   return r.type === "trackDetail" ? r.data?.[field] : undefined;
 }
 
 /** Build the ActionTarget for the current selection in a list of tracks. */
-export function selectionTarget(kind: "tracks" | "albums" | "artists" | "playlists", fallbackId?: string): ActionTarget | undefined {
+export function selectionTarget(kind: "albums" | "artists" | "playlists", fallbackId?: string): ActionTarget | undefined {
   const sel = useApp.getState().selection;
   const ids = explicitIds(sel);
   if (ids && ids.length) return { type: kind, data: { ids } } as ActionTarget;

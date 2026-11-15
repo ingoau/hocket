@@ -92,7 +92,7 @@ export async function serverId(page: Page): Promise<string> {
 /** The FakeCore's "Word by Word": syllable-tier lyrics with background vocals. */
 export async function playShowcase(page: Page): Promise<void> {
   const sid = await serverId(page);
-  await page.evaluate((s) => window.hocket.dispatch({ type: "playTracks", data: { server_id: s, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } }), sid);
+  await page.evaluate((s) => window.hocket.dispatch({ type: "playTracks", data: { tracks: ["tr-1"].map((id) => ({ source: s, id })), start_index: 0, label: "e2e", shuffle: false } }), sid);
   await expect(page.getByTestId("player-bar").locator(".now .title")).toContainText("Word by Word");
 }
 

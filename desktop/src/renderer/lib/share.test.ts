@@ -17,8 +17,8 @@ describe("share", () => {
   });
 
   it("asks the core for a Squigly link by the song's or the album's id", () => {
-    expect(songLinkIds({ type: "tracks", data: { ids: ["t1"] } }, { kind: "song", count: 1, trackIds: ["t9"] })).toEqual({ track_id: "t9" });
-    expect(songLinkIds({ type: "tracks", data: { ids: ["t1"] } }, { kind: "song", count: 1 })).toEqual({ track_id: "t1" });
+    expect(songLinkIds({ type: "tracks", data: { tracks: [{ source: "s", id: "t1" }] } }, { kind: "song", count: 1, trackIds: ["t9"] })).toEqual({ track_id: "t9" });
+    expect(songLinkIds({ type: "tracks", data: { tracks: [{ source: "s", id: "t1" }] } }, { kind: "song", count: 1 })).toEqual({ track_id: "t1" });
     expect(songLinkIds({ type: "albums", data: { ids: ["al1"] } }, { kind: "album", count: 1 })).toEqual({ album_id: "al1" });
     expect(songLinkIds({ type: "artists", data: { ids: ["ar1"] } }, { kind: "artist", count: 1 })).toBeUndefined();
   });

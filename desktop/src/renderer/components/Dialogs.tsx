@@ -1,6 +1,6 @@
 // Modal dialogs: prompt, confirm, add-to-playlist, sleep timer, snooze until, Connect picker, track info, Save to Coordinator.
 import { useEffect, useRef, useState } from "react";
-import type { Album, DeviceInfo } from "@core/api";
+import type { Album, DeviceInfo, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
@@ -8,6 +8,7 @@ import { bridge } from "../core/bridge";
 import { fmtDate, fmtDuration, fmtRelative, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
+import { MIXED_SOURCE } from "../lib/sources";
 import { deviceIcon } from "./ConnectPill";
 import { Slider } from "./controls";
 import { useVolumeControl } from "../lib/volume";
@@ -51,11 +52,12 @@ export function Dialogs() {
     <div className={`overlay ${dialog.kind === "connect" ? "overlay-popover" : ""} ${closing ? "closing" : ""}`} style={popoverStyle} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div {...exitProps} className={`dialog ${dialog.kind === "trackInfo" ? "dialog-wide" : ""} ${dialog.kind === "report" ? "dialog-report" : ""} ${dialog.kind === "connect" ? "dialog-popover connect-popover" : ""} ${motion}`} role={dialog.kind === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="dialog-title" aria-describedby={dialog.kind === "confirm" ? "dialog-message" : undefined} onKeyDown={onKey} data-testid={`dialog-${dialog.kind}`}>
         {dialog.kind === "prompt" ? <Prompt {...dialog} /> : null}
+        {dialog.kind === "newPlaylist" ? <NewPlaylist tracks={dialog.tracks} initial={dialog.initial} /> : null}
         {dialog.kind === "confirm" ? <Confirm {...dialog} /> : null}
         {dialog.kind === "sleepTimer" ? <SleepTimerDialog /> : null}
-        {dialog.kind === "snoozeUntil" ? <SnoozeUntilDialog trackIds={dialog.trackIds} /> : null}
+        {dialog.kind === "snoozeUntil" ? <SnoozeUntilDialog tracks={dialog.tracks} /> : null}
         {dialog.kind === "connect" ? <ConnectDialog /> : null}
-        {dialog.kind === "trackInfo" ? <SongInfo trackId={dialog.trackId} /> : null}
+        {dialog.kind === "trackInfo" ? <SongInfo track={dialog.track} /> : null}
         {dialog.kind === "albumInfo" ? <AlbumInfo albumId={dialog.albumId} /> : null}
         {dialog.kind === "report" ? <ReportDialog allDevices={dialog.allDevices} /> : null}
         {dialog.kind === "pairDevice" ? <PairDeviceDialog /> : null}
@@ -84,6 +86,43 @@ function Prompt({ title, label, initial, confirmLabel, onConfirm }: { title: str
       <div className="buttons">
         <button type="button" className="btn" onClick={close}>{t("dialog.cancel")}</button>
         <button type="submit" className="btn primary" disabled={!value.trim()}>{confirmLabel ?? t("dialog.ok")}</button>
+      </div>
+    </form>
+  );
+}
+
+function NewPlaylist({ tracks, initial }: { tracks: TrackRef[]; initial?: string }) {
+  const close = useApp((s) => s.closeDialog);
+  const accounts = useApp((s) => s.accounts);
+  const [value, setValue] = useState(initial ?? "");
+  // The songs' own account when they share one, else the first account.
+  const sources = [...new Set(tracks.map((r) => r.source))];
+  const [account, setAccount] = useState(sources.length === 1 && accounts.some((a) => a.id === sources[0]) ? sources[0]! : sources.length > 1 ? MIXED_SOURCE : (accounts[0]?.id ?? ""));
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!value.trim() || !account) return;
+    bridge().dispatch({ type: "createPlaylist", data: { account_id: account, name: value.trim(), tracks } });
+    close();
+  };
+  return (
+    <form onSubmit={submit}>
+      <h2 className="dialog-title" id="dialog-title">{t("dialog.newPlaylist")}</h2>
+      <label style={{ marginTop: 10 }}>
+        {t("dialog.playlistName")}
+        <input className="input" value={value} onChange={(e) => setValue(e.target.value)} data-testid="prompt-input" />
+      </label>
+      {accounts.length > 1 ? (
+        <label style={{ marginTop: 10 }}>
+          {t("dialog.playlistOn")}
+          <select className="input" value={account} onChange={(e) => setAccount(e.target.value)} data-testid="new-playlist-account">
+            {accounts.map((a) => <option key={a.id} value={a.id}>{a.name || a.url}</option>)}
+            <option value={MIXED_SOURCE}>{t("dialog.playlistMixed")}</option>
+          </select>
+        </label>
+      ) : null}
+      <div className="buttons">
+        <button type="button" className="btn" onClick={close}>{t("dialog.cancel")}</button>
+        <button type="submit" className="btn primary" disabled={!value.trim()}>{t("dialog.ok")}</button>
       </div>
     </form>
   );
@@ -136,7 +175,7 @@ export function localDateTimeValue(ms: number): string {
 }
 
 /** Snooze songs until a date and time, a week from now to start. */
-function SnoozeUntilDialog({ trackIds }: { trackIds: string[] }) {
+function SnoozeUntilDialog({ tracks }: { tracks: TrackRef[] }) {
   const close = useApp((s) => s.closeDialog);
   const [value, setValue] = useState(() => localDateTimeValue(Date.now() + 7 * 24 * 3600_000));
   // A datetime-local value with no zone parses as local time.
@@ -145,7 +184,7 @@ function SnoozeUntilDialog({ trackIds }: { trackIds: string[] }) {
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid) return;
-    bridge().dispatch({ type: "snoozeUntil", data: { track_ids: trackIds, until } });
+    bridge().dispatch({ type: "snoozeUntil", data: { tracks, until } });
     close();
   };
   return (

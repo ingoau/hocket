@@ -16,7 +16,7 @@ async function populate(page: Page): Promise<void> {
   await expect(page.getByTestId("queue-row-current")).toBeVisible();
   await playShowcase(page);
   const sid = await serverId(page);
-  await page.evaluate((s) => window.hocket.dispatch({ type: "playNext", data: { server_id: s, track_ids: ["tr-2", "tr-3"] } }), sid);
+  await page.evaluate((s) => window.hocket.dispatch({ type: "playNext", data: { tracks: ["tr-2", "tr-3"].map((id) => ({ source: s, id })) } }), sid);
   await expect(page.getByTestId("queue-row-group").first()).toBeVisible();
   await showSideView(page, "lyrics");
   // The first syllable line is active from 1.5 s.
@@ -226,7 +226,7 @@ test.describe("axe: no violations anywhere", () => {
       // Prompt dialog (new playlist), confirmation dialog (remove server), sleep timer, Connect, track info.
       await openPlace(page, "playlists");
       await page.getByRole("button", { name: "New playlist" }).click();
-      await expect(page.getByTestId("dialog-prompt")).toBeVisible();
+      await expect(page.getByTestId("dialog-newPlaylist")).toBeVisible();
       await expectNoViolations(page, `${theme} prompt dialog`);
       await page.keyboard.press("Escape");
       await page.getByTestId("nav-settings").click();

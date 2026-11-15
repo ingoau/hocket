@@ -5,7 +5,7 @@
 // and MusicBrainz (similar tracks, the album's notes, the artist's biography
 // and similar artists). Read-only: no action buttons beyond revealing the file.
 import { useRef, useState } from "react";
-import type { Track } from "@core/api";
+import type { Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
@@ -14,6 +14,8 @@ import { fmtBytes, fmtDate, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { Stars } from "./Stars";
+import { SongSources } from "./SongSources";
+import { ratingTarget, refOf, type HasRef } from "../lib/track-ref";
 
 type Row = [string, React.ReactNode | undefined];
 type Section = "listening" | "sound" | "credits" | "around";
@@ -38,11 +40,11 @@ const ordinal = (n: number) => {
   return t(cat === "one" || cat === "two" || cat === "few" ? `songInfo.ordinal.${cat}` : "songInfo.ordinal.other", { n });
 };
 
-export function SongInfo({ trackId }: { trackId: string }) {
+export function SongInfo({ track }: { track: TrackRef }) {
+  const trackId = track.id;
   const close = useApp((s) => s.closeDialog);
   const navigate = useApp((s) => s.navigate);
-  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
-  const { data } = useQuery(() => ({ type: "track", data: { id: trackId } }), "trackDetail", [trackId]);
+  const { data } = useQuery(() => ({ type: "track", data: { track } }), "trackDetail", [track.source, trackId]);
   const tr = data as Track | undefined;
   const related = useQuery(() => ({ type: "related", data: { track_id: trackId, count: 6 } }), "related", [trackId], { static: true });
   const albumTracks = useQuery(() => (tr?.albumId ? { type: "albumTracks", data: { id: tr.albumId } } : null), "trackList", [tr?.albumId], { static: true });
@@ -51,7 +53,7 @@ export function SongInfo({ trackId }: { trackId: string }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [on, setOn] = useState<Section>("listening");
   if (!tr) return <h2 className="dialog-title" id="dialog-title">{t("misc.loading")}</h2>;
-  const playNext = (id: string) => bridge().dispatch({ type: "playNext", data: { server_id: serverId, track_ids: [id] } });
+  const playNext = (tr: HasRef) => bridge().dispatch({ type: "playNext", data: { tracks: [refOf(tr)] } });
   const go = (route: Parameters<typeof navigate>[0]) => { close(); navigate(route); };
   const link = (label: string | undefined, route: Parameters<typeof navigate>[0] | undefined) => (label ? (route ? <a href="#" className="plain-link" onClick={(e) => { e.preventDefault(); go(route); }}>{label}</a> : label) : undefined);
   const artistLink = link(tr.artist, tr.artistId ? { view: "artist", id: tr.artistId } : undefined);
@@ -96,9 +98,10 @@ export function SongInfo({ trackId }: { trackId: string }) {
           </div>
           <div className="si-rating">
             <span className="muted" aria-hidden="true">{t("album.yourRating")}</span>
-            <Stars value={tr.rating} label={t("a11y.ratingOf", { title: tr.title })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id: tr.id } }], rating: r } })} />
+            <Stars value={tr.rating} label={t("a11y.ratingOf", { title: tr.title })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [ratingTarget(tr)], rating: r } })} />
           </div>
         </header>
+        <SongSources track={track} />
         <nav className="si-tabs" aria-label={t("songInfo.sections")}>
           {SECTIONS.map((s) => (
             <button key={s} type="button" className={`si-tab ${on === s ? "on" : ""}`} aria-current={on === s || undefined} onClick={() => jump(s)} data-testid={`song-info-tab-${s}`}>{t(`songInfo.tab.${s}`)}</button>
@@ -154,7 +157,7 @@ export function SongInfo({ trackId }: { trackId: string }) {
                       {similar.map((r) => (
                         <li key={r.track.id}>
                           {/* A button, so the keyboard plays it next too: a key's click has detail 0, a double click's second 2, a single click (1) does nothing. */}
-                          <button type="button" className="si-similar-row" onClick={(e) => { if (e.detail !== 1) playNext(r.track.id); }} aria-label={t("songInfo.playNextNamed", { title: r.track.title, artist: r.track.artist ?? "" })} data-testid="song-info-similar">
+                          <button type="button" className="si-similar-row" onClick={(e) => { if (e.detail !== 1) playNext(r.track); }} aria-label={t("songInfo.playNextNamed", { title: r.track.title, artist: r.track.artist ?? "" })} data-testid="song-info-similar">
                             <Artwork id={r.track.coverArt} size={96} className="art" />
                             <span className="grow" style={{ minWidth: 0 }}>
                               <span className="truncate si-similar-title">{r.track.title}<span className="muted"> · {r.track.artist}</span></span>

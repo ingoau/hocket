@@ -11,7 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  TrackRef, IdentityInfo, CoordinatorInviteInfo,
+  TrackRef, IdentityInfo, CoordinatorInviteInfo, HomeShelf,
   ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
@@ -290,6 +290,15 @@ export class FakeCore implements CoreHandle {
         return;
       case "addAccount": {
         const a = cmd.data.setup.data;
+        const id = accountIdFor(a.url, a.username);
+        if (this.lib && this.servers.length && !this.servers.some((s) => s.id === id) && /^https?:\/\//.test(a.url)) {
+          // Another account beside the first (the source chip, the Mixed playlist choice). The
+          // fake keeps one library, the first account's; the new one lists nothing.
+          const first = this.servers[0]!;
+          this.servers = [...this.servers, { ...first, id, source: id, url: a.url, username: a.username, name: a.name ?? new URL(a.url).host, priority: this.servers.length, lastSync: undefined }];
+          this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
+          return;
+        }
         this.addServer(a.url, a.username, a.name ?? new URL(a.url).host, false);
         return;
       }
@@ -354,7 +363,7 @@ export class FakeCore implements CoreHandle {
         this.emitTransport();
         return;
       case "previewStart":
-        this.previewStart(cmd.data.track_id);
+        this.previewStart(cmd.data.track.id);
         return;
       case "previewToggle":
         this.previewToggle();
@@ -384,17 +393,17 @@ export class FakeCore implements CoreHandle {
         this.emitAlbumResumes();
         return;
       case "playTracks":
-        this.playContext({ source: cmd.data.server_id, kind: { type: "adHoc", data: { label: cmd.data.label } }, label: cmd.data.label, sort: "default", tracks: this.refs(cmd.data.track_ids) }, cmd.data.start_index, cmd.data.shuffle, true);
+        this.playContext({ source: cmd.data.tracks[0]?.source ?? "", kind: { type: "adHoc", data: { label: cmd.data.label } }, label: cmd.data.label, sort: "default", tracks: cmd.data.tracks }, cmd.data.start_index, cmd.data.shuffle, true);
         if (cmd.data.start_position_ms) this.seek(cmd.data.start_position_ms);
         return;
       case "playNext":
-        this.insert(cmd.data.track_ids, cmd.data.keys ?? [], "next");
+        this.insert(cmd.data.tracks.map((r) => r.id), cmd.data.keys ?? [], "next");
         return;
       case "addToQueue":
-        this.insert(cmd.data.track_ids, cmd.data.keys ?? [], "group");
+        this.insert(cmd.data.tracks.map((r) => r.id), cmd.data.keys ?? [], "group");
         return;
       case "playLater":
-        this.insert(cmd.data.track_ids, cmd.data.keys ?? [], "later");
+        this.insert(cmd.data.tracks.map((r) => r.id), cmd.data.keys ?? [], "later");
         return;
       case "jumpToQueueItem":
         this.jumpTo(cmd.data.key);
@@ -406,7 +415,7 @@ export class FakeCore implements CoreHandle {
         this.moveItem(cmd.data.key, cmd.data.after, cmd.data.in_group);
         return;
       case "insertTracks":
-        this.insertAfter(cmd.data.track_ids, cmd.data.keys ?? [], cmd.data.after, cmd.data.in_group);
+        this.insertAfter(cmd.data.tracks.map((r) => r.id), cmd.data.keys ?? [], cmd.data.after, cmd.data.in_group);
         return;
       case "clearQueue":
         this.clearQueue();
@@ -504,6 +513,14 @@ export class FakeCore implements CoreHandle {
       case "setLoved":
         this.setLoved(cmd.data.targets, cmd.data.loved);
         return;
+      case "linkTracks":
+      case "unlinkTrack":
+        // One library on one account: there is nothing to link.
+        return;
+      case "setInLibrary":
+        return;
+      case "convertPlaylistToMixed":
+        return;
       case "setArtistLoved": {
         const a = this.lib?.artists.find((x) => x.id === cmd.data.artist_id);
         if (a) {
@@ -522,7 +539,7 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "createPlaylist":
-        this.createPlaylist(cmd.data.name, cmd.data.track_ids);
+        this.createPlaylist(cmd.data.name, cmd.data.tracks.map((r) => r.id));
         return;
       case "deletePlaylist":
         if (this.lib) {
@@ -553,7 +570,7 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "playlistAdd":
-        this.playlistAdd(cmd.data.playlist_id, cmd.data.track_ids, cmd.data.at_index);
+        this.playlistAdd(cmd.data.playlist_id, cmd.data.tracks.map((r) => r.id), cmd.data.at_index);
         return;
       case "playlistRemove":
         this.playlistRemove(cmd.data.playlist_id, cmd.data.indices);
@@ -582,7 +599,7 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "primeTrack":
-        this.prime("track", cmd.data.track_id, cmd.data.track_id);
+        this.prime("track", cmd.data.track.id, cmd.data.track.id);
         return;
       case "setStorageWarnThreshold":
         this.setSettingValue("storage.warnThresholdBytes", JSON.stringify(cmd.data.bytes ?? 4 * 1024 ** 3));
@@ -784,7 +801,7 @@ export class FakeCore implements CoreHandle {
         // Only Android casts (its Cast SDK backend); the desktop never sends it.
         return;
       case "stashAdd":
-        this.stashAdd(cmd.data.track_ids);
+        this.stashAdd(cmd.data.tracks.map((r) => r.id));
         return;
       case "stashRemove": {
         const ids = new Set(cmd.data.entry_ids);
@@ -823,13 +840,13 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "snooze":
-        this.applySnooze(cmd.data.track_ids, cmd.data.duration);
+        this.applySnooze(cmd.data.tracks.map((r) => r.id), cmd.data.duration);
         return;
       case "snoozeUntil":
-        this.applySnoozeUntil(cmd.data.track_ids, cmd.data.until);
+        this.applySnoozeUntil(cmd.data.tracks.map((r) => r.id), cmd.data.until);
         return;
       case "unsnooze":
-        this.clearSnooze(cmd.data.track_ids);
+        this.clearSnooze(cmd.data.tracks.map((r) => r.id));
         return;
       case "setTransitionSettings":
         this.transitions = cmd.data.settings;
@@ -2346,7 +2363,7 @@ export class FakeCore implements CoreHandle {
   private libraryPinOf(target: ActionTarget): { kind: string; id: string } | undefined {
     if (target.type !== "albums" && target.type !== "artists" && target.type !== "playlists" && target.type !== "tracks") return undefined;
     const kind = target.type === "albums" ? "album" : target.type === "artists" ? "artist" : target.type === "playlists" ? "playlist" : "track";
-    const ids = target.data.ids;
+    const ids = target.type === "tracks" ? target.data.tracks.map((r) => r.id) : target.data.ids;
     const id = ids.length === 1 ? ids[0] : undefined;
     return id ? { kind, id } : undefined;
   }
@@ -2552,12 +2569,12 @@ export class FakeCore implements CoreHandle {
       }
       case "love": {
         const t = this.currentTrack();
-        if (t) this.setLoved([{ type: "track", data: { id: t.id } }], !t.loved);
+        if (t) this.setLoved([{ type: "track", data: { id: t.id, source: t.serverId } }], !t.loved);
         break;
       }
       case "rate": {
         const t = this.currentTrack();
-        if (t && value !== undefined) this.setRating([{ type: "track", data: { id: t.id } }], Math.round(value));
+        if (t && value !== undefined) this.setRating([{ type: "track", data: { id: t.id, source: t.serverId } }], Math.round(value));
         break;
       }
       case "stash": {
@@ -2595,7 +2612,7 @@ export class FakeCore implements CoreHandle {
     const actionId = canonicalActionId(rawId);
     const trackIds = this.targetTrackIds(target);
     const sid = this.lib?.serverId ?? "";
-    const ratingTargets = target.type === "albums" ? target.data.ids.map((id) => ({ type: "album" as const, data: { id } })) : trackIds.map((id) => ({ type: "track" as const, data: { id } }));
+    const ratingTargets: RatingTarget[] = target.type === "albums" ? target.data.ids.map((id) => ({ type: "album" as const, data: { id } })) : trackIds.map((id) => ({ type: "track" as const, data: { id, source: sid } }));
     switch (actionId) {
       case "play":
         if (target.type === "albums" && target.data.ids.length === 1) {
@@ -2649,7 +2666,7 @@ export class FakeCore implements CoreHandle {
         const loved = actionId === "love";
         if (target.type === "none") {
           const t = this.currentTrack();
-          if (t) this.setLoved([{ type: "track", data: { id: t.id } }], loved);
+          if (t) this.setLoved([{ type: "track", data: { id: t.id, source: t.serverId } }], loved);
         } else if (target.type === "artists") for (const id of target.data.ids) this.handle({ type: "setArtistLoved", data: { artist_id: id, loved } });
         else this.setLoved(ratingTargets, loved);
         return;
@@ -2735,7 +2752,7 @@ export class FakeCore implements CoreHandle {
       default:
         if (/^rate[0-5]$/.test(actionId)) {
           const r = Number(actionId.slice(4));
-          const targets = ratingTargets.length ? ratingTargets : this.currentTrack() ? [{ type: "track" as const, data: { id: this.currentTrack()!.id } }] : [];
+          const targets = ratingTargets.length ? ratingTargets : this.currentTrack() ? [{ type: "track" as const, data: { id: this.currentTrack()!.id, source: this.currentTrack()!.serverId } }] : [];
           if (targets.length) this.setRating(targets, r);
           return;
         }
@@ -2748,7 +2765,7 @@ export class FakeCore implements CoreHandle {
     if (!this.lib) return [];
     switch (target.type) {
       case "tracks":
-        return target.data.ids;
+        return target.data.tracks.map((r) => r.id);
       case "albums":
         return target.data.ids.flatMap((id) => this.lib?.albumTracks.get(id) ?? []);
       case "artists":
@@ -2866,7 +2883,10 @@ export class FakeCore implements CoreHandle {
   }
 
   private answer(q: Query): QueryResult {
-    const lib = this.lib;
+    // A list query naming an account other than the library's (the source filter chip) lists
+    // nothing: the fake core keeps one library, on the first account.
+    const elsewhere = (sid: string | undefined) => !!sid && sid !== this.lib?.serverId;
+    const lib = "data" in q && q.data && typeof q.data === "object" && "server_id" in q.data && elsewhere((q.data as { server_id?: string }).server_id) && q.type !== "playlistMembership" ? undefined : this.lib;
     switch (q.type) {
       case "snapshot":
         return { type: "snapshotResult", data: this.snapshot() };
@@ -2879,9 +2899,20 @@ export class FakeCore implements CoreHandle {
       case "trackCount":
         return { type: "count", data: q.data.filter ? this.evaluateNode(q.data.filter).length : (lib?.tracks.length ?? 0) };
       case "track":
-        return { type: "trackDetail", data: lib?.tracksById.get(q.data.id) };
+        return { type: "trackDetail", data: lib?.tracksById.get(q.data.track.id) };
       case "tracksByIds":
-        return { type: "trackList", data: q.data.ids.map((id) => lib?.tracksById.get(id)).filter((t): t is Track => !!t) };
+        return { type: "trackList", data: q.data.tracks.map((r) => lib?.tracksById.get(r.id)).filter((t): t is Track => !!t) };
+      case "trackSources": {
+        const tr = lib?.tracksById.get(q.data.track.id);
+        const account = this.servers.find((s) => s.id === tr?.serverId);
+        return { type: "trackSources", data: tr ? [{ track: tr, accountId: tr.serverId, accountName: account?.name ?? "", available: true, manual: false, preferred: true }] : [] };
+      }
+      case "linkCandidates": {
+        // One library: nothing on another account to link to.
+        return { type: "trackList", data: [] };
+      }
+      case "homeShelves":
+        return { type: "homeShelves", data: this.homeShelves() };
       case "albums": {
         let items = lib?.albums ?? [];
         if (q.data.artist_id) items = items.filter((a) => a.artistId === q.data.artist_id);
@@ -2960,7 +2991,7 @@ export class FakeCore implements CoreHandle {
       }
       case "playlistMembership": {
         // Like the core: every playlist (name order) with the indices where it holds any of the tracks.
-        const wanted = new Set(q.data.track_ids);
+        const wanted = new Set(q.data.tracks.map((r) => r.id));
         const data = [...(lib?.playlists ?? [])].sort((a, b) => a.playlist.name.localeCompare(b.playlist.name)).map((p) => ({
           playlistId: p.playlist.id,
           entries: p.trackIds.flatMap((trackId, index) => (wanted.has(trackId) ? [{ trackId, index }] : [])),
@@ -2969,7 +3000,7 @@ export class FakeCore implements CoreHandle {
         return { type: "membership", data };
       }
       case "search":
-        return { type: "search", data: this.search(q.data.query, q.data.limit, q.data.request_id, q.data.include_server) };
+        return { type: "search", data: lib ? this.search(q.data.query, q.data.limit, q.data.request_id, q.data.include_server) : ({ query: q.data.query, tracks: [], albums: [], artists: [], playlists: [], lyrics: [], requestId: q.data.request_id, fromServer: false } satisfies SearchResults) };
       case "queue":
         return { type: "queue", data: this.queueView() };
       case "queueRange":
@@ -3124,6 +3155,29 @@ export class FakeCore implements CoreHandle {
     }
   }
   private coverFiles: string[] | undefined;
+
+  /** Like the core's: Continue listening, then the library's account's shelves. */
+  private homeShelves(): HomeShelf[] {
+    const lib = this.lib;
+    if (!lib) return [];
+    const account = this.servers.find((s) => s.id === lib.serverId);
+    const several = this.servers.length > 1;
+    const title = (base: string) => (several && account?.name ? `${base} \u00b7 ${account.name}` : base);
+    const recent: Album[] = [];
+    for (const h of this.playHistory) {
+      const a = lib.albums.find((x) => x.id === lib.tracksById.get(h.track.id)?.albumId);
+      if (a && !recent.includes(a)) recent.push(a);
+      if (recent.length >= 20) break;
+    }
+    const by = (key: (a: Album) => number) => [...lib.albums].sort((x, y) => key(y) - key(x)).slice(0, 20);
+    const shelf = (id: string, name: string, albums: Album[], defaultOn: boolean, accountId?: string): HomeShelf => ({ id, accountId, title: name, kind: "albums", albums, tracks: [], playlists: [], defaultOn });
+    return [
+      shelf("hocket/continueListening", "Continue listening", recent, true),
+      shelf(`${lib.serverId}/recentlyAdded`, title("Recently added"), by((a) => a.created ?? 0), true, lib.serverId),
+      shelf(`${lib.serverId}/mostPlayed`, title("Most played"), by((a) => a.playCount ?? 0), false, lib.serverId),
+      shelf(`${lib.serverId}/recentlyPlayed`, title("Recently played"), recent, false, lib.serverId),
+    ];
+  }
 
   private search(query: string, limit: number, requestId: string, includeServer: boolean): SearchResults {
     const q = query.trim().toLowerCase();

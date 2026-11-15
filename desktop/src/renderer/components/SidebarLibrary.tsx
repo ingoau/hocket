@@ -81,7 +81,7 @@ export function useLibraryEntries(): LibraryEntry[] {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const queues = useApp((s) => s.savedQueues);
   const nowId = useApp((s) => s.session?.current?.track.id);
-  const playlists = useQuery(() => (serverId ? { type: "playlists", data: { server_id: serverId } } : null), "playlists", [serverId]).data;
+  const playlists = useQuery(() => (serverId ? { type: "playlists", data: { server_id: "" } } : null), "playlists", [serverId]).data;
   // The history moves on as songs change, so what was just played comes to the top.
   const history = useQuery(() => ({ type: "recentlyPlayed", data: { limit: 300 } }), "history", [nowId]).data;
   // What plays now counts as just played, before its songs reach the history.
