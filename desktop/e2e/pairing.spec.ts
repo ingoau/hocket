@@ -29,6 +29,19 @@ test.describe("pairing", () => {
     await expect(page.getByTestId("setup-url")).toBeVisible();
   });
 
+  test("the same pairing failure twice still ends each attempt", async ({ hocket }) => {
+    const { page } = hocket;
+    await page.getByTestId("setup-source-device").click();
+    await page.getByTestId("setup-pair-link").fill("hocket://pair?d=expired-fake-invite");
+    const join = page.getByTestId("setup-pair-join");
+    for (let i = 0; i < 2; i++) {
+      await join.click();
+      await expect(page.getByTestId("setup-error")).toContainText("expired");
+      await expect(join).toHaveText("Pair");
+      await expect(join).toBeEnabled();
+    }
+  });
+
   test("settings list this device, credential sync and the coordinator", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

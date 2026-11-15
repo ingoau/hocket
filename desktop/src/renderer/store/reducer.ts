@@ -94,10 +94,12 @@ export interface PairingState {
   /** This device joined another's identity: the accounts it still needs passwords for. */
   finished: PairingAccount[] | undefined;
   error: string | undefined;
+  /** How many pairings have failed so far (never reset): the same error twice is still news. */
+  failures: number;
 }
 
 export const EMPTY_IDENTITY: IdentityInfo = { id: "", deviceId: "", devices: [], removed: false, credentialSync: false, coordinator: undefined };
-export const EMPTY_PAIRING: PairingState = { invite: undefined, paired: undefined, finished: undefined, error: undefined };
+export const EMPTY_PAIRING: PairingState = { invite: undefined, paired: undefined, finished: undefined, error: undefined, failures: 0 };
 
 export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: false, repeat: "off", autoplay: false };
 
@@ -196,13 +198,13 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "identityChanged":
       return { ...state, identity: e.data.identity };
     case "pairingInvite":
-      return { ...state, pairing: { ...EMPTY_PAIRING, invite: { link: e.data.link, expiresAt: e.data.expires_at } } };
+      return { ...state, pairing: { ...EMPTY_PAIRING, failures: state.pairing.failures, invite: { link: e.data.link, expiresAt: e.data.expires_at } } };
     case "devicePaired":
       return { ...state, pairing: { ...state.pairing, invite: undefined, paired: { deviceId: e.data.device_id, name: e.data.name } } };
     case "pairingFinished":
-      return { ...state, pairing: { ...EMPTY_PAIRING, finished: e.data.accounts } };
+      return { ...state, pairing: { ...EMPTY_PAIRING, failures: state.pairing.failures, finished: e.data.accounts } };
     case "pairingFailed":
-      return { ...state, pairing: { ...state.pairing, error: e.data.message } };
+      return { ...state, pairing: { ...state.pairing, error: e.data.message, failures: state.pairing.failures + 1 } };
     case "credentialsSynced": // main stores them
       return state;
     case "coordinatorJoined":

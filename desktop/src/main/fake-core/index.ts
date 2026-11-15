@@ -862,7 +862,9 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "pairingInvite", data: { link: "hocket://pair?d=ZmFrZS1wYWlyaW5nLWludml0ZQ", expires_at: Date.now() + 600_000 } });
         return;
       case "pairWithInvite":
-        this.emit({ type: "pairingFinished", data: { accounts: [] } });
+        // e2e: an invite whose payload is "expired-fake-invite" fails, the same way every time.
+        if (/[?&]d=expired-fake-invite\b/.test(cmd.data.link)) this.emit({ type: "pairingFailed", data: { message: "This pairing link has expired." } });
+        else this.emit({ type: "pairingFinished", data: { accounts: [] } });
         return;
       case "removeDevice": {
         const self = cmd.data.device_id === this.config.deviceId;

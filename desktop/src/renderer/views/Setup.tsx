@@ -157,8 +157,9 @@ function YtmCard() {
         if (r === "signedIn") {
           setSummary(true);
         } else {
+          // "busy": another sign-in window was open (main focused it); nothing failed here.
           setBusy(undefined);
-          setError(t("setup.ytm.cancelled"));
+          if (r === "cancelled") setError(t("setup.ytm.cancelled"));
         }
       })
       .catch((err: unknown) => {
@@ -210,6 +211,7 @@ function PairForm() {
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
   const error = useApp((s) => s.pairing.error);
+  const failures = useApp((s) => s.pairing.failures);
   const pendingPair = useApp((s) => s.pendingPair);
   const join = (value: string) => {
     const at = value.search(/hocket:\/\/pair\?/i);
@@ -224,9 +226,10 @@ function PairForm() {
     setLink(pendingPair);
     join(pendingPair);
   }, [pendingPair]);
+  // Each failure ends the attempt, even one with the same message as the last.
   useEffect(() => {
-    if (error) setBusy(false);
-  }, [error]);
+    if (failures) setBusy(false);
+  }, [failures]);
   return (
     <form className="setup-card" onSubmit={(e) => { e.preventDefault(); join(link); }} aria-labelledby="setup-title" aria-describedby="setup-subtitle" data-testid="setup-pair">
       <h2 id="setup-title" className="setup-title">{t("setup.device.title")}</h2>

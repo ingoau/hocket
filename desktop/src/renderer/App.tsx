@@ -227,11 +227,14 @@ function useIdentityToasts() {
   const paired = useApp((s) => s.pairing.paired);
   const finished = useApp((s) => s.pairing.finished);
   const joined = useApp((s) => s.coordinator.joined);
-  const error = useApp((s) => s.pairing.error);
+  const failures = useApp((s) => s.pairing.failures);
   useEffect(() => { if (paired) showToast(t("pairDevice.paired", { name: paired.name })); }, [paired]);
   useEffect(() => { if (finished) showToast(t("pairDevice.joined")); }, [finished]);
   useEffect(() => { if (joined) showToast(joined.owner ? t("identity.claimed") : t("identity.joinedCoordinator")); }, [joined]);
-  useEffect(() => { if (error && useApp.getState().dialog?.kind !== "pairDevice") showToast(t("pairDevice.failed", { message: error })); }, [error]);
+  useEffect(() => {
+    const error = useApp.getState().pairing.error;
+    if (failures && error && useApp.getState().dialog?.kind !== "pairDevice") showToast(t("pairDevice.failed", { message: error }));
+  }, [failures]);
 }
 
 function useDeepLinks() {

@@ -36,6 +36,17 @@ describe("reducer", () => {
     expect(settingValue(s, "missing", 42)).toBe(42);
   });
 
+  it("counts every pairing failure, the same message twice included, across new invites", () => {
+    const fail = (s: typeof initialCoreState) => reduce(s, { type: "pairingFailed", data: { message: "invite expired" } });
+    const s1 = fail(initialCoreState);
+    const s2 = fail(s1);
+    expect(s2.pairing.error).toBe("invite expired");
+    expect([s1.pairing.failures, s2.pairing.failures]).toEqual([1, 2]);
+    const s3 = reduce(s2, { type: "pairingInvite", data: { link: "hocket://pair?d=x", expires_at: 1 } });
+    expect(s3.pairing.error).toBeUndefined();
+    expect(fail(s3).pairing.failures).toBe(3);
+  });
+
   it("does not mirror mediaSession into view state (OS session is main-process only)", () => {
     const s0 = applySnapshot(initialCoreState, snapshot);
     const s1 = reduce(s0, { type: "mediaSession", data: { state: { ...snapshot.mediaSession, isPlaying: true } } });
