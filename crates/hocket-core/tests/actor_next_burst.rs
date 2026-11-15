@@ -46,8 +46,7 @@ async fn playing_core(name: &str, n: usize) -> TestCore {
     .await;
     let ids: Vec<String> = (0..n).map(|i| format!("t{i}")).collect();
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: ids,
+        tracks: TrackRef::list(&t.server_id, ids),
         start_index: 0,
         label: "All".into(),
         shuffle: false,

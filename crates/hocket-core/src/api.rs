@@ -81,6 +81,15 @@ impl TrackRef {
     }
 }
 
+impl TrackRef {
+    /// `ids`, all valid in `source`.
+    pub fn list<S: Into<TrackId>>(source: &str, ids: impl IntoIterator<Item = S>) -> Vec<TrackRef> {
+        ids.into_iter()
+            .map(|id| TrackRef::new(source, id))
+            .collect()
+    }
+}
+
 /// Tests name tracks by bare id, with no source.
 #[cfg(any(test, feature = "sim"))]
 impl From<&str> for TrackRef {
@@ -545,6 +554,57 @@ pub struct ProviderCapabilities {
     pub radio: bool,
     pub home_shelves: bool,
     pub share: bool,
+    /// The account keeps a library you add to and remove from (otherwise adds go to the
+    /// Hocket library). Navidrome's library is the server's files: nothing to add.
+    #[serde(default)]
+    pub library_edit: bool,
+}
+
+/// One copy of a song, as the track details list its sources.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackSource {
+    pub track: Track,
+    pub account_id: AccountId,
+    /// The account's display name ("" when this device has no such account).
+    pub account_name: String,
+    /// This device has the account (else the copy is only known from a link).
+    pub available: bool,
+    /// Joined by a manual "Link to…" rather than the matcher.
+    pub manual: bool,
+    /// The copy play would pick here.
+    pub preferred: bool,
+}
+
+/// What a home shelf lists.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum HomeShelfKind {
+    #[default]
+    Albums,
+    Tracks,
+    Playlists,
+}
+
+/// One shelf of Home: a provider's (`HomeShelf::account_id` set) or Hocket's own.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeShelf {
+    /// Stable across devices: `<accountId>/<shelf>` for a provider's, `hocket/<shelf>` for
+    /// Hocket's. Home's section list (`home.sections`) names it as `shelf:<id>`.
+    pub id: String,
+    /// The provider's account; `None` for Hocket's own.
+    pub account_id: Option<AccountId>,
+    pub title: String,
+    pub kind: HomeShelfKind,
+    pub albums: Vec<Album>,
+    pub tracks: Vec<Track>,
+    pub playlists: Vec<Playlist>,
+    /// Shown unless the user switched it off (new shelves start this way).
+    pub default_on: bool,
 }
 
 /// One music account as the platforms list it (Settings → Accounts).
@@ -787,6 +847,11 @@ pub struct QueueItem {
     /// it. Equal to the list index while shuffle is off.
     #[serde(default)]
     pub ordinal: u32,
+    /// Other copies of the song (its dedup group on a device that has them), so a device
+    /// without `track`'s account can play one of them instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[typeshare(skip)]
+    pub alts: Vec<TrackRef>,
 }
 
 #[typeshare]
@@ -2152,6 +2217,9 @@ pub struct MediaSessionMetadata {
     /// Local `file://` path resolved through the image cache, or `None`.
     pub artwork_path: Option<String>,
     pub track_id: Option<TrackId>,
+    /// Where `track_id` is valid.
+    #[serde(default)]
+    pub source: Option<SourceId>,
     pub loved: bool,
     pub rating: u32,
     /// The playing track is already in the stash. The notification shows a
@@ -2237,7 +2305,7 @@ pub struct ActionDescriptor {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum ActionTarget {
     None,
-    Tracks { ids: Vec<TrackId> },
+    Tracks { tracks: Vec<TrackRef> },
     Albums { ids: Vec<AlbumId> },
     Artists { ids: Vec<ArtistId> },
     Playlists { ids: Vec<PlaylistId> },
@@ -2414,8 +2482,14 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum RatingTarget {
-    Track { id: TrackId },
-    Album { id: AlbumId },
+    /// `source` is where `id` is valid (the copy's account).
+    Track {
+        id: TrackId,
+        source: SourceId,
+    },
+    Album {
+        id: AlbumId,
+    },
 }
 
 /// What a [`LibraryItemState`] describes.
@@ -2637,7 +2711,7 @@ pub enum Command {
     /// playing. Never written to the queue, play history, scrobbles or the
     /// resume position.
     PreviewStart {
-        track_id: TrackId,
+        track: TrackRef,
     },
     /// Pause or resume the preview that is already open.
     PreviewToggle,
@@ -2654,8 +2728,7 @@ pub enum Command {
     },
     /// Play an ad-hoc list (search results, a selection).
     PlayTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         start_index: u32,
         label: String,
         shuffle: bool,
@@ -2668,22 +2741,19 @@ pub enum Command {
     /// section setting is on. `keys` names queue entries to put there instead of new copies:
     /// one ahead of the pointer moves, one behind it (or the current one) is copied.
     PlayNext {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         #[serde(default)]
         keys: Vec<QueueKey>,
     },
     /// At the end of the "Next in queue" group. `keys` as for `PlayNext`.
     AddToQueue {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         #[serde(default)]
         keys: Vec<QueueKey>,
     },
     /// At the end of the whole list, outside the group. `keys` as for `PlayNext`.
     PlayLater {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         #[serde(default)]
         keys: Vec<QueueKey>,
     },
@@ -2693,8 +2763,7 @@ pub enum Command {
     /// past the group's end lands at its end, an out-of-group one inside it just after it).
     /// `keys` as for `PlayNext`: one ahead of the pointer moves, one behind it is copied.
     InsertTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         #[serde(default)]
         keys: Vec<QueueKey>,
         after: QueueKey,
@@ -2765,7 +2834,7 @@ pub enum Command {
     // -- stash ------------------------------------------------------------
     /// Stash songs (added at the end). Songs already in the stash are skipped.
     StashAdd {
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     /// Take entries out of the stash. Toasts with an Undo.
     StashRemove {
@@ -2796,17 +2865,17 @@ pub enum Command {
     /// Leave songs out of shuffle, playlists, artist play and autoplay for `duration`.
     /// Goes through global undo.
     Snooze {
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         duration: SnoozeFor,
     },
     /// Snooze songs until a chosen moment (the menu's Custom row). Goes through global undo.
     SnoozeUntil {
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         until: EpochMs,
     },
     /// Bring snoozed songs back. Goes through global undo.
     Unsnooze {
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
 
     // -- undo -------------------------------------------------------------
@@ -2827,14 +2896,39 @@ pub enum Command {
         targets: Vec<RatingTarget>,
         loved: bool,
     },
+    /// "Link to…": `track` and `to` are the same song. Syncs through the identity and wins over
+    /// the matcher.
+    LinkTracks {
+        track: TrackRef,
+        to: TrackRef,
+    },
+    /// "Not the same song": take `track` out of its group, for good (syncs through the identity).
+    UnlinkTrack {
+        track: TrackRef,
+    },
+    /// Add songs to, or take them out of, the Hocket library: for accounts that can't keep a
+    /// library of their own (`ProviderCapabilities::library_edit` false).
+    SetInLibrary {
+        tracks: Vec<TrackRef>,
+        added: bool,
+    },
+    /// Turn a provider playlist into a Mixed one (same name and songs, plus `add`); the
+    /// provider's copy is deleted. What the "Convert to Mixed" toast runs.
+    ConvertPlaylistToMixed {
+        playlist_id: PlaylistId,
+        add: Vec<TrackRef>,
+    },
     SetArtistLoved {
         artist_id: ArtistId,
         loved: bool,
     },
+    /// A playlist on `account_id`, or a Mixed playlist Hocket keeps when it is
+    /// [`crate::library::HOCKET_SOURCE`]. Songs of another account go in as that account's
+    /// copy when there is one; with none, a provider playlist becomes Mixed.
     CreatePlaylist {
-        server_id: ServerId,
+        account_id: AccountId,
         name: String,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     DeletePlaylist {
         playlist_id: PlaylistId,
@@ -2845,9 +2939,11 @@ pub enum Command {
         comment: Option<String>,
         public: Option<bool>,
     },
+    /// Songs of another account go in as the playlist account's copy; with no copy the core
+    /// toasts an offer to convert the playlist to Mixed (`ConvertPlaylistToMixed`).
     PlaylistAdd {
         playlist_id: PlaylistId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         at_index: Option<u32>,
     },
     /// Indices into the playlist's current order.
@@ -2891,7 +2987,7 @@ pub enum Command {
     },
     /// [`Command::PrimeAlbum`] for one track (a hovered track row).
     PrimeTrack {
-        track_id: TrackId,
+        track: TrackRef,
     },
     /// What the platform's playback backend can do. `core_stream`: it reads
     /// `hocket-stream://<token>` media sources through the core's stream
@@ -3174,10 +3270,10 @@ pub enum Query {
         filter: Option<FilterNode>,
     },
     Track {
-        id: TrackId,
+        track: TrackRef,
     },
     TracksByIds {
-        ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     Albums {
         server_id: ServerId,
@@ -3270,6 +3366,17 @@ pub enum Query {
     Stash,
     /// Songs snoozed right now, soonest ending first.
     Snoozes,
+    /// Every copy of a song (its dedup group): the track details' Sources.
+    TrackSources {
+        track: TrackRef,
+    },
+    /// Songs "Link to…" can offer for `track`: other accounts' songs matching `query`.
+    LinkCandidates {
+        track: TrackRef,
+        query: String,
+    },
+    /// Home's provider shelves plus Hocket's own Continue listening.
+    HomeShelves,
     /// Where this album would resume, if it has a point and the feature is on.
     AlbumResume {
         id: AlbumId,
@@ -3579,6 +3686,8 @@ pub struct SyncedAccountCredential {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum QueryResult {
     SnapshotResult(Snapshot),
+    TrackSources(Vec<TrackSource>),
+    HomeShelves(Vec<HomeShelf>),
     Accounts(Vec<AccountInfo>),
     Identity(IdentityInfo),
     Tracks(TrackPage),

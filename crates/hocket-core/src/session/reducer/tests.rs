@@ -1052,14 +1052,16 @@ fn from_command_covers_queue_commands() {
     assert!(QueueOp::from_command(&Command::ClearQueueGroup).is_some());
     assert!(matches!(
         QueueOp::from_command(&Command::PlayNext {
-            server_id: "s".into(),
-            track_ids: vec![],
+            tracks: vec![],
             keys: vec![],
         }),
         Some(QueueOp::PlayNext { queued: true, .. })
     ));
     assert!(QueueOp::from_command(&Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t".into(),
+            source: String::new()
+        }],
         rating: 3,
     })
     .is_none());

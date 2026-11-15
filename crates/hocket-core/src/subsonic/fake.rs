@@ -30,6 +30,8 @@ pub struct ScrobbleRecord {
 
 #[derive(Default)]
 pub struct FakeState {
+    /// See [`SubsonicApi::feature_overrides`].
+    pub feature_overrides: Option<crate::api::ProviderCapabilities>,
     pub songs: BTreeMap<String, Child>,
     pub albums: BTreeMap<String, AlbumId3>,
     pub artists: BTreeMap<String, ArtistId3>,
@@ -331,6 +333,10 @@ impl SubsonicApi for FakeServer {
     fn username(&self) -> Option<String> {
         Some(self.username.clone())
     }
+    fn feature_overrides(&self) -> Option<crate::api::ProviderCapabilities> {
+        self.state.lock().feature_overrides.clone()
+    }
+
     fn capabilities(&self) -> ServerCapabilities {
         self.caps.lock().clone()
     }

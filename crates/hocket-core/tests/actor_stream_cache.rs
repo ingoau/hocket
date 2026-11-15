@@ -542,8 +542,7 @@ async fn clear_stream_cache_defers_files_in_use() {
     let held = t.core.stream_open(&s1.url, 0, None).await.unwrap();
     let first = t.core.stream_read(held.handle, 1000).await.unwrap();
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
@@ -590,8 +589,7 @@ async fn clear_stream_cache_defers_files_in_use() {
     assert_eq!(stream_files(&t).len(), 1);
     // The player moves on: t0 goes too.
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t3".into()],
+        tracks: TrackRef::list(&t.server_id, ["t3"]),
         start_index: 0,
         label: "Other".into(),
         shuffle: false,
@@ -612,8 +610,7 @@ async fn clear_stream_cache_defers_files_in_use() {
 async fn backend_sources_carry_no_credentials_and_gapless_preload_reads_through_the_core() {
     let t = started("gapless", 3).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Three".into(),
         shuffle: false,

@@ -79,7 +79,7 @@ impl Actor {
             Command::SetMuted { muted } => self.volume_command(None, muted),
 
             // -- preview --
-            Command::PreviewStart { track_id } => self.preview_start(track_id),
+            Command::PreviewStart { track } => self.preview_start(track),
             Command::PreviewToggle => self.preview_toggle(),
             Command::PreviewSeek { position_ms } => self.preview_seek(position_ms),
             Command::PreviewStop => self.stop_preview(true),
@@ -142,10 +142,10 @@ impl Actor {
             Command::SetLoved { targets, loved } => self.set_loved(targets, loved),
             Command::SetArtistLoved { artist_id, loved } => self.set_artist_loved(artist_id, loved),
             Command::CreatePlaylist {
-                server_id,
+                account_id,
                 name,
-                track_ids,
-            } => self.create_playlist(server_id, name, track_ids),
+                tracks,
+            } => self.create_playlist(account_id, name, tracks),
             Command::DeletePlaylist { playlist_id } => self.delete_playlist(playlist_id),
             Command::RenamePlaylist {
                 playlist_id,
@@ -155,9 +155,15 @@ impl Actor {
             } => self.rename_playlist(playlist_id, name, comment, public),
             Command::PlaylistAdd {
                 playlist_id,
-                track_ids,
+                tracks,
                 at_index,
-            } => self.playlist_add(playlist_id, track_ids, at_index),
+            } => self.playlist_add(playlist_id, tracks, at_index),
+            Command::ConvertPlaylistToMixed { playlist_id, add } => {
+                self.convert_playlist_to_mixed(playlist_id, add)
+            }
+            Command::LinkTracks { track, to } => self.link_tracks(track, to),
+            Command::UnlinkTrack { track } => self.unlink_track(track),
+            Command::SetInLibrary { tracks, added } => self.set_in_library(tracks, added),
             Command::PlaylistRemove {
                 playlist_id,
                 indices,
@@ -189,10 +195,7 @@ impl Actor {
             Command::Unpin { target } => self.unpin(target),
             Command::ClearStreamCache => self.clear_stream_cache(),
             Command::PrimeAlbum { album_id } => self.prime_album(album_id),
-            Command::PrimeTrack { track_id } => {
-                let track = self.track_ref_of(&track_id);
-                self.request_prime(track)
-            }
+            Command::PrimeTrack { track } => self.request_prime(track),
             Command::SetBackendCapabilities { core_stream } => {
                 let native = self.cfg.audio == AudioMode::Native;
                 self.core_stream = (core_stream || native) && self.stream_reader.is_some();

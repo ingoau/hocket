@@ -175,8 +175,7 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
         other => panic!("{other:?}"),
     }
     t.run(Command::PlayTracks {
-        server_id: server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&server_id, ["t0"]),
         start_index: 0,
         label: "Downloaded".into(),
         shuffle: false,

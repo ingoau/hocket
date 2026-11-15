@@ -124,9 +124,9 @@ impl Actor {
     /// [`Self::with_mix`]).
     fn next_source(&self, upcoming: &[QueueItem], locked: Option<Ms>) -> Option<MediaSource> {
         let item = upcoming.first()?;
-        let track = self.track_or_bare(&item.track)?;
+        let track = self.track_for_item(item)?;
         let source = self.media_source_for(&item.key, &track)?;
-        let following = upcoming.get(1).and_then(|i| self.track_or_bare(&i.track));
+        let following = upcoming.get(1).and_then(|i| self.track_for_item(i));
         Some(self.with_mix(source, &track, following.as_ref(), locked))
     }
 
@@ -239,7 +239,9 @@ impl Actor {
         // index (`ctx-N`), and an edit ahead of one hands its key to another
         // track: the preload stays only if the track is the same too (#62).
         let same_track = match (next, &self.playback.next) {
-            (Some(i), Some(n)) => names(&n.track, &i.track),
+            (Some(i), Some(n)) => self
+                .track_for_item(i)
+                .is_some_and(|t| names(&n.track, &TrackRef::new(t.server_id, t.id))),
             _ => false,
         };
         let locked = self.locked_tail_start();
@@ -331,7 +333,7 @@ impl Actor {
         carried: Option<(Ms, EpochMs, bool)>,
     ) {
         self.playback.pending_load = None;
-        let Some(track) = self.track_or_bare(&item.track) else {
+        let Some(track) = self.track_for_item(item) else {
             return;
         };
         if self.skip_if_unavailable_offline(item, &track) {
@@ -351,11 +353,12 @@ impl Actor {
         let now = self.now();
         let is_next = carried.is_none()
             && position_ms == 0
-            && self
-                .playback
-                .next
-                .as_ref()
-                .is_some_and(|n| names(&n.track, &item.track));
+            && self.playback.next.as_ref().is_some_and(|n| {
+                names(
+                    &n.track,
+                    &TrackRef::new(track.server_id.clone(), track.id.clone()),
+                )
+            });
         // Gapless (or at an AutoMix handover): the backend already moved on
         // to this track.
         let transitioned = is_next && self.playback.awaiting_transition;
@@ -433,7 +436,7 @@ impl Actor {
             source.mix_in = None;
             source.mix_out_ms = upcoming
                 .first()
-                .and_then(|i| self.track_or_bare(&i.track))
+                .and_then(|i| self.track_for_item(i))
                 .and_then(|next| self.mix_out_for(&track, Some(&next)));
             self.playback.doc_key = Some(item.key.clone());
             self.playback.backend_key = Some(item.key.clone());
@@ -504,7 +507,7 @@ impl Actor {
                 }
             }
         }
-        let track = self.track_or_bare(&item.track);
+        let track = self.track_for_item(item);
         let position_ms = match &track {
             Some(t) if t.duration_ms > 0 => position_ms.min(t.duration_ms),
             _ => position_ms,
@@ -749,6 +752,7 @@ impl Actor {
                 added: false,
                 queued: false,
                 ordinal: 0,
+                alts: vec![],
             });
         self.playback.want_playing = play;
         self.load_item(

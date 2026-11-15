@@ -151,6 +151,7 @@ impl AutoplayPick {
             added: false,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         }
     }
 

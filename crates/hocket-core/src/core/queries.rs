@@ -46,10 +46,28 @@ impl Actor {
                 let server_id = self.library_scope(server_id);
                 QueryResult::Count(self.db.track_count(&server_id, &filter).unwrap_or(0))
             }
-            Query::Track { id } => QueryResult::TrackDetail(self.db.track(&id).ok().flatten()),
-            Query::TracksByIds { ids } => {
-                QueryResult::TrackList(self.db.tracks_by_ids(&ids).unwrap_or_default())
+            Query::Track { track } => {
+                QueryResult::TrackDetail(self.db.track_ref(&track).ok().flatten())
             }
+            Query::TracksByIds { tracks } => {
+                let found = self.db.tracks_by_refs(&tracks).unwrap_or_default();
+                // In the order asked for.
+                let list = tracks
+                    .iter()
+                    .filter_map(|r| {
+                        found
+                            .iter()
+                            .find(|t| t.server_id == r.source && t.id == r.id)
+                            .cloned()
+                    })
+                    .collect();
+                QueryResult::TrackList(list)
+            }
+            Query::TrackSources { track } => QueryResult::TrackSources(self.track_sources(&track)),
+            Query::LinkCandidates { track, query } => {
+                QueryResult::TrackList(self.link_candidates(&track, &query))
+            }
+            Query::HomeShelves => QueryResult::HomeShelves(self.home_shelves()),
             Query::Albums {
                 server_id,
                 artist_id,

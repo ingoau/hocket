@@ -6102,6 +6102,7 @@ mod tests {
             added: false,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         });
         room_doc.upcoming = vec![
             crate::api::QueueItem {
@@ -6112,6 +6113,7 @@ mod tests {
                 added: false,
                 queued: false,
                 ordinal: 1,
+                alts: vec![],
             },
             crate::api::QueueItem {
                 key: "k3".into(),
@@ -6121,6 +6123,7 @@ mod tests {
                 added: false,
                 queued: false,
                 ordinal: 2,
+                alts: vec![],
             },
         ];
         // attached and synced at revision 2
@@ -7317,6 +7320,7 @@ mod tests {
             added: false,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         });
         attach(&mut b, Some(replica_with(room_doc)), vec![dev("a")]);
         b.handle(Input::WireIn {
@@ -7409,6 +7413,7 @@ mod tests {
             added: false,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         });
         let mut rep = replica_with(room_doc);
         rep.last_stamp = Some(crate::connect::wire::LastStamp {
@@ -7614,6 +7619,7 @@ mod tests {
             added: false,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         });
         let mut rep = replica_with(room_doc);
         rep.last_stamp = Some(crate::connect::wire::LastStamp {
@@ -9154,6 +9160,7 @@ mod tests {
             added: false,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         });
         let mut rep = replica_with(room_doc);
         rep.last_stamp = Some(crate::connect::wire::LastStamp {

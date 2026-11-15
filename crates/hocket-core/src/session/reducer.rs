@@ -206,6 +206,11 @@ pub enum QueueOp {
     /// failures ([`QueueOp::SkipUnavailable`]) stay marked. Local only, like
     /// [`QueueOp::SkipOffline`].
     ClearOfflineSkips,
+    /// Other copies of entries' songs (`QueueItem::alts`), from a device that
+    /// knows their dedup groups. Local only, like [`QueueOp::SkipOffline`].
+    SetAlternates {
+        alts: Vec<(QueueKey, Vec<TrackRef>)>,
+    },
     AppendAutoplay {
         items: Vec<AutoplayItem>,
     },
@@ -254,53 +259,39 @@ impl QueueOp {
         Some(match cmd {
             Command::PlayContext { args } => QueueOp::PlayContext { args: args.clone() },
             Command::PlayTracks {
-                server_id,
-                track_ids,
+                tracks,
                 start_index,
                 label,
                 shuffle,
                 start_position_ms,
             } => QueueOp::PlayTracks {
-                track_ids: refs(server_id, track_ids),
+                track_ids: tracks.clone(),
                 start_index: *start_index,
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
                 start_position_ms: *start_position_ms,
             },
-            Command::PlayNext {
-                server_id,
-                track_ids,
-                keys,
-            } => QueueOp::PlayNext {
-                track_ids: refs(server_id, track_ids),
+            Command::PlayNext { tracks, keys } => QueueOp::PlayNext {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
                 queued: true,
             },
-            Command::AddToQueue {
-                server_id,
-                track_ids,
-                keys,
-            } => QueueOp::AddToQueue {
-                track_ids: refs(server_id, track_ids),
+            Command::AddToQueue { tracks, keys } => QueueOp::AddToQueue {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
             },
-            Command::PlayLater {
-                server_id,
-                track_ids,
-                keys,
-            } => QueueOp::PlayLater {
-                track_ids: refs(server_id, track_ids),
+            Command::PlayLater { tracks, keys } => QueueOp::PlayLater {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
             },
             Command::InsertTracks {
-                server_id,
-                track_ids,
+                tracks,
                 keys,
                 after,
                 in_group,
             } => QueueOp::InsertTracks {
-                track_ids: refs(server_id, track_ids),
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
                 after: after.clone(),
                 in_group: *in_group,
@@ -1019,6 +1010,14 @@ impl Reducer<'_, '_> {
                 set_offline_skipped(self.doc, &BTreeSet::new());
                 Ok(())
             }
+            QueueOp::SetAlternates { alts } => {
+                for (key, refs) in alts {
+                    if let Some(item) = self.q.list.iter_mut().find(|i| i.key == key) {
+                        item.alts = refs;
+                    }
+                }
+                Ok(())
+            }
             QueueOp::AppendAutoplay { items } => {
                 let at = self.q.len();
                 let count = items.len();
@@ -1036,6 +1035,7 @@ impl Reducer<'_, '_> {
                         added: false,
                         queued: false,
                         ordinal: 0,
+                        alts: vec![],
                     });
                 }
                 self.q.ordinals_at_end(at, count);
@@ -1133,6 +1133,7 @@ impl Reducer<'_, '_> {
             added,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         }
     }
 

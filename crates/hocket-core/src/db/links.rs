@@ -2,7 +2,9 @@
 
 use rusqlite::{params, OptionalExtension};
 
+use super::queries::{album_from_row, fts_query, track_from_row, ALBUM_COLUMNS, TRACK_COLUMNS};
 use super::{Db, DbResult};
+use crate::api::{Album, Track};
 use crate::api::{SourceId, TrackRef};
 use crate::library::links::{EntityFacts, EntityGroup, Group, SongFacts};
 use crate::library::{MixedPlaylist, HOCKET_SOURCE};
@@ -187,6 +189,50 @@ impl Db {
                 "UPDATE tracks SET rating = ?3 WHERE server_id = ?1 AND id = ?2",
                 params![track.source, track.id, rating.min(5)],
             )? > 0)
+        })
+    }
+
+    /// A playlist's songs as references, in order (a Mixed playlist's name
+    /// their own accounts).
+    pub fn playlist_track_refs(&self, playlist_id: &str) -> DbResult<Vec<TrackRef>> {
+        self.with_conn(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT COALESCE(track_source, server_id), track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position ASC",
+            )?;
+            let rows = st.query_map([playlist_id], |r| {
+                Ok(TrackRef::new(r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// `source`'s albums played most recently.
+    pub fn albums_recently_played(&self, source: &str, limit: u32) -> DbResult<Vec<Album>> {
+        self.with_conn(|c| {
+            let mut st = c.prepare_cached(&format!(
+                "SELECT {ALBUM_COLUMNS} FROM albums WHERE server_id = ?1 AND last_played IS NOT NULL ORDER BY last_played DESC LIMIT ?2"
+            ))?;
+            let rows = st.query_map(params![source, limit as i64], album_from_row)?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// `source`'s songs matching `query` (title, album, artist), best first.
+    pub fn search_tracks(&self, source: &str, query: &str, limit: u32) -> DbResult<Vec<Track>> {
+        let Some(match_expr) = fts_query(query) else {
+            return Ok(vec![]);
+        };
+        let cols = TRACK_COLUMNS
+            .split(", ")
+            .map(|col| format!("t.{col}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.with_conn(|c| {
+            let mut st = c.prepare_cached(&format!(
+                "SELECT {cols} FROM tracks_fts f JOIN tracks t ON t.rowid = f.rowid WHERE tracks_fts MATCH ?1 AND t.server_id = ?2 ORDER BY bm25(tracks_fts, 3.0, 1.0, 2.0) LIMIT ?3"
+            ))?;
+            let rows = st.query_map(params![match_expr, source, limit as i64], track_from_row)?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
     }
 

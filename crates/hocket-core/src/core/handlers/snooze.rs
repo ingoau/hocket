@@ -124,59 +124,38 @@ impl Actor {
             return;
         }
         match cmd {
-            Command::Snooze {
-                track_ids,
-                duration,
-            } => {
+            Command::Snooze { tracks, duration } => {
                 let until = snooze::until_for(duration, self.now());
-                let n = track_ids.len();
+                let n = tracks.len();
                 let message = match (n == 1, duration) {
                     (true, SnoozeFor::Indefinite) => "Snoozed indefinitely".to_string(),
                     (true, d) => format!("Snoozed for {}", duration_label(d)),
                     (false, SnoozeFor::Indefinite) => format!("Snoozed {} indefinitely", songs(n)),
                     (false, d) => format!("Snoozed {} for {}", songs(n), duration_label(d)),
                 };
-                self.write_snoozes(
-                    self.refs_of(&track_ids),
-                    Some(until),
-                    "snooze",
-                    "Snooze",
-                    Some(message),
-                );
+                self.write_snoozes(tracks, Some(until), "snooze", "Snooze", Some(message));
             }
-            Command::SnoozeUntil { track_ids, until } => {
+            Command::SnoozeUntil { tracks, until } => {
                 if until <= self.now() {
                     self.toast("Pick a time in the future to snooze until", None);
                     return;
                 }
-                let n = track_ids.len();
+                let n = tracks.len();
                 let message = if n == 1 {
                     "Snoozed".to_string()
                 } else {
                     format!("Snoozed {}", songs(n))
                 };
-                self.write_snoozes(
-                    self.refs_of(&track_ids),
-                    Some(Some(until)),
-                    "snooze",
-                    "Snooze",
-                    Some(message),
-                );
+                self.write_snoozes(tracks, Some(Some(until)), "snooze", "Snooze", Some(message));
             }
-            Command::Unsnooze { track_ids } => {
-                let n = track_ids.len();
+            Command::Unsnooze { tracks } => {
+                let n = tracks.len();
                 let message = if n == 1 {
                     "Unsnoozed".to_string()
                 } else {
                     format!("Unsnoozed {}", songs(n))
                 };
-                self.write_snoozes(
-                    self.refs_of(&track_ids),
-                    None,
-                    "unsnooze",
-                    "Unsnooze",
-                    Some(message),
-                );
+                self.write_snoozes(tracks, None, "unsnooze", "Unsnooze", Some(message));
             }
             _ => {}
         }

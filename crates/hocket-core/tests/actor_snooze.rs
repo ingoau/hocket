@@ -57,7 +57,7 @@ async fn play(t: &TestCore, kind: ContextKind, tracks: &[&str], start: Option<u3
 async fn snooze_undo_and_each_queue() {
     let t = TestCore::start("snooze", seeded_server(6, 200.0)).await;
     t.run(Command::Snooze {
-        track_ids: ids(&["b"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["b"])),
         duration: SnoozeFor::Week,
     })
     .await;
@@ -80,7 +80,7 @@ async fn snooze_undo_and_each_queue() {
     .await;
     assert_eq!(queue_ids(&t.queue().await), ids(&["a", "b", "c"]));
     t.run(Command::Snooze {
-        track_ids: ids(&["a"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["a"])),
         duration: SnoozeFor::Day,
     })
     .await;
@@ -169,7 +169,7 @@ async fn snooze_undo_and_each_queue() {
 
     // Every song snoozed: play them anyway.
     t.run(Command::Snooze {
-        track_ids: ids(&["c"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["c"])),
         duration: SnoozeFor::Indefinite,
     })
     .await;
@@ -204,7 +204,7 @@ async fn snooze_undo_and_each_queue() {
     assert!(left.contains(&"a".to_string()) && left.contains(&"b".to_string()));
 
     t.run(Command::Unsnooze {
-        track_ids: ids(&["a", "b"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["a", "b"])),
     })
     .await;
     assert!(snoozed(&t).await.is_empty());
@@ -217,7 +217,7 @@ async fn snooze_undo_and_each_queue() {
 async fn shuffle_and_play_leave_out_a_snoozed_first_song() {
     let t = TestCore::start("shuffle", seeded_server(4, 200.0)).await;
     t.run(Command::Snooze {
-        track_ids: ids(&["a"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["a"])),
         duration: SnoozeFor::Week,
     })
     .await;
@@ -254,7 +254,7 @@ async fn shuffle_and_play_leave_out_a_snoozed_first_song() {
 async fn a_snooze_expires_when_its_end_passes() {
     let t = TestCore::start("expire", seeded_server(4, 200.0)).await;
     t.run(Command::Snooze {
-        track_ids: ids(&["t0"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["t0"])),
         duration: SnoozeFor::Day,
     })
     .await;
@@ -284,7 +284,7 @@ async fn two_devices_share_snoozes() {
     assert!(a.snapshot().await.connection.connected);
 
     a.run(Command::Snooze {
-        track_ids: ids(&["t0"]),
+        tracks: TrackRef::list(&a.server_id, ids(&["t0"])),
         duration: SnoozeFor::Month,
     })
     .await;
@@ -292,11 +292,11 @@ async fn two_devices_share_snoozes() {
     assert_eq!(snoozed(&b).await, ids(&["t0"]));
 
     b.run(Command::Unsnooze {
-        track_ids: ids(&["t0"]),
+        tracks: TrackRef::list(&b.server_id, ids(&["t0"])),
     })
     .await;
     b.run(Command::Snooze {
-        track_ids: ids(&["t1"]),
+        tracks: TrackRef::list(&b.server_id, ids(&["t1"])),
         duration: SnoozeFor::Indefinite,
     })
     .await;
@@ -325,7 +325,7 @@ async fn a_restored_playlist_queue_still_leaves_snoozed_songs_out() {
     .await;
     let out = ids(&["t2", "t5", "t7"]);
     t.run(Command::Snooze {
-        track_ids: out.clone(),
+        tracks: TrackRef::list(&t.server_id, out.clone()),
         duration: SnoozeFor::Week,
     })
     .await;
@@ -408,7 +408,7 @@ async fn snooze_until_a_chosen_time() {
     let t = TestCore::start("snooze-until", seeded_server(3, 200.0)).await;
     let at = t.clock.now_ms() + 5.0 * 24.0 * 3600.0 * 1000.0;
     t.run(Command::SnoozeUntil {
-        track_ids: ids(&["a", "b"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["a", "b"])),
         until: at,
     })
     .await;
@@ -421,7 +421,7 @@ async fn snooze_until_a_chosen_time() {
 
     // A time that has already passed snoozes nothing.
     t.run(Command::SnoozeUntil {
-        track_ids: ids(&["c"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["c"])),
         until: t.clock.now_ms() - 1.0,
     })
     .await;

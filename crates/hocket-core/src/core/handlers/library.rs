@@ -29,9 +29,18 @@ impl Actor {
     /// The account a mutation's target belongs to.
     fn owner_of(&self, mutation: &Mutation) -> Option<String> {
         use crate::outbox::LoveTarget;
+        if let Mutation::SetRating {
+            target: RatingTarget::Track { source, .. },
+            ..
+        } = mutation
+        {
+            if !source.is_empty() {
+                return Some(source.clone());
+            }
+        }
         let kind = match mutation {
             Mutation::SetRating {
-                target: RatingTarget::Track { id },
+                target: RatingTarget::Track { id, .. },
                 ..
             }
             | Mutation::SetLoved {
@@ -356,8 +365,8 @@ impl Actor {
             .get_bool(crate::settings::keys::RATINGS_LOVE_BRIDGE_ENABLED);
         for t in targets {
             let (prior, target, loved_now) = match &t {
-                RatingTarget::Track { id } => {
-                    let tr = self.db.track(id).ok().flatten();
+                RatingTarget::Track { id, source } => {
+                    let tr = self.track_of_target(id, source);
                     (
                         tr.as_ref().map(|t| t.rating).unwrap_or(0),
                         RemoteTarget::Track { id: id.clone() },
@@ -374,7 +383,7 @@ impl Actor {
                 }
             };
             ids.push(match &t {
-                RatingTarget::Track { id } | RatingTarget::Album { id } => id.clone(),
+                RatingTarget::Track { id, .. } | RatingTarget::Album { id } => id.clone(),
             });
             self.enqueue(
                 Mutation::SetRating {
@@ -409,15 +418,13 @@ impl Actor {
     }
 
     pub(crate) fn set_loved(&mut self, targets: Vec<RatingTarget>, loved: bool) {
+        let targets = self.star_targets(targets, loved);
         let mut items = vec![];
         let mut ids = vec![];
         for t in targets {
             let (prior, target) = match &t {
-                RatingTarget::Track { id } => (
-                    self.db
-                        .track(id)
-                        .ok()
-                        .flatten()
+                RatingTarget::Track { id, source } => (
+                    self.track_of_target(id, source)
                         .map(|t| t.loved)
                         .unwrap_or(false),
                     RemoteTarget::Track { id: id.clone() },
@@ -433,15 +440,20 @@ impl Actor {
                 ),
             };
             ids.push(match &t {
-                RatingTarget::Track { id } | RatingTarget::Album { id } => id.clone(),
+                RatingTarget::Track { id, .. } | RatingTarget::Album { id } => id.clone(),
             });
-            self.enqueue(
-                Mutation::SetLoved {
-                    target: LoveTarget::from(t),
-                    loved,
-                },
-                Some(Prior::Loved(prior)),
-            );
+            let mutation = Mutation::SetLoved {
+                target: LoveTarget::from(t.clone()),
+                loved,
+            };
+            match &t {
+                RatingTarget::Track { source, .. } if !source.is_empty() => {
+                    self.enqueue_on(source, mutation, Some(Prior::Loved(prior)));
+                }
+                _ => {
+                    self.enqueue(mutation, Some(Prior::Loved(prior)));
+                }
+            }
             items.push(RemoteItem {
                 target,
                 prior: RemoteValue::Loved(prior),
@@ -465,6 +477,54 @@ impl Actor {
         );
         self.announce_items(&announced);
         self.after_library_mutation(vec!["tracks", "albums"], ids);
+    }
+
+    /// A rating or love target's song: the copy its source names, or by bare id.
+    fn track_of_target(&self, id: &str, source: &str) -> Option<Track> {
+        if source.is_empty() {
+            self.db.track(id).ok().flatten()
+        } else {
+            self.db.track_ref(&TrackRef::new(source, id)).ok().flatten()
+        }
+    }
+
+    /// Starring a song stars every copy of it (one action in the UI): each
+    /// linked copy on an account here that keeps stars, and the Hocket
+    /// library for a copy whose account can't. Albums pass through.
+    fn star_targets(&mut self, targets: Vec<RatingTarget>, loved: bool) -> Vec<RatingTarget> {
+        let mut out: Vec<RatingTarget> = vec![];
+        let mut saved = vec![];
+        for t in targets {
+            let RatingTarget::Track { id, source } = &t else {
+                out.push(t);
+                continue;
+            };
+            let source = if source.is_empty() {
+                self.track_ref_of(id).source
+            } else {
+                source.clone()
+            };
+            for copy in self.copies_of(&TrackRef::new(source, id.clone())) {
+                let Some(account) = self.accounts.for_source(&copy.source) else {
+                    continue;
+                };
+                if account.provider.is_none() || account.info.features.star {
+                    let target = RatingTarget::Track {
+                        id: copy.id.clone(),
+                        source: copy.source.clone(),
+                    };
+                    if !out.contains(&target) {
+                        out.push(target);
+                    }
+                } else {
+                    saved.push(copy);
+                }
+            }
+        }
+        if !saved.is_empty() {
+            self.save_to_hocket_library(saved, Some(loved), None);
+        }
+        out
     }
 
     pub(crate) fn set_artist_loved(&mut self, artist_id: ArtistId, loved: bool) {
@@ -508,19 +568,13 @@ impl Actor {
 
     pub(crate) fn create_playlist(
         &mut self,
-        server_id: ServerId,
+        account_id: AccountId,
         name: String,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     ) {
-        // No account named: the first song's, else the session's.
-        let server_id = if server_id.is_empty() {
-            track_ids
-                .first()
-                .map(|id| self.track_ref_of(id).source)
-                .or_else(|| self.scope_account())
-                .unwrap_or_default()
-        } else {
-            server_id
+        let Some((server_id, track_ids)) = self.route_create_playlist(&account_id, &name, tracks)
+        else {
+            return;
         };
         if !self.accounts.contains(&server_id) {
             self.toast("Unknown server", None);
@@ -539,6 +593,10 @@ impl Actor {
     }
 
     pub(crate) fn delete_playlist(&mut self, playlist_id: PlaylistId) {
+        if self.is_mixed_playlist(&playlist_id) {
+            self.mixed_playlist_delete(&playlist_id);
+            return;
+        }
         // Confirm-instead: no undo entry (the platform asks first).
         if !matches!(self.selection, ActionTarget::None) {
             let sel = std::mem::replace(&mut self.selection, ActionTarget::None);
@@ -565,6 +623,10 @@ impl Actor {
         comment: Option<String>,
         public: Option<bool>,
     ) {
+        if self.is_mixed_playlist(&playlist_id) {
+            self.mixed_playlist_rename(&playlist_id, name, comment);
+            return;
+        }
         self.rename_playlist_inner(playlist_id, name, comment, public, true);
     }
 
@@ -635,10 +697,44 @@ impl Actor {
     pub(crate) fn playlist_add(
         &mut self,
         playlist_id: PlaylistId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         at_index: Option<u32>,
     ) {
-        self.playlist_add_inner(playlist_id, track_ids, at_index, true);
+        if self.is_mixed_playlist(&playlist_id) {
+            self.mixed_playlist_add(&playlist_id, tracks, at_index);
+            return;
+        }
+        let Some(source) = self
+            .db
+            .playlist(&playlist_id)
+            .ok()
+            .flatten()
+            .map(|p| p.server_id)
+        else {
+            return;
+        };
+        // Another account's song goes in as this account's copy; with none,
+        // offer to make the playlist Mixed. No source (an undo) is this
+        // account's own song.
+        let tracks: Vec<TrackRef> = tracks
+            .into_iter()
+            .map(|t| {
+                if t.source.is_empty() {
+                    TrackRef::new(source.clone(), t.id)
+                } else {
+                    t
+                }
+            })
+            .collect();
+        match self.copies_on(&source, &tracks) {
+            Ok(copies) => {
+                let track_ids = copies.into_iter().map(|t| t.id).collect();
+                self.playlist_add_inner(playlist_id, track_ids, at_index, true);
+            }
+            Err(missing) => {
+                self.offer_convert_to_mixed(playlist_id, &source, missing.len(), tracks);
+            }
+        }
     }
 
     fn playlist_add_inner(
@@ -697,6 +793,10 @@ impl Actor {
     }
 
     pub(crate) fn playlist_remove(&mut self, playlist_id: PlaylistId, indices: Vec<u32>) {
+        if self.is_mixed_playlist(&playlist_id) {
+            self.mixed_playlist_remove(&playlist_id, indices);
+            return;
+        }
         self.playlist_remove_inner(playlist_id, indices, true);
     }
 
@@ -761,6 +861,10 @@ impl Actor {
         from_index: u32,
         to_index: u32,
     ) {
+        if self.is_mixed_playlist(&playlist_id) {
+            self.mixed_playlist_move(&playlist_id, from_index, to_index);
+            return;
+        }
         self.playlist_move_inner(playlist_id, from_index, to_index, true);
     }
 
@@ -840,12 +944,12 @@ impl Actor {
                     }
                     Command::PlaylistAdd {
                         playlist_id,
-                        track_ids,
+                        tracks,
                         at_index,
                     } => {
                         self.playlist_add_inner(
                             playlist_id.clone(),
-                            track_ids.clone(),
+                            tracks.iter().map(|t| t.id.clone()).collect(),
                             *at_index,
                             false,
                         );
@@ -1369,7 +1473,11 @@ impl Actor {
             self.toast("The filter matches nothing right now", None);
             return;
         }
-        self.create_playlist(server_id, name, ids);
+        let tracks = ids
+            .into_iter()
+            .map(|id| TrackRef::new(server_id.clone(), id))
+            .collect();
+        self.create_playlist(server_id, name, tracks);
     }
 
     pub(crate) fn create_smart_playlist(
@@ -1923,7 +2031,10 @@ fn announced_item(target: &RemoteTarget) -> Option<(LibraryItemKind, String)> {
 fn cas_target(m: &CasMutation) -> Option<CasTarget> {
     Some(match (&m.target, &m.expect) {
         (RemoteTarget::Track { id }, RemoteValue::Rating(_)) => {
-            CasTarget::Rating(RatingTarget::Track { id: id.clone() })
+            CasTarget::Rating(RatingTarget::Track {
+                id: id.clone(),
+                source: String::new(),
+            })
         }
         (RemoteTarget::Album { id }, RemoteValue::Rating(_)) => {
             CasTarget::Rating(RatingTarget::Album { id: id.clone() })
@@ -1952,7 +2063,7 @@ fn cas_new(m: &CasMutation) -> Option<Prior> {
 
 fn apply_cas_locally(db: &Db, target: &CasTarget, new: &Prior) {
     let _ = match (target, new) {
-        (CasTarget::Rating(RatingTarget::Track { id }), Prior::Rating(r)) => {
+        (CasTarget::Rating(RatingTarget::Track { id, .. }), Prior::Rating(r)) => {
             db.set_track_rating(id, *r)
         }
         (CasTarget::Rating(RatingTarget::Album { id }), Prior::Rating(r)) => {

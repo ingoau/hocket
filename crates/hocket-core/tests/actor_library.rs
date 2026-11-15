@@ -149,12 +149,20 @@ async fn search_answers_locally_first_then_from_the_server() {
 async fn ratings_go_through_the_outbox_and_undo_is_compare_and_swap() {
     let t = synced("rate", seeded_server(4, 180.0)).await;
     t.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t0".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t0".into(),
+            source: String::new(),
+        }],
         rating: 4,
     })
     .await;
     // Optimistic locally, then flushed.
-    match t.query(Query::Track { id: "t0".into() }).await {
+    match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), "t0"),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => assert_eq!(tr.rating, 4),
         other => panic!("{other:?}"),
     }
@@ -196,7 +204,10 @@ async fn ratings_go_through_the_outbox_and_undo_is_compare_and_swap() {
 async fn rating_bridges_to_love_above_the_threshold_when_enabled() {
     let t = synced("bridge", seeded_server(2, 180.0)).await;
     t.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t0".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t0".into(),
+            source: String::new(),
+        }],
         rating: 5,
     })
     .await;
@@ -208,7 +219,10 @@ async fn rating_bridges_to_love_above_the_threshold_when_enabled() {
     })
     .await;
     t.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t1".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t1".into(),
+            source: String::new(),
+        }],
         rating: 4,
     })
     .await;
@@ -230,14 +244,17 @@ async fn offline_changes_flush_after_the_network_returns() {
     })
     .await;
     t.run(Command::SetLoved {
-        targets: vec![RatingTarget::Track { id: "t2".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t2".into(),
+            source: String::new(),
+        }],
         loved: true,
     })
     .await;
     t.run(Command::CreatePlaylist {
-        server_id: t.server_id.clone(),
+        account_id: t.server_id.clone(),
         name: "Road trip".into(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1"]),
     })
     .await;
     t.run_for(2_000.0).await;
@@ -250,7 +267,12 @@ async fn offline_changes_flush_after_the_network_returns() {
         .values()
         .all(|p| p.name != "Road trip"));
     // Local view already reflects the love.
-    match t.query(Query::Track { id: "t2".into() }).await {
+    match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), "t2"),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => assert!(tr.loved),
         other => panic!("{other:?}"),
     }
@@ -284,8 +306,14 @@ async fn filters_preview_export_and_materialise() {
     let t = synced("filters", seeded_server(6, 180.0)).await;
     t.run(Command::SetRating {
         targets: vec![
-            RatingTarget::Track { id: "t1".into() },
-            RatingTarget::Track { id: "t2".into() },
+            RatingTarget::Track {
+                id: "t1".into(),
+                source: String::new(),
+            },
+            RatingTarget::Track {
+                id: "t2".into(),
+                source: String::new(),
+            },
         ],
         rating: 5,
     })
@@ -576,8 +604,7 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
     t.events.clear();
     let calls_before = t.server.calls_to("getLyricsBySongId");
     t.run(Command::PlayTracks {
-        server_id: "srv".into(),
-        track_ids: vec!["t2".into(), "t0".into()],
+        tracks: TrackRef::list("srv", ["t2", "t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -719,7 +746,7 @@ async fn settings_persist_export_and_import() {
     t.run(Command::RunAction {
         action_id: "rate.3".into(),
         target: ActionTarget::Tracks {
-            ids: vec!["t0".into()],
+            tracks: TrackRef::list(&t.server_id, ["t0"]),
         },
     })
     .await;
@@ -747,7 +774,12 @@ async fn pins_download_through_the_job_queue() {
         })
     })
     .await;
-    match t.query(Query::Track { id: "t0".into() }).await {
+    match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), "t0"),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => assert_eq!(tr.offline, OfflineState::Downloaded),
         other => panic!("{other:?}"),
     }
@@ -779,8 +811,7 @@ async fn pins_download_through_the_job_queue() {
     assert!(!art.starts_with("file://"), "{art}");
     assert!(std::path::Path::new(&art).is_file(), "{art}");
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
@@ -828,7 +859,7 @@ async fn playlist_append_undo_removes_and_redo_re_adds_without_new_history() {
     // Append (no index): the common "Add to playlist" path.
     t.run(Command::PlaylistAdd {
         playlist_id: "pl".into(),
-        track_ids: vec!["t2".into(), "t3".into()],
+        tracks: TrackRef::list(&t.server_id, ["t2", "t3"]),
         at_index: None,
     })
     .await;
@@ -899,7 +930,7 @@ async fn playlist_remove_and_move_undo_are_compare_and_swap() {
     // expects t4 present, finds it gone, reports honestly and leaves it.
     t.run(Command::PlaylistAdd {
         playlist_id: "pl".into(),
-        track_ids: vec!["t4".into()],
+        tracks: TrackRef::list(&t.server_id, ["t4"]),
         at_index: None,
     })
     .await;

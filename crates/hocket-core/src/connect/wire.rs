@@ -499,53 +499,39 @@ impl SessionOp {
         Some(match cmd {
             Command::PlayContext { args } => SessionOp::PlayContext { args: args.clone() },
             Command::PlayTracks {
-                server_id,
-                track_ids,
+                tracks,
                 start_index,
                 label,
                 shuffle,
                 start_position_ms,
             } => SessionOp::PlayTracks {
-                track_ids: crate::session::reducer::refs(server_id, track_ids),
+                track_ids: tracks.clone(),
                 start_index: *start_index,
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
                 start_position_ms: *start_position_ms,
             },
-            Command::PlayNext {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::PlayNext {
-                track_ids: crate::session::reducer::refs(server_id, track_ids),
+            Command::PlayNext { tracks, keys } => SessionOp::PlayNext {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
                 queued: true,
             },
-            Command::AddToQueue {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::AddToQueue {
-                track_ids: crate::session::reducer::refs(server_id, track_ids),
+            Command::AddToQueue { tracks, keys } => SessionOp::AddToQueue {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
             },
-            Command::PlayLater {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::PlayLater {
-                track_ids: crate::session::reducer::refs(server_id, track_ids),
+            Command::PlayLater { tracks, keys } => SessionOp::PlayLater {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
             },
             Command::InsertTracks {
-                server_id,
-                track_ids,
+                tracks,
                 keys,
                 after,
                 in_group,
             } => SessionOp::InsertTracks {
-                track_ids: crate::session::reducer::refs(server_id, track_ids),
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
                 after: after.clone(),
                 in_group: *in_group,
@@ -1929,14 +1915,13 @@ mod tests {
     #[test]
     fn insert_tracks_round_trips_from_the_command() {
         let cmd = Command::InsertTracks {
-            server_id: "s".into(),
-            track_ids: vec!["t1".into(), "t2".into()],
+            tracks: TrackRef::list("s", ["t1", "t2"]),
             keys: vec!["k".into()],
             after: "a".into(),
             in_group: true,
         };
         // The UI's JSON (variant camelCase, fields as declared), `keys` optional.
-        let ui = r#"{"type":"insertTracks","data":{"server_id":"s","track_ids":["t1","t2"],"after":"a","in_group":true}}"#;
+        let ui = r#"{"type":"insertTracks","data":{"tracks":[{"source":"s","id":"t1"},{"source":"s","id":"t2"}],"after":"a","in_group":true}}"#;
         let parsed: Command = serde_json::from_str(ui).unwrap();
         assert!(matches!(
             &parsed,

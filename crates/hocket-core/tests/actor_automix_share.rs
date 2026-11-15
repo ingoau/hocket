@@ -215,8 +215,7 @@ async fn the_window_is_fetched_once_and_own_records_are_uploaded() {
     })
     .await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: (0..8).map(|i| format!("t{i}")).collect(),
+        tracks: TrackRef::list(&t.server_id, (0..8).map(|i| format!("t{i}"))),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,

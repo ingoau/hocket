@@ -230,8 +230,7 @@ async fn housekeeping_prunes_finished_outbox_entries_and_old_jobs() {
     let t = synced_core("prune").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,

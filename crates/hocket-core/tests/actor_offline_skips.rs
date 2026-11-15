@@ -61,8 +61,7 @@ async fn key_of(t: &TestCore, id: &str) -> QueueKey {
 /// derived context items).
 async fn queue(t: &TestCore, first: &str, later: &[&str]) {
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec![first.into()],
+        tracks: TrackRef::list(&t.server_id, [first]),
         start_index: 0,
         label: "Mixed".into(),
         shuffle: false,
@@ -70,8 +69,7 @@ async fn queue(t: &TestCore, first: &str, later: &[&str]) {
     })
     .await;
     t.run(Command::PlayLater {
-        server_id: t.server_id.clone(),
-        track_ids: later.iter().map(|s| s.to_string()).collect(),
+        tracks: TrackRef::list(&t.server_id, later.iter().map(|s| s.to_string())),
         keys: vec![],
     })
     .await;
@@ -177,8 +175,7 @@ async fn a_load_failure_stays_marked_across_an_offline_spell() {
     // Offline, something else is skipped for being unavailable here.
     t.run(network(NetworkKind::Offline)).await;
     t.run(Command::PlayLater {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t3".into()],
+        tracks: TrackRef::list(&t.server_id, ["t3"]),
         keys: vec![],
     })
     .await;
@@ -210,8 +207,7 @@ async fn the_clear_reaches_a_peer() {
     // Nothing is downloaded or cached on a: offline, everything is skipped.
     a.run(network(NetworkKind::Offline)).await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -244,8 +240,7 @@ async fn a_repeating_queue_with_nothing_offline_stops_with_a_coded_notice() {
     })
     .await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Loop".into(),
         shuffle: false,
@@ -293,8 +288,7 @@ async fn a_clear_refused_as_stale_is_run_again() {
         off.run(Command::SetAutoplay { enabled: false }).await;
         off.run(network(NetworkKind::Offline)).await;
         off.run(Command::PlayTracks {
-            server_id: off.server_id.clone(),
-            track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+            tracks: TrackRef::list(&off.server_id, ["t0", "t1", "t2"]),
             start_index: 0,
             label: "Sel".into(),
             shuffle: false,
@@ -307,8 +301,7 @@ async fn a_clear_refused_as_stale_is_run_again() {
 
         // The peer's op and the network's return race for the same revision.
         peer.dispatch(Command::PlayLater {
-            server_id: peer.server_id.clone(),
-            track_ids: vec!["t4".into()],
+            tracks: TrackRef::list(&peer.server_id, ["t4"]),
             keys: vec![],
         });
         off.dispatch(network(NetworkKind::Wifi));

@@ -232,8 +232,7 @@ async fn a_play_scrobbles_exactly_once_and_lands_in_history() {
     let t = synced_core("c").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
@@ -293,8 +292,7 @@ async fn seeking_does_not_count_as_listening() {
     let t = synced_core("d").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
@@ -320,8 +318,7 @@ async fn unplayable_items_are_skipped_with_a_notice() {
     let t = synced_core("e").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -372,8 +369,7 @@ async fn sleep_timer_stops_at_end_of_track() {
     let t = synced_core("f").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -403,8 +399,7 @@ async fn a_play_with_scrobbling_off_is_recorded_but_not_marked_scrobbled() {
     .await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
@@ -444,8 +439,7 @@ async fn auto_advance_follows_the_backend(name: &str, transition_only: bool) {
     t.backend.set_transition_only(transition_only);
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1", "t2", "t3"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -515,8 +509,7 @@ async fn play_tracks_loads_at_the_given_position() {
     let t = synced_core("pos").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Lyric".into(),
         shuffle: false,
@@ -550,8 +543,7 @@ async fn transient_focus_loss_resumes_when_focus_returns() {
     let t = synced_core("i").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -600,8 +592,7 @@ async fn lease_renewals_during_a_call_do_not_resume_playback() {
     let t = synced_core("j").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -643,8 +634,7 @@ async fn a_stream_error_during_a_call_retries_quietly() {
     let t = synced_core("l").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -691,8 +681,7 @@ async fn a_permanent_focus_loss_during_a_call_pauses_for_good() {
     let t = synced_core("k").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -731,8 +720,7 @@ async fn an_adopted_item_the_backend_never_starts_is_loaded_explicitly() {
     t.backend.set_drop_next(true);
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -1134,8 +1122,7 @@ async fn autoplay_at_the_end_does_not_skip_a_song_started_meanwhile() {
     t.dispatch(Command::PlayContext { args });
     t.dispatch(Command::Next);
     t.dispatch(Command::PlayTracks {
-        server_id: sid.clone(),
-        track_ids: vec!["t5".into()],
+        tracks: TrackRef::list(&sid, ["t5"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
@@ -1297,7 +1284,10 @@ async fn rating_off_queue_does_not_emit_queue() {
     t.run_for(500.0).await;
     t.events.clear();
     t.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t7".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t7".into(),
+            source: String::new(),
+        }],
         rating: 5,
     })
     .await;

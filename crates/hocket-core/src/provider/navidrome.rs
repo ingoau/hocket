@@ -56,7 +56,7 @@ fn star_targets(targets: &[api::RatingTarget]) -> Vec<StarTarget> {
     targets
         .iter()
         .map(|t| match t {
-            api::RatingTarget::Track { id } => StarTarget::Song(id.clone()),
+            api::RatingTarget::Track { id, .. } => StarTarget::Song(id.clone()),
             api::RatingTarget::Album { id } => StarTarget::Album(id.clone()),
         })
         .collect()
@@ -76,6 +76,9 @@ impl Provider for NavidromeProvider {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
+        if let Some(over) = self.api.feature_overrides() {
+            return over;
+        }
         let caps = self.api.capabilities();
         ProviderCapabilities {
             library_sync: true,
@@ -92,8 +95,10 @@ impl Provider for NavidromeProvider {
             report_play: true,
             lyrics: true,
             radio: true,
+            // Home builds a mirrored account's shelves from the mirror.
             home_shelves: false,
             share: true,
+            library_edit: false,
         }
     }
 

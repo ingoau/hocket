@@ -142,10 +142,7 @@ impl Actor {
         }
         let now = self.now();
         match cmd {
-            Command::StashAdd { track_ids } => {
-                let tracks = track_ids.iter().map(|id| self.track_ref_of(id)).collect();
-                self.stash_add(tracks, now)
-            }
+            Command::StashAdd { tracks } => self.stash_add(tracks, now),
             Command::StashRemove { entry_ids } => {
                 let removed = stash::set_removed(&mut self.stash, &entry_ids, true, now);
                 if !removed.is_empty() {

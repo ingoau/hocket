@@ -80,7 +80,7 @@ impl Actor {
     fn analysis_candidates(&self) -> Vec<Track> {
         let mut out: Vec<Track> = self.playback.track.iter().cloned().collect();
         for item in self.upcoming_playable(2) {
-            if let Some(t) = self.track_or_bare(&item.track) {
+            if let Some(t) = self.track_for_item(&item) {
                 if !out.iter().any(|o| o.id == t.id) {
                     out.push(t);
                 }

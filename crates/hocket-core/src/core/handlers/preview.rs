@@ -45,7 +45,8 @@ pub(crate) fn command_ends_preview(cmd: &Command) -> bool {
 }
 
 impl Actor {
-    pub(crate) fn preview_start(&mut self, track_id: TrackId) {
+    pub(crate) fn preview_start(&mut self, track_ref: TrackRef) {
+        let track_id = track_ref.id.clone();
         if self
             .preview
             .as_ref()
@@ -54,7 +55,7 @@ impl Actor {
             self.preview_toggle();
             return;
         }
-        let Some(track) = self.track_or_bare(&self.track_ref_of(&track_id)) else {
+        let Some(track) = self.best_copy(&track_ref, &[]) else {
             return;
         };
         let duration_ms = track.duration_ms;

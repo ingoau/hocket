@@ -5,10 +5,11 @@
 
 use crate::api::{ActionTarget, Command, MediaSessionAction, RepeatMode, SleepTimer};
 
+use crate::api::TrackRef;
 use crate::session::QueuePlacement;
 
 use super::{
-    ids_of, pin_targets, play_commands, queue_commands, rating_targets, single_id, track_ids_of,
+    ids_of, pin_targets, play_commands, queue_commands, rating_targets, single_id, track_refs_of,
     Resolver, StateView, Surface, SEEK_STEP_MS,
 };
 
@@ -213,7 +214,7 @@ fn can_add_to_queue(t: &ActionTarget, s: &StateView) -> bool {
 
 /// Shuffling one song is just playing it, so a single song isn't offered Shuffle.
 fn not_one_song(t: &ActionTarget, _: &StateView) -> bool {
-    !matches!(t, ActionTarget::Tracks { ids } if ids.len() == 1)
+    !matches!(t, ActionTarget::Tracks { tracks } if tracks.len() == 1)
 }
 
 fn queue_section_on(_: &ActionTarget, s: &StateView) -> bool {
@@ -232,28 +233,28 @@ fn stash_queue_group(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<C
 
 fn one_track(t: &ActionTarget, _: &StateView) -> bool {
     match t {
-        ActionTarget::Tracks { ids } => ids.len() == 1,
+        ActionTarget::Tracks { tracks } => tracks.len() == 1,
         ActionTarget::QueueItems { keys } => keys.len() == 1,
         _ => false,
     }
 }
 
 fn preview_start(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
-    let mut ids = super::track_ids_of(t, s, r);
-    if ids.len() != 1 {
+    let mut tracks = super::track_refs_of(t, s, r);
+    if tracks.len() != 1 {
         return vec![];
     }
     vec![Command::PreviewStart {
-        track_id: ids.remove(0),
+        track: tracks.remove(0),
     }]
 }
 
 fn stash(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
-    let track_ids = track_ids_of(t, s, r);
-    if track_ids.is_empty() {
+    let tracks = track_refs_of(t, s, r);
+    if tracks.is_empty() {
         return vec![];
     }
-    vec![Command::StashAdd { track_ids }]
+    vec![Command::StashAdd { tracks }]
 }
 
 fn clear_stash(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Command> {
@@ -264,11 +265,17 @@ fn snoozed(id: &str, s: &StateView) -> bool {
     s.snoozed_tracks.iter().any(|t| t == id)
 }
 
+fn snoozed_ref(t: &TrackRef, s: &StateView) -> bool {
+    snoozed(&t.id, s)
+}
+
 /// Snooze is on when any selected song isn't snoozed. A queue row's track isn't known here, so the
 /// menu decides; the action stays available.
 fn snooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
     match t {
-        ActionTarget::Tracks { ids } if !ids.is_empty() => ids.iter().any(|id| !snoozed(id, s)),
+        ActionTarget::Tracks { tracks } if !tracks.is_empty() => {
+            tracks.iter().any(|t| !snoozed_ref(t, s))
+        }
         ActionTarget::QueueItems { keys } if !keys.is_empty() => true,
         ActionTarget::None => s
             .current_track_id
@@ -280,7 +287,9 @@ fn snooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
 
 fn unsnooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
     match t {
-        ActionTarget::Tracks { ids } if !ids.is_empty() => ids.iter().any(|id| snoozed(id, s)),
+        ActionTarget::Tracks { tracks } if !tracks.is_empty() => {
+            tracks.iter().any(|t| snoozed_ref(t, s))
+        }
         ActionTarget::QueueItems { keys } if !keys.is_empty() => true,
         ActionTarget::None => s.current_track_id.as_ref().is_some_and(|id| snoozed(id, s)),
         _ => false,
@@ -288,23 +297,23 @@ fn unsnooze_enabled(t: &ActionTarget, s: &StateView) -> bool {
 }
 
 fn snooze(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
-    let track_ids = track_ids_of(t, s, r);
-    if track_ids.is_empty() {
+    let tracks = track_refs_of(t, s, r);
+    if tracks.is_empty() {
         return vec![];
     }
     // The song menu offers every duration itself. A swipe or the palette uses a week.
     vec![Command::Snooze {
-        track_ids,
+        tracks,
         duration: crate::api::SnoozeFor::Week,
     }]
 }
 
 fn unsnooze(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
-    let track_ids = track_ids_of(t, s, r);
-    if track_ids.is_empty() {
+    let tracks = track_refs_of(t, s, r);
+    if tracks.is_empty() {
         return vec![];
     }
-    vec![Command::Unsnooze { track_ids }]
+    vec![Command::Unsnooze { tracks }]
 }
 
 macro_rules! rate_fn {

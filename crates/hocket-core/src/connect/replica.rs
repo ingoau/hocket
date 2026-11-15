@@ -587,6 +587,7 @@ mod tests {
                 added: false,
                 queued: false,
                 ordinal: i as u32,
+                alts: vec![],
             });
         }
         r.set_document(d, 5.0);

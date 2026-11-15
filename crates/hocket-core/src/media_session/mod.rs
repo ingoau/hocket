@@ -17,6 +17,7 @@
 //! Platform specifics for the desktop addon are in `PLATFORM_NOTES.md` next
 //! to this file.
 
+use crate::api::TrackRef;
 use crate::api::{
     Command, MediaSessionAction, MediaSessionMetadata, MediaSessionState, PositionStamp, QueueView,
     RatingTarget, RepeatMode, TransportState,
@@ -185,6 +186,7 @@ pub fn derive_media_session_state(
             duration_ms: t.duration_ms,
             artwork_path: artwork_path.clone(),
             track_id: Some(t.id.clone()),
+            source: Some(t.server_id.clone()),
             loved: t.loved,
             rating: t.rating.min(5),
             stashed: false,
@@ -266,7 +268,13 @@ pub fn command_for(
     value: Option<f64>,
     current: &MediaSessionState,
 ) -> Option<Command> {
-    let track_id = || current.metadata.as_ref().and_then(|m| m.track_id.clone());
+    let track = || {
+        current.metadata.as_ref().and_then(|m| {
+            m.track_id
+                .clone()
+                .map(|id| TrackRef::new(m.source.clone().unwrap_or_default(), id))
+        })
+    };
     match action {
         MediaSessionAction::Play => Some(Command::Play),
         MediaSessionAction::Pause => Some(Command::Pause),
@@ -300,30 +308,33 @@ pub fn command_for(
             Some(Command::SetRepeat { mode })
         }
         MediaSessionAction::Love => {
-            let id = track_id()?;
+            let t = track()?;
             let loved = match value {
                 Some(v) if v.is_finite() => v != 0.0,
                 _ => !current.metadata.as_ref().map(|m| m.loved).unwrap_or(false),
             };
             Some(Command::SetLoved {
-                targets: vec![RatingTarget::Track { id }],
+                targets: vec![RatingTarget::Track {
+                    id: t.id,
+                    source: t.source,
+                }],
                 loved,
             })
         }
         MediaSessionAction::Rate => {
-            let id = track_id()?;
+            let t = track()?;
             let v = value.filter(|v| v.is_finite())?;
             Some(Command::SetRating {
-                targets: vec![RatingTarget::Track { id }],
+                targets: vec![RatingTarget::Track {
+                    id: t.id,
+                    source: t.source,
+                }],
                 rating: v.round().clamp(0.0, 5.0) as u32,
             })
         }
-        MediaSessionAction::Stash => {
-            let id = track_id()?;
-            Some(Command::StashAdd {
-                track_ids: vec![id],
-            })
-        }
+        MediaSessionAction::Stash => Some(Command::StashAdd {
+            tracks: vec![track()?],
+        }),
     }
 }
 
@@ -348,6 +359,7 @@ mod tests {
                     added: false,
                     queued: false,
                     ordinal: 0,
+                    alts: vec![],
                 },
                 track: TrackSummary {
                     id: "t1".into(),
@@ -552,21 +564,30 @@ mod tests {
         assert_eq!(
             command_for(MediaSessionAction::Love, None, &st),
             Some(Command::SetLoved {
-                targets: vec![RatingTarget::Track { id: "t1".into() }],
+                targets: vec![RatingTarget::Track {
+                    id: "t1".into(),
+                    source: String::new()
+                }],
                 loved: false
             })
         );
         assert_eq!(
             command_for(MediaSessionAction::Rate, Some(9.0), &st),
             Some(Command::SetRating {
-                targets: vec![RatingTarget::Track { id: "t1".into() }],
+                targets: vec![RatingTarget::Track {
+                    id: "t1".into(),
+                    source: String::new()
+                }],
                 rating: 5
             })
         );
         assert_eq!(
             command_for(MediaSessionAction::Rate, Some(2.4), &st),
             Some(Command::SetRating {
-                targets: vec![RatingTarget::Track { id: "t1".into() }],
+                targets: vec![RatingTarget::Track {
+                    id: "t1".into(),
+                    source: String::new()
+                }],
                 rating: 2
             })
         );
@@ -574,7 +595,7 @@ mod tests {
         assert_eq!(
             command_for(MediaSessionAction::Stash, None, &st),
             Some(Command::StashAdd {
-                track_ids: vec!["t1".into()]
+                tracks: vec![TrackRef::new("", "t1")]
             })
         );
         let empty = MediaSessionState::default();

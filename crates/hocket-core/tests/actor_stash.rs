@@ -48,7 +48,7 @@ async fn stash_act_on_it_and_keep_it() {
     t.run(Command::RunAction {
         action_id: "stash".into(),
         target: ActionTarget::Tracks {
-            ids: ids(&["t0", "t1"]),
+            tracks: TrackRef::list(&t.server_id, ids(&["t0", "t1"])),
         },
     })
     .await;
@@ -67,7 +67,7 @@ async fn stash_act_on_it_and_keep_it() {
     // Stashing a song that's there already is a no-op.
     t.events.clear();
     t.run(Command::StashAdd {
-        track_ids: ids(&["t1"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["t1"])),
     })
     .await;
     assert_eq!(stashed(&t).await, ids(&["t0", "t1"]));
@@ -76,13 +76,13 @@ async fn stash_act_on_it_and_keep_it() {
 
     // Queue it: the stash stays.
     t.run(Command::StashAdd {
-        track_ids: ids(&["t2"]),
+        tracks: TrackRef::list(&t.server_id, ids(&["t2"])),
     })
     .await;
     t.run(Command::RunAction {
         action_id: "playLater".into(),
         target: ActionTarget::Tracks {
-            ids: stashed(&t).await,
+            tracks: TrackRef::list(&t.server_id, stashed(&t).await),
         },
     })
     .await;
@@ -131,7 +131,12 @@ async fn stash_act_on_it_and_keep_it() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stash_an_album() {
     let t = TestCore::start("a", seeded_server(6, 200.0)).await;
-    let album = match t.query(Query::Track { id: "t0".into() }).await {
+    let album = match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), "t0"),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => tr.album_id.expect("album"),
         other => panic!("{other:?}"),
     };
@@ -154,7 +159,7 @@ async fn two_devices_share_the_stash() {
     assert!(a.snapshot().await.connection.connected);
 
     a.run(Command::StashAdd {
-        track_ids: ids(&["t0", "t1"]),
+        tracks: TrackRef::list(&a.server_id, ids(&["t0", "t1"])),
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
@@ -162,7 +167,7 @@ async fn two_devices_share_the_stash() {
     assert_eq!(last_stash_event(&b), Some(ids(&["t0", "t1"])));
 
     b.run(Command::StashAdd {
-        track_ids: ids(&["t3"]),
+        tracks: TrackRef::list(&b.server_id, ids(&["t3"])),
     })
     .await;
     let first = stash(&b).await[0].entry_id.clone();

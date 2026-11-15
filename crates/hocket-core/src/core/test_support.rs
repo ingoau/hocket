@@ -266,6 +266,32 @@ impl TestCore {
         .await
     }
 
+    /// [`TestCore::start_accounts`] on a shared network and clock.
+    pub async fn start_accounts_on(
+        name: &str,
+        server: FakeServer,
+        more: Vec<FakeServer>,
+        net: Option<Arc<MemoryNet>>,
+        seed: u64,
+        clock: Arc<SimTime>,
+    ) -> TestCore {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Self::start_full(
+            name,
+            server,
+            net,
+            seed,
+            clock,
+            dir,
+            true,
+            "https://music.example/",
+            "secret",
+            None,
+            more,
+        )
+        .await
+    }
+
     /// One core on its own (no Connect network), started.
     pub async fn start(name: &str, server: FakeServer) -> TestCore {
         Self::start_with(name, server, None, 1).await

@@ -94,7 +94,7 @@ impl Actor {
         }
         let mut tracks: Vec<Track> = self.playback.track.iter().cloned().collect();
         for item in self.upcoming_playable(FETCH_AHEAD) {
-            if let Some(t) = self.track_or_bare(&item.track) {
+            if let Some(t) = self.track_for_item(&item) {
                 tracks.push(t);
             }
         }

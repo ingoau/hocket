@@ -111,11 +111,7 @@ async fn offline_plays_downloads_and_complete_cache_entries_and_skips_the_rest()
     t.events.clear();
     t.sources.lock().clear();
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: ["t2", "t0", "t3", "t4", "t1"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+        tracks: TrackRef::list(&t.server_id, ["t2", "t0", "t3", "t4", "t1"]),
         start_index: 0,
         label: "Mixed".into(),
         shuffle: false,
@@ -177,8 +173,7 @@ async fn offline_autoplay_picks_what_plays_offline() {
     pin(&t, "t3").await;
     t.run(network(NetworkKind::Offline, false)).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
@@ -214,8 +209,7 @@ async fn offline_autoplay_picks_what_plays_offline() {
 async fn playback_records_skips_and_autoplay_picks_for_eviction() {
     let t = started("signals", 4).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Three".into(),
         shuffle: false,
@@ -241,8 +235,7 @@ async fn playback_records_skips_and_autoplay_picks_for_eviction() {
 async fn a_track_left_by_a_skip_burst_counts_as_skipped() {
     let t = started("burst-signals", 4).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1", "t2", "t3"]),
         start_index: 0,
         label: "Four".into(),
         shuffle: false,

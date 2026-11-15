@@ -41,7 +41,7 @@ fn state() -> StateView {
 
 fn tracks(ids: &[&str]) -> ActionTarget {
     ActionTarget::Tracks {
-        ids: ids.iter().map(|s| s.to_string()).collect(),
+        tracks: TrackRef::list("srv", ids.iter().copied()),
     }
 }
 
@@ -438,8 +438,7 @@ fn handlers_map_to_commands() {
     assert_eq!(
         c,
         vec![Command::PlayTracks {
-            server_id: "srv".into(),
-            track_ids: vec!["a".into(), "b".into()],
+            tracks: TrackRef::list("srv", ["a", "b"]),
             start_index: 0,
             label: "Selection".into(),
             shuffle: false,
@@ -475,7 +474,7 @@ fn handlers_map_to_commands() {
             &res,
         )
         .unwrap();
-    assert!(matches!(&c[0], Command::PlayTracks { track_ids, .. } if track_ids.len() == 4));
+    assert!(matches!(&c[0], Command::PlayTracks { tracks, .. } if tracks.len() == 4));
     for (action, shuffle) in [("play", false), ("playShuffled", true)] {
         let c = r
             .commands(
@@ -538,8 +537,7 @@ fn handlers_map_to_commands() {
         )
         .unwrap(),
         vec![Command::PlayNext {
-            server_id: "srv".into(),
-            track_ids: vec![],
+            tracks: vec![],
             keys: vec!["key-1".into(), "key-2".into()]
         }]
     );
@@ -556,8 +554,7 @@ fn handlers_map_to_commands() {
         )
         .unwrap(),
         vec![Command::AddToQueue {
-            server_id: "srv".into(),
-            track_ids: vec![],
+            tracks: vec![],
             keys: vec!["key-up1".into(), "key-1".into()]
         }]
     );
@@ -565,15 +562,14 @@ fn handlers_map_to_commands() {
         r.commands(
             "addToQueue",
             &ActionTarget::Tracks {
-                ids: vec!["t9".into()]
+                tracks: TrackRef::list("srv", ["t9"])
             },
             &s,
             &res
         )
         .unwrap(),
         vec![Command::AddToQueue {
-            server_id: "srv".into(),
-            track_ids: vec!["t9".into()],
+            tracks: TrackRef::list("srv", ["t9"]),
             keys: vec![]
         }]
     );
@@ -586,7 +582,7 @@ fn handlers_map_to_commands() {
         .commands(
             "addToQueue",
             &ActionTarget::Tracks {
-                ids: vec!["t9".into()]
+                tracks: TrackRef::list("srv", ["t9"])
             },
             &off,
             &res
@@ -621,15 +617,17 @@ fn handlers_map_to_commands() {
         )
         .unwrap(),
         vec![Command::PlayLater {
-            server_id: "srv".into(),
-            track_ids: vec!["pl-a".into()],
+            tracks: TrackRef::list("srv", ["pl-a"]),
             keys: vec![]
         }]
     );
     assert_eq!(
         r.commands("rate4", &ActionTarget::None, &s, &res).unwrap(),
         vec![Command::SetRating {
-            targets: vec![RatingTarget::Track { id: "cur".into() }],
+            targets: vec![RatingTarget::Track {
+                id: "cur".into(),
+                source: "srv".into()
+            }],
             rating: 4
         }]
     );
@@ -666,7 +664,10 @@ fn handlers_map_to_commands() {
     assert_eq!(
         r.commands("unlove", &tracks(&["t"]), &s, &res).unwrap(),
         vec![Command::SetLoved {
-            targets: vec![RatingTarget::Track { id: "t".into() }],
+            targets: vec![RatingTarget::Track {
+                id: "t".into(),
+                source: "srv".into()
+            }],
             loved: false
         }]
     );

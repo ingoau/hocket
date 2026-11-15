@@ -44,8 +44,7 @@ async fn pair_on() -> (TestCore, TestCore, std::sync::Arc<MemoryNet>) {
 async fn queue_is_shared_and_handoff_moves_transport_with_position() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -150,8 +149,7 @@ async fn queue_is_shared_and_handoff_moves_transport_with_position() {
 async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -248,8 +246,7 @@ async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
 async fn an_output_latency_correction_reaches_the_room() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -281,8 +278,7 @@ async fn a_handed_off_play_is_scrobbled_with_its_original_start_time() {
     let (a, b) = pair().await;
     let started = a.clock.now_ms();
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -395,8 +391,7 @@ async fn synced_settings_merge_last_write_wins() {
 async fn session_undo_is_shared_but_only_the_author_can_undo() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -414,8 +409,7 @@ async fn session_undo_is_shared_but_only_the_author_can_undo() {
 async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -614,8 +608,7 @@ async fn a_removed_device_leaves_the_room() {
 async fn play_on(owner: &TestCore, other: &TestCore) {
     owner
         .run(Command::PlayTracks {
-            server_id: owner.server_id.clone(),
-            track_ids: vec!["t0".into(), "t1".into()],
+            tracks: TrackRef::list(&owner.server_id, ["t0", "t1"]),
             start_index: 0,
             label: "Sel".into(),
             shuffle: false,
@@ -814,8 +807,7 @@ async fn previous_goes_back_once_the_playing_devices_lease_lapses() {
 async fn restarted_while_the_room_still_names_it(start_index: u32) -> (TestCore, TestCore) {
     let (a, b, net) = pair_on().await;
     b.run(Command::PlayTracks {
-        server_id: b.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&b.server_id, ["t0", "t1", "t2"]),
         start_index,
         label: "Sel".into(),
         shuffle: false,
@@ -856,8 +848,7 @@ async fn play_after_a_restart_the_room_outlived_starts_here() {
 async fn new_music_after_a_restart_the_room_outlived_plays_here() {
     let (b, a) = restarted_while_the_room_still_names_it(0).await;
     b.run(Command::PlayTracks {
-        server_id: b.server_id.clone(),
-        track_ids: vec!["t3".into(), "t4".into()],
+        tracks: TrackRef::list(&b.server_id, ["t3", "t4"]),
         start_index: 0,
         label: "New".into(),
         shuffle: false,
@@ -899,8 +890,7 @@ fn starts_playing(log: &[hocket_core::audio::scripted::ScriptedCall]) -> bool {
 async fn a_track_changed_elsewhere_during_a_call_stays_quiet() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -931,8 +921,7 @@ async fn a_track_changed_elsewhere_during_a_call_stays_quiet() {
 async fn play_after_handing_off_during_a_call_starts_at_once() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -1011,8 +1000,7 @@ async fn a_room_rekeying_the_current_item_does_not_restart_it() {
     assert!(ca.connected && cb.connected, "{ca:?} {cb:?}");
 
     b.run(Command::PlayTracks {
-        server_id: b.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&b.server_id, ["t0", "t1", "t2"]),
         start_index: 1,
         label: "Sel".into(),
         shuffle: false,
@@ -1076,8 +1064,7 @@ async fn skips_made_before_rejoining_after_a_restart_are_kept() {
     TestCore::run_all_for(&[&a, &b], 8_000.0).await;
     let ids: Vec<String> = (0..6).map(|i| format!("t{i}")).collect();
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: ids.clone(),
+        tracks: TrackRef::list(&a.server_id, ids.clone()),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -1147,8 +1134,7 @@ async fn skips_made_before_rejoining_after_a_restart_are_kept() {
 
 async fn play_for_headphones(a: &TestCore, b: &TestCore) {
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,

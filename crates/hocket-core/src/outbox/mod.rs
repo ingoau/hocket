@@ -59,7 +59,7 @@ pub enum LoveTarget {
 impl From<RatingTarget> for LoveTarget {
     fn from(t: RatingTarget) -> Self {
         match t {
-            RatingTarget::Track { id } => LoveTarget::Track { id },
+            RatingTarget::Track { id, .. } => LoveTarget::Track { id },
             RatingTarget::Album { id } => LoveTarget::Album { id },
         }
     }
@@ -128,7 +128,7 @@ impl Mutation {
     pub fn target_key(&self) -> String {
         match self {
             Mutation::SetRating {
-                target: RatingTarget::Track { id },
+                target: RatingTarget::Track { id, .. },
                 ..
             } => format!("rating:track:{id}"),
             Mutation::SetRating {
@@ -445,7 +445,7 @@ impl Outbox {
             "INSERT INTO outbox(id, server_id, mutation, status, created_at, attempts, next_attempt_at, target, expected_prior) VALUES (?1, ?2, ?3, 'pending', ?4, 0, ?4, ?5, ?6)",
             params![id, server_id, json, now, target, prior_json],
         )?;
-        apply_local(tx, &mutation)?;
+        apply_local(tx, server_id, &mutation)?;
         Ok(id)
     }
 
@@ -706,10 +706,10 @@ impl Outbox {
         match &entry.mutation {
             Mutation::SetRating { target, rating } => {
                 let id = match target {
-                    RatingTarget::Track { id } | RatingTarget::Album { id } => id,
+                    RatingTarget::Track { id, .. } | RatingTarget::Album { id } => id,
                 };
                 if let Some(Prior::Rating(expected)) = &entry.expected_prior {
-                    if let RatingTarget::Track { id } = target {
+                    if let RatingTarget::Track { id, .. } = target {
                         match api.song(id).await {
                             Ok(song) => {
                                 let found = song.user_rating.unwrap_or(0);
@@ -1056,7 +1056,7 @@ impl Outbox {
     ) -> Result<CasOutcome, SubsonicError> {
         match (&target, &expected, &new) {
             (
-                CasTarget::Rating(RatingTarget::Track { id }),
+                CasTarget::Rating(RatingTarget::Track { id, .. }),
                 Prior::Rating(exp),
                 Prior::Rating(new_r),
             ) => {
@@ -1134,15 +1134,17 @@ fn db_err(e: DbError) -> SubsonicError {
 }
 
 /// Optimistic mirror update at enqueue time.
-fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
+/// The mutation's effect on `server_id`'s mirror (another account's copy with the same id is
+/// another song, or gets its own mutation).
+fn apply_local(tx: &rusqlite::Connection, server_id: &str, m: &Mutation) -> DbResult<()> {
     match m {
         Mutation::SetRating {
-            target: RatingTarget::Track { id },
+            target: RatingTarget::Track { id, .. },
             rating,
         } => {
             tx.execute(
-                "UPDATE tracks SET rating = ?2 WHERE id = ?1",
-                params![id, rating.min(&5)],
+                "UPDATE tracks SET rating = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, rating.min(&5), server_id],
             )?;
         }
         Mutation::SetRating {
@@ -1150,8 +1152,8 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             rating,
         } => {
             tx.execute(
-                "UPDATE albums SET rating = ?2 WHERE id = ?1",
-                params![id, rating.min(&5)],
+                "UPDATE albums SET rating = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, rating.min(&5), server_id],
             )?;
         }
         Mutation::SetLoved {
@@ -1159,8 +1161,8 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             loved,
         } => {
             tx.execute(
-                "UPDATE tracks SET loved = ?2 WHERE id = ?1",
-                params![id, *loved as i64],
+                "UPDATE tracks SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *loved as i64, server_id],
             )?;
         }
         Mutation::SetLoved {
@@ -1168,8 +1170,8 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             loved,
         } => {
             tx.execute(
-                "UPDATE albums SET loved = ?2 WHERE id = ?1",
-                params![id, *loved as i64],
+                "UPDATE albums SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *loved as i64, server_id],
             )?;
         }
         Mutation::SetLoved {
@@ -1177,8 +1179,8 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             loved,
         } => {
             tx.execute(
-                "UPDATE artists SET loved = ?2 WHERE id = ?1",
-                params![id, *loved as i64],
+                "UPDATE artists SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *loved as i64, server_id],
             )?;
         }
         Mutation::PlaylistRename {
@@ -1316,7 +1318,7 @@ fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbRes
     match (m, prior) {
         (
             Mutation::SetRating {
-                target: RatingTarget::Track { id },
+                target: RatingTarget::Track { id, .. },
                 ..
             },
             Prior::Rating(r),
@@ -1552,7 +1554,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 3,
                 },
                 Some(Prior::Rating(2)),
@@ -1563,7 +1568,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 5,
                 },
                 Some(Prior::Rating(3)),
@@ -1641,7 +1649,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t2".into() },
+                    target: RatingTarget::Track {
+                        id: "t2".into(),
+                        source: String::new(),
+                    },
                     rating: 4,
                 },
                 Some(Prior::Rating(2)),
@@ -1664,7 +1675,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 1,
                 },
                 None,
@@ -1676,6 +1690,7 @@ mod tests {
                 Mutation::SetRating {
                     target: RatingTarget::Track {
                         id: "missing".into(),
+                        source: String::new(),
                     },
                     rating: 1,
                 },
@@ -1721,6 +1736,7 @@ mod tests {
                     Mutation::SetRating {
                         target: RatingTarget::Track {
                             id: format!("t{i}"),
+                            source: String::new(),
                         },
                         rating: 1,
                     },
@@ -2227,7 +2243,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 4,
                 },
                 None,
@@ -2288,7 +2307,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 4,
                 },
                 None,
@@ -2299,7 +2321,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t1".into() },
+                    target: RatingTarget::Track {
+                        id: "t1".into(),
+                        source: String::new(),
+                    },
                     rating: 4,
                 },
                 None,
@@ -2328,7 +2353,10 @@ mod tests {
     #[tokio::test]
     async fn compare_and_swap() {
         let (db, s, outbox, _) = setup();
-        let t = CasTarget::Rating(RatingTarget::Track { id: "t0".into() });
+        let t = CasTarget::Rating(RatingTarget::Track {
+            id: "t0".into(),
+            source: String::new(),
+        });
         assert_eq!(
             outbox
                 .execute_cas(&s, t.clone(), Prior::Rating(2), Prior::Rating(5))
@@ -2373,7 +2401,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "ghost".into() },
+                    target: RatingTarget::Track {
+                        id: "ghost".into(),
+                        source: String::new(),
+                    },
                     rating: 1,
                 },
                 None,
@@ -2383,7 +2414,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 1,
                 },
                 None,
@@ -2430,7 +2464,10 @@ mod tests {
     #[test]
     fn mutation_json_is_adjacently_tagged() {
         let m = Mutation::SetRating {
-            target: RatingTarget::Track { id: "x".into() },
+            target: RatingTarget::Track {
+                id: "x".into(),
+                source: String::new(),
+            },
             rating: 3,
         };
         let j = serde_json::to_value(&m).unwrap();

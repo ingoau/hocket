@@ -22,6 +22,10 @@ pub const CACHE_CHECK_MS: f64 = 10.0 * 60_000.0;
 
 #[derive(Default)]
 pub(crate) struct CacheState {
+    /// Whether the `links` table has any group (dedup or manual links).
+    pub links_present: bool,
+    /// Queue keys whose other copies were already looked up.
+    pub alts_checked: std::collections::HashSet<crate::api::QueueKey>,
     /// Items skipped in a row because they cannot play offline.
     pub offline_skips: u32,
     /// Whether the "skipping what isn't offline" notice was shown for the

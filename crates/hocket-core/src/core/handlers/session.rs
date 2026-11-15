@@ -360,14 +360,6 @@ impl Actor {
         if let SessionOp::PlayNext { queued, .. } = &mut op {
             *queued = self.settings.get_bool(crate::settings::keys::QUEUE_SECTION);
         }
-        if let SessionOp::PlayTracks { track_ids, .. }
-        | SessionOp::PlayNext { track_ids, .. }
-        | SessionOp::AddToQueue { track_ids, .. }
-        | SessionOp::PlayLater { track_ids, .. }
-        | SessionOp::InsertTracks { track_ids, .. } = &mut op
-        {
-            self.fix_refs(track_ids);
-        }
         let label = command_label(&cmd);
         self.undoable_op(op, &label, command_kind(&cmd));
     }
@@ -742,7 +734,7 @@ impl Actor {
                     {
                         // Nobody is playing and the user pressed play here.
                         self.playback.doc_key = Some(item.key.clone());
-                        self.playback.track = self.track_or_bare(&item.track);
+                        self.playback.track = self.track_for_item(&item);
                         self.playback.restore_position = Some((item.key.clone(), position));
                         self.queue_input(Input::ClaimTransport { takeover: false });
                     } else {
@@ -752,7 +744,7 @@ impl Actor {
                         // had loaded.
                         self.render_only();
                         self.playback.doc_key = Some(item.key.clone());
-                        self.playback.track = self.track_or_bare(&item.track);
+                        self.playback.track = self.track_for_item(&item);
                         self.playback.position_ms = position;
                         self.playback.position_at = self.now();
                     }
@@ -840,6 +832,11 @@ impl Actor {
         }
         if let Some(tracks) = resolve_tracks {
             self.local_op(SessionOp::SetContextTracks { tracks });
+        }
+        if self.cache.links_present {
+            let _ = self.tx.send(crate::core::ActorMsg::Internal(
+                crate::core::Internal::OfferAlternates,
+            ));
         }
     }
 
@@ -1196,18 +1193,13 @@ impl Actor {
                 .map(|i| i.track.clone())
                 .collect(),
         };
-        // A playlist lives on one account: the first song's. Songs from
-        // another account can't be on it (a Mixed playlist is Phase 3).
+        // On the first song's account; songs from another account go in as
+        // its copies, or the playlist is offered as Mixed.
         let Some(server_id) = refs.first().map(|t| t.source.clone()) else {
             self.toast("Nothing to save", None);
             return;
         };
-        let ids: Vec<TrackId> = refs
-            .into_iter()
-            .filter(|t| t.source == server_id)
-            .map(|t| t.id)
-            .collect();
-        self.create_playlist(server_id, name, ids);
+        self.create_playlist(server_id, name, refs);
     }
 
     // -- undo -------------------------------------------------------------------
@@ -1319,7 +1311,24 @@ impl Actor {
                 ids.push(i.track.clone());
             }
         }
-        let map = self.summaries(&ids);
+        let mut map = self.summaries(&ids);
+        // An item from an account this device lacks shows a copy it has.
+        let stand_ins: Vec<(TrackRef, Vec<TrackRef>)> = derived
+            .entries
+            .iter()
+            .map(|(i, _)| i)
+            .chain(derived.current.iter())
+            .chain(derived.wrap_next.iter())
+            .chain(derived.previous.iter())
+            .filter(|i| !i.alts.is_empty() && !map.contains_key(&i.track))
+            .map(|i| (i.track.clone(), i.alts.clone()))
+            .collect();
+        for (track, alts) in stand_ins {
+            let found = self.summaries(&alts);
+            if let Some(s) = alts.iter().find_map(|a| found.get(a)) {
+                map.insert(track, s.clone());
+            }
+        }
         derived.into_view(|id| map.get(id).cloned().unwrap_or_else(|| bare_summary(id)))
     }
 
@@ -1462,11 +1471,6 @@ impl Actor {
         } else {
             server_id
         }
-    }
-
-    /// [`Actor::track_ref_of`] for each id.
-    pub(crate) fn refs_of(&self, ids: &[TrackId]) -> Vec<TrackRef> {
-        ids.iter().map(|id| self.track_ref_of(id)).collect()
     }
 
     /// [`Actor::ref_for_id`] with the session's account as the fallback.
@@ -1701,9 +1705,7 @@ impl Actor {
         match kind {
             ContextKind::Album { id } => refs(self.db.album_tracks(id)),
             ContextKind::Artist { id } => refs(self.db.artist_tracks(id)),
-            ContextKind::Playlist { id } => {
-                of_source(self.db.playlist_track_ids(id).unwrap_or_default())
-            }
+            ContextKind::Playlist { id } => self.db.playlist_track_refs(id).unwrap_or_default(),
             // A genre spans the unified library.
             ContextKind::Genre { name } => refs(
                 self.db
@@ -1831,21 +1833,17 @@ fn command_kind(cmd: &Command) -> &'static str {
 fn command_label(cmd: &Command) -> String {
     match cmd {
         Command::PlayTracks { label, .. } => format!("Play {label}"),
-        Command::PlayNext {
-            track_ids, keys, ..
-        } => plural("Play next", track_ids.len() + keys.len()),
-        Command::AddToQueue {
-            track_ids, keys, ..
-        } => plural("Add to queue", track_ids.len() + keys.len()),
-        Command::PlayLater {
-            track_ids, keys, ..
-        } => plural("Play later", track_ids.len() + keys.len()),
+        Command::PlayNext { tracks, keys, .. } => plural("Play next", tracks.len() + keys.len()),
+        Command::AddToQueue { tracks, keys, .. } => {
+            plural("Add to queue", tracks.len() + keys.len())
+        }
+        Command::PlayLater { tracks, keys, .. } => plural("Play later", tracks.len() + keys.len()),
         Command::JumpToQueueItem { .. } => "Jump to track".into(),
         Command::RemoveQueueItems { keys } => plural("Remove from queue", keys.len()),
         Command::MoveQueueItem { .. } => "Move track".into(),
-        Command::InsertTracks {
-            track_ids, keys, ..
-        } => plural("Add to queue", track_ids.len() + keys.len()),
+        Command::InsertTracks { tracks, keys, .. } => {
+            plural("Add to queue", tracks.len() + keys.len())
+        }
         Command::ClearQueue => "Clear queue".into(),
         Command::ClearQueueGroup => "Clear next in queue".into(),
         Command::SetShuffle { enabled } => {

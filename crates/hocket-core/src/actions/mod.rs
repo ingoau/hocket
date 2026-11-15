@@ -790,20 +790,20 @@ pub fn canonical_id(id: &str) -> &str {
 
 // -- helpers shared with the definitions ------------------------------------
 
-fn ids_of(target: &ActionTarget) -> &[String] {
+fn ids_of(target: &ActionTarget) -> Vec<&str> {
     match target {
-        ActionTarget::Tracks { ids }
-        | ActionTarget::Albums { ids }
+        ActionTarget::Tracks { tracks } => tracks.iter().map(|t| t.id.as_str()).collect(),
+        ActionTarget::Albums { ids }
         | ActionTarget::Artists { ids }
-        | ActionTarget::Playlists { ids } => ids,
-        ActionTarget::QueueItems { keys } => keys,
-        _ => &[],
+        | ActionTarget::Playlists { ids } => ids.iter().map(String::as_str).collect(),
+        ActionTarget::QueueItems { keys } => keys.iter().map(String::as_str).collect(),
+        _ => vec![],
     }
 }
 
 fn single_id(target: &ActionTarget) -> Option<&str> {
     let ids = ids_of(target);
-    (ids.len() == 1).then(|| ids[0].as_str())
+    (ids.len() == 1).then(|| ids[0])
 }
 
 fn context_of(
@@ -833,15 +833,7 @@ fn context_of(
     })
 }
 
-/// Track ids a target stands for (resolving queue keys and containers).
-/// The bare ids of [`track_refs_of`], for commands that name tracks by id.
-fn track_ids_of(target: &ActionTarget, state: &StateView, resolver: &dyn Resolver) -> Vec<TrackId> {
-    track_refs_of(target, state, resolver)
-        .into_iter()
-        .map(|t| t.id)
-        .collect()
-}
-
+/// The songs a target stands for (resolving queue keys and containers).
 fn track_refs_of(
     target: &ActionTarget,
     state: &StateView,
@@ -853,10 +845,7 @@ fn track_refs_of(
         resolver.context_tracks(&source, &kind)
     };
     match target {
-        ActionTarget::Tracks { ids } => ids
-            .iter()
-            .map(|id| resolver.track_ref(id, &server))
-            .collect(),
+        ActionTarget::Tracks { tracks } => tracks.clone(),
         ActionTarget::QueueItems { keys } => keys
             .iter()
             .filter_map(|k| resolver.track_for_key(k))
@@ -888,18 +877,6 @@ fn track_refs_of(
     }
 }
 
-/// Consecutive runs of one source: the queue commands name one account each.
-fn by_source(refs: Vec<TrackRef>) -> Vec<(SourceId, Vec<TrackId>)> {
-    let mut out: Vec<(SourceId, Vec<TrackId>)> = vec![];
-    for t in refs {
-        match out.last_mut() {
-            Some((s, ids)) if *s == t.source => ids.push(t.id),
-            _ => out.push((t.source, vec![t.id])),
-        }
-    }
-    out
-}
-
 fn rating_targets(
     target: &ActionTarget,
     state: &StateView,
@@ -910,9 +887,12 @@ fn rating_targets(
             .iter()
             .map(|id| RatingTarget::Album { id: id.clone() })
             .collect(),
-        _ => track_ids_of(target, state, resolver)
+        _ => track_refs_of(target, state, resolver)
             .into_iter()
-            .map(|id| RatingTarget::Track { id })
+            .map(|t| RatingTarget::Track {
+                id: t.id,
+                source: t.source,
+            })
             .collect(),
     }
 }
@@ -931,9 +911,9 @@ fn pin_targets(
             .iter()
             .map(|id| PinTarget::Playlist { id: id.clone() })
             .collect(),
-        _ => track_ids_of(target, state, resolver)
+        _ => track_refs_of(target, state, resolver)
             .into_iter()
-            .map(|id| PinTarget::Track { id })
+            .map(|t| PinTarget::Track { id: t.id })
             .collect(),
     }
 }
@@ -971,29 +951,17 @@ fn play_commands(
                     },
                 }];
             }
-            let runs = by_source(track_refs_of(target, state, resolver));
-            let mut out = vec![];
-            for (i, (server_id, track_ids)) in runs.into_iter().enumerate() {
-                // A selection across accounts: the first account's run
-                // starts the queue, the rest follow it.
-                out.push(if i == 0 {
-                    Command::PlayTracks {
-                        server_id,
-                        track_ids,
-                        start_index: 0,
-                        label: "Selection".into(),
-                        shuffle,
-                        start_position_ms: 0,
-                    }
-                } else {
-                    Command::PlayLater {
-                        server_id,
-                        track_ids,
-                        keys: vec![],
-                    }
-                });
+            let tracks = track_refs_of(target, state, resolver);
+            if tracks.is_empty() {
+                return vec![];
             }
-            out
+            vec![Command::PlayTracks {
+                tracks,
+                start_index: 0,
+                label: "Selection".into(),
+                shuffle,
+                start_position_ms: 0,
+            }]
         }
     }
 }
@@ -1008,39 +976,18 @@ pub(crate) fn queue_commands(
     placement: crate::session::QueuePlacement,
 ) -> Vec<Command> {
     use crate::session::QueuePlacement;
-    let server_id = state.server_id.clone().unwrap_or_default();
-    let mut runs = match target {
-        ActionTarget::QueueItems { keys } => vec![(server_id, vec![], keys.clone())],
-        _ => by_source(track_refs_of(target, state, resolver))
-            .into_iter()
-            .map(|(s, ids)| (s, ids, vec![]))
-            .collect(),
+    let (tracks, keys) = match target {
+        ActionTarget::QueueItems { keys } => (vec![], keys.clone()),
+        _ => (track_refs_of(target, state, resolver), vec![]),
     };
-    runs.retain(|(_, ids, keys)| !ids.is_empty() || !keys.is_empty());
-    // Each "play next" lands directly after the current entry: in reverse,
-    // the runs keep their order.
-    if matches!(placement, QueuePlacement::Next) {
-        runs.reverse();
+    if tracks.is_empty() && keys.is_empty() {
+        return vec![];
     }
-    runs.into_iter()
-        .map(|(server_id, track_ids, keys)| match placement {
-            QueuePlacement::Next => Command::PlayNext {
-                server_id,
-                track_ids,
-                keys,
-            },
-            QueuePlacement::Group => Command::AddToQueue {
-                server_id,
-                track_ids,
-                keys,
-            },
-            QueuePlacement::Later => Command::PlayLater {
-                server_id,
-                track_ids,
-                keys,
-            },
-        })
-        .collect()
+    vec![match placement {
+        QueuePlacement::Next => Command::PlayNext { tracks, keys },
+        QueuePlacement::Group => Command::AddToQueue { tracks, keys },
+        QueuePlacement::Later => Command::PlayLater { tracks, keys },
+    }]
 }
 
 #[cfg(test)]

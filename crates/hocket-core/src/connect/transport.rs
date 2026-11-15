@@ -432,6 +432,7 @@ mod tests {
             added: i % 4 == 2,
             queued: false,
             ordinal: i as u32,
+            alts: vec![],
         };
         let list: Vec<QueueItem> = (0..MAX_QUEUE_LEN).map(item).collect();
         let context = |label: &str, tracks: Vec<String>| QueueContext {

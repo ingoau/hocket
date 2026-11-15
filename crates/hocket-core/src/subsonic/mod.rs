@@ -191,6 +191,12 @@ pub trait SubsonicApi: Send + Sync + 'static {
     fn username(&self) -> Option<String>;
     /// Last probed capabilities (empty default before a probe).
     fn capabilities(&self) -> api::ServerCapabilities;
+    /// What the provider can do, overriding Navidrome's: a fake server
+    /// standing in for another kind of provider in tests (one that can't
+    /// keep stars, say). `None` for a real server.
+    fn feature_overrides(&self) -> Option<api::ProviderCapabilities> {
+        None
+    }
 
     fn ping(&self) -> ApiFuture<'_, SubsonicResponse>;
     fn open_subsonic_extensions(&self) -> ApiFuture<'_, Vec<OpenSubsonicExtension>>;

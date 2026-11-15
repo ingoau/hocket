@@ -242,6 +242,7 @@ mod tests {
             added: false,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         });
         d
     }

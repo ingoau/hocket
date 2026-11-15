@@ -753,6 +753,7 @@ impl Actor {
             } => self.on_analysis_done(server_id, track_id, result),
             Internal::SkipOffline { key } => self.on_skip_offline(key),
             Internal::ClearOfflineSkips => self.clear_offline_skips(),
+            Internal::OfferAlternates => self.offer_alternates(),
             Internal::RetryOfflineClear => self.run_offline_clear(false),
             Internal::PrimeDone { generation } => self.on_prime_done(generation),
             Internal::ReportUpload(msg) => self.on_report_upload(msg),

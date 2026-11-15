@@ -57,7 +57,12 @@ pub async fn read_from(
 }
 
 pub async fn offline(t: &TestCore, id: &str) -> OfflineState {
-    match t.query(Query::Track { id: id.into() }).await {
+    match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), id),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => tr.offline,
         other => panic!("no track {id}: {other:?}"),
     }

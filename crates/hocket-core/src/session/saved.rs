@@ -387,6 +387,7 @@ mod tests {
             added: false,
             queued: false,
             ordinal: index,
+            alts: vec![],
         }
     }
 

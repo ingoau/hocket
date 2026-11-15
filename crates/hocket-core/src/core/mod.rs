@@ -205,6 +205,9 @@ pub enum Internal {
     /// Clear offline skip marks if online (posted when this device takes
     /// transport, so it never runs inside the lease reaction).
     ClearOfflineSkips,
+    /// Record other copies of queue items' songs on the document (posted
+    /// after a document change, so it never runs inside that reaction).
+    OfferAlternates,
     /// Run a refused offline-skip clear once more (see `CacheState::offline_clear_sent`).
     RetryOfflineClear,
     /// An album-primer fetch ended.

@@ -30,6 +30,7 @@ mod identity_tests;
 mod library_records_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
 mod snooze_tests;
 #[cfg(test)]
 mod stash_tests;

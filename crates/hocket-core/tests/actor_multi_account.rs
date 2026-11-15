@@ -112,8 +112,7 @@ async fn two_accounts_share_one_library_and_one_mixed_queue() {
 
     // A mixed queue: A's t0 and t1, then B's t0 and b1.
     t.run(Command::PlayTracks {
-        server_id: A.into(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(A, ["t0", "t1"]),
         start_index: 0,
         label: "Mixed".into(),
         shuffle: false,
@@ -121,16 +120,14 @@ async fn two_accounts_share_one_library_and_one_mixed_queue() {
     })
     .await;
     t.run(Command::PlayLater {
-        server_id: B.into(),
-        track_ids: vec!["t0".into(), "b1".into()],
+        tracks: TrackRef::list(B, ["t0", "b1"]),
         keys: vec![],
     })
     .await;
     // A list named by the session's account with another account's song
     // in it: the song is the account's that has it.
     t.run(Command::PlayLater {
-        server_id: A.into(),
-        track_ids: vec!["b3".into()],
+        tracks: TrackRef::list(A, ["b3"]),
         keys: vec![],
     })
     .await;
@@ -232,12 +229,18 @@ async fn downloads_and_the_outbox_go_to_each_tracks_account() {
     // waits in the outbox.
     t.server.set_offline(true);
     t.run(Command::SetLoved {
-        targets: vec![RatingTarget::Track { id: "b2".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "b2".into(),
+            source: String::new(),
+        }],
         loved: true,
     })
     .await;
     t.run(Command::SetLoved {
-        targets: vec![RatingTarget::Track { id: "t1".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t1".into(),
+            source: String::new(),
+        }],
         loved: true,
     })
     .await;
