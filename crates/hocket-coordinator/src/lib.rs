@@ -256,6 +256,8 @@ impl Args {
 /// A live room and the sockets attached to it.
 struct RoomState {
     room: Room,
+    /// Taken out of the map: a sender that raced its closing must look again.
+    closed: bool,
     /// Outgoing frame channel per socket.
     senders: HashMap<PeerId, mpsc::UnboundedSender<Message>>,
     /// Something worth persisting happened since the last save.
@@ -388,7 +390,10 @@ impl SaveSlot {
 /// Process-wide state shared by every connection.
 pub struct App {
     args: Args,
-    rooms: Mutex<HashMap<String, RoomState>>,
+    /// Open rooms. The map lock is only held to find or insert a room;
+    /// each room has its own lock, so one busy room (a big identity merge)
+    /// never stalls the others. Lock order: a room, then the map.
+    rooms: Mutex<HashMap<String, Arc<Mutex<RoomState>>>>,
     store: Arc<dyn ReplicaStore>,
     peer_seq: AtomicU64,
     connections: AtomicU64,
@@ -847,22 +852,45 @@ impl App {
     /// room hears about it, so nothing it sends is lost. Loads the replica
     /// (if any) off the lock.
     async fn attach_sender(&self, scope: &str, peer: &PeerId, tx: mpsc::UnboundedSender<Message>) {
-        let restored = if self.rooms.lock().contains_key(scope) {
-            None
-        } else {
+        loop {
+            if let Some(room) = self.room(scope) {
+                let mut state = room.lock();
+                if !state.closed {
+                    state.senders.insert(peer.clone(), tx);
+                    return;
+                }
+                // It closed under us: open it again (from disk).
+                drop(state);
+                let mut rooms = self.rooms.lock();
+                if rooms.get(scope).is_some_and(|r| Arc::ptr_eq(r, &room)) {
+                    rooms.remove(scope);
+                }
+                continue;
+            }
             let store = self.store.clone();
             let s = scope.to_string();
-            Some(
-                tokio::task::spawn_blocking(move || store.load(&s))
-                    .await
-                    .unwrap_or_else(|e| Err(ReplicaError::Io(e.into()))),
-            )
-        };
-        let mut rooms = self.rooms.lock();
-        let state = rooms
-            .entry(scope.to_string())
-            .or_insert_with(|| self.open_room(scope, restored));
-        state.senders.insert(peer.clone(), tx);
+            let restored = tokio::task::spawn_blocking(move || store.load(&s))
+                .await
+                .unwrap_or_else(|e| Err(ReplicaError::Io(e.into())));
+            // Opened off the map lock; another socket may have won the race.
+            let fresh = Arc::new(Mutex::new(self.open_room(scope, Some(restored))));
+            let room = self
+                .rooms
+                .lock()
+                .entry(scope.to_string())
+                .or_insert(fresh)
+                .clone();
+            let mut state = room.lock();
+            if !state.closed {
+                state.senders.insert(peer.clone(), tx);
+                return;
+            }
+        }
+    }
+
+    /// The open room for `scope`, if any (the map lock is released on return).
+    fn room(&self, scope: &str) -> Option<Arc<Mutex<RoomState>>> {
+        self.rooms.lock().get(scope).cloned()
     }
 
     fn open_room(
@@ -892,6 +920,7 @@ impl App {
         }
         RoomState {
             room,
+            closed: false,
             senders: HashMap::new(),
             dirty: false,
             touched: false,
@@ -910,10 +939,13 @@ impl App {
         let mut to_save: Option<ReplicaState> = None;
         let mut identity_changed = None;
         {
-            let mut rooms = self.rooms.lock();
-            let Some(state) = rooms.get_mut(scope) else {
+            let Some(room) = self.room(scope) else {
                 return;
             };
+            let mut state = room.lock();
+            if state.closed {
+                return;
+            }
             let outs = state.room.handle(input);
             for o in outs {
                 match o {
@@ -961,7 +993,11 @@ impl App {
                 if state.take_save_due(now, true) {
                     to_save = Some(state.room.replica().clone());
                 }
-                rooms.remove(scope);
+                state.closed = true;
+                let mut rooms = self.rooms.lock();
+                if rooms.get(scope).is_some_and(|r| Arc::ptr_eq(r, &room)) {
+                    rooms.remove(scope);
+                }
                 debug!(scope, "room closed");
             } else if state.take_save_due(now, false) {
                 to_save = Some(state.room.replica().clone());
@@ -1013,20 +1049,26 @@ impl App {
     /// Persist every open room's replica (shutdown). Synchronous: the
     /// process is on its way out.
     pub fn flush_all(&self) {
-        let snapshots: Vec<(String, ReplicaState)> = {
-            let mut rooms = self.rooms.lock();
-            let now = Instant::now();
-            rooms
-                .iter_mut()
-                .filter(|(_, s)| s.room.ever_admitted())
-                .map(|(scope, s)| {
-                    s.dirty = false;
-                    s.touched = false;
-                    s.last_saved = now;
-                    (scope.clone(), s.room.replica().clone())
-                })
-                .collect()
-        };
+        let rooms: Vec<(String, Arc<Mutex<RoomState>>)> = self
+            .rooms
+            .lock()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let now = Instant::now();
+        let snapshots: Vec<(String, ReplicaState)> = rooms
+            .into_iter()
+            .filter_map(|(scope, room)| {
+                let mut s = room.lock();
+                if !s.room.ever_admitted() {
+                    return None;
+                }
+                s.dirty = false;
+                s.touched = false;
+                s.last_saved = now;
+                Some((scope, s.room.replica().clone()))
+            })
+            .collect();
         for (scope, replica) in snapshots {
             let slot = self.save_slot(&scope);
             let generation = slot.begin();
@@ -1040,19 +1082,13 @@ impl App {
 
     /// Whether a device is currently a member of the scope's room.
     pub fn has_member(&self, scope: &str, device_id: &str) -> bool {
-        self.rooms
-            .lock()
-            .get(scope)
-            .map(|r| r.room.has_member(device_id))
-            .unwrap_or(false)
+        self.room(scope)
+            .is_some_and(|r| r.lock().room.has_member(device_id))
     }
 
     /// The scope's current transport lease owner, if the room is open.
     pub fn live_owner(&self, scope: &str) -> Option<String> {
-        self.rooms
-            .lock()
-            .get(scope)
-            .and_then(|r| r.room.live_owner())
+        self.room(scope).and_then(|r| r.lock().room.live_owner())
     }
 
     pub fn store(&self) -> &dyn ReplicaStore {
@@ -1342,11 +1378,8 @@ async fn handle_socket(socket: WebSocket, app: Arc<App>) {
         }
         app.drive(&current_scope, RoomInput::Message(peer.clone(), msg));
         if !app
-            .rooms
-            .lock()
-            .get(&current_scope)
-            .map(|r| r.senders.contains_key(&peer))
-            .unwrap_or(false)
+            .room(&current_scope)
+            .is_some_and(|r| r.lock().senders.contains_key(&peer))
         {
             // The room closed us.
             break;
@@ -1534,6 +1567,33 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A room busy with heavy work (its lock held) doesn't stall another.
+    #[tokio::test]
+    async fn a_busy_room_does_not_block_the_others() {
+        let app = App::new(Args::for_tests()).unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        app.attach_sender("busy", &"p1".to_string(), tx.clone())
+            .await;
+        app.attach_sender("other", &"p2".to_string(), tx).await;
+        let busy = app.room("busy").unwrap();
+        let _held = busy.lock();
+        let app2 = app.clone();
+        let done = std::thread::spawn(move || {
+            app2.drive("other", RoomInput::Tick);
+            app2.has_member("other", "x")
+        });
+        let t = Instant::now();
+        while !done.is_finished() {
+            assert!(
+                t.elapsed() < Duration::from_secs(10),
+                "blocked by another room"
+            );
+            std::thread::yield_now();
+        }
+        assert!(!done.join().unwrap());
+        assert_eq!(app.room_count(), 2);
+    }
 
     #[test]
     fn analysis_answers_are_chunked_by_count_and_size() {

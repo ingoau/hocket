@@ -23,7 +23,7 @@
 //!   applied (the 1600-frame AAC priming trimmed), as both platforms play it,
 //!   so they line up with what devices hear.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +54,65 @@ pub const PROVIDER: &str = "ytm";
 pub const SESSION_FILE: &str = "ytm-session.json";
 /// Video ids the queue holds; past it the oldest are dropped.
 pub const QUEUE_MAX: usize = 256;
+/// Failed video ids remembered; past it the oldest are forgotten.
+pub const FAILED_MAX: usize = 4096;
+/// First wait after a failure that may pass (a network error, a refused
+/// stream); doubled per repeat, up to [`RETRY_MAX_MS`].
+pub const RETRY_BASE_MS: u64 = 10 * 60_000;
+pub const RETRY_MAX_MS: u64 = 24 * 3_600_000;
+
+/// Why one analysis failed: worth another try later, or never (the stream
+/// is too large or can't be analysed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Failure {
+    Transient(String),
+    Permanent(String),
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Transient(e) | Failure::Permanent(e) => f.write_str(e),
+        }
+    }
+}
+
+/// Video ids that failed: a bounded map (oldest forgotten first) with a
+/// retry time per id (never, for a permanent failure).
+#[derive(Default)]
+struct Failed {
+    /// id → (retry at, ms or `u64::MAX`; transient failures so far; order).
+    by_id: HashMap<String, (u64, u32, u64)>,
+    seq: u64,
+}
+
+impl Failed {
+    fn blocks(&self, id: &str, now: u64) -> bool {
+        self.by_id.get(id).is_some_and(|(until, _, _)| now < *until)
+    }
+
+    fn note(&mut self, id: &str, failure: &Failure, now: u64) {
+        let tries = self.by_id.get(id).map_or(0, |e| e.1) + 1;
+        let until = match failure {
+            Failure::Permanent(_) => u64::MAX,
+            Failure::Transient(_) => {
+                let wait = RETRY_BASE_MS.saturating_mul(1 << (tries - 1).min(16));
+                now.saturating_add(wait.min(RETRY_MAX_MS))
+            }
+        };
+        self.seq += 1;
+        self.by_id.insert(id.to_string(), (until, tries, self.seq));
+        while self.by_id.len() > FAILED_MAX {
+            let oldest = self
+                .by_id
+                .iter()
+                .min_by_key(|(_, e)| e.2)
+                .map(|(k, _)| k.clone())
+                .expect("not empty");
+            self.by_id.remove(&oldest);
+        }
+    }
+}
 /// The longest stream the worker downloads.
 pub const MAX_BYTES: u64 = 200 << 20;
 
@@ -79,7 +138,7 @@ pub struct YtmAnalysis {
     dir: Option<PathBuf>,
     session: Mutex<Option<Session>>,
     provider: RwLock<Arc<YtmProvider>>,
-    queue: Mutex<(VecDeque<String>, HashSet<String>)>,
+    queue: Mutex<(VecDeque<String>, Failed)>,
     wake: tokio::sync::Notify,
 }
 
@@ -153,6 +212,7 @@ impl YtmAnalysis {
     /// Queue the video ids of these YouTube Music keys (a client missed them).
     pub fn push<'a>(&self, keys: impl IntoIterator<Item = &'a AnalysisKey>) -> usize {
         let mut added = 0;
+        let now = self.clock.now_ms() as u64;
         {
             let mut q = self.queue.lock();
             for k in keys {
@@ -162,7 +222,7 @@ impl YtmAnalysis {
                 let Some(id) = k.fingerprint.split('|').next().filter(|id| video_id_ok(id)) else {
                     continue;
                 };
-                if q.1.contains(id) || q.0.iter().any(|x| x == id) {
+                if q.1.blocks(id, now) || q.0.iter().any(|x| x == id) {
                     continue;
                 }
                 if q.0.len() >= QUEUE_MAX {
@@ -186,8 +246,9 @@ impl YtmAnalysis {
         self.queue.lock().0.pop_front()
     }
 
-    fn mark_failed(&self, id: &str) {
-        self.queue.lock().1.insert(id.to_string());
+    fn mark_failed(&self, id: &str, failure: &Failure) {
+        let now = self.clock.now_ms() as u64;
+        self.queue.lock().1.note(id, failure, now);
     }
 
     /// Sign in with the session in `envelope` (sealed to `secret`'s key), or
@@ -236,6 +297,8 @@ impl YtmAnalysis {
         }
         *self.provider.write() = provider_for(&self.http, &self.clock, &self.js, session.as_ref());
         *self.session.lock() = session;
+        // Another account may stream what this one couldn't.
+        self.queue.lock().1 = Failed::default();
         Ok(())
     }
 
@@ -246,30 +309,35 @@ impl YtmAnalysis {
         store: &AnalysisStore,
         video_id: &str,
         tmp_dir: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Failure> {
+        use Failure::{Permanent, Transient};
         let provider = self.provider.read().clone();
         // Resolved here, for this address: never a device's URL.
         let stream = provider
             .resolve_stream(video_id, &StreamRequest::default())
             .await
-            .map_err(|e| format!("resolve: {e}"))?;
+            .map_err(|e| Transient(format!("resolve: {e}")))?;
         if stream.content_length.is_some_and(|l| l > MAX_BYTES) {
-            return Err("stream too large".into());
+            return Err(Permanent("stream too large".into()));
         }
-        let itag: u32 = stream.variant.parse().map_err(|_| "no itag")?;
-        std::fs::create_dir_all(tmp_dir).map_err(|e| format!("tmp: {e}"))?;
+        let itag: u32 = stream
+            .variant
+            .parse()
+            .map_err(|_| Permanent("no itag".into()))?;
+        std::fs::create_dir_all(tmp_dir).map_err(|e| Transient(format!("tmp: {e}")))?;
         let path = tmp_dir.join(format!("ytm-{video_id}.m4a"));
         let result = async {
             provider
                 .download_to_file(&stream, &path)
                 .await
-                .map_err(|e| format!("download: {e}"))?;
+                .map_err(|e| Transient(format!("download: {e}")))?;
             if analyser.is_none() {
-                *analyser = Some(Analyser::new(1).map_err(|e| format!("analyser: {e}"))?);
+                *analyser =
+                    Some(Analyser::new(1).map_err(|e| Transient(format!("analyser: {e}")))?);
             }
             let a = analyser.as_mut().expect("just set");
             a.analyse_file(&path, AnalysisProducer::Worker)
-                .map_err(|e| format!("analyse: {e}"))
+                .map_err(|e| Permanent(format!("analyse: {e}")))
         }
         .await;
         let _ = std::fs::remove_file(&path);
@@ -289,7 +357,7 @@ impl YtmAnalysis {
                 compact(record),
                 self.clock.now_ms() as u64,
             )
-            .map_err(|e| format!("store: {e}"))?;
+            .map_err(|e| Transient(format!("store: {e}")))?;
         debug!(video = %video_id, itag, "YouTube Music track analysed");
         Ok(())
     }
@@ -311,7 +379,7 @@ impl YtmAnalysis {
                 info!(video = %id, "analysing a YouTube Music track a client asked for");
                 if let Err(e) = self.analyse_one(&mut analyser, &store, &id, &tmp_dir).await {
                     warn!(video = %id, error = %e, "YouTube Music analysis failed");
-                    self.mark_failed(&id);
+                    self.mark_failed(&id, &e);
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(pause) => {}
@@ -328,21 +396,7 @@ impl YtmAnalysis {
 
 /// Write `bytes` readable by this user only.
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    {
-        use std::io::Write;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    std::fs::rename(tmp, path)
+    crate::identities::write_atomic(path, bytes)
 }
 
 /// The worker on its own thread at a lowered priority, as the Navidrome one.
@@ -373,4 +427,60 @@ pub fn spawn(
             };
             rt.block_on(ytm.run(store, tmp_dir, pause, cancel));
         })?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hocket_core::util::FixedClock;
+    use hocket_core::ytm::http::FakeYtmHttp;
+
+    const V: &str = "dQw4w9WgXcQ";
+
+    fn ytm(clock: Arc<FixedClock>) -> YtmAnalysis {
+        YtmAnalysis::open(Arc::new(FakeYtmHttp::new(|_| None)), clock, None)
+    }
+
+    fn key(id: &str) -> AnalysisKey {
+        AnalysisKey::ytm(id, 140)
+    }
+
+    /// A failure that may pass is retried after a backoff that grows; one
+    /// that won't is not; signing in forgets both.
+    #[test]
+    fn failures_back_off_expire_and_clear_on_sign_in() {
+        let clock = Arc::new(FixedClock::new(1_000_000.0));
+        let y = ytm(clock.clone());
+        assert_eq!(y.push([&key(V)]), 1);
+        assert_eq!(y.pop().as_deref(), Some(V));
+        y.mark_failed(V, &Failure::Transient("resolve: 503".into()));
+        assert_eq!(y.push([&key(V)]), 0);
+        clock.advance(RETRY_BASE_MS as f64 + 1.0);
+        assert_eq!(y.push([&key(V)]), 1);
+        assert_eq!(y.pop().as_deref(), Some(V));
+        // Twice: twice the wait.
+        y.mark_failed(V, &Failure::Transient("resolve: 503".into()));
+        clock.advance(RETRY_BASE_MS as f64 + 1.0);
+        assert_eq!(y.push([&key(V)]), 0);
+        clock.advance(RETRY_BASE_MS as f64);
+        assert_eq!(y.push([&key(V)]), 1);
+        assert_eq!(y.pop().as_deref(), Some(V));
+        // Permanent: never again, until a sign-in.
+        y.mark_failed(V, &Failure::Permanent("stream too large".into()));
+        clock.advance(RETRY_MAX_MS as f64 * 10.0);
+        assert_eq!(y.push([&key(V)]), 0);
+        y.set_session(None).unwrap();
+        assert_eq!(y.push([&key(V)]), 1);
+    }
+
+    #[test]
+    fn the_failed_set_is_bounded() {
+        let mut f = Failed::default();
+        for i in 0..FAILED_MAX + 10 {
+            f.note(&format!("v{i}"), &Failure::Permanent("x".into()), 0);
+        }
+        assert_eq!(f.by_id.len(), FAILED_MAX);
+        assert!(!f.blocks("v0", 0));
+        assert!(f.blocks(&format!("v{}", FAILED_MAX + 9), 0));
+    }
 }

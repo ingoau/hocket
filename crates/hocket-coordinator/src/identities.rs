@@ -74,14 +74,33 @@ fn normalise(code: &str) -> String {
         .collect()
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Write `bytes` to `path` atomically, readable by this user only: the
+/// temporary file is created 0600 (never with the umask's permissions, not
+/// even for a moment), and a failure to set them is an error.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes)?;
+    // A leftover could have other permissions; `create_new` won't reuse it.
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&tmp)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    drop(f);
     std::fs::rename(&tmp, path)
 }
 
@@ -399,6 +418,24 @@ mod tests {
 
     fn device() -> Identity {
         Identity::create("dev", "Phone", 1.0)
+    }
+
+    /// The key file is 0600 even when a world-readable leftover temp file
+    /// sits where the new one goes, and whatever the umask.
+    #[cfg(unix)]
+    #[test]
+    fn private_files_are_never_readable_by_others() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("coordinator-key.json");
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, b"old").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o666)).unwrap();
+        write_atomic(&path, b"secret").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read(&path).unwrap(), b"secret");
+        assert!(!tmp.exists());
     }
 
     #[test]
