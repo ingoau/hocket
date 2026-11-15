@@ -1155,6 +1155,14 @@
     <string name="identity_invite_used">Used</string>
     <string name="identity_invite_until">Until %1$s</string>
     <string name="identity_invites_none">No open invites</string>
+    <!-- Settings → Connect's devices → the coordinator's YouTube Music analysis (owner only, docs/providers.md). -->
+    <string name="identity_coord_ytm">YouTube Music analysis</string>
+    <string name="identity_coord_ytm_anon">The coordinator analyses YouTube Music tracks for AutoMix without an account. Sign it in with an account of its own to cover more tracks; this device\'s sign-in stays here.</string>
+    <string name="identity_coord_ytm_signed_in">Signed in as %1$s, with a session of its own.</string>
+    <string name="identity_coord_ytm_sign_in">Sign the coordinator in</string>
+    <string name="identity_coord_ytm_sign_out">Sign it out</string>
+    <string name="identity_coord_ytm_cancelled">Sign-in cancelled: the coordinator is unchanged.</string>
+    <string name="identity_coord_ytm_sign_in_title">Sign the coordinator in to Google</string>
     <string name="account_more_places">More places</string>
     <string name="account_signed_in">%1$s on %2$s</string>
     <!-- Settings → Pebble watch (the Hocket watchapp, docs/pebble.md). -->

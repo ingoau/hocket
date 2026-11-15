@@ -1,6 +1,9 @@
 package app.hocket.ui.screens.settings
 
+import android.app.Activity
 import android.text.format.DateUtils
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -27,6 +30,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
+import app.hocket.YtmSignInActivity
 import app.hocket.core.api.Command
 import app.hocket.core.api.CommandClaimCoordinatorInner
 import app.hocket.core.api.CommandRedeemCoordinatorInviteInner
@@ -42,7 +46,7 @@ import app.hocket.ui.screens.setup.PairingLinks
  * Settings → Connect's devices: the identity's devices (when each last synced, and Remove, which
  * says to change passwords), Add a device, credential sync (saying the coordinator holds the key
  * while it's on), and the coordinator: claim it with a `hocket-coordinator pair` code (typed or
- * scanned), join one with an invite, and the owner's invites.
+ * scanned), join one with an invite, and the owner's invites and its YouTube Music analysis sign-in.
  */
 @Composable
 fun ColumnScope.IdentitySettings() {
@@ -95,7 +99,12 @@ private fun ColumnScope.Coordinator() {
     var url by rememberSaveable { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
     val pin = identity.coordinator
-    LaunchedEffect(pin?.owner, pin?.url) { if (pin?.owner == true) client.dispatch(Command.ListCoordinatorInvites) }
+    LaunchedEffect(pin?.owner, pin?.url) {
+        if (pin?.owner == true) {
+            client.dispatch(Command.ListCoordinatorInvites)
+            client.dispatch(Command.CoordinatorYtmStatus)
+        }
+    }
     SettingsSection(stringResource(R.string.identity_coordinator))
     SettingRow(
         when {
@@ -128,5 +137,36 @@ private fun ColumnScope.Coordinator() {
             }))
         }
         OutlinedButton(onClick = { client.dispatch(Command.CreateCoordinatorInvite) }, shapes = ButtonDefaults.shapes(), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("identity.inviteCreate")) { Text(stringResource(R.string.identity_invite_create)) }
+    }
+    CoordinatorYouTubeMusic(owner = pin?.owner == true)
+}
+
+/**
+ * The coordinator's YouTube Music analysis (owner only, when it runs it): signed in as / anonymous,
+ * a refusal, and Sign in, which opens a fresh Google sign-in (a cleared cookie jar, cleared again
+ * after) so the coordinator gets a session of its own, never this device's.
+ */
+@Composable
+private fun ColumnScope.CoordinatorYouTubeMusic(owner: Boolean) {
+    val client = LocalCoreClient.current
+    val context = LocalContext.current
+    val status by client.coordinatorYtm.collectAsStateWithLifecycle()
+    var cancelled by remember { mutableStateOf(false) }
+    val signIn = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val command = CoordinatorYtm.signIn(result.resultCode == Activity.RESULT_OK, result.data?.getStringExtra(YtmSignInActivity.EXTRA_COOKIES))
+        cancelled = command == null
+        command?.let(client::dispatch)
+    }
+    val row = CoordinatorYtm.row(owner, status) ?: return
+    SettingsSection(stringResource(R.string.identity_coord_ytm))
+    SettingRow(
+        if (row.signedIn) stringResource(R.string.identity_coord_ytm_signed_in, row.account.orEmpty()) else stringResource(R.string.identity_coord_ytm_anon),
+        row.error ?: if (cancelled) stringResource(R.string.identity_coord_ytm_cancelled) else null,
+        tag = "identity.coordYtm",
+    )
+    if (row.signedIn) {
+        OutlinedButton(onClick = { cancelled = false; client.dispatch(CoordinatorYtm.signOut) }, shapes = ButtonDefaults.shapes(), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("identity.coordYtmSignOut")) { Text(stringResource(R.string.identity_coord_ytm_sign_out)) }
+    } else {
+        Button(onClick = { cancelled = false; signIn.launch(YtmSignInActivity.forCoordinator(context)) }, shapes = ButtonDefaults.shapes(), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("identity.coordYtmSignIn")) { Text(stringResource(R.string.identity_coord_ytm_sign_in)) }
     }
 }

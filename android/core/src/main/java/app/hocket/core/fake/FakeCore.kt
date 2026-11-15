@@ -391,6 +391,12 @@ class FakeCore(
     private var identity: IdentityInfo = freshIdentity()
     private val coordinatorInvites = mutableListOf<CoordinatorInviteInfo>()
     private fun emitIdentity() = emit(Event.IdentityChanged(EventIdentityChangedInner(identity)))
+    private var coordinatorYtmAccount: String? = null
+
+    private fun emitCoordinatorYtm(error: String? = null) = emit(
+        Event.CoordinatorYtmStatus(EventCoordinatorYtmStatusInner(enabled = true, signed_in = coordinatorYtmAccount != null, account = coordinatorYtmAccount, error = error)),
+    )
+
     private fun emitInvites(created: String? = null) = emit(Event.CoordinatorInvites(EventCoordinatorInvitesInner(coordinatorInvites.toList(), created)))
 
     private fun sessionDocument() = SessionDocument(1u, "fake-session", "$serverId:ada", revision, now(), context, history.toList(), current,
@@ -1215,9 +1221,19 @@ class FakeCore(
             is Command.RevokeCoordinatorInvite -> { coordinatorInvites.removeAll { it.code == c.data.code }; emitInvites() }
             is Command.YtmJsAnswer -> Unit
             Command.ListCoordinatorInvites -> emitInvites()
-            // No coordinator YouTube Music analysis in the fake.
-            is Command.SignCoordinatorInToYoutubeMusic, Command.CoordinatorYtmStatus ->
-                emit(Event.CoordinatorYtmStatus(EventCoordinatorYtmStatusInner(enabled = false, signed_in = false)))
+            // The coordinator's YouTube Music analysis, as an owned coordinator with --analysis-ytm
+            // answers: a session with SAPISID signs it in as "Coordinator Account", anything else is
+            // refused, none signs it out.
+            is Command.SignCoordinatorInToYoutubeMusic -> {
+                val cookies = c.data.cookies
+                when {
+                    identity.coordinator == null -> emit(Event.CoordinatorFailed(EventCoordinatorFailedInner("No coordinator: claim one first.")))
+                    cookies == null -> { coordinatorYtmAccount = null; emitCoordinatorYtm() }
+                    "SAPISID=" in cookies -> { coordinatorYtmAccount = FAKE_COORDINATOR_YTM_ACCOUNT; emitCoordinatorYtm() }
+                    else -> emitCoordinatorYtm(error = "that isn't a signed-in YouTube session")
+                }
+            }
+            Command.CoordinatorYtmStatus -> if (identity.coordinator?.owner == true) emitCoordinatorYtm()
         }
     }
 
@@ -1977,6 +1993,8 @@ class FakeCore(
     }
 
     companion object {
+        /** The account the fake coordinator's YouTube Music analysis is signed in as. */
+        const val FAKE_COORDINATOR_YTM_ACCOUNT = "Coordinator Account"
         /** Rows the queue view carries on each side of the pointer, as the core's `QUEUE_VIEW_BEFORE` / `_AFTER`. */
         const val QUEUE_VIEW_SIDE = 100
         /** The core's protocol constants (`HISTORY_CAP`, `MAX_QUEUE_LEN`; "Limits" in docs/design.md). */

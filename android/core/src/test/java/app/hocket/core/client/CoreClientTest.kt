@@ -113,6 +113,33 @@ class CoreClientTest {
     }
 
     @Test
+    fun theCoordinatorsYouTubeMusicStatusFollowsItsSignInAndOut() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        assertEquals(null, client.coordinatorYtm.value)
+        // Not the owner: nothing to show, nothing answered.
+        client.dispatch(Command.CoordinatorYtmStatus)
+        runCurrent()
+        assertEquals(null, client.coordinatorYtm.value)
+        client.dispatch(Command.ClaimCoordinator(CommandClaimCoordinatorInner("wss://c.example/ws", "CODE")))
+        client.dispatch(Command.CoordinatorYtmStatus)
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = false), client.coordinatorYtm.value)
+        // A fresh session signs it in; a jar without one is refused and changes nothing.
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner("PREF=x")))
+        runCurrent()
+        assertEquals(false, client.coordinatorYtm.value?.signed_in)
+        assertNotNull(client.coordinatorYtm.value?.error)
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner("SID=a; SAPISID=b")))
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = true, account = FakeCore.FAKE_COORDINATOR_YTM_ACCOUNT), client.coordinatorYtm.value)
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner(null)))
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = false), client.coordinatorYtm.value)
+    }
+
+    @Test
     fun networkAndCodedNoticesFollowTheirEvents() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })

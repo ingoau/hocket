@@ -117,6 +117,9 @@ class CoreClient(
     private val _coordinatorInvites = MutableStateFlow<EventCoordinatorInvitesInner?>(null)
     /** The coordinator's invites (owner only), with the code just made. */
     val coordinatorInvites: StateFlow<EventCoordinatorInvitesInner?> = _coordinatorInvites.asStateFlow()
+    private val _coordinatorYtm = MutableStateFlow<EventCoordinatorYtmStatusInner?>(null)
+    /** The coordinator's YouTube Music analysis (owner only), once asked: on, signed in as, a refusal. */
+    val coordinatorYtm: StateFlow<EventCoordinatorYtmStatusInner?> = _coordinatorYtm.asStateFlow()
     private val _identityEvents = MutableSharedFlow<Event>(extraBufferCapacity = 8)
     /**
      * Pairing and coordinator answers as they arrive: `DevicePaired`, `PairingFinished`,
@@ -592,8 +595,7 @@ class CoreClient(
             is Event.IdentityChanged -> _identity.value = event.data.identity
             is Event.PairingInvite -> _pairingInvite.value = event.data
             is Event.CoordinatorInvites -> _coordinatorInvites.value = event.data
-            // The coordinator's YouTube Music sign-in is set up from the desktop app for now.
-            is Event.CoordinatorYtmStatus -> Unit
+            is Event.CoordinatorYtmStatus -> _coordinatorYtm.value = event.data
             is Event.DevicePaired -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
             is Event.PairingFinished, is Event.PairingFailed, is Event.CredentialsSynced,
             is Event.CoordinatorJoined, is Event.CoordinatorFailed -> _identityEvents.tryEmit(event)
