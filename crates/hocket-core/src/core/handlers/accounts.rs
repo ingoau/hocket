@@ -726,7 +726,29 @@ impl Actor {
 
     pub(crate) fn reconcile_playlist_pins(&mut self) {
         let mut changed = false;
-        for sid in self.accounts.ids() {
+        // A Mixed playlist that gained a song from another source: pin it
+        // there too.
+        let mut pinned_mixed: Vec<(PinTarget, bool)> = vec![];
+        for sid in self.accounts.sources() {
+            for pin in self.downloads.pins(&sid).unwrap_or_default() {
+                if matches!(&pin.target, PinTarget::Playlist { id } if self.is_mixed_playlist(id))
+                    && !pinned_mixed.iter().any(|(t, _)| *t == pin.target)
+                {
+                    pinned_mixed.push((pin.target.clone(), pin.transcoded));
+                }
+            }
+        }
+        for (target, transcode) in pinned_mixed {
+            for sid in self.pin_sources(&target) {
+                if let Ok(Some(spec)) = self.downloads.pin(&sid, &target, transcode) {
+                    changed = true;
+                    if let Err(e) = self.jobs.submit(spec) {
+                        self.error(ErrorKind::Storage, "download job", Some(e.to_string()));
+                    }
+                }
+            }
+        }
+        for sid in self.accounts.sources() {
             let pins = self.downloads.pins(&sid).unwrap_or_default();
             for pin in pins {
                 if let PinTarget::Playlist { id } = &pin.target {

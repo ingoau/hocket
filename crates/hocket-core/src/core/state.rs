@@ -146,6 +146,18 @@ impl AccountRegistry {
     pub fn ids(&self) -> Vec<AccountId> {
         self.accounts.iter().map(|a| a.info.id.clone()).collect()
     }
+
+    /// The accounts' sources (what pins, the mirror and providers are keyed
+    /// by), each once.
+    pub fn sources(&self) -> Vec<SourceId> {
+        let mut out: Vec<SourceId> = vec![];
+        for a in &self.accounts {
+            if !out.contains(&a.info.source) {
+                out.push(a.info.source.clone());
+            }
+        }
+        out
+    }
 }
 
 /// What this device's backend has loaded and where it is.

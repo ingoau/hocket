@@ -1179,12 +1179,51 @@ impl Actor {
 
     // -- downloads -----------------------------------------------------------------------
 
-    /// Every account's pins.
+    /// Every account's pins (kept by source: a YouTube Music song's pin is
+    /// the `ytm` source's, whichever account added it).
+    /// A Mixed playlist's per-source pins list as one.
     pub(crate) fn pins(&self) -> Vec<Pin> {
-        self.accounts
-            .ids()
+        let mut out: Vec<Pin> = vec![];
+        for p in self
+            .accounts
+            .sources()
             .iter()
             .flat_map(|sid| self.downloads.pins(sid).unwrap_or_default())
+        {
+            match out.iter_mut().find(|o| o.target == p.target) {
+                Some(o) => {
+                    o.track_count += p.track_count;
+                    o.downloaded_count += p.downloaded_count;
+                    o.bytes += p.bytes;
+                    o.created_at = o.created_at.min(p.created_at);
+                }
+                None => out.push(p),
+            }
+        }
+        out
+    }
+
+    /// The sources a pin of `target` is kept under: its owner's, or for a
+    /// Mixed playlist every source its songs come from (each source's
+    /// songs download through that source's provider).
+    pub(crate) fn pin_sources(&self, target: &PinTarget) -> Vec<String> {
+        if let PinTarget::Playlist { id } = target {
+            if self.is_mixed_playlist(id) {
+                let mut out: Vec<String> = vec![];
+                for t in crate::library::playlist(&self.library_records, id)
+                    .map(|p| p.tracks)
+                    .unwrap_or_default()
+                {
+                    if !out.contains(&t.source) && self.accounts.for_source(&t.source).is_some() {
+                        out.push(t.source);
+                    }
+                }
+                return out;
+            }
+        }
+        self.pin_owner(target)
+            .or_else(|| self.scope_account())
+            .into_iter()
             .collect()
     }
 
@@ -1224,24 +1263,27 @@ impl Actor {
     }
 
     pub(crate) fn pin(&mut self, target: PinTarget, transcode: bool) {
-        let Some(sid) = self.pin_owner(&target).or_else(|| self.scope_account()) else {
+        let sources = self.pin_sources(&target);
+        if sources.is_empty() {
             self.toast("Add a server first", None);
             return;
-        };
+        }
         let transcode = transcode
             || self
                 .settings
                 .get_bool(crate::settings::keys::DOWNLOADS_TRANSCODE);
-        match self.downloads.pin(&sid, &target, transcode) {
-            Ok(Some(spec)) => {
-                if let Err(e) = self.jobs.submit(spec) {
-                    self.error(ErrorKind::Storage, "download job", Some(e.to_string()));
+        for sid in sources {
+            match self.downloads.pin(&sid, &target, transcode) {
+                Ok(Some(spec)) => {
+                    if let Err(e) = self.jobs.submit(spec) {
+                        self.error(ErrorKind::Storage, "download job", Some(e.to_string()));
+                    }
                 }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                self.toast(format!("Couldn't pin: {e}"), None);
-                return;
+                Ok(None) => {}
+                Err(e) => {
+                    self.toast(format!("Couldn't pin: {e}"), None);
+                    return;
+                }
             }
         }
         let pins = self.pins();
@@ -1254,29 +1296,40 @@ impl Actor {
     }
 
     pub(crate) fn unpin(&mut self, target: PinTarget) {
-        // The account holding the pin (the mirror may have dropped the item).
-        let held = self.accounts.ids().into_iter().find(|sid| {
-            self.downloads
-                .pins(sid)
-                .unwrap_or_default()
-                .iter()
-                .any(|p| p.target == target)
-        });
-        let Some(sid) = held.or_else(|| self.pin_owner(&target)) else {
+        // The sources holding the pin (the mirror may have dropped the item;
+        // a Mixed playlist's is held by each of its songs' sources).
+        let mut held: Vec<String> = self
+            .accounts
+            .sources()
+            .into_iter()
+            .filter(|sid| {
+                self.downloads
+                    .pins(sid)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|p| p.target == target)
+            })
+            .collect();
+        if held.is_empty() {
+            held.extend(self.pin_owner(&target));
+        }
+        let Some(sid) = held.first().cloned() else {
             return;
         };
-        // A paused job would otherwise outlive its pin and keep holding its
-        // tracks from a later pin of the same target.
-        for job in self
-            .downloads
-            .unfinished_jobs(&sid, &target)
-            .unwrap_or_default()
-        {
-            let _ = self.jobs.cancel(&job);
-        }
-        if let Err(e) = self.downloads.unpin(&sid, &target) {
-            self.toast(format!("Couldn't remove download: {e}"), None);
-            return;
+        for sid in &held {
+            // A paused job would otherwise outlive its pin and keep holding
+            // its tracks from a later pin of the same target.
+            for job in self
+                .downloads
+                .unfinished_jobs(sid, &target)
+                .unwrap_or_default()
+            {
+                let _ = self.jobs.cancel(&job);
+            }
+            if let Err(e) = self.downloads.unpin(sid, &target) {
+                self.toast(format!("Couldn't remove download: {e}"), None);
+                return;
+            }
         }
         let pins = self.pins();
         self.emit(Event::PinsChanged { pins });

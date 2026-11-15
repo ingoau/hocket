@@ -1178,6 +1178,17 @@ impl Db {
     /// index into the playlist (what remove and move name). A song the
     /// mirror doesn't have (another account's, one swept, one from the
     /// catalogue) comes from the catalogue, or as a bare entry with its id.
+    /// Track ids of a playlist's songs from `source`, in position order.
+    pub fn playlist_track_ids_on(&self, playlist_id: &str, source: &str) -> DbResult<Vec<String>> {
+        self.with_conn(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 AND COALESCE(track_source, server_id) = ?2 ORDER BY position ASC",
+            )?;
+            let rows = st.query_map([playlist_id, source], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     pub fn playlist_tracks(&self, playlist_id: &str, page: Option<Page>) -> DbResult<Vec<Track>> {
         let sql = format!(
             "SELECT pt.track_id, COALESCE(pt.track_source, pt.server_id), {} FROM playlist_tracks pt LEFT JOIN tracks t ON t.id = pt.track_id AND t.server_id = COALESCE(pt.track_source, pt.server_id) WHERE pt.playlist_id = ?1 ORDER BY pt.position ASC{}",

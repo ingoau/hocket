@@ -736,7 +736,10 @@ impl Downloads {
     }
 
     /// The tracks a target currently resolves to (from the mirror).
-    fn member_ids(&self, target: &PinTarget) -> DbResult<Vec<String>> {
+    /// The songs a pin of `target` under `server_id` downloads: for a
+    /// playlist, those from that source (a Mixed playlist is pinned under
+    /// each source its songs come from).
+    fn member_ids(&self, server_id: &str, target: &PinTarget) -> DbResult<Vec<String>> {
         Ok(match target {
             PinTarget::Track { id } => vec![id.clone()],
             PinTarget::Album { id } => self
@@ -746,14 +749,14 @@ impl Downloads {
                 .into_iter()
                 .map(|t| t.id)
                 .collect(),
-            PinTarget::Playlist { id } => self.inner.db.playlist_track_ids(id)?,
+            PinTarget::Playlist { id } => self.inner.db.playlist_track_ids_on(id, server_id)?,
         })
     }
 
     /// Insert `wanted` rows for members not yet tracked. For album/track pins
     /// the set is fixed at pin time; playlists re-run this on change.
     fn materialise(&self, server_id: &str, target: &PinTarget) -> Result<(), DownloadError> {
-        let members = self.member_ids(target)?;
+        let members = self.member_ids(server_id, target)?;
         let kind = kind_name(target);
         let id = target_id(target);
         self.inner.db.with_tx(|tx| {
@@ -845,7 +848,7 @@ impl Downloads {
         if !self.is_pinned(server_id, &target)? {
             return Ok(None);
         }
-        let members = self.member_ids(&target)?;
+        let members = self.member_ids(server_id, &target)?;
         let tracked: Vec<(String, Option<String>)> = self.inner.db.with_conn(|c| {
             let mut st = c.prepare_cached("SELECT track_id, path FROM pin_tracks WHERE server_id = ?1 AND target_kind = 'playlist' AND target_id = ?2")?;
             let rows = st.query_map(params![server_id, playlist_id], |r| Ok((r.get(0)?, r.get(1)?)))?;

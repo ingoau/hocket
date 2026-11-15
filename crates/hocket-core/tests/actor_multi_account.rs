@@ -286,3 +286,56 @@ async fn reordering_keeps_the_identitys_session() {
         other => panic!("{other:?}"),
     }
 }
+
+/// A Mixed playlist's pin downloads each song from its own account, and
+/// lists as one pin.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mixed_playlist_pin_downloads_each_song_from_its_account() {
+    let (t, b) = two_accounts("multi-dl-mixed").await;
+    t.server.set_media("t1", vec![7u8; 4096]);
+    t.run(Command::CreatePlaylist {
+        account_id: "hocket".into(),
+        name: "Mix".into(),
+        tracks: vec![TrackRef::new(A, "t1"), TrackRef::new(B, "b1")],
+    })
+    .await;
+    let mix = match t
+        .query(Query::Playlists {
+            server_id: String::new(),
+        })
+        .await
+    {
+        QueryResult::Playlists(l) => l.into_iter().find(|p| p.name == "Mix").unwrap(),
+        other => panic!("{other:?}"),
+    };
+    t.run(Command::Pin {
+        target: PinTarget::Playlist { id: mix.id.clone() },
+        transcode: false,
+    })
+    .await;
+    t.wait_until(20_000.0, |t| {
+        t.events.all().iter().any(|e| {
+            matches!(e, Event::PinsChanged { pins } if pins.iter().any(|p| p.downloaded_count == 2))
+        })
+    })
+    .await;
+    assert_eq!(t.server.calls_to("download"), 1);
+    assert_eq!(b.calls_to("download"), 1);
+    match t.query(Query::Pins).await {
+        QueryResult::Pins(pins) => {
+            assert_eq!(pins.len(), 1);
+            assert_eq!(pins[0].target, PinTarget::Playlist { id: mix.id.clone() });
+            assert_eq!((pins[0].track_count, pins[0].downloaded_count), (2, 2));
+        }
+        other => panic!("{other:?}"),
+    }
+    // Unpinned: gone from both.
+    t.run(Command::Unpin {
+        target: PinTarget::Playlist { id: mix.id },
+    })
+    .await;
+    match t.query(Query::Pins).await {
+        QueryResult::Pins(pins) => assert!(pins.is_empty()),
+        other => panic!("{other:?}"),
+    }
+}
