@@ -746,8 +746,9 @@ didn't fit the code.*
 - **On demand, `--analysis-ytm`.** There is no library to walk, so the coordinator analyses only the
   YouTube Music tracks clients asked for and missed (`AnalysisKey::ytm(videoId, 140)`, queued by
   video id, bounded, one at a time on a niced thread). It resolves every URL itself through the
-  same client chain (visionOS first) and never takes one from a device: a request carries only the
-  video id. Records are keyed `(videoId, 140)`, which is what devices ask for.
+  same client chain and never takes one from a device: a request carries only the video id, and
+  googlevideo URLs are bound to the address that resolved them. Records are keyed `(videoId, 140)`,
+  which is what devices ask for; a Premium session's 141 is never analysed, so the keys match.
 - **Priming.** The coordinator decodes with the same decoder as the desktop, which applies the MP4
   edit list (the 1600-frame AAC priming trimmed), and Media3 trims it on Android, so the correction
   is 0 everywhere and the records line up. The record's source fingerprint is the duration only
@@ -759,15 +760,55 @@ didn't fit the code.*
   against the account menu, keeps it in `<data-dir>/ytm-session.json` (0600) and answers
   `Msg::CoordYtmStatus` (`Event::CoordinatorYtmStatus`). The desktop's coordinator settings have
   the button; it opens a fresh Google sign-in (the cleared sign-in window), so the coordinator gets
-  a session of its own, never the device's. Android only handles the event (no button yet).
-- **Deviation: the sign-in doesn't reach the streams yet.** The player clients that need no JS never
-  send a session (Phase 4), and the coordinator has no JS host, so a signed-in coordinator still
-  resolves streams anonymously: uploads and region-blocked tracks stay out of reach. The session is
-  in place for when a JS-capable path exists on the server.
+  a session of its own, never the device's. Android has it too, in Settings → Connect's devices
+  (owner only, shown when the coordinator runs `--analysis-ytm`): `YtmSignInActivity` opened for the
+  coordinator starts from a cleared cookie jar and clears it again once the session is captured, so
+  the coordinator's cookies don't stay in the device's WebView; Sign out sends `None`.
+- **Streams with its account: the TV app.** A signed-in coordinator resolves through `TVHTML5` first
+  (`ytm::clients::TV`, posing as yt-dlp's `tv_samsung`: 5.x, a Samsung Tizen user agent), with the
+  session: the cookies, `Authorization: SAPISIDHASH …` (plus the `SAPISID1PHASH`/`SAPISID3PHASH`
+  forms when the jar has the `__Secure-` cookies, as yt-dlp sends) and `X-Origin`, and the visitor
+  data. Why that client, from yt-dlp's client matrix (master, Nov 2026): `tv_samsung` is first in
+  both its signed-in and Premium defaults; the TV clients accept cookies and have no GVS PO token
+  policy, so their googlevideo URLs stream without one; the web clients (`web`, `web_music`, `mweb`,
+  `web_safari`, `web_embedded`) need a GVS PO token unless the account is Premium, and minting one
+  needs BotGuard in a browser; `tv` 7.x is avoided because some sessions get only DRM formats there
+  (yt-dlp issue 12563); the no-JS clients (visionOS, `android_vr`, iOS) don't take cookies. The TV
+  app's URLs need the player JS, so the coordinator has a JS host of its own (below). When the TV
+  app refuses (login required, not a bot, no AAC, a 403 from googlevideo) the chain carries on
+  anonymously (visionOS, `android_vr`, iOS), never sending the session there; anonymous, the TV
+  app is the chain's last resort. The platforms' chains are unchanged: a `JsHost` names the JS
+  clients it serves (`JsHost::clients`), the hidden pages the web client, the coordinator the TV app.
+- **The embedded solver.** `hocket-coordinator::ytm_js` runs the same vendored EJS (`jsc`) as the
+  platforms in QuickJS (`rquickjs` 0.14, quickjs-ng; a coordinator-only dependency, so the core
+  and the apps don't carry it). It fetches `iframe_api` for the player id and the main player
+  (`player_ias.vflset/en_US/base.js`, whose `signatureTimestamp` goes into the `player` call), and
+  solves `sig` and `n` per format; the first solve parses the player and keeps EJS's preprocessed
+  form for the next ones (live, that first solve took 11.6 s in a release build). Each
+  solve runs in a fresh runtime on its own thread with a 1 GiB heap cap and a 2-minute deadline.
+  Not done server-side: PO tokens (no BotGuard), so the web client isn't offered on the coordinator
+  and Premium's 141 isn't reached (not needed: the key is 140). Size: the stripped release binary
+  grows by 1.4 MiB (34.6 → 36.1 MB, QuickJS and the 158 KB solver script); the Docker image
+  (`crates/hocket-coordinator/Dockerfile`, unchanged: the build stage already has a C compiler)
+  builds and is 120 MB.
+- **Live check** (`HOCKET_LIVE_YTM=1 HOCKET_YTM_FORCE_WEB=1 cargo test --release -p
+  hocket-coordinator --test ytm_live -- --ignored --nocapture`; the force switch leaves only the
+  JS host's clients, here the TV app), 16 Nov 2026 from the dev host, anonymous: player `fad7e4e9`
+  (signature timestamp 20767) fetched and solved in QuickJS, the TV app's 140 URL resolved and
+  fetched in two bounded ranges (1 MiB, then the rest, 206 both), analysed (369 s, 116.1 BPM).
+  The signed-in TV path has not run live: nobody could sign in to Google from the dev host.
 - **Tests.** `hocket-coordinator/tests/ytm_analysis.rs` (miss → queue by video id; the worker's own
-  player call and ranged download from a fake googlevideo; owner-only, sealed sign-in, refusal of a
-  wrong key, persistence and sign-out; off without the flag) and
+  player call and ranged download from a fake googlevideo; signed in, the worker's TV call with the
+  session and its URL signed and `n`-transformed by the embedded EJS, and the fallback to visionOS
+  when the TV app refuses; owner-only, sealed sign-in, refusal of a wrong key, persistence and
+  sign-out; off without the flag), `tests/ytm_js.rs` (EJS in QuickJS through `JsHost` against a
+  synthetic preprocessed player; solver failures are errors), the core's chain tests
+  (`a_signed_in_session_streams_through_the_tv_app_with_its_cookies`,
+  `a_refused_session_falls_back_to_the_anonymous_chain`), and
   `actor_automix_share::the_owner_signs_the_coordinator_in_to_youtube_music_with_a_sealed_session`.
-- **Needs a person:** the coordinator analysing real YouTube Music tracks on the deployed server
-  (and whether Google flags a session used from a datacenter address), and the desktop button
-  against a real coordinator.
+  Android: `CoordinatorYtmTest` (owner-only row, the commands) and
+  `CoreClientTest.theCoordinatorsYouTubeMusicStatusFollowsItsSignInAndOut` (through FakeCore).
+- **Needs a person:** signing the coordinator in (desktop or Android button) against a real
+  coordinator and checking it analyses an upload or an account-only track through the TV app;
+  the coordinator on the deployed server (and whether Google flags a session, or the TV client,
+  used from a datacenter address); the Android button on a device.
