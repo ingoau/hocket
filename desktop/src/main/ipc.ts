@@ -292,7 +292,7 @@ export function installIpc(deps: IpcDeps): void {
     const parent = BrowserWindow.fromWebContents(e.sender) ?? undefined;
     const cookies = await signInToYouTubeMusic(parent);
     if (!cookies) return "cancelled";
-    dispatch({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies, js_host: false } } } });
+    dispatch({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies, js_host: true } } } });
     return "signedIn";
   });
 

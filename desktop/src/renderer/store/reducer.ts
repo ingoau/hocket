@@ -308,8 +308,8 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, roomDiagnostics: e.data.status };
     case "reportUploadChanged":
       return { ...state, reportUpload: e.data.status };
-    // ytmJsRequest: the JS host (YouTube Music's web player puzzles) isn't offered (`js_host:
-    // false`). ytmSignInExpired: the core toasts it itself.
+    // ytmJsRequest: main answers it (a hidden window: ytm-js-host.ts). ytmSignInExpired: the
+    // core toasts it itself.
     case "backend":
     case "diagnosticsRequested": // main answers it
     case "ytmJsRequest":

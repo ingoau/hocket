@@ -25,6 +25,7 @@ import { StoreFile } from "./store-file";
 import { AppTray, appIcon } from "./tray";
 import { installUpdater } from "./updater";
 import { Windows } from "./windows";
+import { openHiddenPage, YtmJsHost } from "./ytm-js-host";
 
 // Chromium must not grab the media keys or publish its own media session:
 // audio comes out of Rust and the OS session is playwire's (design.md).
@@ -221,7 +222,21 @@ async function main(): Promise<void> {
   ]);
   // Position reports (~1 Hz while playing) stay here: every window extrapolates from the stamp it has.
   const ticks = new PositionTickFilter();
+  // YouTube Music's web client puzzles (signature, n, PO token) in a hidden window.
+  const ytmJs = new YtmJsHost(
+    openHiddenPage,
+    async () => {
+      const r = await core.query({ type: "ytmJsHostScript" });
+      if (r.type !== "text") throw new Error("the core has no JS host script");
+      return r.data;
+    },
+    (c) => core.dispatch(c),
+  );
   core.onEvent((event: Event) => {
+    if (event.type === "ytmJsRequest") {
+      void ytmJs.handle(event.data.request_id, event.data.request);
+      return;
+    }
     if (event.type !== "mediaSession" && event.type !== "backend" && event.type !== "log" && event.type !== "diagnosticsRequested" && ticks.pass(event)) {
       for (const w of windows.all()) {
         if (w.isDestroyed()) continue;
@@ -343,6 +358,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     windows.quitting = true;
+    ytmJs.close();
     mediaSession.dispose();
     tray.destroy();
     void core

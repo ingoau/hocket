@@ -41,11 +41,11 @@ describe("ServerCredentialStore", () => {
 
   it("keeps this device's YouTube Music sign-in under one key and replays it", async () => {
     const store = await open(dir);
-    store.intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SAPISID=abc; SID=x", js_host: false } } } });
+    store.intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SAPISID=abc; SID=x", js_host: true } } } });
     await vi.waitFor(() => expect(existsSync(join(dir, "credentials.json"))).toBe(true));
     expect(onDisk(dir)[0]!.blob).toBe(b64("enc:SAPISID=abc; SID=x"));
     const again = await open(dir);
-    expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SAPISID=abc; SID=x", js_host: false } } } }]);
+    expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SAPISID=abc; SID=x", js_host: true } } } }]);
     // Kept while any YouTube Music account is installed (its id is a channel id), dropped after.
     again.retainOnly([{ id: "UCme", kind: "youtubeMusic" }]);
     expect(again.replayCommands()).toHaveLength(1);
@@ -53,8 +53,8 @@ describe("ServerCredentialStore", () => {
     again.retainOnly([]);
     expect(again.replayCommands()).toEqual([]);
     // Anonymous: replayed without cookies.
-    again.intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: false } } } });
-    await vi.waitFor(() => expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: false } } } }]));
+    again.intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: true } } } });
+    await vi.waitFor(() => expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: true } } } }]));
   });
 
   it("treats the Linux basic_text backend as no encryption at all", async () => {

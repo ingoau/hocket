@@ -203,7 +203,7 @@ export class ServerCredentialStore {
   replayCommands(): Command[] {
     return [...this.known.values()].map((e): Command =>
       e.kind === "ytm"
-        ? { type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: e.password || undefined, js_host: false } } } }
+        ? { type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: e.password || undefined, js_host: true } } } }
         : { type: "addAccount", data: { setup: { type: "navidrome", data: { url: e.url, username: e.username, password: e.password, name: e.name } } } },
     );
   }

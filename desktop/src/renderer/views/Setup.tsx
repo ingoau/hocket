@@ -169,7 +169,7 @@ function YtmCard() {
   const anonymous = () => {
     setBusy("anon");
     setSummary(true);
-    bridge().dispatch({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: false } } } });
+    bridge().dispatch({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: true } } } });
   };
   return (
     <section className="setup-card" aria-labelledby="setup-ytm-title" data-testid="setup-ytm">

@@ -3119,6 +3119,9 @@ export class FakeCore implements CoreHandle {
         return { type: "albumResumeState", data: this.albumResumes.find((x) => x.albumId === q.data.id) };
       case "identity":
         return { type: "identity", data: this.identity };
+      case "ytmJsHostScript":
+        // The fake never sends ytmJsRequest.
+        return { type: "text", data: "" };
       default: {
         const never: never = q;
         void never;
