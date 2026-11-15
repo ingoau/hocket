@@ -421,11 +421,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
     val client = LocalCoreClient.current
     val nowPlaying = client.nowPlaying.collectAsStateWithLifecycle()
     val playerVisible by remember { derivedStateOf { nowPlaying.value != null } }
-    // Another device's setup code opened while this one is signed in: setup is where it applies.
-    val alreadySetUp = stringResource(R.string.setup_device_already_set_up)
-    LaunchedEffect(Unit) {
-        app.hocket.AppLinks.setup.collect { link -> if (link != null) { app.hocket.AppLinks.consume(link); snackbar.showSnackbar(alreadySetUp) } }
-    }
+    // Another device's pairing link or a coordinator claim, opened while this one is set up: asked first.
+    IdentityLinkPrompts(snackbar)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // The phone's bar: the compact floating pill, or the standard full-width bar.
         val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR).bool ?: true
@@ -842,7 +839,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             }
             if (editorOpen) BottomBarEditorSheet(onDismiss = { editorOpen = false })
             if (devicesOpen) app.hocket.ui.player.HandoffSheet(onDismiss = { devicesOpen = false })
-            if (setUpDeviceOpen) SetupDeviceSheet(onDismiss = { setUpDeviceOpen = false })
+            if (setUpDeviceOpen) PairDeviceSheet(onDismiss = { setUpDeviceOpen = false })
             }
         }
     }

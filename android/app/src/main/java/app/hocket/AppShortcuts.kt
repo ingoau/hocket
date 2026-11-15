@@ -116,11 +116,19 @@ object AppLinks {
 
     fun consume(link: SearchLink) { _search.compareAndSet(link, null) }
 
-    private val _setup = MutableStateFlow<app.hocket.ui.screens.setup.SetupLink?>(null)
-    /** Another device's setup link (hocket://setup), until setup applies it or the shell turns it away. */
-    val setup: StateFlow<app.hocket.ui.screens.setup.SetupLink?> = _setup.asStateFlow()
+    private val _pair = MutableStateFlow<String?>(null)
+    /** Another device's pairing link (hocket://pair), until setup pairs with it or the shell asks first. */
+    val pair: StateFlow<String?> = _pair.asStateFlow()
 
-    fun openSetup(link: app.hocket.ui.screens.setup.SetupLink) { _setup.value = link }
+    fun openPair(link: String) { _pair.value = link }
 
-    fun consume(link: app.hocket.ui.screens.setup.SetupLink) { _setup.compareAndSet(link, null) }
+    fun consumePair(link: String) { _pair.compareAndSet(link, null) }
+
+    private val _claim = MutableStateFlow<Pair<String, String>?>(null)
+    /** A coordinator claim link (hocket://claim), until the shell asks to claim it. */
+    val claim: StateFlow<Pair<String, String>?> = _claim.asStateFlow()
+
+    fun openClaim(link: Pair<String, String>) { _claim.value = link }
+
+    fun consumeClaim(link: Pair<String, String>) { _claim.compareAndSet(link, null) }
 }

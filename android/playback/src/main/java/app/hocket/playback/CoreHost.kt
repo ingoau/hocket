@@ -226,6 +226,12 @@ object CoreHost {
                     if (replayed) store.retainOnly(servers.map { it.url.trimEnd('/') to it.username })
                     refreshLogins(store)
                 }
+                // Credential sync brought passwords (the core already added the accounts): keep them
+                // as if typed here.
+                is Event.CredentialsSynced -> {
+                    event.data.credentials.forEach { c -> store.save(ServerCredential(c.url.trimEnd('/'), c.username, c.password, null)) }
+                    refreshLogins(store)
+                }
                 is Event.Error -> if (event.data.kind == ErrorKind.Auth) {
                     if (pendingLogin != null) {
                         pendingLogin = null // refused: never saved

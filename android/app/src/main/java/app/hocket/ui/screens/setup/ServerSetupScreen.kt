@@ -109,10 +109,10 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     // The other device's card: the form says to paste its setup link.
     var fromDevice by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(existing?.id) { if (addingFrom != null && existing != null && existing.id != addingFrom) addingFrom = null }
-    // The coordinator, or else the settings (a JSON object), from a scanned or pasted setup link:
-    // applied as the form connects, and dropped once the person types a server or user of their own.
-    var linkCoordinator by rememberSaveable { mutableStateOf<String?>(null) }
-    var linkSettings by rememberSaveable { mutableStateOf<String?>(null) }
+    // Pairing with another device (its link scanned, pasted or opened), until the core answers.
+    var pairing by rememberSaveable { mutableStateOf(false) }
+    // Paired: the account the other device named, whose password this one still needs.
+    var pairedAccount by rememberSaveable { mutableStateOf<String?>(null) }
     val sync by client.syncProgress.collectAsStateWithLifecycle()
 
     LaunchedEffect(client) { client.errors.collect { e -> connecting = false; error = e.detail?.let { "${e.message}\n$it" } ?: e.message } }
@@ -134,44 +134,44 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
         if (cleanUrl == null || username.isBlank()) return
         error = null
         connecting = true
-        linkCoordinator?.let {
-            client.dispatch(Commands.setCoordinatorUrl(it))
-            client.dispatch(Command.ConnectCoordinator)
-        }
-        linkSettings?.let { client.dispatch(Commands.applySetupSettings(it)) }
         onConnecting()
         // The core never keeps the password: it lives in the platform keystore and is replayed on
         // every start. CoreHost stores it only once the core reports the server reachable with it.
         CoreHost.login(client::dispatch, ServerCredential(cleanUrl, username.trim(), password, null))
     }
-    /**
-     * Another device's setup code: fills the form (its coordinator or settings are applied as the
-     * form connects). Scanned or pasted here ([fromHere]), with the password, it signs in straight
-     * away. A link opened from outside (any web page can open one) only fills in the server and
-     * user and waits for Connect: its coordinator and settings are dropped, since neither shows in
-     * the form and a coordinator receives the account's credential when the device joins it.
-     */
-    fun applySetupLink(link: SetupLink, fromHere: Boolean) {
-        url = link.server
-        username = link.username
-        password = link.password ?: ""
-        linkCoordinator = link.coordinator?.takeIf { fromHere }
-        linkSettings = link.settings?.takeIf { fromHere }
-        urlError = false
-        error = null
+    /** Another device's pairing link: the core does the exchange (no password travels in it). */
+    fun pairWith(link: String) {
+        pairing = true
+        fromDevice = true
         started = true
-        if (fromHere && link.password != null && !connecting) connect()
+        error = null
+        client.dispatch(Command.PairWithInvite(app.hocket.core.api.CommandPairWithInviteInner(link)))
+    }
+    LaunchedEffect(client) {
+        client.identityEvents.collect { e ->
+            when (e) {
+                is app.hocket.core.api.Event.PairingFinished -> {
+                    pairing = false
+                    e.data.accounts.firstOrNull()?.let { a ->
+                        url = a.url; username = a.username; urlError = false
+                        pairedAccount = "${a.username}\u0000${a.url.removePrefix("https://").removePrefix("http://")}"
+                    }
+                }
+                is app.hocket.core.api.Event.PairingFailed -> { pairing = false; error = e.data.message }
+                else -> Unit
+            }
+        }
     }
     fun scan() = app.hocket.SetupScanner.scan(context,
-        onResult = { text -> SetupLink.parse(text)?.let { applySetupLink(it, fromHere = true) } ?: run { started = true; error = invalidCode } },
+        onResult = { text -> PairingLinks.pair(text)?.let(::pairWith) ?: run { started = true; error = invalidCode } },
         onError = { started = true; error = scanFailed })
-    // A setup link opened from outside (the camera, a shared link), while the form can take it.
-    val pendingLink by app.hocket.AppLinks.setup.collectAsStateWithLifecycle()
+    // A pairing link opened from outside (the camera, a shared link), while the form can take it.
+    val pendingLink by app.hocket.AppLinks.pair.collectAsStateWithLifecycle()
     LaunchedEffect(pendingLink, step) {
         val link = pendingLink ?: return@LaunchedEffect
         if (step == SetupStep.Summary) return@LaunchedEffect
-        app.hocket.AppLinks.consume(link)
-        applySetupLink(link, fromHere = false)
+        app.hocket.AppLinks.consumePair(link)
+        pairWith(link)
     }
     val cleartext = url.trim().startsWith("http://", ignoreCase = true)
     val ground = Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainer))
@@ -215,7 +215,12 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
             ) {
                 Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 24.dp)) {
                     Text(stringResource(R.string.setup_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                    Text(stringResource(if (fromDevice) R.string.setup_source_device_paste else R.string.setup_subtitle), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
+                    Text(when {
+                        pairing -> stringResource(R.string.setup_pairing)
+                        pairedAccount != null -> pairedAccount!!.split('\u0000').let { stringResource(R.string.setup_paired_password, it[0], it.getOrElse(1) { "" }) }
+                        fromDevice -> stringResource(R.string.setup_source_device_paste)
+                        else -> stringResource(R.string.setup_subtitle)
+                    }, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
                     if (needsRelogin) {
                         Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp).testTag("setup.relogin")) {
                             Text(stringResource(R.string.setup_relogin_notice), color = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
@@ -224,10 +229,10 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                     val field = RoundedCornerShape(16.dp)
                     OutlinedTextField(
                         value = url, onValueChange = { typed ->
-                            // A pasted link, even into a field that already holds an address.
-                            val link = typed.indexOf("hocket://setup?", ignoreCase = true).takeIf { it >= 0 }?.let { SetupLink.parse(typed.substring(it)) }
-                            if (link != null) applySetupLink(link, fromHere = true)
-                            else { url = typed; urlError = false; linkCoordinator = null; linkSettings = null }
+                            // A pasted pairing link, even into a field that already holds an address.
+                            val link = PairingLinks.pair(typed)
+                            if (link != null) pairWith(link)
+                            else { url = typed; urlError = false }
                         }, label = { Text(stringResource(R.string.setup_url)) },
                         placeholder = { Text(stringResource(R.string.setup_url_hint)) }, singleLine = true, isError = urlError, shape = field,
                         supportingText = if (urlError) ({ Text(stringResource(R.string.setup_error_url)) }) else null,
@@ -240,7 +245,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                         }
                     }
                     val user = @Composable { m: Modifier ->
-                        OutlinedTextField(value = username, onValueChange = { username = it; linkCoordinator = null; linkSettings = null }, label = { Text(stringResource(R.string.setup_username)) }, singleLine = true, shape = field,
+                        OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text(stringResource(R.string.setup_username)) }, singleLine = true, shape = field,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next), modifier = m.testTag("setup.username"), enabled = !connecting)
                     }
                     val pass = @Composable { m: Modifier ->

@@ -95,7 +95,7 @@ fun OfflineIndicator(modifier: Modifier = Modifier) {
 
 /**
  * Who is signed in where, then Settings, Listening stats, Devices (the Connect picker) and Set up
- * another device ([SetupDeviceSheet]), the places not in the bottom bar (so every place stays reachable) and the bar editor.
+ * another device ([PairDeviceSheet]), the places not in the bottom bar (so every place stays reachable) and the bar editor.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

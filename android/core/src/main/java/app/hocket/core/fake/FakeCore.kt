@@ -383,8 +383,15 @@ class FakeCore(
         accounts = servers.toList(), session = sessionDocument(), queue = queueView(), transport = transport(), connection = connection,
         devices = devices.toList(), jobs = jobs.toList(), problems = problems.toList(), undo = undoState(), settings = settings.values.toList(),
         audio = audio, mediaSession = mediaSessionState(), resumeOffer = resumeOffer, sleepTimer = sleepTimer, network = network,
-        batterySaver = batterySaver, syncProgress = syncProgress,
+        batterySaver = batterySaver, syncProgress = syncProgress, identity = identity,
     )
+
+    // -- identity: one device, enough for the pairing and devices screens -------------------------
+    private fun freshIdentity() = IdentityInfo("fake-identity", deviceId, listOf(IdentityDevice(deviceId, "This phone", true, now())), removed = false, credentialSync = false)
+    private var identity: IdentityInfo = freshIdentity()
+    private val coordinatorInvites = mutableListOf<CoordinatorInviteInfo>()
+    private fun emitIdentity() = emit(Event.IdentityChanged(EventIdentityChangedInner(identity)))
+    private fun emitInvites(created: String? = null) = emit(Event.CoordinatorInvites(EventCoordinatorInvitesInner(coordinatorInvites.toList(), created)))
 
     private fun sessionDocument() = SessionDocument(1u, "fake-session", "$serverId:ada", revision, now(), context, history.toList(), current,
         upcoming.toList(), shuffle, repeat, autoplay, transport(), shownSaved(), null)
@@ -1179,6 +1186,29 @@ class FakeCore(
             }
             is Command.SetSelection -> { selection = c.data.target }
             is Command.Touch -> Unit
+            Command.CreatePairingInvite -> emit(Event.PairingInvite(EventPairingInviteInner("hocket://pair?d=ZmFrZS1wYWlyaW5nLWludml0ZQ", now() + 600_000.0)))
+            is Command.PairWithInvite -> emit(Event.PairingFinished(EventPairingFinishedInner(emptyList())))
+            is Command.RemoveDevice -> {
+                identity = if (c.data.device_id == deviceId) freshIdentity() else identity.copy(devices = identity.devices.filter { it.id != c.data.device_id })
+                emitIdentity()
+            }
+            Command.ResetIdentity -> { identity = freshIdentity(); emitIdentity() }
+            is Command.SetCredentialSync -> { identity = identity.copy(credentialSync = c.data.on); emitIdentity() }
+            is Command.ClaimCoordinator, is Command.RedeemCoordinatorInvite -> {
+                val owner = c is Command.ClaimCoordinator
+                val url = (c as? Command.ClaimCoordinator)?.data?.url ?: (c as Command.RedeemCoordinatorInvite).data.url
+                val shown = url.ifBlank { "wss://coordinator.example/ws" }
+                identity = identity.copy(coordinator = CoordinatorInfo(shown, owner, identity.credentialSync))
+                emitIdentity()
+                emit(Event.CoordinatorJoined(EventCoordinatorJoinedInner(shown, owner)))
+            }
+            Command.CreateCoordinatorInvite -> {
+                val code = "FAKE-" + (coordinatorInvites.size + 1).toString().padStart(4, '0')
+                coordinatorInvites += CoordinatorInviteInfo(code, now(), now() + 7 * 86_400_000.0, false)
+                emitInvites(code)
+            }
+            is Command.RevokeCoordinatorInvite -> { coordinatorInvites.removeAll { it.code == c.data.code }; emitInvites() }
+            Command.ListCoordinatorInvites -> emitInvites()
         }
     }
 
@@ -1826,6 +1856,7 @@ class FakeCore(
         Query.ReportUpload -> QueryResult.ReportUpload(reportUpload)
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
         Query.SetupSettings -> QueryResult.Text(setupSettings())
+        Query.Identity -> QueryResult.Identity(identity)
         is Query.CreateShare -> QueryResult.Share(q.data.ids.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() }?.let { CreatedShare("https://navidrome.example/share/${it.joinToString("-")}") })
         is Query.ExportAudio -> QueryResult.AudioFile(null)
         is Query.SongLink -> QueryResult.SongLink(

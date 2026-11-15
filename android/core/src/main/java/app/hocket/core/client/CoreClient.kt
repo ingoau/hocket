@@ -108,6 +108,21 @@ class CoreClient(
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
     private val _devices = MutableStateFlow<List<DeviceInfo>>(emptyList())
     val devices: StateFlow<List<DeviceInfo>> = _devices.asStateFlow()
+    private val _identity = MutableStateFlow(IdentityInfo(id = "", deviceId = "", devices = emptyList(), removed = false, credentialSync = false))
+    /** This device's Hocket identity: its devices, credential sync, the coordinator. */
+    val identity: StateFlow<IdentityInfo> = _identity.asStateFlow()
+    private val _pairingInvite = MutableStateFlow<EventPairingInviteInner?>(null)
+    /** The pairing invite this device shows (Add a device), until it is used or replaced. */
+    val pairingInvite: StateFlow<EventPairingInviteInner?> = _pairingInvite.asStateFlow()
+    private val _coordinatorInvites = MutableStateFlow<EventCoordinatorInvitesInner?>(null)
+    /** The coordinator's invites (owner only), with the code just made. */
+    val coordinatorInvites: StateFlow<EventCoordinatorInvitesInner?> = _coordinatorInvites.asStateFlow()
+    private val _identityEvents = MutableSharedFlow<Event>(extraBufferCapacity = 8)
+    /**
+     * Pairing and coordinator answers as they arrive: `DevicePaired`, `PairingFinished`,
+     * `PairingFailed`, `CredentialsSynced`, `CoordinatorJoined`, `CoordinatorFailed`.
+     */
+    val identityEvents: SharedFlow<Event> = _identityEvents.asSharedFlow()
     private val _handoff = MutableStateFlow(HandoffPicker())
     val handoffPicker: StateFlow<HandoffPicker> = _handoff.asStateFlow()
     private val _jobs = MutableStateFlow<List<Job>>(emptyList())
@@ -525,6 +540,7 @@ class CoreClient(
 
     fun applySnapshot(s: Snapshot) {
         _servers.value = s.accounts
+        _identity.value = s.identity
         _session.value = s.session
         setQueue(s.queue)
         clockTransport = s.transport
@@ -553,6 +569,12 @@ class CoreClient(
             is Event.Started -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
             is Event.Snapshot -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
             is Event.AccountsChanged -> _servers.value = event.data.accounts
+            is Event.IdentityChanged -> _identity.value = event.data.identity
+            is Event.PairingInvite -> _pairingInvite.value = event.data
+            is Event.CoordinatorInvites -> _coordinatorInvites.value = event.data
+            is Event.DevicePaired -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
+            is Event.PairingFinished, is Event.PairingFailed, is Event.CredentialsSynced,
+            is Event.CoordinatorJoined, is Event.CoordinatorFailed -> _identityEvents.tryEmit(event)
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {
                 val sid = event.data.server_id

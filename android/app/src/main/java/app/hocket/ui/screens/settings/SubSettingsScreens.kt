@@ -266,7 +266,7 @@ private fun ProfileEditor(title: String, networkId: String) {
         trailingIcon = { TextButton(onClick = { push(profile.copy(cannotDecode = cannot.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() })) }) { Text(stringResource(R.string.action_save)) } })
 }
 
-/** Coordinator URL, connect/disconnect, LAN discovery, device identity. */
+/** Coordinator URL, connect/disconnect, LAN discovery, this device, and the identity's devices. */
 @Composable
 fun ConnectSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
@@ -288,6 +288,7 @@ fun ConnectSettingsScreen(nav: NavHostController) {
         SettingRow(status, connection.error ?: connection.roundTripMs?.let { "${it.toInt()} ms" })
         SwitchRow(stringResource(R.string.settings_lan_discovery), lan.bool ?: true, { client.dispatch(Commands.setLanDiscovery(it)) }, scope = lan.scope, tag = "connect.lan")
         devices.firstOrNull { it.isSelf }?.let { SettingRow(stringResource(R.string.settings_device_name, it.name), it.id) }
+        IdentitySettings()
     }
 }
 
