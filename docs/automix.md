@@ -597,14 +597,16 @@ message types they don't know):
 
 Coordinator (`hocket-coordinator/src/analysis.rs`):
 
-- `<data-dir>/automix.sqlite` (in memory without `--data-dir`; off with
+- `<data-dir>/analysis.sqlite` (in memory without `--data-dir`; off with
   `--no-analysis-store`), table `records(server, track_id, version,
   has_beats, produced_by, json, updated_at)`, primary key (server, track
-  id). `server` is `wire::server_key` of the verified server: the
-  credential's `server_url` (or `--verify-url`; with `--no-verify`, the
-  Hello's), trimmed, without a trailing `/`, scheme and host lowercased
-  (the path keeps its case) — the same normalisation as `scope_key`. Every verified user of a server reads and
-  writes that server's records.
+  id), holding a provider-aware fingerprint (`wire::AnalysisKey`): `server`
+  is the provider (`navidrome:` plus `wire::server_key` of the account's
+  URL: trimmed, without a trailing `/`, scheme and host lowercased) and
+  `track_id` the file within it (`<track id>|<size>|<suffix>`). Clients
+  send the key with every fetch and upload; every admitted identity using a
+  server reads and writes that server's records. (Records keyed by
+  `(server, track)` lived in `automix.sqlite`, which is no longer read.)
 - Analysis messages are the coordinator's own business: never passed to
   the room, only from a socket whose device is an admitted member, at most
   60 per minute per socket (the rest are dropped). Store work runs on the
@@ -652,7 +654,7 @@ Client (`core/handlers/analysis_share.rs`):
 
 | Flag | Default | |
 |---|---|---|
-| `--analysis-server URL` | off | The Navidrome URL the worker fetches from. Records are keyed by `--verify-url` when set (as clients' are), otherwise by this URL, which must then be the one **your clients use**. A warning is logged when the two name different hosts. |
+| `--analysis-server URL` | off | The Navidrome URL the worker fetches from, with its own account. Records are keyed by this URL, which must be the one **your clients use**. |
 | `--analysis-user NAME` | — | A dedicated non-admin Navidrome user. |
 | `--analysis-password-file PATH` | — | Its password (trailing newline trimmed); or env `HOCKET_ANALYSIS_PASSWORD`. Never logged. |
 | `--analysis-nice N` | 10 | Nice value of the worker thread (0–19, Linux; 0 leaves it). The inference pool inherits it. |
@@ -674,8 +676,8 @@ Client (`core/handlers/analysis_share.rs`):
   failed library walk or pass is retried after 10 minutes.
 - **Priority queue**: `answer_analysis_fetch` pushes the ids an
   `AnalysisFetch` missed (no record, or one without a beat grid that isn't
-  the worker's) onto `PriorityQueue`, but only when the socket's server key
-  is the worker's (`--verify-url` if set, else `--analysis-server`). Only
+  the worker's) onto `PriorityQueue`, but only when the key's provider is
+  the worker's (`--analysis-server`). Only
   ids are taken (non-empty, ≤ 256 bytes), deduplicated, at most 256 queued
   (the oldest dropped: clients are untrusted), and ids the worker failed on
   or won't analyse in this process (bad file, too long or large, unknown to

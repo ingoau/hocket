@@ -153,9 +153,10 @@ cd pebble && HOCKET_DEMO=1 pebble build          # sample data, for emulator scr
 
 # Coordinator
 cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --data-dir /var/lib/hocket
-# … and let one account's devices receive its whole log in developer diagnostics
-cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --diagnostics-user 'me@https://music.example.net'
-# … with --data-dir as well, that account can save reports there (docs/reports.md); read them with
+# … claim it: prints a short-lived code and QR; the first device to enter it owns the coordinator
+# (its devices get the whole log in developer diagnostics, and can invite other identities)
+cargo run -p hocket-coordinator -- --data-dir /var/lib/hocket pair --url wss://coordinator.example.net/ws
+# … the owner's devices can save reports there (docs/reports.md); read them with
 cargo run -p hocket-coordinator -- --data-dir /var/lib/hocket reports list
 # … and analyse the library for AutoMix with a dedicated non-admin account (docs/automix.md → Coordinator worker)
 HOCKET_ANALYSIS_PASSWORD=… cargo run --release -p hocket-coordinator -- --data-dir /var/lib/hocket \

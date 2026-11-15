@@ -2,9 +2,12 @@
 #   docker build -f crates/hocket-coordinator/Dockerfile -t hocket-coordinator .
 # Run:
 #   docker run -p 7373:7373 -v hocket-data:/data hocket-coordinator
-# Reports (with --diagnostics-user) are kept in /data/reports; read them with:
+# Claim it (the first Hocket device to enter the code owns it; good for 10 minutes):
+#   docker exec <container> hocket-coordinator --data-dir /data pair --url wss://your.host/ws
+# Its key is /data/coordinator-key.json, the admitted identities /data/identities.json.
+# Reports (saved by the owner's devices) are kept in /data/reports; read them with:
 #   docker exec <container> hocket-coordinator --data-dir /data reports list
-# AutoMix records are kept in /data/automix.sqlite. The opt-in analysis worker
+# AutoMix records are kept in /data/analysis.sqlite. The opt-in analysis worker
 # (--analysis-server/--analysis-user/--analysis-password-file, docs/automix.md
 # → Coordinator worker) downloads into /data/analysis-tmp.
 FROM rust:1-bookworm AS build

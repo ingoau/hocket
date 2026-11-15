@@ -5,10 +5,11 @@ five screenshots and one screen recording) on the hosted coordinator straight
 from the diagnostics page, instead of saving a file and attaching it somewhere.
 Reports stay on the coordinator's disk; nothing goes to a third party.
 
-Only the accounts the operator named with `--diagnostics-user` may save
-reports, and only on a coordinator with a `--data-dir` (and without
-`--no-reports`). The apps show **Save to Coordinator** only once the
-coordinator has said this account may, so it is never greyed out or broken.
+Only the devices of the identity that claimed the coordinator (its owner,
+`hocket-coordinator pair`) may save reports, and only on a coordinator with a
+`--data-dir` (and without `--no-reports`). The apps show **Save to
+Coordinator** only once the coordinator has said this device may, so it is
+never greyed out or broken.
 
 ## Flow
 

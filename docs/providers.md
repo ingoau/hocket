@@ -1,6 +1,6 @@
 # Providers, then YouTube Music
 
-*Status: Phase 1 implemented (15 Nov 2026); later phases planned. Revised after review.*
+*Status: Phases 1 and 2 implemented (15 Nov 2026); later phases planned. Revised after review.*
 
 Hocket is built around one Navidrome server. This plan turns music sources into
 **providers**: first several Navidrome servers, then YouTube Music, and later
@@ -422,3 +422,64 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
   test vector). The platforms' fake cores stay single-account.
 - **Not verified by hand.** The "two real servers on Android and desktop" check needs two
   Navidrome servers and devices; the sim test `actor_multi_account` covers the core side.
+
+## Phase 2 notes
+
+*Written while implementing Phase 2. Calls made where the plan was silent or didn't fit the code.*
+
+- **Where things live.** `crates/hocket-core/src/identity/`: `crypto` (ed25519/X25519 keys,
+  ChaCha20-Poly1305 sealed boxes, HKDF envelopes, a canonical byte encoding), `log` (the member
+  list), `mod.rs` (`Identity`: keys, group keys, grants, the credential blob, signed records) and
+  `pairing`. `connect/auth.rs` is now the signature handshake. The coordinator's admission lives
+  in `crates/hocket-coordinator/src/identities.rs`.
+- **Keys are in the core's database.** The identity (device secret included) is one
+  `saved_state` row (`identity`). Neither platform's credential store is a good fit (Android's is
+  keyed per login, the desktop's per server), so there is no keystore integration yet.
+- **Member-list rules, precisely.** Validity is a pure function of the op set (so convergence is by
+  construction; the proptests check order-independence and mutual removal). An op is valid when
+  its author is a member in its causal past. "Removal wins" became: a valid `Remove(D)` voids every
+  op by D outside the removal's causal past (and whatever those enabled, such as a device D added
+  meanwhile), removals take effect in ascending op-hash order (so of two devices removing each
+  other the lowest hash wins, however deep either side's history), and a removed id or key is never
+  added again. "Old or replayed lists are rejected" falls out of the union: an old list can't undo
+  anything, and every check is against the newest list known.
+- **The group key** is committed in the log (genesis, `Remove`, `Rotate` carry its hash), so a key
+  handed over by anyone can be checked; the current key is the last committing op in the log's
+  deterministic order. Grants (X25519 envelopes) are part of the synced state, so "pending
+  envelopes for offline members" are simply the grants every member and the coordinator keep and
+  pass on. Any key holder makes the grants a member lacks.
+- **Records a removed device signed** (the coordinator pin, the credential-sync flag) would vanish
+  with it; the remover re-signs them as part of the removal.
+- **Credential sync** keeps the plaintext only in memory on each device; the blob (sealed with the
+  group key, `SecretKind` has no YouTube Music kind) is re-sealed whenever the key rotates. A device
+  receiving it adds the accounts itself and emits `CredentialsSynced` for the platform's credential
+  store. The coordinator gets a grant only while the toggle is on and a coordinator is pinned;
+  turning it off rotates the key and drops the blob, and pruning drops the coordinator's grant.
+- **The coordinator proves itself** with its own key (`coordinator-key.json`), pinned in the
+  identity when a device claims it or redeems an invite (`CoordAdmitted`); the pin syncs, so other
+  devices trust the same coordinator, and the pinned URL becomes the coordinator URL setting.
+- **`pair` writes `<data-dir>/claim.json`** for the running server to read (so `docker exec` works);
+  it needs `--data-dir`. Claiming again hands ownership to the new identity (recovery); the old one
+  stays admitted. Invites last a week, work once and can be revoked. A claim or redemption for an
+  identity the coordinator knows only merges what was sent, so a forged list can't replace a real
+  one.
+- **Flags removed:** `--verify-url`, `--no-verify`, `--allow-private-servers`, `--diagnostics-user`.
+  The owner identity's devices get the full log and report grants instead.
+- **Analysis store.** Keyed by `wire::AnalysisKey { provider, fingerprint }`: `navidrome:<server>`
+  and `<track id>|<size>|<suffix>`. The file is new (`analysis.sqlite`); old records aren't read.
+  Every admitted identity on a server shares them. The worker keeps its own Navidrome account
+  (`--analysis-server`/`--analysis-user`), as before; signing it in to YouTube Music is Phase 4.
+- **Pairing rendezvous.** LAN addresses are the source address of the default route (IPv4 and
+  IPv6) plus the listener's port; the coordinator relays a join to the member that sent
+  `PairOffer` for the invite. The new device tries the LAN addresses (4 s each), then the
+  coordinator, and says clearly when neither answers. The invite's `settings` field exists but is
+  left empty: synced settings arrive with the session once paired.
+- **Session scope.** The session belongs to the identity, so it is open from first start, with or
+  without accounts; reordering or removing accounts no longer moves it. Pairing moves the device to
+  the other identity's session (the old one is closed, not merged).
+- **Engine details worth knowing.** A peer turned away while it was of another identity is
+  unblocked once the member list newly lists it; a reopened session gets the LAN adverts already
+  seen; a follower leaves a LAN leader the list removed, and a removed device closes its room.
+- **Not verified by hand:** pairing two real devices over a real LAN and through a deployed
+  coordinator, and the QR scan on a phone. The sim tests, the actor test over the in-memory network
+  and the coordinator's socket tests cover the protocol.
