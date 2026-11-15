@@ -172,8 +172,19 @@ pub fn decode32(h: &str) -> Option<[u8; 32]> {
     v.try_into().ok()
 }
 
-/// Check an ed25519 signature (hex) by a verifying key (hex).
+/// Whether `s` is lowercase hex (the only spelling accepted, so a
+/// signature or key has exactly one encoding and nothing hashed over it can
+/// be duplicated by changing its case).
+pub fn is_lower_hex(s: &str) -> bool {
+    s.bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Check an ed25519 signature (lowercase hex) by a verifying key (hex).
 pub fn verify(sign_pk: &str, msg: &[u8], sig: &str) -> bool {
+    if !is_lower_hex(sig) {
+        return false;
+    }
     let Some(pk) = decode32(sign_pk) else {
         return false;
     };
@@ -279,6 +290,8 @@ mod tests {
         let other = DeviceSecret::generate().public();
         assert!(!verify(&other.sign, b"hello", &sig));
         assert!(!verify(&p.sign, b"hello", "zz"));
+        // One spelling only: the same signature in uppercase is refused.
+        assert!(!verify(&p.sign, b"hello", &sig.to_uppercase()));
         assert!(!verify("nothex", b"hello", &sig));
     }
 

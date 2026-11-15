@@ -242,25 +242,28 @@ fn two_devices_removing_each_other_settle_the_same_way_everywhere() {
     w.remove(1, 0).unwrap();
     w.net.heal_all();
     w.run_for(60_000.0);
-    // Everyone that is still in agrees with everyone else.
+    // Whoever is still in agrees with everyone else. A removal that reaches
+    // the others concurrently with its counterpart takes both devices out
+    // (a removed device can never undo its removal); one that a removed
+    // device can no longer deliver leaves its remover in. Never both in.
     let reference = members(&w, 2);
     assert!(reference.contains(&"dev-c".to_string()));
     let survivors: Vec<usize> = [0, 1]
         .into_iter()
         .filter(|&i| reference.contains(&w.devices[i].id))
         .collect();
-    assert_eq!(
-        survivors.len(),
-        1,
-        "exactly one of the two stays: {reference:?}"
-    );
-    let loser = 1 - survivors[0];
-    w.set_member(survivors[0], true);
-    w.set_member(loser, false);
-    assert_eq!(members(&w, survivors[0]), reference);
-    assert_eq!(members(&w, loser), reference);
-    assert!(w.identities[loser].lock().was_removed());
-    assert_eq!(key(&w, survivors[0]), key(&w, 2));
+    assert!(survivors.len() <= 1, "at most one stays: {reference:?}");
+    assert!(!w.identities[2].lock().state().rekey);
+    for i in [0, 1] {
+        let stays = survivors.contains(&i);
+        w.set_member(i, stays);
+        if stays {
+            assert_eq!(members(&w, i), reference);
+            assert_eq!(key(&w, i), key(&w, 2));
+        } else {
+            assert_ne!(key(&w, i), key(&w, 2));
+        }
+    }
     w.finish();
     w.assert_ok();
 }

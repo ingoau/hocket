@@ -269,14 +269,18 @@ impl Identities {
         match r.identities.get_mut(&id) {
             Some(e) => {
                 // Known already: what it sent can only add to the list.
-                e.shared.merge(sync).map_err(|_| AdmitError::BadIdentity)?;
+                e.shared
+                    .merge(sync, now as f64)
+                    .map_err(|_| AdmitError::BadIdentity)?;
             }
             None => {
                 if r.identities.len() >= IDENTITIES_MAX {
                     return Err(AdmitError::Full);
                 }
                 let mut shared = SharedState::new(MemberLog::empty(&id));
-                shared.merge(sync).map_err(|_| AdmitError::BadIdentity)?;
+                shared
+                    .merge(sync, now as f64)
+                    .map_err(|_| AdmitError::BadIdentity)?;
                 if shared.state().members.is_empty() {
                     return Err(AdmitError::BadIdentity);
                 }

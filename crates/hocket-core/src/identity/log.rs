@@ -22,23 +22,32 @@
 //!    removal, or after it, never counts (including whatever those ops
 //!    enabled, such as a device D added). A removed device id or key is never
 //!    added again.
-//! 4. **Tie-break.** Removals take effect in ascending op-hash order. When
-//!    two removals conflict (each voids the other: two devices removing each
-//!    other at the same moment), the lowest hash wins.
+//! 4. **Contested removals.** Two removals of each other's authors, neither
+//!    in the other's causal past (two devices removing each other at the
+//!    same moment, or a removed device signing a removal of its remover
+//!    from before its own removal), both stand: both devices are out, and
+//!    neither removal's new key is used ([`MemberState::rekey`] asks a
+//!    remaining member to rotate). A removed device can never undo its
+//!    removal. A removal only acts while no other removal voids it, so a
+//!    void removal voids nothing; a cycle of three or more falls back to the
+//!    lowest op hash.
 //! 5. **Group key.** Genesis, `Remove` and `Rotate` commit to a new group
 //!    key (`keyId`, the hash of the key). The current key is the one
 //!    committed by the last valid such op in the log's deterministic
 //!    topological order (parents first, ties by lowest hash).
+//! 6. **Storage.** Void ops by a removed device that nothing kept builds on
+//!    are dropped on merge, so a removed device can't fill the log.
 //!
 //! Voiding is monotonic (a voided op stays void), so the fixpoint in
 //! [`compute`] terminates, and it depends only on the set of ops.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::api::{DeviceId, EpochMs};
 use crate::identity::crypto::{self, Canon, DeviceSecret, PublicKeys};
+use crate::identity::COORDINATOR_ID;
 
 /// Most ops one log holds; merges beyond it are refused.
 pub const MAX_OPS: usize = 4096;
@@ -172,6 +181,9 @@ pub struct MemberState {
     pub key_id: Option<String>,
     /// Valid op hashes.
     pub valid: BTreeSet<String>,
+    /// The current key predates a contested removal (both removed devices
+    /// may hold it): a remaining member should rotate.
+    pub rekey: bool,
 }
 
 impl MemberState {
@@ -314,49 +326,96 @@ impl MemberLog {
 
     /// Union in ops from a peer. Ops that fail the structural checks (bad
     /// signature, unknown parents, a second genesis) are dropped; the rest
-    /// are kept whether or not they turn out valid. Returns how many were new.
+    /// are kept whether or not they turn out valid, except void ops by a
+    /// removed device that nothing kept builds on (see [`MemberLog::prune`]).
+    /// A batch of more than [`MAX_OPS`] ops is refused before any work, and
+    /// a merge that would leave more than [`MAX_OPS`] ops is undone.
+    /// Returns how many ops the log changed by (new ones kept plus old ones
+    /// pruned).
     pub fn merge(&mut self, ops: Vec<MemberOp>) -> Result<usize, LogError> {
-        let mut pending: Vec<MemberOp> = vec![];
+        if ops.len() > MAX_OPS {
+            return Err(LogError::Full);
+        }
+        let mut pending: BTreeMap<String, MemberOp> = BTreeMap::new();
         for op in ops {
             if op.identity != self.identity {
                 return Err(LogError::WrongIdentity);
             }
             let h = op.hash();
-            if !self.ops.contains_key(&h) && !pending.iter().any(|p| p.hash() == h) {
-                pending.push(op);
+            if !self.ops.contains_key(&h) {
+                pending.entry(h).or_insert(op);
             }
         }
-        let mut added = 0;
-        // Repeat while progress is made, so ops arriving children-first still land.
-        loop {
-            let mut progress = false;
-            let mut rest = vec![];
-            for op in pending {
-                if self.ops.len() >= MAX_OPS {
-                    if added > 0 {
-                        self.state = None;
-                    }
-                    return Err(LogError::Full);
-                }
-                match self.structurally_ok(&op) {
-                    Some(true) => {
-                        self.ops.insert(op.hash(), op);
-                        added += 1;
-                        progress = true;
-                    }
-                    Some(false) => {}
-                    None => rest.push(op),
-                }
-            }
-            pending = rest;
-            if !progress || pending.is_empty() {
-                break;
+        if pending.is_empty() {
+            return Ok(0);
+        }
+        // Parents first, so one pass decides every op (children of a dropped
+        // op have a missing parent and are dropped too).
+        let mut inserted: Vec<String> = vec![];
+        for h in topo_order(&pending) {
+            let op = pending.remove(&h).expect("ordered from the map");
+            if self.structurally_ok(&op) == Some(true) {
+                self.ops.insert(h.clone(), op);
+                inserted.push(h);
             }
         }
-        if added > 0 {
+        if inserted.is_empty() {
+            return Ok(0);
+        }
+        self.state = None;
+        let pruned = self.prune();
+        let new: HashSet<&String> = inserted.iter().collect();
+        if self.ops.len() > MAX_OPS {
+            for h in &inserted {
+                self.ops.remove(h);
+            }
+            for (h, op) in pruned {
+                if !new.contains(&h) {
+                    self.ops.insert(h, op);
+                }
+            }
             self.state = None;
+            return Err(LogError::Full);
         }
-        Ok(added)
+        let kept = inserted
+            .iter()
+            .filter(|h| self.ops.contains_key(*h))
+            .count();
+        let pruned_old = pruned.iter().filter(|(h, _)| !new.contains(h)).count();
+        Ok(kept + pruned_old)
+    }
+
+    /// Drop void ops by removed devices that no kept op builds on: what a
+    /// removed device signed after (or concurrently with) its removal never
+    /// counts, so it isn't stored either and can't fill the log. Repeats
+    /// until nothing more goes (dropping one can change what is void).
+    /// Returns what was dropped.
+    fn prune(&mut self) -> Vec<(String, MemberOp)> {
+        let mut dropped = vec![];
+        loop {
+            let state = compute(&self.ops);
+            let order = topo_order(&self.ops);
+            let mut needed: BTreeSet<&String> = BTreeSet::new();
+            let mut drop: Vec<String> = vec![];
+            for h in order.iter().rev() {
+                let op = &self.ops[h];
+                let prunable = !state.valid.contains(h) && state.removed.contains(&op.author);
+                if prunable && !needed.contains(h) {
+                    drop.push(h.clone());
+                } else {
+                    needed.extend(op.parents.iter());
+                }
+            }
+            if drop.is_empty() {
+                self.state = Some(state);
+                return dropped;
+            }
+            for h in drop {
+                if let Some(op) = self.ops.remove(&h) {
+                    dropped.push((h, op));
+                }
+            }
+        }
     }
 
     /// `Some(ok)` when decidable now; `None` while a parent is missing.
@@ -364,6 +423,7 @@ impl MemberLog {
         if op.parents.len() > MAX_PARENTS
             || op.parents.windows(2).any(|w| w[0] >= w[1])
             || op.author.is_empty()
+            || !crypto::is_lower_hex(&op.sig)
         {
             return Some(false);
         }
@@ -384,28 +444,33 @@ impl MemberLog {
             return None;
         }
         // The author's key comes from an Add in the op's causal past.
-        let keys = self.author_keys_in_past(&op.parents, &op.author);
-        let signed = op.signed_bytes();
-        Some(keys.iter().any(|k| crypto::verify(k, &signed, &op.sig)))
+        Some(self.author_signed_in_past(op))
     }
 
-    fn author_keys_in_past(&self, parents: &[String], author: &str) -> Vec<String> {
-        let mut seen = BTreeSet::new();
-        let mut stack: Vec<&String> = parents.iter().collect();
-        let mut keys = vec![];
+    /// Whether an `Add` of `op`'s author in its causal past carries a key
+    /// that verifies its signature. Stops at the first one that does.
+    fn author_signed_in_past(&self, op: &MemberOp) -> bool {
+        let signed = op.signed_bytes();
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut tried: Vec<&str> = vec![];
+        let mut stack: Vec<&String> = op.parents.iter().collect();
         while let Some(h) = stack.pop() {
-            if !seen.insert(h.clone()) {
+            if !seen.insert(h.as_str()) {
                 continue;
             }
-            let Some(op) = self.ops.get(h) else { continue };
-            if let OpBody::Add { device, .. } = &op.body {
-                if device.id == author {
-                    keys.push(device.keys.sign.clone());
+            let Some(o) = self.ops.get(h) else { continue };
+            if let OpBody::Add { device, .. } = &o.body {
+                let k = device.keys.sign.as_str();
+                if device.id == op.author && !tried.contains(&k) {
+                    if crypto::verify(k, &signed, &op.sig) {
+                        return true;
+                    }
+                    tried.push(k);
                 }
             }
-            stack.extend(op.parents.iter());
+            stack.extend(o.parents.iter());
         }
-        keys
+        false
     }
 
     /// The member list (computed once per change).
@@ -536,6 +601,7 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
     }
     let mut void = vec![false; n];
     let mut valid = vec![false; n];
+    let mut contested = vec![false; n];
     loop {
         valid.iter_mut().for_each(|v| *v = false);
         // Valid adds and removes per device id, in order.
@@ -565,6 +631,7 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
                                 && !removes
                                     .get(device.id.as_str())
                                     .is_some_and(|v| v.iter().any(|&r| past[i].has(r)))
+                                && device.id != COORDINATOR_ID
                                 && !removed_keys
                                     .iter()
                                     .any(|(r, k)| past[i].has(*r) && *k == device.keys.sign)
@@ -592,25 +659,84 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
                 }
             }
         }
-        // Removal wins: in ascending hash order, a valid removal voids its
-        // target's ops outside its causal past.
-        let mut next = void.clone();
-        let mut removals: Vec<usize> = (0..n)
+        // Removal wins: a valid removal voids its target's ops outside its
+        // causal past. Two removals of each other's authors, neither in the
+        // other's past, are *contested*: both stand (both devices are out)
+        // and neither voids the other, so a removed device that signs a
+        // removal of its remover from before its own removal only takes the
+        // remover down with it; it never stays. Each removal pairs with at
+        // most one contester (the lowest hash), so signing many changes
+        // nothing.
+        let removals: Vec<usize> = (0..n)
             .filter(|&i| valid[i] && matches!(op_at[i].body, OpBody::Remove { .. }))
             .collect();
-        removals.sort_by(|a, b| order[*a].cmp(&order[*b]));
-        for r in removals {
-            if next[r] {
-                continue;
+        let target = |i: usize| match &op_at[i].body {
+            OpBody::Remove { device_id, .. } => device_id.as_str(),
+            _ => "",
+        };
+        let mutual = |r: usize, o: usize| {
+            o != r
+                && target(o) == op_at[r].author
+                && target(r) == op_at[o].author
+                && !past[r].has(o)
+                && !past[o].has(r)
+        };
+        let partner_of = |r: usize| -> Option<usize> {
+            removals
+                .iter()
+                .copied()
+                .filter(|&o| mutual(r, o))
+                .min_by(|a, b| order[*a].cmp(&order[*b]))
+        };
+        let partner: BTreeMap<usize, usize> = removals
+            .iter()
+            .filter_map(|&r| Some((r, partner_of(r)?)))
+            .collect();
+        contested = vec![false; n];
+        for (&r, &o) in &partner {
+            if partner.get(&o) == Some(&r) {
+                contested[r] = true;
             }
-            let OpBody::Remove { device_id, .. } = &op_at[r].body else {
-                continue;
-            };
-            for j in 0..n {
-                if j != r && op_at[j].author == *device_id && !past[r].has(j) {
-                    next[j] = true;
+        }
+        // A contested removal is never voided by a removal of its author
+        // signed by its target (its partner, or further counter-removals,
+        // which lose). A removal another removal voids is challenged and
+        // waits: only unchallenged removals act this round, so a removal
+        // that is itself void never voids anything. A cycle of three or
+        // more (all challenged) falls back to the lowest hash.
+        let voids = |r: usize, j: usize| {
+            j != r
+                && op_at[j].author == target(r)
+                && !past[r].has(j)
+                && !(contested[j] && mutual(r, j))
+        };
+        let challenged: Vec<bool> = (0..n)
+            .map(|j| removals.iter().any(|&r| valid[j] && voids(r, j)))
+            .collect();
+        let apply = |rs: &[usize], next: &mut Vec<bool>| {
+            for &r in rs {
+                for j in 0..n {
+                    if voids(r, j) {
+                        next[j] = true;
+                    }
                 }
             }
+        };
+        let mut next = void.clone();
+        let free: Vec<usize> = removals
+            .iter()
+            .copied()
+            .filter(|&r| !challenged[r])
+            .collect();
+        apply(&free, &mut next);
+        if next == void {
+            let mut rest: Vec<usize> = removals
+                .iter()
+                .copied()
+                .filter(|&r| challenged[r])
+                .collect();
+            rest.sort_by(|a, b| order[*a].cmp(&order[*b]));
+            apply(&rest[..rest.len().min(1)], &mut next);
         }
         if next == void {
             break;
@@ -618,6 +744,7 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
         void = next;
     }
     let mut state = MemberState::default();
+    let mut key_op: Option<usize> = None;
     for i in 0..n {
         if !valid[i] {
             continue;
@@ -636,10 +763,17 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
             }
             OpBody::Rotate { .. } => {}
         }
-        if let Some(k) = op.key_commit() {
+        // A contested removal's new key was made by a device that is now
+        // out: it never becomes the group key.
+        if let (Some(k), false) = (op.key_commit(), contested[i]) {
             state.key_id = Some(k.to_string());
+            key_op = Some(i);
         }
     }
+    // Every key committed before a contested removal is known to a device
+    // it put out: someone still in has to rotate.
+    state.rekey =
+        (0..n).any(|c| contested[c] && valid[c] && key_op.is_none_or(|k| !past[k].has(c)));
     state
 }
 
@@ -770,27 +904,177 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_mutual_removal_lowest_hash_wins() {
+    fn concurrent_mutual_removal_removes_both() {
         let (a, b, c) = (Dev::new("a"), Dev::new("b"), Dev::new("c"));
         let mut base = genesis(&a);
         add(&mut base, &a, &b);
         add(&mut base, &a, &c);
         let mut la = base.clone();
         let mut lb = base.clone();
-        let ra = remove(&mut la, &a, "b", "ka");
-        let rb = remove(&mut lb, &b, "a", "kb");
+        remove(&mut la, &a, "b", "ka");
+        remove(&mut lb, &b, "a", "kb");
         la.merge(lb.ops()).unwrap();
         lb.merge(la.ops()).unwrap();
         let sa = la.state().clone();
         assert_eq!(sa, *lb.state());
-        let (winner, loser) = if ra.hash() < rb.hash() {
-            ("a", "b")
-        } else {
-            ("b", "a")
-        };
-        assert!(sa.is_member(winner));
-        assert!(!sa.is_member(loser));
+        assert!(!sa.is_member("a"));
+        assert!(!sa.is_member("b"));
         assert!(sa.is_member("c"));
+        // Neither removed device's new key is used, and the one before is
+        // known to both: c has to rotate.
+        assert_eq!(sa.key_id.as_deref(), Some("k0"));
+        assert!(sa.rekey);
+        la.append(
+            "c",
+            3.0,
+            OpBody::Rotate {
+                key_id: "kc".into(),
+            },
+            &c.secret,
+        );
+        assert_eq!(la.state().key_id.as_deref(), Some("kc"));
+        assert!(!la.state().rekey);
+    }
+
+    /// A removed device signs removals of its remover from before its own
+    /// removal, with any `at` it likes: it never gets back in.
+    #[test]
+    fn removed_device_cannot_undo_its_removal() {
+        let (a, b, c) = (Dev::new("a"), Dev::new("b"), Dev::new("c"));
+        let mut base = genesis(&a);
+        add(&mut base, &a, &b);
+        add(&mut base, &a, &c);
+        let mut la = base.clone();
+        remove(&mut la, &a, "b", "ka");
+        for at in 0..40 {
+            let counter = MemberOp::new(
+                "ident",
+                "b",
+                base.heads(),
+                at as f64,
+                OpBody::Remove {
+                    device_id: "a".into(),
+                    key_id: format!("kb{at}"),
+                },
+                &b.secret,
+            );
+            let mut l = la.clone();
+            l.merge(vec![counter.clone()]).unwrap();
+            let s = l.state().clone();
+            assert!(!s.is_member("b"), "b got back in with at={at}");
+            assert!(s.removed.contains("b"));
+            assert!(s.is_member("c"));
+            assert_ne!(s.key_id.as_deref(), Some(format!("kb{at}").as_str()));
+            // A peer that saw the counter-removal first ends the same way.
+            let mut other = base.clone();
+            other.merge(vec![counter]).unwrap();
+            other.merge(la.ops()).unwrap();
+            assert_eq!(other.state(), &s);
+        }
+        // Many counter-removals at once: still out, and only one is kept.
+        let counters: Vec<MemberOp> = (0..40)
+            .map(|at| {
+                MemberOp::new(
+                    "ident",
+                    "b",
+                    base.heads(),
+                    at as f64,
+                    OpBody::Remove {
+                        device_id: "a".into(),
+                        key_id: format!("kb{at}"),
+                    },
+                    &b.secret,
+                )
+            })
+            .collect();
+        let before = la.len();
+        la.merge(counters).unwrap();
+        assert!(!la.state().is_member("b"));
+        assert_eq!(la.len(), before + 1);
+    }
+
+    #[test]
+    fn signatures_have_one_spelling() {
+        let (a, b) = (Dev::new("a"), Dev::new("b"));
+        let mut log = genesis(&a);
+        let mut other = log.clone();
+        let op = add(&mut other, &a, &b);
+        let mut upper = op.clone();
+        upper.sig = upper.sig.to_uppercase();
+        assert_ne!(upper.hash(), op.hash());
+        assert_eq!(log.merge(vec![upper]).unwrap(), 0);
+        assert_eq!(log.merge(vec![op]).unwrap(), 1);
+        assert_eq!(log.len(), 2);
+    }
+
+    /// A removed device can't fill the log with ops it signs from before
+    /// its removal: they are void, nothing builds on them, and they go.
+    #[test]
+    fn removed_device_cannot_fill_the_log() {
+        let (a, b, c) = (Dev::new("a"), Dev::new("b"), Dev::new("c"));
+        let mut base = genesis(&a);
+        add(&mut base, &a, &b);
+        let mut la = base.clone();
+        remove(&mut la, &a, "b", "k1");
+        let len = la.len();
+        // More than MAX_OPS in all, in batches.
+        let per = MAX_OPS / 3 + 1;
+        for batch in 0..4 {
+            let spam: Vec<MemberOp> = (0..per)
+                .map(|i| {
+                    MemberOp::new(
+                        "ident",
+                        "b",
+                        base.heads(),
+                        (batch * per + i) as f64,
+                        OpBody::Rotate {
+                            key_id: format!("x{i}"),
+                        },
+                        &b.secret,
+                    )
+                })
+                .collect();
+            la.merge(spam).unwrap();
+            assert_eq!(la.len(), len);
+        }
+        add(&mut la, &a, &c);
+        assert_eq!(members(&mut la), ["a", "c"]);
+        // Too big a batch is refused before any work.
+        let too_many = vec![la.ops()[0].clone(); MAX_OPS + 1];
+        assert_eq!(la.merge(too_many), Err(LogError::Full));
+    }
+
+    #[test]
+    fn the_coordinator_id_is_never_a_member() {
+        let a = Dev::new("a");
+        let mut log = genesis(&a);
+        let fake = Dev::new(COORDINATOR_ID);
+        add(&mut log, &a, &fake);
+        assert_eq!(members(&mut log), ["a"]);
+    }
+
+    /// A long history arriving children-first merges in one pass.
+    #[test]
+    fn long_reversed_history_merges() {
+        let a = Dev::new("a");
+        let mut log = genesis(&a);
+        let mut fresh = log.clone();
+        for i in 0..2000 {
+            log.append(
+                "a",
+                i as f64,
+                OpBody::Rotate {
+                    key_id: format!("k{i}"),
+                },
+                &a.secret,
+            );
+        }
+        let mut ops = log.ops();
+        ops.reverse();
+        let t = std::time::Instant::now();
+        assert_eq!(fresh.merge(ops).unwrap(), 2000);
+        assert!(t.elapsed() < std::time::Duration::from_secs(20));
+        assert_eq!(fresh.state().key_id.as_deref(), Some("k1999"));
     }
 
     #[test]
@@ -901,9 +1185,9 @@ mod tests {
 
         /// Two devices removing each other at the same moment, with any
         /// amount of unrelated history on either side, settle the same way
-        /// everywhere: exactly one of them stays.
+        /// everywhere: both are out.
         #[test]
-        fn mutual_removal_settles_one_way(extra_a in 0usize..3, extra_b in 0usize..3) {
+        fn mutual_removal_removes_both(extra_a in 0usize..3, extra_b in 0usize..3) {
             let devs: Vec<Dev> = (0..9).map(|i| Dev::new(&format!("m{i}"))).collect();
             let mut base = genesis(&devs[0]);
             add(&mut base, &devs[0], &devs[1]);
@@ -922,7 +1206,8 @@ mod tests {
             let s = la.state().clone();
             prop_assert_eq!(&s, lb.state());
             prop_assert_eq!(&s, lc.state());
-            prop_assert!(s.is_member("m0") != s.is_member("m1"));
+            prop_assert!(!s.is_member("m0") && !s.is_member("m1"));
+            prop_assert!(s.rekey);
             prop_assert!(s.is_member("m2"));
         }
     }

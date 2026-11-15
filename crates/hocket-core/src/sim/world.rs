@@ -374,7 +374,7 @@ impl World {
                 root.clone()
             } else if i < cfg.devices {
                 let mut me = honest[i - 1].clone();
-                me.merge(root.sync()).expect("same identity");
+                me.merge(root.sync(), f64::INFINITY).expect("same identity");
                 me
             } else if i == cfg.devices && cfg.hostile {
                 // The hostile device: the right identity id, but a list of

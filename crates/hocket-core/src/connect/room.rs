@@ -950,18 +950,24 @@ impl Room {
             return;
         };
         let (nonce, already) = (u.nonce.clone(), u.proven.is_some());
-        if let Some(sync) = sync {
-            self.merge_identity(sync, None);
-        }
         let scope = self.cfg.scope.clone();
-        let ok = match (&nonce, self.identity.as_mut()) {
+        // Check the proof against our list plus the ops it sent (they are
+        // signed, so a peer with a newer list than ours still proves), and
+        // take nothing from it until it has proved it is a member.
+        let ok = match (&nonce, self.identity.as_ref()) {
             (Some(nonce), Some(shared)) => {
+                let mut log = shared.log.clone();
+                if let Some(sync) = &sync {
+                    if !sync.log.is_empty() {
+                        let _ = log.merge(sync.log.ops());
+                    }
+                }
                 !already
                     && device_id != ours
                     && heads.len() <= 64
-                    && shared.log.knows(&heads)
+                    && log.knows(&heads)
                     && auth::verify_member(
-                        shared.state(),
+                        log.state(),
                         Role::Joiner,
                         &scope,
                         nonce,
@@ -973,6 +979,9 @@ impl Room {
             _ => false,
         };
         if ok {
+            if let Some(sync) = sync {
+                self.merge_identity(sync, None);
+            }
             if let Some(u) = self.unknown.iter_mut().find(|u| u.peer == peer) {
                 u.proven = Some(device_id);
             }
@@ -1035,7 +1044,8 @@ impl Room {
         let Some(shared) = &mut self.identity else {
             return;
         };
-        match shared.merge(sync) {
+        let now = self.clock.now_ms();
+        match shared.merge(sync, now) {
             Ok(ch) if ch.any() => {
                 self.out.push(RoomOutput::IdentityChanged);
                 self.broadcast_identity(from);
@@ -2994,7 +3004,7 @@ mod tests {
             } => {
                 assert_eq!(device_id, "leader");
                 if let Some(sync) = sync {
-                    me.merge((**sync).clone()).unwrap();
+                    me.merge((**sync).clone(), f64::INFINITY).unwrap();
                 }
                 assert!(auth::verify_member(
                     me.state(),
@@ -3021,6 +3031,49 @@ mod tests {
             heads: me.heads(),
             sync: Some(Box::new(me.sync())),
         })
+    }
+
+    /// A peer that fails its proof gets nothing into the identity: not its
+    /// blob, grants or sync times.
+    #[test]
+    fn a_failed_proof_merges_nothing() {
+        let (leader, mut a) = identities();
+        let (mut r, _) = id_room(&leader);
+        let before = r.identity().unwrap().clone();
+        let stranger = Identity::create_with(
+            "scope",
+            "x",
+            "X",
+            crate::identity::crypto::DeviceSecret::from_seed(b"x"),
+            0.0,
+        );
+        let mut sync = leader.sync();
+        sync.blob = Some(crate::identity::CredentialBlob {
+            key_id: "junk".into(),
+            author: "a".into(),
+            at: 1e300,
+            sealed: crate::identity::crypto::seal(&[0; 32], b"", b"junk"),
+        });
+        sync.last_synced.insert("a".into(), 1e300);
+        let nonce = challenge(&mut r, "p1", &mut a);
+        let outs = r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::Proof {
+                device_id: "a".into(),
+                sig: auth::prove(
+                    stranger.secret(),
+                    Role::Joiner,
+                    "scope",
+                    &nonce,
+                    "a",
+                    &leader.heads(),
+                ),
+                heads: leader.heads(),
+                sync: Some(Box::new(sync)),
+            }),
+        ));
+        assert!(matches!(sent(&outs, "p1")[0], Msg::Refuse { .. }));
+        assert_eq!(r.identity().unwrap(), &before);
     }
 
     #[test]
@@ -3128,7 +3181,9 @@ mod tests {
         assert!(outs.contains(&RoomOutput::IdentityChanged));
         let outs = r.handle(RoomInput::Message("pc".into(), hello("c")));
         assert!(matches!(sent(&outs, "pc")[0], Msg::Welcome { .. }));
-        leader.merge(r.identity().unwrap().clone()).unwrap();
+        leader
+            .merge(r.identity().unwrap().clone(), f64::INFINITY)
+            .unwrap();
         assert!(leader.state().is_member("c"));
     }
 

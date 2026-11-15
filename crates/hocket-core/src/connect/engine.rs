@@ -2445,29 +2445,25 @@ impl Engine {
                 heads,
                 sync,
             } => {
-                // What it sent first: ops self-authenticate, so a peer with an
-                // older list than the leader's catches up before checking it.
-                if let Some(sync) = sync {
-                    self.merge_identity((**sync).clone());
-                    // What that changed may have moved us elsewhere.
-                    let same = matches!(
-                        &self.remote,
-                        Some(Remote { state: RemoteState::Handshaking { peer: p, .. }, .. }) if *p == peer
-                    );
-                    if !same {
-                        return true;
-                    }
-                }
+                // Ops self-authenticate, so a peer with an older list than the
+                // leader's checks the proof against its list plus the ops it
+                // sent; nothing is taken until the proof checks out.
                 let ok = {
-                    let mut id = identity.lock();
+                    let id = identity.lock();
                     let scope = id.id.clone();
                     if h.leader_proven || heads.len() > 64 {
                         false
                     } else if lan {
+                        let mut log = id.shared.log.clone();
+                        if let Some(sync) = sync {
+                            if !sync.log.is_empty() {
+                                let _ = log.merge(sync.log.ops());
+                            }
+                        }
                         Some(device_id) == leader.as_ref()
-                            && id.shared.log.knows(heads)
+                            && log.knows(heads)
                             && auth::verify_member(
-                                id.state(),
+                                log.state(),
                                 Role::Leader,
                                 &scope,
                                 &h.our_nonce,
@@ -2493,6 +2489,17 @@ impl Engine {
                 if !ok {
                     reject(self, "its proof did not check out");
                     return true;
+                }
+                if let Some(sync) = sync {
+                    self.merge_identity((**sync).clone());
+                    // What that changed may have moved us elsewhere.
+                    let same = matches!(
+                        &self.remote,
+                        Some(Remote { state: RemoteState::Handshaking { peer: p, .. }, .. }) if *p == peer
+                    );
+                    if !same {
+                        return true;
+                    }
                 }
                 h.leader_proven = true;
                 h.leader_heads = heads.clone();
@@ -2571,7 +2578,8 @@ impl Engine {
         let Some(identity) = self.cfg.identity.clone() else {
             return;
         };
-        let changed = match identity.lock().merge(sync) {
+        let now = self.clock.now_ms();
+        let changed = match identity.lock().merge(sync, now) {
             Ok(ch) => ch.any(),
             Err(e) => {
                 self.log("debug", format!("identity sync refused: {e}"));

@@ -233,8 +233,10 @@ impl Joiner {
         let mut shared = crate::identity::SharedState::new(crate::identity::log::MemberLog::empty(
             &self.invite.identity,
         ));
+        // The inviter's answer, proved by the pairing code's MAC: no clock
+        // cap (this device's clock may not be set yet).
         shared
-            .merge(accept.state)
+            .merge(accept.state, EpochMs::INFINITY)
             .map_err(|e| format!("pairing failed: {e}"))?;
         let add = shared.log.get(&accept.add_op).cloned();
         let state = shared.state().clone();
@@ -289,6 +291,9 @@ impl Identity {
     /// invite (one use), admit the device and answer.
     pub fn accept_join(&mut self, join: &PairJoin, now: EpochMs) -> Result<PairAccept, String> {
         self.expire_invites(now);
+        if join.device.id == super::COORDINATOR_ID {
+            return Err("that device id is reserved".into());
+        }
         let Some(idx) = self
             .invites
             .iter()

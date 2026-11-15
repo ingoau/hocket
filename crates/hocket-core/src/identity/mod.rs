@@ -218,6 +218,9 @@ impl<T: Canonical> Signed<T> {
     }
 }
 
+/// How far ahead of our clock a peer's unsigned time may be.
+pub const MAX_SKEW_MS: EpochMs = 5.0 * 60_000.0;
+
 /// Everything about an identity that devices and the coordinator share.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -295,8 +298,10 @@ impl SharedState {
         s
     }
 
-    /// Union in a peer's state.
-    pub fn merge(&mut self, other: IdentitySync) -> Result<Changed, LogError> {
+    /// Union in a peer's state (one that proved it is a member). Times from
+    /// beyond `now` (plus [`MAX_SKEW_MS`]) are refused: an unsigned blob or
+    /// sync time from the future would otherwise win forever.
+    pub fn merge(&mut self, other: IdentitySync, now: EpochMs) -> Result<Changed, LogError> {
         let mut ch = Changed::default();
         if other.identity() != self.identity() {
             return Err(LogError::WrongIdentity);
@@ -340,7 +345,7 @@ impl SharedState {
                 ch.other = true;
             }
         }
-        if let Some(theirs) = other.blob {
+        if let Some(theirs) = other.blob.filter(|b| b.at <= now + MAX_SKEW_MS) {
             // Only a key holder can seal one under the current key, and
             // those rank first; the author is informational.
             let better = match &self.blob {
@@ -353,7 +358,7 @@ impl SharedState {
             }
         }
         for (d, t) in other.last_synced {
-            if !state.is_member(&d) && !state.removed.contains(&d) {
+            if (!state.is_member(&d) && !state.removed.contains(&d)) || t > now + MAX_SKEW_MS {
                 continue;
             }
             let e = self.last_synced.entry(d).or_insert(0.0);
@@ -437,6 +442,12 @@ impl SharedState {
             .grants
             .iter()
             .find(|g| g.key_id == key_id && g.to == holder.id)?;
+        self.open_grant(holder, g)
+    }
+
+    /// The key in `g`, if it is `holder`'s and opens to its key id.
+    fn open_grant(&self, holder: &Holder, g: &Grant) -> Option<[u8; 32]> {
+        let key_id = g.key_id.as_str();
         let key: [u8; 32] = holder
             .secret
             .open_envelope(&grant_context(self.identity(), key_id, holder.id), &g.env)?
@@ -707,10 +718,49 @@ impl Identity {
 
     /// Union in a peer's state, then take any key granted to us and do what
     /// a key holder owes the others.
-    pub fn merge(&mut self, sync: IdentitySync) -> Result<Changed, LogError> {
-        let mut ch = self.shared.merge(sync)?;
+    pub fn merge(&mut self, mut sync: IdentitySync, now: EpochMs) -> Result<Changed, LogError> {
+        // What we can check, we do: a blob under a key we hold must open,
+        // and a grant to us must open to its key. Ours too, so a bad one
+        // that got in before can be replaced.
+        let keys = self.key_map();
+        let opens = |b: &CredentialBlob| {
+            keys.get(&b.key_id)
+                .is_none_or(|k| open_blob(&self.id, k, b).is_some())
+        };
+        if sync.blob.as_ref().is_some_and(|b| !opens(b)) {
+            sync.blob = None;
+        }
+        let bad_ours = self.shared.blob.as_ref().is_some_and(|b| !opens(b));
+        let me = self.device_id.clone();
+        let grant_ok =
+            |g: &Grant| g.to != me || self.shared.open_grant(&self.holder(), g).is_some();
+        sync.grants.retain(|g| grant_ok(g));
+        let mine_ok: Vec<bool> = self.shared.grants.iter().map(|g| grant_ok(g)).collect();
+        let mut i = 0;
+        self.shared.grants.retain(|_| {
+            i += 1;
+            mine_ok[i - 1]
+        });
+        if bad_ours {
+            self.shared.blob = None;
+        }
+        let mut ch = self.shared.merge(sync, now)?;
         if self.after_merge() {
             ch.other = true;
+        }
+        // A contested removal left a key the removed devices hold: move
+        // everyone left to a new one.
+        if self.state().rekey && self.is_member() {
+            let at = self
+                .shared
+                .log
+                .ops()
+                .iter()
+                .map(|o| o.at)
+                .fold(0.0, f64::max);
+            if self.rotate(at + 1.0).is_ok() {
+                ch.members = true;
+            }
         }
         Ok(ch)
     }
@@ -786,6 +836,9 @@ impl Identity {
     ) -> Result<(MemberOp, Option<Grant>), String> {
         if !self.is_member() {
             return Err("this device is no longer part of the identity".into());
+        }
+        if device.id == COORDINATOR_ID {
+            return Err("that device id is reserved".into());
         }
         let state = self.state().clone();
         if state.removed.contains(&device.id) {
@@ -1026,10 +1079,12 @@ pub(crate) mod tests {
     use super::testing::*;
     use super::*;
 
+    const T: EpochMs = 1_000_000.0;
+
     fn exchange(a: &mut Identity, b: &mut Identity) {
         for _ in 0..2 {
-            a.merge(b.sync()).unwrap();
-            b.merge(a.sync()).unwrap();
+            a.merge(b.sync(), T).unwrap();
+            b.merge(a.sync(), T).unwrap();
         }
     }
 
@@ -1070,10 +1125,92 @@ pub(crate) mod tests {
         assert_ne!(old, new);
         assert_eq!(c.group_key(), Some(new));
         // a learns it was removed and never gets the new key.
-        a.merge(c.sync()).unwrap();
+        a.merge(c.sync(), T).unwrap();
         assert!(a.was_removed());
         assert!(!a.holds_current_key());
         assert!(!c.sync().grants.iter().any(|g| g.to == "a"));
+    }
+
+    /// A blob from the future never wins, and a key holder keeps only a
+    /// blob that opens and a grant to it that opens.
+    #[test]
+    fn unopenable_or_future_blobs_and_grants_are_dropped() {
+        let mut a = Identity::create("a", "A", 1.0);
+        let mut b = pair(&mut a, "b", 2.0);
+        a.set_coordinator(
+            Some(CoordinatorPin {
+                url: "wss://c".into(),
+                keys: DeviceSecret::from_seed(b"coord").public(),
+                owner: true,
+            }),
+            3.0,
+        );
+        a.set_credential_sync(true, Some(&secrets()), 4.0).unwrap();
+        exchange(&mut a, &mut b);
+        let kid = a.state().key_id.clone().unwrap();
+        // Garbage under the current key, far in the future.
+        let mut bad = a.sync();
+        bad.blob = Some(CredentialBlob {
+            key_id: kid.clone(),
+            author: "a".into(),
+            at: 1e300,
+            sealed: crypto::seal(&[7; 32], b"", b"junk"),
+        });
+        bad.last_synced.insert("a".into(), 1e300);
+        b.merge(bad.clone(), T).unwrap();
+        assert_eq!(b.secrets(), Some(secrets()));
+        assert!(b.shared.last_synced["a"] < 1e300);
+        // Without the key (a coordinator), the time cap still keeps it out.
+        let mut shared = a.shared.clone();
+        shared.merge(bad, T).unwrap();
+        assert!(shared.blob.as_ref().unwrap().at < 1e300);
+        // A garbage grant to b is refused, and b keeps its key.
+        let mut bad = a.sync();
+        let other = DeviceSecret::from_seed(b"other").public();
+        bad.grants = vec![Grant {
+            key_id: kid.clone(),
+            to: "b".into(),
+            env: crypto::envelope(&other.kx, b"x", &[1; 32]).unwrap(),
+        }];
+        let mut fresh = b.clone();
+        fresh.shared.grants.retain(|g| g.to != "b");
+        fresh.merge(bad, T).unwrap();
+        assert!(fresh
+            .shared
+            .grants
+            .iter()
+            .all(|g| g.to != "b" || fresh.shared.open_key(&fresh.holder(), &kid).is_some()));
+    }
+
+    #[test]
+    fn the_coordinator_id_cannot_join() {
+        let mut a = Identity::create("a", "A", 1.0);
+        let (d, _) = device(COORDINATOR_ID);
+        assert!(a.add_device(d, 2.0).is_err());
+        assert!(!a.state().is_member(COORDINATOR_ID));
+    }
+
+    /// Two devices remove each other: both are out, and the device left
+    /// moves to a key neither of them holds.
+    #[test]
+    fn contested_removal_rotates_away_from_both() {
+        let mut a = Identity::create("a", "A", 1.0);
+        let mut b = pair(&mut a, "b", 2.0);
+        let mut c = pair(&mut a, "c", 3.0);
+        exchange(&mut a, &mut b);
+        exchange(&mut a, &mut c);
+        a.remove_device("b", 4.0).unwrap();
+        b.remove_device("a", 4.0).unwrap();
+        c.merge(a.sync(), T).unwrap();
+        c.merge(b.sync(), T).unwrap();
+        assert!(c.is_member());
+        assert!(!c.state().is_member("a"));
+        assert!(!c.state().is_member("b"));
+        assert!(!c.state().rekey);
+        let key = c.group_key().unwrap();
+        assert_ne!(a.group_key(), Some(key));
+        assert_ne!(b.group_key(), Some(key));
+        assert!(!c.sync().grants.iter().any(|g| g.to == "a" || g.to == "b"));
     }
 
     #[test]
@@ -1111,7 +1248,7 @@ pub(crate) mod tests {
         let current = c.state().key_id.clone().unwrap();
         assert_eq!(c.shared.blob.as_ref().unwrap().key_id, current);
         // b, removed, can't read the re-sealed blob.
-        b.merge(a.sync()).unwrap();
+        b.merge(a.sync(), T).unwrap();
         assert!(b.secrets().is_none());
         // Off: rotates, the blob and the coordinator's grant are gone.
         let before = c.state().key_id.clone();
@@ -1137,7 +1274,7 @@ pub(crate) mod tests {
         exchange(&mut a, &mut b);
         assert_eq!(a.group_key(), b.group_key());
         assert!(a.shared.blob.is_none());
-        c.merge(a.sync()).unwrap();
+        c.merge(a.sync(), T).unwrap();
         assert!(!c.holds_current_key());
     }
 
@@ -1161,7 +1298,7 @@ pub(crate) mod tests {
             10.0,
             b.secret(),
         ));
-        a.merge(b.sync()).unwrap();
+        a.merge(b.sync(), T).unwrap();
         assert!(a.shared.coordinator_pin().is_none());
     }
 

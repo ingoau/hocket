@@ -173,7 +173,7 @@ pub async fn try_join(
                 sync,
             } => {
                 if let Some(s) = sync {
-                    me.merge((**s).clone()).unwrap();
+                    me.merge((**s).clone(), f64::INFINITY).unwrap();
                 }
                 assert_eq!(device_id, COORDINATOR_ID);
                 assert!(
