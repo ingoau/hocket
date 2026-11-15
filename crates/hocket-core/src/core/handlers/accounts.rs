@@ -335,12 +335,14 @@ impl Actor {
         if self.started {
             self.register_job_runners();
         }
+        self.relink();
         self.emit_everything(false);
     }
 
     pub(crate) fn reorder_accounts(&mut self, ids: Vec<AccountId>) {
         self.accounts.reorder(&ids);
         self.persist_priorities();
+        self.relink();
         self.providers_changed();
         if self.started {
             self.register_job_runners();
@@ -682,6 +684,9 @@ impl Actor {
             });
             let accounts = self.account_infos();
             self.emit(Event::AccountsChanged { accounts });
+            // New songs may have copies elsewhere; the Hocket library's
+            // stars and the Mixed playlists' rows are redone over the mirror.
+            self.apply_library_records();
             self.reconcile_playlist_pins();
             // Cached audio of tracks whose file changed on the server is stale.
             match self.downloads.invalidate_changed_sources() {

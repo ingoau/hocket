@@ -206,6 +206,9 @@ pub(crate) struct Actor {
     pub snoozes: Vec<crate::api::Snooze>,
     /// Where albums were left off, tombstones included (`crate::album_resume`).
     pub album_resumes: Vec<crate::api::AlbumResumeEntry>,
+    /// The identity's library: manual links, Mixed playlists, the Hocket
+    /// library (`crate::library`), tombstones included.
+    pub library_records: Vec<crate::library::LibraryRecord>,
     /// Track and position the next local load should land on (album resume).
     pub pending_resume_at: Option<(TrackRef, Ms)>,
     /// When the oldest offered album resume point expires (re-announced from the tick).
@@ -521,6 +524,7 @@ impl Actor {
             stash: vec![],
             snoozes: vec![],
             album_resumes: vec![],
+            library_records: vec![],
             pending_resume_at: None,
             album_resume_expires_at: None,
             emitted_transport: None,

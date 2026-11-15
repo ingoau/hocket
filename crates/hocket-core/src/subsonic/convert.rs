@@ -120,6 +120,11 @@ pub fn track_from_child(server_id: &str, c: &Child) -> api::Track {
         explicit: c.explicit_status.as_deref() == Some("explicit"),
         comment: c.comment.clone().filter(|s| !s.is_empty()),
         artists,
+        isrc: c
+            .isrc
+            .iter()
+            .find(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_ascii_uppercase()),
     }
 }
 

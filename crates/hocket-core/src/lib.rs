@@ -27,6 +27,7 @@ pub mod downloads;
 pub mod filters;
 pub mod identity;
 pub mod jobs;
+pub mod library;
 pub mod lyrics;
 pub mod media_session;
 pub mod outbox;

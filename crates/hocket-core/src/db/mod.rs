@@ -15,6 +15,7 @@
 //! The schema contract shared with the filters module is `schema.sql`.
 //! `WhereClause` lets that module hand over raw SQL against `tracks`.
 
+pub mod links;
 pub mod queries;
 pub mod sync;
 
@@ -29,11 +30,12 @@ use crate::util::{now_ms, Clock};
 /// The schema, applied as one migration. Hocket has no users yet: a schema
 /// change edits `schema.sql` and bumps the version, and a database from an
 /// older version is backed up and recreated (`migrate`). 11 squashed the
-/// earlier 0001–0010 and renamed `servers` to `accounts`.
-pub const MIGRATIONS: &[(u32, &str, &str)] = &[(11, "0011_accounts", include_str!("schema.sql"))];
+/// earlier 0001–0010 and renamed `servers` to `accounts`; 12 added dedup
+/// links, ISRCs and Mixed playlists' per-song sources.
+pub const MIGRATIONS: &[(u32, &str, &str)] = &[(12, "0012_links", include_str!("schema.sql"))];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[

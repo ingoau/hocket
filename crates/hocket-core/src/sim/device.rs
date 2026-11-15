@@ -125,6 +125,8 @@ pub struct SimDevice {
     pub stash: Vec<StashEntry>,
     /// The account's snoozes as the actor holds them (tombstones included).
     pub snoozes: Vec<Snooze>,
+    /// The identity's library records as the actor holds them.
+    pub library_records: Vec<crate::library::LibraryRecord>,
     pub outbox: Vec<(TrackId, EpochMs)>,
     pub resume_offer: Option<ResumeOfferDraft>,
     pub picker_open: bool,
@@ -223,6 +225,7 @@ impl SimDevice {
             saved_queues: saved.clone(),
             stash: stash.clone(),
             snoozes: snoozes.clone(),
+            library_records: vec![],
             outbox: vec![],
             resume_offer: None,
             picker_open: false,
@@ -262,6 +265,13 @@ impl SimDevice {
         // Kick the tier selection (the engine only connects on a config change or tick).
         d.handle(Input::Tick);
         d
+    }
+
+    /// An identity library record, as the actor puts it: put the record, hand the set to the engine.
+    pub fn put_library_record(&mut self, record: crate::library::LibraryRecord) {
+        let now = self.now();
+        crate::library::put(&mut self.library_records, record, now);
+        self.handle(Input::LibraryRecordsChanged(self.library_records.clone()));
     }
 
     pub fn persisted(&self) -> Persisted {
@@ -571,6 +581,9 @@ impl SimDevice {
                 self.snoozes = crate::snooze::merge(&self.snoozes, &list).0;
             }
             Output::AlbumResumeMerged(_) => {}
+            Output::LibraryRecordsMerged(list) => {
+                self.library_records = crate::library::merge(&self.library_records, &list).0;
+            }
             Output::LibraryEditReceived {
                 from,
                 items,

@@ -10,6 +10,7 @@ pub(crate) mod command;
 pub(crate) mod connect;
 pub(crate) mod diagnostics;
 pub(crate) mod identity;
+pub(crate) mod identity_library;
 pub(crate) mod library;
 pub(crate) mod playback;
 pub(crate) mod prefetch;

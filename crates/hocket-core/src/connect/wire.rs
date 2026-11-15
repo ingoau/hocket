@@ -33,6 +33,7 @@ use crate::api::{
     PositionStamp, QueueKey, RepeatMode, SavedQueue, SessionDocument, SessionId, Setting, Snooze,
     StashEntry, TrackId, TrackRef, TransportLease, UndoEntry,
 };
+use crate::library::LibraryRecord;
 
 /// Highest protocol version this build speaks.
 ///
@@ -259,6 +260,12 @@ pub struct ReplicaState {
     /// (`crate::album_resume`).
     #[serde(default)]
     pub album_resumes: Vec<AlbumResumeEntry>,
+    /// The identity's library: manual dedup links, Mixed playlists and the
+    /// Hocket library. LWW set keyed on record key, tombstones included
+    /// (`crate::library`).
+    #[serde(default)]
+    #[typeshare(skip)]
+    pub library_records: Vec<LibraryRecord>,
     /// Per-device last seen.
     #[serde(default)]
     pub devices: Vec<DeviceLease>,
@@ -1128,6 +1135,11 @@ pub enum Msg {
     AlbumResumeSync {
         entries: Vec<AlbumResumeEntry>,
     },
+    /// Either direction. The identity's library records, merged LWW per key
+    /// (`crate::library::merge`).
+    LibraryRecordsSync {
+        records: Vec<LibraryRecord>,
+    },
 
     // -- undo -----------------------------------------------------------
     /// Either direction. A session-tier undo entry shared with the session,
@@ -1346,6 +1358,7 @@ impl Msg {
         "stashSync",
         "snoozeSync",
         "albumResumeSync",
+        "libraryRecordsSync",
         "undoEntryShared",
         "libraryEdited",
         "diagnosticsRequest",
@@ -1415,6 +1428,7 @@ impl Msg {
             Msg::StashSync { .. } => "stashSync",
             Msg::SnoozeSync { .. } => "snoozeSync",
             Msg::AlbumResumeSync { .. } => "albumResumeSync",
+            Msg::LibraryRecordsSync { .. } => "libraryRecordsSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
@@ -1705,6 +1719,7 @@ mod tests {
             Msg::SettingsSync { settings: vec![] },
             Msg::StashSync { entries: vec![] },
             Msg::AlbumResumeSync { entries: vec![] },
+            Msg::LibraryRecordsSync { records: vec![] },
             Msg::LibraryEdited {
                 device_id: "a".into(),
                 items: vec![],
@@ -1770,6 +1785,7 @@ mod tests {
             stash: vec![],
             snoozes: vec![],
             album_resumes: vec![],
+            library_records: vec![],
             devices: vec![],
             transport_lease: TransportLease::default(),
             last_stamp: None,

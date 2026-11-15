@@ -146,6 +146,7 @@ impl Actor {
         self.load_stash();
         self.load_snoozes();
         self.load_album_resumes();
+        self.load_library_records();
         // Restore the resume point: the last known item and position, dormant
         // (never auto-resume on start).
         if let Ok(Some(pos)) = self
@@ -566,6 +567,7 @@ impl Actor {
             Output::StashMerged(list) => self.on_stash_merged(list),
             Output::SnoozesMerged(list) => self.on_snoozes_merged(list),
             Output::AlbumResumeMerged(list) => self.on_album_resume_merged(list),
+            Output::LibraryRecordsMerged(list) => self.on_library_records_merged(list),
             Output::UndoEntryReceived {
                 entry,
                 before_revision: _,

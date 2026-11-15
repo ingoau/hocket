@@ -286,6 +286,9 @@ pub struct Track {
     /// the display string as tagged (e.g. "A feat. B").
     #[serde(default)]
     pub artists: Vec<ArtistRef>,
+    /// The recording's ISRC, when the provider reports one (dedup matches on it).
+    #[serde(default)]
+    pub isrc: Option<String>,
 }
 
 /// One of a song's artists: its library id (when the server gives one) and its name.

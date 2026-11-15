@@ -15,6 +15,7 @@ use crate::api::{
 };
 use crate::lyrics::search::{self, IndexedLyrics};
 
+use super::links::{hidden_copy, LinkKind};
 use super::{Db, DbResult};
 
 /// A raw SQL fragment over `tracks` with positional parameters. Built by the
@@ -89,7 +90,7 @@ const ALBUM_OWNER: &str = "COALESCE((SELECT a.server_id FROM albums a WHERE a.id
 /// As [`ALBUM_OWNER`], for an artist id.
 const ARTIST_OWNER: &str = "COALESCE((SELECT a.server_id FROM artists a WHERE a.id = ?1 ORDER BY COALESCE((SELECT priority FROM accounts WHERE accounts.id = a.server_id), 1000000) LIMIT 1), server_id)";
 
-pub const TRACK_COLUMNS: &str = "id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, key, energy, mood, danceability, valence, offline, music_brainz_id, explicit, comment, artists";
+pub const TRACK_COLUMNS: &str = "id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, key, energy, mood, danceability, valence, offline, music_brainz_id, explicit, comment, artists, isrc";
 
 fn opt_u32(row: &Row, idx: usize) -> rusqlite::Result<Option<u32>> {
     Ok(row.get::<_, Option<i64>>(idx)?.map(|v| v.max(0) as u32))
@@ -153,6 +154,7 @@ pub fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
         explicit: row.get::<_, i64>(39)? != 0,
         comment: row.get(40)?,
         artists: Vec::new(),
+        isrc: row.get(42)?,
     };
     // As stored (JSON), or for a row from before the column existed the one artist it names.
     t.artists = row
@@ -861,7 +863,8 @@ impl Db {
         let seed = self.random_seed();
         self.with_conn(|c| {
             let sql = format!(
-                "SELECT {ARTIST_COLUMNS} FROM artists WHERE (?1 = '' OR server_id = ?1) ORDER BY {}{}",
+                "SELECT {ARTIST_COLUMNS} FROM artists WHERE (server_id = ?1 OR (?1 = '' AND NOT {})) ORDER BY {}{}",
+                hidden_copy(LinkKind::Artist, "artists"),
                 artist_order(sort, descending, seed),
                 page_sql(&page)
             );
@@ -894,7 +897,10 @@ impl Db {
     pub fn artist_count(&self, server_id: &str) -> DbResult<u32> {
         self.with_conn(|c| {
             let n: i64 = c.query_row(
-                "SELECT count(*) FROM artists WHERE (?1 = '' OR server_id = ?1)",
+                &format!(
+                    "SELECT count(*) FROM artists WHERE (server_id = ?1 OR (?1 = '' AND NOT {}))",
+                    hidden_copy(LinkKind::Artist, "artists")
+                ),
                 [server_id],
                 |r| r.get(0),
             )?;
@@ -1070,7 +1076,7 @@ impl Db {
     pub fn playlist_tracks(&self, playlist_id: &str, page: Option<Page>) -> DbResult<Vec<Track>> {
         self.with_conn(|c| {
             let sql = format!(
-                "SELECT {} FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id AND t.server_id = pt.server_id WHERE pt.playlist_id = ?1 ORDER BY pt.position ASC{}",
+                "SELECT {} FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id AND t.server_id = COALESCE(pt.track_source, pt.server_id) WHERE pt.playlist_id = ?1 ORDER BY pt.position ASC{}",
                 TRACK_COLUMNS.split(", ").map(|col| format!("t.{col}")).collect::<Vec<_>>().join(", "),
                 page_sql(&page)
             );
@@ -1231,23 +1237,26 @@ impl Db {
         };
         let lim = limit.max(1) as i64;
         self.with_conn(|c| {
+            let hidden_t = hidden_copy(LinkKind::Track, "t");
+            let hidden_al = hidden_copy(LinkKind::Album, "a");
+            let hidden_ar = hidden_copy(LinkKind::Artist, "a");
             let track_cols = TRACK_COLUMNS.split(", ").map(|col| format!("t.{col}")).collect::<Vec<_>>().join(", ");
             let mut st = c.prepare_cached(&format!(
-                "SELECT {track_cols} FROM tracks_fts f JOIN tracks t ON t.rowid = f.rowid WHERE tracks_fts MATCH ?1 AND (?2 = '' OR t.server_id = ?2) ORDER BY bm25(tracks_fts, 3.0, 1.0, 2.0), t.title COLLATE NOCASE LIMIT ?3"
+                "SELECT {track_cols} FROM tracks_fts f JOIN tracks t ON t.rowid = f.rowid WHERE tracks_fts MATCH ?1 AND (t.server_id = ?2 OR (?2 = '' AND NOT {hidden_t})) ORDER BY bm25(tracks_fts, 3.0, 1.0, 2.0), t.title COLLATE NOCASE LIMIT ?3"
             ))?;
             let rows = st.query_map(params![match_expr, server_id, lim], track_from_row)?;
             results.tracks = rows.collect::<Result<Vec<_>, _>>()?.iter().map(crate::subsonic::convert::summary_of).collect();
 
             let album_cols = ALBUM_COLUMNS.split(", ").map(|col| format!("a.{col}")).collect::<Vec<_>>().join(", ");
             let mut st = c.prepare_cached(&format!(
-                "SELECT {album_cols} FROM albums_fts f JOIN albums a ON a.rowid = f.rowid WHERE albums_fts MATCH ?1 AND (?2 = '' OR a.server_id = ?2) ORDER BY bm25(albums_fts, 3.0, 1.0), a.name COLLATE NOCASE LIMIT ?3"
+                "SELECT {album_cols} FROM albums_fts f JOIN albums a ON a.rowid = f.rowid WHERE albums_fts MATCH ?1 AND (a.server_id = ?2 OR (?2 = '' AND NOT {hidden_al})) ORDER BY bm25(albums_fts, 3.0, 1.0), a.name COLLATE NOCASE LIMIT ?3"
             ))?;
             let rows = st.query_map(params![match_expr, server_id, lim], album_from_row)?;
             results.albums = rows.collect::<Result<Vec<_>, _>>()?;
 
             let artist_cols = ARTIST_COLUMNS.split(", ").map(|col| format!("a.{col}")).collect::<Vec<_>>().join(", ");
             let mut st = c.prepare_cached(&format!(
-                "SELECT {artist_cols} FROM artists_fts f JOIN artists a ON a.rowid = f.rowid WHERE artists_fts MATCH ?1 AND (?2 = '' OR a.server_id = ?2) ORDER BY bm25(artists_fts), a.name COLLATE NOCASE LIMIT ?3"
+                "SELECT {artist_cols} FROM artists_fts f JOIN artists a ON a.rowid = f.rowid WHERE artists_fts MATCH ?1 AND (a.server_id = ?2 OR (?2 = '' AND NOT {hidden_ar})) ORDER BY bm25(artists_fts), a.name COLLATE NOCASE LIMIT ?3"
             ))?;
             let rows = st.query_map(params![match_expr, server_id, lim], artist_from_row)?;
             results.artists = rows.collect::<Result<Vec<_>, _>>()?;
@@ -1508,7 +1517,11 @@ impl Db {
 
 fn track_where(server_id: &str, filter: &Option<WhereClause>) -> (String, Vec<Value>) {
     let mut params = vec![Value::Text(server_id.to_string())];
-    let mut sql = "(?1 = '' OR server_id = ?1)".to_string();
+    // The unified library lists one copy of a song on several accounts.
+    let mut sql = format!(
+        "(server_id = ?1 OR (?1 = '' AND NOT {}))",
+        hidden_copy(LinkKind::Track, "tracks")
+    );
     if let Some(f) = filter {
         if !f.is_empty() {
             // Renumber: filter params are appended after server_id, so its `?` must be positional-unnumbered.
@@ -1523,7 +1536,10 @@ fn track_where(server_id: &str, filter: &Option<WhereClause>) -> (String, Vec<Va
 
 fn album_where(q: &AlbumQuery) -> (String, Vec<Value>) {
     let mut params = vec![Value::Text(q.server_id.clone())];
-    let mut sql = "(?1 = '' OR server_id = ?1)".to_string();
+    let mut sql = format!(
+        "(server_id = ?1 OR (?1 = '' AND NOT {}))",
+        hidden_copy(LinkKind::Album, "albums")
+    );
     if let Some(a) = &q.artist_id {
         params.push(Value::Text(a.clone()));
         sql.push_str(&format!(" AND artist_id = ?{}", params.len()));
@@ -1542,8 +1558,8 @@ pub(crate) fn upsert_tracks_in(
     sync_gen: i64,
 ) -> DbResult<usize> {
     let mut st = tx.prepare_cached(
-        "INSERT INTO tracks(id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, changed, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, mood, music_brainz_id, explicit, comment, is_compilation, sync_gen, artists)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, COALESCE((SELECT is_compilation FROM albums WHERE albums.server_id = ?2 AND albums.id = ?4), 0), ?38, ?39)
+        "INSERT INTO tracks(id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, changed, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, mood, music_brainz_id, explicit, comment, is_compilation, sync_gen, artists, isrc)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, COALESCE((SELECT is_compilation FROM albums WHERE albums.server_id = ?2 AND albums.id = ?4), 0), ?38, ?39, ?40)
          ON CONFLICT(server_id, id) DO UPDATE SET
            title = excluded.title, album_id = excluded.album_id, album = excluded.album, artist_id = excluded.artist_id, artist = excluded.artist, album_artist = excluded.album_artist,
            track_number = excluded.track_number, disc_number = excluded.disc_number, year = excluded.year, genre = excluded.genre, duration_ms = excluded.duration_ms,
@@ -1553,7 +1569,7 @@ pub(crate) fn upsert_tracks_in(
            rg_track_gain = excluded.rg_track_gain, rg_track_peak = excluded.rg_track_peak, rg_album_gain = excluded.rg_album_gain, rg_album_peak = excluded.rg_album_peak,
            bpm = COALESCE(excluded.bpm, tracks.bpm), mood = COALESCE(excluded.mood, tracks.mood),
            music_brainz_id = excluded.music_brainz_id, explicit = excluded.explicit, comment = excluded.comment,
-           is_compilation = excluded.is_compilation, sync_gen = excluded.sync_gen, artists = excluded.artists",
+           is_compilation = excluded.is_compilation, sync_gen = excluded.sync_gen, artists = excluded.artists, isrc = excluded.isrc",
     )?;
     let mut n = 0;
     for (i, t) in tracks.iter().enumerate() {
@@ -1605,6 +1621,7 @@ pub(crate) fn upsert_tracks_in(
             t.comment,
             sync_gen,
             artists,
+            t.isrc,
         ])?;
     }
     Ok(n)
@@ -2196,6 +2213,7 @@ mod tests {
             music_brainz_id: Some("mb".into()),
             explicit: true,
             comment: Some("c".into()),
+            isrc: Some("USRC17607839".into()),
             artists: vec![
                 api::ArtistRef {
                     id: Some("ar".into()),

@@ -26,6 +26,7 @@ use crate::api::{
 use crate::connect::wire::{
     merge_saved_queues, merge_settings, DeviceLease, LastStamp, ReplicaState, ScrobbleRecord,
 };
+use crate::library::LibraryRecord;
 
 /// Replicas idle for this long are dropped by [`ReplicaStore::purge_expired`].
 pub const REPLICA_TTL_MS: f64 = 30.0 * 24.0 * 3_600_000.0;
@@ -67,6 +68,7 @@ pub fn new_replica(document: SessionDocument, now: EpochMs) -> ReplicaState {
         stash: vec![],
         snoozes: vec![],
         album_resumes: vec![],
+        library_records: vec![],
         devices: vec![],
         transport_lease: TransportLease::default(),
         last_stamp: None,
@@ -85,6 +87,7 @@ pub trait ReplicaExt {
     fn merge_stash(&mut self, theirs: &[StashEntry], now: EpochMs) -> bool;
     fn merge_snoozes(&mut self, theirs: &[Snooze], now: EpochMs) -> bool;
     fn merge_album_resumes(&mut self, theirs: &[AlbumResumeEntry], now: EpochMs) -> bool;
+    fn merge_library_records(&mut self, theirs: &[LibraryRecord], now: EpochMs) -> bool;
     fn claim_scrobble(
         &mut self,
         track_id: &TrackRef,
@@ -174,6 +177,17 @@ impl ReplicaExt for ReplicaState {
         let changed = merged != self.album_resumes;
         if changed {
             self.album_resumes = merged;
+            self.updated_at = now;
+        }
+        changed
+    }
+
+    fn merge_library_records(&mut self, theirs: &[LibraryRecord], now: EpochMs) -> bool {
+        let (mut merged, _) = crate::library::merge(&self.library_records, theirs);
+        crate::library::prune(&mut merged, now);
+        let changed = merged != self.library_records;
+        if changed {
+            self.library_records = merged;
             self.updated_at = now;
         }
         changed

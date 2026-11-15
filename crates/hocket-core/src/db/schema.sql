@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     -- spoken content's resume point in ms; unused for songs
     resume_position   INTEGER,
     has_lyrics        INTEGER NOT NULL DEFAULT 0,
+    -- the recording's ISRC, when the provider reports one (dedup matches on it)
+    isrc              TEXT,
     -- local (this device) listening data, maintained by the scrobbler
     local_play_count  INTEGER NOT NULL DEFAULT 0,
     local_last_played REAL,
@@ -277,9 +279,28 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
     playlist_id  TEXT NOT NULL,
     position     INTEGER NOT NULL,
     track_id     TEXT NOT NULL,
+    -- where track_id is valid when it isn't the playlist's own account (a Mixed playlist's songs)
+    track_source TEXT,
     PRIMARY KEY (server_id, playlist_id, position)
 );
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track ON playlist_tracks(server_id, track_id);
+
+-- Dedup (docs/providers.md, Phase 3): songs, albums and artists that are one
+-- thing on several accounts. Only members of groups of two or more have rows;
+-- rebuilt by the matcher from the mirror and the identity's manual links.
+CREATE TABLE IF NOT EXISTS links (
+    -- 'track' | 'album' | 'artist'
+    kind      TEXT NOT NULL,
+    source    TEXT NOT NULL,
+    id        TEXT NOT NULL,
+    group_id  TEXT NOT NULL,
+    -- the copy the unified library lists (the highest-priority account's)
+    rep       INTEGER NOT NULL DEFAULT 0,
+    -- joined by a manual link rather than the matcher
+    manual    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (kind, source, id)
+);
+CREATE INDEX IF NOT EXISTS idx_links_group ON links(kind, group_id);
 
 -- ---------------------------------------------------------------------------
 -- Local listening data (not rebuildable)

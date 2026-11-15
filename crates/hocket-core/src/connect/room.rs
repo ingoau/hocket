@@ -1839,6 +1839,16 @@ impl Room {
                     self.send(peer, Msg::SnoozeSync { entries: merged });
                 }
             }
+            Msg::LibraryRecordsSync { records } => {
+                let changed = self.replica.merge_library_records(&records, now);
+                let merged = self.replica.library_records.clone();
+                if changed {
+                    self.dirty = true;
+                    self.broadcast(Msg::LibraryRecordsSync { records: merged }, None);
+                } else if crate::library::merge(&records, &merged).1 {
+                    self.send(peer, Msg::LibraryRecordsSync { records: merged });
+                }
+            }
             Msg::AlbumResumeSync { entries } => {
                 let changed = self.replica.merge_album_resumes(&entries, now);
                 let merged = self.replica.album_resumes.clone();

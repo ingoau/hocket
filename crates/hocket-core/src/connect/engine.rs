@@ -49,6 +49,7 @@ use crate::connect::{
     SyncPoint, LOOPBACK,
 };
 use crate::identity::SharedIdentity;
+use crate::library::LibraryRecord;
 use crate::util::Clock;
 
 /// Default pre-buffer fan-out cap.
@@ -341,6 +342,8 @@ pub enum Input {
     SnoozesChanged(Vec<Snooze>),
     /// The local album-resume map, whole (tombstones included).
     AlbumResumeChanged(Vec<AlbumResumeEntry>),
+    /// The identity's library records, whole (tombstones included).
+    LibraryRecordsChanged(Vec<LibraryRecord>),
     UndoEntryCreated {
         entry: UndoEntry,
         before_revision: u32,
@@ -526,6 +529,8 @@ pub enum Output {
     SnoozesMerged(Vec<Snooze>),
     /// Album resume points after merging a remote copy (whole).
     AlbumResumeMerged(Vec<AlbumResumeEntry>),
+    /// Library records after merging a remote copy (whole).
+    LibraryRecordsMerged(Vec<LibraryRecord>),
     UndoEntryReceived {
         entry: UndoEntry,
         before_revision: u32,
@@ -792,6 +797,7 @@ pub struct Engine {
     stash: Vec<StashEntry>,
     snoozes: Vec<Snooze>,
     album_resumes: Vec<AlbumResumeEntry>,
+    library_records: Vec<LibraryRecord>,
 
     lan_peers: Vec<PeerAdvert>,
     /// LAN peers that failed the mutual proof (or refused us), with the
@@ -943,6 +949,7 @@ impl Engine {
             stash: vec![],
             snoozes: vec![],
             album_resumes: vec![],
+            library_records: vec![],
             lan_peers: vec![],
             lan_blocklist: BTreeMap::new(),
             lan_strikes: BTreeMap::new(),
@@ -1189,6 +1196,10 @@ impl Engine {
 
     pub fn album_resumes(&self) -> &[AlbumResumeEntry] {
         &self.album_resumes
+    }
+
+    pub fn library_records(&self) -> &[LibraryRecord] {
+        &self.library_records
     }
 
     pub fn now_local_ms(&self) -> EpochMs {
@@ -1518,6 +1529,13 @@ impl Engine {
                 self.album_resumes = merged;
                 let entries = self.album_resumes.clone();
                 self.upstream_send(Msg::AlbumResumeSync { entries });
+            }
+            Input::LibraryRecordsChanged(list) => {
+                let (mut merged, _) = crate::library::merge(&list, &self.library_records);
+                crate::library::prune(&mut merged, self.clock.now_ms());
+                self.library_records = merged;
+                let records = self.library_records.clone();
+                self.upstream_send(Msg::LibraryRecordsSync { records });
             }
             Input::UndoEntryCreated {
                 entry,
@@ -3280,6 +3298,14 @@ impl Engine {
                     self.out.push(Output::AlbumResumeMerged(merged));
                 }
             }
+            Msg::LibraryRecordsSync { records } => {
+                let (mut merged, _) = crate::library::merge(&self.library_records, &records);
+                crate::library::prune(&mut merged, self.clock.now_ms());
+                if merged != self.library_records {
+                    self.library_records = merged.clone();
+                    self.out.push(Output::LibraryRecordsMerged(merged));
+                }
+            }
             Msg::UndoEntryShared {
                 entry,
                 before_revision,
@@ -3663,6 +3689,13 @@ impl Engine {
                 self.album_resumes = merged.clone();
                 self.out.push(Output::AlbumResumeMerged(merged));
             }
+            let (mut merged, _) =
+                crate::library::merge(&self.library_records, &rep.library_records);
+            crate::library::prune(&mut merged, self.clock.now_ms());
+            if merged != self.library_records {
+                self.library_records = merged.clone();
+                self.out.push(Output::LibraryRecordsMerged(merged));
+            }
             if remote {
                 let (theirs_plus_ours, ours_has_more) =
                     merge_saved_queues(&rep.saved_queues, &self.saved_queues);
@@ -3692,13 +3725,20 @@ impl Engine {
                     let entries = self.album_resumes.clone();
                     self.upstream_send(Msg::AlbumResumeSync { entries });
                 }
+                let (_, ours_has_more) =
+                    crate::library::merge(&rep.library_records, &self.library_records);
+                if ours_has_more {
+                    let records = self.library_records.clone();
+                    self.upstream_send(Msg::LibraryRecordsSync { records });
+                }
             }
         } else if remote
             && (!self.saved_queues.is_empty()
                 || !self.settings.is_empty()
                 || !self.stash.is_empty()
                 || !self.snoozes.is_empty()
-                || !self.album_resumes.is_empty())
+                || !self.album_resumes.is_empty()
+                || !self.library_records.is_empty())
         {
             let q = self.saved_queues.clone();
             self.upstream_send(Msg::SavedQueuesSync { queues: q });
@@ -3715,6 +3755,10 @@ impl Engine {
             if !self.album_resumes.is_empty() {
                 let entries = self.album_resumes.clone();
                 self.upstream_send(Msg::AlbumResumeSync { entries });
+            }
+            if !self.library_records.is_empty() {
+                let records = self.library_records.clone();
+                self.upstream_send(Msg::LibraryRecordsSync { records });
             }
         }
         if self.held.is_some() {
