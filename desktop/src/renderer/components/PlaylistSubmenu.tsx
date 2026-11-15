@@ -17,7 +17,7 @@ import { useQuery } from "../store/queries";
 import { executeAction } from "../store/actions";
 import { usePins } from "../lib/use-pins";
 import { showToast, toastUndoable } from "../lib/ui-toast";
-import { clickIntent, keepLayout, layoutPlaylists, pickerGroups, rowState, type PickerGroupId, type PickerLayout, type RowState } from "../lib/playlist-picker";
+import { clickIntent, keepLayout, layoutPlaylists, pickerGroups, refsWithIds, rowState, type PickerGroupId, type PickerLayout, type RowState } from "../lib/playlist-picker";
 import { placeFlyout, type FlyoutSide } from "../lib/flyout";
 import { Icon } from "./Icon";
 import { MOUSE_BACK } from "./MenuFlyout";
@@ -49,11 +49,9 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
   const several = useApp((s) => s.accounts.length > 1);
   const openDialog = useApp((s) => s.openDialog);
   const trackIds = useMemo(() => tracks.map((r) => r.id), [tracks]);
-  // Membership names songs by id; back to the references to add them.
-  const refsFor = (ids: string[]): TrackRef[] => ids.map((id) => tracks.find((r) => r.id === id) ?? { source: "", id });
   const dispatch = useApp((s) => s.dispatch);
   const pins = usePins();
-  const ids = JSON.stringify(trackIds);
+  const ids = JSON.stringify(tracks);
   const { data: playlists } = useQuery(() => (serverId ? { type: "playlists", data: { server_id: "" } } : null), "playlists", [serverId], { keep: true });
   const { data: membership } = useQuery(() => (serverId ? { type: "playlistMembership", data: { server_id: "", tracks } } : null), "membership", [serverId, ids], { keep: true });
   const [layout, setLayout] = useState<PickerLayout | undefined>(undefined);
@@ -114,25 +112,26 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
 
   if (!ready) return null;
 
-  const add = (p: Playlist, ids: string[], again: boolean) =>
-    toastUndoable(t(again ? "toast.addedAgain" : "toast.addedToPlaylist", { playlist: p.name }), () => dispatch({ type: "playlistAdd", data: { playlist_id: p.id, tracks: refsFor(ids), at_index: undefined } }));
+  const add = (p: Playlist, refs: TrackRef[], again: boolean) =>
+    toastUndoable(t(again ? "toast.addedAgain" : "toast.addedToPlaylist", { playlist: p.name }), () => dispatch({ type: "playlistAdd", data: { playlist_id: p.id, tracks: refs, at_index: undefined } }));
   const remove = (p: Playlist, indices: number[], one: boolean) => {
     setAsking(null);
     if (indices.length) toastUndoable(t(one ? "toast.removedOneFrom" : "toast.removedFrom", { playlist: p.name }), () => dispatch({ type: "playlistRemove", data: { playlist_id: p.id, indices } }));
   };
   const addCopy = (p: Playlist, s: RowState) => {
     setAsking(null);
-    add(p, trackIds, s.checked !== false);
+    add(p, tracks, s.checked !== false);
   };
   const toggle = (p: Playlist, s: RowState, i: number) => {
     switch (clickIntent(s)) {
       case "add":
         setAsking(null);
-        add(p, trackIds, false);
+        add(p, tracks, false);
         return;
       case "addMissing":
         setAsking(null);
-        add(p, s.missing, false);
+        // Membership names songs by id; back to the references (every account's) to add them.
+        add(p, refsWithIds(tracks, s.missing), false);
         return;
       case "remove":
         remove(p, s.indices, false);
