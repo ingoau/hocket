@@ -131,7 +131,7 @@ impl Actor {
     /// Bytes a prime of this track fetches.
     pub(crate) fn prime_bytes(&self, track: &Track) -> u64 {
         let seconds = f64::from(track.duration_ms) / 1000.0;
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         let rate = if let Some(kbps) = profile.as_ref().and_then(|p| p.max_bit_rate) {
             f64::from(kbps) * 1000.0 / 8.0
         } else if let (Some(size), true) = (track.size_bytes.filter(|b| *b > 0.0), seconds > 0.0) {
@@ -158,7 +158,7 @@ impl Actor {
         ) {
             return false;
         }
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         if matches!(
             self.downloads
                 .cache_lookup(&track.server_id, &track.id, profile.as_ref(), false),

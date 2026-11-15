@@ -107,6 +107,9 @@ impl SettingsStore for DbSettingsStore {
     }
 }
 
+/// Live home shelves by account, with when they were fetched.
+pub(crate) type LiveHome = Arc<Mutex<HashMap<String, (f64, Vec<crate::api::HomeShelf>)>>>;
+
 pub(crate) struct Actor {
     pub cfg: CoreConfig,
     pub clock: Arc<dyn Clock>,
@@ -190,6 +193,14 @@ pub(crate) struct Actor {
     pub accounts: AccountRegistry,
     /// Accounts added but not yet verified by a probe.
     pub pending_accounts: HashMap<AccountId, super::PendingAccount>,
+    /// Live home shelves by account, with when they were fetched.
+    pub live_home: LiveHome,
+    pub live_home_fetching: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// The InnerTube transport tests inject (`None`: reqwest).
+    pub ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
+    /// YouTube Music JS host requests waiting for the platform's answer.
+    pub ytm_js_pending:
+        HashMap<String, tokio::sync::oneshot::Sender<Result<crate::api::YtmJsAnswer, String>>>,
     pub engine: Option<Engine>,
     /// The session's scope: the identity id while a session is open.
     pub scope: Option<String>,
@@ -514,6 +525,10 @@ impl Actor {
             lyrics_http: deps.lyrics_http,
             accounts: AccountRegistry::default(),
             pending_accounts: HashMap::new(),
+            ytm_js_pending: HashMap::new(),
+            ytm_http: deps.ytm_http.clone(),
+            live_home: Arc::default(),
+            live_home_fetching: Arc::default(),
             engine: None,
             scope: None,
             identity,
@@ -658,6 +673,13 @@ impl Actor {
             },
             Internal::SyncProgress(p) => self.on_sync_progress(p),
             Internal::Probed { account_id, result } => self.on_probed(account_id, result),
+            Internal::YtmProbed {
+                cookies,
+                js_host,
+                result,
+            } => self.on_ytm_probed(cookies, js_host, result),
+            Internal::YtmJs { request, reply } => self.on_ytm_js(request, reply),
+            Internal::LiveHomeFetched { account_id } => self.on_live_home_fetched(account_id),
             Internal::Connected { peer, url, tx } => {
                 self.conns.insert(peer.clone(), tx);
                 self.engine_input(Input::Connected { peer, url });

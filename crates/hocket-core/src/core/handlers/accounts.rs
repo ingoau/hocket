@@ -61,6 +61,9 @@ impl Actor {
                 password,
                 name,
             } => self.add_navidrome(url, username, password, name),
+            AccountSetup::YoutubeMusic { cookies, js_host } => {
+                self.add_youtube_music(cookies, js_host)
+            }
         }
     }
 
@@ -218,13 +221,34 @@ impl Actor {
 
     fn install_account(
         &mut self,
-        mut info: AccountInfo,
+        info: AccountInfo,
         api: Arc<dyn SubsonicApi>,
         client: Option<Arc<Client>>,
         password: Option<Secret>,
         reachable: bool,
     ) {
         let provider: Arc<dyn Provider> = Arc::new(NavidromeProvider::new(api.clone()));
+        let tx = self.tx.clone();
+        let sync = LibrarySync::new(
+            self.db.clone(),
+            api.clone(),
+            self.clock.clone(),
+            Arc::new(move |p: SyncProgress| {
+                let _ = tx.send(ActorMsg::Internal(Internal::SyncProgress(p)));
+            }),
+        );
+        self.install_provider(info, provider, Some(sync), client, password, reachable);
+    }
+
+    pub(crate) fn install_provider(
+        &mut self,
+        mut info: AccountInfo,
+        provider: Arc<dyn Provider>,
+        sync: Option<LibrarySync>,
+        client: Option<Arc<Client>>,
+        password: Option<Secret>,
+        reachable: bool,
+    ) {
         info.features = provider.capabilities();
         if let Err(e) = self.db.upsert_account(&info, self.now()) {
             self.error(ErrorKind::Storage, "save account", Some(e.to_string()));
@@ -240,16 +264,7 @@ impl Actor {
         if password.is_some() {
             state.password = password;
         }
-        let tx = self.tx.clone();
-        let sync = LibrarySync::new(
-            self.db.clone(),
-            api.clone(),
-            self.clock.clone(),
-            Arc::new(move |p: SyncProgress| {
-                let _ = tx.send(ActorMsg::Internal(Internal::SyncProgress(p)));
-            }),
-        );
-        state.sync = Some(Arc::new(sync));
+        state.sync = sync.map(Arc::new);
         state.ready_tables = self
             .db
             .saved_state_get::<SyncCursor>(&SyncCursor::key(&state.info.id))
@@ -329,6 +344,14 @@ impl Actor {
         self.prefetch_tick(self.now());
         if let Err(e) = self.db.delete_account(&account_id) {
             self.error(ErrorKind::Storage, "remove account", Some(e.to_string()));
+        }
+        // The last account of a shared source (YouTube Music's `ytm`) takes
+        // the source's mirror, pins and outbox with it.
+        let source = removed.info.source.clone();
+        if source != account_id && self.accounts.for_source(&source).is_none() {
+            if let Err(e) = self.db.delete_account(&source) {
+                self.error(ErrorKind::Storage, "remove account", Some(e.to_string()));
+            }
         }
         self.persist_priorities();
         self.credentials_changed();
@@ -754,7 +777,12 @@ impl Actor {
         let tx = self.tx.clone();
         self.spawn(async move {
             let mut total: Option<crate::outbox::FlushReport> = None;
-            for p in providers.iter() {
+            // One provider per source: a source's rows go to its highest-priority account.
+            let mut seen = std::collections::HashSet::new();
+            for p in providers
+                .iter()
+                .filter(|p| seen.insert(p.source().to_string()))
+            {
                 if let Ok(r) = outbox.flush(p.as_ref(), 100).await {
                     total.get_or_insert_with(Default::default).absorb(r);
                 }

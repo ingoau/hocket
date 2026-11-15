@@ -81,6 +81,7 @@ async fn bare_core(name: &str) -> Bare {
             lyrics_http: None,
             seed: 3,
             reducer: None,
+            ytm_http: None,
         },
     )
     .unwrap();

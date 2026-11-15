@@ -264,6 +264,9 @@ struct Inner {
     cache_budget_auto: RwLock<bool>,
     warn_threshold: RwLock<Option<f64>>,
     policy: RwLock<TranscodingPolicy>,
+    /// Track gain a provider reported when it resolved a stream (YouTube
+    /// Music's `loudnessDb`), by (source, track): used when nothing was scanned.
+    provider_gain: RwLock<HashMap<(String, String), f64>>,
     network: RwLock<Option<api::NetworkState>>,
     /// `storage.prefetchOnMobileData`.
     prefetch_on_mobile_data: RwLock<bool>,
@@ -350,6 +353,7 @@ impl Downloads {
                 cache_budget_auto: RwLock::new(true),
                 warn_threshold: RwLock::new(None),
                 policy: RwLock::new(TranscodingPolicy::default()),
+                provider_gain: RwLock::new(HashMap::new()),
                 network: RwLock::new(None),
                 prefetch_on_mobile_data: RwLock::new(false),
                 cache_use: parking_lot::Mutex::new(CacheUse::default()),
@@ -921,14 +925,30 @@ impl Downloads {
         if pin.is_some() {
             return Ok(pin);
         }
-        self.inner.db.with_conn(|c| {
+        let scanned = self.inner.db.with_conn(|c| {
             Ok(c.query_row(
                 "SELECT gain_db, peak FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND complete = 1 AND gain_db IS NOT NULL ORDER BY (profile = '') DESC, last_used_at DESC LIMIT 1",
                 params![server_id, track_id],
                 |r| Ok((r.get::<_, f64>(0)?, r.get::<_, Option<f64>>(1)?)),
             )
             .optional()?)
-        })
+        })?;
+        Ok(scanned.or_else(|| {
+            self.inner
+                .provider_gain
+                .read()
+                .get(&(server_id.to_string(), track_id.to_string()))
+                .map(|g| (*g, None))
+        }))
+    }
+
+    /// The track gain a provider reported for a stream it resolved.
+    pub fn note_provider_gain(&self, server_id: &str, track_id: &str, gain_db: f64) {
+        let mut m = self.inner.provider_gain.write();
+        if m.len() > 4096 {
+            m.clear();
+        }
+        m.insert((server_id.to_string(), track_id.to_string()), gain_db);
     }
 
     /// Stored gain for a track, if any.
@@ -1575,6 +1595,15 @@ impl Downloads {
     /// Effective transcoding profile for streaming now: the per-network
     /// profile, with the platform's `cannot_decode` list merged in, forced
     /// to a transcode when the track's container can't be decoded.
+    /// The profile a track streams with: none for a source that can't
+    /// transcode (YouTube Music streams its one AAC format).
+    pub fn track_profile(&self, track: &api::Track) -> Option<TranscodingProfile> {
+        if track.server_id == crate::ytm::SOURCE {
+            return None;
+        }
+        self.effective_profile(track.suffix.as_deref())
+    }
+
     pub fn effective_profile(&self, suffix: Option<&str>) -> Option<TranscodingProfile> {
         let network = self.inner.network.read().clone();
         let mut profile = self
@@ -1656,7 +1685,12 @@ impl Downloads {
                 mix_out_ms: None,
             });
         }
-        let profile = self.effective_profile(track.suffix.as_deref());
+        // A provider that can't transcode (YouTube Music) streams its one format.
+        let profile = if provider.capabilities().transcode {
+            self.track_profile(track)
+        } else {
+            None
+        };
         let transcoded = profile
             .as_ref()
             .is_some_and(|p| p.format.is_some() || p.max_bit_rate.is_some());

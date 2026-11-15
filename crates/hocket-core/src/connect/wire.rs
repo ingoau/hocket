@@ -211,6 +211,15 @@ impl AnalysisKey {
         }
     }
 
+    /// A YouTube Music video's key: one provider for every account (video
+    /// ids are global) and the format (itag) the audio was analysed from.
+    pub fn ytm(video_id: &str, itag: u32) -> AnalysisKey {
+        AnalysisKey {
+            provider: "ytm".into(),
+            fingerprint: format!("{video_id}|{itag}"),
+        }
+    }
+
     pub fn valid(&self) -> bool {
         !self.provider.is_empty()
             && !self.fingerprint.is_empty()

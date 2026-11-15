@@ -517,14 +517,19 @@ impl Db {
 
     /// The track a reference names.
     pub fn track_ref(&self, r: &api::TrackRef) -> DbResult<Option<Track>> {
-        self.with_conn(|c| {
+        let found = self.with_conn(|c| {
             Ok(c.query_row(
                 &format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE server_id = ?1 AND id = ?2"),
                 [&r.source, &r.id],
                 track_from_row,
             )
             .optional()?)
-        })
+        })?;
+        match found {
+            Some(t) => Ok(Some(t)),
+            // A song outside the library (YouTube Music's catalogue).
+            None => self.catalogue_track_ref(&r.source, &r.id),
+        }
     }
 
     /// The reference for a bare id from a UI target: the highest-priority
@@ -594,10 +599,20 @@ impl Db {
                     found.insert((t.server_id.clone(), t.id.clone()), t);
                 }
             }
-            Ok(refs
-                .iter()
-                .filter_map(|r| found.get(&(r.source.clone(), r.id.clone())).cloned())
-                .collect())
+            Ok(found)
+        })
+        .map(|found| {
+            refs.iter()
+                .filter_map(|r| {
+                    found
+                        .get(&(r.source.clone(), r.id.clone()))
+                        .cloned()
+                        .or_else(|| {
+                            // Outside the lock: a song outside the library.
+                            self.catalogue_track_ref(&r.source, &r.id).ok().flatten()
+                        })
+                })
+                .collect()
         })
     }
 

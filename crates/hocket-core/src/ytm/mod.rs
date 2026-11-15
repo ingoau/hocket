@@ -8,11 +8,13 @@
 //!   recorded fixtures (`fixtures/`).
 //! - [`player`]: the `player` client fallback chain and the platform's JS
 //!   host for the web client's signature, `n` and PO token.
-//! - [`provider`]: [`YtmProvider`].
+//! - [`provider`][]: [`YtmProvider`].
 
 pub mod auth;
 pub mod client;
 pub mod clients;
+#[cfg(any(test, feature = "sim"))]
+pub mod fake;
 pub mod http;
 pub mod parse;
 pub mod player;

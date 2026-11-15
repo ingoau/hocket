@@ -78,11 +78,28 @@ impl Actor {
 
     /// The provider instance a track's source belongs to (`None` for a
     /// source no account here serves).
-    fn analysis_provider_url(&self, source: &str) -> Option<String> {
-        self.accounts
-            .for_source(source)
-            .filter(|a| a.info.kind == AccountKind::Navidrome)
-            .map(|a| a.info.url.clone())
+    /// Where a track's analysis record is shared: a Navidrome server's
+    /// file, or a YouTube Music video in the format played (itag 140; 141
+    /// records line up with it once both are trimmed by their edit lists).
+    fn analysis_key(
+        &self,
+        source: &str,
+        track_id: &str,
+        size_bytes: Option<f64>,
+        suffix: Option<&str>,
+    ) -> Option<AnalysisKey> {
+        let a = self.accounts.for_source(source)?;
+        match a.info.kind {
+            AccountKind::Navidrome => Some(AnalysisKey::navidrome(
+                &a.info.url,
+                track_id,
+                size_bytes,
+                suffix,
+            )),
+            AccountKind::YoutubeMusic => {
+                Some(AnalysisKey::ytm(track_id, crate::ytm::player::ITAG_AAC_128))
+            }
+        }
     }
 
     fn fetch_analysis_records(&mut self, now: f64) {
@@ -111,10 +128,11 @@ impl Actor {
             {
                 continue;
             }
-            let Some(url) = self.analysis_provider_url(&t.server_id) else {
+            let Some(key) =
+                self.analysis_key(&t.server_id, &t.id, t.size_bytes, t.suffix.as_deref())
+            else {
                 continue;
             };
-            let key = AnalysisKey::navidrome(&url, &t.id, t.size_bytes, t.suffix.as_deref());
             wants.push(AnalysisWant { track_id, key });
         }
         wants.truncate(ANALYSIS_FETCH_MAX);
@@ -147,16 +165,15 @@ impl Actor {
         track_id: &TrackId,
         record: &AnalysisRecord,
     ) {
-        let Some(url) = self.analysis_provider_url(server_id) else {
-            return;
-        };
-        let track_ref = TrackRef::new(server_id, track_id.clone());
-        let key = AnalysisKey::navidrome(
-            &url,
+        let Some(key) = self.analysis_key(
+            server_id,
             track_id,
             record.source.size_bytes,
             record.source.suffix.as_deref(),
-        );
+        ) else {
+            return;
+        };
+        let track_ref = TrackRef::new(server_id, track_id.clone());
         self.share.uploads.retain(|e| e.track_id != track_ref);
         if self.share.uploads.len() >= UPLOAD_QUEUE_MAX {
             self.share.uploads.remove(0);

@@ -164,6 +164,11 @@ impl Actor {
             Command::LinkTracks { track, to } => self.link_tracks(track, to),
             Command::UnlinkTrack { track } => self.unlink_track(track),
             Command::SetInLibrary { tracks, added } => self.set_in_library(tracks, added),
+            Command::YtmJsAnswer {
+                request_id,
+                answer,
+                error,
+            } => self.on_ytm_js_answer(request_id, answer, error),
             Command::PlaylistRemove {
                 playlist_id,
                 indices,

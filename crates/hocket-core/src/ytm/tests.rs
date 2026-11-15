@@ -14,112 +14,13 @@ use serde_json::{json, Value};
 use super::auth::Cookies;
 use super::client::InnerTube;
 use super::clients::ClientKind;
-use super::http::{FakeYtmHttp, HttpRequest, HttpResponse};
+use super::fake::{endpoint, fake, fx, ok, players, SW_JS_DATA};
+use super::http::{FakeYtmHttp, HttpResponse};
 use super::parse::*;
 use super::player::{JsAnswer, JsHost, JsRequest};
 use super::provider::{shelf_id, sized_thumbnail, YtmProvider, MAX_RANGE};
 use crate::provider::{LibraryTarget, Provider, ProviderError, ProviderWrite, StreamRequest};
 use crate::util::FixedClock;
-
-fn fx(name: &str) -> Value {
-    let s = match name {
-        "search_songs" => include_str!("fixtures/search_songs.json"),
-        "search_albums" => include_str!("fixtures/search_albums.json"),
-        "search_artists" => include_str!("fixtures/search_artists.json"),
-        "search_all" => include_str!("fixtures/search_all.json"),
-        "album" => include_str!("fixtures/album.json"),
-        "artist" => include_str!("fixtures/artist.json"),
-        "home" => include_str!("fixtures/home.json"),
-        "next_radio" => include_str!("fixtures/next_radio.json"),
-        "lyrics" => include_str!("fixtures/lyrics.json"),
-        "playlist_mixed" => include_str!("fixtures/playlist_mixed.json"),
-        "player_visionos" => include_str!("fixtures/player_visionos.json"),
-        "player_android_vr" => include_str!("fixtures/player_android_vr.json"),
-        "player_ios" => include_str!("fixtures/player_ios.json"),
-        other => panic!("no fixture {other}"),
-    };
-    serde_json::from_str(s).unwrap()
-}
-
-const SW_JS_DATA: &str = include_str!("fixtures/sw_js_data.txt");
-
-fn ok(v: &Value) -> Option<HttpResponse> {
-    Some(HttpResponse::json(200, &v.to_string()))
-}
-
-fn endpoint(r: &HttpRequest) -> &str {
-    r.url
-        .split('?')
-        .next()
-        .and_then(|p| p.rsplit_once("/youtubei/v1/"))
-        .map(|(_, e)| e)
-        .unwrap_or("")
-}
-
-/// Answers every InnerTube call from the fixtures; `player` by client name
-/// through `players` (what each client answers).
-fn fake(players: Arc<Mutex<Vec<(&'static str, Value)>>>) -> FakeYtmHttp {
-    FakeYtmHttp::new(move |r| {
-        if r.url.contains("sw.js_data") {
-            return Some(HttpResponse::json(200, SW_JS_DATA));
-        }
-        let body = r.json();
-        if body.get("continuation").is_some() {
-            return ok(&json!({}));
-        }
-        match endpoint(r) {
-            "player" => {
-                let client = body["context"]["client"]["clientName"]
-                    .as_str()
-                    .unwrap_or("");
-                players
-                    .lock()
-                    .iter()
-                    .find(|(c, _)| *c == client)
-                    .and_then(|(_, v)| ok(v))
-            }
-            "search" => match body["params"].as_str() {
-                Some(p) if p.starts_with("EgWKAQIIAW") => ok(&fx("search_songs")),
-                Some(p) if p.starts_with("EgWKAQIYAW") => ok(&fx("search_albums")),
-                Some(p) if p.starts_with("EgWKAQIgAW") => ok(&fx("search_artists")),
-                _ => ok(&fx("search_all")),
-            },
-            "browse" => match body["browseId"].as_str().unwrap_or("") {
-                "MPREb_K8qWMWVqXGi" => ok(&fx("album")),
-                "UCRr1xG_2WIDs18a6cIiCxeA" => ok(&fx("artist")),
-                "FEmusic_home" => ok(&fx("home")),
-                "MPLYt_K8qWMWVqXGi-8" => ok(&fx("lyrics")),
-                "VLPLmixed" | "VLLM" => ok(&fx("playlist_mixed")),
-                "FEmusic_liked_videos" => ok(&fx("search_songs")),
-                "FEmusic_liked_albums" => ok(&fx("search_albums")),
-                "FEmusic_library_corpus_track_artists" => ok(&fx("search_artists")),
-                "FEmusic_liked_playlists" => ok(&json!({"contents": {"x": [
-                    {"musicTwoRowItemRenderer": {"title": {"runs": [{"text": "Liked Music"}]},
-                        "navigationEndpoint": {"browseEndpoint": {"browseId": "VLLM"}}}},
-                    {"musicTwoRowItemRenderer": {"title": {"runs": [{"text": "Road trip"}]},
-                        "subtitle": {"runs": [{"text": "Playlist"}, {"text": " • "}, {"text": "12 songs"}]},
-                        "navigationEndpoint": {"browseEndpoint": {"browseId": "VLPLmixed",
-                            "browseEndpointContextSupportedConfigs": {"browseEndpointContextMusicConfig": {"pageType": "MUSIC_PAGE_TYPE_PLAYLIST"}}}}}}
-                ]}})),
-                _ => None,
-            },
-            "next" => ok(&fx("next_radio")),
-            "browse/edit_playlist" => ok(
-                &json!({"status": "STATUS_SUCCEEDED", "playlistEditResults": [
-                {"playlistEditVideoAddedResultData": {"videoId": "newvid00001", "setVideoId": "NEWSET0001"}}]}),
-            ),
-            "playlist/create" => ok(&json!({"playlistId": "PLcreated"})),
-            "like/like" | "like/removelike" | "playlist/delete" | "subscription/subscribe" => {
-                ok(&json!({}))
-            }
-            _ => None,
-        }
-    })
-}
-
-fn players(list: &[(&'static str, &str)]) -> Arc<Mutex<Vec<(&'static str, Value)>>> {
-    Arc::new(Mutex::new(list.iter().map(|(c, f)| (*c, fx(f))).collect()))
-}
 
 fn provider_with(http: FakeYtmHttp, signed_in: bool) -> YtmProvider {
     let clock = Arc::new(FixedClock::new(1_763_200_000_000.0));
@@ -266,7 +167,7 @@ fn player_answers_parse_per_client() {
         .is_some_and(|u| u.contains("googlevideo.com")));
     assert!(f140.mime.starts_with("audio/mp4"));
     assert_eq!(f140.content_length, Some(5_983_881));
-    assert!((f140.loudness_db.unwrap() - 3.14).abs() < 0.01);
+    assert_eq!((f140.loudness_db.unwrap() * 100.0).round(), 314.0);
     assert_eq!(v.expires_in_s, Some(21_540));
     assert!(!v.sabr_only);
     // Video formats are not audio formats.
@@ -335,7 +236,7 @@ async fn visionos_answers_first_and_its_stream_is_reused() {
     assert_eq!(s.max_range, Some(MAX_RANGE));
     assert!(s.range_capable && !s.transcoded);
     assert!(
-        (s.gain_db.unwrap() + 3.14).abs() < 0.01,
+        (s.gain_db.unwrap() * 100.0).round() == -314.0,
         "loudnessDb maps to track gain"
     );
     assert!(s.headers["User-Agent"].contains("Safari"));
@@ -524,6 +425,7 @@ async fn catalogue_search_album_artist_and_track() {
     assert_eq!(r.tracks[0].id, "4D7u5KF7SP8");
     assert_eq!(r.tracks[0].server_id, "ytm");
     assert_eq!(r.tracks[0].suffix.as_deref(), Some("m4a"));
+    assert_eq!(r.tracks[0].duration_ms, 370_000);
     assert!(!r.albums.is_empty() && !r.artists.is_empty());
     // A second search is served from the TTL cache.
     p.search("daft punk get lucky", 10).await.unwrap();

@@ -277,6 +277,11 @@ pub trait Provider: Send + Sync + 'static {
         unsupported("playlist")
     }
 
+    /// An artist's most popular songs (artist pages of a live catalogue).
+    fn artist_top_tracks(&self, _id: &str) -> ProviderFuture<'_, Vec<api::Track>> {
+        unsupported("artist top tracks")
+    }
+
     /// A URL `resolve_stream` handed out was refused (`status`: 403, 410…)
     /// or ran out: forget it, so the next resolve fetches a fresh one.
     fn stream_failed(&self, _id: &str, _status: u16) {}

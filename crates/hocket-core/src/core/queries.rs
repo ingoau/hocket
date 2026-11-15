@@ -9,6 +9,7 @@ use tokio::sync::oneshot;
 use crate::actions::Surface;
 use crate::api::*;
 use crate::core::actor::Actor;
+use crate::core::handlers::catalogue::CatalogueWant;
 use crate::core::handlers::library::DbAutoplaySource;
 use crate::core::{ActorMsg, Internal};
 use crate::db::queries::{AlbumQuery, TrackQuery, WhereClause};
@@ -76,6 +77,7 @@ impl Actor {
                 descending,
                 page,
             } => {
+                let artist = artist_id.clone();
                 let q = AlbumQuery {
                     server_id: self.library_scope(server_id),
                     artist_id,
@@ -84,11 +86,19 @@ impl Actor {
                     descending,
                     page: Some(page.clone()),
                 };
-                QueryResult::Albums(self.db.album_page(&q).unwrap_or(AlbumPage {
+                let found = self.db.album_page(&q).unwrap_or(AlbumPage {
                     items: vec![],
                     offset: page.offset,
                     total: 0,
-                }))
+                });
+                // A catalogue artist's albums (none of them in the library).
+                if let Some(a) = artist
+                    .filter(|a| found.total == 0 && page.offset == 0 && self.is_catalogue_id(a))
+                {
+                    self.catalogue_query(a, CatalogueWant::ArtistAlbums, 0, reply);
+                    return;
+                }
+                QueryResult::Albums(found)
             }
             Query::AlbumCount {
                 server_id,
@@ -103,9 +113,21 @@ impl Actor {
                 };
                 QueryResult::Count(self.db.album_count(&q).unwrap_or(0))
             }
-            Query::Album { id } => QueryResult::AlbumDetail(self.db.album(&id).ok().flatten()),
+            Query::Album { id } => match self.db.album(&id).ok().flatten() {
+                Some(a) => QueryResult::AlbumDetail(Some(a)),
+                None if self.is_catalogue_id(&id) => {
+                    self.catalogue_query(id, CatalogueWant::AlbumDetail, 0, reply);
+                    return;
+                }
+                None => QueryResult::AlbumDetail(None),
+            },
             Query::AlbumTracks { id } => {
-                QueryResult::TrackList(self.db.album_tracks(&id).unwrap_or_default())
+                let tracks = self.db.album_tracks(&id).unwrap_or_default();
+                if tracks.is_empty() && self.is_catalogue_id(&id) {
+                    self.catalogue_query(id, CatalogueWant::AlbumTracks, 0, reply);
+                    return;
+                }
+                QueryResult::TrackList(tracks)
             }
             Query::Artists {
                 server_id,
@@ -126,9 +148,14 @@ impl Actor {
                         total: 0,
                     }),
             ),
-            Query::Artist { id } => {
-                QueryResult::ArtistDetail(self.db.artist_or_credited(&id, None).ok().flatten())
-            }
+            Query::Artist { id } => match self.db.artist_or_credited(&id, None).ok().flatten() {
+                Some(a) => QueryResult::ArtistDetail(Some(a)),
+                None if self.is_catalogue_id(&id) => {
+                    self.catalogue_query(id, CatalogueWant::ArtistDetail, 0, reply);
+                    return;
+                }
+                None => QueryResult::ArtistDetail(None),
+            },
             Query::ArtistAppearsOn { id } => {
                 let items = self.db.artist_appears_on(&id, None).unwrap_or_default();
                 QueryResult::Albums(AlbumPage {
@@ -138,6 +165,17 @@ impl Actor {
                 })
             }
             Query::ArtistTopSongs { id, count } => {
+                if self
+                    .db
+                    .artist_or_credited(&id, None)
+                    .ok()
+                    .flatten()
+                    .is_none()
+                    && self.is_catalogue_id(&id)
+                {
+                    self.catalogue_query(id, CatalogueWant::ArtistTopSongs, count, reply);
+                    return;
+                }
                 self.artist_top_songs(id, count, reply);
                 return;
             }
@@ -516,13 +554,15 @@ impl Actor {
     fn related(&mut self, track_id: String, count: u32, reply: oneshot::Sender<QueryResult>) {
         // Autoplay stays within the seed's account.
         let seed = self.track_ref_of(&track_id);
-        let Some(api) = self.subsonic_for(&seed.source) else {
+        let api = self.subsonic_for(&seed.source);
+        let Some(provider) = self.provider_for(&seed.source) else {
             let _ = reply.send(QueryResult::Related(vec![]));
             return;
         };
         let track = self.summary_or_bare(&seed);
         let source = DbAutoplaySource {
             api,
+            provider,
             db: self.db.clone(),
             server_id: seed.source.clone(),
             now: self.now(),

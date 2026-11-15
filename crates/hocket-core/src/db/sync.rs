@@ -192,7 +192,10 @@ pub type ProgressFn = Arc<dyn Fn(SyncProgress) + Send + Sync>;
 /// The sync engine for one server.
 pub struct LibrarySync {
     db: Db,
-    api: Arc<dyn SubsonicApi>,
+    api: Option<Arc<dyn SubsonicApi>>,
+    /// A provider whose library is walked through the `Provider` trait
+    /// (YouTube Music) rather than Subsonic's endpoints.
+    provider: Option<Arc<dyn crate::provider::Provider>>,
     clock: Arc<dyn Clock>,
     on_progress: ProgressFn,
     page_size: u32,
@@ -207,10 +210,41 @@ impl LibrarySync {
     ) -> Self {
         LibrarySync {
             db,
-            api,
+            api: Some(api),
+            provider: None,
             clock,
             on_progress,
             page_size: PAGE_SIZE,
+        }
+    }
+
+    /// The sync of a provider without Subsonic endpoints: every run walks
+    /// `library_page` and the playlists, then sweeps what it didn't see.
+    pub fn for_provider(
+        db: Db,
+        provider: Arc<dyn crate::provider::Provider>,
+        clock: Arc<dyn Clock>,
+        on_progress: ProgressFn,
+    ) -> Self {
+        LibrarySync {
+            db,
+            api: None,
+            provider: Some(provider),
+            clock,
+            on_progress,
+            page_size: PAGE_SIZE,
+        }
+    }
+
+    fn api(&self) -> &Arc<dyn SubsonicApi> {
+        self.api.as_ref().expect("a Subsonic sync")
+    }
+
+    /// Where the mirror rows live: the account's source.
+    fn mirror_id(&self) -> &str {
+        match &self.provider {
+            Some(p) => p.source(),
+            None => self.api().server_id(),
         }
     }
 
@@ -220,8 +254,12 @@ impl LibrarySync {
         self
     }
 
+    /// The account this sync belongs to (its cursor and progress key).
     pub fn server_id(&self) -> &str {
-        self.api.server_id()
+        match &self.provider {
+            Some(p) => p.account_id(),
+            None => self.api().server_id(),
+        }
     }
 
     pub fn cursor(&self) -> Result<SyncCursor, DbError> {
@@ -259,6 +297,9 @@ impl LibrarySync {
     /// Run a sync. `full` forces a reconcile; otherwise it is incremental
     /// unless a full one is due or never happened. Resumes an interrupted run.
     pub async fn run(&self, full: bool, obs: &dyn SyncObserver) -> Result<SyncStats, SyncError> {
+        if let Some(p) = self.provider.clone() {
+            return self.run_provider(p.as_ref(), obs).await;
+        }
         let mut c = self.cursor()?;
         let now = self.clock.now_ms();
         let mut stats = SyncStats::default();
@@ -285,7 +326,7 @@ impl LibrarySync {
         stats.full = c.full;
 
         // Scan status first: total for progress, and a cheap "nothing changed" signal.
-        let scan = match self.api.scan_status().await {
+        let scan = match self.api().scan_status().await {
             Ok(s) => Some(s),
             Err(e) => {
                 tracing::debug!(error = %e, "getScanStatus unavailable");
@@ -411,8 +452,110 @@ impl LibrarySync {
         Ok(stats)
     }
 
+    async fn run_provider(
+        &self,
+        p: &dyn crate::provider::Provider,
+        obs: &dyn SyncObserver,
+    ) -> Result<SyncStats, SyncError> {
+        let mut c = self.cursor()?;
+        let mid = self.mirror_id().to_string();
+        let mut stats = SyncStats {
+            full: true,
+            ..Default::default()
+        };
+        c.full = true;
+        c.gen += 1;
+        c.phase = Phase::Tracks;
+        c.offset = 0;
+        c.started_at = Some(self.clock.now_ms());
+        self.save_cursor(&c)?;
+        let gen = c.gen;
+        let mut offset = 0;
+        let mut in_library = std::collections::HashSet::new();
+        loop {
+            obs.checkpoint().await?;
+            let page = p.library_page(offset, self.page_size).await?;
+            let changed = vec![None; page.tracks.len()];
+            let none_a = vec![None; page.albums.len()];
+            self.db.with_tx(|tx| {
+                upsert_artists_in(tx, &page.artists, gen)?;
+                upsert_albums_in(tx, &page.albums, &none_a, gen)?;
+                upsert_tracks_in(tx, &page.tracks, &changed, gen)?;
+                Ok(())
+            })?;
+            stats.tracks += page.tracks.len();
+            in_library.extend(page.tracks.iter().map(|t| t.id.clone()));
+            stats.albums += page.albums.len();
+            stats.artists += page.artists.len();
+            offset += page.tracks.len() as u32;
+            self.report(obs, &c, offset, None, false);
+            match page.next_offset {
+                Some(n) if n > 0 => offset = n,
+                _ => break,
+            }
+        }
+        for t in ["artists", "albums", "tracks"] {
+            if !c.ready_tables.iter().any(|x| x == t) {
+                c.ready_tables.push(t.into());
+            }
+        }
+        c.phase = Phase::Playlists;
+        self.save_cursor(&c)?;
+        let playlists = match p.playlists().await {
+            Ok(l) => l,
+            Err(SubsonicError::Unsupported(_)) => vec![],
+            Err(e) => return Err(e.into()),
+        };
+        self.db.with_tx(|tx| {
+            upsert_playlists_in(tx, &playlists, gen)?;
+            sweep(tx, "playlists", &mid, gen)?;
+            Ok(())
+        })?;
+        for pl in &playlists {
+            obs.checkpoint().await?;
+            let contents = match p.playlist(&pl.id).await {
+                Ok(x) => x,
+                Err(SubsonicError::NotFound(_)) => continue,
+                Err(e) => return Err(e.into()),
+            };
+            // The mirror lists what Hocket shows (songs only); edits map
+            // visible positions onto the provider's own order when they flush.
+            // Songs the library walk wrote keep what it said (stars).
+            let tracks: Vec<api::Track> = contents
+                .entries
+                .iter()
+                .filter(|e| e.visible && !in_library.contains(&e.track.id))
+                .map(|e| e.track.clone())
+                .collect();
+            let changed = vec![None; tracks.len()];
+            let ids = contents.visible_ids();
+            self.db.with_tx(|tx| {
+                upsert_tracks_in(tx, &tracks, &changed, gen)?;
+                set_playlist_tracks_in(tx, &mid, &pl.id, &ids)?;
+                Ok(())
+            })?;
+            stats.playlists += 1;
+        }
+        if !c.ready_tables.iter().any(|x| x == "playlists") {
+            c.ready_tables.push("playlists".into());
+        }
+        stats.deleted += self.sweep(gen)?;
+        let finished_at = self.clock.now_ms();
+        c.phase = Phase::Done;
+        c.offset = 0;
+        c.last_full_at = Some(finished_at);
+        c.last_incremental_at = Some(finished_at);
+        let tracks = self.db.track_count(&mid, &None)?;
+        c.last_track_count = Some(tracks);
+        self.save_cursor(&c)?;
+        self.db
+            .set_account_last_sync(self.server_id(), finished_at)?;
+        self.report(obs, &c, tracks, Some(tracks), true);
+        Ok(stats)
+    }
+
     async fn sync_artists(&self, gen: i64) -> Result<usize, SyncError> {
-        let index = self.api.artists().await?;
+        let index = self.api().artists().await?;
         let sid = self.server_id();
         let artists: Vec<api::Artist> = index
             .index
@@ -428,7 +571,7 @@ impl LibrarySync {
     /// One page of `getAlbumList2 alphabeticalByName`. Returns (count, done).
     async fn sync_albums_page(&self, gen: i64, offset: u32) -> Result<(usize, bool), SyncError> {
         let page = self
-            .api
+            .api()
             .album_list2(AlbumListType::AlphabeticalByName, self.page_size, offset)
             .await?;
         let sid = self.server_id();
@@ -443,7 +586,7 @@ impl LibrarySync {
     /// One page of `search3` with an empty query. Returns (count, done).
     async fn sync_tracks_page(&self, gen: i64, offset: u32) -> Result<(usize, bool), SyncError> {
         let r = self
-            .api
+            .api()
             .search3("", Search3Page::songs(self.page_size, offset))
             .await?;
         let sid = self.server_id();
@@ -476,7 +619,7 @@ impl LibrarySync {
         let mut new_albums = vec![];
         'outer: loop {
             let page = self
-                .api
+                .api()
                 .album_list2(AlbumListType::Newest, self.page_size, offset)
                 .await?;
             let len = page.len() as u32;
@@ -505,7 +648,7 @@ impl LibrarySync {
         let mut tracks = 0;
         let mut albums = 0;
         for a in new_albums {
-            let full = match self.api.album(&a.id).await {
+            let full = match self.api().album(&a.id).await {
                 Ok(f) => f,
                 Err(SubsonicError::NotFound(_)) => continue,
                 Err(e) => return Err(e.into()),
@@ -552,7 +695,7 @@ impl LibrarySync {
     /// made on other clients; ratings have no such endpoint and wait for the
     /// full pass).
     async fn sync_starred(&self, _gen: i64) -> Result<(), SyncError> {
-        let starred = self.api.starred2().await?;
+        let starred = self.api().starred2().await?;
         let sid = self.server_id();
         self.db.with_tx(|tx| {
             for (table, ids) in [
@@ -599,8 +742,8 @@ impl LibrarySync {
 
     async fn sync_playlists(&self, gen: i64, full: bool) -> Result<usize, SyncError> {
         let sid = self.server_id();
-        let username = self.api.username();
-        let list = self.api.playlists().await?;
+        let username = self.api().username();
+        let list = self.api().playlists().await?;
         let existing = self.db.playlists(sid)?;
         let playlists: Vec<api::Playlist> = list
             .iter()
@@ -621,7 +764,7 @@ impl LibrarySync {
             if !stale {
                 continue;
             }
-            let detail = match self.api.playlist(&p.id).await {
+            let detail = match self.api().playlist(&p.id).await {
                 Ok(d) => d,
                 Err(SubsonicError::NotFound(_)) => continue,
                 Err(e) => return Err(e.into()),
@@ -646,7 +789,7 @@ impl LibrarySync {
 
     async fn sync_genres(&self, gen: i64) -> Result<(), SyncError> {
         let genres: Vec<api::Genre> = self
-            .api
+            .api()
             .genres()
             .await?
             .iter()
@@ -658,7 +801,7 @@ impl LibrarySync {
 
     /// Mark-and-sweep plus derived counts.
     fn sweep(&self, gen: i64) -> Result<usize, SyncError> {
-        let sid = self.server_id();
+        let sid = self.mirror_id();
         let n = self.db.with_tx(|tx| {
             let mut n = 0;
             n += sweep(tx, "tracks", sid, gen)?;

@@ -5,7 +5,8 @@
 //! come back as `Output::LibraryRecordsMerged`.
 
 use crate::api::{
-    AccountKind, Event, OfflineState, QueueItem, SourceId, Track, TrackRef, TrackSource,
+    AccountKind, Event, OfflineState, QueueItem, RatingTarget, SourceId, Track, TrackRef,
+    TrackSource,
 };
 use crate::connect::engine::Input;
 use crate::core::actor::Actor;
@@ -282,6 +283,23 @@ impl Actor {
     /// their own go to the Hocket library. Navidrome's library is the
     /// server's files, so there is nothing to add there.
     pub(crate) fn set_in_library(&mut self, tracks: Vec<TrackRef>, added: bool) {
+        // An account that keeps its own library (signed-in YouTube Music):
+        // a song goes into it by liking it (the outbox writes it back).
+        let own: Vec<RatingTarget> = tracks
+            .iter()
+            .filter(|t| {
+                self.accounts
+                    .for_source(&t.source)
+                    .is_some_and(|a| a.info.features.library_edit)
+            })
+            .map(|t| RatingTarget::Track {
+                id: t.id.clone(),
+                source: t.source.clone(),
+            })
+            .collect();
+        if !own.is_empty() {
+            self.set_loved(own, added);
+        }
         let hocket: Vec<TrackRef> = tracks
             .into_iter()
             .filter(|t| {

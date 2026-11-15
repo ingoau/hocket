@@ -610,3 +610,21 @@ CREATE TABLE IF NOT EXISTS automix_records (
     updated_at  REAL NOT NULL,
     PRIMARY KEY (server_id, track_id)
 );
+
+-- ---------------------------------------------------------------------------
+-- The live catalogue (YouTube Music search results, album and artist pages,
+-- home shelves, radio): what a song, album or artist outside the library
+-- looked like when it was last fetched, so a queue item, an album page or
+-- now playing can show it without the network. Not the library: list
+-- queries never read it. `kind` is track, album or artist; an album's json
+-- carries its track ids, an artist's its albums.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS catalogue (
+    kind       TEXT NOT NULL,
+    server_id  TEXT NOT NULL,
+    id         TEXT NOT NULL,
+    json       TEXT NOT NULL,
+    fetched_at REAL NOT NULL,
+    PRIMARY KEY (kind, server_id, id)
+);

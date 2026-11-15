@@ -489,7 +489,7 @@ pub fn track_of(s: &YtSong) -> api::Track {
         artist,
         album_artist: artists.first().map(|a| a.name.clone()),
         year: s.year,
-        duration_ms: s.duration_s.unwrap_or(0) as _,
+        duration_ms: (u64::from(s.duration_s.unwrap_or(0)) * 1000) as _,
         suffix: Some("m4a".into()),
         content_type: Some("audio/mp4".into()),
         cover_art: s.thumbnail.clone(),
@@ -929,6 +929,25 @@ impl Provider for YtmProvider {
                     (!empty && !shelf.title.is_empty()).then_some(shelf)
                 })
                 .collect())
+        })
+    }
+
+    fn artist_top_tracks(&self, id: &str) -> ProviderFuture<'_, Vec<api::Track>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let v = self.browse_cached(&id).await?;
+            let (_, shelves) = parse_artist(&v, &id);
+            Ok(shelves
+                .iter()
+                .find(|s| s.items.iter().any(|i| matches!(i, Item::Song(_))))
+                .map(|s| {
+                    parse::songs(&s.items)
+                        .iter()
+                        .filter(|x| x.is_song())
+                        .map(track_of)
+                        .collect()
+                })
+                .unwrap_or_default())
         })
     }
 

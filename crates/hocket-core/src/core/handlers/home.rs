@@ -12,6 +12,9 @@ use crate::api::{Album, AlbumResumePoint, HomeShelf, HomeShelfKind, SortOrder, T
 use crate::core::actor::Actor;
 use crate::db::queries::AlbumQuery;
 
+/// How long a live home feed is shown before it is fetched again.
+const LIVE_HOME_TTL_MS: f64 = 30.0 * 60_000.0;
+
 /// How many items a shelf holds.
 const SHELF_SIZE: u32 = 20;
 
@@ -80,7 +83,81 @@ impl Actor {
                 default_on: false,
             });
         }
+        out.extend(self.live_home_shelves());
         out
+    }
+
+    /// The shelves of providers that answer them live (YouTube Music's home
+    /// feed), from the last answer; a stale or missing one is refreshed in
+    /// the background and announced with `LibraryChanged {tables: ["home"]}`.
+    fn live_home_shelves(&self) -> Vec<HomeShelf> {
+        let now = self.now();
+        let mut out = vec![];
+        let mut seen = std::collections::HashSet::new();
+        for a in self.accounts.iter() {
+            let Some(p) = a.provider.clone() else {
+                continue;
+            };
+            if !a.info.features.home_shelves || !seen.insert(a.info.source.clone()) {
+                continue;
+            }
+            let cached = self.live_home.lock().get(&a.info.id).cloned();
+            let stale = cached
+                .as_ref()
+                .is_none_or(|(at, _)| now - at > LIVE_HOME_TTL_MS);
+            if let Some((_, shelves)) = cached {
+                out.extend(shelves);
+            }
+            if stale && self.live_home_fetching.lock().insert(a.info.id.clone()) {
+                let account = a.info.id.clone();
+                let cache = self.live_home.clone();
+                let fetching = self.live_home_fetching.clone();
+                let db = self.db.clone();
+                let tx = self.tx.clone();
+                self.rt.spawn(async move {
+                    let got = p.home_shelves().await;
+                    fetching.lock().remove(&account);
+                    let Ok(shelves) = got else { return };
+                    let mut list = vec![];
+                    for s in shelves {
+                        let _ = db.catalogue_put_tracks(&s.tracks, now);
+                        let _ = db.catalogue_put_albums(&s.albums, now);
+                        let kind = if !s.tracks.is_empty() {
+                            HomeShelfKind::Tracks
+                        } else if !s.albums.is_empty() {
+                            HomeShelfKind::Albums
+                        } else {
+                            HomeShelfKind::Playlists
+                        };
+                        list.push(HomeShelf {
+                            id: format!("{account}/{}", s.id),
+                            account_id: Some(account.clone()),
+                            title: s.title,
+                            kind,
+                            albums: s.albums,
+                            tracks: s.tracks,
+                            playlists: s.playlists,
+                            default_on: true,
+                        });
+                    }
+                    cache.lock().insert(account.clone(), (now, list));
+                    let _ = tx.send(crate::core::ActorMsg::Internal(
+                        crate::core::Internal::LiveHomeFetched {
+                            account_id: account,
+                        },
+                    ));
+                });
+            }
+        }
+        out
+    }
+
+    pub(crate) fn on_live_home_fetched(&mut self, account_id: String) {
+        self.emit(crate::api::Event::LibraryChanged {
+            server_id: account_id,
+            tables: vec!["home".into()],
+            ids: vec![],
+        });
     }
 
     /// Albums left part way (album resume), newest first; then albums of

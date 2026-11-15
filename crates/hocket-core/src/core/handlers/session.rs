@@ -897,7 +897,8 @@ impl Actor {
             .map(|c| c.track.source.clone())
             .or_else(|| self.scope_account())
             .unwrap_or_default();
-        let Some(api) = self.subsonic_for(&seed_source) else {
+        let api = self.subsonic_for(&seed_source);
+        let Some(provider) = self.provider_for(&seed_source) else {
             self.autoplay = Some(engine);
             return;
         };
@@ -954,6 +955,7 @@ impl Actor {
         }
         let source = crate::core::handlers::library::DbAutoplaySource {
             api,
+            provider,
             db: self.db.clone(),
             server_id: seed_source,
             now: self.now(),
@@ -1467,7 +1469,11 @@ impl Actor {
     /// one row per dedup group) for none, else the one named (the source
     /// filter chip).
     pub(crate) fn library_scope(&self, server_id: String) -> String {
-        server_id
+        // A YouTube Music account's library lives under its source (`ytm`).
+        match self.accounts.get(&server_id) {
+            Some(a) => a.info.source.clone(),
+            None => server_id,
+        }
     }
 
     /// [`Actor::ref_for_id`] with the session's account as the fallback.
@@ -1666,6 +1672,16 @@ impl Actor {
             },
             volume_unknown: self.volume_control().0.is_none(),
             snoozed_tracks: self.snoozed_ids().into_iter().map(|t| t.id).collect(),
+            hocket_library_sources: self
+                .accounts
+                .iter()
+                .filter(|a| {
+                    a.provider.is_some()
+                        && !a.info.features.library_edit
+                        && a.info.kind != AccountKind::Navidrome
+                })
+                .map(|a| a.info.source.clone())
+                .collect(),
             library_pins: crate::actions::LibraryPin::list_from(
                 &self
                     .settings

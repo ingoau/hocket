@@ -584,6 +584,12 @@ impl Actor {
             self.toast("Give the playlist a name", None);
             return;
         }
+        // The outbox and the mirror name the account's source.
+        let server_id = self
+            .accounts
+            .get(&server_id)
+            .map(|a| a.info.source.clone())
+            .unwrap_or(server_id);
         self.enqueue_on(
             &server_id,
             Mutation::PlaylistCreate { name, track_ids },
@@ -1850,6 +1856,8 @@ impl Actor {
                 .collect();
             if !providers.is_empty() {
                 let tx = self.tx.clone();
+                let db = self.db.clone();
+                let now = self.now();
                 self.spawn(async move {
                     let mut results = SearchResults {
                         request_id,
@@ -1867,6 +1875,12 @@ impl Actor {
                             continue;
                         };
                         any = true;
+                        // A live catalogue's results outlive the search:
+                        // a song played from them shows without the network.
+                        if p.source() == crate::ytm::SOURCE {
+                            let _ = db.catalogue_put_tracks(&r.tracks, now);
+                            let _ = db.catalogue_put_albums(&r.albums, now);
+                        }
                         results.tracks.extend(r.tracks.iter().map(summary_of));
                         results.albums.extend(r.albums);
                         results.artists.extend(r.artists);
@@ -2079,9 +2093,11 @@ fn apply_cas_locally(db: &Db, target: &CasTarget, new: &Prior) {
 }
 
 /// The autoplay chain's data source: the Subsonic client plus the mirror
-/// for saved filters.
+/// for saved filters, or a provider's radio (YouTube Music: autoplay stays
+/// within the seed's provider).
 pub(crate) struct DbAutoplaySource {
-    pub api: Arc<dyn SubsonicApi>,
+    pub api: Option<Arc<dyn SubsonicApi>>,
+    pub provider: Arc<dyn crate::provider::Provider>,
     pub db: Db,
     pub server_id: String,
     pub now: f64,
@@ -2097,6 +2113,12 @@ fn net_err(e: crate::subsonic::SubsonicError) -> AutoplayError {
     }
 }
 
+impl DbAutoplaySource {
+    fn api(&self) -> Result<&Arc<dyn SubsonicApi>, AutoplayError> {
+        self.api.as_ref().ok_or(AutoplayError::Unsupported)
+    }
+}
+
 impl AutoplaySource for DbAutoplaySource {
     fn sonic_similar<'a>(
         &'a self,
@@ -2104,11 +2126,11 @@ impl AutoplaySource for DbAutoplaySource {
         count: u32,
     ) -> BoxFuture<'a, Result<Vec<ScoredTrack>, AutoplayError>> {
         Box::pin(async move {
-            if !self.api.capabilities().sonic_similarity {
+            let api = self.api()?;
+            if !api.capabilities().sonic_similarity {
                 return Err(AutoplayError::Unsupported);
             }
-            let list = self
-                .api
+            let list = api
                 .sonic_similar_tracks(track_id, count)
                 .await
                 .map_err(net_err)?;
@@ -2128,11 +2150,17 @@ impl AutoplaySource for DbAutoplaySource {
         count: u32,
     ) -> BoxFuture<'a, Result<Vec<TrackSummary>, AutoplayError>> {
         Box::pin(async move {
-            let list = self
-                .api
-                .similar_songs2(track_id, count)
-                .await
-                .map_err(net_err)?;
+            let Some(api) = self.api.as_ref() else {
+                // A provider's own radio (YouTube Music).
+                let tracks = self
+                    .provider
+                    .radio(track_id, count)
+                    .await
+                    .map_err(net_err)?;
+                let _ = self.db.catalogue_put_tracks(&tracks, self.now);
+                return Ok(tracks.iter().map(summary_of).collect());
+            };
+            let list = api.similar_songs2(track_id, count).await.map_err(net_err)?;
             Ok(list
                 .iter()
                 .map(|c| summary_of(&track_from_child(&self.server_id, c)))
@@ -2148,7 +2176,7 @@ impl AutoplaySource for DbAutoplaySource {
     ) -> BoxFuture<'a, Result<Vec<TrackSummary>, AutoplayError>> {
         Box::pin(async move {
             let list = self
-                .api
+                .api()?
                 .top_songs(artist_name, count)
                 .await
                 .map_err(net_err)?;
@@ -2165,7 +2193,7 @@ impl AutoplaySource for DbAutoplaySource {
     ) -> BoxFuture<'a, Result<Vec<TrackSummary>, AutoplayError>> {
         Box::pin(async move {
             let list = self
-                .api
+                .api()?
                 .random_songs(count, None, None, None)
                 .await
                 .map_err(net_err)?;

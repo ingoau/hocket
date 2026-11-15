@@ -74,6 +74,8 @@ pub struct TestOptions {
     pub seed: u64,
     /// The session reducer Connect applies ops with (`None` = this build's).
     pub reducer: Option<crate::connect::ReducerHandle>,
+    /// YouTube Music's InnerTube transport (`None`: reqwest; tests pass a fake).
+    pub ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
 }
 
 impl Core {
@@ -100,6 +102,7 @@ impl Core {
                 lyrics_http: None,
                 seed: 1,
                 reducer: None,
+                ytm_http: None,
             },
         )
     }
@@ -160,6 +163,7 @@ impl Core {
             seed: Some(opts.seed),
             manual_tick: true,
             stream_upstream: Some(upstream),
+            ytm_http: opts.ytm_http,
             reducer: opts.reducer,
             identity: opts
                 .net
@@ -262,6 +266,32 @@ impl TestCore {
             "secret",
             None,
             more,
+            None,
+        )
+        .await
+    }
+
+    /// One core with a Navidrome account and YouTube Music's InnerTube
+    /// answered by `ytm_http` (add the YouTube Music account with `AddAccount`).
+    pub async fn start_with_ytm(
+        name: &str,
+        server: FakeServer,
+        ytm_http: Arc<dyn crate::ytm::http::YtmHttp>,
+    ) -> TestCore {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Self::start_full(
+            name,
+            server,
+            None,
+            1,
+            SimTime::new(1_700_000_000_000.0),
+            dir,
+            true,
+            "https://music.example/",
+            "secret",
+            None,
+            vec![],
+            Some(ytm_http),
         )
         .await
     }
@@ -288,6 +318,7 @@ impl TestCore {
             "secret",
             None,
             more,
+            None,
         )
         .await
     }
@@ -372,6 +403,7 @@ impl TestCore {
             password,
             None,
             vec![],
+            None,
         )
         .await
     }
@@ -399,6 +431,7 @@ impl TestCore {
             "secret",
             Some(reducer),
             vec![],
+            None,
         )
         .await
     }
@@ -416,6 +449,7 @@ impl TestCore {
         password: &str,
         reducer: Option<crate::connect::ReducerHandle>,
         more: Vec<FakeServer>,
+        ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
     ) -> TestCore {
         let config = CoreConfig {
             data_dir: dir.path().join("data").to_string_lossy().into_owned(),
@@ -451,6 +485,7 @@ impl TestCore {
                 lyrics_http: None,
                 seed,
                 reducer,
+                ytm_http,
             },
             upstream.clone(),
         )

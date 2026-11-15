@@ -66,7 +66,7 @@ impl Actor {
                 });
             return Some((path, !original));
         }
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         match self
             .downloads
             .cache_lookup(&track.server_id, &track.id, profile.as_ref(), false)

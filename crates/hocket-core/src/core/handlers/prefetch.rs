@@ -221,7 +221,7 @@ impl Actor {
         ) {
             return Some(0.0);
         }
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         match self
             .downloads
             .cache_lookup(&track.server_id, &track.id, profile.as_ref(), false)
@@ -239,7 +239,7 @@ impl Actor {
         ) {
             return false;
         }
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         !matches!(
             self.downloads
                 .cache_lookup(&track.server_id, &track.id, profile.as_ref(), false),
@@ -250,7 +250,7 @@ impl Actor {
     /// Rough bytes a fetch of the track will write.
     fn prefetch_estimate(&self, track: &Track) -> f64 {
         let seconds = f64::from(track.duration_ms) / 1000.0;
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         if let Some(kbps) = profile.as_ref().and_then(|p| p.max_bit_rate) {
             return f64::from(kbps) * 1000.0 / 8.0 * seconds;
         }

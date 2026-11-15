@@ -436,6 +436,7 @@ async fn synced_with_http(name: &str, server: FakeServer, http: Arc<dyn LyricsHt
             lyrics_http: Some(http),
             seed: 7,
             reducer: None,
+            ytm_http: None,
         },
     )
     .unwrap();

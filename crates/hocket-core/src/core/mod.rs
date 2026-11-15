@@ -103,6 +103,22 @@ pub enum Internal {
     SyncProgress(SyncProgress),
     /// A server capability probe finished. `Err` carries the error kind
     /// (auth / network / server) and a message.
+    /// A YouTube Music sign-in was checked: `(channel id, name, premium)`.
+    YtmProbed {
+        cookies: Option<crate::api::Secret>,
+        js_host: bool,
+        result: Result<(String, String, bool), (ErrorKind, String)>,
+    },
+    /// A provider's live home shelves arrived.
+    LiveHomeFetched {
+        account_id: AccountId,
+    },
+    /// The YouTube Music JS host is asked something; the reply goes back to
+    /// the provider's resolve.
+    YtmJs {
+        request: crate::api::YtmJsRequest,
+        reply: tokio::sync::oneshot::Sender<Result<crate::api::YtmJsAnswer, String>>,
+    },
     Probed {
         account_id: AccountId,
         result: Result<ServerCapabilities, (ErrorKind, String)>,
@@ -338,6 +354,8 @@ pub(crate) struct Deps {
     pub manual_tick: bool,
     /// How the in-process stream reader reaches the server (`None` = reqwest).
     pub stream_upstream: Option<Arc<dyn stream_reader::StreamUpstream>>,
+    /// How YouTube Music's InnerTube client reaches YouTube (`None` = reqwest).
+    pub ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
     /// The session reducer Connect applies ops with (`None` = this build's).
     pub reducer: Option<crate::connect::ReducerHandle>,
     /// The identity a device without one starts with (tests: cores on one
@@ -357,6 +375,7 @@ impl Deps {
             seed: None,
             manual_tick: false,
             stream_upstream: None,
+            ytm_http: None,
             reducer: None,
             identity: None,
         }

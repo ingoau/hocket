@@ -353,6 +353,44 @@ fn set_loved(t: &ActionTarget, s: &StateView, r: &dyn Resolver, loved: bool) -> 
     }
 }
 
+/// Songs of an account that keeps no library of its own (anonymous YouTube
+/// Music): "Add to library" puts them in the Hocket library.
+fn hocket_library_songs(t: &ActionTarget, s: &StateView) -> bool {
+    if s.hocket_library_sources.is_empty() {
+        return false;
+    }
+    match t {
+        ActionTarget::Tracks { tracks } => tracks
+            .iter()
+            .any(|r| s.hocket_library_sources.contains(&r.source)),
+        ActionTarget::None => s
+            .current_track
+            .as_ref()
+            .is_some_and(|r| s.hocket_library_sources.contains(&r.source)),
+        _ => false,
+    }
+}
+
+fn set_in_library(t: &ActionTarget, s: &StateView, r: &dyn Resolver, added: bool) -> Vec<Command> {
+    let tracks: Vec<TrackRef> = track_refs_of(t, s, r)
+        .into_iter()
+        .filter(|x| s.hocket_library_sources.contains(&x.source))
+        .collect();
+    if tracks.is_empty() {
+        vec![]
+    } else {
+        vec![Command::SetInLibrary { tracks, added }]
+    }
+}
+
+fn add_to_library(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    set_in_library(t, s, r, true)
+}
+
+fn remove_from_library(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
+    set_in_library(t, s, r, false)
+}
+
 fn love(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
     set_loved(t, s, r, true)
 }
@@ -1194,6 +1232,26 @@ static ALL: &[ActionDef] = &[
         unlove,
         undoable = true
     ),
+    action!(
+        "addToLibrary",
+        "Add to library",
+        "library_add",
+        Library,
+        TRACKISH,
+        hocket_library_songs,
+        add_to_library,
+        visible = Some(hocket_library_songs)
+    ),
+    action!(
+        "removeFromLibrary",
+        "Remove from library",
+        "library_remove",
+        Library,
+        TRACKISH,
+        hocket_library_songs,
+        remove_from_library,
+        visible = Some(hocket_library_songs)
+    ),
     action!("download", "Download", "download", Library, PINNABLE, has_items, download),
     action!(
         "unpin",
@@ -1578,6 +1636,8 @@ const CONTEXT_MENU: &[&str] = &[
     "stash",
     "love",
     "unlove",
+    "addToLibrary",
+    "removeFromLibrary",
     "rate5",
     "rate4",
     "rate3",

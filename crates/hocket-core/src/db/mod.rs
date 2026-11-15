@@ -15,6 +15,7 @@
 //! The schema contract shared with the filters module is `schema.sql`.
 //! `WhereClause` lets that module hand over raw SQL against `tracks`.
 
+pub mod catalogue;
 pub mod links;
 pub mod queries;
 pub mod sync;
@@ -31,11 +32,11 @@ use crate::util::{now_ms, Clock};
 /// change edits `schema.sql` and bumps the version, and a database from an
 /// older version is backed up and recreated (`migrate`). 11 squashed the
 /// earlier 0001–0010 and renamed `servers` to `accounts`; 12 added dedup
-/// links, ISRCs and Mixed playlists' per-song sources.
-pub const MIGRATIONS: &[(u32, &str, &str)] = &[(12, "0012_links", include_str!("schema.sql"))];
+/// links, ISRCs and Mixed playlists' per-song sources; 13 the live catalogue.
+pub const MIGRATIONS: &[(u32, &str, &str)] = &[(13, "0013_catalogue", include_str!("schema.sql"))];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -51,6 +52,7 @@ pub const MIRROR_TABLES: &[&str] = &[
     "lyrics_search",
     "metadata_cache",
     "cache_entries",
+    "catalogue",
 ];
 
 /// Tables that cannot be rebuilt from the server (backed up before migrating).

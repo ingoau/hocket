@@ -2575,6 +2575,46 @@ pub enum AccountSetup {
         password: Secret,
         name: Option<String>,
     },
+    /// YouTube Music on this device: signed in with the cookies the
+    /// platform's Google sign-in captured (a `Cookie:` header for
+    /// music.youtube.com), or anonymous (`ytm:anon`) without them. The
+    /// account id is the channel id once the sign-in is checked. `js_host`:
+    /// the platform answers [`Event::YtmJsRequest`] (signature, `n`, PO token
+    /// for the web client), which Premium's 256k AAC needs.
+    YoutubeMusic {
+        cookies: Option<Secret>,
+        #[serde(default)]
+        js_host: bool,
+    },
+}
+
+/// What the core asks the platform's JS host (a hidden WebView or window on
+/// music.youtube.com) for the web player client.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "type", content = "data")]
+pub enum YtmJsRequest {
+    /// The player's signature timestamp and a PO token for this video.
+    Prepare {
+        video_id: String,
+        visitor_data: String,
+    },
+    /// Sign and `n`-transform these stream URLs (a plain URL or a
+    /// `signatureCipher` query string each); answer one URL per entry.
+    Decipher {
+        video_id: String,
+        formats: Vec<String>,
+    },
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct YtmJsAnswer {
+    pub signature_timestamp: Option<u32>,
+    pub po_token: Option<String>,
+    #[serde(default)]
+    pub urls: Vec<String>,
 }
 
 #[typeshare]
@@ -2616,6 +2656,12 @@ pub enum Command {
     /// A new account goes last in the priority order.
     AddAccount {
         setup: AccountSetup,
+    },
+    /// The platform's answer to [`Event::YtmJsRequest`]: `answer`, or `error`.
+    YtmJsAnswer {
+        request_id: String,
+        answer: Option<YtmJsAnswer>,
+        error: Option<String>,
     },
     /// Forget an account: its mirror, pins, outbox and history go with it.
     RemoveAccount {
@@ -3996,6 +4042,18 @@ pub enum Event {
     /// credential store.
     CredentialsSynced {
         credentials: Vec<SyncedAccountCredential>,
+    },
+    /// The core needs the platform's JS host (see `AccountSetup::YoutubeMusic`);
+    /// answer with `Command::YtmJsAnswer` within 20 s.
+    YtmJsRequest {
+        request_id: String,
+        request: YtmJsRequest,
+    },
+    /// A YouTube Music sign-in stopped working (cookies expired or were
+    /// revoked): sign in again on this device. The account stays, anonymous
+    /// reads keep working.
+    YtmSignInExpired {
+        account_id: AccountId,
     },
     /// `ClaimCoordinator` / `RedeemCoordinatorInvite` worked.
     CoordinatorJoined {

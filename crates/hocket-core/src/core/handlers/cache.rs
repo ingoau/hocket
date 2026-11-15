@@ -55,7 +55,7 @@ impl Actor {
         ) {
             return true;
         }
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         matches!(
             self.downloads
                 .cache_lookup(&track.server_id, &track.id, profile.as_ref(), false),

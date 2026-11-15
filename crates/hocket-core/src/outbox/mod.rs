@@ -564,7 +564,8 @@ impl Outbox {
     /// network failure (the rest would fail the same way) and reschedules.
     pub async fn flush(&self, provider: &dyn Provider, max: usize) -> DbResult<FlushReport> {
         let now = self.clock.now_ms();
-        let server_id = provider.account_id().to_string();
+        // Rows name the source their ids are valid in.
+        let server_id = provider.source().to_string();
         let due: Vec<OutboxEntry> = self.db.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
                 "SELECT {ENTRY_COLUMNS} FROM outbox WHERE server_id = ?1 AND status = 'pending' AND next_attempt_at <= ?2 ORDER BY created_at ASC LIMIT ?3"
@@ -696,11 +697,7 @@ impl Outbox {
         // Everything else is a Subsonic edit (ratings, stars, playlists by
         // index, the play queue).
         let Some(api) = provider.navidrome().map(|a| a.as_ref()) else {
-            return Err(SubsonicError::Unsupported(format!(
-                "{} on a {:?} account",
-                entry.mutation.target_key(),
-                provider.kind()
-            )));
+            return self.execute_provider(provider, entry, report).await;
         };
         let replay = entry.attempts > 0;
         match &entry.mutation {
@@ -974,6 +971,175 @@ impl Outbox {
                 .await?;
                 Ok(PostCall::None)
             }
+        }
+    }
+
+    /// A mutation for a provider without a Subsonic client (YouTube Music),
+    /// through [`Provider::write`]. Playlist positions are the mirror's
+    /// (what Hocket lists); the provider maps them onto its own order.
+    async fn execute_provider(
+        &self,
+        provider: &dyn Provider,
+        entry: &OutboxEntry,
+        report: &mut FlushReport,
+    ) -> Result<PostCall, SubsonicError> {
+        use crate::provider::{LibraryTarget, ProviderWrite, WriteOutcome};
+        let refresh = |id: &str| id.to_string();
+        let playlist_id = match &entry.mutation {
+            Mutation::SetRating { .. } | Mutation::SavePlayQueue { .. } => {
+                // No ratings, no server play queue: nothing to send.
+                return Ok(PostCall::None);
+            }
+            Mutation::SetLoved { target, loved } => {
+                let w = match target {
+                    LoveTarget::Track { id } => {
+                        let t = vec![RatingTarget::Track {
+                            id: id.clone(),
+                            source: provider.source().to_string(),
+                        }];
+                        if *loved {
+                            ProviderWrite::Star(t)
+                        } else {
+                            ProviderWrite::Unstar(t)
+                        }
+                    }
+                    LoveTarget::Album { id } => {
+                        let t = LibraryTarget::Album { id: id.clone() };
+                        if *loved {
+                            ProviderWrite::LibraryAdd(t)
+                        } else {
+                            ProviderWrite::LibraryRemove(t)
+                        }
+                    }
+                    LoveTarget::Artist { id } => {
+                        let t = LibraryTarget::Artist { id: id.clone() };
+                        if *loved {
+                            ProviderWrite::LibraryAdd(t)
+                        } else {
+                            ProviderWrite::LibraryRemove(t)
+                        }
+                    }
+                };
+                provider.write(w).await?;
+                return Ok(PostCall::None);
+            }
+            Mutation::PlaylistCreate { name, track_ids } => {
+                let id = match &entry.server_ref {
+                    Some(r) => r.clone(),
+                    None => match provider
+                        .write(ProviderWrite::CreatePlaylist {
+                            name: name.clone(),
+                            track_ids: track_ids.clone(),
+                        })
+                        .await?
+                    {
+                        WriteOutcome::Created(id) => id,
+                        WriteOutcome::Done => {
+                            return Err(SubsonicError::Protocol("no playlist id".into()))
+                        }
+                    },
+                };
+                self.db
+                    .with_conn(|c| {
+                        c.execute(
+                            "UPDATE outbox SET server_ref = ?2 WHERE id = ?1",
+                            params![entry.id, id],
+                        )?;
+                        Ok(())
+                    })
+                    .map_err(db_err)?;
+                report
+                    .created_playlists
+                    .push((entry.id.clone(), id.clone()));
+                refresh(&id)
+            }
+            Mutation::PlaylistDelete { playlist_id } => {
+                provider
+                    .write(ProviderWrite::DeletePlaylist {
+                        id: playlist_id.clone(),
+                    })
+                    .await?;
+                return Ok(PostCall::None);
+            }
+            Mutation::PlaylistRename {
+                playlist_id, name, ..
+            } => {
+                if let Some(name) = name {
+                    provider
+                        .write(ProviderWrite::RenamePlaylist {
+                            id: playlist_id.clone(),
+                            name: name.clone(),
+                        })
+                        .await?;
+                }
+                return Ok(PostCall::None);
+            }
+            Mutation::PlaylistAdd {
+                playlist_id,
+                track_ids,
+                at_index,
+            } => {
+                let mut to_add = track_ids.clone();
+                if entry.attempts > 0 && at_index.is_none() {
+                    // The append may have landed on a previous attempt.
+                    let have = provider.playlist(playlist_id).await?.visible_ids();
+                    to_add.retain(|t| !have.contains(t));
+                }
+                if !to_add.is_empty() {
+                    provider
+                        .write(ProviderWrite::PlaylistAdd {
+                            id: playlist_id.clone(),
+                            track_ids: to_add,
+                            at_index: *at_index,
+                        })
+                        .await?;
+                }
+                refresh(playlist_id)
+            }
+            Mutation::PlaylistRemove {
+                playlist_id,
+                track_ids,
+                indices,
+            } => {
+                provider
+                    .write(ProviderWrite::PlaylistRemove {
+                        id: playlist_id.clone(),
+                        track_ids: track_ids.clone(),
+                        indices: indices.clone(),
+                    })
+                    .await?;
+                refresh(playlist_id)
+            }
+            Mutation::PlaylistMove {
+                playlist_id,
+                track_id,
+                from_index,
+                to_index,
+            } => {
+                provider
+                    .write(ProviderWrite::PlaylistMove {
+                        id: playlist_id.clone(),
+                        track_id: track_id.clone(),
+                        from_index: *from_index,
+                        to_index: *to_index,
+                    })
+                    .await?;
+                refresh(playlist_id)
+            }
+            Mutation::Scrobble { .. } => return self.execute_scrobble(provider, entry).await,
+        };
+        match provider.playlist(&playlist_id).await {
+            Ok(c) => {
+                let track_ids = c.visible_ids();
+                let mut playlist = c.playlist;
+                playlist.id = playlist_id;
+                Ok(PostCall::Playlist {
+                    playlist,
+                    track_ids,
+                })
+            }
+            Err(SubsonicError::NotFound(_)) => Ok(PostCall::PlaylistGone(playlist_id)),
+            Err(e) => Err(e),
         }
     }
 

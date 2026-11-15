@@ -144,6 +144,9 @@ pub struct StateView {
     pub queue_section: bool,
     /// Entries in the "Next in queue" group.
     pub queue_group_count: u32,
+    /// Sources whose accounts keep no library of their own (anonymous
+    /// YouTube Music): their songs go into the Hocket library.
+    pub hocket_library_sources: Vec<SourceId>,
 }
 
 /// One entry of `library.pins`.

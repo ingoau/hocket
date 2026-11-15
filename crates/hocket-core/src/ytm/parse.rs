@@ -973,15 +973,29 @@ pub fn parse_player(v: &Value) -> PlayerInfo {
     }
 }
 
-/// The signed-in account's channel id and name, from `account/account_menu`.
+/// The signed-in account's channel id and name, from `account/account_menu`:
+/// the header's name, and the first channel (`UC…`) the menu links to.
 pub fn parse_account(v: &Value) -> Option<(String, String)> {
     let h = find_key(v, "activeAccountHeaderRenderer")?;
     let name = h.get("accountName").map(text).unwrap_or_default();
-    let channel = find_key(h, "browseId")
-        .and_then(Value::as_str)
-        .or_else(|| find_key(v, "channelId").and_then(Value::as_str))
-        .map(str::to_string)?;
-    Some((channel, name))
+    fn channel(v: &Value) -> Option<&str> {
+        match v {
+            Value::Object(m) => {
+                for k in ["browseId", "channelId"] {
+                    if let Some(id) = m.get(k).and_then(Value::as_str) {
+                        if id.starts_with("UC") {
+                            return Some(id);
+                        }
+                    }
+                }
+                m.values().find_map(channel)
+            }
+            Value::Array(a) => a.iter().find_map(channel),
+            _ => None,
+        }
+    }
+    let id = channel(h).or_else(|| channel(v))?;
+    Some((id.to_string(), name))
 }
 
 /// Whether the account has Premium: the account menu offers no "Get Music

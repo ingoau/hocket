@@ -143,6 +143,8 @@ pub struct StreamInfo {
 pub struct UpstreamRequest {
     pub url: Url,
     pub range: Option<String>,
+    /// Headers the provider's URL needs (googlevideo: the client's User-Agent).
+    pub headers: Vec<(String, String)>,
 }
 
 /// The server's answer, body streamed.
@@ -195,6 +197,9 @@ impl StreamUpstream for ReqwestUpstream {
             let mut b = client.get(request.url);
             if let Some(r) = &request.range {
                 b = b.header(reqwest::header::RANGE, r);
+            }
+            for (k, v) in &request.headers {
+                b = b.header(k.as_str(), v.as_str());
             }
             let resp = b.send().await.map_err(|e| e.without_url().to_string())?;
             let h = resp.headers();
@@ -1556,7 +1561,19 @@ impl CacheSource {
         cancel: &CancellationToken,
     ) -> Result<(), StreamError> {
         let (request, gap_end) = self.segment_request(pos).await?;
-        let up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
+        let mut up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
+        let mut gap_end = gap_end;
+        if matches!(up.status, 403 | 410) {
+            // An expiring URL (googlevideo's last ~6 h, bound to this IP):
+            // the provider forgets it and the same range goes to a fresh one.
+            if let Some(api) = &self.api {
+                tracing::info!(target: "hocket::stream", track = %self.token.track_id, status = up.status, at = pos, "stream URL refused; resolving it again");
+                api.stream_failed(&self.token.track_id, up.status);
+                let (request, end) = self.segment_request(pos).await?;
+                gap_end = end;
+                up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
+            }
+        }
         self.attach_segment(pos, gap_end, up)
     }
 
@@ -1569,33 +1586,65 @@ impl CacheSource {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        // To the end of the stream: open-ended (what a plain seek sends).
-        let bounded = gap_end.filter(|e| Some(*e) != self.total);
-        let range = match (pos, bounded) {
-            (0, None) => None,
-            (p, None) => Some(format!("bytes={p}-")),
-            (p, Some(e)) => Some(format!("bytes={p}-{}", e.max(p + 1) - 1)),
-        };
-        tracing::debug!(target: "hocket::stream", track = %self.token.track_id, ?range, "fetching from the server");
+        let total = self.total;
+        let first = self.served == 0 && pos == 0;
         let req = StreamRequest {
             profile: self.profile.clone(),
             offset_s: None,
             suffix: self.token.suffix.clone(),
         };
-        let track_id = self.token.track_id.clone();
+        let track = self.token.track_id.clone();
+        let source = self.token.server_id.clone();
+        let downloads = self.sh.downloads.clone();
         async move {
             let Some(api) = api else {
                 return Err(StreamError::NoServer);
             };
-            let url = api
-                .resolve_stream(&track_id, &req)
+            let stream = api
+                .resolve_stream(&track, &req)
                 .await
                 .map_err(|e| match e {
                     ProviderError::Network(m) => StreamError::Network(m),
                     other => StreamError::Io(other.to_string()),
-                })?
-                .url;
-            Ok((UpstreamRequest { url, range }, gap_end))
+                })?;
+            if let Some(g) = stream.gain_db {
+                downloads.note_provider_gain(&source, &track, g);
+            }
+            // A provider that throttles big requests (googlevideo) gets
+            // bounded ranges: a small first one so playback starts fast.
+            let gap_end = match stream.max_range {
+                Some(max) => {
+                    let max = if first {
+                        max.min(crate::ytm::provider::FIRST_RANGE)
+                    } else {
+                        max
+                    };
+                    let cap = pos + max.max(1);
+                    let end = gap_end.map_or(cap, |e| e.min(cap));
+                    Some(match total.or(stream.content_length) {
+                        Some(t) => end.min(t),
+                        None => end,
+                    })
+                }
+                None => gap_end,
+            };
+            // To the end of the stream: open-ended (what a plain seek sends).
+            let bounded = gap_end.filter(|e| stream.max_range.is_some() || Some(*e) != total);
+            let range = match (pos, bounded) {
+                (0, None) => None,
+                (p, None) => Some(format!("bytes={p}-")),
+                (p, Some(e)) => Some(format!("bytes={p}-{}", e.max(p + 1) - 1)),
+            };
+            tracing::debug!(target: "hocket::stream", track = %track, ?range, "fetching from the server");
+            let headers = stream.headers.into_iter().collect();
+            Ok((
+                UpstreamRequest {
+                    url: stream.url,
+                    range,
+                    headers,
+                },
+                gap_end,
+            ))
         }
     }
 
@@ -1672,7 +1721,11 @@ impl CacheSource {
             next_abs: body_start,
             pending: Bytes::new(),
             pending_at: pos,
-            stop: if whole { None } else { gap_end },
+            stop: if whole {
+                None
+            } else {
+                gap_end.map(|g| self.total.map_or(g, |t| g.min(t)))
+            },
             eof: false,
             skip_to: (whole && pos > 0).then_some(pos),
             error: None,
@@ -2214,5 +2267,172 @@ mod tests {
         let a = new_token();
         assert_eq!(a.len(), 32);
         assert_ne!(a, new_token());
+    }
+}
+
+/// googlevideo through the reader: bounded ranges with the client's
+/// User-Agent, and a URL refused partway is resolved again and the read
+/// carries on at the same offset with the same bytes.
+#[cfg(test)]
+mod googlevideo_tests {
+    use super::*;
+    use crate::ytm::http::{FakeYtmHttp, HttpResponse};
+    use crate::ytm::provider::{FIRST_RANGE, MAX_RANGE};
+
+    const LEN: usize = 9 * 1024 * 1024 + 4321;
+
+    /// A fetch: its URL, range and headers.
+    type Fetched = (String, Option<String>, Vec<(String, String)>);
+
+    struct Googlevideo {
+        bytes: Arc<Vec<u8>>,
+        log: Mutex<Vec<Fetched>>,
+    }
+
+    impl StreamUpstream for Googlevideo {
+        fn fetch(
+            &self,
+            request: UpstreamRequest,
+        ) -> BoxFuture<'static, Result<UpstreamResponse, String>> {
+            self.log.lock().push((
+                request.url.to_string(),
+                request.range.clone(),
+                request.headers.clone(),
+            ));
+            let bytes = self.bytes.clone();
+            Box::pin(async move {
+                let (a, b) = request
+                    .range
+                    .as_deref()
+                    .and_then(|r| r.strip_prefix("bytes="))
+                    .and_then(|r| r.split_once('-'))
+                    .map(|(a, b)| (a.parse::<usize>().unwrap(), b.parse::<usize>().ok()))
+                    .unwrap_or((0, None));
+                // The first URL dies after its first range.
+                if request.url.as_str().ends_with("n=1") && a > 0 {
+                    return Ok(UpstreamResponse {
+                        status: 403,
+                        content_type: Some("text/plain".into()),
+                        content_length: Some(0),
+                        content_range: None,
+                        body: futures::stream::empty().boxed(),
+                    });
+                }
+                let b = b.unwrap_or(LEN - 1).min(LEN - 1);
+                let chunk = Bytes::copy_from_slice(&bytes[a..=b]);
+                Ok(UpstreamResponse {
+                    status: 206,
+                    content_type: Some("audio/mp4".into()),
+                    content_length: Some(chunk.len() as u64),
+                    content_range: Some(format!("bytes {a}-{b}/{LEN}")),
+                    body: futures::stream::iter(
+                        chunk
+                            .chunks(256 * 1024)
+                            .map(|c| Ok(Bytes::copy_from_slice(c)))
+                            .collect::<Vec<_>>(),
+                    )
+                    .boxed(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_url_is_resolved_again_mid_stream_and_ranges_stay_bounded() {
+        let resolves = Arc::new(Mutex::new(0u32));
+        let http = {
+            let resolves = resolves.clone();
+            FakeYtmHttp::new(move |r| {
+                if r.url.contains("sw.js_data") {
+                    return Some(HttpResponse::json(
+                        200,
+                        include_str!("../ytm/fixtures/sw_js_data.txt"),
+                    ));
+                }
+                let mut n = resolves.lock();
+                *n += 1;
+                let v = serde_json::json!({"playabilityStatus": {"status": "OK"}, "streamingData": {"expiresInSeconds": "21540", "adaptiveFormats": [
+                    {"itag": 140, "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "contentLength": LEN.to_string(),
+                     "url": format!("https://rr1.googlevideo.com/videoplayback?itag=140&n={}", *n), "loudnessDb": 2.5}]}});
+                Some(HttpResponse::json(200, &v.to_string()))
+            })
+        };
+        let clock: Arc<dyn Clock> = Arc::new(crate::util::WallClock);
+        let it = Arc::new(crate::ytm::client::InnerTube::new(
+            Arc::new(http),
+            clock.clone(),
+            None,
+        ));
+        let provider = Arc::new(crate::ytm::YtmProvider::new(
+            crate::ytm::ANON,
+            it,
+            clock.clone(),
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let dl = Downloads::new(
+            crate::db::Db::open_in_memory().unwrap(),
+            clock.clone(),
+            Arc::new(crate::downloads::UnknownStorage),
+            &dir.path().join("data"),
+            &dir.path().join("cache"),
+            crate::api::Platform::Linux,
+        );
+        let bytes: Arc<Vec<u8>> = Arc::new((0..LEN).map(|i| (i * 13 % 251) as u8).collect());
+        let upstream = Arc::new(Googlevideo {
+            bytes: bytes.clone(),
+            log: Mutex::default(),
+        });
+        let r = StreamReader::new(dl.clone(), clock, upstream.clone(), Arc::new(|_| {}));
+        r.set_providers(crate::provider::ProviderSet::single(provider));
+        let url = r
+            .mint(StreamTarget {
+                server_id: "ytm".into(),
+                track_id: "vid".into(),
+                profile: None,
+                suffix: Some("m4a".into()),
+                mime_type: Some("audio/mp4".into()),
+                duration_ms: Some(370_000.0),
+            })
+            .unwrap();
+        let info = r.open(&url, 0, None).await.unwrap();
+        let mut got = vec![];
+        loop {
+            let b = r.read(info.handle, 64 * 1024).await.unwrap();
+            if b.is_empty() {
+                break;
+            }
+            got.extend_from_slice(&b);
+        }
+        r.close(info.handle);
+        assert_eq!(got.len(), LEN);
+        assert!(got == *bytes, "the same bytes across the re-resolve");
+        assert_eq!(*resolves.lock(), 2, "resolved once more after the refusal");
+        let log = upstream.log.lock();
+        let ranges: Vec<(u64, u64)> = log
+            .iter()
+            .filter_map(|(_, r, _)| {
+                let (a, b) = r.as_deref()?.strip_prefix("bytes=")?.split_once('-')?;
+                Some((a.parse().ok()?, b.parse().ok()?))
+            })
+            .collect();
+        assert_eq!(ranges.len(), log.len(), "never an open-ended request");
+        assert_eq!(ranges[0], (0, FIRST_RANGE - 1), "a small first range");
+        assert!(ranges.iter().all(|(a, b)| b - a < MAX_RANGE));
+        let retry = log.iter().find(|(u, _, _)| u.ends_with("n=2")).unwrap();
+        assert_eq!(
+            retry
+                .1
+                .as_deref()
+                .map(|r| r.starts_with(&format!("bytes={FIRST_RANGE}-"))),
+            Some(true),
+            "resumed where it was refused"
+        );
+        // Each URL is fetched as the client that resolved it: visionOS first,
+        // then (visionOS's URL refused) the next client in the chain.
+        assert!(log.iter().all(|(u, _, h)| h
+            .iter()
+            .any(|(k, v)| k == "User-Agent" && (v.contains("Safari") == u.ends_with("n=1")))));
+        // loudnessDb became the track gain.
+        assert_eq!(dl.gain("ytm", "vid").unwrap(), Some(-2.5));
     }
 }

@@ -147,6 +147,11 @@ impl FakeYtmHttp {
         }
     }
 
+    /// What the handler answers `req` (without logging it).
+    pub fn answer(&self, req: &HttpRequest) -> Option<HttpResponse> {
+        (self.handler)(req)
+    }
+
     /// The InnerTube endpoints called, in order (`player`, `browse`…).
     pub fn endpoints(&self) -> Vec<String> {
         self.log

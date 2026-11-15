@@ -258,9 +258,211 @@ pub fn find_lame_header(bytes: &[u8]) -> Option<LameInfo> {
     None
 }
 
+/// An MP4 edit list's single edit (`moov/trak/edts/elst`): where the
+/// presentation starts in the media (the encoder priming to skip) and how
+/// long it lasts. YouTube's AAC (itag 140/141) carries no `iTunSMPB`, only
+/// this: `media_time` 1600 (`docs/spikes/desktop-decoding.md`). Symphonia
+/// parses it but never applies it, so the decoder does (Media3 applies it
+/// itself on Android).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditList {
+    /// Where playback starts, in media timescale units.
+    pub media_time: u64,
+    /// How long it plays, in movie timescale units.
+    pub segment_duration: u64,
+    pub movie_timescale: u32,
+    pub media_timescale: u32,
+}
+
+impl EditList {
+    /// Frames to skip at the start and frames to play, at `sample_rate`.
+    pub fn frames(&self, sample_rate: u32) -> (u32, Option<u64>) {
+        let rescale = |v: u64, from: u32| -> u64 {
+            if from == 0 || from == sample_rate {
+                v
+            } else {
+                (u128::from(v) * u128::from(sample_rate) / u128::from(from)) as u64
+            }
+        };
+        let skip = rescale(self.media_time, self.media_timescale).min(u64::from(u32::MAX)) as u32;
+        let dur = (self.segment_duration > 0)
+            .then(|| rescale(self.segment_duration, self.movie_timescale));
+        (skip, dur)
+    }
+}
+
+fn be32(b: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?))
+}
+
+fn be64(b: &[u8], at: usize) -> Option<u64> {
+    Some(u64::from_be_bytes(b.get(at..at + 8)?.try_into().ok()?))
+}
+
+/// The boxes directly inside `b`: (type, body).
+fn boxes(b: &[u8]) -> Vec<([u8; 4], &[u8])> {
+    let mut out = vec![];
+    let mut at = 0usize;
+    while at + 8 <= b.len() {
+        let Some(size) = be32(b, at) else { break };
+        let kind: [u8; 4] = b[at + 4..at + 8].try_into().unwrap_or_default();
+        let (header, size) = match size {
+            1 => match be64(b, at + 8) {
+                Some(s) => (16usize, s as usize),
+                None => break,
+            },
+            0 => (8, b.len() - at),
+            s => (8, s as usize),
+        };
+        if size < header {
+            break;
+        }
+        // A box cut off by the end of the head: what's there still parses.
+        let end = at.saturating_add(size).min(b.len());
+        out.push((kind, &b[at + header.min(end - at)..end]));
+        at = at.saturating_add(size);
+    }
+    out
+}
+
+fn child<'a>(b: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
+    boxes(b)
+        .into_iter()
+        .find(|(k, _)| k == kind)
+        .map(|(_, body)| body)
+}
+
+/// A header box's timescale (`mvhd`, `mdhd`): after version/flags and two
+/// times (32-bit in version 0, 64-bit in version 1).
+fn timescale(full: &[u8]) -> Option<u32> {
+    match *full.first()? {
+        1 => be32(full, 4 + 16),
+        _ => be32(full, 4 + 8),
+    }
+}
+
+/// The first track's single edit, from the head of an MP4 file (its
+/// `moov`, which a DASH/fragmented file puts at the start). `None` without
+/// an edit list or with several real edits.
+pub fn parse_mp4_edit_list(head: &[u8]) -> Option<EditList> {
+    let moov = child(head, b"moov")?;
+    let movie_timescale = timescale(child(moov, b"mvhd")?)?;
+    for (kind, trak) in boxes(moov) {
+        if &kind != b"trak" {
+            continue;
+        }
+        let Some(elst) = child(trak, b"edts").and_then(|e| child(e, b"elst")) else {
+            continue;
+        };
+        let media_timescale = child(trak, b"mdia")
+            .and_then(|m| child(m, b"mdhd"))
+            .and_then(timescale)
+            .unwrap_or(movie_timescale);
+        let version = *elst.first()?;
+        let count = be32(elst, 4)? as usize;
+        let entry_size = if version == 1 { 20 } else { 12 };
+        let mut real = vec![];
+        for i in 0..count.min(16) {
+            let at = 8 + i * entry_size;
+            let (dur, time) = if version == 1 {
+                (be64(elst, at)?, be64(elst, at + 8)? as i64)
+            } else {
+                (
+                    u64::from(be32(elst, at)?),
+                    i64::from(be32(elst, at + 4)? as i32),
+                )
+            };
+            // `media_time` -1 is an empty edit (a delay), not part of the media.
+            if time >= 0 {
+                real.push((dur, time as u64));
+            }
+        }
+        return match real.as_slice() {
+            [(dur, time)] => Some(EditList {
+                media_time: *time,
+                segment_duration: *dur,
+                movie_timescale,
+                media_timescale,
+            }),
+            _ => None,
+        };
+    }
+    None
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A minimal fMP4 head: ftyp, moov(mvhd, trak(tkhd, edts(elst), mdia(mdhd)), mvex), sidx.
+    pub(crate) fn mp4_head(media_time: u32, segment: u32, version1: bool) -> Vec<u8> {
+        fn bx(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+            let mut v = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+            v.extend_from_slice(kind);
+            v.extend_from_slice(body);
+            v
+        }
+        let mut mvhd = vec![0u8; 4 + 8];
+        mvhd.extend_from_slice(&44_100u32.to_be_bytes());
+        mvhd.extend_from_slice(&[0u8; 80]);
+        let elst = if version1 {
+            let mut e = vec![1u8, 0, 0, 0];
+            e.extend_from_slice(&1u32.to_be_bytes());
+            e.extend_from_slice(&u64::from(segment).to_be_bytes());
+            e.extend_from_slice(&u64::from(media_time).to_be_bytes());
+            e.extend_from_slice(&[0, 1, 0, 0]);
+            e
+        } else {
+            let mut e = vec![0u8; 4];
+            e.extend_from_slice(&2u32.to_be_bytes());
+            // An empty edit first: not part of the media.
+            e.extend_from_slice(&0u32.to_be_bytes());
+            e.extend_from_slice(&(-1i32).to_be_bytes());
+            e.extend_from_slice(&[0, 1, 0, 0]);
+            e.extend_from_slice(&segment.to_be_bytes());
+            e.extend_from_slice(&media_time.to_be_bytes());
+            e.extend_from_slice(&[0, 1, 0, 0]);
+            e
+        };
+        let mut mdhd = vec![0u8; 4 + 8];
+        mdhd.extend_from_slice(&44_100u32.to_be_bytes());
+        mdhd.extend_from_slice(&[0u8; 8]);
+        let trak = [
+            bx(b"tkhd", &[0u8; 84]),
+            bx(b"edts", &bx(b"elst", &elst)),
+            bx(b"mdia", &bx(b"mdhd", &mdhd)),
+        ]
+        .concat();
+        let moov = [
+            bx(b"mvhd", &mvhd),
+            bx(b"trak", &trak),
+            bx(b"mvex", &[0u8; 32]),
+        ]
+        .concat();
+        [
+            bx(b"ftyp", b"dash\0\0\0\0iso6mp41"),
+            bx(b"moov", &moov),
+            bx(b"sidx", &[0u8; 40]),
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn parses_youtubes_edit_list_priming() {
+        // itag 140 of 4D7u5KF7SP8: media_time 1600, segment 16300536.
+        let e = parse_mp4_edit_list(&mp4_head(1600, 16_300_536, false)).unwrap();
+        assert_eq!(e.media_time, 1600);
+        assert_eq!(e.segment_duration, 16_300_536);
+        assert_eq!(e.frames(44_100), (1600, Some(16_300_536)));
+        // Another sample rate rescales.
+        assert_eq!(e.frames(48_000).0, 1741);
+        let v1 = parse_mp4_edit_list(&mp4_head(2112, 1000, true)).unwrap();
+        assert_eq!((v1.media_time, v1.segment_duration), (2112, 1000));
+        // Junk and a head cut before the edit list give nothing.
+        assert!(parse_mp4_edit_list(b"ID3\x04\0\0\0\0\0\0").is_none());
+        let head = mp4_head(1600, 5, false);
+        assert!(parse_mp4_edit_list(&head[..40]).is_none());
+    }
 
     /// Build a synthetic first frame: MPEG-1 Layer III stereo, optional CRC,
     /// with a Xing tag (frames + bytes + TOC + quality) and a LAME extension
