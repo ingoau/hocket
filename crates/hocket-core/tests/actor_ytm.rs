@@ -171,6 +171,28 @@ async fn anonymous_youtube_music_searches_browses_and_keeps_its_catalogue() {
     .await;
     t.run_for(2_000.0).await;
     assert!(!http.endpoints().iter().any(|e| e.starts_with("like/")));
+    // An added song lists in the library (from its snapshot), not loved;
+    // removed, it goes again.
+    let in_library = |t: &TestCore| {
+        let db = t.open_db();
+        db.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT loved FROM tracks WHERE server_id = 'ytm' AND id = '4D7u5KF7SP8'",
+                [],
+                |r| r.get::<_, bool>(0),
+            )
+            .ok())
+        })
+        .unwrap()
+    };
+    assert_eq!(in_library(&t), Some(false));
+    t.run(Command::SetInLibrary {
+        tracks: vec![TrackRef::new("ytm", "4D7u5KF7SP8")],
+        added: false,
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    assert_eq!(in_library(&t), None);
 
     // Home gets YouTube Music's shelves, songs only.
     let _ = t.query(Query::HomeShelves).await;

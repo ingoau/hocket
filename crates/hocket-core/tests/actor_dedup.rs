@@ -481,6 +481,36 @@ async fn mixed_playlists_hold_any_account_s_songs() {
     );
 }
 
+/// Converting deletes the provider's playlist: one whose songs haven't
+/// loaded yet is refused, not converted empty.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_playlist_not_yet_loaded_is_not_converted() {
+    let a = server(A, "alice", "a");
+    a.add_playlist("pa", "On A", "alice", &["a-own", "a-shared"], false);
+    let t = TestCore::start_accounts("dedup-convert-unsynced", a.clone(), vec![]).await;
+    wait_synced(&t, &[A]).await;
+    t.open_db()
+        .with_conn(|c| {
+            c.execute("UPDATE playlists SET tracks_synced = 0 WHERE id = 'pa'", [])?;
+            Ok(())
+        })
+        .unwrap();
+    t.events.clear();
+    t.run(Command::ConvertPlaylistToMixed {
+        playlist_id: "pa".into(),
+        add: vec![],
+    })
+    .await;
+    t.run_for(5_000.0).await;
+    let lists = playlists(&t).await;
+    assert!(lists.iter().any(|p| p.id == "pa"), "still on the server");
+    assert!(!lists.iter().any(|p| p.server_id == "hocket"));
+    assert_eq!(t.server.state.lock().playlist_songs["pa"].len(), 2);
+    assert!(t.events.all().iter().any(
+        |e| matches!(e, Event::Toast { toast } if toast.message.contains("hasn't finished loading"))
+    ));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn home_has_continue_listening_and_each_account_s_shelves() {
     let t = two_accounts("dedup-home", server(B, "bob", "b")).await;

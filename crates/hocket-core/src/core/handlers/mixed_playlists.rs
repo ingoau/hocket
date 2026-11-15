@@ -187,6 +187,22 @@ impl Actor {
             self.toast("Smart playlists are read-only", None);
             return;
         }
+        // Its songs must be here first: converting deletes the provider's
+        // playlist, so a list not yet fetched would lose them.
+        if !self
+            .db
+            .playlist_tracks_synced(&playlist_id)
+            .unwrap_or(false)
+        {
+            self.toast(
+                format!(
+                    "\u{201c}{}\u{201d} hasn't finished loading. Try again in a moment.",
+                    p.name
+                ),
+                None,
+            );
+            return;
+        }
         let mut tracks = self
             .db
             .playlist_track_refs(&playlist_id)

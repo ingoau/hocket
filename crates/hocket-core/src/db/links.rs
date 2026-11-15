@@ -9,6 +9,11 @@ use crate::api::{SourceId, TrackRef};
 use crate::library::links::{EntityFacts, EntityGroup, Group, SongFacts};
 use crate::library::{MixedPlaylist, HOCKET_SOURCE};
 
+/// The `sync_gen` of a row listed from a Hocket library record's snapshot
+/// (the account's mirror doesn't have the song): no sync ever writes it, so
+/// such rows can be told apart and dropped when the record goes.
+pub const SNAPSHOT_GEN: i64 = -1;
+
 /// What a dedup group is made of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkKind {
@@ -178,6 +183,45 @@ impl Db {
             Ok(c.execute(
                 "UPDATE tracks SET loved = ?3 WHERE server_id = ?1 AND id = ?2",
                 params![track.source, track.id, loved as i64],
+            )? > 0)
+        })
+    }
+
+    /// Songs listed only from a Hocket library record's snapshot (rows
+    /// [`SNAPSHOT_GEN`] marks).
+    pub fn snapshot_track_refs(&self) -> DbResult<Vec<TrackRef>> {
+        self.with_conn(|c| {
+            let mut st =
+                c.prepare_cached("SELECT server_id, id FROM tracks WHERE sync_gen = ?1")?;
+            let rows = st.query_map([SNAPSHOT_GEN], |r| {
+                Ok(TrackRef::new(
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                ))
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Whether the mirror has a row for this song (not the catalogue).
+    pub fn has_track_row(&self, track: &TrackRef) -> DbResult<bool> {
+        self.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT 1 FROM tracks WHERE server_id = ?1 AND id = ?2",
+                params![track.source, track.id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+        })
+    }
+
+    /// Drop a snapshot-only row (never one a sync put there).
+    pub fn delete_snapshot_track(&self, track: &TrackRef) -> DbResult<bool> {
+        self.with_conn(|c| {
+            Ok(c.execute(
+                "DELETE FROM tracks WHERE server_id = ?1 AND id = ?2 AND sync_gen = ?3",
+                params![track.source, track.id, SNAPSHOT_GEN],
             )? > 0)
         })
     }

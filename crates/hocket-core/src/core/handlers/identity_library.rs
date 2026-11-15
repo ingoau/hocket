@@ -10,8 +10,8 @@ use crate::api::{
 };
 use crate::connect::engine::Input;
 use crate::core::actor::Actor;
-use crate::db::links::LinkKind;
-use crate::library::{self, links, LibraryRecord};
+use crate::db::links::{LinkKind, SNAPSHOT_GEN};
+use crate::library::{self, links, LibraryRecord, RecordBody};
 use crate::session::QueueOp;
 
 impl Actor {
@@ -387,28 +387,44 @@ impl Actor {
             .collect()
     }
 
-    /// Stars kept in the Hocket library show on the mirror's rows.
+    /// The Hocket library on the mirror: a saved song (starred, added or
+    /// both) lists, loved when starred, from its snapshot when the mirror
+    /// lacks it; one no longer saved is unloved, and a row only its snapshot
+    /// put there goes.
     fn apply_saved_tracks(&mut self) {
-        for s in library::saved(&self.library_records) {
-            if !s.starred {
+        let saved = library::saved(&self.library_records);
+        let kept: std::collections::HashSet<&TrackRef> = saved.iter().map(|s| &s.track).collect();
+        for s in &saved {
+            if self.db.has_track_row(&s.track).unwrap_or(false) {
+                let _ = self.db.set_loved_ref(&s.track, s.starred);
                 continue;
             }
-            if self.db.track_ref(&s.track).ok().flatten().is_none() {
-                // Known only from the record: list it from its snapshot, when
-                // this device has the account.
-                let Some(mut t) = s.snapshot.clone() else {
-                    continue;
-                };
-                if self.accounts.for_source(&s.track.source).is_none() {
-                    continue;
+            // Known only from the record: list it from its snapshot, when
+            // this device has the account.
+            let Some(mut t) = s.snapshot.clone() else {
+                continue;
+            };
+            if self.accounts.for_source(&s.track.source).is_none() {
+                continue;
+            }
+            t.id = s.track.id.clone();
+            t.server_id = s.track.source.clone();
+            t.loved = s.starred;
+            let _ = self.db.upsert_tracks(&[t], &[None], SNAPSHOT_GEN);
+        }
+        // Removed (a tombstone): no longer loved here.
+        for r in &self.library_records {
+            if let (true, RecordBody::Saved(s)) = (r.removed, &r.body) {
+                if !kept.contains(&s.track) {
+                    let _ = self.db.set_loved_ref(&s.track, false);
                 }
-                t.id = s.track.id.clone();
-                t.server_id = s.track.source.clone();
-                t.loved = true;
-                let _ = self.db.upsert_tracks(&[t], &[None], 0);
-                continue;
             }
-            let _ = self.db.set_loved_ref(&s.track, true);
+        }
+        // And a row only a snapshot put there goes with its record.
+        for t in self.db.snapshot_track_refs().unwrap_or_default() {
+            if !kept.contains(&t) {
+                let _ = self.db.delete_snapshot_track(&t);
+            }
         }
     }
 }

@@ -97,48 +97,53 @@ fn opt_u32(row: &Row, idx: usize) -> rusqlite::Result<Option<u32>> {
 }
 
 pub fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
+    track_from_offset_row(row, 0)
+}
+
+/// [`track_from_row`] for track columns starting at column `o`.
+pub fn track_from_offset_row(row: &Row, o: usize) -> rusqlite::Result<Track> {
     let rg = api::ReplayGain {
-        track_gain_db: row.get(27)?,
-        track_peak: row.get(28)?,
-        album_gain_db: row.get(29)?,
-        album_peak: row.get(30)?,
+        track_gain_db: row.get(o + 27)?,
+        track_peak: row.get(o + 28)?,
+        album_gain_db: row.get(o + 29)?,
+        album_peak: row.get(o + 30)?,
     };
     let sonic = api::SonicAttributes {
-        bpm: row.get(31)?,
-        key: row.get(32)?,
-        energy: row.get(33)?,
-        mood: row.get(34)?,
-        danceability: row.get(35)?,
-        valence: row.get(36)?,
+        bpm: row.get(o + 31)?,
+        key: row.get(o + 32)?,
+        energy: row.get(o + 33)?,
+        mood: row.get(o + 34)?,
+        danceability: row.get(o + 35)?,
+        valence: row.get(o + 36)?,
     };
     let mut t = Track {
-        id: row.get(0)?,
-        server_id: row.get(1)?,
-        title: row.get(2)?,
-        album_id: row.get(3)?,
-        album: row.get(4)?,
-        artist_id: row.get(5)?,
-        artist: row.get(6)?,
-        album_artist: row.get(7)?,
-        track_number: opt_u32(row, 8)?,
-        disc_number: opt_u32(row, 9)?,
-        year: opt_u32(row, 10)?,
-        genre: row.get(11)?,
-        duration_ms: row.get::<_, i64>(12)?.max(0) as u32,
-        bit_rate: opt_u32(row, 13)?,
-        sample_rate: opt_u32(row, 14)?,
-        bit_depth: opt_u32(row, 15)?,
-        channels: opt_u32(row, 16)?,
-        suffix: row.get(17)?,
-        content_type: row.get(18)?,
-        size_bytes: row.get(19)?,
-        path: row.get(20)?,
-        cover_art: row.get(21)?,
-        rating: row.get::<_, i64>(22)?.clamp(0, 5) as u32,
-        loved: row.get::<_, i64>(23)? != 0,
-        play_count: row.get::<_, i64>(24)?.max(0) as u32,
-        last_played: row.get(25)?,
-        created: row.get(26)?,
+        id: row.get(o + 0)?,
+        server_id: row.get(o + 1)?,
+        title: row.get(o + 2)?,
+        album_id: row.get(o + 3)?,
+        album: row.get(o + 4)?,
+        artist_id: row.get(o + 5)?,
+        artist: row.get(o + 6)?,
+        album_artist: row.get(o + 7)?,
+        track_number: opt_u32(row, o + 8)?,
+        disc_number: opt_u32(row, o + 9)?,
+        year: opt_u32(row, o + 10)?,
+        genre: row.get(o + 11)?,
+        duration_ms: row.get::<_, i64>(o + 12)?.max(0) as u32,
+        bit_rate: opt_u32(row, o + 13)?,
+        sample_rate: opt_u32(row, o + 14)?,
+        bit_depth: opt_u32(row, o + 15)?,
+        channels: opt_u32(row, o + 16)?,
+        suffix: row.get(o + 17)?,
+        content_type: row.get(o + 18)?,
+        size_bytes: row.get(o + 19)?,
+        path: row.get(o + 20)?,
+        cover_art: row.get(o + 21)?,
+        rating: row.get::<_, i64>(o + 22)?.clamp(0, 5) as u32,
+        loved: row.get::<_, i64>(o + 23)? != 0,
+        play_count: row.get::<_, i64>(o + 24)?.max(0) as u32,
+        last_played: row.get(o + 25)?,
+        created: row.get(o + 26)?,
         replay_gain: if rg == api::ReplayGain::default() {
             None
         } else {
@@ -149,16 +154,16 @@ pub fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
         } else {
             Some(sonic)
         },
-        offline: offline_from_i64(row.get(37)?),
-        music_brainz_id: row.get(38)?,
-        explicit: row.get::<_, i64>(39)? != 0,
-        comment: row.get(40)?,
+        offline: offline_from_i64(row.get(o + 37)?),
+        music_brainz_id: row.get(o + 38)?,
+        explicit: row.get::<_, i64>(o + 39)? != 0,
+        comment: row.get(o + 40)?,
         artists: Vec::new(),
-        isrc: row.get(42)?,
+        isrc: row.get(o + 42)?,
     };
     // As stored (JSON), or for a row from before the column existed the one artist it names.
     t.artists = row
-        .get::<_, Option<String>>(41)?
+        .get::<_, Option<String>>(o + 41)?
         .and_then(|j| serde_json::from_str(&j).ok())
         .filter(|a: &Vec<api::ArtistRef>| !a.is_empty())
         .unwrap_or_else(|| crate::subsonic::convert::fallback_artists(&t.artist_id, &t.artist));
@@ -1088,17 +1093,47 @@ impl Db {
         })
     }
 
+    /// A playlist's songs in order: every entry, so an index here is an
+    /// index into the playlist (what remove and move name). A song the
+    /// mirror doesn't have (another account's, one swept, one from the
+    /// catalogue) comes from the catalogue, or as a bare entry with its id.
     pub fn playlist_tracks(&self, playlist_id: &str, page: Option<Page>) -> DbResult<Vec<Track>> {
-        self.with_conn(|c| {
-            let sql = format!(
-                "SELECT {} FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id AND t.server_id = COALESCE(pt.track_source, pt.server_id) WHERE pt.playlist_id = ?1 ORDER BY pt.position ASC{}",
-                TRACK_COLUMNS.split(", ").map(|col| format!("t.{col}")).collect::<Vec<_>>().join(", "),
-                page_sql(&page)
-            );
+        let sql = format!(
+            "SELECT pt.track_id, COALESCE(pt.track_source, pt.server_id), {} FROM playlist_tracks pt LEFT JOIN tracks t ON t.id = pt.track_id AND t.server_id = COALESCE(pt.track_source, pt.server_id) WHERE pt.playlist_id = ?1 ORDER BY pt.position ASC{}",
+            TRACK_COLUMNS
+                .split(", ")
+                .map(|col| format!("t.{col}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            page_sql(&page)
+        );
+        let rows: Vec<(String, String, Option<Track>)> = self.with_conn(|c| {
             let mut st = c.prepare_cached(&sql)?;
-            let rows = st.query_map([playlist_id], track_from_row)?;
+            let rows = st.query_map([playlist_id], |r| {
+                let id: String = r.get(0)?;
+                let source: String = r.get(1)?;
+                let found: Option<String> = r.get(2)?;
+                let track = match found {
+                    Some(_) => Some(track_from_offset_row(r, 2)?),
+                    None => None,
+                };
+                Ok((id, source, track))
+            })?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })
+        })?;
+        rows.into_iter()
+            .map(|(id, source, track)| match track {
+                Some(t) => Ok(t),
+                None => Ok(self
+                    .catalogue_track_ref(&source, &id)?
+                    .unwrap_or_else(|| Track {
+                        title: id.clone(),
+                        id,
+                        server_id: source,
+                        ..Default::default()
+                    })),
+            })
+            .collect()
     }
 
     pub fn playlist_track_page(&self, playlist_id: &str, page: Page) -> DbResult<api::TrackPage> {
@@ -2503,6 +2538,46 @@ mod tests {
             .playlist_membership("s", &[(api::TrackRef::new("s", "9"), "9".into())])
             .unwrap();
         assert!(none.iter().all(|p| p.entries.is_empty()));
+    }
+
+    /// Every entry lists, in place, even one the mirror lacks (another
+    /// account's song, one swept): what remove and move index.
+    #[test]
+    fn playlist_tracks_list_every_entry_in_place() {
+        let db = seeded();
+        db.upsert_playlists(
+            &[Playlist {
+                id: "pl3".into(),
+                server_id: "s".into(),
+                name: "Gaps".into(),
+                is_mine: true,
+                ..Default::default()
+            }],
+            1,
+        )
+        .unwrap();
+        db.set_playlist_tracks("s", "pl3", &["1".into(), "gone".into(), "2".into()])
+            .unwrap();
+        let ids: Vec<String> = db
+            .playlist_tracks("pl3", None)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["1", "gone", "2"]);
+        let page = db
+            .playlist_track_page(
+                "pl3",
+                Page {
+                    offset: 1,
+                    limit: 2,
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 3);
+        assert_eq!(page.items[0].id, "gone");
+        assert_eq!(page.items[0].server_id, "s");
+        assert_eq!(page.items[1].id, "2");
     }
 
     #[test]
