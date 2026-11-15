@@ -668,3 +668,106 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
   - The coordinator analysing YouTube Music, and its optional sign-in.
   - Cast is Phase 5. Not verified: a mixed queue playing gaplessly and handing off between real
     devices, and the Android UI flows beyond compile and unit tests.
+
+## Phase 5 notes
+
+*Written while implementing Phase 5 and the two Phase 4 gaps. Calls made where the plan was silent or
+didn't fit the code.*
+
+- **Where things live.** `core/handlers/remote_streams.rs` (the renderer's URLs for providers that
+  resolve over the network), `Provider::resolves_live` / `Provider::cached_stream`,
+  `Downloads::resolve_remote_live`; on Android `cast/CastFailures.kt`. Tests:
+  `tests/actor_ytm_cast.rs`, `CastFailuresTest`.
+- **Just-in-time URLs without blocking.** A YouTube Music item on a renderer needs a network round
+  trip for its URL, so the actor never waits on it: a load whose URL isn't cached shows the item
+  buffering, fetches it (`Internal::RemoteStreamResolved`) and then loads it at the position it was
+  asked for. The follow-up's URL is fetched as soon as it becomes the follow-up (the receiver holds
+  only current + next, and preloads 20 s before the end), so "preload time" is the start of the
+  current track: minutes ahead, well inside the 6 h life. A cached URL with under 45 min left is
+  fetched again.
+- **Long pause.** Resuming on a renderer after 10 min or more paused (or with the held URL running
+  out) evicts and re-fetches both the current and the next URL, then reloads at the position. 10 min
+  rather than "hours": the phone may have changed networks, and the URLs are bound to its address.
+- **Receiver failures.** The player's existing one retry now evicts a live URL first, so the retry
+  is the re-resolve; the second failure is the usual skip with its notice. `RendererFailed` (the
+  session dying right after a start) never learns a format for a YouTube Music track: it evicts the
+  URL, and the reconnect's reload fetches a new one. A YouTube Music track is never transcoded.
+- **Explaining the address binding (Android).** `CastFailures`: a YouTube Music item that fails
+  goes to the core (re-resolve once); a second failure before any YouTube Music item has played on
+  that receiver is taken as the address mismatch. With nothing else played yet, casting ends with
+  the explanation; in a mixed queue whose Navidrome items play, the explanation is a toast (once)
+  and the Navidrome items carry on. The text depends on the phone's network: mobile data, VPN, or
+  otherwise "same network, both IPv4 or both IPv6".
+- **Headers.** The receiver gets the URL only (the Default Media Receiver can't send headers): the
+  visionOS URL worked without its User-Agent in the spike's range tests, but on a Chromecast it is
+  part of the manual check. A Chromecast fetching a long track open-ended may hit the throttling
+  measured in Phase 0 (`docs/spikes/streams.md`); only ~2× realtime, so it still plays.
+- **Mixed queues** need nothing special beyond the per-item provider: a Navidrome item keeps the
+  server URL (and its transcode fallback), a YouTube Music one the googlevideo URL as `audio/mp4`.
+  The FOSS build is unaffected (all of it is in `:cast` or the core).
+- **Needs a person (the plan's "Done when", physical Chromecast):**
+  - A mixed queue (Navidrome + YouTube Music) casts from Android on the home LAN.
+  - The next track still loads after the phone has been asleep for 10 minutes.
+  - Also worth recording: resuming after a pause longer than 10 min; the toast/ending text on mobile
+    data and on a VPN; an IPv6-resolving phone with an IPv4 Chromecast (`docs/spikes/manual.md`, 4).
+
+### Phase 4 follow-up: the platform JS host
+
+- **The script comes from the core.** `Query::YtmJsHostScript` returns one script both platforms run
+  in a hidden page on `https://www.youtube.com`: yt-dlp's EJS solver (`ytm/js/ejs-*.min.js`, 0.8.0
+  from github.com/yt-dlp/ejs releases, vendored unmodified; Unlicense, bundling meriyah (ISC) and
+  astring (MIT)) and our `ytm/js/host.js` (`hocketYtm.prepare` / `hocketYtm.decipher`). The solver
+  parses the current `base.js` (found through `iframe_api`) and runs the player's own signature
+  and `n` functions; the preprocessed player is cached until the player changes.
+- **PO token.** Minted in the page with BotGuard, as BgUtils / NewPipe's `PoTokenWebView` do
+  (`jnn/v1/Create`, the VM's snapshot, `GenerateIT`, the minter). It works headlessly. Found live:
+  a token bound to the visitor data gets googlevideo's 403 after the first MiB (the GVS wall), one
+  bound to the **video id** streams the whole file, so `prepare` mints for the video id. Minting
+  failures answer `poToken: null` and the chain carries on.
+- **Platforms.** Desktop: `main/ytm-js-host.ts`, a hidden `BrowserWindow` (own partition, plain
+  Chrome UA, muted) on `www.youtube.com/robots.txt`, made on the first request and closed after
+  10 min idle. Android: `playback/YtmJsHost.kt` + `WebViewJsPage.kt` (a WebView never shown,
+  `loadDataWithBaseURL("https://www.youtube.com/")`, results through a JavaScript interface since
+  `evaluateJavascript` can't await), served from `CoreHost` for the life of the core, so it answers
+  whether or not the playback service runs. Both now add YouTube Music with `js_host: true`.
+- **Premium is learned from 141.** A signed-in account with a JS host tries the web client first
+  until it has seen its formats: 141 offered means Premium, only 140 means not, whatever the
+  account-menu heuristic said (a web failure tries again after 30 min).
+- **Live check** (`HOCKET_LIVE_YTM=1 xvfb-run … pnpm test:e2e e2e/ytm-js-live.spec.ts`, real core,
+  anonymous, every client but the web one skipped with `HOCKET_YTM_FORCE_WEB=1`), 16 Nov 2026 from
+  the dev host: signature timestamp 20767 read, PO token minted, the stream resolved by the web
+  client (140) and fetched past the first MiB without a refusal. The Android WebView path is
+  covered by unit tests with a fake page only; it has not run on a device.
+- **Not verified:** itag 141 for a real Premium account on either platform; the Android WebView
+  solving live.
+
+### Phase 4 follow-up: the coordinator's YouTube Music analysis
+
+- **On demand, `--analysis-ytm`.** There is no library to walk, so the coordinator analyses only the
+  YouTube Music tracks clients asked for and missed (`AnalysisKey::ytm(videoId, 140)`, queued by
+  video id, bounded, one at a time on a niced thread). It resolves every URL itself through the
+  same client chain (visionOS first) and never takes one from a device: a request carries only the
+  video id. Records are keyed `(videoId, 140)`, which is what devices ask for.
+- **Priming.** The coordinator decodes with the same decoder as the desktop, which applies the MP4
+  edit list (the 1600-frame AAC priming trimmed), and Media3 trims it on Android, so the correction
+  is 0 everywhere and the records line up. The record's source fingerprint is the duration only
+  (devices know a YouTube Music track by duration, not size or suffix).
+- **Signing it in.** `Command::SignCoordinatorInToYoutubeMusic { cookies }` (owner identity only)
+  seals the `Cookie:` header to the pinned coordinator's X25519 key (`identity::crypto::envelope`,
+  context `hocket-coordinator-ytm-v1`) and sends `Msg::CoordYtmSignIn`; `None` signs it out. The
+  coordinator answers only the owner identity's members, opens the envelope, checks the session
+  against the account menu, keeps it in `<data-dir>/ytm-session.json` (0600) and answers
+  `Msg::CoordYtmStatus` (`Event::CoordinatorYtmStatus`). The desktop's coordinator settings have
+  the button; it opens a fresh Google sign-in (the cleared sign-in window), so the coordinator gets
+  a session of its own, never the device's. Android only handles the event (no button yet).
+- **Deviation: the sign-in doesn't reach the streams yet.** The player clients that need no JS never
+  send a session (Phase 4), and the coordinator has no JS host, so a signed-in coordinator still
+  resolves streams anonymously: uploads and region-blocked tracks stay out of reach. The session is
+  in place for when a JS-capable path exists on the server.
+- **Tests.** `hocket-coordinator/tests/ytm_analysis.rs` (miss → queue by video id; the worker's own
+  player call and ranged download from a fake googlevideo; owner-only, sealed sign-in, refusal of a
+  wrong key, persistence and sign-out; off without the flag) and
+  `actor_automix_share::the_owner_signs_the_coordinator_in_to_youtube_music_with_a_sealed_session`.
+- **Needs a person:** the coordinator analysing real YouTube Music tracks on the deployed server
+  (and whether Google flags a session used from a datacenter address), and the desktop button
+  against a real coordinator.
