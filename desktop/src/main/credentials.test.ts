@@ -39,6 +39,24 @@ describe("ServerCredentialStore", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps this device's YouTube Music sign-in under one key and replays it", async () => {
+    const store = await open(dir);
+    store.intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SAPISID=abc; SID=x", js_host: false } } } });
+    await vi.waitFor(() => expect(existsSync(join(dir, "credentials.json"))).toBe(true));
+    expect(onDisk(dir)[0]!.blob).toBe(b64("enc:SAPISID=abc; SID=x"));
+    const again = await open(dir);
+    expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SAPISID=abc; SID=x", js_host: false } } } }]);
+    // Kept while any YouTube Music account is installed (its id is a channel id), dropped after.
+    again.retainOnly([{ id: "UCme", kind: "youtubeMusic" }]);
+    expect(again.replayCommands()).toHaveLength(1);
+    again.intercept({ type: "removeAccount", data: { account_id: "UCme" } });
+    again.retainOnly([]);
+    expect(again.replayCommands()).toEqual([]);
+    // Anonymous: replayed without cookies.
+    again.intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: false } } } });
+    await vi.waitFor(() => expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: false } } } }]));
+  });
+
   it("treats the Linux basic_text backend as no encryption at all", async () => {
     expect(await encryptionUsable(fakeStorage("basic_text"), "linux")).toBe(false);
     expect(await encryptionUsable(fakeStorage("gnome_libsecret"), "linux")).toBe(true);

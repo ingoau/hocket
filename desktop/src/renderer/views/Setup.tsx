@@ -22,6 +22,9 @@ import { BrandMark } from "../components/BrandMark";
 let summaryOpen = false;
 // When Connect was pressed: the summary's sync is the first library sync queued after it.
 let openedAt = 0;
+// Which source card the form opens on ("Add another source?" picks one).
+type Choice = "navidrome" | "device" | "ytm";
+let initialChoice: Choice = "navidrome";
 // What setup shows while it is open over an account: the summary of the one just added, the
 // "Add another source?" cards, or a form for the next.
 type Phase = "summary" | "another" | "form";
@@ -95,29 +98,87 @@ export function Setup() {
  * accounts the other device named (unless credential sync brought them).
  */
 function Sources({ adding = false }: { adding?: boolean }) {
-  const [fromDevice, setFromDevice] = useState(false);
+  const [choice, setChoice] = useState<Choice>(() => {
+    const c = initialChoice;
+    initialChoice = "navidrome";
+    return c;
+  });
   const finished = useApp((s) => s.pairing.finished);
   const pendingPair = useApp((s) => s.pendingPair);
   useEffect(() => {
-    if (pendingPair) setFromDevice(true);
+    if (pendingPair) setChoice("device");
   }, [pendingPair]);
-  const pickDevice = () => setFromDevice(true);
   const waiting = finished?.[0];
+  const body = choice === "ytm"
+    ? <YtmCard />
+    : choice === "device" && finished === undefined
+      ? <PairForm />
+      : <ConnectForm adding={adding} initial={waiting && { url: waiting.url, username: waiting.username }} />;
   return (
     <div className="setup-sources" data-testid="setup-sources">
       <h1 className="setup-heading">{adding ? t("setup.sources.addTitle") : t("setup.sources.title")}</h1>
-      {fromDevice && finished === undefined ? <PairForm /> : <ConnectForm adding={adding} initial={waiting && { url: waiting.url, username: waiting.username }} />}
+      {body}
+      {choice !== "navidrome" ? (
+        <button type="button" className="setup-source" onClick={() => setChoice("navidrome")} data-testid="setup-source-navidrome">
+          <Icon name="library" size={24} />
+          <span className="setup-source-text"><span className="setup-source-title">{t("setup.sources.navidrome")}</span><span className="setup-hint">{t("setup.sources.navidromeHint")}</span></span>
+        </button>
+      ) : null}
+      {choice !== "ytm" ? (
+        <button type="button" className="setup-source" onClick={() => setChoice("ytm")} data-testid="setup-source-ytm">
+          <Icon name="cloud" size={24} />
+          <span className="setup-source-text"><span className="setup-source-title">{t("setup.sources.ytm")}</span><span className="setup-hint">{t("setup.sources.ytmHint")}</span></span>
+        </button>
+      ) : null}
       {adding ? (
         <div className="setup-buttons">
           <button type="button" className="btn tonal" onClick={() => setSummary(false)} data-testid="setup-cancel">{t("setup.sources.cancel")}</button>
         </div>
-      ) : (
-        <button type="button" className="setup-source" onClick={pickDevice} aria-pressed={fromDevice} data-testid="setup-source-device">
+      ) : choice !== "device" ? (
+        <button type="button" className="setup-source" onClick={() => setChoice("device")} aria-pressed={false} data-testid="setup-source-device">
           <Icon name="devices" size={24} />
           <span className="setup-source-text"><span className="setup-source-title">{t("setup.sources.device")}</span><span className="setup-hint">{t("setup.sources.deviceHint")}</span></span>
         </button>
-      )}
+      ) : null}
     </div>
+  );
+}
+
+/** YouTube Music: sign in with Google (a window of its own), or carry on anonymously. */
+function YtmCard() {
+  const [busy, setBusy] = useState<"signIn" | "anon" | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const signIn = () => {
+    setBusy("signIn");
+    setError(undefined);
+    bridge()
+      .ytm.signIn()
+      .then((r) => {
+        if (r === "signedIn") {
+          setSummary(true);
+        } else {
+          setBusy(undefined);
+          setError(t("setup.ytm.cancelled"));
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("YouTube Music sign-in failed", err);
+        setBusy(undefined);
+      });
+  };
+  const anonymous = () => {
+    setBusy("anon");
+    setSummary(true);
+    bridge().dispatch({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: false } } } });
+  };
+  return (
+    <section className="setup-card" aria-labelledby="setup-ytm-title" data-testid="setup-ytm">
+      <h2 id="setup-ytm-title" className="setup-title">{t("setup.ytm.title")}</h2>
+      <p className="setup-subtitle">{t("setup.ytm.subtitle")}</p>
+      {error ? <div className="error" role="alert" data-testid="setup-error"><Icon name="warn" size={18} filled />{error}</div> : null}
+      <button type="button" className="btn connect primary" disabled={!!busy} onClick={signIn} autoFocus data-testid="setup-ytm-signin">{busy === "signIn" ? <Icon name="spinner" size={20} className="spin" /> : null}{busy === "signIn" ? t("setup.ytm.signingIn") : t("setup.ytm.signIn")}</button>
+      <button type="button" className="btn tonal" disabled={!!busy} onClick={anonymous} data-testid="setup-ytm-anon">{t("setup.ytm.anonymous")}</button>
+    </section>
   );
 }
 
@@ -131,6 +192,10 @@ function AddAnother() {
         <button type="button" className="setup-source" onClick={() => setPhase("form")} data-testid="setup-another-navidrome">
           <Icon name="library" size={24} />
           <span className="setup-source-text"><span className="setup-source-title">{t("setup.sources.navidrome")}</span><span className="setup-hint">{t("setup.sources.navidromeHint")}</span></span>
+        </button>
+        <button type="button" className="setup-source" onClick={() => { initialChoice = "ytm"; setPhase("form"); }} data-testid="setup-another-ytm">
+          <Icon name="cloud" size={24} />
+          <span className="setup-source-text"><span className="setup-source-title">{t("setup.sources.ytm")}</span><span className="setup-hint">{t("setup.sources.ytmHint")}</span></span>
         </button>
       </div>
       <div className="setup-buttons">
@@ -244,6 +309,43 @@ function ConnectForm({ adding, initial }: { adding: boolean; initial?: { url: st
 
 /** What the server turned out to be, while the first sync runs. */
 function Summary({ server }: { server: AccountInfo }) {
+  if (server.kind === "youtubeMusic") return <YtmSummary account={server} />;
+  return <NavidromeSummary server={server} />;
+}
+
+/** A YouTube Music account: who is signed in (or nobody), what it offers, its first sync. */
+function YtmSummary({ account }: { account: AccountInfo }) {
+  const jobs = useApp((s) => s.jobs);
+  const signedIn = account.features.librarySync;
+  const sync = jobs.filter((j) => j.kind === "librarySync" && j.createdAt >= openedAt - 1000).sort((a, b) => b.createdAt - a.createdAt)[0];
+  const synced = sync ? sync.state === "done" : !!account.lastSync;
+  const failed = sync?.state === "failed" || sync?.state === "cancelled";
+  const pct = synced ? 100 : sync?.total ? Math.min(100, Math.round((sync.done / sync.total) * 100)) : 0;
+  const premium = account.capabilities.serverVersion === "premium";
+  const caps: [string, boolean][] = [[t("setup.ytm.cap.search"), true], [t("setup.ytm.cap.lyrics"), true], [t("setup.ytm.cap.library"), signedIn], [t("setup.ytm.cap.premium"), premium]];
+  const different = () => { leaving = account.id; bridge().dispatch({ type: "removeAccount", data: { account_id: account.id } }); };
+  return (
+    <section className="setup-card setup-summary" aria-labelledby="setup-found" data-testid="setup-summary">
+      <h1 id="setup-found" className="setup-version">{t("setup.ytm.title")}</h1>
+      <p className="setup-who" data-testid="setup-ytm-who">{signedIn ? t("setup.ytm.who", { name: account.username || account.name }) : t("setup.ytm.anon")}</p>
+      <ul className="plain-list setup-caps" aria-label={t("setup.capabilities")}>
+        {caps.map(([label, ok]) => <li key={label} className={`setup-cap ${ok ? "ok" : ""}`}><Icon name={ok ? "check" : "close"} size={18} />{label}<span className="sr-only">, {ok ? t("setup.cap.yes") : t("setup.cap.no")}</span></li>)}
+      </ul>
+      {!signedIn ? null : failed ? <div className="setup-old" role="alert" data-testid="setup-sync-failed">{t("setup.syncFailed")}</div> : (
+        <>
+          <div className="setup-sync" role="status"><span>{synced ? t("setup.synced") : t("setup.syncing")}</span><span>{pct}%</span></div>
+          <div className="setup-meter" role="progressbar" aria-label={t("setup.syncing")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}><span style={{ width: `${pct}%` }} /></div>
+        </>
+      )}
+      <div className="setup-buttons">
+        <button type="button" className="btn tonal" onClick={different} data-testid="setup-different">{t("setup.different")}</button>
+        <button type="button" className="btn primary" onClick={() => setPhase("another")} autoFocus data-testid="setup-continue">{t("setup.continue")}</button>
+      </div>
+    </section>
+  );
+}
+
+function NavidromeSummary({ server }: { server: AccountInfo }) {
   const jobs = useApp((s) => s.jobs);
   // This server's first sync; until the core queues it, it is about to start (0%), not done.
   const sync = jobs.filter((j) => j.kind === "librarySync" && j.createdAt >= openedAt - 1000).sort((a, b) => b.createdAt - a.createdAt)[0];

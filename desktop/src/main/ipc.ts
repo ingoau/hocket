@@ -15,6 +15,7 @@ import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
 import { showOpenDialog, showSaveDialog } from "./file-dialog";
+import { signInToYouTubeMusic } from "./ytm-signin";
 import type { DevLog, DiagnosticsBundle } from "./devlog";
 import { installReportIpc } from "./report";
 import type { Windows } from "./windows";
@@ -284,6 +285,15 @@ export function installIpc(deps: IpcDeps): void {
     if (r.canceled || !r.filePath) return undefined;
     await writeFile(r.filePath, text, { encoding: "utf8", mode: 0o600 });
     return r.filePath;
+  });
+
+  ipcMain.handle(IPC.ytmSignIn, async (e): Promise<"signedIn" | "cancelled" | undefined> => {
+    if (!isOurs(windows, e.sender)) return undefined;
+    const parent = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    const cookies = await signInToYouTubeMusic(parent);
+    if (!cookies) return "cancelled";
+    dispatch({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies, js_host: false } } } });
+    return "signedIn";
   });
 
   ipcMain.handle(IPC.configImport, async (e): Promise<boolean> => {

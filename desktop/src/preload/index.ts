@@ -58,6 +58,9 @@ const bridge: HocketBridge = {
     saveText: (req: SaveDialogRequest & { text: string }) => ipcRenderer.invoke(IPC.dialogSaveText, req) as Promise<string | undefined>,
     openText: (req: OpenDialogRequest) => ipcRenderer.invoke(IPC.dialogOpenText, req) as Promise<OpenedTextFile | undefined>,
   },
+  ytm: {
+    signIn: () => ipcRenderer.invoke(IPC.ytmSignIn) as Promise<"signedIn" | "cancelled">,
+  },
   config: {
     export: (document: string) => ipcRenderer.invoke(IPC.configExport, document) as Promise<string | undefined>,
     import: () => ipcRenderer.invoke(IPC.configImport) as Promise<boolean>,

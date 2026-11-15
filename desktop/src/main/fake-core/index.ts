@@ -289,6 +289,10 @@ export class FakeCore implements CoreHandle {
         this.refreshSaver();
         return;
       case "addAccount": {
+        if (cmd.data.setup.type === "youtubeMusic") {
+          this.addYoutubeMusic(!!cmd.data.setup.data.cookies);
+          return;
+        }
         const a = cmd.data.setup.data;
         const id = accountIdFor(a.url, a.username);
         if (this.lib && this.servers.length && !this.servers.some((s) => s.id === id) && /^https?:\/\//.test(a.url)) {
@@ -897,6 +901,8 @@ export class FakeCore implements CoreHandle {
       case "listCoordinatorInvites":
         this.emit({ type: "coordinatorInvites", data: { invites: this.coordinatorInvites, created: undefined } });
         return;
+      case "ytmJsAnswer":
+        return;
       default: {
         const never: never = cmd;
         void never;
@@ -1102,6 +1108,31 @@ export class FakeCore implements CoreHandle {
   }
 
   // ---- Servers and sync ------------------------------------------------
+  /**
+   * YouTube Music, anonymous or signed in: an account of its own after any other. The fake has
+   * no YouTube Music library (search, home and the catalogue are the real core's).
+   */
+  private addYoutubeMusic(signedIn: boolean): void {
+    const id = signedIn ? "UCfakeChannel" : "ytm:anon";
+    this.later(300, () => {
+      const account: AccountInfo = {
+        id,
+        kind: "youtubeMusic",
+        priority: this.servers.length,
+        source: "ytm",
+        features: { librarySync: signedIn, search: true, browse: true, stream: true, download: false, transcode: false, coverArt: true, star: signedIn, rate: false, playlists: signedIn, smartPlaylists: false, reportPlay: signedIn, lyrics: true, radio: true, homeShelves: true, share: true, libraryEdit: signedIn },
+        url: "https://music.youtube.com",
+        username: signedIn ? "Test User" : "",
+        name: signedIn ? "YouTube Music (Test User)" : "YouTube Music",
+        capabilities: { serverVersion: undefined, openSubsonic: false, extensions: [], transcodeOffset: false, formPost: false, songLyrics: false, sonicSimilarity: false, apiKeyAuthentication: false, transcodingExtension: false, nativeApi: false, meetsFloor: false },
+        lastSync: undefined,
+        reachable: true,
+      };
+      this.servers = [...this.servers.filter((s) => s.kind !== "youtubeMusic"), account];
+      this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
+    });
+  }
+
   private addServer(url: string, username: string, name: string, silent: boolean): void {
     if (!silent && !/^https?:\/\//.test(url)) {
       this.emit({ type: "error", data: { kind: "network", message: "Server URL must start with http:// or https://", detail: undefined } });

@@ -176,6 +176,13 @@ export interface HocketBridge {
   clipboard: {
     writeText(text: string): void;
   };
+  ytm: {
+    /**
+     * Sign in to YouTube Music in a window of its own; once signed in, main
+     * adds the account (the cookies never reach the renderer).
+     */
+    signIn(): Promise<"signedIn" | "cancelled">;
+  };
   /**
    * Share one track's original audio file. Main resolves the file (a finished download, or a fresh
    * copy in the cache) and never tells the page where it is: macOS opens the share sheet, elsewhere
@@ -253,6 +260,7 @@ export const IPC = {
   dialogOpenText: "hocket:dialog:open-text",
   configExport: "hocket:config:export",
   configImport: "hocket:config:import",
+  ytmSignIn: "hocket:ytm:sign-in",
   clipboardWrite: "hocket:clipboard:write",
   deepLink: "hocket:deep-link",
   prefsGet: "hocket:prefs:get",

@@ -15,10 +15,20 @@ import type { Command } from "@core/api";
 import type { CredentialStorage } from "@shared/bridge-types";
 import { accountIdFor } from "./account-id";
 
+/**
+ * YouTube Music on this device is one entry under a fixed key: its account id
+ * (a channel id) is only known once the core checked the sign-in. The
+ * "password" is the sign-in's cookie header, empty for anonymous use.
+ */
+export const YTM_KEY = "ytm";
+export const YTM_URL = "https://music.youtube.com";
+
 interface StoredCredential {
   url: string;
   username: string;
   name?: string;
+  /** `ytm` for YouTube Music. */
+  kind?: "ytm";
   /** base64 of safeStorage.encryptStringAsync(password). */
   blob: string;
 }
@@ -28,6 +38,7 @@ interface KnownCredential {
   url: string;
   username: string;
   name?: string;
+  kind?: "ytm";
   password: string;
   blob?: string;
 }
@@ -103,8 +114,8 @@ export class ServerCredentialStore {
   }
 
   /** Credentials are keyed by the account they sign in (the core's `AccountId`). */
-  static key(url: string, username: string): string {
-    return accountIdFor(url, username);
+  static key(url: string, username: string, kind?: "ytm"): string {
+    return kind === "ytm" ? YTM_KEY : accountIdFor(url, username);
   }
 
   /** Observe commands on their way to the core. */
@@ -112,6 +123,10 @@ export class ServerCredentialStore {
     if (command.type === "addAccount" && command.data.setup.type === "navidrome") {
       const s = command.data.setup.data;
       void this.remember(s.url, s.username, s.password, s.name);
+    }
+    if (command.type === "addAccount" && command.data.setup.type === "youtubeMusic") {
+      // This device's YouTube Music: signed in (its cookies) or anonymous ("").
+      void this.remember(YTM_URL, "", command.data.setup.data.cookies ?? "", undefined, "ytm");
     }
     if (command.type === "removeAccount") {
       // Server ids are core-assigned; we don't know the mapping, so the
@@ -121,8 +136,8 @@ export class ServerCredentialStore {
   }
 
   /** Resolves once the password is on disk, or known not to be going there. Never rejects. */
-  async remember(url: string, username: string, password: string, name?: string): Promise<void> {
-    const key = ServerCredentialStore.key(url, username);
+  async remember(url: string, username: string, password: string, name?: string, kind?: "ytm"): Promise<void> {
+    const key = ServerCredentialStore.key(url, username, kind);
     // Whatever was persisted for this server is stale now: never replay an
     // old password on the next start because the new one couldn't be stored.
     const hadBlob = this.known.get(key)?.blob !== undefined || this.undecryptable.has(key);
@@ -135,7 +150,7 @@ export class ServerCredentialStore {
       return;
     }
     this.volatile.delete(key);
-    const entry: KnownCredential = { url, username, name, password };
+    const entry: KnownCredential = { url, username, name, password, kind };
     this.known.set(key, entry);
     // Off disk now, not once the new blob lands: a quit in between must not replay the old password.
     if (hadBlob) this.flush();
@@ -162,10 +177,11 @@ export class ServerCredentialStore {
    * with Started when its account table couldn't be read, and that must not
    * log the user out.
    */
-  retainOnly(accounts: { id: string }[]): void {
+  retainOnly(accounts: { id: string; kind?: string }[]): void {
     if (!accounts.length && !this.removalPending) return;
     this.removalPending = false;
     const keep = new Set(accounts.map((s) => s.id));
+    if (accounts.some((a) => a.kind === "youtubeMusic")) keep.add(YTM_KEY);
     let dropped = false;
     for (const map of [this.known, this.undecryptable])
       for (const key of [...map.keys()])
@@ -185,10 +201,11 @@ export class ServerCredentialStore {
 
   /** AddAccount commands to replay at startup. */
   replayCommands(): Command[] {
-    return [...this.known.values()].map((e) => ({
-      type: "addAccount",
-      data: { setup: { type: "navidrome", data: { url: e.url, username: e.username, password: e.password, name: e.name } } },
-    }));
+    return [...this.known.values()].map((e): Command =>
+      e.kind === "ytm"
+        ? { type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: e.password || undefined, js_host: false } } } }
+        : { type: "addAccount", data: { setup: { type: "navidrome", data: { url: e.url, username: e.username, password: e.password, name: e.name } } } },
+    );
   }
 
   hasAny(): boolean {
@@ -212,7 +229,7 @@ export class ServerCredentialStore {
           console.error(`[credentials] couldn't decrypt credential for ${e.url}; it will need to be re-entered`, err);
           return e;
         }
-        const known: KnownCredential = { url: e.url, username: e.username, name: e.name, password: decryption.result, blob: e.blob };
+        const known: KnownCredential = { url: e.url, username: e.username, name: e.name, kind: e.kind, password: decryption.result, blob: e.blob };
         // The OS rotated the key, or offers a better one: store the blob it would write now.
         if (decryption.shouldReEncrypt && this.usable) {
           try {
@@ -226,7 +243,7 @@ export class ServerCredentialStore {
       }),
     );
     for (const e of decrypted) {
-      const key = ServerCredentialStore.key(e.url, e.username);
+      const key = ServerCredentialStore.key(e.url, e.username, e.kind);
       if ("password" in e) this.known.set(key, e);
       else this.undecryptable.set(key, e);
     }
@@ -236,7 +253,7 @@ export class ServerCredentialStore {
   /** Writes the credentials whose encryption has landed, and those that wouldn't decrypt. */
   private flush(): void {
     const entries: StoredCredential[] = [...this.undecryptable.values()];
-    for (const e of this.known.values()) if (e.blob !== undefined) entries.push({ url: e.url, username: e.username, name: e.name, blob: e.blob });
+    for (const e of this.known.values()) if (e.blob !== undefined) entries.push({ url: e.url, username: e.username, name: e.name, kind: e.kind, blob: e.blob });
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       const tmp = `${this.path}.tmp`;
