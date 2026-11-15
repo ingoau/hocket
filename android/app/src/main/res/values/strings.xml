@@ -1516,7 +1516,6 @@
     <string name="playlist_keep_on">Keep it on</string>
     <string name="source_all">All</string>
     <string name="source_mixed">Mixed</string>
-    <string name="source_filter">Source</string>
     <string name="sources_title">Sources</string>
     <string name="sources_preferred">Plays from here</string>
     <string name="sources_linked_by_hand">Linked by hand</string>

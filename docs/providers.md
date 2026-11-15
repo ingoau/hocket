@@ -1,6 +1,6 @@
 # Providers, then YouTube Music
 
-*Status: Phases 1 and 2 implemented (15 Nov 2026); later phases planned. Revised after review.*
+*Status: Phases 1–3 implemented (15 Nov 2026); later phases planned. Revised after review.*
 
 Hocket is built around one Navidrome server. This plan turns music sources into
 **providers**: first several Navidrome servers, then YouTube Music, and later
@@ -484,3 +484,90 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
 - **Not verified by hand:** pairing two real devices over a real LAN and through a deployed
   coordinator, and the QR scan on a phone. The sim tests, the actor test over the in-memory network
   and the coordinator's socket tests cover the protocol.
+
+## Phase 3 notes
+
+*Written while implementing Phase 3. Calls made where the plan was silent or didn't fit the code.*
+
+- **Where things live.** `crates/hocket-core/src/library/`: `links.rs` is the matcher (pure, with
+  the dedup fixtures in `links_tests.rs`), `mod.rs` the identity's library records. The actor side
+  is `core/handlers/identity_library.rs` (records, relinking, choosing a copy), `mixed_playlists.rs`
+  and `home.rs`; the tables are in `db/links.rs`.
+- **One `links` table, not `track_links`.** Rows are `(kind, source, id, group_id, rep, manual)` for
+  songs, albums and artists, and only for members of groups of two or more, so a one-account
+  library has none. It is rebuilt from the mirror and the manual links after every sync, record
+  merge, reorder and account removal (100k songs take well under a second). `group_id` is the
+  smallest member reference, so it doesn't move when priorities do; `rep` (the highest-priority
+  account's copy) is the row the unified library lists.
+- **The matcher.** Only across sources, one copy per source per group (closest durations first).
+  Titles and albums keep their qualifiers: "(Live)", "- 2011 Remaster", "(Clean)", "(Radio Edit)"
+  and a different album (live album, compilation, deluxe edition) stay apart; case, accents,
+  quotes, bracket style, "&"/"and", "The" and featuring credits are folded away, and " - Live"
+  reads as "(Live)". The explicit flag must match; ISRC (`tracks.isrc`, from OpenSubsonic `isrc`)
+  decides when both copies have one. Albums group by normalised album artist and name (and year
+  when both have one), artists by name; there are no manual album or artist links.
+- **The identity's library is one record set.** Manual links (`link`, a pair and same/not the
+  same), Mixed playlists (`playlist`, the whole playlist LWW) and the Hocket library (`saved`) are
+  `LibraryRecord`s in one last-write-wins set, synced like the stash (`Msg::LibraryRecordsSync`,
+  `ReplicaState::library_records`). "Not the same song" writes a not-the-same link to every other
+  member, so the matcher can't put it back; "Link to…" a same link, which joins two groups whatever
+  the matcher says.
+- **Only manual links sync; queue items carry the copies.** Automatic groups are re-derived on each
+  device from its own mirror, so a device without an account can't see them. Instead a device that
+  knows a queue item's group records the other copies on the item (`QueueItem::alts`, written by a
+  local `QueueOp::SetAlternates` document replace after queue changes), and a device without the
+  item's account plays, and lists, its own copy. Playlists and the context list carry no such
+  copies: a Mixed playlist's song from an account this device lacks isn't listed here.
+- **Choosing a copy.** `Actor::best_copy`: a pinned or cached copy first, then the copy on the
+  highest-priority account this device can reach, else the item's own reference. The playing
+  track is that copy, so now playing, scrobbles and history go to the account that played it.
+  Scrobble dedupe across a handoff is still keyed by reference: a play handed between devices that
+  pick different copies can be scrobbled to both accounts (accepted, rare).
+- **Writes.** Starring a song stars every copy on an account here that keeps stars, as separate
+  outbox writes (each touches only its account's mirror row now); a copy on an account without
+  stars goes to the Hocket library. Ratings go to the named copy only. The undo of a rating, love
+  or playlist add still names songs by bare id; the core resolves those against the playlist's or
+  the mirror's account.
+- **Bare ids are gone from the song commands.** `PlayTracks`, `PlayNext`, `AddToQueue`,
+  `PlayLater`, `InsertTracks`, `StashAdd`, `Snooze*`, `CreatePlaylist`, `PlaylistAdd`,
+  `PreviewStart`, `PrimeTrack`, `ActionTarget::Tracks`, `RatingTarget::Track`, `Query::Track`,
+  `TracksByIds` and `PlaylistMembership` take `TrackRef`s, and the core's "resolve a bare id"
+  step for them is gone (`fix_refs` remains only for a context's own track list). Still bare,
+  because they act on the playing song or a pin and resolve to it first: lyrics, related, analysis,
+  media source, export, song link, `PinTarget::Track`, and album, artist and playlist ids (the
+  matcher groups those). Library pins of songs now store `source` beside the id.
+- **List queries.** An empty account id is the unified library (one row per group); a named
+  account is that account's library, which is what the source chip sends. Platforms send "" for
+  everything that isn't the chip (Home, details, Android Auto, Pebble).
+- **Hocket library.** `SavedTrack {track, starred, added, snapshot}` records; a starred song is
+  marked loved on the mirror after every sync, and a song only known from its snapshot is written
+  into the mirror when this device has its account. `SetInLibrary` and the `library_edit`
+  capability are the "add" half; Navidrome has nothing to add to, so there is no add UI until
+  YouTube Music. The capability test uses a fake server with `feature_overrides` (no stars).
+- **Mixed playlists** are `playlists` rows with `server_id = "hocket"` and per-song
+  `playlist_tracks.track_source`, rebuilt from the records. Their edits change the record (no undo
+  entry yet). Adding another account's song to a provider playlist uses that account's copy, else
+  toasts "Convert to Mixed" (dismissing it cancels); converting creates the Mixed playlist with the
+  songs and deletes the provider's. Creating a provider playlist from songs without copies there
+  offers "Create as Mixed" instead. The create menu (desktop dialog, Android sheet) offers each
+  account and Mixed only with more than one account.
+- **Home.** `Query::HomeShelves` answers Hocket's Continue listening (albums left part way, then
+  the latest plays' albums) and, for each account the core mirrors, Recently added, Most played and
+  Recently played, built from the mirror so Home never waits on the network. Navidrome's
+  `home_shelves` capability stays false: the live `Provider::home_shelves` is for providers
+  without a mirror (YouTube Music, Phase 4). Shelves are Home sections named `shelf:<shelf id>`
+  in the synced `home.sections` and order, hide and restyle like the rest; the built-in "New in
+  your library" and "Recently played" sections became these shelves. Continue listening and each
+  account's Recently added are on by default.
+- **Schema** is version 12 (`links`, `tracks.isrc`, `playlist_tracks.track_source`); an older
+  database is recreated as before.
+- **Tests.** Dedup fixtures (`library/links_tests.rs`); record sync through the coordinator and a
+  LAN room, a Mixed playlist's edits and deletion, catch-up from the replica (`sim/library_records_tests.rs`);
+  `tests/actor_dedup.rs` (one row per group, play from the first account and scrobble there, a
+  queue item handed to a device without the account plays its copy, stars to every copy, link and
+  unlink, link candidates, the Hocket library, Mixed playlists and Convert to Mixed, Home shelves);
+  desktop `e2e/providers.spec.ts` (shelves, chip, New playlist, Sources) and unit tests on both
+  platforms for the shelves layout, the chip and the New playlist default.
+- **Not verified by hand:** two real servers with overlapping libraries on a phone and the
+  desktop; the Android chip, Sources and New playlist sheet are covered by logic tests only (the
+  fake cores keep one library).
