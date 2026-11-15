@@ -1,9 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Command } from "@core/api";
 
-vi.mock("electron", () => ({ BrowserWindow: class {}, session: {} }));
+/** The hidden windows openHiddenPage made; loadURL fails while `failLoad` is set. */
+const windows: FakeWindow[] = [];
+let failLoad = false;
+class FakeWindow {
+  destroyed = false;
+  webContents = {
+    setUserAgent: () => undefined,
+    setAudioMuted: () => undefined,
+    isCrashed: () => false,
+    executeJavaScript: async () => undefined,
+  };
+  constructor() {
+    windows.push(this);
+  }
+  loadURL(): Promise<void> {
+    return failLoad ? Promise.reject(new Error("ERR_INTERNET_DISCONNECTED (-106)")) : Promise.resolve();
+  }
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  destroy(): void {
+    this.destroyed = true;
+  }
+}
+vi.mock("electron", () => ({ BrowserWindow: FakeWindow, session: {} }));
 
-const { YtmJsHost, callFor, answerOf } = await import("./ytm-js-host");
+const { YtmJsHost, callFor, answerOf, openHiddenPage } = await import("./ytm-js-host");
 type JsPage = import("./ytm-js-host").JsPage;
 
 const SCRIPT = "/* host script */";
@@ -135,6 +159,51 @@ describe("YouTube Music JS host", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("doesn't close the page under a request while others overlapped it", async () => {
+    vi.useFakeTimers();
+    try {
+      const pages: FakePage[] = [];
+      const { h, sent } = host(pages, 1_000);
+      await h.handle("r0", prepare);
+      const page = at(pages, 0);
+      // Hold the page's answers until released.
+      const held: (() => void)[] = [];
+      const run = page.run.bind(page);
+      page.run = (code) => new Promise<void>((go) => held.push(go)).then(() => run(code));
+      const r1 = h.handle("r1", prepare);
+      const r2 = h.handle("r2", prepare);
+      await vi.advanceTimersByTimeAsync(0);
+      held.splice(0).forEach((go) => go());
+      await Promise.all([r1, r2]);
+      // Another request starts, and runs longer than the idle time.
+      const r3 = h.handle("r3", prepare);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(page.closed).toBe(false);
+      held.splice(0).forEach((go) => go());
+      await r3;
+      expect(sent.map(errorOf)).toEqual([undefined, undefined, undefined, undefined]);
+      // Idle once all of them are answered.
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(page.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("destroys the hidden window when its page fails to load", async () => {
+    failLoad = true;
+    try {
+      await expect(openHiddenPage()).rejects.toThrow("ERR_INTERNET_DISCONNECTED");
+      expect(windows.at(-1)?.destroyed).toBe(true);
+    } finally {
+      failLoad = false;
+    }
+    const page = await openHiddenPage();
+    expect(windows.at(-1)?.destroyed).toBe(false);
+    page.close();
+    expect(page.closed).toBe(true);
   });
 
   it("builds the calls and refuses a short answer", () => {

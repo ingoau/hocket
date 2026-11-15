@@ -50,6 +50,8 @@ export const IDLE_CLOSE_MS = 10 * 60_000;
 export class YtmJsHost {
   private page: Promise<JsPage> | undefined;
   private idle: ReturnType<typeof setTimeout> | undefined;
+  /** Requests being answered; the idle timer only runs while this is 0. */
+  private inFlight = 0;
 
   constructor(
     private readonly open: () => Promise<JsPage>,
@@ -60,7 +62,8 @@ export class YtmJsHost {
 
   /** Answer one request; never throws (a failure is the answer's `error`). */
   async handle(requestId: string, request: YtmJsRequest): Promise<void> {
-    if (this.idle) clearTimeout(this.idle);
+    this.clearIdle();
+    this.inFlight++;
     try {
       const page = await this.ready();
       const answer = answerOf(request, await page.run(callFor(request)));
@@ -76,16 +79,25 @@ export class YtmJsHost {
       console.warn(`[ytm-js] ${request.type} failed: ${error}`);
       this.dispatch({ type: "ytmJsAnswer", data: { request_id: requestId, answer: undefined, error } });
     } finally {
-      this.idle = setTimeout(() => this.close(), this.idleMs);
+      // Overlapping requests: only the last one to finish starts the idle timer.
+      this.inFlight--;
+      if (this.inFlight === 0) {
+        this.clearIdle();
+        this.idle = setTimeout(() => this.close(), this.idleMs);
+      }
     }
   }
 
   close(): void {
-    if (this.idle) clearTimeout(this.idle);
-    this.idle = undefined;
+    this.clearIdle();
     const page = this.page;
     this.page = undefined;
     void page?.then((p) => p.close()).catch(() => undefined);
+  }
+
+  private clearIdle(): void {
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = undefined;
   }
 
   private ready(): Promise<JsPage> {
@@ -122,7 +134,13 @@ export async function openHiddenPage(): Promise<JsPage> {
   });
   win.webContents.setUserAgent(CHROME_UA);
   win.webContents.setAudioMuted(true);
-  await win.loadURL(HOST_URL);
+  try {
+    await win.loadURL(HOST_URL);
+  } catch (e) {
+    // Offline, say: the window is no use, and nothing else would ever close it.
+    if (!win.isDestroyed()) win.destroy();
+    throw e;
+  }
   return {
     run: (code) => win.webContents.executeJavaScript(code, true),
     close: () => {
