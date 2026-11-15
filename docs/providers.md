@@ -278,6 +278,7 @@ Pairing is a two-way exchange, not a static link.
 - **Lyrics.** YouTube Music lyrics come before LRCLIB.
 - **Radio.** A YouTube Music radio `AutoplaySource`, used only for YouTube Music seeds.
 - **Client.** Everything goes through our own InnerTube client: search, browse, library, writes, home, uploads, lyrics, radio and `player`.
+- **Client fallback chain.** `player` requests try client profiles in order: `VISIONOS`, then `ANDROID_VR`, then `IOS`, then the web music client with signature, `n` and PO token from the platform JS host below. The first one that returns a usable AAC stream wins. The chain is per track and remembered for a while, so a broken client is skipped quickly. All profiles (names, versions, user agents) live in one table so they're easy to bump.
 - **Premium JS path.** The core asks the platform to solve the signature and `n` puzzles and to produce a PO token. It does this through a callback interface implemented with a hidden WebView on Android and a hidden `BrowserWindow` on desktop. This path is only used for Premium accounts, to reach itag 141, and failures fall back to visionOS 140.
 
 **Done when:**
