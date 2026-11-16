@@ -832,7 +832,7 @@
     <string name="home_style_list">List</string>
     <string name="home_style_tile">Tile</string>
     <string name="home_section_rediscover">Rediscover</string>
-    <string name="home_section_rediscover_desc">Songs you love that you haven\'t played lately</string>
+    <string name="home_section_rediscover_desc">Albums of songs you love that you haven\'t played lately</string>
     <string name="home_section_filters">From your filters</string>
     <string name="home_section_filters_desc">Your saved filters, ready to play</string>
     <string name="home_section_favourite_artists">Your favourite artists</string>

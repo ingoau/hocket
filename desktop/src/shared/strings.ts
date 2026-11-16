@@ -268,7 +268,7 @@ const STRINGS = {
   "home.style.list": "List",
   "home.style.tile": "Tile",
   "home.section.rediscover": "Rediscover",
-  "home.section.rediscover.desc": "Songs you love that you haven't played lately",
+  "home.section.rediscover.desc": "Albums of songs you love that you haven't played lately",
   "home.section.filters": "From your filters",
   "home.section.filters.desc": "Your saved filters, ready to play",
   "home.section.favouriteArtists": "Your favourite artists",

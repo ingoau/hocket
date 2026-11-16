@@ -2323,6 +2323,11 @@ export class FakeCore implements CoreHandle {
       }
       case "album":
         return { type: "albumDetail", data: lib?.albums.find((a) => a.id === q.data.id) };
+      case "albumsOfTracks": {
+        const tracks = this.sortTracks(q.data.filter ? this.evaluateNode(q.data.filter) : (lib?.tracks ?? []), q.data.sort, q.data.descending);
+        const albums = [...new Set(tracks.map((t) => t.albumId).filter((x): x is string => !!x))].map((id) => lib?.albums.find((a) => a.id === id)).filter((a): a is Album => !!a);
+        return { type: "albums", data: { items: albums.slice(0, q.data.limit), offset: 0, total: albums.length } };
+      }
       case "albumTracks":
         return { type: "trackList", data: (lib?.albumTracks.get(q.data.id) ?? []).map((id) => lib?.tracksById.get(id)).filter((t): t is Track => !!t) };
       case "artists": {

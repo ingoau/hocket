@@ -1354,6 +1354,11 @@ class FakeCore(
         is Query.AlbumCount -> QueryResult.Count(library.albums.count { (q.data.artist_id == null || it.artistId == q.data.artist_id) && (q.data.genre == null || it.genre == q.data.genre) }.toUInt())
         is Query.Album -> QueryResult.AlbumDetail(library.album(q.data.id))
         is Query.AlbumTracks -> QueryResult.TrackList(library.albumTracks(q.data.id))
+        is Query.AlbumsOfTracks -> {
+            val all = q.data.filter?.let { f -> library.tracks.filter { matches(it, f) } } ?: library.tracks
+            val albums = library.sorted(all, q.data.sort, q.data.descending).mapNotNull { it.albumId }.distinct().mapNotNull { library.album(it) }
+            QueryResult.Albums(AlbumPage(albums.take(q.data.limit.toInt()), 0u, albums.size.toUInt()))
+        }
         is Query.Artists -> {
             val sorted = library.sortedArtists(library.artists, q.data.sort ?: SortOrder.Default, q.data.descending ?: false)
             val off = q.data.page.offset.toInt()

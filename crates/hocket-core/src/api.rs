@@ -2193,6 +2193,16 @@ pub enum Query {
     AlbumTracks {
         id: AlbumId,
     },
+    /// The albums holding the tracks that match `filter`, each placed where its first matching
+    /// track falls under `sort` (Home's "Rediscover": albums of loved songs gone quiet). At most
+    /// `limit`; `total` counts every such album.
+    AlbumsOfTracks {
+        server_id: ServerId,
+        filter: Option<FilterNode>,
+        sort: SortOrder,
+        descending: bool,
+        limit: u32,
+    },
     Artists {
         server_id: ServerId,
         page: Page,

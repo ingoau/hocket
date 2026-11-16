@@ -617,6 +617,36 @@ impl Db {
         })
     }
 
+    /// The albums of the tracks `q` matches, in the order of each album's first matching track,
+    /// at most `limit` of them (`q.page` is ignored); `total` counts them all. Albums missing
+    /// from the mirror are left out.
+    pub fn albums_of_tracks(&self, q: &TrackQuery, limit: u32) -> DbResult<api::AlbumPage> {
+        let seed = self.random_seed();
+        let (ids, total) = self.with_conn(|c| {
+            let (where_sql, params) = track_where(&q.server_id, &q.filter);
+            let sql = format!(
+                "SELECT album_id FROM tracks WHERE ({where_sql}) AND album_id IN (SELECT id FROM albums) ORDER BY {}",
+                track_order(q.sort, q.descending, seed),
+            );
+            let mut st = c.prepare_cached(&sql)?;
+            let mut rows = st.query(params_from_iter(params.iter()))?;
+            let mut seen = std::collections::HashSet::new();
+            let mut ids = vec![];
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                if seen.insert(id.clone()) && ids.len() < limit as usize {
+                    ids.push(id);
+                }
+            }
+            Ok((ids, seen.len() as u32))
+        })?;
+        Ok(api::AlbumPage {
+            items: self.albums_by_ids(&ids)?,
+            offset: 0,
+            total,
+        })
+    }
+
     pub fn upsert_albums(
         &self,
         albums: &[Album],
@@ -1786,7 +1816,7 @@ mod tests {
             ..Default::default()
         };
         let page = db.track_page(&q).unwrap();
-        assert_eq!(page.total, 3);
+        assert_eq!(page.total, 2);
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.items[0].id, "1");
         assert_eq!(page.items[1].id, "2");
@@ -2240,5 +2270,49 @@ mod tests {
             .is_empty());
         let v: serde_json::Value = db.saved_state_get("session").unwrap().unwrap();
         assert_eq!(v["rev"], 3, "durable state untouched by mirror clear");
+    }
+
+    /// Albums of the matching tracks, placed by each one's best track, each once, up to the limit;
+    /// tracks without an album, and albums missing from the mirror, are left out.
+    #[test]
+    fn albums_of_tracks_go_by_their_best_track() {
+        let db = Db::open_in_memory().unwrap();
+        let rated = |id: &str, album: &str, rating: u32| Track {
+            rating,
+            ..t(id, id, album, "A")
+        };
+        let mut loose = rated("5", "x", 5);
+        loose.album_id = None;
+        let tracks = [
+            rated("1", "low", 2),
+            rated("2", "high", 5),
+            rated("3", "low", 4),
+            rated("4", "high", 3),
+            rated("6", "gone", 5),
+            loose,
+        ];
+        db.upsert_tracks(&tracks, &[None; 6], 1).unwrap();
+        let album = |id: &str| Album {
+            id: id.into(),
+            server_id: "s".into(),
+            name: id.into(),
+            ..Default::default()
+        };
+        db.upsert_albums(&[album("al-low"), album("al-high")], &[None, None], 1)
+            .unwrap();
+        let q = TrackQuery {
+            server_id: "s".into(),
+            filter: None,
+            sort: SortOrder::Rating,
+            descending: true,
+            page: None,
+        };
+        let page = db.albums_of_tracks(&q, 10).unwrap();
+        let ids: Vec<_> = page.items.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["al-high", "al-low"]);
+        assert_eq!(page.total, 2);
+        let one = db.albums_of_tracks(&q, 1).unwrap();
+        assert_eq!(one.items.len(), 1);
+        assert_eq!(one.total, 2);
     }
 }
