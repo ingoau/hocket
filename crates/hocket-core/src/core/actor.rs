@@ -208,6 +208,9 @@ pub(crate) struct Actor {
     pub scope: Option<String>,
     /// This device's identity (shared with the engine; persisted on change).
     pub identity: crate::identity::SharedIdentity,
+    /// The coordinator the identity pinned when last looked at: when the pin
+    /// goes away, so does the coordinator address it set.
+    pub pinned_coordinator: Option<String>,
     pub queued_inputs: VecDeque<Input>,
     /// Effects the reducer reported for the local op being submitted.
     pub pending_effects: Option<Vec<crate::session::Effect>>,
@@ -328,6 +331,11 @@ impl Actor {
         // State a version-10 database kept per session scope now belongs to
         // the identity's session: write it there, once.
         let scope = identity.lock().id.clone();
+        let pinned_coordinator = identity
+            .lock()
+            .shared
+            .coordinator_pin()
+            .map(|p| p.url.clone());
         crate::db::restore_v10::finish(&db, &scope, clock.as_ref());
         let settings_store = DbSettingsStore {
             db: db.clone(),
@@ -539,6 +547,7 @@ impl Actor {
             engine: None,
             scope: None,
             identity,
+            pinned_coordinator,
             queued_inputs: VecDeque::new(),
             pending_effects: None,
             last_doc: None,

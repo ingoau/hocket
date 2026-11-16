@@ -137,23 +137,34 @@ impl Actor {
         self.emit(Event::DevicePaired { device_id, name });
     }
 
-    /// The pinned coordinator is the one to use.
-    fn apply_coordinator_pin(&mut self) {
+    /// The pinned coordinator is the one to use. When the pin goes (this
+    /// device started over, or the device that claimed it left the
+    /// identity), the address it set goes too, which drops the connection:
+    /// nothing would be left dialling a coordinator Settings no longer shows.
+    pub(crate) fn apply_coordinator_pin(&mut self) {
         let pinned = self
             .identity
             .lock()
             .shared
             .coordinator_pin()
             .map(|p| p.url.clone());
-        let Some(url) = pinned else { return };
+        let previous = std::mem::replace(&mut self.pinned_coordinator, pinned.clone());
         let current = self
             .settings
             .get_string(crate::settings::keys::CONNECT_COORDINATOR_URL);
-        if current.as_deref() != Some(url.as_str()) {
-            self.set_setting_value(
+        match coordinator_url_for_pin(previous.as_deref(), pinned, current.as_deref()) {
+            None => {}
+            Some(Some(url)) => self.set_setting_value(
                 crate::settings::keys::CONNECT_COORDINATOR_URL,
                 serde_json::Value::String(url),
-            );
+            ),
+            Some(None) => {
+                self.log("info", "coordinator pin gone: forgetting its address");
+                self.set_setting_value(
+                    crate::settings::keys::CONNECT_COORDINATOR_URL,
+                    serde_json::Value::Null,
+                );
+            }
         }
     }
 
@@ -360,6 +371,7 @@ impl Actor {
         self.persist_identity();
         self.rescope_session();
         self.emit_identity();
+        self.apply_coordinator_pin();
     }
 
     // -- credential sync ----------------------------------------------------
@@ -597,9 +609,49 @@ async fn exchange(
     }
 }
 
+/// What `connect.coordinatorUrl` should become when the identity's pin is
+/// `pinned` (it was `previous`; the setting is `current`): `None` leaves it,
+/// `Some(None)` clears it. A pin sets its address; the pin going takes the
+/// address with it, while an address no pin ever set is left to the user.
+fn coordinator_url_for_pin(
+    previous: Option<&str>,
+    pinned: Option<String>,
+    current: Option<&str>,
+) -> Option<Option<String>> {
+    match pinned {
+        Some(url) if current != Some(url.as_str()) => Some(Some(url)),
+        Some(_) => None,
+        None if previous.is_some() && current.is_some() => Some(None),
+        None => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_coordinator_address_follows_the_pin() {
+        let c = Some("wss://c/ws");
+        // A pin sets its address (and leaves it be once set).
+        assert_eq!(
+            coordinator_url_for_pin(None, Some("wss://c/ws".into()), None),
+            Some(Some("wss://c/ws".into()))
+        );
+        assert_eq!(
+            coordinator_url_for_pin(c, Some("wss://c/ws".into()), c),
+            None
+        );
+        assert_eq!(
+            coordinator_url_for_pin(c, Some("wss://d/ws".into()), c),
+            Some(Some("wss://d/ws".into()))
+        );
+        // The pin going (reset, or its author left the identity) clears the address.
+        assert_eq!(coordinator_url_for_pin(c, None, c), Some(None));
+        // Nothing to clear, or no pin to have set it: left alone.
+        assert_eq!(coordinator_url_for_pin(c, None, None), None);
+        assert_eq!(coordinator_url_for_pin(None, None, c), None);
+    }
 
     #[test]
     fn claim_links_parse() {
