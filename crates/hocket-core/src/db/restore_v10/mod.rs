@@ -30,8 +30,9 @@
 //!   **filters**, the **outbox** (pending, in-flight and failed rows; a track
 //!   rating gains the `source` the new mutation carries). Download jobs are
 //!   not: run before the platform signs the account in and its mirror is
-//!   synced, every item would fail. Wanted tracks are planned again once the
-//!   account's first sync finishes (`Downloads::replan_wanted`).
+//!   synced, every item would fail. A flag per account ([`REPLAN_PREFIX`])
+//!   has its first finished sync plan the restored pins' wanted tracks
+//!   (`Downloads::replan_wanted`), once.
 //! - **device-local saved state**: volume, mute, renderer formats, traffic
 //!   totals, autoplay exclusions, lyric offsets.
 //! - **scope-keyed saved state** (the queue document, resume position,
@@ -49,12 +50,16 @@
 //! Every part is best effort: a part that fails is rolled back to its
 //! savepoint, logged and reported, and the rest carries on. When SQLite rolls
 //! the whole transaction back instead (a full disk, an I/O error), the
-//! restore is [`Aborted`]: nothing of it is kept. Nothing here can fail
-//! opening the database. A finished restore records [`DONE_KEY`]; on any
-//! open without it, a version-10 backup in the backup directory (the first
-//! one taken) is restored ([`retry_pending`]), so an upgrade interrupted
-//! after its schema committed, or by an older build, or an aborted restore,
-//! is caught up. A database that never was version 10 has no such backup.
+//! restore is [`Aborted`]: nothing of it is kept, and the recreation is
+//! redone without it, writing [`RETRY_KEY`] in the same transaction. The
+//! next open retries once ([`after_open`]); that database has served a
+//! session meanwhile, so rows already there win and the old outbox is left
+//! out (stale writes sent over newer changes are worse than lost ones). A
+//! retry that aborts again is recorded as done with its errors. Nothing here
+//! can fail opening the database. A current database with neither record (a
+//! fresh install, or one recreated by a build without this restore, such as
+//! v0.1.605, and in use since) is recorded as done with nothing restored:
+//! its version-10 backup is not restored into it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -76,6 +81,19 @@ pub const PENDING_KEY: &str = "restore:v10:pending";
 
 /// `saved_state` key recording that the restore ran (its report).
 pub const DONE_KEY: &str = "restore:v10:done";
+
+/// `saved_state` key asking the next open to retry an aborted restore (the
+/// backup's path), written with the recreation that went ahead without it.
+pub const RETRY_KEY: &str = "restore:v10:retry";
+
+/// Prefix of the `saved_state` keys (one per account) asking the account's
+/// next finished sync to plan its restored pins' wanted tracks, once.
+pub const REPLAN_PREFIX: &str = "restore:v10:replan:";
+
+/// The one-shot replan flag of `account` ([`REPLAN_PREFIX`]).
+pub fn replan_key(account: &str) -> String {
+    format!("{REPLAN_PREFIX}{account}")
+}
 
 /// Settings that are not restored although the registry knows them.
 const DROPPED_SETTINGS: &[&str] = &[crate::settings::keys::CONNECT_COORDINATOR_URL];
@@ -160,6 +178,8 @@ struct Ctx<'a> {
     scopes: HashMap<String, String>,
     /// The scope whose session document is restored (the one used last).
     session_scope: Option<String>,
+    /// A retry on a database already used since its recreation.
+    retry: bool,
 }
 
 impl Ctx<'_> {
@@ -185,7 +205,11 @@ thread_local! {
 /// `conn`, inside the caller's open transaction, and record [`DONE_KEY`] in
 /// it. A backup that can't be read is reported (and recorded as done: there
 /// is nothing to retry); a transaction SQLite rolled back is [`Aborted`].
-pub(super) fn restore_in(conn: &Connection, backup: &Path) -> Result<RestoreReport, Aborted> {
+pub(super) fn restore_in(
+    conn: &Connection,
+    backup: &Path,
+    retry: bool,
+) -> Result<RestoreReport, Aborted> {
     let mut report = RestoreReport::default();
     let opened = open_backup(backup)
         .map_err(|e| format!("open backup: {e}"))
@@ -220,6 +244,7 @@ pub(super) fn restore_in(conn: &Connection, backup: &Path) -> Result<RestoreRepo
             })
             .collect(),
         session_scope: None,
+        retry,
     };
     ctx.session_scope = last_session_scope(&ctx).unwrap_or_else(|e| {
         report.errors.push(format!("session scope: {e}"));
@@ -236,6 +261,7 @@ pub(super) fn restore_in(conn: &Connection, backup: &Path) -> Result<RestoreRepo
         ("pinTracks", |c, _| {
             copy_by_account(c, "pin_tracks", PIN_TRACKS)
         }),
+        ("replanFlags", |c, _| flag_replans(c)),
         ("cacheEntries", |c, _| {
             copy_by_account(c, "cache_entries", CACHE_ENTRIES)
         }),
@@ -330,28 +356,90 @@ fn mark_done(conn: &Connection, report: &RestoreReport) -> Result<(), Aborted> {
     .map_err(|e| abort(report.clone(), "done", &e.to_string()))
 }
 
-/// [`restore_in`] in a transaction of its own.
-pub(super) fn restore(conn: &Connection, backup: &Path) -> RestoreReport {
-    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
-        tracing::warn!(error = %e, "restore could not start a transaction");
-        return RestoreReport {
+/// Ask the next open to retry: in the caller's transaction, the one that
+/// recreated the database without the restore.
+pub(super) fn mark_retry(conn: &Connection, backup: &Path) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO saved_state(key, json, updated_at) VALUES (?1, ?2, ?3)",
+        params![
+            RETRY_KEY,
+            json!(backup.to_string_lossy()).to_string(),
+            crate::util::now_ms()
+        ],
+    )
+    .map(|_| ())
+}
+
+/// Every open of a current database after `migrate`: retry the restore
+/// [`mark_retry`] asked for, once. A database without a record either way
+/// (a fresh install, or one recreated by a build without this restore and
+/// used since: restoring the old data into it would bring back pins,
+/// accounts and outbox writes the user has moved on from) is recorded as
+/// done with nothing restored.
+pub(super) fn after_open(conn: &Connection) -> Option<RestoreReport> {
+    let get = |key: &str| -> Option<String> {
+        conn.query_row("SELECT json FROM saved_state WHERE key = ?1", [key], |r| {
+            r.get(0)
+        })
+        .optional()
+        .ok()
+        .flatten()
+    };
+    if get(DONE_KEY).is_some() {
+        return None;
+    }
+    let Some(backup) = get(RETRY_KEY).and_then(|j| serde_json::from_str::<String>(&j).ok()) else {
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO saved_state(key, json, updated_at) VALUES (?1, '{}', ?2)",
+            params![DONE_KEY, crate::util::now_ms()],
+        );
+        return None;
+    };
+    tracing::warn!(backup, "retrying the restore from the version-10 backup");
+    Some(retry(conn, Path::new(&backup)))
+}
+
+/// The retry [`after_open`] runs, in a transaction of its own. The
+/// database has served a session since it was recreated: rows already
+/// there win, and the outbox is left out (old writes sent over newer
+/// changes are worse than lost ones). It is tried once: if it aborts
+/// again, it is recorded as done with the errors.
+pub(super) fn retry(conn: &Connection, backup: &Path) -> RestoreReport {
+    let attempt = conn
+        .execute_batch("BEGIN IMMEDIATE")
+        .and_then(|()| conn.execute("DELETE FROM saved_state WHERE key = ?1", [RETRY_KEY]))
+        .map_err(|e| RestoreReport {
             errors: vec![format!("begin: {e}")],
             ..Default::default()
-        };
-    }
-    match restore_in(conn, backup) {
-        Ok(report) => match conn.execute_batch("COMMIT") {
-            Ok(()) => report,
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                tracing::warn!(error = %e, "restore could not commit; next open retries");
-                RestoreReport {
+        })
+        .and_then(|_| restore_in(conn, backup, true).map_err(|Aborted(r)| r))
+        .and_then(|report| {
+            conn.execute_batch("COMMIT")
+                .map(|()| report)
+                .map_err(|e| RestoreReport {
                     errors: vec![format!("commit: {e}")],
                     ..Default::default()
-                }
+                })
+        });
+    match attempt {
+        Ok(report) => report,
+        Err(report) => {
+            if !conn.is_autocommit() {
+                let _ = conn.execute_batch("ROLLBACK");
             }
-        },
-        Err(Aborted(report)) => {
+            tracing::warn!(errors = ?report.errors, "the restore retry failed too; giving up");
+            let _ = conn.execute_batch("BEGIN IMMEDIATE").and_then(|()| {
+                conn.execute("DELETE FROM saved_state WHERE key = ?1", [RETRY_KEY])?;
+                conn.execute(
+                    "INSERT OR REPLACE INTO saved_state(key, json, updated_at) VALUES (?1, ?2, ?3)",
+                    params![
+                        DONE_KEY,
+                        serde_json::to_string(&report).unwrap_or_default(),
+                        crate::util::now_ms()
+                    ],
+                )?;
+                conn.execute_batch("COMMIT")
+            });
             if !conn.is_autocommit() {
                 let _ = conn.execute_batch("ROLLBACK");
             }
@@ -382,33 +470,6 @@ pub(super) fn first_backup(dir: &Path, db_path: &Path) -> Option<std::path::Path
         })
         .min_by_key(|(ms, _)| *ms)
         .map(|(_, p)| p)
-}
-
-/// Any open: a version-10 backup with no record of its restore (the
-/// recreating open was interrupted, or SQLite rolled the restore back)
-/// is restored now. Nothing for a database that never was version 10.
-pub(super) fn retry_pending(
-    conn: &Connection,
-    db_path: &Path,
-    dir: &Path,
-) -> Option<RestoreReport> {
-    let backup = first_backup(dir, db_path)?;
-    let done: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM saved_state WHERE key = ?1",
-            [DONE_KEY],
-            |r| r.get(0),
-        )
-        .optional()
-        .ok()?;
-    if done.is_some() {
-        return None;
-    }
-    tracing::warn!(
-        ?backup,
-        "a version-10 backup was never restored; restoring it now"
-    );
-    Some(restore(conn, &backup))
 }
 
 /// Write the parked scope-keyed state under `scope` (this device's identity)
@@ -772,6 +833,18 @@ fn copy_rows(
     Ok((kept, skipped))
 }
 
+/// One flag per account with restored wanted tracks: its next finished
+/// sync plans them (`Downloads::replan_wanted`), once.
+fn flag_replans(ctx: &Ctx) -> DbResult<(usize, usize)> {
+    let n = ctx.new.execute(
+        "INSERT OR IGNORE INTO saved_state(key, json, updated_at)
+         SELECT DISTINCT ?1 || server_id, 'true', ?2 FROM pin_tracks
+         WHERE state IN ('wanted', 'downloading')",
+        params![REPLAN_PREFIX, crate::util::now_ms()],
+    )?;
+    Ok((n, 0))
+}
+
 fn restore_play_history(ctx: &Ctx) -> DbResult<(usize, usize)> {
     copy_by_account(ctx, "play_history", PLAY_HISTORY)
 }
@@ -792,6 +865,15 @@ fn restore_filters(ctx: &Ctx) -> DbResult<(usize, usize)> {
 /// Unsent rows (pending, in flight when the app stopped, failed and
 /// retryable by hand), their mutation in the current format.
 fn restore_outbox(ctx: &Ctx) -> DbResult<(usize, usize)> {
+    if ctx.retry {
+        let unsent: i64 = ctx.old.query_row(
+            "SELECT count(*) FROM outbox WHERE status IN ('pending', 'inflight', 'failed')",
+            [],
+            |r| r.get(0),
+        )?;
+        tracing::warn!(unsent, "restore retry: the old outbox is left out");
+        return Ok((0, unsent.max(0) as usize));
+    }
     let cols = [
         "server_id",
         "mutation",

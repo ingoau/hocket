@@ -822,10 +822,10 @@ impl Downloads {
     }
 
     /// Fetch jobs for this account's pins with wanted tracks no unfinished
-    /// job is fetching: a job lost between pinning and submitting it, or
-    /// pins restored from a version-10 backup without their jobs. Run once
-    /// the account's library has synced (planning and fetching need its
-    /// tracks, and an account that synced is signed in).
+    /// job is fetching: pins restored from a version-10 backup, which come
+    /// without their jobs. Run once, after the account's first sync
+    /// (planning and fetching need its tracks, and an account that synced
+    /// is signed in); see `restore_v10::REPLAN_PREFIX`.
     pub fn replan_wanted(&self, server_id: &str) -> Result<Vec<JobSpec>, DownloadError> {
         let mut out = vec![];
         for pin in self.pins(server_id)? {

@@ -531,7 +531,7 @@ fn an_unreadable_backup_restores_nothing() {
     std::fs::write(&junk, b"this is not a database").unwrap();
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch(super::super::MIGRATIONS[0].2).unwrap();
-    let r = restore(&c, &junk);
+    let r = retry(&c, &junk);
     assert_eq!(r.errors.len(), 1, "{r:?}");
     assert!(r.restored.is_empty());
     // Recorded as done: there's nothing to retry.
@@ -558,36 +558,72 @@ fn back_up(f: &Fixture, ms: i64) -> PathBuf {
 }
 
 #[test]
-fn an_interrupted_upgrade_is_restored_from_the_first_backup() {
-    // An older build backed up, then crashed while dropping tables one by
-    // one; its retry backed up the half-emptied file, recreated it and
-    // crashed before restoring. What is left opens as a current database.
+fn the_upgrade_restores_from_the_first_backup() {
+    // An older build backed the database up, then crashed while dropping
+    // tables one by one: the file is still version 10 but half emptied.
+    // This open backs that up too, and restores from the first copy.
     let f = fixture();
     back_up(&f, 1_000);
     Connection::open(f.db_path())
         .unwrap()
         .execute_batch("DELETE FROM servers; DROP TABLE pins; DROP TABLE pin_tracks;")
         .unwrap();
-    back_up(&f, 2_000);
-    for ext in ["", "-wal", "-shm"] {
-        let _ = std::fs::remove_file(format!("{}{ext}", f.db_path().display()));
-    }
     let db = f.open();
-    assert_eq!(db.open_report().from_version, 0);
-    let r = db
-        .open_report()
-        .restore
-        .clone()
-        .expect("restored on this open");
+    assert_eq!(db.open_report().from_version, 10);
+    let r = db.open_report().restore.clone().expect("restored");
     assert!(r.errors.is_empty(), "{r:?}");
     assert_eq!(r.restored["accounts"], 2, "from the first backup");
     assert_eq!(count(&db, "SELECT count(*) FROM pin_tracks"), 3);
-    assert!(db.saved_state_get_raw(DONE_KEY).unwrap().is_some());
-    assert!(finish(&db, "ident", &WallClock) >= 5);
-    drop(db);
+}
+
+#[test]
+fn a_database_recreated_by_a_build_without_the_restore_is_left_alone() {
+    // v0.1.605 squashed the schema without restoring: its devices have the
+    // version-10 backup, a recreated database in use since, and no record.
+    let f = fixture();
+    back_up(&f, 1_000);
+    for ext in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{ext}", f.db_path().display()));
+    }
+    {
+        let c = Connection::open(f.db_path()).unwrap();
+        c.execute_batch(super::super::MIGRATIONS[0].2).unwrap();
+        c.execute(
+            "INSERT INTO schema_version(version, applied_at) VALUES (?1, 0)",
+            [SCHEMA_VERSION],
+        )
+        .unwrap();
+        // The user signed in to one account again and listened since.
+        c.execute(
+            "INSERT INTO accounts(id, url, username, name, created_at) VALUES (?1, ?2, 'alice', 'Home', 5)",
+            params![a(), URL_A],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO play_history(server_id, track_id, played_at, device_id) VALUES (?1, 'new', 9000, 'dev')",
+            [a()],
+        )
+        .unwrap();
+    }
     let db = f.open();
-    assert!(db.open_report().restore.is_none(), "done once");
-    assert_eq!(count(&db, "SELECT count(*) FROM accounts"), 2);
+    assert_eq!(db.open_report().from_version, SCHEMA_VERSION);
+    assert!(db.open_report().restore.is_none(), "nothing restored");
+    assert!(
+        db.saved_state_get_raw(DONE_KEY).unwrap().is_some(),
+        "recorded"
+    );
+    assert_eq!(count(&db, "SELECT count(*) FROM accounts"), 1);
+    assert_eq!(count(&db, "SELECT count(*) FROM play_history"), 1);
+    for table in ["pins", "pin_tracks", "outbox", "filters"] {
+        assert_eq!(
+            count(&db, &format!("SELECT count(*) FROM {table}")),
+            0,
+            "{table}"
+        );
+    }
+    assert!(db.saved_state_get_raw(PENDING_KEY).unwrap().is_none());
+    drop(db);
+    assert!(f.open().open_report().restore.is_none());
 }
 
 #[test]
@@ -596,15 +632,13 @@ fn a_database_that_never_was_version_10_restores_nothing() {
     let data = dir.path().join("data");
     let backups = data.join("backups");
     std::fs::create_dir_all(&backups).unwrap();
-    // Backups of other files and versions aren't the pre-upgrade copy.
     std::fs::write(backups.join("hocket.sqlite.v11.5.bak"), b"x").unwrap();
-    std::fs::write(backups.join("other.sqlite.v10.5.bak"), b"x").unwrap();
-    std::fs::write(backups.join("hocket.sqlite.v10.manual.bak"), b"x").unwrap();
     let path = data.join("hocket.sqlite");
     for _ in 0..2 {
         let db = Db::open(&path, &backups).unwrap();
         assert!(db.open_report().restore.is_none());
-        assert!(db.saved_state_get_raw(DONE_KEY).unwrap().is_none());
+        assert!(db.saved_state_get_raw(DONE_KEY).unwrap().is_some());
+        assert!(db.saved_state_get_raw(RETRY_KEY).unwrap().is_none());
         assert!(db.accounts().unwrap().is_empty());
     }
 }
@@ -624,7 +658,7 @@ impl Drop for AbortAt {
 }
 
 #[test]
-fn a_restore_sqlite_rolled_back_keeps_nothing_and_runs_again() {
+fn a_restore_sqlite_rolled_back_is_retried_on_the_next_open() {
     let f = fixture();
     let db = {
         let _abort = AbortAt::set("pinTracks");
@@ -638,6 +672,7 @@ fn a_restore_sqlite_rolled_back_keeps_nothing_and_runs_again() {
         "{r:?}"
     );
     assert!(db.saved_state_get_raw(DONE_KEY).unwrap().is_none());
+    assert!(db.saved_state_get_raw(RETRY_KEY).unwrap().is_some());
     assert_eq!(
         count(&db, "SELECT count(*) FROM accounts"),
         0,
@@ -645,28 +680,33 @@ fn a_restore_sqlite_rolled_back_keeps_nothing_and_runs_again() {
     );
     assert_eq!(count(&db, "SELECT count(*) FROM pins"), 0);
     drop(db);
-    // The next open restores from the backup.
+    // The next open restores from the backup, all but the old outbox: the
+    // database has served a session meanwhile.
     let db = f.open();
     let r = db.open_report().restore.clone().expect("retried");
     assert!(r.errors.is_empty(), "{r:?}");
+    assert_eq!(r.skipped["outbox"], 2, "the unsent rows");
     assert_eq!(count(&db, "SELECT count(*) FROM accounts"), 2);
     assert_eq!(count(&db, "SELECT count(*) FROM pin_tracks"), 3);
+    assert_eq!(count(&db, "SELECT count(*) FROM outbox"), 0);
     assert!(db.saved_state_get_raw(DONE_KEY).unwrap().is_some());
+    assert!(db.saved_state_get_raw(RETRY_KEY).unwrap().is_none());
     drop(db);
     assert!(f.open().open_report().restore.is_none());
 }
 
 #[test]
-fn a_restore_aborted_on_its_own_open_writes_nothing() {
-    // An open after the upgrade (no outer transaction): the parts after the
-    // rollback don't autocommit one by one.
+fn a_retry_sqlite_rolls_back_gives_up_without_writing_anything() {
+    // The parts after the rollback don't autocommit one by one, and a
+    // second failure is recorded instead of retried on every open.
     let f = fixture();
     let backup = back_up(&f, 1_000);
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch(super::super::MIGRATIONS[0].2).unwrap();
+    mark_retry(&c, &backup).unwrap();
     let r = {
         let _abort = AbortAt::set("cacheEntries");
-        restore(&c, &backup)
+        after_open(&c).unwrap()
     };
     assert!(
         r.errors.iter().any(|e| e.starts_with("cacheEntries:")),
@@ -680,13 +720,21 @@ fn a_restore_aborted_on_its_own_open_writes_nothing() {
         "play_history",
         "filters",
         "outbox",
-        "saved_state",
     ] {
         let n: i64 = c
             .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0, "{table}");
     }
+    let keys: Vec<String> = c
+        .prepare("SELECT key FROM saved_state")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(keys, vec![DONE_KEY.to_string()]);
+    assert!(after_open(&c).is_none());
 }
 
 /// End to end: a platform starts the core on the old data directory.
@@ -737,6 +785,10 @@ async fn the_core_starts_where_the_old_build_left_off() {
     })
     .await;
     let db = t.open_db();
+    assert!(
+        db.saved_state_get_raw(&replan_key(&a())).unwrap().is_none(),
+        "planned once"
+    );
     assert_eq!(
         count(&db, "SELECT count(*) FROM jobs WHERE state = 'failed'"),
         0,
@@ -750,5 +802,51 @@ async fn the_core_starts_where_the_old_build_left_off() {
     assert_eq!(
         db.track("t3").unwrap().unwrap().offline,
         crate::api::OfflineState::Downloaded
+    );
+}
+
+/// Wanted tracks whose job the user cancelled stay unfetched: only pins a
+/// restore brought back are planned after a sync, and only once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sync_does_not_restart_a_cancelled_download() {
+    use crate::core::test_support::{seeded_server, TestCore};
+    let t = TestCore::start("cancelled", seeded_server(4, 180.0)).await;
+    let sid = t.server_id.clone();
+    let payload = json!({"serverId": sid, "target": PinTarget::Album { id: "al0".into() }, "transcode": false});
+    t.open_db()
+        .with_conn(|c| {
+            c.execute(
+                "INSERT INTO pins(server_id, target_kind, target_id, label, created_at) VALUES (?1, 'album', 'al0', 'Album 0', 1.0)",
+                [&sid],
+            )?;
+            c.execute(
+                "INSERT INTO pin_tracks(server_id, target_kind, target_id, track_id, state) VALUES (?1, 'album', 'al0', 't1', 'wanted')",
+                [&sid],
+            )?;
+            c.execute(
+                "INSERT INTO jobs(id, kind, label, state, payload, total, created_at, updated_at) VALUES ('cx', 'download', 'Download Album 0', 'cancelled', ?1, 1, 1.0, 1.0)",
+                [payload.to_string()],
+            )?;
+            c.execute("INSERT INTO job_items(job_id, seq, item, state) VALUES ('cx', 0, 't1', 'cancelled')", [])?;
+            Ok(())
+        })
+        .unwrap();
+    t.run(crate::api::Command::SyncLibrary {
+        account_id: sid.clone(),
+        full: true,
+    })
+    .await;
+    t.run_for(5_000.0).await;
+    let db = t.open_db();
+    assert!(
+        count(
+            &db,
+            "SELECT count(*) FROM jobs WHERE kind = 'librarySync' AND state = 'done'"
+        ) >= 1
+    );
+    assert_eq!(
+        count(&db, "SELECT count(*) FROM jobs WHERE kind = 'download'"),
+        1,
+        "nothing resubmitted"
     );
 }

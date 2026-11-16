@@ -415,7 +415,9 @@ fn migrate(
     }
     let pending: Vec<_> = MIGRATIONS.iter().filter(|(v, _, _)| *v > from).collect();
     if pending.is_empty() {
-        retry_restore(conn, path, backup_dir, &mut report);
+        if path.is_some() {
+            report.restore = restore_v10::after_open(conn);
+        }
         return Ok(report);
     }
     if from > 0 {
@@ -469,29 +471,17 @@ fn migrate(
             report.to_version = *version;
         }
     }
-    if report.restore.is_none() {
-        retry_restore(conn, path, backup_dir, &mut report);
+    if report.restore.is_none() && path.is_some() {
+        report.restore = restore_v10::after_open(conn);
     }
     Ok(report)
-}
-
-/// A version-10 backup whose restore never finished is restored now
-/// ([`restore_v10::retry_pending`]).
-fn retry_restore(
-    conn: &Connection,
-    path: Option<&Path>,
-    backup_dir: Option<&Path>,
-    report: &mut OpenReport,
-) {
-    if let (Some(path), Some(dir)) = (path, backup_dir) {
-        report.restore = restore_v10::retry_pending(conn, path, dir);
-    }
 }
 
 /// Drop everything and apply the current schema, then restore from
 /// `backup`, in one transaction: a crash leaves the old database whole. A
 /// restore SQLite rolled back takes the recreation with it; the recreation
-/// is then redone without it (the next open retries the restore).
+/// is then redone without it, recording in the same transaction that the
+/// next open retries the restore (`restore_v10::after_open`).
 fn recreate(
     conn: &Connection,
     backup: Option<&Path>,
@@ -499,8 +489,8 @@ fn recreate(
     // Not inside a transaction (it would be a no-op there): dropping a
     // parent table before its children must not trip foreign keys.
     conn.execute_batch("PRAGMA foreign_keys = OFF")?;
-    let result = match recreate_once(conn, backup) {
-        Ok(Err(aborted)) => recreate_once(conn, None).map(|_| Some(aborted)),
+    let result = match recreate_once(conn, backup, None) {
+        Ok(Err(aborted)) => recreate_once(conn, None, backup).map(|_| Some(aborted)),
         other => other.map(|r| r.ok().flatten()),
     };
     conn.execute_batch("PRAGMA foreign_keys = ON")?;
@@ -508,10 +498,12 @@ fn recreate(
 }
 
 /// `Ok(Err(report))`: the restore was aborted and nothing was committed.
+/// `retry_from`: no restore now, the next open restores from that backup.
 #[allow(clippy::type_complexity)]
 fn recreate_once(
     conn: &Connection,
     backup: Option<&Path>,
+    retry_from: Option<&Path>,
 ) -> DbResult<Result<Option<restore_v10::RestoreReport>, restore_v10::RestoreReport>> {
     let (version, _, sql) = MIGRATIONS[0];
     conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -524,10 +516,14 @@ fn recreate_once(
                         rusqlite::params![version, now_ms()],
                     )
                 })
+                .and_then(|_| match retry_from {
+                    Some(b) => restore_v10::mark_retry(conn, b),
+                    None => Ok(()),
+                })
                 .map_err(|source| DbError::Migration { version, source })
         })
         .map(|_| match backup {
-            Some(b) => restore_v10::restore_in(conn, b)
+            Some(b) => restore_v10::restore_in(conn, b, false)
                 .map(Some)
                 .map_err(|restore_v10::Aborted(r)| r),
             None => Ok(None),
