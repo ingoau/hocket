@@ -183,7 +183,7 @@ fun AppRoot(
         val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake && LocalFakeCoreBanner.current
         // Set when the setup form signs in: setup stays up for the server's summary until Continue.
         var holdSetup by rememberSaveable { mutableStateOf(false) }
-        val inShell = started && ready && first != null && firstHasLogin && first.capabilities.meetsFloor && !holdSetup && !addingAccount
+        val inShell = started && ready && first != null && firstHasLogin && CoreHost.meetsFloor(first) && !holdSetup && !addingAccount
         // Setup is about the account being set up: the newest while one is being added.
         val server = if (holdSetup || addingAccount) servers.lastOrNull() else first
         val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
@@ -202,7 +202,7 @@ fun AppRoot(
                     if (started && ready) SideEffect(onFirstScreen)
                     when {
                         !started || !ready -> LoadingScreen()
-                        !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !server.capabilities.meetsFloor), needsRelogin = needsRelogin, adding = addingAccount, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false; app.hocket.ui.screens.setup.SetupRequests.done() })
+                        !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !CoreHost.meetsFloor(server)), needsRelogin = needsRelogin, adding = addingAccount, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false; app.hocket.ui.screens.setup.SetupRequests.done() })
                         else -> MainShell(snackbar)
                     }
                 }

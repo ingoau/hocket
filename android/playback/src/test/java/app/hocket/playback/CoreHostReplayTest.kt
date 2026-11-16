@@ -12,6 +12,7 @@ import app.hocket.core.api.EventErrorInner
 import app.hocket.core.api.EventAccountsChangedInner
 import app.hocket.core.api.EventSnapshotInner
 import app.hocket.core.api.EventStartedInner
+import app.hocket.core.api.EventYtmSignInExpiredInner
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.ServerCapabilities
@@ -73,7 +74,7 @@ class CoreHostReplayTest {
     private fun started(servers: List<AccountInfo>) = Event.Started(EventStartedInner(snapshot.copy(accounts = servers)))
     private fun snapshotOf(servers: List<AccountInfo>) = Event.Snapshot(EventSnapshotInner(snapshot.copy(accounts = servers)))
     private fun serversChanged(servers: List<AccountInfo>) = Event.AccountsChanged(EventAccountsChangedInner(servers))
-    private fun authError() = Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", null))
+    private fun authError(accountId: String? = null) = Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", null, accountId))
 
     @Before
     fun setUp() = runBlocking {
@@ -236,5 +237,67 @@ class CoreHostReplayTest {
         assertEquals(1, core.addServers.size)
         core.emit(serversChanged(listOf(server(user = "someone-else"))))
         assertTrue("logins for servers the core no longer lists are dropped", store.all().isEmpty())
+    }
+
+    @Test
+    fun youTubeMusicCountsAsLoggedInByItsFixedKeyOrWhenAnonymous() = runBlocking {
+        startReplay()
+        core.emit(started(emptyList()))
+        assertFalse(CoreHost.hasLogin(ytm(), CoreHost.logins.value))
+        CoreHost.ytmLogin(core::dispatch, "SAPISID=abc")
+        core.emit(serversChanged(listOf(ytm())))
+        assertTrue("a channel id account is logged in through YtmLogin.KEY", CoreHost.hasLogin(ytm(), CoreHost.logins.value))
+        assertTrue(CoreHost.hasLogin(ytm().copy(id = AccountIds.YTM_ANON), emptySet()))
+        assertTrue("YouTube Music has no version floor", CoreHost.meetsFloor(ytm().copy(capabilities = caps.copy(meetsFloor = false))))
+        assertFalse(CoreHost.meetsFloor(server().copy(capabilities = caps.copy(meetsFloor = false))))
+    }
+
+    @Test
+    fun anAuthErrorDropsOnlyTheNamedAccountsLogin() = runBlocking {
+        val bob = ServerCredential(url, "bob", "pw", null)
+        store.save(credential)
+        store.save(bob)
+        store.save(YtmLogin.credential("SAPISID=abc"))
+        startReplay()
+        core.emit(started(listOf(server(reachable = false), server(reachable = false, user = "bob"), ytm())))
+        core.emit(authError(server(user = "bob").id))
+        assertEquals("secret", store.get(url, "alice")?.password)
+        assertNull(store.get(url, "bob"))
+        assertTrue(CoreHost.hasLogin(ytm(), CoreHost.logins.value))
+        core.emit(authError(ytm().id))
+        assertFalse("a YouTube Music refusal drops its fixed-key login", CoreHost.hasLogin(ytm(), CoreHost.logins.value))
+        assertEquals("secret", store.get(url, "alice")?.password)
+    }
+
+    @Test
+    fun anAuthErrorWithoutAnAccountPrunesOnlyWhenOneNavidromeAccountExists() = runBlocking {
+        store.save(credential)
+        store.save(ServerCredential(url, "bob", "pw", null))
+        startReplay()
+        core.emit(started(listOf(server(reachable = false), server(reachable = false, user = "bob"))))
+        core.emit(authError())
+        assertEquals("which of two logins was refused is unknown: both stay", 2, store.all().size)
+    }
+
+    @Test
+    fun aSetupLoginSurvivesAnotherAccountsRefusal() = runBlocking {
+        store.save(credential)
+        startReplay()
+        core.emit(started(listOf(server(reachable = false))))
+        CoreHost.login(core::dispatch, ServerCredential(url, "bob", "pw", null))
+        core.emit(authError(server().id))
+        assertNull("alice's refused login is dropped", store.get(url, "alice"))
+        core.emit(serversChanged(listOf(server(reachable = true, user = "bob"))))
+        assertEquals("bob's pending login is still saved once confirmed", "pw", store.get(url, "bob")?.password)
+    }
+
+    @Test
+    fun anExpiredYouTubeMusicSignInVoidsItsPendingLogin() = runBlocking {
+        startReplay()
+        core.emit(started(emptyList()))
+        CoreHost.ytmLogin(core::dispatch, "SAPISID=abc")
+        core.emit(Event.YtmSignInExpired(EventYtmSignInExpiredInner("UCme")))
+        core.emit(serversChanged(listOf(ytm())))
+        assertTrue("the expired sign-in is not stored", store.keys().isEmpty())
     }
 }

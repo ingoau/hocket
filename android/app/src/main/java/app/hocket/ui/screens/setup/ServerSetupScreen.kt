@@ -196,7 +196,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     val ground = Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainer))
 
     BoxWithConstraints(Modifier.fillMaxSize().background(ground)) {
-        val tooOld = existing != null && !existing.capabilities.meetsFloor
+        val tooOld = existing != null && !CoreHost.meetsFloor(existing)
         // The mark: centred and large on the welcome, small over the form, mid-size over the summary.
         val tile by animateDpAsState(when (step) { SetupStep.Welcome -> 104.dp; SetupStep.Form -> 72.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm -> 104.dp }, label = "setupTile")
         val mark by animateDpAsState(when (step) { SetupStep.Welcome -> 40.dp; SetupStep.Form -> 26.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm -> 30.dp }, label = "setupMark")

@@ -7,6 +7,9 @@ import java.security.MessageDigest
  * `server_id_for`): the first 8 bytes of md5(`serverKey(url)|username`), in hex.
  */
 object AccountIds {
+    /** The anonymous YouTube Music account (the core's `ytm::provider::ANON`). */
+    const val YTM_ANON = "ytm:anon"
+
     /** A server URL as the core's `server_key` normalises it: blanks and trailing slashes go, scheme and host lowercased. */
     fun serverKey(url: String): String {
         val u = url.trim().trimEnd('/')

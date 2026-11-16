@@ -271,16 +271,20 @@ object CoreHost {
                     refreshLogins(store)
                 }
                 is Event.Error -> if (event.data.kind == ErrorKind.Auth) {
-                    if (pendingLogin != null) {
+                    val pending = pendingLogin
+                    val refused = refusedAccount(event.data.account_id, lastServers)
+                    // A setup login is refused unless the error names another account.
+                    if (pending != null && (event.data.account_id == null || refused == null || matches(refused, pending))) {
                         pendingLogin = null // refused: never saved
-                    } else {
-                        lastServers.firstOrNull()?.let { s ->
-                            Log.i(TAG, "stored login for ${s.username}@${s.url} was refused; removing it")
-                            store.remove(s.url, s.username)
-                            refreshLogins(store)
-                        }
+                    } else if (refused != null) {
+                        Log.i(TAG, "stored login for ${refused.username}@${refused.url} was refused; removing it")
+                        if (refused.kind == AccountKind.YoutubeMusic) store.remove(YtmLogin.KEY.first, YtmLogin.KEY.second)
+                        else store.remove(refused.url, refused.username)
+                        refreshLogins(store)
                     }
                 }
+                // The core dropped a YouTube Music sign-in: a sign-in still held for it is void too.
+                is Event.YtmSignInExpired -> if (pendingLogin?.let { YtmLogin.isYtm(it) } == true) pendingLogin = null
                 else -> Unit
             }
         }
@@ -297,8 +301,29 @@ object CoreHost {
         _unreadableLogins.value = lookups.filterValues { it is CredentialLookup.Unavailable }.keys.map { (url, user) -> ServerCredentialStore.key(url, user) }.toSet()
     }
 
-    /** True when [logins] (a collected value) holds a login for [server]. */
-    fun hasLogin(server: AccountInfo, logins: Set<String>): Boolean = server.id in logins
+    /**
+     * The account an `auth` error is about: [accountId] when the core named one, else the only
+     * Navidrome account (an error without an id can't be pinned on one of several).
+     */
+    internal fun refusedAccount(accountId: String?, servers: List<AccountInfo>): AccountInfo? =
+        if (accountId != null) servers.firstOrNull { it.id == accountId }
+        else servers.filter { it.kind == AccountKind.Navidrome }.singleOrNull()
+
+    /** The [logins] key YouTube Music's one sign-in per device is stored under. */
+    val ytmLoginKey: String get() = ServerCredentialStore.key(YtmLogin.KEY.first, YtmLogin.KEY.second)
+
+    /**
+     * True when [logins] (a collected value) holds a login for [server]. YouTube Music keeps its
+     * sign-in under [YtmLogin.KEY] (its account id, a channel id, is only known later); an
+     * anonymous account needs none.
+     */
+    fun hasLogin(server: AccountInfo, logins: Set<String>): Boolean = when (server.kind) {
+        AccountKind.YoutubeMusic -> server.id == AccountIds.YTM_ANON || ytmLoginKey in logins
+        AccountKind.Navidrome -> server.id in logins
+    }
+
+    /** Whether [server] may be used: Navidrome below the supported version can't, other providers can. */
+    fun meetsFloor(server: AccountInfo): Boolean = server.kind != AccountKind.Navidrome || server.capabilities.meetsFloor
 
     fun needsRelogin(server: AccountInfo, unreadable: Set<String>): Boolean = server.id in unreadable
 
