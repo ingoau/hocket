@@ -780,6 +780,12 @@ impl Actor {
             self.open_report.backup_path,
             self.open_report.mirror_rebuilt
         ));
+        if let Some(r) = &self.open_report.restore {
+            out.push_str(&format!(
+                "db restore from v10: restored={:?} skipped={:?} errors={:?}\n",
+                r.restored, r.skipped, r.errors
+            ));
+        }
         for s in self.account_infos() {
             out.push_str(&format!(
                 "server: {} {} user={} reachable={} version={:?} extensions={:?} floor={}\n",

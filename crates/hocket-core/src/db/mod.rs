@@ -18,6 +18,7 @@
 pub mod catalogue;
 pub mod links;
 pub mod queries;
+pub mod restore_v10;
 pub mod sync;
 
 use std::path::{Path, PathBuf};
@@ -107,6 +108,9 @@ pub struct OpenReport {
     pub backup_path: Option<PathBuf>,
     /// The mirror was dropped and must be re-synced.
     pub mirror_rebuilt: bool,
+    /// What was restored from the backup of a version-10 database
+    /// ([`restore_v10`]); `None` when no restore ran.
+    pub restore: Option<restore_v10::RestoreReport>,
 }
 
 struct Inner {
@@ -430,9 +434,11 @@ fn migrate(
             report.backup_path = Some(dest);
         }
     }
-    if from > 0 && from < MIGRATIONS[0].0 {
-        // Older than the squashed schema: nothing to migrate from (no users
-        // yet). The backup above keeps the old file; start over.
+    let recreated = from > 0 && from < MIGRATIONS[0].0;
+    if recreated {
+        // Older than the squashed schema: nothing to migrate from. The
+        // backup above keeps the old file; start over, then restore what
+        // the server can't give back from it (below).
         tracing::warn!(from, "database predates the squashed schema; recreating it");
         drop_all_tables(conn)?;
         report.mirror_rebuilt = true;
@@ -451,6 +457,11 @@ fn migrate(
             }
         }
         report.to_version = *version;
+    }
+    if recreated {
+        if let Some(backup) = report.backup_path.clone() {
+            report.restore = restore_v10::restore(conn, from, &backup);
+        }
     }
     Ok(report)
 }

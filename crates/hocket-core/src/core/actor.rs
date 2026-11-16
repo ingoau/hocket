@@ -325,6 +325,10 @@ impl Actor {
             clock.now_ms(),
             deps.identity.clone(),
         )));
+        // State a version-10 database kept per session scope now belongs to
+        // the identity's session: write it there, once.
+        let scope = identity.lock().id.clone();
+        crate::db::restore_v10::finish(&db, &scope, clock.as_ref());
         let settings_store = DbSettingsStore {
             db: db.clone(),
             clock: clock.clone(),

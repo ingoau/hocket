@@ -424,6 +424,21 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
 - **Not verified by hand.** The "two real servers on Android and desktop" check needs two
   Navidrome servers and devices; the sim test `actor_multi_account` covers the core side.
 
+### Upgrade restore
+
+Released devices run schema 10. Opening such a database backs it up and recreates it, then
+`db/restore_v10.rs` copies back, from that backup and before anything else reads the new
+database, what the server can't give back: the `servers` rows as accounts (same ids, which is
+what `AddAccount` finds when the platform replays its login), the settings document (minus keys
+the registry dropped and `connect.coordinatorUrl`), device-local saved state, pins and their
+files (same layout, so the startup sweeps keep them), the stream cache, play history, filters,
+the unsent outbox (a track rating gains its `source`), unfinished download jobs and AutoMix
+records. The queue document, resume position, stash, snoozes and album resume points were keyed
+by the old session scope; they are converted to track references and parked until the actor has
+the identity, then written under its scope once. Mirror tables, sync cursors and the room's sync
+base are left to resync. `OpenReport::restore` and the diagnostics say what came back. The
+module can go once no device is on version 10.
+
 ## Phase 2 notes
 
 *Written while implementing Phase 2. Calls made where the plan was silent or didn't fit the code.*
