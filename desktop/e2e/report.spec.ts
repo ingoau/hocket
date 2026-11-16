@@ -59,6 +59,7 @@ test("Save to Coordinator: offered via the coordinator only; the dialog stages f
     await expect(page.getByTestId("developer-room-status")).toContainText("Bundles from 1 of 1");
     await expect(page.getByTestId("developer-save-coordinator")).toHaveCount(0);
 
+    await page.evaluate(() => window.hocket.dispatch({ type: "setCoordinatorUrl", data: { url: "wss://coordinator.example/ws" } }));
     await page.evaluate(() => window.hocket.dispatch({ type: "connectCoordinator" }));
     await page.getByTestId("developer-refresh").click();
     await expect(page.getByTestId("developer-source-coordinator")).toHaveAttribute("data-state", "received");

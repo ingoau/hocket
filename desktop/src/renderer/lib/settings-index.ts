@@ -37,7 +37,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "transcodingBitrate", section: "transcoding", label: "settingsSearch.transcodingBitrate", keywords: "settingsSearch.kw.transcoding" },
   { id: "transcodingCannotDecode", section: "transcoding", label: "settings.transcodingCannotDecode", keywords: "settingsSearch.kw.transcoding" },
   { id: "deviceName", section: "connect", label: "settings.deviceName", keywords: "settingsSearch.kw.deviceName" },
-  { id: "coordinatorUrl", section: "connect", label: "settings.coordinatorUrl", keywords: "settingsSearch.kw.coordinatorUrl" },
+  { id: "coordinator", section: "connect", label: "identity.coordinator", keywords: "settingsSearch.kw.coordinator" },
   { id: "lanDiscovery", section: "connect", label: "settings.lanDiscovery", keywords: "settingsSearch.kw.lanDiscovery" },
   { id: "storageUsage", section: "storage", label: "settings.storageUsage", keywords: "settingsSearch.kw.storage" },
   { id: "cacheUsage", section: "storage", label: "settings.cacheUsage", keywords: "settingsSearch.kw.cache" },

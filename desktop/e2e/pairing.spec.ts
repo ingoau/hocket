@@ -52,14 +52,49 @@ test.describe("pairing", () => {
     await expect(sync).toContainText("Off");
     await sync.getByRole("switch").click();
     await expect(sync).toContainText("Google sign-ins never");
+    // No coordinator yet: the hint, the address and code, Claim and Join with invite, nothing to disconnect.
+    const section = page.getByTestId("identity-coordinator-section");
+    await expect(section.getByTestId("identity-coordinator")).toContainText("hocket-coordinator pair");
+    await expect(section.getByTestId("identity-redeem")).toBeVisible();
+    await expect(section.getByTestId("identity-coordinator-disconnect")).toHaveCount(0);
     await page.getByTestId("identity-coordinator-url").fill("wss://coordinator.example/ws");
     await page.getByTestId("identity-coordinator-code").fill("ABCD-EFGH");
     await page.getByTestId("identity-claim").click();
-    await expect(page.getByTestId("identity-coordinator")).toContainText("(yours)");
+    // Pinned: whose it is and the connection, Disconnect, and no address field any more.
+    await expect(page.getByTestId("identity-coordinator")).toContainText("wss://coordinator.example/ws (yours)");
+    await expect(page.getByTestId("identity-coordinator-status")).toContainText("Connected");
+    await expect(section.getByTestId("identity-coordinator-url")).toHaveCount(0);
+    await expect(section.getByTestId("identity-claim")).toHaveCount(0);
+    await expect(section.getByRole("textbox")).toHaveCount(0);
+    await page.getByTestId("identity-coordinator-disconnect").click();
+    await expect(page.getByTestId("identity-coordinator-status")).toHaveText("Not connected");
+    await page.getByTestId("identity-coordinator-reconnect").click();
+    await expect(page.getByTestId("identity-coordinator-status")).toContainText("Connected");
     await expect(sync).toContainText("coordinator holds the key");
     await page.getByTestId("identity-invite-create").click();
     await expect(page.getByTestId("identity-invite-FAKE-0001")).toBeVisible();
     await page.getByTestId("identity-invite-FAKE-0001").getByRole("button", { name: "Revoke" }).click();
     await expect(page.getByTestId("identity-invite-FAKE-0001")).toHaveCount(0);
+  });
+
+  test("an address without a pin shows with its connection and can be forgotten", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    // As the core, the fake connects to nothing without an address.
+    await page.evaluate(() => window.hocket.dispatch({ type: "connectCoordinator" }));
+    await page.getByTestId("nav-settings").click();
+    await page.getByTestId("settings-nav-connect").click();
+    const section = page.getByTestId("identity-coordinator-section");
+    await expect(section.getByTestId("identity-coordinator-leftover")).toHaveCount(0);
+    await page.evaluate(() => window.hocket.dispatch({ type: "setCoordinatorUrl", data: { url: "wss://old.example/ws" } }));
+    await page.evaluate(() => window.hocket.dispatch({ type: "connectCoordinator" }));
+    const leftover = section.getByTestId("identity-coordinator-leftover");
+    await expect(leftover).toContainText("wss://old.example/ws (not claimed)");
+    await expect(leftover.getByTestId("identity-coordinator-status")).toContainText("Connected");
+    // Claiming and joining are still offered beside it.
+    await expect(section.getByTestId("identity-claim")).toBeVisible();
+    await leftover.getByTestId("identity-coordinator-forget").click();
+    await expect(leftover).toHaveCount(0);
+    await expect(section.getByTestId("identity-coordinator")).toContainText("hocket-coordinator pair");
   });
 });

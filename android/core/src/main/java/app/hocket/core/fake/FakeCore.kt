@@ -1114,7 +1114,8 @@ class FakeCore(
                 connection = connection.copy(coordinatorUrl = c.data.url, tier = if (c.data.url != null) ConnectionTier.Coordinator else ConnectionTier.Lan)
                 emit(Event.ConnectionChanged(EventConnectionChangedInner(connection)))
             }
-            Command.ConnectCoordinator -> { connection = connection.copy(connected = true, tier = ConnectionTier.Coordinator, error = null, roundTripMs = 48.0); emit(Event.ConnectionChanged(EventConnectionChangedInner(connection))) }
+            // As the core: nothing to connect to without an address.
+            Command.ConnectCoordinator -> if (connection.coordinatorUrl != null) { connection =connection.copy(connected = true, tier = ConnectionTier.Coordinator, error = null, roundTripMs = 48.0); emit(Event.ConnectionChanged(EventConnectionChangedInner(connection))) }
             Command.DisconnectCoordinator -> { connection = connection.copy(connected = false, tier = ConnectionTier.Local, peerCount = 0u); emit(Event.ConnectionChanged(EventConnectionChangedInner(connection))) }
             is Command.SetLanDiscovery -> setSetting(SettingKeys.CONNECT_LAN_DISCOVERY, c.data.enabled.toString())
             Command.OpenHandoffPicker -> {
@@ -1211,6 +1212,10 @@ class FakeCore(
                 val shown = url.ifBlank { "wss://coordinator.example/ws" }
                 identity = identity.copy(coordinator = CoordinatorInfo(shown, owner, identity.credentialSync))
                 emitIdentity()
+                // As the core does: the pinned coordinator becomes the one to connect to, and it connects.
+                setSetting(SettingKeys.CONNECT_COORDINATOR_URL, "\"$shown\"")
+                connection = connection.copy(coordinatorUrl = shown, connected = true, tier = ConnectionTier.Coordinator, error = null, roundTripMs = 48.0)
+                emit(Event.ConnectionChanged(EventConnectionChangedInner(connection)))
                 emit(Event.CoordinatorJoined(EventCoordinatorJoinedInner(shown, owner)))
             }
             Command.CreateCoordinatorInvite -> {

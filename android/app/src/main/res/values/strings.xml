@@ -695,6 +695,7 @@
     <string name="settings_search_kw_battery">battery power energy saver</string>
     <string name="settings_search_kw_battery_customise">battery saver blur lyrics animation refresh rate 60 hz artwork immersive sync</string>
     <string name="settings_search_kw_connect">connect remote coordinator relay network wifi lan mdns devices</string>
+    <string name="settings_search_kw_coordinator">connect remote server relay claim invite join pair address url</string>
     <string name="settings_search_kw_pebble">pebble watch smartwatch wrist</string>
     <string name="settings_search_kw_player_swipe_up">gesture swipe up player now playing queue lyrics play on devices connect output menu</string>
     <string name="settings_search_kw_customise">customize reorder order hide show menu buttons navigation bar swipe gestures</string>
@@ -756,10 +757,6 @@
     <string name="settings_bitrate_unlimited">Unlimited</string>
     <string name="settings_bitrate_kbps">%1$d kbps</string>
     <string name="settings_cannot_decode">Always transcode</string>
-    <string name="settings_coordinator_url">Coordinator URL</string>
-    <string name="settings_coordinator_hint">wss://hocket.example.com</string>
-    <string name="settings_coordinator_connect">Connect</string>
-    <string name="settings_coordinator_disconnect">Disconnect</string>
     <string name="settings_lan_discovery">Find devices on this network</string>
     <string name="settings_device_name">This device: %1$s</string>
     <string name="settings_section_queue">Queue</string>
@@ -1139,10 +1136,15 @@
     <string name="identity_credential_sync_on">Navidrome passwords reach your other devices, encrypted. Google sign-ins never do.</string>
     <string name="identity_credential_sync_coordinator">Navidrome passwords reach your other devices, encrypted. While this is on, your coordinator holds the key too. Google sign-ins never sync.</string>
     <string name="identity_coordinator">Coordinator</string>
-    <string name="identity_coordinator_none">None. Claim yours with the code hocket-coordinator pair prints, or join one with an invite.</string>
+    <string name="identity_coordinator_none">No coordinator yet. Claim yours with the code hocket-coordinator pair prints, or join one with an invite from its owner.</string>
     <string name="identity_coordinator_owner">%1$s (yours)</string>
     <string name="identity_coordinator_guest">%1$s (invited)</string>
     <string name="identity_coordinator_url">Coordinator address</string>
+    <string name="identity_coordinator_url_hint">wss://hocket.example.com</string>
+    <string name="identity_coordinator_disconnect">Disconnect</string>
+    <string name="identity_coordinator_reconnect">Reconnect</string>
+    <string name="identity_coordinator_leftover">%1$s (not claimed)</string>
+    <string name="identity_coordinator_forget">Forget address</string>
     <string name="identity_coordinator_code">Code</string>
     <string name="identity_claim">Claim</string>
     <string name="identity_redeem">Join with invite</string>

@@ -62,6 +62,17 @@ test.describe("settings search", () => {
     await expect(page.locator("#setting-transitions")).toContainText("never within albums");
   });
 
+  test("\"claim\" lands on the Coordinator section, on its address field", async ({ hocket }) => {
+    const { page } = hocket;
+    const field = page.getByTestId("settings-search");
+    await field.fill("claim");
+    await page.getByTestId("settings-hit-coordinator").click();
+    await expect(page.getByTestId("settings-nav-connect")).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("#setting-coordinator")).toHaveClass(/setting-flash/);
+    await expect(page.getByTestId("identity-coordinator-url")).toBeFocused();
+    await expect(page.locator("#setting-coordinator")).toBeInViewport();
+  });
+
   test("shows an empty state, and the clear button resets", async ({ hocket }) => {
     const { page } = hocket;
     await page.getByTestId("settings-search").fill("zzzz nothing");

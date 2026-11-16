@@ -447,16 +447,12 @@ function Connect() {
   const connection = useApp((s) => s.connection);
   const devices = useApp((s) => s.devices);
   const meta = useApp((s) => s.meta);
-  const [url, setUrl] = useState(connection.coordinatorUrl ?? "");
-  useEffect(() => setUrl(connection.coordinatorUrl ?? ""), [connection.coordinatorUrl]);
+  // The devices found on this network, while that is how this device is connected.
+  const lanPeers = connection.tier === "lan" && connection.connected ? t("connect.peers", { count: connection.peerCount }) : undefined;
   return (
     <>
       <Row anchor="deviceName" title={t("settings.deviceName")} settingKey="device.name"><span className="muted">{meta?.deviceName}</span></Row>
-      <Row anchor="coordinatorUrl" title={t("settings.coordinatorUrl")} desc={connection.error ?? (connection.connected ? `${connection.tier} · ${connection.roundTripMs ?? "?"} ms` : undefined)} settingKey={SK.connectCoordinatorUrl}>
-        <input className="input" placeholder="wss://coordinator.example.org" aria-label={t("settings.coordinatorUrl")} value={url} onChange={(e) => setUrl(e.target.value)} onBlur={() => bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } })} style={{ width: 260 }} />
-        {connection.tier === "coordinator" && connection.connected ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "disconnectCoordinator" })}>{t("settings.coordinatorDisconnect")}</button> : <button type="button" className="btn sm" onClick={() => { bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } }); bridge().dispatch({ type: "connectCoordinator" }); }} disabled={!url.trim()}>{t("settings.coordinatorConnect")}</button>}
-      </Row>
-      <Toggle anchor="lanDiscovery" settingKey={SK.connectLanDiscovery} title={t("settings.lanDiscovery")} />
+      <Toggle anchor="lanDiscovery" settingKey={SK.connectLanDiscovery} title={t("settings.lanDiscovery")} desc={lanPeers} />
       <IdentitySettings />
       <h2 className="section-title">{t("connect.title")}</h2>
       {devices.map((d) => <div key={d.id} className="setting-row"><div className="label"><div className="title">{d.name}{d.isSelf ? <span className="badge">{t("connect.thisDevice")}</span> : null}{d.playing ? <span className="badge ok">{t("connect.playing")}</span> : null}</div><div className="desc">{d.platform} · {d.appVersion} · {fmtRelative(d.lastSeen)}</div></div><div className="control" /></div>)}

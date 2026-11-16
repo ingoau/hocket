@@ -16,8 +16,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -266,27 +264,20 @@ private fun ProfileEditor(title: String, networkId: String) {
         trailingIcon = { TextButton(onClick = { push(profile.copy(cannotDecode = cannot.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() })) }) { Text(stringResource(R.string.action_save)) } })
 }
 
-/** Coordinator URL, connect/disconnect, LAN discovery, this device, and the identity's devices. */
+/**
+ * LAN discovery, this device, and the identity: its devices and its coordinator (claim or join one,
+ * then its address, connection and Disconnect / Reconnect).
+ */
 @Composable
 fun ConnectSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val connection by client.connection.collectAsStateWithLifecycle()
     val devices by client.devices.collectAsStateWithLifecycle()
     val lan = setting(SettingKeys.CONNECT_LAN_DISCOVERY)
-    var url by remember(connection.coordinatorUrl) { mutableStateOf(connection.coordinatorUrl ?: "") }
     SubScreen(nav, stringResource(R.string.settings_category_connect)) {
-        OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.settings_coordinator_url)) }, placeholder = { Text(stringResource(R.string.settings_coordinator_hint)) }, singleLine = true, modifier = Modifier.fillMaxWidth().settingAnchor("connect.coordinator").testTag(settingTag("connect.coordinator")).padding(16.dp))
-        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(shapes = ButtonDefaults.shapes(), onClick = { client.dispatch(Commands.setCoordinatorUrl(url.trim().ifEmpty { null })); client.dispatch(Command.ConnectCoordinator) }) { Text(stringResource(R.string.settings_coordinator_connect)) }
-            TextButton(onClick = { client.dispatch(Command.DisconnectCoordinator) }, enabled = connection.connected) { Text(stringResource(R.string.settings_coordinator_disconnect)) }
-        }
-        val status = when (connection.tier) {
-            app.hocket.core.api.ConnectionTier.Local -> stringResource(R.string.connection_local)
-            app.hocket.core.api.ConnectionTier.Lan -> pluralStringResource(R.plurals.connection_lan, connection.peerCount.toInt(), connection.peerCount.toInt())
-            app.hocket.core.api.ConnectionTier.Coordinator -> pluralStringResource(R.plurals.connection_coordinator, connection.peerCount.toInt(), connection.peerCount.toInt())
-        }
-        SettingRow(status, connection.error ?: connection.roundTripMs?.let { "${it.toInt()} ms" })
-        SwitchRow(stringResource(R.string.settings_lan_discovery), lan.bool ?: true, { client.dispatch(Commands.setLanDiscovery(it)) }, scope = lan.scope, tag = "connect.lan")
+        // The devices found on this network, while that is how this device is connected.
+        val lanPeers = if (connection.tier == app.hocket.core.api.ConnectionTier.Lan) pluralStringResource(R.plurals.connection_lan, connection.peerCount.toInt(), connection.peerCount.toInt()) else null
+        SwitchRow(stringResource(R.string.settings_lan_discovery), lan.bool ?: true, { client.dispatch(Commands.setLanDiscovery(it)) }, subtitle = lanPeers, scope = lan.scope, tag = "connect.lan")
         devices.firstOrNull { it.isSelf }?.let { SettingRow(stringResource(R.string.settings_device_name, it.name), it.id) }
         IdentitySettings()
     }
