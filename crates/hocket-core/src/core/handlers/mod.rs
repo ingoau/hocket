@@ -16,6 +16,7 @@ pub(crate) mod identity_library;
 pub(crate) mod library;
 pub(crate) mod mixed_playlists;
 pub(crate) mod playback;
+pub(crate) mod plays;
 pub(crate) mod prefetch;
 pub(crate) mod preview;
 pub(crate) mod prime;
