@@ -38,17 +38,16 @@ object LibraryPatches {
         tracks = r.tracks.map { track(it, items) },
         albums = r.albums.map { album(it, items) },
         artists = r.artists.map { artist(it, items) },
+        lyrics = r.lyrics?.map { h -> track(h.track, items).let { if (it === h.track) h else h.copy(track = it) } },
     )
 
     fun queue(q: QueueView, items: List<LibraryItemState>): QueueView {
-        val history = q.history.map { entry(it, items) }
+        val entries = q.entries.map { entry(it, items) }
         val current = q.current?.let { entry(it, items) }
-        val playingNext = q.playingNext.map { entry(it, items) }
-        val upcoming = q.upcoming.map { entry(it, items) }
-        if (sameRefs(history, q.history) && current === q.current && sameRefs(playingNext, q.playingNext) && sameRefs(upcoming, q.upcoming)) {
-            return q
-        }
-        return q.copy(history = history, current = current, playingNext = playingNext, upcoming = upcoming)
+        val wrapNext = q.wrapNext?.let { entry(it, items) }
+        val previous = q.previous?.let { entry(it, items) }
+        if (sameRefs(entries, q.entries) && current === q.current && wrapNext === q.wrapNext && previous === q.previous) return q
+        return q.copy(entries = entries, current = current, wrapNext = wrapNext, previous = previous)
     }
 
     private fun sameRefs(a: List<QueueEntry>, b: List<QueueEntry>): Boolean {

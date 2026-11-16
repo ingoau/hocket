@@ -4,7 +4,7 @@
 //!
 //! | Stored | Detail |
 //! |---|---|
-//! | Session | context, cursor, history, shuffle, insertions, `(position, takenAt, isPlaying)` as last received |
+//! | Session | context, history, current, upcoming, shuffle, `(position, takenAt, isPlaying)` as last received |
 //! | Saved queues | the LWW set, per Navidrome user scope |
 //! | Settings | account-synced keys, LWW |
 //! | Leases | per-device last-seen and the transport lease |
@@ -21,12 +21,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::api::{
-    DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
+    AlbumResumeEntry, DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, Snooze,
+    StashEntry, TrackRef, TransportLease,
 };
 use crate::connect::wire::{
     merge_saved_queues, merge_settings, DeviceLease, LastStamp, PlayRecord, ReplicaState,
     ScrobbleRecord,
 };
+use crate::library::LibraryRecord;
 
 /// Replicas idle for this long are dropped by [`ReplicaStore::purge_expired`].
 pub const REPLICA_TTL_MS: f64 = 30.0 * 24.0 * 3_600_000.0;
@@ -48,7 +50,7 @@ pub const PLAY_PAGE: usize = 500;
 /// Device leases not seen for this long are forgotten.
 pub const DEVICE_TTL_MS: f64 = 7.0 * 24.0 * 3_600_000.0;
 /// Cap on stored history (mirrors the session module's own cap).
-pub const HISTORY_CAP: usize = 200;
+pub const HISTORY_CAP: usize = crate::session::HISTORY_CAP;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplicaError {
@@ -75,6 +77,10 @@ pub fn new_replica(document: SessionDocument, now: EpochMs) -> ReplicaState {
         document,
         saved_queues: vec![],
         settings: vec![],
+        stash: vec![],
+        snoozes: vec![],
+        album_resumes: vec![],
+        library_records: vec![],
         devices: vec![],
         transport_lease: TransportLease::default(),
         last_stamp: None,
@@ -93,16 +99,20 @@ pub trait ReplicaExt {
     fn forget_device(&mut self, device_id: &str);
     fn merge_saved_queues(&mut self, theirs: &[SavedQueue], now: EpochMs) -> bool;
     fn merge_settings(&mut self, theirs: &[Setting], now: EpochMs) -> bool;
+    fn merge_stash(&mut self, theirs: &[StashEntry], now: EpochMs) -> bool;
+    fn merge_snoozes(&mut self, theirs: &[Snooze], now: EpochMs) -> bool;
+    fn merge_album_resumes(&mut self, theirs: &[AlbumResumeEntry], now: EpochMs) -> bool;
+    fn merge_library_records(&mut self, theirs: &[LibraryRecord], now: EpochMs) -> bool;
     fn claim_scrobble(
         &mut self,
-        track_id: &str,
+        track_id: &TrackRef,
         started_at: EpochMs,
         device_id: &str,
         now: EpochMs,
     ) -> ScrobbleClaim;
     /// Drop the record of a pair (a claim withdrawn before it was
     /// confirmed). Returns whether there was one.
-    fn forget_scrobble(&mut self, track_id: &str, started_at: EpochMs, now: EpochMs) -> bool;
+    fn forget_scrobble(&mut self, track_id: &TrackRef, started_at: EpochMs, now: EpochMs) -> bool;
     /// Keep the plays the log does not have yet (identity `(trackId,
     /// playedAt)`), numbered in arrival order. Returns the new ones as
     /// stored, with their `seq`.
@@ -159,9 +169,54 @@ impl ReplicaExt for ReplicaState {
         changed
     }
 
+    fn merge_stash(&mut self, theirs: &[StashEntry], now: EpochMs) -> bool {
+        let (mut merged, _) = crate::stash::merge(&self.stash, theirs);
+        crate::stash::prune(&mut merged, now);
+        // Only what survives the prune counts: a stale tombstone coming back is no change.
+        let changed = merged != self.stash;
+        if changed {
+            self.stash = merged;
+            self.updated_at = now;
+        }
+        changed
+    }
+
+    fn merge_snoozes(&mut self, theirs: &[Snooze], now: EpochMs) -> bool {
+        let (mut merged, _) = crate::snooze::merge(&self.snoozes, theirs);
+        crate::snooze::prune(&mut merged, now);
+        let changed = merged != self.snoozes;
+        if changed {
+            self.snoozes = merged;
+            self.updated_at = now;
+        }
+        changed
+    }
+
+    fn merge_album_resumes(&mut self, theirs: &[AlbumResumeEntry], now: EpochMs) -> bool {
+        let (mut merged, _) = crate::album_resume::merge(&self.album_resumes, theirs);
+        crate::album_resume::prune(&mut merged, now);
+        let changed = merged != self.album_resumes;
+        if changed {
+            self.album_resumes = merged;
+            self.updated_at = now;
+        }
+        changed
+    }
+
+    fn merge_library_records(&mut self, theirs: &[LibraryRecord], now: EpochMs) -> bool {
+        let (mut merged, _) = crate::library::merge(&self.library_records, theirs);
+        crate::library::prune(&mut merged, now);
+        let changed = merged != self.library_records;
+        if changed {
+            self.library_records = merged;
+            self.updated_at = now;
+        }
+        changed
+    }
+
     fn claim_scrobble(
         &mut self,
-        track_id: &str,
+        track_id: &TrackRef,
         started_at: EpochMs,
         device_id: &str,
         now: EpochMs,
@@ -169,7 +224,7 @@ impl ReplicaExt for ReplicaState {
         if let Some(r) = self
             .scrobbles
             .iter()
-            .find(|r| r.track_id == track_id && same_start(r.started_at, started_at))
+            .find(|r| &r.track_id == track_id && same_start(r.started_at, started_at))
         {
             return if r.device_id == device_id {
                 ScrobbleClaim::Own
@@ -178,7 +233,7 @@ impl ReplicaExt for ReplicaState {
             };
         }
         self.scrobbles.push(ScrobbleRecord {
-            track_id: track_id.to_string(),
+            track_id: track_id.clone(),
             started_at,
             device_id: device_id.to_string(),
             recorded_at: now,
@@ -190,10 +245,10 @@ impl ReplicaExt for ReplicaState {
         ScrobbleClaim::New
     }
 
-    fn forget_scrobble(&mut self, track_id: &str, started_at: EpochMs, now: EpochMs) -> bool {
+    fn forget_scrobble(&mut self, track_id: &TrackRef, started_at: EpochMs, now: EpochMs) -> bool {
         let before = self.scrobbles.len();
         self.scrobbles
-            .retain(|r| !(r.track_id == track_id && same_start(r.started_at, started_at)));
+            .retain(|r| !(&r.track_id == track_id && same_start(r.started_at, started_at)));
         let changed = self.scrobbles.len() != before;
         if changed {
             self.updated_at = now;
@@ -204,7 +259,7 @@ impl ReplicaExt for ReplicaState {
     fn add_plays(&mut self, plays: &[PlayRecord], now: EpochMs) -> Vec<PlayRecord> {
         let mut added = Vec::new();
         for p in plays {
-            if p.track_id.is_empty()
+            if p.track_id.id.is_empty()
                 || !p.played_at.is_finite()
                 || now - p.played_at >= PLAY_LOG_TTL_MS
                 || self.play_log.iter().any(|q| q.same_play(p))
@@ -286,7 +341,7 @@ pub(crate) fn same_start(a: EpochMs, b: EpochMs) -> bool {
 /// A scrobble identity, for callers that want to reason about pairs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScrobblePair {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub started_at: EpochMs,
     pub device_id: DeviceId,
 }
@@ -480,7 +535,7 @@ impl ReplicaStore for FileReplicaStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{Platform, QueueMode, RepeatMode, SettingScope, TransportState};
+    use crate::api::{Platform, RepeatMode, SettingScope, TransportState};
 
     fn doc() -> SessionDocument {
         SessionDocument {
@@ -490,12 +545,10 @@ mod tests {
             revision: 1,
             updated_at: 0.0,
             context: None,
-            mode: QueueMode::Apple,
-            cursor: 0,
-            current: None,
             history: vec![],
-            insertions: vec![],
-            shuffle: None,
+            current: None,
+            upcoming: vec![],
+            shuffle: false,
             repeat: RepeatMode::Off,
             autoplay: false,
             transport: TransportState::default(),
@@ -520,25 +573,42 @@ mod tests {
     #[test]
     fn scrobble_claims_dedupe_across_devices_but_not_self() {
         let mut r = new_replica(doc(), 0.0);
-        assert_eq!(r.claim_scrobble("t", 1000.0, "a", 1.0), ScrobbleClaim::New);
-        assert_eq!(r.claim_scrobble("t", 1000.4, "a", 2.0), ScrobbleClaim::Own);
         assert_eq!(
-            r.claim_scrobble("t", 1000.0, "b", 3.0),
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 1000.0, "a", 1.0),
+            ScrobbleClaim::New
+        );
+        assert_eq!(
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 1000.4, "a", 2.0),
+            ScrobbleClaim::Own
+        );
+        assert_eq!(
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 1000.0, "b", 3.0),
             ScrobbleClaim::Duplicate
         );
-        assert_eq!(r.claim_scrobble("t", 5000.0, "b", 4.0), ScrobbleClaim::New);
+        assert_eq!(
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 5000.0, "b", 4.0),
+            ScrobbleClaim::New
+        );
         assert_eq!(r.scrobbles.len(), 2);
         // a withdrawn claim frees the pair for whoever asks next
-        assert!(r.forget_scrobble("t", 1000.3, 5.0));
-        assert!(!r.forget_scrobble("t", 1000.3, 6.0));
-        assert_eq!(r.claim_scrobble("t", 1000.0, "b", 7.0), ScrobbleClaim::New);
+        assert!(r.forget_scrobble(&crate::api::TrackRef::from("t"), 1000.3, 5.0));
+        assert!(!r.forget_scrobble(&crate::api::TrackRef::from("t"), 1000.3, 6.0));
+        assert_eq!(
+            r.claim_scrobble(&crate::api::TrackRef::from("t"), 1000.0, "b", 7.0),
+            ScrobbleClaim::New
+        );
     }
 
     #[test]
     fn scrobble_log_is_capped_and_expires() {
         let mut r = new_replica(doc(), 0.0);
         for i in 0..(SCROBBLE_LOG_CAP + 10) {
-            r.claim_scrobble("t", i as f64 * 10_000.0, "a", i as f64);
+            r.claim_scrobble(
+                &crate::api::TrackRef::from("t"),
+                i as f64 * 10_000.0,
+                "a",
+                i as f64,
+            );
         }
         assert_eq!(r.scrobbles.len(), SCROBBLE_LOG_CAP);
         // kept: recorded_at 10..=509; expiring at TTL+100 drops recorded_at <= 100
@@ -565,12 +635,16 @@ mod tests {
     fn history_is_capped_when_stored() {
         let mut r = new_replica(doc(), 0.0);
         let mut d = doc();
-        for i in 0..300 {
+        for i in 0..HISTORY_CAP + 100 {
             d.history.push(crate::api::QueueItem {
                 key: format!("k{i}"),
-                track_id: format!("t{i}"),
+                track: format!("t{i}").into(),
                 source: crate::api::QueueSource::Inserted,
                 unavailable: false,
+                added: false,
+                queued: false,
+                ordinal: i as u32,
+                alts: vec![],
             });
         }
         r.set_document(d, 5.0);

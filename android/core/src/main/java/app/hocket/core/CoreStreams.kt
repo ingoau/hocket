@@ -20,6 +20,12 @@ interface CoreStreams {
     /** Closes a stream; idempotent, never blocks. */
     fun streamClose(handle: Long)
 
+    /**
+     * Whether playing [url] needs no network now: a download, or a stream the core has whole at the
+     * profile it would serve. A quick index lookup that still BLOCKS: never on the main thread.
+     */
+    fun streamLocal(url: String): Boolean = false
+
     companion object {
         /** The URL scheme of core streams. */
         const val SCHEME = "hocket-stream"

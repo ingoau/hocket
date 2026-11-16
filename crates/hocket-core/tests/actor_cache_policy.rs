@@ -111,14 +111,11 @@ async fn offline_plays_downloads_and_complete_cache_entries_and_skips_the_rest()
     t.events.clear();
     t.sources.lock().clear();
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: ["t2", "t0", "t3", "t4", "t1"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+        tracks: TrackRef::list(&t.server_id, ["t2", "t0", "t3", "t4", "t1"]),
         start_index: 0,
         label: "Mixed".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1000.0).await;
@@ -135,13 +132,11 @@ async fn offline_plays_downloads_and_complete_cache_entries_and_skips_the_rest()
     assert_eq!(loaded, ["t0", "t1"], "t0 loaded with t1 preloaded");
     let q = t.queue().await;
     assert!(q
-        .history
-        .iter()
+        .history()
         .any(|e| e.track.id == "t2" && e.item.unavailable));
     // The queue shows what is available offline.
     let up: Vec<_> = q
-        .upcoming
-        .iter()
+        .upcoming()
         .map(|e| (e.track.id.as_str(), e.track.offline))
         .collect();
     assert_eq!(
@@ -178,11 +173,11 @@ async fn offline_autoplay_picks_what_plays_offline() {
     pin(&t, "t3").await;
     t.run(network(NetworkKind::Offline, false)).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::SetAutoplay { enabled: true }).await;
@@ -196,7 +191,7 @@ async fn offline_autoplay_picks_what_plays_offline() {
         QueueSource::Autoplay { reason, .. } => assert_eq!(reason, "Available offline"),
         other => panic!("{other:?}"),
     }
-    assert!(q.upcoming.is_empty(), "nothing else plays offline: {q:?}");
+    assert!(q.total_upcoming == 0, "nothing else plays offline: {q:?}");
     // An autoplay pick is marked for eviction (a one-off goes early).
     assert_eq!(signal(&t, "t3").map(|s| s.0), Some(1));
     for endpoint in [
@@ -214,11 +209,11 @@ async fn offline_autoplay_picks_what_plays_offline() {
 async fn playback_records_skips_and_autoplay_picks_for_eviction() {
     let t = started("signals", 4).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Three".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(5_000.0).await;
@@ -240,11 +235,11 @@ async fn playback_records_skips_and_autoplay_picks_for_eviction() {
 async fn a_track_left_by_a_skip_burst_counts_as_skipped() {
     let t = started("burst-signals", 4).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1", "t2", "t3"]),
         start_index: 0,
         label: "Four".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(5_000.0).await;

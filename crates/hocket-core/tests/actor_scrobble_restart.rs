@@ -73,11 +73,11 @@ async fn deferred_on_b() -> Deferred {
 
     let started = clock.now_ms();
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 30_000.0).await;
@@ -103,7 +103,7 @@ async fn deferred_on_b() -> Deferred {
     let (_, state) = connect_state(&b);
     let waits = awaiting(&state);
     assert_eq!(waits.len(), 1, "{state}");
-    assert_eq!(waits[0]["trackId"], "t0");
+    assert_eq!(waits[0]["trackId"]["id"], "t0");
     Deferred { a, b, net, started }
 }
 
@@ -222,11 +222,11 @@ async fn a_single_device_play_is_submitted_at_its_threshold_and_leaves_nothing_p
     let t = TestCore::start("solo", seeded_server(4, 200.0)).await;
     t.run_for(8_000.0).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(99_000.0).await;

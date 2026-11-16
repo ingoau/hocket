@@ -20,7 +20,6 @@ use crate::core::Internal;
 use crate::db::DbResult;
 use crate::media_session::{command_for, derive_media_session_state};
 use crate::outbox::{ScrobbleAction, Verdict};
-use crate::session::reducer::derive_window;
 
 impl Actor {
     // -- loading ----------------------------------------------------------------
@@ -31,16 +30,28 @@ impl Actor {
     /// it; otherwise the legacy cached file or server stream URL. With
     /// ReplayGain folded into `gain_db`.
     pub(crate) fn media_source_for(&self, key: &str, track: &Track) -> Option<MediaSource> {
-        let api = self.api()?;
+        // The track's own account resolves it (a queue mixes accounts).
+        let provider = self.provider_for(&track.server_id)?;
         let reader = self
             .stream_reader
             .as_ref()
             .filter(|_| self.core_stream)
             .map(|r| r as &dyn crate::downloads::StreamMinter);
-        let mut source = match self
-            .downloads
-            .resolve_with(api.as_ref(), key, track, reader)
-        {
+        let resolved = if self.renderer.is_some() && provider.resolves_live() {
+            // Fetched ahead (`want_remote_url`): nothing to hand over until then.
+            let stream = provider.cached_stream(&track.id)?;
+            self.downloads
+                .resolve_remote_live(provider.as_ref(), key, track, stream)
+        } else if let Some(r) = &self.renderer {
+            let cannot_play =
+                crate::downloads::receivers::cannot_play(r, &self.renderer_formats, track);
+            self.downloads
+                .resolve_remote(provider.as_ref(), key, track, cannot_play)
+        } else {
+            self.downloads
+                .resolve_with(provider.as_ref(), key, track, reader)
+        };
+        let mut source = match resolved {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(target: "hocket_core", error = %e, "resolve media source");
@@ -51,17 +62,22 @@ impl Actor {
             .doc()
             .and_then(|d| d.context.as_ref())
             .is_some_and(|c| matches!(c.kind, ContextKind::Album { .. }));
-        let download_gain = self
+        let download = self
             .downloads
-            .gain(&track.server_id, &track.id)
+            .gain_with_peak(&track.server_id, &track.id)
             .ok()
             .flatten();
-        let rg = track.replay_gain.clone().or_else(|| {
-            download_gain.map(|g| ReplayGain {
-                track_gain_db: Some(g),
-                ..Default::default()
-            })
-        });
+        // The measured gain fills what the server left out: a partial tag
+        // set (album gain, a bare peak) would otherwise shadow the
+        // on-device scan of the track.
+        let mut rg = track.replay_gain.clone().unwrap_or_default();
+        if rg.track_gain_db.is_none() {
+            if let Some((gain_db, peak)) = download {
+                rg.track_gain_db = Some(gain_db);
+                rg.track_peak = rg.track_peak.or(peak);
+            }
+        }
+        let rg = (rg != ReplayGain::default()).then_some(rg);
         source.gain_db = gain_for_track(
             rg.as_ref(),
             self.audio.replay_gain,
@@ -71,59 +87,209 @@ impl Actor {
         Some(source)
     }
 
-    /// The item that follows the current one, for gapless preload
-    /// (offline: the next one that can play offline).
-    fn next_item(&self) -> Option<QueueItem> {
-        let doc = self.doc()?;
+    /// The first `n` items that will play after the current one: the first
+    /// is the gapless preload (offline: the next ones that can play offline),
+    /// and AutoMix plans the follow-up's own mix-out from the second.
+    pub(crate) fn upcoming_playable(&self, n: usize) -> Vec<QueueItem> {
+        let Some(doc) = self.doc() else {
+            return vec![];
+        };
         if doc.repeat == RepeatMode::One {
-            return None;
+            return vec![];
         }
         let offline = self.is_offline();
-        // Context items are never marked unavailable: online, the first
-        // upcoming one is as far as the search below can get.
-        let d = derive_window(doc, if offline { usize::MAX } else { 1 });
-        // Repeat All wraps to the top: that item is next too (#13).
-        d.playing_next
+        // Repeat All wraps to the top: those entries are next too (#13).
+        let wrapped = (doc.repeat == RepeatMode::All)
+            .then(|| doc.history.iter().chain(doc.current.iter()))
             .into_iter()
-            .chain(d.upcoming)
-            .chain(d.wrap_next)
+            .flatten();
+        doc.upcoming
+            .iter()
+            .chain(wrapped)
             .filter(|i| !i.unavailable)
-            .find(|i| {
+            .filter(|i| {
                 !offline
                     || self
-                        .track_or_bare(&i.track_id)
-                        .is_some_and(|t| self.available_offline(&t))
+                        .track_or_bare(&i.track)
+                        .is_some_and(|t| self.playable_offline(&t))
             })
+            .take(n)
+            .cloned()
+            .collect()
+    }
+
+    /// Whether the backend gets the follow-up ahead of time: with gapless
+    /// on, with transitions on (a mix needs it), and always on a remote
+    /// renderer, whose own queue moves on to it while this device sleeps.
+    pub(crate) fn preloads_next(&self) -> bool {
+        self.audio.gapless || self.renderer.is_some() || self.transition_settings().mode.is_on()
+    }
+
+    /// The follow-up's source, with its AutoMix fields (`locked`: see
+    /// [`Self::with_mix`]).
+    fn next_source(&self, upcoming: &[QueueItem], locked: Option<Ms>) -> Option<MediaSource> {
+        let item = upcoming.first()?;
+        let track = self.track_for_item(item)?;
+        let source = self.media_source_for(&item.key, &track)?;
+        let following = upcoming.get(1).and_then(|i| self.track_for_item(i));
+        Some(self.with_mix(source, &track, following.as_ref(), locked))
+    }
+
+    /// Playback moves to a remote renderer (a Cast device), to another one,
+    /// or back here (`Command::SetRenderer`). Sources resolve differently from now on, so
+    /// the current item reloads at its position, keeping its played time:
+    /// on the renderer it keeps playing (or not); back here it pauses,
+    /// rather than bursting out of the phone's speaker.
+    pub(crate) fn set_renderer(&mut self, renderer: Option<crate::api::Renderer>) {
+        // Some again (another session, maybe a receiver of the same name)
+        // still reloads: the new receiver has nothing loaded.
+        if self.renderer.is_none() && renderer.is_none() {
+            return;
+        }
+        tracing::info!(target: "hocket::player", renderer = ?renderer, "renderer");
+        let leaving = renderer.is_none();
+        self.renderer = renderer;
+        if !leaving {
+            // Nothing here reads the stream cache while the renderer plays.
+            self.cancel_prefetch();
+        }
+        // A load waiting for the old renderer's URL loads anew for this one.
+        let waiting = self.remote.wait.take();
+        if let Some(w) = waiting.filter(|_| self.owns_transport()) {
+            if let Some(item) = self
+                .doc()
+                .and_then(|d| d.current.clone())
+                .filter(|i| i.key == w.key)
+            {
+                let play = w.play && self.playback.want_playing && !leaving;
+                self.load_item(&item, w.position_ms, play, w.carried);
+                if !play {
+                    self.playback.want_playing = false;
+                }
+                return;
+            }
+        }
+        let reload =
+            self.owns_transport() && self.playback.loaded && self.playback.pending_load.is_none();
+        if reload {
+            if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
+                let now = self.now();
+                let position = self.playback.position_now(now);
+                let play = self.playback.playing && !leaving;
+                let carried = (
+                    self.scrobbler.played_ms(),
+                    self.playback.started_at,
+                    self.playback.scrobbled,
+                );
+                self.load_item(&item, position, play, Some(carried));
+                if !play {
+                    self.playback.want_playing = false;
+                }
+                return;
+            }
+        }
+        // Nothing to reload: the follow-up (if any) still resolves anew.
+        self.playback.next = None;
+        self.playback.next_doc_key = None;
+        self.refresh_next();
+        self.stamp();
+        self.emit_transport();
+    }
+
+    /// The renderer's receiver died right after starting `track_id`
+    /// untranscoded (`Command::RendererFailed`): note its format as one
+    /// this receiver can't play, so from now on it is transcoded there.
+    pub(crate) fn renderer_failed(&mut self, track_id: &str) {
+        let Some(renderer) = self.renderer.clone() else {
+            return;
+        };
+        if let Some(t) = self
+            .playback
+            .track
+            .clone()
+            .filter(|t| t.id == track_id && self.remote_live(t))
+        {
+            // A live stream (YouTube Music) is never transcoded: the
+            // reconnect's reload fetches a fresh URL instead.
+            self.evict_remote_url(&t);
+            return;
+        }
+        let track = match self.db.track(track_id) {
+            Ok(Some(t)) => t,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(target: "hocket::player", error = %e, "renderer failed: track");
+                return;
+            }
+        };
+        if !crate::downloads::receivers::learn(&mut self.renderer_formats, &renderer, &track) {
+            return;
+        }
+        tracing::info!(
+            target: "hocket::player",
+            receiver = %renderer.name,
+            suffix = ?track.suffix,
+            hi_res = crate::downloads::receivers::hi_res(&track),
+            "receiver can't play this format: transcoding it there from now on"
+        );
+        if let Err(e) = self.db.saved_state_set(
+            crate::downloads::receivers::STATE_KEY,
+            &self.renderer_formats,
+            self.clock.as_ref(),
+        ) {
+            tracing::warn!(target: "hocket::player", error = %e, "save renderer formats");
+        }
     }
 
     pub(crate) fn refresh_next(&mut self) {
+        self.refresh_next_with(false);
+    }
+
+    /// `replan`: rebuild the follow-up's AutoMix plan even when the
+    /// follow-up itself is unchanged (see [`Self::replan_next`]).
+    pub(crate) fn refresh_next_with(&mut self, replan: bool) {
         if self.playback.pending_load.is_some() {
             // The backend holds the item a burst skipped away from; the
             // deferred load hands over the follow-up with the item.
             return;
         }
-        if !self.audio.gapless {
+        if self.playback.transition.is_some() {
+            // The backend is mixing into the follow-up and ignores a new one
+            // until the handover, which rebuilds it for the item after.
+            return;
+        }
+        if !self.preloads_next() {
             self.playback.next = None;
             self.playback.next_doc_key = None;
             let _ = self.backend.set_next(None);
             return;
         }
-        let next = self.next_item();
-        let next_key = next.as_ref().map(|i| i.key.clone());
+        let upcoming = self.upcoming_playable(2);
+        let next = upcoming.first();
+        let next_key = next.map(|i| i.key.clone());
         // A document an older peer edited keys upcoming context items by
         // index (`ctx-N`), and an edit ahead of one hands its key to another
         // track: the preload stays only if the track is the same too (#62).
-        let same_track = match (&next, &self.playback.next) {
-            (Some(i), Some(n)) => n.track.id == i.track_id,
+        let same_track = match (next, &self.playback.next) {
+            (Some(i), Some(n)) => self
+                .track_for_item(i)
+                .is_some_and(|t| names(&n.track, &TrackRef::new(t.server_id, t.id))),
             _ => false,
         };
+        let locked = self.locked_tail_start();
         if next_key == self.playback.next_doc_key && same_track {
-            return;
+            // A committed plan stays, unless a context rule (Off, sleep
+            // end-of-track, Cast, exclusive output) now refuses mixing.
+            let keep = locked.is_some() && self.mix_context_allows();
+            if !replan || keep {
+                return;
+            }
         }
-        let source = next.and_then(|i| {
-            let track = self.track_or_bare(&i.track_id)?;
-            self.media_source_for(&i.key, &track)
-        });
+        if let Some(t) = next.and_then(|i| self.track_for_item(i)) {
+            // On a renderer, the follow-up's URL is fetched now (it is set once it arrives).
+            self.want_remote_url(&t);
+        }
+        let source = self.next_source(&upcoming, locked);
         self.playback.next_doc_key = next_key;
         self.playback.next = source.clone();
         if let Err(e) = self.backend.set_next(source) {
@@ -162,9 +328,12 @@ impl Actor {
                 ids.push(tid);
             }
         }
-        let mut all: Vec<String> = vec![];
+        let mut all: Vec<TrackRef> = vec![];
         for (server_id, ids) in by_server {
-            all.extend(ids.iter().cloned());
+            all.extend(
+                ids.iter()
+                    .map(|id| TrackRef::new(server_id.clone(), id.clone())),
+            );
             self.emit(Event::LibraryChanged {
                 server_id,
                 tables: vec!["tracks".into()],
@@ -178,8 +347,8 @@ impl Actor {
         let in_queue = self.doc().is_some_and(|d| {
             d.current
                 .iter()
-                .chain(d.insertions.iter())
-                .any(|i| all.contains(&i.track_id))
+                .chain(d.upcoming.iter())
+                .any(|i| all.contains(&i.track))
                 || d.context
                     .as_ref()
                     .is_some_and(|c| c.tracks.iter().any(|t| all.contains(t)))
@@ -200,7 +369,8 @@ impl Actor {
         carried: Option<(Ms, EpochMs, bool)>,
     ) {
         self.playback.pending_load = None;
-        let Some(track) = self.track_or_bare(&item.track_id) else {
+        self.remote.wait = None;
+        let Some(track) = self.track_for_item(item) else {
             return;
         };
         if self.skip_if_unavailable_offline(item, &track) {
@@ -218,33 +388,72 @@ impl Actor {
             position_ms
         };
         let now = self.now();
-        // Gapless: the backend already moved on to this track.
-        let transitioned = carried.is_none()
+        let is_next = carried.is_none()
             && position_ms == 0
-            && self
-                .playback
-                .next
-                .as_ref()
-                .is_some_and(|n| n.track.id == item.track_id)
-            && self.playback.awaiting_transition;
+            && self.playback.next.as_ref().is_some_and(|n| {
+                names(
+                    &n.track,
+                    &TrackRef::new(track.server_id.clone(), track.id.clone()),
+                )
+            });
+        // Gapless (or at an AutoMix handover): the backend already moved on
+        // to this track.
+        let transitioned = is_next && self.playback.awaiting_transition;
+        // Next pressed while the backend mixes into this track: it completes
+        // the transition instead of loading it afresh.
+        let completes = is_next && !transitioned && self.playback.transition.is_some();
+        let transitioned = transitioned || completes;
         self.note_cache_signals(item, &track, transitioned, play);
         let (played_ms, started_at, scrobbled) = match carried {
             Some((p, s, sc)) => (p, s, sc),
             None => (0, self.session_now(), false),
         };
+        let mut position_ms = position_ms;
         if transitioned {
-            let backend_key = self.playback.next.as_ref().map(|n| n.key.clone());
+            let next = self.playback.next.take();
+            let backend_key = next.as_ref().map(|n| n.key.clone());
+            // Where the incoming track is: 0 after a gapless join; after a mix,
+            // already some way in (the backend's `Position` follows). A plan
+            // alone is no mix: the backend skips one it reached too late (a
+            // seek past the tail start, a late plan, a failed render) and
+            // joins from 0, so only a reported start counts.
+            let mixed = next.as_ref().is_some_and(|n| {
+                self.playback
+                    .transition
+                    .as_ref()
+                    .is_some_and(|t| t.to == n.key)
+            });
+            position_ms = match next.as_ref().and_then(|n| n.mix_in.as_ref()) {
+                Some(plan) if mixed && completes => {
+                    let a_pos = self.playback.position_now(now);
+                    plan.incoming_position_at(a_pos.saturating_sub(plan.tail_start_ms))
+                }
+                Some(plan) if mixed => plan.handover_position_ms(),
+                _ => 0,
+            };
+            if completes {
+                tracing::debug!(target: "hocket::player", key = %item.key, "next during a transition: completing it");
+                if let Err(e) = self.backend.complete_transition() {
+                    self.log("debug", format!("complete_transition: {e}"));
+                }
+            }
             self.playback.doc_key = Some(item.key.clone());
             self.playback.backend_key = backend_key;
             self.playback.track = Some(track.clone());
-            self.playback.position_ms = 0;
+            self.playback.position_ms = position_ms;
             self.playback.position_at = now;
-            self.playback.next = None;
+            self.playback.adopted_position_ms = position_ms;
+            self.playback.mix_out_ms = next.as_ref().and_then(|n| n.mix_out_ms);
+            self.playback.transition = None;
             self.playback.next_doc_key = None;
             self.playback.awaiting_transition = false;
             self.playback.adopted_at = Some(now);
             self.playback.loaded = true;
         } else {
+            if self.remote_live(&track) && !self.want_remote_url(&track) {
+                self.wait_for_remote_url(item, track, position_ms, play, carried);
+                return;
+            }
             let Some(source) = self.media_source_for(&item.key, &track) else {
                 tracing::info!(target: "hocket::player", key = %item.key, track = %track.id, "no source to play this from");
                 self.player_notice(
@@ -257,6 +466,22 @@ impl Actor {
                 self.playback.loaded = false;
                 return;
             };
+            let upcoming = if self.preloads_next() {
+                self.upcoming_playable(2)
+            } else {
+                vec![]
+            };
+            // Loaded as current, a source never mixes in (a handoff starts
+            // the incoming track unmixed); its mix-out comes from what follows.
+            if let Some(t) = upcoming.first().and_then(|i| self.track_for_item(i)) {
+                self.want_remote_url(&t);
+            }
+            let mut source = source;
+            source.mix_in = None;
+            source.mix_out_ms = upcoming
+                .first()
+                .and_then(|i| self.track_for_item(i))
+                .and_then(|next| self.mix_out_for(&track, Some(&next)));
             self.playback.doc_key = Some(item.key.clone());
             self.playback.backend_key = Some(item.key.clone());
             self.playback.track = Some(track.clone());
@@ -265,14 +490,13 @@ impl Actor {
             self.playback.awaiting_transition = false;
             self.playback.adopted_at = None;
             self.playback.loaded = true;
+            self.playback.mix_out_ms = source.mix_out_ms;
+            self.playback.transition = None;
+            self.playback.adopted_position_ms = 0;
             self.playback.next = None;
             self.playback.next_doc_key = None;
-            let next = self.audio.gapless.then(|| self.next_item()).flatten();
-            let next_source = next.as_ref().and_then(|i| {
-                let t = self.track_or_bare(&i.track_id)?;
-                self.media_source_for(&i.key, &t)
-            });
-            self.playback.next_doc_key = next.map(|i| i.key);
+            let next_source = self.next_source(&upcoming, None);
+            self.playback.next_doc_key = upcoming.first().map(|i| i.key.clone());
             self.playback.next = next_source.clone();
             if let Err(e) = self.backend.load(source, next_source, position_ms, play) {
                 self.error(ErrorKind::Playback, "load", Some(e.to_string()));
@@ -327,7 +551,7 @@ impl Actor {
                 }
             }
         }
-        let track = self.track_or_bare(&item.track_id);
+        let track = self.track_for_item(item);
         let position_ms = match &track {
             Some(t) if t.duration_ms > 0 => position_ms.min(t.duration_ms),
             _ => position_ms,
@@ -345,6 +569,7 @@ impl Actor {
         p.adopted_at = None;
         p.next = None;
         p.next_doc_key = None;
+        p.transition = None;
         if play {
             p.focus_suspended = false;
         }
@@ -486,6 +711,11 @@ impl Actor {
             self.prefetch_tick(self.now());
         }
         if owns {
+            // A preview started while someone else held the transport must
+            // not keep playing once this device takes it over.
+            if self.preview.as_ref().is_some_and(|p| p.hold.is_none()) {
+                self.stop_preview(false);
+            }
             self.playback.consecutive_skips = 0;
             // Taking over from a device that skipped tracks while offline:
             // here they may play.
@@ -541,7 +771,7 @@ impl Actor {
     pub(crate) fn take_transport(
         &mut self,
         key: QueueKey,
-        track_id: TrackId,
+        track_id: TrackRef,
         position_ms: Ms,
         played_ms: Ms,
         started_at: EpochMs,
@@ -554,15 +784,19 @@ impl Actor {
                 d.current
                     .iter()
                     .chain(d.history.iter())
-                    .chain(d.insertions.iter())
+                    .chain(d.upcoming.iter())
                     .find(|i| i.key == key)
                     .cloned()
             })
             .unwrap_or(QueueItem {
                 key: key.clone(),
-                track_id: track_id.clone(),
+                track: track_id.clone(),
                 source: QueueSource::Inserted,
                 unavailable: false,
+                added: false,
+                queued: false,
+                ordinal: 0,
+                alts: vec![],
             });
         self.playback.want_playing = play;
         self.load_item(
@@ -574,7 +808,7 @@ impl Actor {
         self.clear_player_notice();
     }
 
-    pub(crate) fn pre_buffer(&mut self, key: QueueKey, track_id: TrackId, position_ms: Ms) {
+    pub(crate) fn pre_buffer(&mut self, key: QueueKey, track_id: TrackRef, position_ms: Ms) {
         let Some(track) = self.track_or_bare(&track_id) else {
             return;
         };
@@ -638,6 +872,15 @@ impl Actor {
 
     /// Apply a transport command on this device (we own transport).
     pub(crate) fn apply_transport_command(&mut self, cmd: TransportCommand) {
+        // A Connect peer's command lands here without passing
+        // `handle_command`, so a preview has to give way here too. Play,
+        // stop and seek take the output back. A pause leaves the preview
+        // playing but drops the hold, so closing it does not undo the pause.
+        match cmd {
+            TransportCommand::Pause => self.drop_preview_hold(),
+            TransportCommand::SetVolume { .. } => {}
+            _ => self.stop_preview(false),
+        }
         match cmd {
             TransportCommand::Play => {
                 self.playback.want_playing = true;
@@ -659,8 +902,10 @@ impl Actor {
             TransportCommand::Stop => {
                 self.playback.want_playing = false;
                 if self.playback.loaded {
+                    // Pause first so the album resume point keeps this position. The rewind
+                    // below is only the transport; it is not where the album was left.
                     self.set_playing(false);
-                    self.seek_to(0);
+                    self.seek_to_inner(0, false);
                 }
                 self.engine_input(Input::ReleaseTransport);
             }
@@ -683,6 +928,9 @@ impl Actor {
 
     fn ensure_loaded_then_play(&mut self) {
         if self.playback.loaded {
+            if self.refresh_remote_on_resume() {
+                return;
+            }
             self.set_playing(true);
         } else if let Some(item) = self.doc().and_then(|d| d.current.clone()) {
             tracing::debug!(target: "hocket::player", key = %item.key, "play with nothing loaded: loading");
@@ -738,6 +986,8 @@ impl Actor {
         self.playback.awaiting_transition = false;
         self.playback.adopted_at = None;
         self.playback.pending_load = None;
+        self.playback.transition = None;
+        self.playback.mix_out_ms = None;
     }
 
     /// Every tick: an item adopted at a gapless boundary that the backend
@@ -770,6 +1020,12 @@ impl Actor {
     }
 
     pub(crate) fn set_playing(&mut self, playing: bool) {
+        self.set_playing_inner(playing, true);
+    }
+
+    /// `save_position` persists the resume point. A preview pause passes
+    /// false: the preview must not rewrite resume state.
+    pub(crate) fn set_playing_inner(&mut self, playing: bool, save_position: bool) {
         if !playing && self.playback.loaded && self.playback.focus_suspended {
             // Paused while focus is away: the backend must not resume later.
             self.playback.focus_suspended = false;
@@ -785,6 +1041,7 @@ impl Actor {
         self.playback.position_ms = self.playback.position_now(now);
         self.playback.position_at = now;
         self.playback.playing = playing;
+        self.remote.paused_at = (!playing).then_some(now);
         let r = if self.playback.pending_load.is_some() {
             // Nothing of this item is in the backend yet: the deferred load
             // starts it playing or paused.
@@ -799,14 +1056,20 @@ impl Actor {
         }
         let actions = self.scrobbler.set_playing(playing);
         self.apply_scrobble_actions(actions);
-        if !playing {
+        if !playing && save_position {
             self.save_position();
+            self.capture_album_resume(true);
         }
         self.stamp();
         self.emit_transport();
     }
 
     pub(crate) fn seek_to(&mut self, position_ms: Ms) {
+        self.seek_to_inner(position_ms, true);
+    }
+
+    /// `record` is false for the rewind Stop does after the resume point was saved.
+    fn seek_to_inner(&mut self, position_ms: Ms, record: bool) {
         let cap = self.playback.duration_ms();
         let position_ms = if cap > 0 {
             position_ms.min(cap)
@@ -815,6 +1078,9 @@ impl Actor {
         };
         if !self.playback.loaded {
             self.playback.position_ms = position_ms;
+            if record {
+                self.capture_album_resume(true);
+            }
             return;
         }
         self.playback.position_ms = position_ms;
@@ -823,16 +1089,25 @@ impl Actor {
         // silently); a backend still short of data reports buffering again.
         if self.playback.pending_load.is_some() {
             // The deferred load starts there.
+            if record {
+                self.capture_album_resume(true);
+            }
             self.stamp();
             self.emit_transport();
             return;
         }
         self.playback.buffering = false;
+        // A seek cancels a transition still before its handover: the backend
+        // drops the incoming side and the follow-up stays preloaded.
+        self.playback.transition = None;
         if let Err(e) = self.backend.seek(position_ms) {
             self.error(ErrorKind::Playback, "seek", Some(e.to_string()));
         }
         if let Some(id) = self.playback.track_id().map(str::to_string) {
             self.scrobbler.seeked(&id, position_ms);
+        }
+        if record {
+            self.capture_album_resume(true);
         }
         self.stamp();
         self.emit_transport();
@@ -1000,7 +1275,7 @@ impl Actor {
         let p = &self.playback;
         let input = Input::LocalStamp {
             key: p.doc_key.clone(),
-            track_id: p.track_id().map(str::to_string),
+            track_id: p.track_ref(),
             position: PositionStamp {
                 position_ms: p.position_now(now),
                 taken_at: now,
@@ -1014,6 +1289,7 @@ impl Actor {
                 volume: p.volume,
                 muted: p.muted,
             }),
+            renderer: self.renderer.as_ref().map(|r| r.name.clone()),
         };
         self.engine_input(input);
     }
@@ -1021,6 +1297,47 @@ impl Actor {
     // -- backend reports -----------------------------------------------------------
 
     pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
+        if self.preview.is_some() {
+            match &report {
+                // The preview player taking the output is not another app,
+                // and a Playing report must not start the main item under it.
+                BackendReport::AudioFocusLost { .. } => return,
+                BackendReport::Playing { .. } => {
+                    let _ = self.backend.pause();
+                    return;
+                }
+                _ => {}
+            }
+        }
+        match &report {
+            BackendReport::PreviewReady { duration_ms } => {
+                self.on_preview_ready(*duration_ms);
+                return;
+            }
+            BackendReport::PreviewProgress {
+                position_ms,
+                playing,
+            } => {
+                self.on_preview_progress(*position_ms, *playing);
+                return;
+            }
+            BackendReport::PreviewEnded => {
+                self.stop_preview(true);
+                return;
+            }
+            BackendReport::PreviewInterrupted => {
+                self.stop_preview(false);
+                return;
+            }
+            BackendReport::PreviewFailed => {
+                if self.preview.is_some() {
+                    self.toast("Couldn't preview this song", None);
+                }
+                self.stop_preview(true);
+                return;
+            }
+            _ => {}
+        }
         if !matches!(
             report,
             BackendReport::Position { .. }
@@ -1087,6 +1404,7 @@ impl Actor {
                 self.playback.position_at = self.now();
                 if self.playback.playing {
                     self.playback.playing = false;
+                    self.remote.paused_at = Some(self.now());
                     let actions = self.scrobbler.set_playing(false);
                     self.apply_scrobble_actions(actions);
                     self.save_position();
@@ -1173,11 +1491,14 @@ impl Actor {
                     self.local_op(SessionOp::TrackEnded);
                 }
                 if !self.playback.awaiting_transition {
-                    // Nothing followed: stay on the last item, stopped.
+                    // Nothing followed: stay on the last item, stopped. The
+                    // document names it by `doc_key`, which a room that
+                    // re-keyed it has moved off the backend's `key`.
+                    let doc_key = self.playback.doc_key.clone();
                     if self
                         .doc()
                         .and_then(|d| d.current.as_ref())
-                        .is_some_and(|c| c.key == key)
+                        .is_some_and(|c| Some(&c.key) == doc_key.as_ref())
                     {
                         self.playback.playing = false;
                         self.stamp();
@@ -1192,7 +1513,7 @@ impl Actor {
                 if self.playback.backend_key.as_ref() == Some(&key) {
                     self.playback.adopted_at = None;
                     self.playback.playing = true;
-                    self.playback.position_ms = 0;
+                    self.playback.position_ms = self.playback.adopted_position_ms;
                     self.playback.position_at = self.now();
                     self.refresh_next();
                     self.stamp();
@@ -1230,8 +1551,11 @@ impl Actor {
                 if is_next && !current(&key, self) {
                     // The preloaded follow-up failed. Forget it: it is resolved
                     // afresh (with the usual retry and skip) when it comes up.
+                    // A mix into it is over too: without this `refresh_next`
+                    // would wait for a handover that never comes.
                     self.playback.next = None;
                     self.playback.next_doc_key = None;
+                    self.playback.transition = None;
                     if !self.playback.awaiting_transition {
                         // The current item is still playing: leave it alone.
                         return;
@@ -1266,6 +1590,11 @@ impl Actor {
                         let pos = self.playback.position_ms;
                         tracing::debug!(target: "hocket::player", key = %item.key, position_ms = pos, failures, "retrying after a playback error");
                         let play = self.playback.want_playing && !self.playback.focus_suspended;
+                        if let Some(t) = self.playback.track.clone().filter(|t| self.remote_live(t))
+                        {
+                            // The retry fetches a new URL (the receiver may hold a stale one).
+                            self.evict_remote_url(&t);
+                        }
                         self.load_item(&item, pos, play, None);
                         self.playback.load_failures = failures;
                     }
@@ -1306,6 +1635,21 @@ impl Actor {
                     }
                 }
             }
+            BackendReport::TransitionStarted {
+                from,
+                to,
+                tail_len_ms,
+                handover_ms,
+                ..
+            } => {
+                let ours = current(&from, self)
+                    && self.playback.next.as_ref().is_some_and(|n| n.key == to);
+                if !ours {
+                    return;
+                }
+                tracing::debug!(target: "hocket::player", %from, %to, tail_len_ms, handover_ms, "transition started");
+                self.playback.transition = Some(crate::core::state::ActiveTransition { from, to });
+            }
             BackendReport::PreBufferReady { key } => {
                 self.engine_input(Input::PreBufferReady { key });
             }
@@ -1335,6 +1679,13 @@ impl Actor {
                 self.stamp();
                 self.emit_transport();
             }
+            // The external bridge consumes acknowledgements.
+            BackendReport::LoadApplied { .. }
+            | BackendReport::PreviewReady { .. }
+            | BackendReport::PreviewProgress { .. }
+            | BackendReport::PreviewEnded
+            | BackendReport::PreviewFailed
+            | BackendReport::PreviewInterrupted => {}
             BackendReport::OutputDevicesChanged { devices } => {
                 self.output_devices = devices.clone();
                 self.emit(Event::OutputDevicesChanged { devices });
@@ -1357,7 +1708,9 @@ impl Actor {
                     {
                         continue;
                     }
-                    let Some(server_id) = self.server_id() else {
+                    // The playing track's own account hears about it.
+                    let Some(server_id) = self.playback.track.as_ref().map(|t| t.server_id.clone())
+                    else {
                         continue;
                     };
                     if let Err(e) = self
@@ -1377,9 +1730,11 @@ impl Actor {
                     // across a handoff) before submitting.
                     self.playback.scrobbled = true;
                     let started_at = self.playback.started_at;
-                    let Some(server_id) = self.server_id() else {
+                    let Some(server_id) = self.playback.track.as_ref().map(|t| t.server_id.clone())
+                    else {
                         continue;
                     };
+                    let track = TrackRef::new(server_id.clone(), track_id.clone());
                     // The play's ORIGINAL start (its identity, on the session
                     // clock), not when this device resumed it: every device
                     // that ever submits this play sends the same Subsonic
@@ -1399,11 +1754,11 @@ impl Actor {
                         played_ms,
                     };
                     self.pending_submits
-                        .insert((track_id.clone(), started_at.to_bits()), pending.clone());
+                        .insert((track.clone(), started_at.to_bits()), pending.clone());
                     if self.engine.is_none() {
                         // No session to ask (between servers): nobody else
                         // could have scrobbled this play.
-                        self.on_scrobble_verdict(track_id, started_at, true);
+                        self.on_scrobble_verdict(track, started_at, true);
                         continue;
                     }
                     // Durable before the engine is asked (its verdict may come
@@ -1411,7 +1766,7 @@ impl Actor {
                     self.store_pending_scrobble(&pending);
                     self.stamp();
                     self.engine_input(Input::ScrobbleReached {
-                        track_id,
+                        track_id: track,
                         started_at,
                     });
                     // An unanswered ask is a wait the engine persists with its
@@ -1432,7 +1787,7 @@ impl Actor {
         let now = self.now();
         let r = self.db.with_tx(|tx| {
             let mut list = load_pending_scrobbles(tx, &key)?;
-            list.retain(|p| !p.is(&pending.track_id, pending.started_at));
+            list.retain(|p| !p.is(&pending.track(), pending.started_at));
             list.push(pending.clone());
             save_pending_scrobbles(tx, &key, &list, now)
         });
@@ -1459,7 +1814,7 @@ impl Actor {
             }
         };
         for p in list {
-            let (track_id, started_at) = (p.track_id.clone(), p.started_at);
+            let (track_id, started_at) = (p.track(), p.started_at);
             self.pending_submits
                 .insert((track_id.clone(), started_at.to_bits()), p);
             self.engine_input(Input::ScrobbleReached {
@@ -1480,7 +1835,7 @@ impl Actor {
 
     pub(crate) fn on_scrobble_verdict(
         &mut self,
-        track_id: TrackId,
+        track: TrackRef,
         started_at: EpochMs,
         allowed: bool,
     ) {
@@ -1488,13 +1843,13 @@ impl Actor {
         self.mark_doc_dirty();
         let pending = self
             .pending_submits
-            .remove(&(track_id.clone(), started_at.to_bits()));
+            .remove(&(track.clone(), started_at.to_bits()));
+        let track_id = track.id.clone();
         let (server_id, played_at, played_ms) = match pending {
             Some(p) => (p.server_id, p.played_at, p.played_ms),
             None => {
-                let Some(server_id) = self.server_id() else {
-                    return;
-                };
+                // The play's own account (a queue mixes accounts).
+                let server_id = track.source.clone();
                 let played_ms = self.scrobbler.played_ms();
                 let played_at = if started_at > 0.0 {
                     started_at
@@ -1535,7 +1890,7 @@ impl Actor {
                 };
                 let mut list = load_pending_scrobbles(tx, key)?;
                 let before = list.len();
-                list.retain(|p| !p.is(&track_id, started_at));
+                list.retain(|p| !p.is(&track, started_at));
                 if list.len() != before {
                     save_pending_scrobbles(tx, key, &list, now)?;
                 }
@@ -1559,17 +1914,14 @@ impl Actor {
     #[cfg(feature = "sim")]
     pub(crate) fn scrobble_command(
         &mut self,
-        track_id: TrackId,
+        track: TrackRef,
         played_at: EpochMs,
         submission: bool,
     ) {
-        let Some(server_id) = self.server_id() else {
-            return;
-        };
         let r = self.outbox.enqueue(
-            &server_id,
+            &track.source,
             crate::outbox::Mutation::Scrobble {
-                track_id,
+                track_id: track.id,
                 played_at,
                 submission,
                 history_id: None,
@@ -1590,6 +1942,8 @@ impl Actor {
         self.emit(Event::SleepTimerChanged {
             timer: self.sleep.state(),
         });
+        // The end-of-track mode never mixes out of the track it stops after.
+        self.replan_next();
     }
 
     pub(crate) fn apply_sleep_action(&mut self, action: SleepAction) {
@@ -1600,6 +1954,9 @@ impl Actor {
                 let _ = self.backend.set_volume(self.effective_volume());
             }
             SleepAction::Stop => {
+                // The timer stops all audio here, and closing a preview
+                // afterwards must not start the main player again.
+                self.stop_preview(false);
                 self.playback.want_playing = false;
                 self.set_playing(false);
                 self.playback.fade_gain = None;
@@ -1620,14 +1977,22 @@ impl Actor {
     ) -> MediaSessionState {
         let art = self.media_session_artwork(queue);
         let actions = self.registry.media_session_actions(&self.state_view());
-        derive_media_session_state(
+        let mut state = derive_media_session_state(
             queue,
             transport,
             self.session_now(),
             art,
             self.owns_transport(),
             Some(actions),
-        )
+        );
+        if let Some(meta) = state.metadata.as_mut() {
+            if let Some(current) = self.playback.track_ref() {
+                meta.stashed = crate::stash::live(&self.stash)
+                    .iter()
+                    .any(|entry| entry.track == current);
+            }
+        }
+        state
     }
 
     /// The OS media session's state, unless it would only repeat the last
@@ -1649,10 +2014,9 @@ impl Actor {
     }
 
     fn media_art_size(&self) -> u32 {
-        if self.battery_saver
-            && self
-                .settings
-                .get_bool(crate::settings::keys::BATTERY_SMALL_ARTWORK)
+        if self
+            .battery_saver
+            .has(crate::api::SaverFeature::SmallArtwork)
         {
             MEDIA_SESSION_ART_SMALL
         } else {
@@ -1671,7 +2035,7 @@ impl Actor {
                 return path.clone();
             }
         }
-        let server_id = self.server_id()?;
+        let server_id = queue.current.as_ref()?.track.server_id.clone();
         match self.caches.artwork_cached(&server_id, &cover, size) {
             Ok(Some(p)) => {
                 let path = p.to_string_lossy().into_owned();
@@ -1679,17 +2043,19 @@ impl Actor {
                 Some(path)
             }
             _ => {
-                self.fetch_artwork(cover, size);
+                self.fetch_artwork(&server_id, cover, size);
                 None
             }
         }
     }
 
-    pub(crate) fn fetch_artwork(&mut self, id: String, size: u32) {
+    pub(crate) fn fetch_artwork(&mut self, source: &str, id: String, size: u32) {
         if self.media_art_pending.as_ref() == Some(&(id.clone(), size)) {
             return;
         }
-        let Some(api) = self.api() else { return };
+        let Some(api) = self.provider_for(source) else {
+            return;
+        };
         self.media_art_pending = Some((id.clone(), size));
         let caches = self.caches.clone();
         let tx = self.tx.clone();
@@ -1726,7 +2092,7 @@ impl Actor {
             return;
         };
         let size = self.media_art_size();
-        let Some(server_id) = self.server_id() else {
+        let Some(server_id) = self.playback.track.as_ref().map(|t| t.server_id.clone()) else {
             return;
         };
         if matches!(
@@ -1735,32 +2101,71 @@ impl Actor {
         ) {
             return;
         }
-        if self.battery_saver
-            && self
-                .settings
-                .get_bool(crate::settings::keys::BATTERY_PAUSE_PREFETCH)
-        {
-            return;
-        }
-        self.fetch_artwork(cover, size);
+        self.fetch_artwork(&server_id, cover, size);
     }
 
     pub(crate) fn media_session_command(&mut self, action: MediaSessionAction, value: Option<f64>) {
         let queue = self.queue_head_view();
         let transport = self.transport_state();
         let state = self.media_session_state(&queue, &transport);
+        // Stash toggles: a song already in the stash comes out. `command_for`
+        // only knows the track, not the entries listing it, so this lives here.
+        if action == MediaSessionAction::Stash && state.metadata.as_ref().is_some_and(|m| m.stashed)
+        {
+            let Some(current) = self.playback.track_ref() else {
+                return;
+            };
+            let entry_ids: Vec<String> = self
+                .stash
+                .iter()
+                .filter(|e| !e.removed && e.track == current)
+                .map(|e| e.entry_id.clone())
+                .collect();
+            if !entry_ids.is_empty() {
+                self.handle_command(Command::StashRemove { entry_ids });
+            }
+            return;
+        }
         if let Some(cmd) = command_for(action, value, &state) {
             self.handle_command(cmd);
         }
     }
 
-    pub(crate) fn set_battery_saver(&mut self, enabled: bool) {
-        if self.battery_saver != enabled {
-            self.battery_saver = enabled;
-            self.emit(Event::BatterySaverChanged { enabled });
-            self.mark_prefetch_check();
+    pub(crate) fn set_power_save(&mut self, enabled: bool) {
+        if self.power_save != enabled {
+            self.power_save = enabled;
+            self.refresh_battery_saver();
+        }
+    }
+
+    /// Battery saver from the power-save state and the `battery.*` settings;
+    /// announced (and acted on) when it changes.
+    pub(crate) fn refresh_battery_saver(&mut self) {
+        use crate::settings::keys;
+        let level = |key| crate::saver::parse_level(&self.settings.get(key));
+        let saver = crate::saver::resolve(
+            level(keys::BATTERY_LEVEL).unwrap_or(crate::api::SaverLevel::Off),
+            level(keys::BATTERY_AUTO_LEVEL).unwrap_or(crate::api::SaverLevel::Medium),
+            self.settings.get_bool(keys::BATTERY_AUTO_ENGAGE),
+            self.power_save,
+            &crate::saver::parse_custom(&self.settings.get(keys::BATTERY_CUSTOM)),
+        );
+        if saver == self.battery_saver {
+            return;
+        }
+        let was = std::mem::replace(&mut self.battery_saver, saver.clone());
+        self.emit(Event::BatterySaverChanged { saver });
+        if was.has(crate::api::SaverFeature::SmallArtwork)
+            != self
+                .battery_saver
+                .has(crate::api::SaverFeature::SmallArtwork)
+        {
             self.media_art = None;
             self.emit_media_session();
+        }
+        let slow_sync = self.battery_saver.has(crate::api::SaverFeature::SlowSync);
+        if slow_sync != was.has(crate::api::SaverFeature::SlowSync) && self.engine.is_some() {
+            self.engine_input(Input::SetSlowSync(slow_sync));
         }
     }
 }
@@ -1795,4 +2200,9 @@ fn save_pending_scrobbles(
         rusqlite::params![key, json, now],
     )?;
     Ok(())
+}
+
+/// Whether a summary is the track a reference names.
+pub(crate) fn names(summary: &TrackSummary, track: &TrackRef) -> bool {
+    summary.id == track.id && summary.server_id == track.source
 }

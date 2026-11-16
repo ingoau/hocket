@@ -1,5 +1,7 @@
 package app.hocket.core.fake
 
+import app.hocket.core.Commands
+import app.hocket.core.Saver
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.ActionIds
@@ -28,7 +30,7 @@ import kotlin.random.Random
  * An in-process Kotlin stand-in for the Rust core.
  *
  * It keeps just enough of the session model to make every screen work against realistic state:
- * a context with cursor, history, insertions, shuffle, repeat and autoplay; transport with position
+ * a flat queue list with a pointer, the "Next in queue" group, shuffle, repeat and autoplay; transport with position
  * stamps (extrapolated by the client, exactly like the real core); saved queues; a snapshot undo
  * stack; jobs that progress; problems; pins; filters; scoped settings; lyrics; devices, the
  * handoff picker and a dormant resume offer. Every command is applied on a single dispatcher and
@@ -67,18 +69,22 @@ class FakeCore(
     val deviceId = "fake-device"
 
     // -- state -------------------------------------------------------------------------------------
-    private var servers = ArrayList<ServerInfo>()
+    private var servers = ArrayList<AccountInfo>()
     private var context: QueueContext? = null
     private var contextTracks: List<TrackId> = emptyList()
-    private var order: List<Int> = emptyList() // permuted indices into contextTracks
-    private var cursor = 0
-    private var current: QueueItem? = null
-    private val history = ArrayList<QueueItem>()
-    private val insertions = ArrayList<QueueItem>()
-    private var shuffle: ShuffleState? = null
+    /** The queue: one flat list with a pointer ("Queue model" in docs/design.md). */
+    private val list = ArrayList<QueueItem>()
+    /** Index of the current entry; `list.size` when nothing is current. */
+    private var ptr = 0
+    private val current: QueueItem? get() = list.getOrNull(ptr)
+    private val history: List<QueueItem> get() = list.subList(0, ptr.coerceAtMost(list.size))
+    private val upcoming: List<QueueItem> get() = if (ptr + 1 >= list.size) emptyList() else list.subList(ptr + 1, list.size)
+    /** Entries in the "Next in queue" group: the `queued` run right after the current one. */
+    private val groupCount: Int get() = if (current == null) 0 else upcoming.takeWhile { it.queued == true }.size
+    private var shuffle = false
     private var repeat = RepeatMode.Off
     private var autoplay = true
-    private var mode = QueueMode.Apple
+    private var queueSection = true
     private var revision = 0u
     private var stamp = PositionStamp(0u, now(), 1.0, false)
     /** Each device's own volume and mute; the control drives the device playing (as the core). */
@@ -99,9 +105,11 @@ class FakeCore(
     private val settings = LinkedHashMap<String, Setting>()
     private val defaults = HashMap<String, String>()
     private var audio = AudioSettings(ReplayGainMode.Auto, 0.0, false, EqSettings(false, 0.0, defaultBands(), null), true, null, false)
+    private var transitions = TransitionSettings(TransitionMode.Off, 6.0)
     private var sleepTimer: SleepTimer? = null
     private var network: NetworkState? = null
-    private var batterySaver = false
+    private var powerSave = false
+    private var batterySaver = Saver.OFF
     private var started = false
     private var syncProgress: SyncProgress? = null
     private var connection = ConnectionState(ConnectionTier.Lan, true, null, 0.0, 12.0, 2u, null)
@@ -116,6 +124,11 @@ class FakeCore(
     private var externalLyrics = false
     private var autoplaySettings = AutoplaySettings(listOf(AutoplayProvider.SonicSimilarity, AutoplayProvider.SimilarSongs, AutoplayProvider.TopSongs, AutoplayProvider.Random), 5u, 0.6, 50u, null)
     private var savedQueueCap = 10
+    /** The song stash (#150): entry id → track id, in order; no sync on one fake device. */
+    private val stash = mutableListOf<Pair<String, TrackId>>()
+    /** Album id to the resume point the album page queries. Tests seed this. */
+    val albumResumes = mutableMapOf<String, app.hocket.core.api.AlbumResumePoint>()
+    private val stashRemoved = mutableMapOf<String, Pair<Int, TrackId>>()
     private var warnThreshold: Double? = 4.0 * 1024 * 1024 * 1024
     private val playHistory = ArrayList<PlayHistoryEntry>()
     private var keyCounter = 0
@@ -128,8 +141,15 @@ class FakeCore(
     )
     private val primed = java.util.concurrent.CopyOnWriteArrayList<String>()
 
+    /** The last `MoveQueueItem` received (for tests). */
+    @Volatile var lastQueueMove: CommandMoveQueueItemInner? = null
+        private set
+
     /** `album:<id>` / `track:<id>` for every PrimeAlbum / PrimeTrack received, in order (for tests). */
     val primeRequests: List<String> get() = primed.toList()
+
+    /** Files to answer `Query.Artwork` with (id, size); none by default, so the id's gradient stands in. */
+    @Volatile var artworkFile: ((String, Int) -> String?)? = null
 
     init {
         devices += DeviceInfo(deviceId, "This phone", Platform.Android, "0.1.0", true, false, now(), true)
@@ -137,9 +157,8 @@ class FakeCore(
         devices += DeviceInfo("living-room", "Living room", Platform.MacOs, "0.1.0", false, false, now() - 60_000, false)
         // The registry's keys, scopes and defaults (settings/registry.rs).
         fun def(key: String, value: String, scope: SettingScope) { settings[key] = Setting(key, value, scope, now()) }
-        def(SettingKeys.QUEUE_MODE, "\"apple\"", SettingScope.AccountSynced)
+        def(SettingKeys.QUEUE_SECTION, "true", SettingScope.AccountSynced)
         def(SettingKeys.QUEUE_SAVED_CAP, "10", SettingScope.AccountSynced)
-        def(SettingKeys.QUEUE_HISTORY_CAP, "200", SettingScope.AccountSynced)
         def(SettingKeys.TRANSCODING_PROFILES, "{\"default\":{\"format\":null,\"maxBitRate\":null,\"cannotDecode\":[]},\"cellular\":{\"format\":\"opus\",\"maxBitRate\":128,\"cannotDecode\":[]}}", SettingScope.DeviceLocal)
         def(SettingKeys.LYRICS_EXTERNAL_ENABLED, "false", SettingScope.AccountSynced)
         def(SettingKeys.LYRICS_EXTERNAL_PROVIDER, "\"lrclib\"", SettingScope.AccountSynced)
@@ -150,13 +169,17 @@ class FakeCore(
         def(SettingKeys.BATTERY_AUTO_ENGAGE, "true", SettingScope.DeviceLocal)
         def(SettingKeys.MEDIA_EXTERNAL_CONTROL, "false", SettingScope.DeviceLocal)
         def(SettingKeys.BATTERY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
-        def(SettingKeys.BATTERY_SMALL_ARTWORK, "true", SettingScope.DeviceLocal)
-        def(SettingKeys.BATTERY_PAUSE_PREFETCH, "true", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_LEVEL, "\"off\"", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_AUTO_LEVEL, "\"medium\"", SettingScope.DeviceLocal)
+        def(SettingKeys.BATTERY_CUSTOM, Saver.customValue(Saver.preset(SaverLevel.Medium)), SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_ANIMATED_BACKGROUND, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_THEME, "\"system\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK, "\"automatic\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_PLAYER_RATING, "true", SettingScope.AccountSynced)
+        def(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS, "false", SettingScope.AccountSynced)
+        def(SettingKeys.PLAYBACK_RESUME_ALBUMS, "true", SettingScope.AccountSynced)
+        def(SettingKeys.DISPLAY_FLOATING_NAV_BAR, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_ACCENT, "null", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_DYNAMIC_COLOUR, "true", SettingScope.DeviceLocal)
         def(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU, "[]", SettingScope.AccountSynced)
@@ -164,9 +187,11 @@ class FakeCore(
         def(SettingKeys.NAV_MOBILE_BAR, "[]", SettingScope.AccountSynced)
         def(SettingKeys.HOME_SECTIONS, "[]", SettingScope.AccountSynced)
         def(SettingKeys.LIBRARY_PINS, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.SWIPE_PLAYER_UP, "\"queue\"", SettingScope.AccountSynced)
         def(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION, "[]", SettingScope.AccountSynced)
         def(SettingKeys.SYNC_ENABLED, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DEVELOPER_MODE, "false", SettingScope.DeviceLocal)
+        def(SettingKeys.CONNECT_HEADPHONE_HANDOFF, "false", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_COORDINATOR_URL, "null", SettingScope.DeviceLocal)
         def(SettingKeys.CONNECT_LAN_DISCOVERY, "true", SettingScope.DeviceLocal)
         def(SettingKeys.STORAGE_WARN_THRESHOLD_BYTES, "4294967296.0", SettingScope.DeviceLocal)
@@ -205,13 +230,16 @@ class FakeCore(
         }
         if (startWithServer) {
             // Last synced an hour ago.
-            servers += ServerInfo("fake-server", "https://music.example.net", "ada", "music.example.net", capabilities(), lastSync = now() - 3_600_000.0,
-                lastSyncTracks = library.tracks.size.toUInt(), reachable = true)
+            servers += fakeAccount("https://music.example.net", "ada", "music.example.net", capabilities(), lastSync = now() - 3_600_000.0,
+                lastSyncTracks = library.tracks.size.toUInt())
             if (startPlaying) {
                 val album = library.albums[5]
                 setContext(QueueContext(serverId, ContextKind.Album(ContextKindAlbumInner(album.id)), album.name, SortOrder.Default), library.albumTracks(album.id).map { it.id }, 2, false)
-                // Some history, one insertion and an autoplay tail so the queue timeline has every kind of row.
-                insertions += QueueItem(newKey(), library.tracks[300].id, QueueSource.Inserted, false)
+                // Some history, a "Next in queue" entry, an added entry later on and an autoplay tail so
+                // the queue timeline has every kind of row.
+                list.add(ptr + 1, QueueItem(newKey(), ref(library.tracks[300].id), QueueSource.Inserted, false, added = true, queued = true))
+                list += QueueItem(newKey(), ref(library.tracks[301].id), QueueSource.Inserted, false, added = true, queued = false)
+                renumber()
                 stamp = PositionStamp(42_000u, now(), 1.0, true)
                 scheduleAdvance()
                 savedQueues += savedQueueFor(library.playlists[1], pinned = true)
@@ -226,7 +254,90 @@ class FakeCore(
         scope.launch { handle(command) }
     }
 
-    override suspend fun query(query: Query): QueryResult = withContext(dispatcher) { answer(query) }
+    override suspend fun query(query: Query): QueryResult = withContext(dispatcher) {
+        if (query is Query.RoomDiagnostics) QueryResult.Text(roomDiagnostics()) else answer(query)
+    }
+
+    /**
+     * As the native core's `Query::RoomDiagnostics`, played out over about two seconds (at once
+     * without timers): the coordinator (when connected to one) sends its version and log, the
+     * laptop its bundle, and the living room declines, with `RoomDiagnosticsChanged` along the way.
+     */
+    private var roomDiagnosticsAsked = 0
+
+    private suspend fun roomDiagnostics(): String {
+        val requestId = "room-diag-${++roomDiagnosticsAsked}"
+        val unavailable = when {
+            settings[SettingKeys.DEVELOPER_MODE]?.value != "true" -> RoomDiagnosticsUnavailable.DeveloperModeOff
+            !connection.connected -> RoomDiagnosticsUnavailable.NotConnected
+            else -> null
+        }
+        if (unavailable != null) {
+            emit(Event.RoomDiagnosticsChanged(EventRoomDiagnosticsChangedInner(RoomDiagnosticsStatus(requestId = requestId, done = true, elapsedMs = 0.0, unavailable = unavailable, roomAnswered = false, coordinator = null, coordinatorLog = false, devices = emptyList()))))
+            return "Other devices: not collected (${if (unavailable == RoomDiagnosticsUnavailable.DeveloperModeOff) "developer mode is off on this device" else "Connect is not running"}).\n"
+        }
+        val others = devices.filter { !it.isSelf }
+        val viaCoordinator = connection.tier == ConnectionTier.Coordinator
+        val started = now()
+        fun source(id: String, name: String, state: DiagnosticsSourceState, received: Int, parts: Int, reason: String? = null) =
+            DiagnosticsSourceStatus(id, name, state, received.toUInt(), parts.toUInt(), (received * 131_072).toUInt(), reason)
+        fun status(step: Int) = RoomDiagnosticsStatus(
+            requestId = requestId, done = step >= 4, elapsedMs = now() - started, unavailable = null, roomAnswered = step >= 1,
+            coordinator = if (viaCoordinator && step >= 1) source("coordinator", "Coordinator", if (step >= 2) DiagnosticsSourceState.Received else DiagnosticsSourceState.Receiving, if (step >= 2) 2 else 1, 2) else null,
+            coordinatorLog = viaCoordinator && step >= 2,
+            reportUpload = viaCoordinator && step >= 2,
+            devices = if (step < 1) emptyList() else others.mapIndexed { i, d ->
+                when {
+                    i % 2 == 1 -> if (step >= 2) source(d.id, d.name, DiagnosticsSourceState.Declined, 0, 1, "developer mode is off on this device") else source(d.id, d.name, DiagnosticsSourceState.Waiting, 0, 0)
+                    step >= 3 -> source(d.id, d.name, DiagnosticsSourceState.Received, 3, 3)
+                    step >= 2 -> source(d.id, d.name, DiagnosticsSourceState.Receiving, 1, 3)
+                    else -> source(d.id, d.name, DiagnosticsSourceState.Waiting, 0, 0)
+                }
+            },
+        )
+        for (step in 0..4) {
+            if (step > 0 && timers) delay(500)
+            emit(Event.RoomDiagnosticsChanged(EventRoomDiagnosticsChangedInner(status(step))))
+        }
+        val sections = others.mapIndexed { i, d ->
+            "Device: ${d.name} (${d.id})\n" + if (i % 2 == 1) "(declined: developer mode is off on this device)\n" else "(the fake core's stand-in for ${d.name}'s bundle)\n"
+        }
+        val coordinator = if (viaCoordinator) "Coordinator\nhocket-coordinator (fake)\nProcess log (last 60 minutes)\n" else ""
+        return "Other devices in the Connect room (${(others.size + 1) / 2} of ${others.size} sent a bundle)\n\n" + coordinator + sections.joinToString("\n")
+    }
+
+    // -- report upload -----------------------------------------------------------------------------
+    private var reportUpload: ReportUploadStatus? = null
+    private var reportUploadJob: kotlinx.coroutines.Job? = null
+
+    private fun setReportUpload(status: ReportUploadStatus?) {
+        reportUpload = status
+        emit(Event.ReportUploadChanged(EventReportUploadChangedInner(status)))
+    }
+
+    /**
+     * As the native core's report upload, without a network: the note, bundle and attachments are
+     * "sent" over about three seconds (at once without timers) and saved as [FAKE_REPORT_ID].
+     * Ignored while one is uploading, like the core.
+     */
+    private fun startReportUpload(c: CommandStartReportUploadInner) {
+        if (reportUpload?.state == ReportUploadState.Uploading) return
+        val total = c.bundle.length.toDouble() + c.note.length + c.attachments.size * 400_000.0
+        runReportUpload(total, 0.0, now())
+    }
+
+    private fun runReportUpload(total: Double, from: Double, startedAt: Double) {
+        reportUploadJob?.cancel()
+        reportUploadJob = scope.launch {
+            val steps = 10
+            for (i in 0..steps) {
+                val sent = from + (total - from) * i / steps
+                setReportUpload(ReportUploadStatus(ReportUploadState.Uploading, sent, total, if (i > 0) FAKE_REPORT_ID else null, null, null, startedAt))
+                if (timers) delay(300)
+            }
+            setReportUpload(ReportUploadStatus(ReportUploadState.Done, total, total, FAKE_REPORT_ID, null, null, startedAt))
+        }
+    }
 
     override fun close() {
         scope.cancel()
@@ -247,11 +358,11 @@ class FakeCore(
     }
 
     /** Test helper: replace the jobs, sync progress and/or servers, announced as the core would. */
-    fun stageSync(jobs: List<Job>? = null, progress: SyncProgress? = null, servers: List<ServerInfo>? = null) {
+    fun stageSync(jobs: List<Job>? = null, progress: SyncProgress? = null, servers: List<AccountInfo>? = null) {
         scope.launch {
             jobs?.let { this@FakeCore.jobs.clear(); this@FakeCore.jobs += it; emitJobs() }
             progress?.let { syncProgress = it; emit(Event.SyncProgress(EventSyncProgressInner(it))) }
-            servers?.let { this@FakeCore.servers.clear(); this@FakeCore.servers += it; emit(Event.ServersChanged(EventServersChangedInner(it))) }
+            servers?.let { this@FakeCore.servers.clear(); this@FakeCore.servers += it; emit(Event.AccountsChanged(EventAccountsChangedInner(it))) }
         }
     }
 
@@ -269,14 +380,27 @@ class FakeCore(
 
     // -- snapshot ----------------------------------------------------------------------------------
     private fun snapshot() = Snapshot(
-        servers = servers.toList(), session = sessionDocument(), queue = queueView(), transport = transport(), connection = connection,
+        accounts = servers.toList(), session = sessionDocument(), queue = queueView(), transport = transport(), connection = connection,
         devices = devices.toList(), jobs = jobs.toList(), problems = problems.toList(), undo = undoState(), settings = settings.values.toList(),
         audio = audio, mediaSession = mediaSessionState(), resumeOffer = resumeOffer, sleepTimer = sleepTimer, network = network,
-        batterySaver = batterySaver, syncProgress = syncProgress,
+        batterySaver = batterySaver, syncProgress = syncProgress, identity = identity,
     )
 
-    private fun sessionDocument() = SessionDocument(1u, "fake-session", "$serverId:ada", revision, now(), context, mode, cursor.toUInt(), current,
-        history.toList(), insertions.toList(), shuffle, repeat, autoplay, transport(), savedQueues.toList(), null)
+    // -- identity: one device, enough for the pairing and devices screens -------------------------
+    private fun freshIdentity() = IdentityInfo("fake-identity", deviceId, listOf(IdentityDevice(deviceId, "This phone", true, now())), removed = false, credentialSync = false)
+    private var identity: IdentityInfo = freshIdentity()
+    private val coordinatorInvites = mutableListOf<CoordinatorInviteInfo>()
+    private fun emitIdentity() = emit(Event.IdentityChanged(EventIdentityChangedInner(identity)))
+    private var coordinatorYtmAccount: String? = null
+
+    private fun emitCoordinatorYtm(error: String? = null) = emit(
+        Event.CoordinatorYtmStatus(EventCoordinatorYtmStatusInner(enabled = true, signed_in = coordinatorYtmAccount != null, account = coordinatorYtmAccount, error = error)),
+    )
+
+    private fun emitInvites(created: String? = null) = emit(Event.CoordinatorInvites(EventCoordinatorInvitesInner(coordinatorInvites.toList(), created)))
+
+    private fun sessionDocument() = SessionDocument(1u, "fake-session", "$serverId:ada", revision, now(), context, history.toList(), current,
+        upcoming.toList(), shuffle, repeat, autoplay, transport(), shownSaved(), null)
 
     private fun transport(): TransportState {
         val target = volumeTarget()
@@ -284,42 +408,45 @@ class FakeCore(
         return TransportState(TransportLease(transportOwner, epoch, now() + 20_000), stamp, buffering, playedMs.toUInt(), level, muted, target)
     }
 
-    private fun entry(item: QueueItem): QueueEntry? = library.track(item.trackId)?.let { QueueEntry(item, it.toSummary()) }
+    private fun entry(item: QueueItem, inGroup: Boolean = false): QueueEntry? =
+        library.track(item.trackId)?.let { QueueEntry(item, it.toSummary(), inGroup, item.source is QueueSource.Autoplay) }
 
-    private fun queueView(): QueueView {
-        val upcoming = ArrayList<QueueEntry>()
-        if (context != null) {
-            val from = if (current == null) cursor else cursor + 1
-            for (i in from until order.size) {
-                val idx = order[i]
-                entry(QueueItem("ctx-$i-${contextTracks[idx]}", contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false))?.let { upcoming += it }
-                if (upcoming.size >= 100) break
-            }
-            if (autoplay && repeat == RepeatMode.Off && upcoming.size < 3) {
-                autoplayTail().forEach { upcoming += it }
-            }
-        }
-        // Like the core: with Repeat All and nothing left, the first item in play order comes next.
-        val wrapNext = order.firstOrNull()?.takeIf { context != null && repeat == RepeatMode.All && insertions.isEmpty() && upcoming.isEmpty() }
-            ?.let { idx -> entry(QueueItem("ctx-wrap-${contextTracks[idx]}", contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false)) }
-        return QueueView(context?.label, history.mapNotNull(::entry), current?.let(::entry), insertions.mapNotNull(::entry), upcoming,
-            shuffle != null, repeat, autoplay, mode, (order.size - cursor - 1).coerceAtLeast(0).toUInt(), wrapNext)
+    /** As the core's `derive_range`: rows `start until start + count` with exact totals. */
+    private fun queueView(start: Int = ptr - QUEUE_VIEW_SIDE, count: Int = 2 * QUEUE_VIEW_SIDE + 1): QueueView {
+        val from = start.coerceIn(0, list.size)
+        val to = (from + count.coerceAtLeast(0)).coerceAtMost(list.size)
+        val hasCurrent = current != null
+        val group = groupCount
+        val entries = (from until to).mapNotNull { i -> entry(list[i], hasCurrent && i > ptr && i <= ptr + group) }
+        val wrapNext = list.firstOrNull()?.takeIf { repeat == RepeatMode.All && upcoming.isEmpty() && hasCurrent }?.let { entry(it) }
+        val back = list.getOrNull(ptr - 1)?.let { entry(it) } ?: list.lastOrNull()?.takeIf { repeat == RepeatMode.All && ptr == 0 && list.size > 1 }?.let { entry(it) }
+        return QueueView(context?.label, entries, from.toUInt(), list.size.toUInt(), ptr.coerceAtMost(list.size).toUInt(), ptr.takeIf { hasCurrent }?.toUInt(),
+            group.toUInt(), upcoming.size.toUInt(), current?.let { entry(it) }, shuffle, repeat, autoplay, wrapNext, back)
     }
 
-    private var autoplayCache: List<QueueEntry>? = null
-    private fun autoplayTail(): List<QueueEntry> = autoplayCache ?: (0 until 3).mapNotNull { i ->
-        val seed = current?.let { library.track(it.trackId) } ?: library.tracks[0]
-        val t = library.tracks[(seed.id.drop(1).toInt() * 31 + i * 97) % library.tracks.size]
-        entry(QueueItem("auto-$i-${t.id}", t.id, QueueSource.Autoplay(QueueSourceAutoplayInner(AutoplayProvider.SonicSimilarity, "Similar to ${seed.title}", 0.93 - i * 0.07)), false))
-    }.also { autoplayCache = it }
+    /** Like the core's autoplay: with little left to play, similar songs are appended to the list. */
+    private fun topUpAutoplay() {
+        if (!autoplay || repeat != RepeatMode.Off || current == null || upcoming.size >= 3) return
+        val seed = currentTrack() ?: library.tracks[0]
+        for (i in 0 until 3 - upcoming.size) {
+            val t = library.tracks[(seed.id.drop(1).toInt() * 31 + (list.size + i) * 97) % library.tracks.size]
+            list += QueueItem(newKey(), ref(t.id), QueueSource.Autoplay(QueueSourceAutoplayInner(AutoplayProvider.SonicSimilarity, "Similar to ${seed.title}", 0.93 - i * 0.07)), false, ordinal = list.size.toUInt())
+        }
+    }
+
+    /** With shuffle off the unshuffled order is the list order. */
+    private fun renumber() {
+        if (shuffle) return
+        for (i in list.indices) if (list[i].ordinal != i.toUInt()) list[i] = list[i].copy(ordinal = i.toUInt())
+    }
 
     private fun undoState() = UndoState(undoStack.isNotEmpty(), undoStack.lastOrNull()?.first?.label, redoStack.isNotEmpty(), redoStack.lastOrNull()?.first?.label, undoStack.asReversed().map { it.first })
 
     private fun mediaSessionState(): MediaSessionState {
         val t = current?.let { library.track(it.trackId) }
         return MediaSessionState(
-            metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.loved, it.rating) },
-            isPlaying = stamp.isPlaying, position = stamp, shuffle = shuffle != null, repeat = repeat, volume = volumeOf(volumeTarget()).first, muted = volumeOf(volumeTarget()).second,
+            metadata = t?.let { MediaSessionMetadata(it.title, it.artist, it.album, it.durationMs, null, it.id, it.serverId, it.loved, it.rating, stash.any { s -> s.second == it.id }) },
+            isPlaying = stamp.isPlaying, position = stamp, shuffle = shuffle, repeat = repeat, volume = volumeOf(volumeTarget()).first, muted = volumeOf(volumeTarget()).second,
             actions = orderedMediaActions(), ownsTransport = transportOwner == deviceId,
         )
     }
@@ -327,13 +454,23 @@ class FakeCore(
     private fun orderedMediaActions(): List<MediaSessionAction> {
         val base = listOf(MediaSessionAction.Play, MediaSessionAction.Pause, MediaSessionAction.Next, MediaSessionAction.Previous, MediaSessionAction.Seek, MediaSessionAction.Stop)
         val custom = (actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION).mapNotNull {
-            when (it) { ActionIds.LOVE -> MediaSessionAction.Love; ActionIds.SHUFFLE -> MediaSessionAction.Shuffle; ActionIds.REPEAT -> MediaSessionAction.Repeat; ActionIds.RATE -> MediaSessionAction.Rate; else -> null }
+            when (it) { ActionIds.LOVE -> MediaSessionAction.Love; ActionIds.SHUFFLE -> MediaSessionAction.Shuffle; ActionIds.REPEAT -> MediaSessionAction.Repeat; ActionIds.RATE -> MediaSessionAction.Rate; ActionIds.STASH -> MediaSessionAction.Stash; else -> null }
         }
         return base + custom
     }
 
+    /** As the reducer after every op: history to [HISTORY_CAP], then the list to [MAX_QUEUE_LEN] (oldest history first, then the far end). */
+    private fun capQueue() {
+        val trimmed = (ptr - HISTORY_CAP).coerceAtLeast(0)
+        val excess = trimmed + minOf(list.size - trimmed - MAX_QUEUE_LEN, ptr - trimmed).coerceAtLeast(0)
+        if (excess > 0) { list.subList(0, excess).clear(); ptr -= excess }
+        while (list.size > MAX_QUEUE_LEN) list.removeAt(list.size - 1)
+    }
+
     private fun emitQueue() {
-        autoplayCache = null
+        capQueue()
+        topUpAutoplay()
+        renumber()
         revision++
         emit(Event.QueueChanged(EventQueueChangedInner(queueView())))
         emit(Event.NowPlayingChanged(EventNowPlayingChangedInner(current?.let(::entry))))
@@ -350,7 +487,12 @@ class FakeCore(
     private fun emitUndo() = emit(Event.UndoChanged(EventUndoChangedInner(undoState())))
     private fun emitJobs() = emit(Event.JobsChanged(EventJobsChangedInner(jobs.toList())))
     private fun emitProblems() = emit(Event.ProblemsChanged(EventProblemsChangedInner(problems.toList())))
-    private fun emitSaved() = emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(savedQueues.toList())))
+    private fun emitSaved() = emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(shownSaved())))
+    /** As the core: pinned queues and the [savedQueueCap] most recent unpinned ones (the document keeps up to [SAVED_KEPT]). */
+    private fun shownSaved(): List<SavedQueue> {
+        val recent = savedQueues.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt }.take(savedQueueCap.coerceAtLeast(0)).toSet()
+        return savedQueues.filter { it.pinned || it in recent }
+    }
     private fun emitPins() {
         emit(Event.PinsChanged(EventPinsChangedInner(pins.toList())))
         storage = storage.copy(downloadsBytes = pins.sumOf { it.bytes }, warnThresholdBytes = warnThreshold)
@@ -358,6 +500,55 @@ class FakeCore(
     }
     private fun emitDevices() = emit(Event.DevicesChanged(EventDevicesChangedInner(devices.toList())))
     private fun emitLibrary(ids: List<String>, table: String = "tracks") = emit(Event.LibraryChanged(EventLibraryChangedInner(serverId, listOf(table), ids)))
+    private fun stashItems(): List<StashItem> = stash.mapNotNull { (id, t) -> library.track(t)?.let { StashItem(id, 0.0, it) } }
+    private fun emitStash() = emit(Event.StashChanged(EventStashChangedInner(stashItems())))
+    private val snoozes = linkedMapOf<String, Double?>()
+    private fun snoozeItems(): List<SnoozeItem> = snoozes.mapNotNull { (id, until) -> library.track(id)?.let { SnoozeItem(ref(id), until, it) } }
+    private fun emitSnoozes() = emit(Event.SnoozesChanged(EventSnoozesChangedInner(snoozeItems())))
+    private fun untilFor(duration: SnoozeFor): Double? {
+        val day = 86_400_000.0
+        val now = now()
+        return when (duration) {
+            SnoozeFor.Day -> now + day
+            SnoozeFor.ThreeDays -> now + 3 * day
+            SnoozeFor.Week -> now + 7 * day
+            SnoozeFor.Month -> now + 30 * day
+            SnoozeFor.Indefinite -> null
+        }
+    }
+    private fun applySnooze(ids: List<String>, until: Double?, unsnooze: Boolean) {
+        val before = snoozes.toMap()
+        var changed = false
+        for (id in ids.distinct()) {
+            if (library.track(id) == null) continue
+            if (unsnooze) {
+                if (snoozes.remove(id) != null || id in before) changed = id in before
+            } else if (id !in snoozes || snoozes[id] != until) {
+                snoozes[id] = until
+                changed = true
+            }
+        }
+        if (!changed) return
+        emitSnoozes()
+        val message = if (unsnooze) "Unsnoozed" else if (until == null) "Snoozed indefinitely" else "Snoozed"
+        pushUndo(message) {
+            for (id in ids) {
+                if (id in before) snoozes[id] = before[id] else snoozes.remove(id)
+            }
+            emitSnoozes()
+        }
+        toast(message, "Undo", Command.Undo)
+    }
+    private fun stashAdd(trackIds: List<TrackId>) {
+        val fresh = trackIds.distinct().filter { t -> stash.none { it.second == t } && library.track(t) != null }
+        fresh.forEach { stash.add(newId("stash") to it) }
+        if (fresh.isNotEmpty()) {
+            emitStash()
+            emitMedia()
+        }
+        toast(when (fresh.size) { 0 -> "Already in the stash"; 1 -> "Stashed 1 song"; else -> "Stashed ${fresh.size} songs" })
+    }
+
     private fun toast(message: String, actionLabel: String? = null, action: Command? = null, duration: Int = 5000) =
         emit(Event.Toast(EventToastInner(Toast(newId("toast"), message, actionLabel, action?.let { HocketJson.encodeCommand(it) }, duration.toUInt()))))
 
@@ -381,26 +572,32 @@ class FakeCore(
         emitUndo()
     }
 
-    private fun setContext(ctx: QueueContext, tracks: List<TrackId>, startIndex: Int, shuffled: Boolean, keepHistory: Boolean = false) {
-        context = ctx.copy(tracks = tracks)
-        contextTracks = tracks
-        if (!keepHistory) history.clear()
-        insertions.clear()
-        shuffle = if (shuffled) ShuffleState(rng.nextInt(1, 1_000_000).toUInt(), startIndex.toUInt(), null) else null
-        rebuildOrder(anchor = startIndex)
-        cursor = if (shuffled) 0 else startIndex.coerceIn(0, (tracks.size - 1).coerceAtLeast(0))
-        current = order.getOrNull(cursor)?.let { idx -> QueueItem(newKey(), tracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false) }
-        playedMs = 0
+    private fun filterSnoozed(kind: ContextKind, tracks: List<TrackId>, start: Int?): Pair<List<TrackId>, Int?> {
+        val leaves = kind is ContextKind.Playlist || kind is ContextKind.Artist || kind is ContextKind.Genre || kind is ContextKind.Filter || kind is ContextKind.Autoplay
+        if (!leaves || tracks.isEmpty() || snoozes.isEmpty()) return tracks to start
+        val keep = start?.takeIf { it in tracks.indices }
+        val filtered = tracks.filterIndexed { i, id -> i == keep || id !in snoozes }
+        if (filtered.isEmpty()) return tracks to start
+        // Count what stays ahead of the picked song, as the core does: an earlier copy of it isn't it.
+        val next = keep?.let { k -> tracks.take(k).count { it !in snoozes } }
+        return filtered to next
     }
 
-    private fun rebuildOrder(anchor: Int? = null) {
-        val n = contextTracks.size
-        order = if (shuffle == null) (0 until n).toList() else {
-            val perm = (0 until n).shuffled(Random(shuffle!!.seed.toInt())).toMutableList()
-            val a = anchor ?: shuffle!!.anchor?.toInt()
-            if (a != null && a in 0 until n) { perm.remove(a); perm.add(0, a) }
-            perm
-        }
+    /** Playing something new replaces the whole list (group and history included). */
+    private fun setContext(ctx: QueueContext, tracks: List<TrackId>, startIndex: Int, shuffled: Boolean) {
+        context = ctx.copy(tracks = tracks.map(::ref))
+        contextTracks = tracks
+        list.clear()
+        tracks.forEachIndexed { i, id -> list += QueueItem(newKey(), ref(id), QueueSource.Context(QueueSourceContextInner(i.toUInt())), false, ordinal = i.toUInt()) }
+        val start = startIndex.coerceIn(0, (tracks.size - 1).coerceAtLeast(0))
+        shuffle = shuffled
+        ptr = if (shuffled && list.isNotEmpty()) {
+            val first = list.removeAt(start)
+            list.shuffle(rng)
+            list.add(0, first)
+            0
+        } else start
+        playedMs = 0
     }
 
     private fun startPlayback(positionMs: Long = 0, play: Boolean = true) {
@@ -428,49 +625,70 @@ class FakeCore(
         playHistory.add(0, PlayHistoryEntry(t.toSummary(), now(), t.durationMs, true, deviceId))
     }
 
-    /** Next: current goes to history, the next item (insertions first in Apple mode) becomes current. */
+    /** Next: the pointer moves one along; at the end Repeat All wraps and autoplay extends the list. */
     private fun advance(natural: Boolean) {
         val wasPlaying = stamp.isPlaying || natural
-        current?.let { history += it; if (history.size > 200) history.removeAt(0) }
-        val next: QueueItem? = when {
-            insertions.isNotEmpty() -> insertions.removeAt(0)
-            cursor + 1 < order.size -> { cursor++; contextItem(cursor) }
-            repeat == RepeatMode.All && order.isNotEmpty() -> { cursor = 0; contextItem(0) }
-            autoplay -> autoplayTail().firstOrNull()?.item?.copy(key = newKey())?.also { item ->
-                // Autoplay extends the context as an ad-hoc tail so the timeline keeps flowing.
-                contextTracks = contextTracks + item.trackId
-                order = order + (contextTracks.size - 1)
-                cursor = order.size - 1
-            }
-            else -> null
+        if (current != null && ptr + 1 >= list.size) topUpAutoplay()
+        val moved = when {
+            ptr + 1 < list.size -> { ptr++; true }
+            repeat == RepeatMode.All && list.isNotEmpty() -> { ptr = 0; true }
+            else -> false
         }
-        current = next
         playedMs = 0
-        if (next == null) { stamp = PositionStamp(0u, now(), 1.0, false); advanceJob?.cancel() } else startPlayback(0, wasPlaying)
+        if (!moved) { stamp = PositionStamp(0u, now(), 1.0, false); advanceJob?.cancel() } else startPlayback(0, wasPlaying)
     }
 
-    private fun contextItem(pos: Int): QueueItem? = order.getOrNull(pos)?.let { idx -> QueueItem(newKey(), contextTracks[idx], QueueSource.Context(QueueSourceContextInner(idx.toUInt())), false) }
-
-    private fun previous() {
+    private fun previous(restartFromPosition: Boolean = true) {
         // The core's rule (handlers::session::previous with session::previous_should_restart): from
         // 3 s into a track some device plays (here or another), or with nothing before it, Previous
-        // restarts the track.
-        if (transportOwner != null && positionNow() >= 3_000) { startPlayback(0, stamp.isPlaying); return }
-        val prev = history.removeLastOrNull() ?: run { startPlayback(0, stamp.isPlaying); return }
-        current?.let { cur ->
-            when (cur.source) {
-                is QueueSource.Inserted -> insertions.add(0, cur)
-                is QueueSource.Context -> if (cursor > 0 && (prev.source is QueueSource.Context)) cursor--
-                is QueueSource.Autoplay -> Unit
-            }
+        // restarts the track. PreviousTrack ([restartFromPosition] false) only for nothing before it.
+        if (restartFromPosition && transportOwner != null && positionNow() >= 3_000) { startPlayback(0, stamp.isPlaying); return }
+        when {
+            ptr > 0 -> ptr = (ptr - 1).coerceAtMost(list.size - 1)
+            repeat == RepeatMode.All && list.size > 1 -> ptr = list.size - 1
         }
-        current = prev
         startPlayback(0, stamp.isPlaying)
+    }
+
+    private enum class Placement { Next, Group, Later }
+
+    /** [keys] ahead of the pointer taken out to move, the others (history, the current one) copied; then new entries for [trackIds]. */
+    private fun takeForQueueing(trackIds: List<TrackId>, keys: List<QueueKey>): List<QueueItem> {
+        val items = ArrayList<QueueItem>()
+        for (k in keys) {
+            val i = list.indexOfFirst { it.key == k }
+            if (i < 0) continue
+            if (current != null && i > ptr) items += list.removeAt(i) else items += QueueItem(newKey(), ref(list[i].trackId), QueueSource.Inserted, false, added = true)
+        }
+        trackIds.forEach { items += QueueItem(newKey(), ref(it), QueueSource.Inserted, false, added = true) }
+        return items
+    }
+
+    /**
+     * Play next / add to queue / play later: [keys] still ahead of the pointer move, the others
+     * (history, the current one) are copied; [trackIds] are new entries.
+     */
+    private fun place(trackIds: List<TrackId>, keys: List<QueueKey>, placement: Placement) {
+        val items = takeForQueueing(trackIds, keys)
+        // Off, no new group is started: Play next inserts after the current song unqueued, but a
+        // group already there (a Connect peer's, or from before) stays attached and Play next joins it.
+        val hasGroup = groupCount > 0
+        val queued = when (placement) { Placement.Next -> queueSection || hasGroup; Placement.Group -> true; Placement.Later -> false }
+        val placed = items.mapIndexed { n, it -> it.copy(added = true, queued = queued, ordinal = (list.size + n).toUInt()) }
+        val wasEmpty = current == null
+        val at = when {
+            wasEmpty -> list.size
+            placement == Placement.Next -> ptr + 1
+            placement == Placement.Group -> ptr + 1 + groupCount
+            else -> list.size
+        }
+        list.addAll(at, placed)
+        if (wasEmpty) ptr = at
     }
 
     private fun savedQueueFor(p: Playlist, pinned: Boolean): SavedQueue {
         val ctx = QueueContext(serverId, ContextKind.Playlist(ContextKindPlaylistInner(p.id)), p.name, SortOrder.Default)
-        return SavedQueue(newId("sq"), ctx, p.name, 3u, null, emptyList(), emptyList(), null, RepeatMode.Off, 12_000u, pinned, now() - 86_400_000.0, now() - 3_600_000.0, now(), p.songCount, p.coverArt)
+        return SavedQueue(newId("sq"), ctx, p.name, emptyList(), null, emptyList(), false, RepeatMode.Off, 12_000u, pinned, now() - 86_400_000.0, now() - 3_600_000.0, now(), p.songCount, p.coverArt)
     }
 
     private fun saveOutgoingQueue() {
@@ -479,10 +697,10 @@ class FakeCore(
         val key = ctx.kind
         savedQueues.removeAll { it.context.kind == key && !it.pinned }
         val summaryCtx = if (ctx.kind is ContextKind.AdHoc) ctx else ctx.copy(tracks = emptyList())
-        savedQueues.add(0, SavedQueue(newId("sq"), summaryCtx, ctx.label, cursor.toUInt(), current, history.toList(), insertions.toList(), shuffle, repeat,
+        savedQueues.add(0, SavedQueue(newId("sq"), summaryCtx, ctx.label, history.toList(), current, upcoming.toList(), shuffle, repeat,
             positionNow().toUInt(), false, now(), now(), now(), contextTracks.size.toUInt(), currentTrack()?.coverArt))
         val unpinned = savedQueues.filter { !it.pinned }
-        if (unpinned.size > savedQueueCap) unpinned.sortedBy { it.lastInteractedAt }.take(unpinned.size - savedQueueCap).forEach { savedQueues.remove(it) }
+        if (unpinned.size > SAVED_KEPT) unpinned.sortedBy { it.lastInteractedAt }.take(unpinned.size - SAVED_KEPT).forEach { savedQueues.remove(it) }
         emitSaved()
     }
 
@@ -492,7 +710,7 @@ class FakeCore(
         is ContextKind.Playlist -> library.playlistTracks[k.data.id]?.toList() ?: emptyList()
         is ContextKind.Genre -> library.sorted(library.genreTracks(k.data.name), ctx.sort, false).map { it.id }
         is ContextKind.Filter -> evaluateFilter(k.data.filter).map { it.id }
-        is ContextKind.AdHoc -> ctx.tracks ?: emptyList()
+        is ContextKind.AdHoc -> ctx.tracks?.map { it.id } ?: emptyList()
         ContextKind.Autoplay -> emptyList()
     }
 
@@ -590,7 +808,9 @@ class FakeCore(
                 } else {
                     emit(Event.Snapshot(EventSnapshotInner(snapshot())))
                 }
-                emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(savedQueues.toList())))
+                emit(Event.SavedQueuesChanged(EventSavedQueuesChangedInner(shownSaved())))
+                // As the real core does with every snapshot (actor.rs).
+                emit(Event.AlbumResumesChanged(EventAlbumResumesChangedInner(albumResumes.values.sortedBy { it.albumId })))
                 emit(Event.PinsChanged(EventPinsChangedInner(pins.toList())))
                 emit(Event.StorageChanged(EventStorageChangedInner(storage)))
                 emit(Event.FiltersChanged(EventFiltersChangedInner(filters.toList())))
@@ -609,7 +829,7 @@ class FakeCore(
                 val offline = c.data.state.kind == NetworkKind.Offline
                 // Like the core: offline, only downloads and complete cache entries play; say so.
                 if (offline && !wasOffline && current != null) {
-                    val queued = (listOfNotNull(current) + insertions + queueView().upcoming.map { it.item }).mapNotNull { library.track(it.trackId) }
+                    val queued = (listOfNotNull(current) + upcoming).mapNotNull { library.track(it.trackId) }
                     val playable = queued.count { it.offline == OfflineState.Downloaded || it.offline == OfflineState.Cached }
                     playerNotice = when {
                         playable == 0 -> EventPlayerNoticeInner(OFFLINE_NOTHING, PlayerNoticeCode.NothingAvailableOffline)
@@ -623,11 +843,20 @@ class FakeCore(
                 }
             }
             is Command.SetVisibility -> Unit
-            is Command.SetBatterySaver -> if (batterySaver != c.data.enabled) { batterySaver = c.data.enabled; emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(batterySaver))) }
+            is Command.SetPowerSave -> if (powerSave != c.data.enabled) { powerSave = c.data.enabled; refreshBatterySaver() }
 
-            is Command.AddServer -> addServer(c.data)
-            is Command.RemoveServer -> { servers.clear(); jobs.removeAll { it.kind == JobKind.LibrarySync }; emitJobs(); emit(Event.ServersChanged(EventServersChangedInner(emptyList()))) }
-            is Command.ProbeServer -> emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
+            is Command.AddAccount -> when (val setup = c.data.setup) {
+                is AccountSetup.Navidrome -> addServer(setup.data)
+                is AccountSetup.YoutubeMusic -> addYoutubeMusic(setup.data.cookies != null)
+            }
+            is Command.ReorderAccounts -> {
+                val order = c.data.account_ids
+                val sorted = servers.sortedBy { order.indexOf(it.id) }.mapIndexed { i, a -> a.copy(priority = i.toUInt()) }
+                servers.clear(); servers += sorted
+                emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
+            }
+            is Command.RemoveAccount -> { servers.clear(); jobs.removeAll { it.kind == JobKind.LibrarySync }; emitJobs(); emit(Event.AccountsChanged(EventAccountsChangedInner(emptyList()))) }
+            is Command.ProbeAccount -> emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
             is Command.SyncLibrary -> startSync(c.data.full)
             is Command.SetTranscodingProfile -> {
                 // Like the core: one JSON map keyed by network id, "default" when none.
@@ -647,17 +876,35 @@ class FakeCore(
             Command.Stop -> { stamp = PositionStamp(0u, now(), 1.0, false); advanceJob?.cancel(); if (transportOwner == deviceId) { transportOwner = null; epoch++ }; emitTransport() }
             Command.Next -> { advance(natural = false); emitQueue(); emitTransport() }
             Command.Previous -> { previous(); emitQueue(); emitTransport() }
+            Command.PreviousTrack -> { previous(restartFromPosition = false); emitQueue(); emitTransport() }
             is Command.SeekTo -> { startPlayback(c.data.position_ms.toLong(), stamp.isPlaying); emitTransport() }
             is Command.SeekBy -> { startPlayback((positionNow() + c.data.delta_ms).coerceAtLeast(0), stamp.isPlaying); emitTransport() }
             is Command.SetVolume -> { volumes[volumeTarget()] = c.data.volume.coerceIn(0.0, 1.0) to false; emitTransport() }
             is Command.SetMuted -> { volumes[volumeTarget()] = volumeOf(volumeTarget()).first to c.data.muted; emitTransport() }
+            is Command.PreviewStart -> previewStart(c.data.track.id)
+            Command.PreviewToggle -> previewToggle()
+            is Command.PreviewSeek -> previewSeek(c.data.position_ms)
+            Command.PreviewStop -> previewStop(true)
 
+            is Command.ResumeAlbum -> {
+                val p = albumResumes[c.data.album_id]
+                if (p == null) handle(Commands.playContext(Commands.albumContext(serverId, c.data.album_id, library.album(c.data.album_id)?.name ?: "")))
+                else {
+                    handle(Commands.playContext(Commands.albumContext(serverId, c.data.album_id, library.album(c.data.album_id)?.name ?: ""), startIndex = p.trackIndex.toInt()))
+                    handle(Command.SeekTo(CommandSeekToInner(p.positionMs)))
+                }
+            }
+            is Command.ClearAlbumResume -> {
+                albumResumes.remove(c.data.album_id)
+                emit(Event.AlbumResumesChanged(EventAlbumResumesChangedInner(albumResumes.values.sortedBy { it.albumId })))
+            }
             is Command.PlayContext -> {
                 val a = c.data.args
                 val before = captureSession()
                 if (a.saveOutgoing != false) saveOutgoingQueue()
-                val tracks = resolveContext(a.context)
-                setContext(a.context, tracks, a.startIndex?.toInt() ?: 0, a.shuffle)
+                val resolved = resolveContext(a.context)
+                val (tracks, start) = filterSnoozed(a.context.kind, resolved, a.startIndex?.toInt())
+                setContext(a.context, tracks, start ?: 0, a.shuffle)
                 startPlayback(0, true)
                 pushUndo("Play ${a.context.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
@@ -665,64 +912,46 @@ class FakeCore(
             is Command.PlayTracks -> {
                 val before = captureSession()
                 saveOutgoingQueue()
-                setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.track_ids), c.data.track_ids, c.data.start_index.toInt(), c.data.shuffle)
-                startPlayback(0, true)
+                setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.tracks), c.data.tracks.map { it.id }, c.data.start_index.toInt(), c.data.shuffle)
+                startPlayback(c.data.start_position_ms?.toLong() ?: 0, true)
                 pushUndo("Play ${c.data.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
             }
-            is Command.PlayNext -> {
-                val before = captureSession()
-                c.data.track_ids.reversed().forEach { insertions.add(0, QueueItem(newKey(), it, QueueSource.Inserted, false)) }
-                if (current == null) { advance(false) }
-                pushUndo("Play next") { restoreSession(before) }
-                toast(if (c.data.track_ids.size == 1) "Playing next" else "${c.data.track_ids.size} tracks playing next", "Undo", Command.Undo)
-                emitQueue()
-            }
-            is Command.PlayLater -> {
-                val before = captureSession()
-                c.data.track_ids.forEach { insertions += QueueItem(newKey(), it, QueueSource.Inserted, false) }
-                if (current == null) { advance(false) }
-                pushUndo("Play later") { restoreSession(before) }
-                toast(if (c.data.track_ids.size == 1) "Added to queue" else "${c.data.track_ids.size} tracks added to queue", "Undo", Command.Undo)
-                emitQueue()
-            }
+            is Command.PlayNext -> queueCommand(c.data.tracks.map { it.id }, c.data.keys.orEmpty(), Placement.Next)
+            is Command.AddToQueue -> queueCommand(c.data.tracks.map { it.id }, c.data.keys.orEmpty(), Placement.Group)
+            is Command.PlayLater -> queueCommand(c.data.tracks.map { it.id }, c.data.keys.orEmpty(), Placement.Later)
             is Command.JumpToQueueItem -> jumpTo(c.data.key)
             is Command.RemoveQueueItems -> {
                 val before = captureSession()
                 val keys = c.data.keys.toSet()
-                insertions.removeAll { it.key in keys }
-                history.removeAll { it.key in keys }
-                val ctxRemovals = queueView().upcoming.filter { it.item.key in keys && it.item.source is QueueSource.Context }.map { (it.item.source as QueueSource.Context).data.index.toInt() }.toSet()
-                if (ctxRemovals.isNotEmpty()) {
-                    val newOrder = order.filter { it !in ctxRemovals }
-                    val keep = contextTracks.indices.filter { it !in ctxRemovals }
-                    val remap = keep.withIndex().associate { (n, old) -> old to n }
-                    val curIdx = order.getOrNull(cursor)
-                    contextTracks = keep.map { contextTracks[it] }
-                    order = newOrder.map { remap[it]!! }
-                    cursor = curIdx?.let { remap[it] }?.let { order.indexOf(it) } ?: cursor.coerceAtMost((order.size - 1).coerceAtLeast(0))
-                    if (shuffle != null) shuffle = shuffle!!.copy(order = order.map { it.toUInt() })
-                }
-                if (current?.key in keys) advance(false)
+                val wasCurrent = current?.key in keys
+                ptr -= list.subList(0, ptr.coerceAtMost(list.size)).count { it.key in keys }
+                list.removeAll { it.key in keys }
+                ptr = ptr.coerceIn(0, list.size)
+                if (wasCurrent) { playedMs = 0; if (current != null) startPlayback(0, stamp.isPlaying) else { stamp = PositionStamp(0u, now(), 1.0, false); advanceJob?.cancel() } }
                 pushUndo(if (keys.size == 1) "Remove from queue" else "Remove ${keys.size} from queue") { restoreSession(before) }
-                toast(if (keys.size == 1) "Removed from queue" else "Removed ${keys.size} tracks", "Undo", Command.Undo)
                 emitQueue(); emitTransport()
             }
-            is Command.MoveQueueItem -> moveItem(c.data.key, c.data.to_index.toInt())
-            Command.ClearQueue -> { val before = captureSession(); insertions.clear(); order = order.take(cursor + 1); pushUndo("Clear queue") { restoreSession(before) }; toast("Queue cleared", "Undo", Command.Undo); emitQueue() }
-            Command.ClearInsertions -> { val before = captureSession(); insertions.clear(); pushUndo("Clear playing next") { restoreSession(before) }; emitQueue() }
+            is Command.MoveQueueItem -> { lastQueueMove = c.data; moveItem(c.data.key, c.data.after, c.data.in_group) }
+            is Command.InsertTracks -> insertItems(c.data.tracks.map { it.id }, c.data.keys.orEmpty(), c.data.after, c.data.in_group)
+            Command.ClearQueue -> { val before = captureSession(); while (list.size > ptr + 1) list.removeAt(list.size - 1); pushUndo("Clear queue") { restoreSession(before) }; toast("Queue cleared", "Undo", Command.Undo); emitQueue() }
+            Command.ClearQueueGroup -> clearGroup(stash = false)
+            Command.StashQueueGroup -> clearGroup(stash = true)
             is Command.SetShuffle -> {
                 val before = captureSession()
-                val curIdx = order.getOrNull(cursor)
-                shuffle = if (c.data.enabled) ShuffleState(rng.nextInt(1, 1_000_000).toUInt(), curIdx?.toUInt(), null) else null
-                rebuildOrder(curIdx)
-                cursor = curIdx?.let { order.indexOf(it) }?.takeIf { it >= 0 } ?: 0
+                if (c.data.enabled != shuffle) {
+                    // Only the entries after the group move; turning it off restores their order.
+                    val from = (ptr + 1 + groupCount).coerceAtMost(list.size)
+                    val rest = list.subList(from, list.size)
+                    val reordered = if (c.data.enabled) rest.shuffled(rng) else rest.sortedBy { it.ordinal ?: UInt.MAX_VALUE }
+                    rest.clear(); rest.addAll(reordered)
+                    shuffle = c.data.enabled
+                }
                 pushUndo(if (c.data.enabled) "Shuffle on" else "Shuffle off") { restoreSession(before) }
                 emitQueue()
             }
             is Command.SetRepeat -> { repeat = c.data.mode; emitQueue() }
             is Command.SetAutoplay -> { autoplay = c.data.enabled; emitQueue() }
-            is Command.SetQueueMode -> { mode = c.data.mode; emitQueue() }
             is Command.SkipUnavailable -> {
                 val t = currentTrack()
                 playerNotice = t?.let { EventPlayerNoticeInner("Couldn't play ${it.title}, skipped", PlayerNoticeCode.CouldNotPlaySkipped, it.title) }
@@ -733,12 +962,54 @@ class FakeCore(
             is Command.RestoreSavedQueue -> restoreSaved(c.data.id)
             is Command.PinSavedQueue -> { val i = savedQueues.indexOfFirst { it.id == c.data.id }; if (i >= 0) { savedQueues[i] = savedQueues[i].copy(pinned = c.data.pinned, updatedAt = now()); emitSaved() } }
             is Command.DeleteSavedQueue -> { savedQueues.removeAll { it.id == c.data.id }; emitSaved() }
+            is Command.RenameQueue -> {
+                val label = c.data.label.trim()
+                if (label.isNotEmpty()) {
+                    val id = c.data.saved_queue_id
+                    if (id == null) { context = context?.copy(label = label); emitQueue() }
+                    else { val i = savedQueues.indexOfFirst { it.id == id }; if (i >= 0) { savedQueues[i] = savedQueues[i].copy(label = label, context = savedQueues[i].context.copy(label = label), updatedAt = now()); emitSaved() } }
+                }
+            }
             is Command.SaveQueueAsPlaylist -> {
-                val ids = c.data.saved_queue_id?.let { id -> savedQueues.firstOrNull { it.id == id }?.let { resolveContext(it.context) } } ?: (contextTracks + insertions.map { it.trackId })
+                val ids = c.data.saved_queue_id?.let { id -> savedQueues.firstOrNull { it.id == id }?.let { resolveContext(it.context) } } ?: list.map { it.trackId }
                 createPlaylist(c.data.name, ids)
                 toast("Saved as playlist “${c.data.name}”")
             }
-            is Command.SetSavedQueueCap -> { savedQueueCap = c.data.cap.toInt(); setSetting(SettingKeys.QUEUE_SAVED_CAP, savedQueueCap.toString()) }
+            is Command.SetSavedQueueCap -> { savedQueueCap = c.data.cap.toInt(); setSetting(SettingKeys.QUEUE_SAVED_CAP, savedQueueCap.toString()); emitSaved() }
+
+            is Command.StashAdd -> stashAdd(c.data.tracks.map { it.id })
+            is Command.StashRemove -> {
+                val ids = c.data.entry_ids.toSet()
+                val gone = stash.withIndex().filter { it.value.first in ids }
+                if (gone.isNotEmpty()) {
+                    gone.forEach { stashRemoved[it.value.first] = it.index to it.value.second }
+                    stash.removeAll { it.first in ids }
+                    emitStash()
+                    emitMedia()
+                    toast(if (gone.size == 1) "Removed 1 song from the stash" else "Removed ${gone.size} songs from the stash", "Undo", Command.StashRestore(CommandStashRestoreInner(gone.map { it.value.first })))
+                }
+            }
+            is Command.StashMove -> {
+                val from = stash.indexOfFirst { it.first == c.data.entry_id }
+                if (from >= 0) { val e = stash.removeAt(from); stash.add(c.data.to_index.toInt().coerceIn(0, stash.size), e); emitStash() }
+            }
+            Command.StashClear -> if (stash.isNotEmpty()) {
+                val ids = stash.map { it.first }
+                stash.forEachIndexed { i, e -> stashRemoved[e.first] = i to e.second }
+                stash.clear()
+                emitStash()
+                toast("Stash cleared", "Undo", Command.StashRestore(CommandStashRestoreInner(ids)))
+            }
+            is Command.StashRestore -> {
+                val back = c.data.entry_ids.mapNotNull { id -> stashRemoved.remove(id)?.let { id to it } }.sortedBy { it.second.first }
+                back.forEach { (id, at) -> if (stash.none { it.second == at.second }) stash.add(at.first.coerceIn(0, stash.size), id to at.second) }
+                if (back.isNotEmpty()) emitStash()
+            }
+            is Command.Snooze -> applySnooze(c.data.tracks.map { it.id }, untilFor(c.data.duration), false)
+            is Command.SnoozeUntil ->
+                if (c.data.until <= now()) toast("Pick a time in the future to snooze until")
+                else applySnooze(c.data.tracks.map { it.id }, c.data.until, false)
+            is Command.Unsnooze -> applySnooze(c.data.tracks.map { it.id }, null, true)
 
             Command.Undo -> undo()
             Command.Redo -> redo()
@@ -750,8 +1021,10 @@ class FakeCore(
 
             is Command.SetRating -> setRating(c.data.targets, c.data.rating.toInt())
             is Command.SetLoved -> setLoved(c.data.targets, c.data.loved)
+            // One library on one account: nothing to link, convert or keep apart.
+            is Command.LinkTracks, is Command.UnlinkTrack, is Command.SetInLibrary, is Command.ConvertPlaylistToMixed -> Unit
             is Command.SetArtistLoved -> { library.updateArtist(c.data.artist_id) { it.copy(loved = c.data.loved) }; emitLibrary(listOf(c.data.artist_id), "artists") }
-            is Command.CreatePlaylist -> { createPlaylist(c.data.name, c.data.track_ids); toast("Created “${c.data.name}”") }
+            is Command.CreatePlaylist -> { createPlaylist(c.data.name, c.data.tracks.map { it.id }); toast("Created “${c.data.name}”") }
             is Command.DeletePlaylist -> { library.playlists.removeAll { it.id == c.data.playlist_id }; library.playlistTracks.remove(c.data.playlist_id); emitLibrary(listOf(c.data.playlist_id), "playlists"); toast("Playlist deleted") }
             is Command.RenamePlaylist -> {
                 val i = library.playlists.indexOfFirst { it.id == c.data.playlist_id }
@@ -762,7 +1035,7 @@ class FakeCore(
                 val list = library.playlistTracks.getOrPut(c.data.playlist_id) { mutableListOf() }
                 val prior = list.toList()
                 val at = c.data.at_index?.toInt()?.coerceIn(0, list.size) ?: list.size
-                list.addAll(at, c.data.track_ids)
+                list.addAll(at, c.data.tracks.map { it.id })
                 library.refreshPlaylist(c.data.playlist_id)
                 pushUndo("Add to playlist") { list.clear(); list.addAll(prior); library.refreshPlaylist(c.data.playlist_id); emitLibrary(listOf(c.data.playlist_id), "playlists") }
                 emitLibrary(listOf(c.data.playlist_id), "playlists")
@@ -787,11 +1060,12 @@ class FakeCore(
 
             is Command.Pin -> pin(c.data.target, c.data.transcode)
             is Command.PrimeAlbum -> primed += "album:${c.data.album_id}"
-            is Command.PrimeTrack -> primed += "track:${c.data.track_id}"
+            is Command.PrimeTrack -> primed += "track:${c.data.track.id}"
             is Command.Unpin -> { pins.removeAll { it.target == c.data.target }; emitPins(); toast("Download removed") }
             Command.ClearStreamCache -> { storage = storage.copy(cacheBytes = 0.0, partialCacheBytes = 0.0); emit(Event.StorageChanged(EventStorageChangedInner(storage))); toast("Stream cache cleared") }
             // The fake plays nothing through a backend: stream capabilities change nothing here.
             is Command.SetBackendCapabilities -> Unit
+            is Command.SetRenderer, is Command.RendererFailed -> Unit
             is Command.SetStorageWarnThreshold -> { warnThreshold = c.data.bytes; emitPins() }
 
             is Command.CancelJob -> updateJob(c.data.id) { it.copy(state = JobState.Cancelled) }
@@ -825,7 +1099,12 @@ class FakeCore(
             is Command.ResetSetting -> settings[c.data.key]?.let { setSetting(c.data.key, defaults[c.data.key] ?: it.value) }
             is Command.SetSettingsSync -> setSetting(SettingKeys.SYNC_ENABLED, c.data.enabled.toString())
             is Command.ExportConfig -> emit(Event.ConfigExported(EventConfigExportedInner(configDocument(c.data.include_secrets))))
+            is Command.AnswerDiagnosticsRequest -> Unit
+            is Command.StartReportUpload -> startReportUpload(c.data)
+            Command.RetryReportUpload -> reportUpload?.takeIf { it.state == ReportUploadState.Failed }?.let { runReportUpload(it.totalBytes, it.sentBytes, it.startedAt) }
+            Command.DismissReportUpload -> { reportUploadJob?.cancel(); reportUploadJob = null; setReportUpload(null) }
             is Command.ImportConfig -> toast("Configuration restored")
+            is Command.ApplySetupSettings -> applySetupSettings(c.data.settings)
             is Command.SetAudioSettings -> { audio = c.data.settings; emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
             is Command.SetOutputDevice -> { audio = audio.copy(outputDevice = c.data.id); emit(Event.AudioSettingsChanged(EventAudioSettingsChangedInner(audio))) }
             Command.RefreshOutputDevices -> emit(Event.OutputDevicesChanged(EventOutputDevicesChangedInner(listOf(OutputDevice("default", "Phone speaker", true), OutputDevice("bt", "Headphones", false)))))
@@ -835,7 +1114,8 @@ class FakeCore(
                 connection = connection.copy(coordinatorUrl = c.data.url, tier = if (c.data.url != null) ConnectionTier.Coordinator else ConnectionTier.Lan)
                 emit(Event.ConnectionChanged(EventConnectionChangedInner(connection)))
             }
-            Command.ConnectCoordinator -> { connection = connection.copy(connected = true, tier = ConnectionTier.Coordinator, error = null, roundTripMs = 48.0); emit(Event.ConnectionChanged(EventConnectionChangedInner(connection))) }
+            // As the core: nothing to connect to without an address.
+            Command.ConnectCoordinator -> if (connection.coordinatorUrl != null) { connection =connection.copy(connected = true, tier = ConnectionTier.Coordinator, error = null, roundTripMs = 48.0); emit(Event.ConnectionChanged(EventConnectionChangedInner(connection))) }
             Command.DisconnectCoordinator -> { connection = connection.copy(connected = false, tier = ConnectionTier.Local, peerCount = 0u); emit(Event.ConnectionChanged(EventConnectionChangedInner(connection))) }
             is Command.SetLanDiscovery -> setSetting(SettingKeys.CONNECT_LAN_DISCOVERY, c.data.enabled.toString())
             Command.OpenHandoffPicker -> {
@@ -855,6 +1135,7 @@ class FakeCore(
                 emitDevices()
                 emit(Event.HandoffPickerChanged(EventHandoffPickerChangedInner(false, emptyList())))
             }
+            is Command.HeadphonesConnected -> {}
             is Command.HandoffTo -> {
                 pickerOpen = false
                 transportOwner = c.data.device_id
@@ -883,6 +1164,8 @@ class FakeCore(
                 emitDevices(); emitQueue(); emitTransport()
             }
             Command.DismissResumeOffer -> { resumeOffer = null; emit(Event.ResumeOfferChanged(EventResumeOfferChangedInner(null))) }
+            is Command.SetTransitionSettings -> transitions = c.data.settings
+            is Command.StoreAnalysisRecord -> Unit
             is Command.SetSleepTimer -> { sleepTimer = c.data.timer; emit(Event.SleepTimerChanged(EventSleepTimerChangedInner(sleepTimer))) }
 
             is Command.BackendReport -> Unit
@@ -893,32 +1176,109 @@ class FakeCore(
                 MediaSessionAction.Previous -> handle(Command.Previous)
                 MediaSessionAction.Seek -> c.data.value?.let { handle(Command.SeekTo(CommandSeekToInner(it.toLong().coerceAtLeast(0).toUInt()))) }
                 MediaSessionAction.Stop -> handle(Command.Stop)
-                MediaSessionAction.Shuffle -> handle(Command.SetShuffle(CommandSetShuffleInner(shuffle == null)))
+                MediaSessionAction.Shuffle -> handle(Command.SetShuffle(CommandSetShuffleInner(!shuffle)))
                 MediaSessionAction.Repeat -> handle(Command.SetRepeat(CommandSetRepeatInner(when (repeat) { RepeatMode.Off -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off })))
-                MediaSessionAction.Love -> currentTrack()?.let { setLoved(listOf(RatingTarget.Track(RatingTargetTrackInner(it.id))), !it.loved) }
-                MediaSessionAction.Rate -> currentTrack()?.let { t -> setRating(listOf(RatingTarget.Track(RatingTargetTrackInner(t.id))), c.data.value?.toInt() ?: 0) }
+                MediaSessionAction.Love -> currentTrack()?.let { setLoved(listOf(RatingTarget.Track(RatingTargetTrackInner(it.id, it.serverId))), !it.loved) }
+                MediaSessionAction.Rate -> currentTrack()?.let { t -> setRating(listOf(RatingTarget.Track(RatingTargetTrackInner(t.id, t.serverId))), c.data.value?.toInt() ?: 0) }
+                MediaSessionAction.Stash -> currentTrack()?.let { t ->
+                    val listed = stash.filter { it.second == t.id }.map { it.first }
+                    if (listed.isEmpty()) stashAdd(listOf(t.id)) else handle(Command.StashRemove(CommandStashRemoveInner(listed)))
+                }
             }
             is Command.RunAction -> runAction(c.data.action_id, c.data.target)
             is Command.SetShortcut -> Unit
             is Command.SetActionOrder -> {
-                actionOrders[c.data.surface] = c.data.action_ids
-                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), c.data.action_ids))
+                val ids = if (c.data.surface == "mediaSession") {
+                    val previous = actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION
+                    ActionIds.withNewlyEnabledStash(previous, c.data.action_ids)
+                } else c.data.action_ids
+                actionOrders[c.data.surface] = ids
+                setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), ids))
                 emit(Event.ActionsChanged(EventActionsChangedInner(c.data.surface))); emitMedia()
             }
             is Command.SetSelection -> { selection = c.data.target }
             is Command.Touch -> Unit
+            Command.CreatePairingInvite -> emit(Event.PairingInvite(EventPairingInviteInner("hocket://pair?d=ZmFrZS1wYWlyaW5nLWludml0ZQ", now() + 600_000.0)))
+            is Command.PairWithInvite -> emit(Event.PairingFinished(EventPairingFinishedInner(emptyList())))
+            is Command.RemoveDevice -> {
+                identity = if (c.data.device_id == deviceId) freshIdentity() else identity.copy(devices = identity.devices.filter { it.id != c.data.device_id })
+                emitIdentity()
+            }
+            Command.ResetIdentity -> { identity = freshIdentity(); emitIdentity() }
+            is Command.SetCredentialSync -> { identity = identity.copy(credentialSync = c.data.on); emitIdentity() }
+            is Command.ClaimCoordinator, is Command.RedeemCoordinatorInvite -> {
+                val owner = c is Command.ClaimCoordinator
+                val url = (c as? Command.ClaimCoordinator)?.data?.url ?: (c as Command.RedeemCoordinatorInvite).data.url
+                val shown = url.ifBlank { "wss://coordinator.example/ws" }
+                identity = identity.copy(coordinator = CoordinatorInfo(shown, owner, identity.credentialSync))
+                emitIdentity()
+                // As the core does: the pinned coordinator becomes the one to connect to, and it connects.
+                setSetting(SettingKeys.CONNECT_COORDINATOR_URL, "\"$shown\"")
+                connection = connection.copy(coordinatorUrl = shown, connected = true, tier = ConnectionTier.Coordinator, error = null, roundTripMs = 48.0)
+                emit(Event.ConnectionChanged(EventConnectionChangedInner(connection)))
+                emit(Event.CoordinatorJoined(EventCoordinatorJoinedInner(shown, owner)))
+            }
+            Command.CreateCoordinatorInvite -> {
+                val code = "FAKE-" + (coordinatorInvites.size + 1).toString().padStart(4, '0')
+                coordinatorInvites += CoordinatorInviteInfo(code, now(), now() + 7 * 86_400_000.0, false)
+                emitInvites(code)
+            }
+            is Command.RevokeCoordinatorInvite -> { coordinatorInvites.removeAll { it.code == c.data.code }; emitInvites() }
+            is Command.YtmJsAnswer -> Unit
+            Command.ListCoordinatorInvites -> emitInvites()
+            // The coordinator's YouTube Music analysis, as an owned coordinator with --analysis-ytm
+            // answers: a session with SAPISID signs it in as "Coordinator Account", anything else is
+            // refused, none signs it out.
+            is Command.SignCoordinatorInToYoutubeMusic -> {
+                val cookies = c.data.cookies
+                when {
+                    identity.coordinator == null -> emit(Event.CoordinatorFailed(EventCoordinatorFailedInner("No coordinator: claim one first.")))
+                    cookies == null -> { coordinatorYtmAccount = null; emitCoordinatorYtm() }
+                    "SAPISID=" in cookies -> { coordinatorYtmAccount = FAKE_COORDINATOR_YTM_ACCOUNT; emitCoordinatorYtm() }
+                    else -> emitCoordinatorYtm(error = "that isn't a signed-in YouTube session")
+                }
+            }
+            Command.CoordinatorYtmStatus -> if (identity.coordinator?.owner == true) emitCoordinatorYtm()
         }
     }
 
-    private data class SessionCapture(val context: QueueContext?, val tracks: List<TrackId>, val order: List<Int>, val cursor: Int, val current: QueueItem?, val history: List<QueueItem>, val insertions: List<QueueItem>, val shuffle: ShuffleState?, val repeat: RepeatMode, val position: Long, val playing: Boolean)
+    private data class SessionCapture(val context: QueueContext?, val tracks: List<TrackId>, val list: List<QueueItem>, val ptr: Int, val shuffle: Boolean, val repeat: RepeatMode, val position: Long, val playing: Boolean)
 
-    private fun captureSession() = SessionCapture(context, contextTracks, order, cursor, current, history.toList(), insertions.toList(), shuffle, repeat, positionNow(), stamp.isPlaying)
+    private fun captureSession() = SessionCapture(context, contextTracks, list.toList(), ptr, shuffle, repeat, positionNow(), stamp.isPlaying)
 
     private fun restoreSession(s: SessionCapture) {
-        context = s.context; contextTracks = s.tracks; order = s.order; cursor = s.cursor; current = s.current
-        history.clear(); history += s.history; insertions.clear(); insertions += s.insertions; shuffle = s.shuffle; repeat = s.repeat
+        context = s.context; contextTracks = s.tracks
+        list.clear(); list += s.list; ptr = s.ptr; shuffle = s.shuffle; repeat = s.repeat
         startPlayback(s.position, s.playing)
         emitQueue(); emitTransport()
+    }
+
+    private fun queueCommand(trackIds: List<TrackId>, keys: List<QueueKey>, placement: Placement) {
+        val before = captureSession()
+        val wasEmpty = current == null
+        place(trackIds, keys, placement)
+        if (wasEmpty && current != null) startPlayback(0, true)
+        val n = trackIds.size + keys.size
+        val (label, done) = when (placement) {
+            Placement.Next -> "Play next" to if (n == 1) "Playing next" else "$n tracks playing next"
+            Placement.Group -> "Add to queue" to if (n == 1) "Added to queue" else "$n tracks added to queue"
+            Placement.Later -> "Play later" to if (n == 1) "Playing later" else "$n tracks playing later"
+        }
+        pushUndo(label) { restoreSession(before) }
+        toast(done, "Undo", Command.Undo)
+        emitQueue(); emitTransport()
+    }
+
+    private fun clearGroup(stash: Boolean) {
+        val n = groupCount
+        if (n == 0) return
+        val before = captureSession()
+        val group = list.subList(ptr + 1, ptr + 1 + n)
+        val ids = group.map { it.trackId }
+        group.clear()
+        if (stash) stashAdd(ids)
+        pushUndo(if (stash) "Stash next in queue" else "Clear next in queue") { restoreSession(before) }
+        emitQueue()
     }
 
     private fun undo(emitToast: Boolean = true) {
@@ -941,81 +1301,54 @@ class FakeCore(
     private fun jumpTo(key: QueueKey) {
         // As the core: a jump to the current item restarts it.
         if (current?.key == key) { startPlayback(0, true); emitTransport(); return }
+        val i = list.indexOfFirst { it.key == key }
+        if (i < 0) return
         val before = captureSession()
-        val view = queueView()
-        view.history.indexOfFirst { it.item.key == key }.takeIf { it >= 0 }?.let { i ->
-            // Everything after the target in history goes back to the front of the future.
-            val target = history[i]
-            val after = history.subList(i + 1, history.size).toList()
-            current?.let { after + it }
-            repeat(history.size - i) { history.removeAt(history.size - 1) }
-            current?.let { cur -> if (cur.source is QueueSource.Inserted) insertions.add(0, cur) }
-            after.reversed().forEach { if (it.source is QueueSource.Inserted) insertions.add(0, it) }
-            current = target
-            (target.source as? QueueSource.Context)?.let { cursor = order.indexOf(it.data.index.toInt()).coerceAtLeast(0) }
-            startPlayback(0, true)
-            pushUndo("Jump back") { restoreSession(before) }
-            emitQueue(); emitTransport(); return
-        }
-        insertions.indexOfFirst { it.key == key }.takeIf { it >= 0 }?.let { i ->
-            current?.let { history += it }
-            val target = insertions.removeAt(i)
-            // Skipped insertions before the target are played through: they go to history.
-            repeat(i) { history += insertions.removeAt(0) }
-            current = target
-            startPlayback(0, true)
-            pushUndo("Jump in queue") { restoreSession(before) }
-            emitQueue(); emitTransport(); return
-        }
-        view.upcoming.firstOrNull { it.item.key == key }?.let { e ->
-            when (val src = e.item.source) {
-                is QueueSource.Context -> {
-                    current?.let { history += it }
-                    val pos = order.indexOf(src.data.index.toInt())
-                    for (p in cursor + 1 until pos) contextItem(p)?.let { history += it }
-                    cursor = pos
-                    current = contextItem(pos)
-                }
-                is QueueSource.Autoplay -> { current?.let { history += it }; current = e.item.copy(key = newKey()) }
-                QueueSource.Inserted -> Unit
-            }
-            startPlayback(0, true)
-            pushUndo("Jump in queue") { restoreSession(before) }
-            emitQueue(); emitTransport()
-        }
+        // Navigation only moves the pointer; nothing is added, removed or reordered.
+        val back = i < ptr
+        ptr = i
+        playedMs = 0
+        startPlayback(0, true)
+        pushUndo(if (back) "Jump back" else "Jump in queue") { restoreSession(before) }
+        emitQueue(); emitTransport()
     }
 
-    private fun moveItem(key: QueueKey, toIndex: Int) {
+    /**
+     * As the core's `MoveQueueItem`: [key] goes right after [after], in or out of the group by
+     * [inGroup] (the sender decides, whatever this device's Queue section setting): an in-group drop
+     * clamps to the group's end, an out-of-group one to just after it.
+     */
+    private fun moveItem(key: QueueKey, after: QueueKey, inGroup: Boolean) {
+        val i = list.indexOfFirst { it.key == key }
+        val a = list.indexOfFirst { it.key == after }
+        if (current == null || i < 0 || a < 0 || i <= ptr || a < ptr) return
         val before = captureSession()
-        val combined = insertions.map { it.key } + queueView().upcoming.map { it.item.key }
-        val from = combined.indexOf(key)
-        if (from < 0) return
-        val insIdx = insertions.indexOfFirst { it.key == key }
-        if (insIdx >= 0 && toIndex < insertions.size) {
-            val item = insertions.removeAt(insIdx); insertions.add(toIndex.coerceIn(0, insertions.size), item)
-        } else if (insIdx >= 0) {
-            // Insertion moved into the context tail: splice it into the order after the cursor.
-            val item = insertions.removeAt(insIdx)
-            contextTracks = contextTracks + item.trackId
-            val newIdx = contextTracks.size - 1
-            val pos = (cursor + 1 + (toIndex - insertions.size)).coerceIn(cursor + 1, order.size)
-            order = order.toMutableList().also { it.add(pos, newIdx) }
-            if (shuffle != null) shuffle = shuffle!!.copy(order = order.map { it.toUInt() })
-        } else {
-            val upIdx = from - insertions.size
-            val o = order.toMutableList()
-            val srcPos = cursor + 1 + upIdx
-            if (srcPos !in o.indices) return
-            val idx = o.removeAt(srcPos)
-            if (toIndex < insertions.size) {
-                insertions.add(toIndex, QueueItem(newKey(), contextTracks[idx], QueueSource.Inserted, false))
-            } else {
-                o.add((cursor + 1 + (toIndex - insertions.size)).coerceIn(cursor + 1, o.size), idx)
-            }
-            order = o
-            if (shuffle != null) shuffle = shuffle!!.copy(order = order.map { it.toUInt() })
-        }
+        val item = list.removeAt(i)
+        // Where `after` is now; dropping onto itself keeps its place.
+        val target = if (a == i) i else if (a > i) a else a + 1
+        list.add(clampToGroup(target, inGroup), item.copy(queued = inGroup))
         pushUndo("Reorder queue") { restoreSession(before) }
+        emitQueue()
+    }
+
+    /** An insertion index [target] kept on its side of the group's end. */
+    private fun clampToGroup(target: Int, inGroup: Boolean): Int {
+        val end = ptr + 1 + groupCount
+        return if (inGroup) minOf(target, end) else maxOf(target, end)
+    }
+
+    /** As the core's `InsertTracks`: the songs go directly after [after], placed like a [moveItem] drop. */
+    private fun insertItems(trackIds: List<TrackId>, keys: List<QueueKey>, after: QueueKey, inGroup: Boolean) {
+        val a = list.indexOfFirst { it.key == after }
+        if (current == null || a < ptr || (trackIds.isEmpty() && keys.isEmpty())) return
+        val before = captureSession()
+        // Where `after` ends up once the moved entries are out (if it moves itself, its old place).
+        val moving = keys.filter { k -> list.indexOfFirst { it.key == k } > ptr }.toSet()
+        val target = list.subList(0, a + 1).count { it.key !in moving }
+        val items = takeForQueueing(trackIds, keys)
+        if (items.isEmpty()) return
+        list.addAll(clampToGroup(target, inGroup), items.map { it.copy(queued = inGroup) })
+        pushUndo("Insert into queue") { restoreSession(before) }
         emitQueue()
     }
 
@@ -1024,10 +1357,12 @@ class FakeCore(
         val before = captureSession()
         saveOutgoingQueue()
         val tracks = resolveContext(sq.context)
-        setContext(sq.context, tracks, sq.cursor.toInt().coerceIn(0, (tracks.size - 1).coerceAtLeast(0)), sq.shuffle != null)
-        history.clear(); history += sq.history
-        insertions.clear(); insertions += sq.insertions
-        sq.current?.let { current = it }
+        setContext(sq.context, tracks, 0, false)
+        if (sq.current != null || sq.history.isNotEmpty() || sq.upcoming.isNotEmpty()) {
+            list.clear(); list += sq.history; sq.current?.let { list += it }; list += sq.upcoming
+            ptr = sq.history.size
+        }
+        shuffle = sq.shuffle
         repeat = sq.repeat
         startPlayback(sq.positionMs.toLong(), true)
         val i = savedQueues.indexOf(sq)
@@ -1144,28 +1479,52 @@ class FakeCore(
                 if (jobs[i].kind == JobKind.LibrarySync) {
                     syncProgress = SyncProgress(serverId, if (done < total / 2u) "tracks" else "albums", done, total, if (done > total / 3u) listOf("artists", "albums") else listOf("artists"), done >= total)
                     emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-                    if (done >= total) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))); emitLibrary(emptyList()) }
+                    if (done >= total) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total); emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList()))); emitLibrary(emptyList()) }
                 }
                 if (done >= total) return@launch
             }
         }
     }
 
-    private fun addServer(a: CommandAddServerInner) {
+    private fun addServer(a: AccountSetupNavidromeInner) {
         when {
             a.password == "wrong" -> emit(Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", "The server refused the credentials.")))
             a.url.contains("old") -> {
-                servers.clear(); servers += ServerInfo("fake-server", a.url, a.username, a.name ?: a.url.removePrefix("https://"), capabilities(false), null, reachable = true)
-                emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
+                servers.clear(); servers += fakeAccount(a.url, a.username, a.name ?: a.url.removePrefix("https://"), capabilities(false), null)
+                emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
                 emit(Event.Error(EventErrorInner(ErrorKind.Server, "Navidrome 0.58.0 is too old", "Hocket needs Navidrome 0.63.0 or newer for synced lyrics and fast library sync.")))
             }
             a.url.contains("down") -> emit(Event.Error(EventErrorInner(ErrorKind.Network, "Couldn't reach ${a.url}", null)))
             else -> {
-                servers.clear(); servers += ServerInfo("fake-server", a.url, a.username, a.name ?: a.url.removePrefix("https://").removePrefix("http://"), capabilities(), null, reachable = true)
-                emit(Event.ServersChanged(EventServersChangedInner(servers.toList())))
+                servers.clear(); servers += fakeAccount(a.url, a.username, a.name ?: a.url.removePrefix("https://").removePrefix("http://"), capabilities(), null)
+                emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
                 startSync(true)
             }
         }
+    }
+
+    /** A track of the fake's one library, named by its account. */
+    private fun ref(id: TrackId) = TrackRef("fake-server", id)
+    private val QueueItem.trackId: TrackId get() = track.id
+
+    /** The fake's one Navidrome account (its library is `fake-server`'s). */
+    private fun fakeAccount(url: String, username: String, name: String, caps: ServerCapabilities, lastSync: Double?, lastSyncTracks: UInt? = null) =
+        AccountInfo("fake-server", AccountKind.Navidrome, 0u, "fake-server", url, username, name,
+            ProviderCapabilities(librarySync = true, search = true, browse = true, stream = true, download = true, transcode = true, coverArt = true, star = true,
+                rate = true, playlists = true, smartPlaylists = caps.nativeApi, reportPlay = true, lyrics = true, radio = true, homeShelves = false, share = true),
+            caps, lastSync, lastSyncTracks, reachable = true)
+
+    /** YouTube Music, anonymous or signed in, after any other account (the fake has no YouTube Music library). */
+    private fun addYoutubeMusic(signedIn: Boolean) {
+        val caps = ServerCapabilities(null, false, emptyList(), false, false, false, false, false, false, false, false)
+        val account = AccountInfo(if (signedIn) "UCfakeChannel" else "ytm:anon", AccountKind.YoutubeMusic, servers.size.toUInt(), "ytm", "https://music.youtube.com",
+            if (signedIn) "Test User" else "", if (signedIn) "YouTube Music (Test User)" else "YouTube Music",
+            ProviderCapabilities(librarySync = signedIn, search = true, browse = true, stream = true, download = false, transcode = false, coverArt = true, star = signedIn,
+                rate = false, playlists = signedIn, smartPlaylists = false, reportPlay = signedIn, lyrics = true, radio = true, homeShelves = true, share = true, libraryEdit = signedIn),
+            caps, null, null, reachable = true)
+        servers.removeAll { it.kind == AccountKind.YoutubeMusic }
+        servers += account
+        emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList())))
     }
 
     private fun startSync(full: Boolean) {
@@ -1177,8 +1536,22 @@ class FakeCore(
             updateJob(id) { it.copy(state = JobState.Done, done = total.toUInt()) }
             syncProgress = syncProgress!!.copy(done = total.toUInt(), finished = true, readyTables = listOf("artists", "albums", "tracks"))
             emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-            if (servers.isNotEmpty()) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total.toUInt()); emit(Event.ServersChanged(EventServersChangedInner(servers.toList()))) }
+            if (servers.isNotEmpty()) { servers[0] = servers[0].copy(lastSync = now(), lastSyncTracks = total.toUInt()); emit(Event.AccountsChanged(EventAccountsChangedInner(servers.toList()))) }
         }
+    }
+
+    /** As the core: the level in force from the power-save state and the `battery.*` settings. */
+    private fun refreshBatterySaver() {
+        val saver = Saver.resolve(
+            Saver.parseLevel(settings[SettingKeys.BATTERY_LEVEL]?.value) ?: SaverLevel.Off,
+            Saver.parseLevel(settings[SettingKeys.BATTERY_AUTO_LEVEL]?.value) ?: SaverLevel.Medium,
+            settings[SettingKeys.BATTERY_AUTO_ENGAGE]?.value?.trim() != "false",
+            powerSave,
+            Saver.parseCustom(settings[SettingKeys.BATTERY_CUSTOM]?.value),
+        )
+        if (saver == batterySaver) return
+        batterySaver = saver
+        emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(saver)))
     }
 
     /** Like the core: unknown keys are refused (an Error event), known ones keep their registry scope. */
@@ -1190,7 +1563,12 @@ class FakeCore(
         }
         settings[key] = Setting(key, value, existing.scope, now())
         emit(Event.SettingChanged(EventSettingChangedInner(settings[key]!!)))
+        if (key.startsWith("battery.")) refreshBatterySaver()
         if (key == SettingKeys.QUEUE_SAVED_CAP) value.toIntOrNull()?.let { savedQueueCap = it }
+        if (key == SettingKeys.QUEUE_SECTION) {
+            queueSection = value.trim() != "false"
+            // Off, no new group starts, but one already there stays (as the core).
+        }
         if (key == SettingKeys.STORAGE_CACHE_MAX_BYTES) {
             // null (the default): the automatic budget; any size is the user's.
             val bytes = value.toDoubleOrNull()?.takeIf { it > 0 }
@@ -1202,31 +1580,106 @@ class FakeCore(
 
     private fun lyricsFor(id: TrackId): Lyrics? = library.lyricsByTrack[id]?.let { it.copy(offsetMs = lyricsOffsets[id] ?: 0) }
 
+    /** Like the core: the account-synced settings changed from their defaults, key → value. */
+    private fun setupSettings(): String = kotlinx.serialization.json.JsonObject(
+        settings.values.filter { it.scope == SettingScope.AccountSynced && it.value != defaults[it.key] }
+            .associate { it.key to HocketJson.json.parseToJsonElement(it.value) },
+    ).toString()
+
+    /** Like the core: known account-synced keys only; the rest are skipped. */
+    private fun applySetupSettings(json: String) {
+        val obj = runCatching { HocketJson.json.parseToJsonElement(json) as? kotlinx.serialization.json.JsonObject }.getOrNull() ?: return
+        for ((key, value) in obj) if (settings[key]?.scope == SettingScope.AccountSynced) setSetting(key, value.toString())
+    }
+
     private fun configDocument(secrets: Boolean) = HocketJson.json.encodeToString(ConfigDocument.serializer(), ConfigDocument(2u, now(), settings.values.toList(), filters.toList(), emptyList(), servers.toList(),
         if (secrets) hashMapOf("fake-server.password" to "••••") else null, audio, autoplaySettings, null))
+
+    private var preview: PreviewState? = null
+    private var previewHeld = false
+    private var previewWasPlaying = false
+
+    /** A local preview. Pausing here is skipped when another device owns playback. */
+    private fun previewStart(trackId: String) {
+        if (preview?.trackId == trackId) {
+            previewToggle()
+            return
+        }
+        val track = library.track(trackId)
+        val duration = track?.durationMs ?: 0u
+        val position = (duration.toDouble() * 0.3).toUInt()
+        val remote = transportOwner != null && transportOwner != deviceId
+        if (preview == null) {
+            previewHeld = !remote
+            previewWasPlaying = stamp.isPlaying
+            if (!remote && stamp.isPlaying) handle(Command.Pause)
+        }
+        preview = PreviewState(trackId, track?.title ?: trackId, duration, position, true, now())
+        emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+    }
+
+    private fun previewToggle() {
+        val current = preview ?: return
+        val position = previewPositionMs(current)
+        preview = current.copy(playing = !current.playing, positionMs = position, takenAt = now())
+        emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+    }
+
+    private fun previewSeek(position: UInt) {
+        val current = preview ?: return
+        val cap = current.durationMs
+        val at = if (cap > 0u) minOf(position, cap) else position
+        preview = current.copy(positionMs = at, takenAt = now())
+        emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+    }
+
+    private fun previewStop(restore: Boolean) {
+        if (preview == null) return
+        preview = null
+        emit(Event.PreviewChanged(EventPreviewChangedInner(null)))
+        if (restore && previewHeld && previewWasPlaying && transportOwner == deviceId) handle(Command.Play)
+        previewHeld = false
+        previewWasPlaying = false
+    }
+
+    private fun previewPositionMs(current: PreviewState): UInt {
+        val extra = if (current.playing) (now() - current.takenAt).coerceAtLeast(0.0) else 0.0
+        val at = current.positionMs.toLong() + extra.toLong()
+        return if (current.durationMs > 0u) minOf(at, current.durationMs.toLong()).toUInt() else at.coerceAtLeast(0).toUInt()
+    }
 
     private fun runAction(actionId: String, target: ActionTarget) {
         val id = canonical(actionId)
         if (id in ActionIds.UI_HANDLED) return // the platform performs these; the core yields no command
         val trackIds: List<TrackId> = when (target) {
-            is ActionTarget.Tracks -> target.data.ids
+            is ActionTarget.Tracks -> target.data.tracks.map { it.id }
             is ActionTarget.Albums -> target.data.ids.flatMap { library.albumTracks(it) }.map { it.id }
             is ActionTarget.Artists -> target.data.ids.flatMap { a -> library.artistAlbums(a).flatMap { library.albumTracks(it.id) } }.map { it.id }
             is ActionTarget.Playlists -> target.data.ids.flatMap { library.playlistTracks[it] ?: emptyList() }
-            is ActionTarget.QueueItems -> target.data.keys.mapNotNull { k -> (history + listOfNotNull(current) + insertions + queueView().upcoming.map { it.item }).firstOrNull { it.key == k }?.trackId }
+            is ActionTarget.QueueItems -> target.data.keys.mapNotNull { k -> list.firstOrNull { it.key == k }?.trackId }
             is ActionTarget.SavedQueue -> emptyList()
             ActionTarget.None -> emptyList()
         }
         val label = when (target) { is ActionTarget.Albums -> library.album(target.data.ids.first())?.name; is ActionTarget.Artists -> library.artist(target.data.ids.first())?.name; is ActionTarget.Playlists -> library.playlist(target.data.ids.first())?.name; else -> null } ?: "${trackIds.size} tracks"
         val rateMatch = Regex("rate([0-5])").matchEntire(id)
         when {
-            rateMatch != null -> setRating(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, rateMatch.groupValues[1].toInt())
-            id == ActionIds.PLAY -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, false)))
-            id == ActionIds.PLAY_SHUFFLED -> handle(Command.PlayTracks(CommandPlayTracksInner(serverId, trackIds, 0u, label, true)))
-            id == ActionIds.PLAY_NEXT -> handle(Command.PlayNext(CommandPlayNextInner(serverId, trackIds)))
-            id == ActionIds.PLAY_LATER -> handle(Command.PlayLater(CommandPlayLaterInner(serverId, trackIds)))
-            id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, true)
-            id == ActionIds.UNLOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it)) }, false)
+            rateMatch != null -> setRating(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, rateMatch.groupValues[1].toInt())
+            id == ActionIds.PLAY -> handle(Command.PlayTracks(CommandPlayTracksInner(trackIds.map(::ref), 0u, label, false)))
+            id == ActionIds.PLAY_SHUFFLED -> handle(Command.PlayTracks(CommandPlayTracksInner(trackIds.map(::ref), 0u, label, true)))
+            id == ActionIds.PLAY_NEXT || id == ActionIds.ADD_TO_QUEUE || id == ActionIds.PLAY_LATER -> {
+                // Queue rows are named by key so the ones still to play move rather than repeat.
+                val keys = (target as? ActionTarget.QueueItems)?.data?.keys
+                val ids = if (keys != null) emptyList() else trackIds
+                val placement = when (id) { ActionIds.PLAY_NEXT -> Placement.Next; ActionIds.ADD_TO_QUEUE -> Placement.Group; else -> Placement.Later }
+                if (placement != Placement.Group || queueSection) queueCommand(ids, keys.orEmpty(), placement)
+            }
+            id == ActionIds.CLEAR_QUEUE_GROUP -> handle(Command.ClearQueueGroup)
+            id == ActionIds.STASH_QUEUE_GROUP -> handle(Command.StashQueueGroup)
+            id == ActionIds.PREVIEW -> trackIds.firstOrNull()?.let { previewStart(it) }
+            id == ActionIds.STASH -> stashAdd(trackIds)
+            id == ActionIds.CLEAR_STASH -> handle(Command.StashClear)
+            id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, true)
+            id == ActionIds.UNLOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, false)
             id == ActionIds.DOWNLOAD -> when (target) {
                 is ActionTarget.Albums -> target.data.ids.forEach { pin(PinTarget.Album(PinTargetAlbumInner(it)), false) }
                 is ActionTarget.Playlists -> target.data.ids.forEach { pin(PinTarget.Playlist(PinTargetPlaylistInner(it)), false) }
@@ -1247,7 +1700,7 @@ class FakeCore(
             id == ActionIds.TOGGLE_PLAY -> handle(Command.TogglePlay)
             id == ActionIds.NEXT -> handle(Command.Next)
             id == ActionIds.PREVIOUS -> handle(Command.Previous)
-            id == ActionIds.SHUFFLE -> handle(Command.SetShuffle(CommandSetShuffleInner(shuffle == null)))
+            id == ActionIds.SHUFFLE -> handle(Command.SetShuffle(CommandSetShuffleInner(!shuffle)))
             id == ActionIds.REPEAT -> handle(Command.MediaSessionCommand(CommandMediaSessionCommandInner(MediaSessionAction.Repeat, null)))
             id == ActionIds.AUTOPLAY -> handle(Command.SetAutoplay(CommandSetAutoplayInner(!autoplay)))
             id == ActionIds.HANDOFF -> handle(Command.OpenHandoffPicker)
@@ -1294,17 +1747,23 @@ class FakeCore(
         is ActionTarget.Albums -> target.data.ids.singleOrNull()?.let { "album" to it }
         is ActionTarget.Artists -> target.data.ids.singleOrNull()?.let { "artist" to it }
         is ActionTarget.Playlists -> target.data.ids.singleOrNull()?.let { "playlist" to it }
-        is ActionTarget.Tracks -> target.data.ids.singleOrNull()?.let { "track" to it }
+        is ActionTarget.Tracks -> target.data.tracks.singleOrNull()?.let { "track" to it.id }
         else -> null
     }
 
     private fun actionsFor(surface: String, target: ActionTarget): List<ActionDescriptor> {
         fun d(id: String, label: String, icon: String, category: String, undoable: Boolean = true, destructive: Boolean = false, enabled: Boolean = true) =
             ActionDescriptor(id, label, icon, category, enabled, null, undoable, destructive)
+        // As the core's `visible` hook: "Add to queue" only with the Queue section setting on.
+        val addToQueue = if (queueSection) listOf(d(ActionIds.ADD_TO_QUEUE, "Add to queue", "queue_music", "queue")) else emptyList()
+        // And Shuffle isn't offered for one song: shuffling it is just playing it.
+        val shuffle = if (target is ActionTarget.Tracks && target.data.tracks.size == 1) emptyList() else listOf(d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"))
         val library = listOf(
-            d(ActionIds.PLAY, "Play", "play_arrow", "playback"), d(ActionIds.PLAY_SHUFFLED, "Shuffle play", "shuffle", "playback"),
-            d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
+            d(ActionIds.PLAY, "Play", "play_arrow", "playback"), *shuffle.toTypedArray(),
+            d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"), *addToQueue.toTypedArray(), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
+            d(ActionIds.PREVIEW, "Preview", "headphones", "playback", undoable = false, enabled = (target is ActionTarget.Tracks && target.data.tracks.size == 1) || (target is ActionTarget.QueueItems && target.data.keys.size == 1)),
             d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false),
+            d(ActionIds.STASH, "Stash", "stash", "queue", undoable = false),
             d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.UNLOVE, "Unlove", "heart_minus", "library"),
             d(ActionIds.rate(5), "Rate 5", "star", "library"), d(ActionIds.rate(4), "Rate 4", "star", "library"), d(ActionIds.rate(3), "Rate 3", "star", "library"),
             d(ActionIds.rate(2), "Rate 2", "star", "library"), d(ActionIds.rate(1), "Rate 1", "star", "library"), d(ActionIds.rate(0), "Clear rating", "star_outline", "library"),
@@ -1317,11 +1776,24 @@ class FakeCore(
             d(ActionIds.UNPIN_FROM_LIBRARY, "Unpin from Library", "keep_off", "library", undoable = false, enabled = pinned),
         ) else emptyList()
         val base: List<ActionDescriptor> = pins + when (target) {
-            is ActionTarget.Tracks -> library + listOf(d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
+            is ActionTarget.Tracks -> {
+                val ids = target.data.tracks.map { it.id }
+                val snoozed = ids.any { it in snoozes }
+                val fresh = ids.any { it !in snoozes }
+                library + listOf(
+                    d(ActionIds.SNOOZE, "Snooze", "bedtime", "queue", enabled = fresh),
+                    d(ActionIds.UNSNOOZE, "Unsnooze", "bedtime", "queue", enabled = snoozed),
+                    d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false),
+                    d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false),
+                )
+            }
             is ActionTarget.Albums -> library + listOf(d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
             is ActionTarget.Artists -> library
             is ActionTarget.Playlists -> library + listOf(d(ActionIds.DELETE_PLAYLIST, "Delete playlist", "delete_forever", "library", undoable = false, destructive = true))
             is ActionTarget.QueueItems -> listOf(d(ActionIds.REMOVE_FROM_QUEUE, "Remove from queue", "remove_from_queue", "queue"), d(ActionIds.PLAY_NEXT, "Play next", "playlist_play", "queue"),
+                *addToQueue.toTypedArray(), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
+                d(ActionIds.SNOOZE, "Snooze", "bedtime", "queue"), d(ActionIds.UNSNOOZE, "Unsnooze", "bedtime", "queue"),
+                d(ActionIds.PREVIEW, "Preview", "headphones", "playback", undoable = false, enabled = target.data.keys.size == 1),
                 d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false), d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.DOWNLOAD, "Download", "download", "offline", undoable = false),
                 d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
             is ActionTarget.SavedQueue -> listOf(d(ActionIds.RESTORE_SAVED_QUEUE, "Restore", "history", "queue"), d(ActionIds.PIN_SAVED_QUEUE, "Pin", "push_pin", "queue"), d(ActionIds.UNPIN_SAVED_QUEUE, "Unpin", "keep_off", "queue"),
@@ -1335,7 +1807,9 @@ class FakeCore(
     // -- queries -----------------------------------------------------------------------------------
     private fun answer(q: Query): QueryResult = when (q) {
         Query.Snapshot -> QueryResult.SnapshotResult(snapshot())
-        Query.Servers -> QueryResult.Servers(servers.toList())
+        Query.Accounts -> QueryResult.Accounts(servers.toList())
+        // The fake never sends YtmJsRequest.
+        Query.YtmJsHostScript -> QueryResult.Text("")
         is Query.Tracks -> {
             val all = q.data.filter?.let { f -> library.tracks.filter { matches(it, f) } } ?: library.tracks
             val sorted = library.sorted(all, q.data.sort, q.data.descending)
@@ -1343,8 +1817,14 @@ class FakeCore(
             QueryResult.Tracks(TrackPage(sorted.drop(off).take(q.data.page.limit.toInt()), off.toUInt(), sorted.size.toUInt()))
         }
         is Query.TrackCount -> QueryResult.Count((q.data.filter?.let { f -> library.tracks.count { matches(it, f) } } ?: library.tracks.size).toUInt())
-        is Query.Track -> QueryResult.TrackDetail(library.track(q.data.id))
-        is Query.TracksByIds -> QueryResult.TrackList(q.data.ids.mapNotNull { library.track(it) })
+        is Query.Track -> QueryResult.TrackDetail(library.track(q.data.track.id))
+        is Query.TrackSources -> QueryResult.TrackSources(library.track(q.data.track.id)?.let { t ->
+            listOf(TrackSource(t, t.serverId, servers.firstOrNull { it.id == t.serverId }?.name.orEmpty(), true, false, true))
+        }.orEmpty())
+        // One library on one account: nothing to link to.
+        is Query.LinkCandidates -> QueryResult.TrackList(emptyList())
+        Query.HomeShelves -> QueryResult.HomeShelves(homeShelves())
+        is Query.TracksByIds -> QueryResult.TrackList(q.data.tracks.mapNotNull { library.track(it.id) })
         is Query.Albums -> {
             val all = library.albums.filter { (q.data.artist_id == null || it.artistId == q.data.artist_id) && (q.data.genre == null || it.genre == q.data.genre) }
             val sorted = library.sortedAlbums(all, q.data.sort, q.data.descending)
@@ -1360,6 +1840,18 @@ class FakeCore(
             QueryResult.Artists(ArtistPage(sorted.drop(off).take(q.data.page.limit.toInt()), off.toUInt(), sorted.size.toUInt()))
         }
         is Query.Artist -> QueryResult.ArtistDetail(library.artist(q.data.id))
+        is Query.ArtistAppearsOn -> {
+            val id = q.data.id
+            val on = library.tracks.filter { t -> t.artistId == id || t.artists.orEmpty().any { it.id == id } }.mapNotNull { it.albumId }.toSet()
+            val items = library.sortedAlbums(library.albums.filter { it.artistId != id && it.id in on }, SortOrder.Year, true)
+            QueryResult.Albums(AlbumPage(items, 0u, items.size.toUInt()))
+        }
+        // Made-up Last.fm details, so the song info and artist pages have something to show.
+        is Query.ArtistInfo -> QueryResult.ExternalInfo(library.artist(q.data.id)?.let { a ->
+            ExternalInfo(text = "${a.name} make quiet, close-miked songs about leaving and coming home.", lastFmUrl = "https://www.last.fm/music/${a.name.replace(' ', '+')}",
+                similarArtists = library.artists.filter { it.id != a.id }.take(5))
+        })
+        is Query.AlbumInfo -> QueryResult.ExternalInfo(library.album(q.data.id)?.let { al -> ExternalInfo(text = "${al.name} was recorded over two winters with the windows open.", lastFmUrl = "https://www.last.fm/music/${(al.artist ?: al.name).replace(' ', '+')}") })
         is Query.ArtistTopSongs -> QueryResult.TrackList(library.artistAlbums(q.data.id).flatMap { library.albumTracks(it.id) }.sortedByDescending { it.playCount }.take(q.data.count.toInt()))
         is Query.Genres -> QueryResult.Genres(library.genres.toList())
         is Query.Playlists -> QueryResult.Playlists(library.playlists.toList())
@@ -1369,10 +1861,14 @@ class FakeCore(
             val off = q.data.page.offset.toInt()
             QueryResult.Tracks(TrackPage(ids.drop(off).take(q.data.page.limit.toInt()).mapNotNull { library.track(it) }, off.toUInt(), ids.size.toUInt()))
         }
-        is Query.PlaylistMembership -> QueryResult.Membership(playlistMembership(q.data.track_ids))
+        is Query.PlaylistMembership -> QueryResult.Membership(playlistMembership(q.data.tracks.map { it.id }))
         is Query.Search -> search(q.data)
         Query.Queue -> QueryResult.Queue(queueView())
-        Query.SavedQueues -> QueryResult.SavedQueues(savedQueues.toList())
+        is Query.QueueRange -> QueryResult.Queue(queueView(q.data.start.toInt(), q.data.count.toInt().coerceAtMost(2 * QUEUE_VIEW_SIDE + 1)))
+        Query.SavedQueues -> QueryResult.SavedQueues(shownSaved())
+        Query.Stash -> QueryResult.StashItems(stashItems())
+        Query.Snoozes -> QueryResult.SnoozeItems(snoozeItems())
+        is Query.AlbumResume -> QueryResult.AlbumResumeState(albumResumes[q.data.id])
         is Query.Lyrics -> QueryResult.LyricsResult(lyricsFor(q.data.track_id))
         is Query.Related -> {
             val seed = library.track(q.data.track_id)
@@ -1396,19 +1892,45 @@ class FakeCore(
         Query.Settings -> QueryResult.Settings(settings.values.toList())
         is Query.Setting -> QueryResult.SettingDetail(settings[q.data.key])
         Query.AudioSettings -> QueryResult.Audio(audio)
+        Query.Transitions -> QueryResult.Transitions(transitions)
+        is Query.TrackAnalysis -> QueryResult.Analysis(null)
         Query.OutputDevices -> QueryResult.OutputDevices(listOf(OutputDevice("default", "Phone speaker", true)))
         Query.Connection -> QueryResult.Connection(connection)
         Query.Devices -> QueryResult.Devices(devices.toList())
         Query.UndoState -> QueryResult.Undo(undoState())
         is Query.Actions -> QueryResult.Actions(actionsFor(q.data.surface, q.data.target))
         Query.Shortcuts -> QueryResult.Shortcuts(emptyList())
-        is Query.Artwork -> QueryResult.Path(null)
+        is Query.Artwork -> QueryResult.Path(artworkFile?.invoke(q.data.id, q.data.size.toInt()))
         is Query.MediaSource -> QueryResult.Source(library.track(q.data.track_id)?.let { MediaSource("k", it.toSummary(), "https://music.example.net/rest/stream?id=${it.id}", hashMapOf(), "audio/flac", -3.0, false) })
         Query.Diagnostics -> QueryResult.Text("Hocket fake core\ndevice=$deviceId\nserver=${servers.firstOrNull()?.url}\ntracks=${library.tracks.size}\n")
+        Query.RoomDiagnostics -> error("RoomDiagnostics is answered by query()")
+        Query.ReportUpload -> QueryResult.ReportUpload(reportUpload)
         is Query.ConfigDocument -> QueryResult.Text(configDocument(q.data.include_secrets))
+        Query.SetupSettings -> QueryResult.Text(setupSettings())
+        Query.Identity -> QueryResult.Identity(identity)
+        is Query.CreateShare -> QueryResult.Share(q.data.ids.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() }?.let { CreatedShare("https://navidrome.example/share/${it.joinToString("-")}") })
+        is Query.ExportAudio -> QueryResult.AudioFile(null)
+        is Query.SongLink -> QueryResult.SongLink(
+            q.data.track_id?.takeIf { it.isNotEmpty() }?.let { "https://squigly.link/song/fake/$it" }
+                ?: q.data.album_id?.takeIf { it.isNotEmpty() }?.let { "https://squigly.link/album/fake/$it" },
+        )
     }
 
     /** As the native core: every playlist, in name order, with the indices holding any of [trackIds]. */
+    /** Like the core's: Continue listening, then the account's Recently added, Most played and Recently played. */
+    private fun homeShelves(): List<HomeShelf> {
+        val account = servers.firstOrNull()?.id ?: serverId
+        fun shelf(id: String, title: String, albums: List<Album>, on: Boolean, owner: String?) =
+            HomeShelf(id, owner, title, HomeShelfKind.Albums, albums.take(20), emptyList(), emptyList(), on)
+        val recent = library.albums.take(6)
+        return listOf(
+            shelf("hocket/continueListening", "Continue listening", recent, true, null),
+            shelf("$account/recentlyAdded", "Recently added", library.sortedAlbums(library.albums, SortOrder.DateAdded, true), true, account),
+            shelf("$account/mostPlayed", "Most played", library.sortedAlbums(library.albums, SortOrder.PlayCount, true), false, account),
+            shelf("$account/recentlyPlayed", "Recently played", recent, false, account),
+        )
+    }
+
     private fun playlistMembership(trackIds: List<TrackId>): List<PlaylistMembership> {
         val wanted = trackIds.toSet()
         return library.playlists.sortedBy { it.name.lowercase() }.map { p ->
@@ -1424,7 +1946,7 @@ class FakeCore(
         val albums = if (needle.isEmpty()) emptyList() else library.albums.filter { it.name.lowercase().contains(needle) || it.artist?.lowercase()?.contains(needle) == true }.take(limit)
         val artists = if (needle.isEmpty()) emptyList() else library.artists.filter { it.name.lowercase().contains(needle) }.take(limit)
         val playlists = if (needle.isEmpty()) emptyList() else library.playlists.filter { it.name.lowercase().contains(needle) }.take(limit)
-        val local = SearchResults(q.request_id, q.query, tracks.map { it.toSummary() }, albums, artists, playlists, false)
+        val local = SearchResults(q.request_id, q.query, tracks.map { it.toSummary() }, albums, artists, playlists, false, lyricHits(needle, limit))
         if (q.include_server && needle.isNotEmpty() && timers) scope.launch {
             delay(700)
             // "Server" results: a handful of extra matches the mirror wouldn't have yet.
@@ -1432,6 +1954,34 @@ class FakeCore(
             emit(Event.SearchResults(EventSearchResultsInner(SearchResults(q.request_id, q.query, extra.map { it.toSummary() }, emptyList(), emptyList(), emptyList(), true))))
         }
         return QueryResult.Search(local)
+    }
+
+    /** Phrases from lyrics this fake has cached (songs it pretends were played). */
+    private fun lyricHits(needle: String, limit: Int): List<LyricHit> {
+        if (needle.isEmpty()) return emptyList()
+        val out = ArrayList<LyricHit>()
+        for (t in library.tracks) {
+            val lyrics = library.lyricsByTrack[t.id] ?: continue
+            val lines = lyrics.lines
+            for (i in lines.indices) {
+                val text = lines[i].text
+                val here = text.lowercase().indexOf(needle)
+                if (here >= 0) {
+                    out += LyricHit(t.toSummary(), text, here.toUInt(), (here + needle.length).toUInt(), lines[i].startMs)
+                    break
+                }
+                if (i + 1 < lines.size) {
+                    val joined = text + "\n" + lines[i + 1].text
+                    val at = joined.lowercase().indexOf(needle)
+                    if (at >= 0) {
+                        out += LyricHit(t.toSummary(), joined, at.toUInt(), (at + needle.length).toUInt(), lines[i].startMs)
+                        break
+                    }
+                }
+            }
+            if (out.size >= limit) break
+        }
+        return out
     }
 
     private fun stats(days: Int): QueryResult {
@@ -1448,9 +1998,20 @@ class FakeCore(
     }
 
     companion object {
+        /** The account the fake coordinator's YouTube Music analysis is signed in as. */
+        const val FAKE_COORDINATOR_YTM_ACCOUNT = "Coordinator Account"
+        /** Rows the queue view carries on each side of the pointer, as the core's `QUEUE_VIEW_BEFORE` / `_AFTER`. */
+        const val QUEUE_VIEW_SIDE = 100
+        /** The core's protocol constants (`HISTORY_CAP`, `MAX_QUEUE_LEN`; "Limits" in docs/design.md). */
+        const val HISTORY_CAP = 5000
+        const val MAX_QUEUE_LEN = 10_000
+        /** Unpinned saved queues the session document keeps; `queue.savedCap` is how many are shown. */
+        const val SAVED_KEPT = 50
         /** The core's automatic stream-cache budget on a roomy volume: min(2 GiB, 10% of the space). */
         const val AUTO_CACHE_BUDGET = 2.0 * 1024 * 1024 * 1024
         const val BUILTIN_AVAILABLE_OFFLINE = "builtin:available-offline"
+        /** The id the fake core's report uploads end with. */
+        const val FAKE_REPORT_ID = "R-20261101-test"
         /** The core's English texts for the offline PlayerNotices (core/handlers/cache.rs); platforms match on the code. */
         const val OFFLINE_SKIPPING = "Offline: skipping tracks that aren't downloaded or cached"
         const val OFFLINE_NOTHING = "Nothing in the queue is available offline"

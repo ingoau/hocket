@@ -120,6 +120,11 @@ pub fn track_from_child(server_id: &str, c: &Child) -> api::Track {
         explicit: c.explicit_status.as_deref() == Some("explicit"),
         comment: c.comment.clone().filter(|s| !s.is_empty()),
         artists,
+        isrc: c
+            .isrc
+            .iter()
+            .find(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_ascii_uppercase()),
     }
 }
 
@@ -156,6 +161,12 @@ pub fn album_from_id3(server_id: &str, a: &AlbumId3) -> api::Album {
         music_brainz_id: a.music_brainz_id.clone().filter(|s| !s.is_empty()),
         replay_gain: replay_gain(&a.replay_gain),
         offline: OfflineState::None,
+        release_types: a
+            .release_types
+            .iter()
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty())
+            .collect(),
     }
 }
 

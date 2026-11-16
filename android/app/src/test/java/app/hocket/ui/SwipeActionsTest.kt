@@ -1,11 +1,17 @@
 package app.hocket.ui
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.filterToOne
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onChildren
@@ -63,9 +69,63 @@ class SwipeActionsTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         compose.onNodeWithTag("row.a").performTouchInput { swipeRight() }
-        compose.waitUntil(5_000) { core.client.queue.value.playingNext.firstOrNull()?.track?.id == a.id }
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.firstOrNull()?.track?.id == a.id }
         compose.onNodeWithTag("row.b").performTouchInput { swipeLeft() }
-        compose.waitUntil(5_000) { core.client.queue.value.playingNext.lastOrNull()?.track?.id == b.id }
+        // Play later: the end of the whole list.
+        compose.waitUntil(5_000) { core.client.queue.value.entries.lastOrNull()?.track?.id == b.id }
+    }
+
+    @Test
+    fun addToQueueSwipesToTheQueuesEndAndPlaysLaterWithoutTheSection() {
+        val core = TestCore()
+        val (a, b, c) = core.fake.library.tracks.takeLast(3)
+        compose.setThemedContent(core) {
+            Column {
+                TrackRow(a.toSummary(), onClick = {}, onMore = {}, modifier = Modifier.testTag("row.a"))
+                TrackRow(b.toSummary(), onClick = {}, onMore = {}, modifier = Modifier.testTag("row.b"))
+                TrackRow(c.toSummary(), onClick = {}, onMore = {}, modifier = Modifier.testTag("row.c"))
+            }
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.onNodeWithTag("row.a").performTouchInput { swipeRight() }
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.firstOrNull()?.track?.id == a.id }
+        // Add to queue: after what is already queued, not first.
+        core.set(SettingKeys.SWIPE_LIST_START_TO_END, ActionIds.ADD_TO_QUEUE)
+        compose.onNodeWithTag("row.b").performTouchInput { swipeRight() }
+        compose.waitUntil(5_000) {
+            val ids = core.client.queue.value.groupEntries.map { it.track.id }
+            ids.firstOrNull() == a.id && ids.lastOrNull() == b.id
+        }
+        // Queue section off: the same swipe plays later, at the end of the whole list.
+        core.client.dispatch(Commands.setSetting(SettingKeys.QUEUE_SECTION, "false"))
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.QUEUE_SECTION]?.value == "false" }
+        compose.onNodeWithTag("row.c").performTouchInput { swipeRight() }
+        compose.waitUntil(5_000) { core.client.queue.value.entries.lastOrNull()?.track?.id == c.id }
+    }
+
+    @Test
+    fun aSegmentedRowSlidesOpaqueOverTheActionsBackground() {
+        // An album's tracks are segments; mid-swipe, the action's colour must show only beside the
+        // sliding row, never through it (it read "Play next" through the title).
+        val core = TestCore()
+        val track = core.fake.library.tracks.first()
+        var actionColour = androidx.compose.ui.graphics.Color.Unspecified
+        compose.setThemedContent(core) {
+            actionColour = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer
+            TrackRow(track.toSummary(), onClick = {}, onMore = {}, segment = 0 to 1, showArtwork = false, modifier = Modifier.testTag("row"))
+        }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.onNodeWithTag("row").performTouchInput { down(centerLeft + androidx.compose.ui.geometry.Offset(10f, 0f)); moveBy(androidx.compose.ui.geometry.Offset(width * 0.2f, 0f)); moveBy(androidx.compose.ui.geometry.Offset(width * 0.2f, 0f)) }
+        compose.waitForIdle()
+        val image = compose.onNodeWithTag("row").captureToImage().toPixelMap()
+        val action = actionColour.toArgb()
+        // Beside the row (in the background's padding, clear of its icon): the revealed action. On the
+        // slid row's middle: not the action's colour.
+        assertEquals(action, image[4, image.height / 2].toArgb())
+        assertFalse(image[image.width * 3 / 4, image.height / 2].toArgb() == action)
+        compose.onNodeWithTag("row").performTouchInput { cancel() }
     }
 
     @Test
@@ -77,21 +137,21 @@ class SwipeActionsTest {
         }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
-        val next0 = core.client.queue.value.playingNext.size
+        val next0 = core.client.queue.value.groupEntries.size
         // Short of the threshold: springs back, nothing runs.
         compose.onNodeWithTag("row").performTouchInput { swipeRight(startX = left + 10f, endX = left + width * 0.15f) }
         compose.waitForIdle()
-        assertEquals(next0, core.client.queue.value.playingNext.size)
+        assertEquals(next0, core.client.queue.value.groupEntries.size)
         // "None" on a side: that side does not move at all.
         core.set(SettingKeys.SWIPE_LIST_START_TO_END, SwipeOptions.NONE)
         compose.onNodeWithTag("row").performTouchInput { swipeRight() }
         compose.waitForIdle()
-        assertEquals(next0, core.client.queue.value.playingNext.size)
+        assertEquals(next0, core.client.queue.value.groupEntries.size)
         // Love through the registry.
         core.set(SettingKeys.SWIPE_LIST_END_TO_START, ActionIds.LOVE)
         compose.onNodeWithTag("row").performTouchInput { swipeLeft() }
         compose.waitUntil(5_000) { core.fake.library.track(track.id)!!.loved }
-        assertEquals(next0, core.client.queue.value.playingNext.size)
+        assertEquals(next0, core.client.queue.value.groupEntries.size)
     }
 
     @Test
@@ -101,20 +161,20 @@ class SwipeActionsTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         compose.waitForIdle()
-        val gone = core.client.queue.value.upcoming.first()
+        val gone = core.client.queue.value.restEntries.first()
         compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${gone.item.key}"))
         compose.onNodeWithTag("queue.row.${gone.item.key}").performTouchInput { swipeLeft() }
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.none { it.item.key == gone.item.key } }
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.none { it.item.key == gone.item.key } }
         // The queue's own setting: swiping right now loves, and the list's setting does not apply here.
         core.set(SettingKeys.SWIPE_QUEUE_START_TO_END, ActionIds.LOVE)
         core.set(SettingKeys.SWIPE_LIST_START_TO_END, ActionIds.PLAY_NEXT)
         compose.waitForIdle()
-        val loved = core.client.queue.value.upcoming.first { !it.track.loved }
-        val count = core.client.queue.value.let { it.playingNext.size + it.upcoming.size }
+        val loved = core.client.queue.value.restEntries.first { !it.track.loved }
+        val count = core.client.queue.value.let { it.groupEntries.size + it.restEntries.size }
         compose.onNodeWithTag("queue.list").performScrollToNode(hasTestTag("queue.row.${loved.item.key}"))
         compose.onNodeWithTag("queue.row.${loved.item.key}").performTouchInput { swipeRight() }
         compose.waitUntil(5_000) { core.fake.library.track(loved.track.id)!!.loved }
-        assertEquals(count, core.client.queue.value.let { it.playingNext.size + it.upcoming.size })
+        assertEquals(count, core.client.queue.value.let { it.groupEntries.size + it.restEntries.size })
     }
 
     @Test
@@ -145,5 +205,12 @@ class SwipeActionsTest {
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_LIST_END_TO_START]?.value == "\"${ActionIds.ADD_TO_PLAYLIST}\"" }
         compose.onNodeWithTag("customise.${SettingKeys.SWIPE_QUEUE_START_TO_END}").performScrollTo().onChildren().filterToOne(hasText("None")).performClick()
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_QUEUE_START_TO_END]?.value == "\"${SwipeOptions.NONE}\"" }
+        // The player's swipe up: the queue by default, any of the four choosable.
+        val playerUp = compose.onNodeWithTag("customise.${SettingKeys.SWIPE_PLAYER_UP}").performScrollTo()
+        playerUp.onChildren().filterToOne(hasText("Queue")).assertIsOn()
+        playerUp.onChildren().filterToOne(hasText("Play on")).performClick()
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_PLAYER_UP]?.value == "\"${SwipeOptions.PLAYER_UP_CONNECT}\"" }
+        playerUp.onChildren().filterToOne(hasText("Song menu")).performClick()
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_PLAYER_UP]?.value == "\"${SwipeOptions.PLAYER_UP_MENU}\"" }
     }
 }

@@ -30,6 +30,8 @@ pub struct ScrobbleRecord {
 
 #[derive(Default)]
 pub struct FakeState {
+    /// See [`SubsonicApi::feature_overrides`].
+    pub feature_overrides: Option<crate::api::ProviderCapabilities>,
     pub songs: BTreeMap<String, Child>,
     pub albums: BTreeMap<String, AlbumId3>,
     pub artists: BTreeMap<String, ArtistId3>,
@@ -62,6 +64,11 @@ pub struct FakeServer {
 }
 
 impl FakeServer {
+    /// This server behind the provider seam, as the core uses it.
+    pub fn provider(&self) -> crate::provider::NavidromeProvider {
+        crate::provider::NavidromeProvider::new(std::sync::Arc::new(self.clone()))
+    }
+
     pub fn new(server_id: &str, username: &str) -> Self {
         let caps = ServerCapabilities {
             server_version: Some("0.63.1 (fake)".into()),
@@ -326,6 +333,10 @@ impl SubsonicApi for FakeServer {
     fn username(&self) -> Option<String> {
         Some(self.username.clone())
     }
+    fn feature_overrides(&self) -> Option<crate::api::ProviderCapabilities> {
+        self.state.lock().feature_overrides.clone()
+    }
+
     fn capabilities(&self) -> ServerCapabilities {
         self.caps.lock().clone()
     }
@@ -696,6 +707,19 @@ impl SubsonicApi for FakeServer {
         })
     }
 
+    fn create_share(&self, ids: &[String]) -> ApiFuture<'_, String> {
+        let ids = ids.to_vec();
+        Box::pin(async move {
+            self.gate("createShare")?;
+            if ids.is_empty() {
+                return Err(SubsonicError::Protocol("createShare needs an id".into()));
+            }
+            let mut st = self.state.lock();
+            st.next_id += 1;
+            Ok(format!("https://navidrome.example/share/{}", st.next_id))
+        })
+    }
+
     fn search3(&self, query: &str, page: Search3Page) -> ApiFuture<'_, SearchResult3> {
         let query = query.to_lowercase();
         Box::pin(async move {
@@ -774,6 +798,18 @@ impl SubsonicApi for FakeServer {
                 .take(count as usize)
                 .cloned()
                 .collect())
+        })
+    }
+
+    fn album_info2(&self, id: &str) -> ApiFuture<'_, AlbumInfo> {
+        let id = id.to_string();
+        Box::pin(async move {
+            self.gate("getAlbumInfo2")?;
+            let st = self.state.lock();
+            Ok(AlbumInfo {
+                notes: st.albums.get(&id).map(|a| format!("About {}", a.name)),
+                ..Default::default()
+            })
         })
     }
 

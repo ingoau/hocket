@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -19,6 +20,8 @@ import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.compositeOver
@@ -97,8 +100,11 @@ val LyricsBackgroundAnimated = SemanticsPropertyKey<Boolean>("LyricsBackgroundAn
 fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, modifier: Modifier = Modifier, tag: String = "lyrics.background") {
     val client = LocalCoreClient.current
     val reducedMotion = LocalReducedMotion.current
-    val prepared by produceState<Pair<Bitmap, Float>?>(initialValue = null, coverArt) {
-        value = withContext(Dispatchers.Default) {
+    // Started afresh for each cover (produceState keeps one state across keys: the last cover's
+    // texture would stay until the new one is ready, another song's art behind this one's, #147).
+    val preparedState = remember(coverArt) { mutableStateOf<Pair<Bitmap, Float>?>(null) }
+    LaunchedEffect(preparedState) {
+        preparedState.value = withContext(Dispatchers.Default) {
             val path = coverArt?.let { client.artworkPath(it, ArtworkSizes.LIST) }
             val src = path?.let { BitmapFactory.decodeFile(it.removePrefix("file://"), BitmapFactory.Options().apply { inSampleSize = 2 }) }
                 ?: placeholderTexture(coverArt)
@@ -106,6 +112,7 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
             tex to LyricsContrast.scrimAlpha(LyricsContrast.brightest(tex))
         }
     }
+    val prepared by preparedState
     val (tex, scrim) = prepared ?: return
     var time by remember { mutableFloatStateOf(0f) }
     val shouldAnimate = animated && !reducedMotion && visible && Build.VERSION.SDK_INT >= 33
@@ -129,7 +136,13 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
                 it.setFloatUniform("texSize", tex.width.toFloat(), tex.height.toFloat())
             }
         }
-        Canvas(modifier.fillMaxSize().semantics { this[LyricsBackgroundAnimated] = shouldAnimate }.testTag(tag)) {
+        // Still and showing: drawn into an offscreen layer that the renderer keeps, so whatever
+        // redraws above it (lyrics, the seek bar) composites a cached texture instead of re-running
+        // the full-screen warp shader every frame. Moving, the layer would be redrawn each frame
+        // anyway; hidden (the player collapsed), it would hold a screen-sized texture for nothing.
+        val still = !shouldAnimate && visible
+        Canvas(modifier.fillMaxSize().graphicsLayer { compositingStrategy = if (still) CompositingStrategy.Offscreen else CompositingStrategy.Auto }
+            .semantics { this[LyricsBackgroundAnimated] = shouldAnimate }.testTag(tag)) {
             shader.setFloatUniform("size", size.width, size.height)
             shader.setFloatUniform("time", if (shouldAnimate) time else 0f)
             nativePaint.shader = shader

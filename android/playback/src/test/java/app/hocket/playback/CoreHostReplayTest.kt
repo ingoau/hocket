@@ -2,17 +2,21 @@ package app.hocket.playback
 
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
+import app.hocket.core.api.AccountKind
+import app.hocket.core.api.AccountSetup
 import app.hocket.core.api.Command
+import app.hocket.core.api.ProviderCapabilities
 import app.hocket.core.api.ErrorKind
 import app.hocket.core.api.Event
 import app.hocket.core.api.EventErrorInner
-import app.hocket.core.api.EventServersChangedInner
+import app.hocket.core.api.EventAccountsChangedInner
 import app.hocket.core.api.EventSnapshotInner
 import app.hocket.core.api.EventStartedInner
+import app.hocket.core.api.EventYtmSignInExpiredInner
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.ServerCapabilities
-import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.AccountInfo
 import app.hocket.core.api.Snapshot
 import app.hocket.core.fake.FakeCore
 import kotlinx.coroutines.CoroutineStart
@@ -51,22 +55,26 @@ class CoreHostReplayTest {
         override suspend fun query(query: Query): QueryResult = error("unused")
         override fun close() = Unit
         suspend fun emit(event: Event) { flow.emit(event); yield(); yield() }
-        val addServers get() = dispatched.filterIsInstance<Command.AddServer>()
+        val addServers get() = dispatched.filterIsInstance<Command.AddAccount>().map { (it.data.setup as AccountSetup.Navidrome).data }
     }
 
     private val url = "https://music.example.net"
     private val caps = ServerCapabilities("0.63.1", true, emptyList(), true, true, true, true, false, true, false, true)
-    private fun server(reachable: Boolean = true, user: String = "alice") = ServerInfo("srv", url, user, "Music", caps, null, reachable = reachable)
+    private fun server(reachable: Boolean = true, user: String = "alice"): AccountInfo {
+        val id = ServerCredentialStore.key(url, user)
+        val features = ProviderCapabilities(true, true, true, true, true, true, true, true, true, true, false, true, true, true, false, true)
+        return AccountInfo(id, AccountKind.Navidrome, 0u, id, url, user, "Music", features, caps, null, reachable = reachable)
+    }
     private val credential = ServerCredential(url, "alice", "secret", null)
     private lateinit var snapshot: Snapshot
     private lateinit var core: ScriptedCore
     private lateinit var store: InMemoryCredentialStore
     private var replay: Job? = null
 
-    private fun started(servers: List<ServerInfo>) = Event.Started(EventStartedInner(snapshot.copy(servers = servers)))
-    private fun snapshotOf(servers: List<ServerInfo>) = Event.Snapshot(EventSnapshotInner(snapshot.copy(servers = servers)))
-    private fun serversChanged(servers: List<ServerInfo>) = Event.ServersChanged(EventServersChangedInner(servers))
-    private fun authError() = Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", null))
+    private fun started(servers: List<AccountInfo>) = Event.Started(EventStartedInner(snapshot.copy(accounts = servers)))
+    private fun snapshotOf(servers: List<AccountInfo>) = Event.Snapshot(EventSnapshotInner(snapshot.copy(accounts = servers)))
+    private fun serversChanged(servers: List<AccountInfo>) = Event.AccountsChanged(EventAccountsChangedInner(servers))
+    private fun authError(accountId: String? = null) = Event.Error(EventErrorInner(ErrorKind.Auth, "Wrong username or password", null, accountId))
 
     @Before
     fun setUp() = runBlocking {
@@ -95,6 +103,32 @@ class CoreHostReplayTest {
      */
     private fun kotlinx.coroutines.CoroutineScope.startReplay() {
         replay = kotlinx.coroutines.CoroutineScope(coroutineContext + Job()).launch(start = CoroutineStart.UNDISPATCHED) { CoreHost.replayCredentials(core, store) }
+    }
+
+    private fun ytm(): AccountInfo {
+        val features = ProviderCapabilities(true, true, true, true, false, false, true, true, false, true, false, true, true, true, true, true)
+        return AccountInfo("UCme", AccountKind.YoutubeMusic, 1u, "ytm", YtmLogin.URL, "Test User", "YouTube Music (Test User)", features, caps, null, reachable = true)
+    }
+
+    @Test
+    fun youTubeMusicSignInIsKeptUnderItsKeyAndReplayedWithItsCookies() = runBlocking {
+        startReplay()
+        core.emit(started(emptyList()))
+        CoreHost.ytmLogin(core::dispatch, "SAPISID=abc")
+        assertTrue("not stored before the core accepts it", store.keys().isEmpty())
+        core.emit(serversChanged(listOf(ytm())))
+        assertEquals(listOf(YtmLogin.KEY), store.keys())
+        // The next core start replays it with its cookies.
+        replay?.cancel()
+        CoreHost.resetForTests()
+        core = ScriptedCore()
+        startReplay()
+        core.emit(started(listOf(ytm())))
+        val setup = core.dispatched.filterIsInstance<Command.AddAccount>().single().data.setup as AccountSetup.YoutubeMusic
+        assertEquals("SAPISID=abc", setup.data.cookies)
+        // Signing out forgets it.
+        CoreHost.removeAccount(core::dispatch, ytm())
+        assertTrue(store.keys().isEmpty())
     }
 
     @Test
@@ -132,7 +166,7 @@ class CoreHostReplayTest {
         store.save(ServerCredential("https://other.example.net", "bob", "pw", null))
         startReplay()
         core.emit(started(listOf(server(reachable = false))))
-        assertEquals(listOf("alice"), core.addServers.map { it.data.username })
+        assertEquals(listOf("alice"), core.addServers.map { it.username })
     }
 
     @Test
@@ -143,8 +177,8 @@ class CoreHostReplayTest {
         core.emit(serversChanged(listOf(server(reachable = true))))
         assertEquals(1, core.addServers.size)
         var storeEmptyAtRemove: Boolean? = null
-        core.onDispatch = { c -> if (c is Command.RemoveServer) storeEmptyAtRemove = store.all().isEmpty() }
-        CoreHost.removeServer(core::dispatch, server())
+        core.onDispatch = { c -> if (c is Command.RemoveAccount) storeEmptyAtRemove = store.all().isEmpty() }
+        CoreHost.removeAccount(core::dispatch, server())
         assertEquals("the credential is gone before RemoveServer reaches the core", true, storeEmptyAtRemove)
         assertFalse(CoreHost.hasLogin(server(), CoreHost.logins.value))
         // The core clears the server and re-emits everything: Snapshot{servers: []} then ServersChanged{[]}.
@@ -203,5 +237,67 @@ class CoreHostReplayTest {
         assertEquals(1, core.addServers.size)
         core.emit(serversChanged(listOf(server(user = "someone-else"))))
         assertTrue("logins for servers the core no longer lists are dropped", store.all().isEmpty())
+    }
+
+    @Test
+    fun youTubeMusicCountsAsLoggedInByItsFixedKeyOrWhenAnonymous() = runBlocking {
+        startReplay()
+        core.emit(started(emptyList()))
+        assertFalse(CoreHost.hasLogin(ytm(), CoreHost.logins.value))
+        CoreHost.ytmLogin(core::dispatch, "SAPISID=abc")
+        core.emit(serversChanged(listOf(ytm())))
+        assertTrue("a channel id account is logged in through YtmLogin.KEY", CoreHost.hasLogin(ytm(), CoreHost.logins.value))
+        assertTrue(CoreHost.hasLogin(ytm().copy(id = AccountIds.YTM_ANON), emptySet()))
+        assertTrue("YouTube Music has no version floor", CoreHost.meetsFloor(ytm().copy(capabilities = caps.copy(meetsFloor = false))))
+        assertFalse(CoreHost.meetsFloor(server().copy(capabilities = caps.copy(meetsFloor = false))))
+    }
+
+    @Test
+    fun anAuthErrorDropsOnlyTheNamedAccountsLogin() = runBlocking {
+        val bob = ServerCredential(url, "bob", "pw", null)
+        store.save(credential)
+        store.save(bob)
+        store.save(YtmLogin.credential("SAPISID=abc"))
+        startReplay()
+        core.emit(started(listOf(server(reachable = false), server(reachable = false, user = "bob"), ytm())))
+        core.emit(authError(server(user = "bob").id))
+        assertEquals("secret", store.get(url, "alice")?.password)
+        assertNull(store.get(url, "bob"))
+        assertTrue(CoreHost.hasLogin(ytm(), CoreHost.logins.value))
+        core.emit(authError(ytm().id))
+        assertFalse("a YouTube Music refusal drops its fixed-key login", CoreHost.hasLogin(ytm(), CoreHost.logins.value))
+        assertEquals("secret", store.get(url, "alice")?.password)
+    }
+
+    @Test
+    fun anAuthErrorWithoutAnAccountPrunesOnlyWhenOneNavidromeAccountExists() = runBlocking {
+        store.save(credential)
+        store.save(ServerCredential(url, "bob", "pw", null))
+        startReplay()
+        core.emit(started(listOf(server(reachable = false), server(reachable = false, user = "bob"))))
+        core.emit(authError())
+        assertEquals("which of two logins was refused is unknown: both stay", 2, store.all().size)
+    }
+
+    @Test
+    fun aSetupLoginSurvivesAnotherAccountsRefusal() = runBlocking {
+        store.save(credential)
+        startReplay()
+        core.emit(started(listOf(server(reachable = false))))
+        CoreHost.login(core::dispatch, ServerCredential(url, "bob", "pw", null))
+        core.emit(authError(server().id))
+        assertNull("alice's refused login is dropped", store.get(url, "alice"))
+        core.emit(serversChanged(listOf(server(reachable = true, user = "bob"))))
+        assertEquals("bob's pending login is still saved once confirmed", "pw", store.get(url, "bob")?.password)
+    }
+
+    @Test
+    fun anExpiredYouTubeMusicSignInVoidsItsPendingLogin() = runBlocking {
+        startReplay()
+        core.emit(started(emptyList()))
+        CoreHost.ytmLogin(core::dispatch, "SAPISID=abc")
+        core.emit(Event.YtmSignInExpired(EventYtmSignInExpiredInner("UCme")))
+        core.emit(serversChanged(listOf(ytm())))
+        assertTrue("the expired sign-in is not stored", store.keys().isEmpty())
     }
 }

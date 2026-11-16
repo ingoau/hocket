@@ -1,5 +1,16 @@
 package app.hocket.ui.screens.settings
 
+import app.hocket.core.api.AccountInfo
+import androidx.compose.material3.IconButton
+import androidx.compose.foundation.layout.Row
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.pluralStringResource
+import app.hocket.core.Saver
+import app.hocket.core.api.SaverFeature
+import app.hocket.core.api.SaverLevel
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -29,6 +40,7 @@ import app.hocket.core.api.SettingScope
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,11 +67,10 @@ import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueryResult
-import app.hocket.core.api.QueueMode
 import app.hocket.playback.CoreHost
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.ConfirmDialog
-import app.hocket.ui.components.formatAgo
+import app.hocket.ui.components.formatAgoPhrase
 import app.hocket.ui.components.formatBytes
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.nav.Route
@@ -79,27 +90,46 @@ import kotlin.math.roundToInt
 @Composable
 internal fun Chevron() = Icon(HocketIcons.Filled.ChevronRight, null)
 
-/** Account & server: the settings-sync master switch, the server, sync now / full sync, sign out. */
+/**
+ * Accounts: every account in priority order (the first plays first and holds the session), each
+ * with its server, sync now / full sync, move up / down and remove; Add account; then the
+ * settings-sync master switch.
+ */
 @Composable
 fun AccountSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
-    val server by client.server.collectAsStateWithLifecycle()
+    val accounts by client.accounts.collectAsStateWithLifecycle()
     val sync = setting(SettingKeys.SYNC_ENABLED)
-    var signOut by remember { mutableStateOf(false) }
-    SubScreen(nav, stringResource(R.string.settings_category_account)) {
-        // The server login is kept on this device only (the keystore); the sync switch has its registry scope.
-        server?.let { s ->
-            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgo(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = "server.info")
-            SettingRow(stringResource(R.string.settings_sync_now), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = false)) }, tag = "server.syncNow")
-            SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) }, tag = "server.fullSync")
-        }
-        SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body), scope = sync.scope ?: SettingScope.DeviceLocal, tag = "sync.master")
-        // Destructive, and last: nothing below it to hit by mistake.
-        server?.let { SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = true }, tag = "server.remove", destructive = true) { Icon(HocketIcons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error) } }
+    var signOut by remember { mutableStateOf<AccountInfo?>(null) }
+    fun move(from: Int, to: Int) {
+        if (to !in accounts.indices) return
+        val ids = accounts.map { it.id }.toMutableList()
+        ids.add(to, ids.removeAt(from))
+        client.dispatch(Commands.reorderAccounts(ids))
     }
-    // Sign-out goes through CoreHost.removeServer: the stored login is removed before RemoveServer,
-    // so nothing can replay it and resurrect the server.
-    if (signOut) server?.let { s -> ConfirmDialog(stringResource(R.string.settings_remove_server_confirm, s.name), stringResource(R.string.settings_remove_server), onConfirm = { CoreHost.removeServer(client::dispatch, s) }, onDismiss = { signOut = false }) }
+    SubScreen(nav, stringResource(R.string.settings_category_account)) {
+        if (accounts.size > 1) Text(stringResource(R.string.settings_accounts_order_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        accounts.forEachIndexed { i, s ->
+            // The first account keeps the tags tests and the settings search know.
+            val tag = { t: String -> if (i == 0) t else "$t.$i" }
+            SettingsSection(s.name, tag = tag("server.section"))
+            // The login is kept on this device only (the keystore).
+            SettingRow(stringResource(R.string.settings_server_body, s.url, s.username), s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgoPhrase(it)) } ?: stringResource(R.string.settings_never_synced), scope = SettingScope.DeviceLocal, tag = tag("server.info")) {
+                if (accounts.size > 1) Row {
+                    IconButton(onClick = { move(i, i - 1) }, enabled = i > 0, modifier = Modifier.testTag("account.up.$i")) { Icon(HocketIcons.Filled.ArrowUpward, stringResource(R.string.settings_accounts_up, s.name)) }
+                    IconButton(onClick = { move(i, i + 1) }, enabled = i < accounts.size - 1, modifier = Modifier.testTag("account.down.$i")) { Icon(HocketIcons.Filled.ArrowDownward, stringResource(R.string.settings_accounts_down, s.name)) }
+                }
+            }
+            SettingRow(stringResource(R.string.settings_sync_now), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = false)) }, tag = tag("server.syncNow"))
+            SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) }, tag = tag("server.fullSync"))
+            SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = s }, tag = tag("server.remove"), destructive = true) { Icon(HocketIcons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error) }
+        }
+        SettingRow(stringResource(R.string.settings_accounts_add), stringResource(R.string.settings_accounts_add_body), onClick = { app.hocket.ui.screens.setup.SetupRequests.addAccount() }, tag = "account.add") { Icon(HocketIcons.Filled.Add, null) }
+        SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body), scope = sync.scope ?: SettingScope.DeviceLocal, tag = "sync.master")
+    }
+    // Removal goes through CoreHost.removeAccount: the stored login is removed before RemoveAccount,
+    // so nothing can replay it and resurrect the account.
+    signOut?.let { s -> ConfirmDialog(stringResource(R.string.settings_remove_server_confirm, s.name), stringResource(R.string.settings_remove_server), onConfirm = { CoreHost.removeAccount(client::dispatch, s) }, onDismiss = { signOut = null }) }
 }
 
 /** Appearance: theme, accent colour, colour from the artwork, animated background, immersive artwork. */
@@ -133,6 +163,10 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
         ChoiceRow(immersiveOptions, isSelected = { (immersive.string ?: "automatic") == it }, onSelect = { immersive.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
         val playerRating = setting(SettingKeys.DISPLAY_PLAYER_RATING)
         SwitchRow(stringResource(R.string.settings_player_rating), playerRating.bool ?: true, { playerRating.setBool(it) }, stringResource(R.string.settings_player_rating_body), playerRating.scope, tag = "display.playerRating")
+        val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR)
+        SwitchRow(stringResource(R.string.settings_floating_nav_bar), floatingBar.bool ?: true, { floatingBar.setBool(it) }, stringResource(R.string.settings_floating_nav_bar_body), floatingBar.scope, tag = "display.floatingNavBar")
+        val albumArtists = setting(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS)
+        SwitchRow(stringResource(R.string.settings_album_track_artists), albumArtists.bool ?: false, { albumArtists.setBool(it) }, stringResource(R.string.settings_album_track_artists_body), albumArtists.scope, tag = "display.albumTrackArtists")
     }
 }
 
@@ -175,7 +209,7 @@ private fun AccentChoices(dynamicLabel: String, swatches: List<Pair<String, Stri
 }
 
 /**
- * Playback & queue: queue mode, how many recent queues to keep, autoplay, sleep-timer defaults, and
+ * Playback & queue: the Queue section, how many recent queues to keep, autoplay, sleep-timer defaults, and
  * whether other apps (media browsers, Android Auto) may browse and control playback.
  */
 @Composable
@@ -183,16 +217,13 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val queue by client.queue.collectAsStateWithLifecycle()
     val savedCap = setting(SettingKeys.QUEUE_SAVED_CAP)
-    val mode = setting(SettingKeys.QUEUE_MODE)
+    val section = setting(SettingKeys.QUEUE_SECTION)
     val sleepMinutes = setting(SettingKeys.SLEEP_DEFAULT_MINUTES)
     val sleepEnd = setting(SettingKeys.SLEEP_STOP_AT_END_OF_TRACK)
     val externalControl = setting(SettingKeys.MEDIA_EXTERNAL_CONTROL)
     SubScreen(nav, stringResource(R.string.settings_category_playback)) {
-        val current = queue.mode
-        val appleLabel = stringResource(R.string.queue_mode_apple)
-        val youTubeLabel = stringResource(R.string.queue_mode_youtube)
-        SettingRow(stringResource(R.string.queue_mode), scope = mode.scope, tag = "queue.mode")
-        ChoiceRow(listOf(QueueMode.Apple to appleLabel, QueueMode.YouTube to youTubeLabel), isSelected = { current == it }, onSelect = { client.dispatch(Commands.setQueueMode(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+        SwitchRow(stringResource(R.string.settings_queue_section), section.bool ?: true, { section.setBool(it) },
+            subtitle = stringResource(R.string.settings_queue_section_desc), scope = section.scope, tag = "queue.section")
         val cap = savedCap.int ?: 10
         var dragging by remember(cap) { mutableFloatStateOf(cap.toFloat()) }
         val shown = dragging.roundToInt()
@@ -207,6 +238,9 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
             modifier = Modifier.padding(horizontal = 16.dp).testTag("queue.savedCap.slider"),
         )
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")
+        val resumeAlbums = setting(SettingKeys.PLAYBACK_RESUME_ALBUMS)
+        SwitchRow(stringResource(R.string.settings_resume_albums), resumeAlbums.bool ?: true, { resumeAlbums.setBool(it) },
+            subtitle = stringResource(R.string.settings_resume_albums_body), scope = resumeAlbums.scope, tag = "playback.resumeAlbums")
         val minutes = sleepMinutes.int ?: 30
         SettingRow(stringResource(R.string.settings_sleep_default), stringResource(R.string.sleep_minutes, minutes), sleepMinutes.scope, tag = "sleep.defaultMinutes")
         val minuteResources = androidx.compose.ui.platform.LocalResources.current
@@ -240,7 +274,7 @@ private fun HomeScreenSection() {
             runCatching { widgets.requestPinAppWidget(android.content.ComponentName(context, app.hocket.playback.NowPlayingWidget::class.java), null, null) }
         }, tag = "widget.add")
     }
-    SettingsSection(stringResource(R.string.settings_shortcuts))
+    SettingsSection(stringResource(R.string.settings_shortcuts), tag = "home.shortcuts")
     Text(stringResource(R.string.settings_shortcuts_summary, AppShortcuts.MAX), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
     AppShortcut.entries.forEach { shortcut ->
         val on = shortcut in current
@@ -351,16 +385,138 @@ fun LibrarySettingsScreen(nav: NavHostController) {
     }
 }
 
-/** Battery: the saver mode and whether it follows the system's battery saver. */
+/**
+ * Battery: the saver level (a four-stop slider, Off to Max), the switches it stands for (editing
+ * one makes the level Custom, starting from what the chosen level turns off), and whether the
+ * system's battery saver engages it, at which level.
+ */
 @Composable
 fun BatterySettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
-    val batterySaver by client.batterySaver.collectAsStateWithLifecycle()
+    val saver by client.batterySaver.collectAsStateWithLifecycle()
+    val levelSetting = setting(SettingKeys.BATTERY_LEVEL)
+    val customSetting = setting(SettingKeys.BATTERY_CUSTOM)
     val autoSaver = setting(SettingKeys.BATTERY_AUTO_ENGAGE)
-    SubScreen(nav, stringResource(R.string.settings_section_battery)) {
-        SwitchRow(stringResource(R.string.settings_battery_saver), batterySaver, { client.dispatch(Commands.setBatterySaver(it)) }, stringResource(R.string.settings_battery_body), tag = "battery.saver")
-        SwitchRow(stringResource(R.string.settings_battery_auto), autoSaver.bool ?: true, { autoSaver.setBool(it) }, scope = autoSaver.scope, tag = "battery.autoEngage")
+    val autoLevelSetting = setting(SettingKeys.BATTERY_AUTO_LEVEL)
+    val storedLevel = Saver.parseLevel(levelSetting.raw) ?: SaverLevel.Off
+    val storedCustom = Saver.parseCustom(customSetting.raw)
+    // What this screen last wrote, shown until the core reports it back: the slider does not snap
+    // back to the old stop on release, and quick toggles build on each other instead of on the
+    // last reported set. Dropped once the setting matches (or after a while, if it never does).
+    var pendingLevel by remember { mutableStateOf<SaverLevel?>(null) }
+    var pendingCustom by remember { mutableStateOf<List<SaverFeature>?>(null) }
+    LaunchedEffect(pendingLevel, storedLevel) {
+        val p = pendingLevel ?: return@LaunchedEffect
+        if (p == storedLevel) pendingLevel = null else { kotlinx.coroutines.delay(PENDING_SETTING_MS); pendingLevel = null }
     }
+    LaunchedEffect(pendingCustom, customSetting.raw) {
+        val p = pendingCustom ?: return@LaunchedEffect
+        if (Saver.customValue(p) == Saver.customValue(storedCustom)) pendingCustom = null else { kotlinx.coroutines.delay(PENDING_SETTING_MS); pendingCustom = null }
+    }
+    val chosen = pendingLevel ?: storedLevel
+    val chosenFeatures = Saver.features(chosen, pendingCustom ?: storedCustom)
+    SubScreen(nav, stringResource(R.string.settings_section_battery)) {
+        val title = stringResource(R.string.settings_battery_saver)
+        val levelName = saverLevelName(chosen)
+        val summary = saverLevelSummary(chosen, chosenFeatures.size)
+        SettingRow(title, stringResource(R.string.settings_battery_level_value, levelName, summary), levelSetting.scope, tag = "battery.level")
+        // A preset sits on its stop. Custom has no stop: the track loses its ticks and the thumb
+        // sits between stops, as far along as the share of savings it turns on. A drag is held
+        // locally and committed on release (the tick count changing mid-drag would restart the slider).
+        val presetIndex = Saver.PRESETS.indexOf(chosen)
+        var drag by remember { mutableStateOf<Float?>(null) }
+        val last = Saver.PRESETS.lastIndex.toFloat()
+        val value = drag ?: if (presetIndex >= 0) presetIndex.toFloat() else last * chosenFeatures.size / Saver.ALL.size
+        val shownName = drag?.let { saverLevelName(Saver.PRESETS[it.roundToInt()]) } ?: levelName
+        LabelledSlider(
+            value = value, onValueChange = { drag = it },
+            onValueChangeFinished = {
+                drag?.let {
+                    val level = Saver.PRESETS[it.roundToInt()]
+                    pendingLevel = level
+                    client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(level)))
+                }
+                drag = null
+            },
+            valueRange = 0f..last, steps = Saver.PRESETS.size - 2, showTicks = presetIndex >= 0,
+            label = title, valueText = shownName,
+            modifier = Modifier.padding(horizontal = 16.dp).testTag("battery.level.slider"),
+        )
+        if (saver.automatic) {
+            Text(stringResource(R.string.settings_battery_automatic_note, saverLevelName(saver.level)), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag("battery.automaticNote"))
+        }
+
+        var expanded by rememberSaveable { mutableStateOf(chosen == SaverLevel.Custom) }
+        val turn by animateFloatAsState(if (expanded) 180f else 0f, label = "customiseArrow")
+        SettingRow(stringResource(R.string.settings_battery_customise), stringResource(R.string.settings_battery_customise_body), onClick = { expanded = !expanded }, tag = "battery.customise") {
+            Icon(HocketIcons.Filled.KeyboardArrowDown, null, Modifier.graphicsLayer { rotationZ = turn })
+        }
+        AnimatedVisibility(expanded) {
+            androidx.compose.foundation.layout.Column {
+                Saver.ALL.forEach { feature ->
+                    val (name, body) = saverFeatureText(feature)
+                    SwitchRow(name, feature in chosenFeatures, { on ->
+                        val next = (if (on) chosenFeatures + feature else chosenFeatures - feature).distinct().sorted()
+                        pendingCustom = next
+                        client.dispatch(Commands.setSetting(SettingKeys.BATTERY_CUSTOM, Saver.customValue(next)))
+                        if (chosen != SaverLevel.Custom) {
+                            pendingLevel = SaverLevel.Custom
+                            client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(SaverLevel.Custom)))
+                        }
+                    }, subtitle = body, tag = "battery.feature.${feature.string}")
+                }
+            }
+        }
+
+        val autoOn = autoSaver.bool ?: true
+        SwitchRow(stringResource(R.string.settings_battery_auto), autoOn, { autoSaver.setBool(it) }, scope = autoSaver.scope, tag = "battery.autoEngage")
+        if (autoOn) {
+            val autoLevel = Saver.parseLevel(autoLevelSetting.raw)?.takeIf { it != SaverLevel.Off } ?: SaverLevel.Medium
+            SettingRow(stringResource(R.string.settings_battery_auto_level), saverLevelName(autoLevel), autoLevelSetting.scope, tag = "battery.autoLevel")
+            val options = listOf(SaverLevel.Light, SaverLevel.Medium, SaverLevel.Max, SaverLevel.Custom).map { it to saverLevelName(it) }
+            ChoiceRow(options, isSelected = { it == autoLevel }, onSelect = { autoLevelSetting.setRaw(Saver.levelValue(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+        }
+    }
+}
+
+/** How long the battery screen shows a level or custom set it wrote before trusting the stored one again. */
+private const val PENDING_SETTING_MS = 3_000L
+
+@Composable
+internal fun saverLevelName(level: SaverLevel): String = stringResource(
+    when (level) {
+        SaverLevel.Off -> R.string.saver_level_off
+        SaverLevel.Light -> R.string.saver_level_light
+        SaverLevel.Medium -> R.string.saver_level_medium
+        SaverLevel.Max -> R.string.saver_level_max
+        SaverLevel.Custom -> R.string.saver_level_custom
+    },
+)
+
+@Composable
+private fun saverLevelSummary(level: SaverLevel, customCount: Int): String = when (level) {
+    SaverLevel.Off -> stringResource(R.string.saver_summary_off)
+    SaverLevel.Light -> stringResource(R.string.saver_summary_light)
+    SaverLevel.Medium -> stringResource(R.string.saver_summary_medium)
+    SaverLevel.Max -> stringResource(R.string.saver_summary_max)
+    SaverLevel.Custom -> pluralStringResource(R.plurals.saver_summary_custom, customCount, customCount, Saver.ALL.size)
+}
+
+@Composable
+private fun saverFeatureText(feature: SaverFeature): Pair<String, String> {
+    val (name, body) = when (feature) {
+        SaverFeature.StillBackground -> R.string.saver_feature_still_background to R.string.saver_feature_still_background_body
+        SaverFeature.StillSeekWave -> R.string.saver_feature_still_seek_wave to R.string.saver_feature_still_seek_wave_body
+        SaverFeature.LighterLyrics -> R.string.saver_feature_lighter_lyrics to R.string.saver_feature_lighter_lyrics_body
+        SaverFeature.RefreshCap -> R.string.saver_feature_refresh_cap to R.string.saver_feature_refresh_cap_body
+        SaverFeature.SlowSync -> R.string.saver_feature_slow_sync to R.string.saver_feature_slow_sync_body
+        SaverFeature.SimpleLyrics -> R.string.saver_feature_simple_lyrics to R.string.saver_feature_simple_lyrics_body
+        SaverFeature.NoImmersiveArtwork -> R.string.saver_feature_no_immersive_artwork to R.string.saver_feature_no_immersive_artwork_body
+        SaverFeature.NoArtworkBlur -> R.string.saver_feature_no_artwork_blur to R.string.saver_feature_no_artwork_blur_body
+        SaverFeature.SmallArtwork -> R.string.saver_feature_small_artwork to R.string.saver_feature_small_artwork_body
+    }
+    return stringResource(name) to stringResource(body)
 }
 
 /** Backup & diagnostics: export (optionally with secrets), import, copy diagnostics. */

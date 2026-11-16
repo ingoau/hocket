@@ -46,7 +46,7 @@ test("home and library", async () => {
       const genres = (await page.evaluate(() => window.hocket.query({ type: "genres", data: { server_id: "" } }).catch(() => undefined))) as { data?: { name: string }[] } | undefined;
       const genre = genres?.data?.[0]?.name ?? "Ambient";
       const playlists = (await page.evaluate(async () => {
-        const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+        const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
         return window.hocket.query({ type: "playlists", data: { server_id: s.data[0]!.id } });
       })) as { data: { id: string }[] };
       await setSetting(page, "library.pins", [

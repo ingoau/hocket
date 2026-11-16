@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::api::{MediaSource, OutputDevice};
+use crate::api::{AudioSettings, MediaSource, OutputDevice};
 use crate::audio::backend::{BackendError, PlaybackBackend};
 use crate::core::stream_reader::STREAM_URL_PREFIX;
 
@@ -66,8 +66,19 @@ pub fn describe_source(source: &MediaSource) -> String {
     } else {
         ""
     };
+    let mix = match &source.mix_in {
+        Some(p) => format!(
+            ", mixed in ({:?} from {} ms, {} ms tail)",
+            p.kind, p.tail_start_ms, p.tail_len_ms
+        ),
+        None => String::new(),
+    };
+    let mix_out = source
+        .mix_out_ms
+        .map(|ms| format!(", mix out from {ms} ms"))
+        .unwrap_or_default();
     format!(
-        "{} ({}) from {}{transcoded}",
+        "{} ({}) from {}{transcoded}{mix}{mix_out}",
         source.key,
         source.track.id,
         source_kind(&source.url)
@@ -133,6 +144,13 @@ impl PlaybackBackend for LoggedBackend {
         )
     }
 
+    fn complete_transition(&self) -> Result<(), BackendError> {
+        logged(
+            || "complete transition".into(),
+            self.inner.complete_transition(),
+        )
+    }
+
     fn set_volume(&self, volume: f64) -> Result<(), BackendError> {
         self.inner.set_volume(volume)
     }
@@ -179,8 +197,47 @@ impl PlaybackBackend for LoggedBackend {
         )
     }
 
+    fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        // One call carries what the piecewise methods log separately, so
+        // log it as one; nothing here names a source or a device.
+        logged(
+            || {
+                format!(
+                    "audio settings (gapless {}, exclusive {})",
+                    if settings.gapless { "on" } else { "off" },
+                    if settings.exclusive { "on" } else { "off" },
+                )
+            },
+            self.inner.set_audio_settings(settings),
+        )
+    }
+
     fn name(&self) -> &'static str {
         self.inner.name()
+    }
+
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        let what = format!("preview {} at {position_ms} ms", describe_source(&source));
+        logged(|| what, self.inner.preview_load(source, position_ms))
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        logged(|| "preview play".into(), self.inner.preview_play())
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        logged(|| "preview pause".into(), self.inner.preview_pause())
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        logged(
+            || format!("preview seek to {position_ms} ms"),
+            self.inner.preview_seek(position_ms),
+        )
+    }
+
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        logged(|| "preview stop".into(), self.inner.preview_stop())
     }
 }
 
@@ -202,6 +259,10 @@ mod tests {
             mime_type: None,
             gain_db: 0.0,
             transcoded: false,
+            local: false,
+            artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         }
     }
 
@@ -295,6 +356,13 @@ mod tests {
             self.0.lock().push(format!("exclusive {e}"));
             Ok(())
         }
+        fn set_audio_settings(&self, s: &AudioSettings) -> Result<(), BackendError> {
+            self.0.lock().push(format!(
+                "audio settings eq {} {}",
+                s.eq.enabled, s.eq.preamp_db
+            ));
+            Ok(())
+        }
         fn name(&self) -> &'static str {
             "recorder"
         }
@@ -352,6 +420,10 @@ mod tests {
         ));
         assert!(b.output_devices().is_empty());
         b.set_exclusive(true).unwrap();
+        let mut audio = crate::core::default_audio_settings();
+        audio.eq.enabled = true;
+        audio.eq.preamp_db = -6.0;
+        b.set_audio_settings(&audio).unwrap();
         b.stop().unwrap();
         assert_eq!(b.name(), "recorder");
         assert_eq!(
@@ -370,6 +442,7 @@ mod tests {
                 "output Some(\"hdmi\")",
                 "devices",
                 "exclusive true",
+                "audio settings eq true -6",
                 "stop",
             ]
         );

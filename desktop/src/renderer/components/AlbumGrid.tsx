@@ -112,7 +112,7 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
   }, [vrows, cols, onNeedRange]);
   const ids = useMemo(() => items.map((x) => x?.id ?? ""), [items]);
 
-  const publish = useCallback((sel: typeof selection) => setSelection(sel, scope), [setSelection, scope]);
+  const publish = useCallback((sel: typeof selection) => setSelection(sel, scope, targetKind), [setSelection, scope, targetKind]);
   const click = (e: React.MouseEvent, i: number, it: GridItem) => {
     setFocusIdx(i);
     if (e.shiftKey) publish(selectRange(selection, it.id, ids, e.ctrlKey || e.metaKey));

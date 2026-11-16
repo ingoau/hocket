@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
@@ -70,8 +72,8 @@ class MenuScreenshotTest {
         compose.waitUntil(5_000) { core.client.started.value }
         // Late night's first song: loved, rated 4, in Late night once and Sunday morning twice.
         val trackId = lib.playlistTracks.getValue("pl0").first()
-        core.client.dispatch(Commands.loveTrack(trackId, true))
-        core.client.dispatch(Commands.rateTrack(trackId, 4))
+        core.client.dispatch(Commands.loveTrack(TrackRef("fake-server", trackId), true))
+        core.client.dispatch(Commands.rateTrack(TrackRef("fake-server", trackId), 4))
         core.client.dispatch(Commands.setSetting(SettingKeys.LIBRARY_PINS, """[{"kind":"playlist","id":"pl0","tap":"open"},{"kind":"playlist","id":"pl6","tap":"open"}]"""))
         val title = lib.track(trackId)!!.title
         compose.setThemedContent(core) {
@@ -91,6 +93,18 @@ class MenuScreenshotTest {
         step {
             openSongMenu()
             shot(dir, "$prefix-01-song-menu")
+            compose.onNodeWithTag("songMenu.action.preview").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            shot(dir, "$prefix-01d-preview-playing")
+            compose.onNodeWithTag("songMenu.action.preview").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            shot(dir, "$prefix-01e-preview-paused")
+            compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+            awaitTag("songMenu.share.navidrome")
+            settle()
+            shot(dir, "$prefix-01c-share")
+            compose.onNodeWithTag("songMenu.share.back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
             // Held part way through a swipe up: the rest opening with the finger, More folding away.
             compose.mainClock.autoAdvance = false
             compose.onNodeWithTag("songMenu.header").performTouchInput { down(center); repeat(4) { moveBy(androidx.compose.ui.geometry.Offset(0f, -40f)) } }
@@ -109,6 +123,12 @@ class MenuScreenshotTest {
             awaitTag("itemMenu.header")
             settle()
             shot(dir, "$prefix-03-album-menu")
+            compose.onNodeWithTag("itemMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+            awaitTag("itemMenu.share.songLink")
+            settle()
+            shot(dir, "$prefix-03b-album-share")
+            compose.onNodeWithTag("itemMenu.share.back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
             dismissSheet()
             albumMenu = null
             settle()
@@ -141,6 +161,9 @@ class MenuScreenshotTest {
             compose.onNodeWithTag("picker.menu.addCopy").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             shot(dir, "$prefix-08-add-to-playlist-pending")
+            // The picker is a sub-page: back returns to the menu, then back again closes the sheet.
+            compose.onNodeWithTag("songMenu.picker.back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
             dismissSheet()
         }
         step {

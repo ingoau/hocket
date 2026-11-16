@@ -1,5 +1,10 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -190,6 +195,35 @@ class FullPlayerLayoutTest {
         assertControlsLayout()
     }
 
+    /**
+     * Scrolling the queue folds the controls under it: a lower transport, the action row gone (the
+     * queue taking the room); scrolling back brings them back where they were.
+     */
+    @Test
+    fun scrollingTheQueueFoldsTheControlsAndScrollingBackUnfoldsThem() {
+        startExpanded()
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { exists("queue.list") }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        val play = bounds("player.playPause")
+        val panel = bounds("player.panel")
+        assertTrue(displayed("player.mode.queue"))
+        compose.onNodeWithTag("queue.list").performTouchInput { swipe(Offset(centerX, height * 0.8f), Offset(centerX, height * 0.2f), 400) }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        val folded = bounds("player.playPause")
+        assertEquals("a lower transport", play.height * 0.66f, folded.height, 1f * dp)
+        assertTrue("the action row gone", !displayed("player.mode.queue"))
+        assertTrue("the queue taking the room (${bounds("player.panel")} vs $panel)", bounds("player.panel").height > panel.height + 80f * dp)
+        compose.onNodeWithTag("queue.list").performTouchInput { swipe(Offset(centerX, height * 0.2f), Offset(centerX, height * 0.8f), 400) }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        assertTrue("the action row back", displayed("player.mode.queue"))
+        assertEquals(play, bounds("player.playPause"))
+        assertEquals(panel, bounds("player.panel"))
+    }
+
     /** The add button shares the thumbnail's centre line: the title + artist pair's, in every mode, with or without the stars. */
     @Test
     fun theAddButtonCentresOnTheTitleAndArtist() {
@@ -237,7 +271,7 @@ class FullPlayerLayoutTest {
             val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
             fun snapshot() = controls.associateWith(::bounds)
             fun play(id: String) {
-                core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(id), 0, "Style"))
+                core.client.dispatch(Commands.playTracks((listOf(id)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Style"))
                 compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == id }
                 compose.mainClock.advanceTimeBy(1_000)
                 compose.waitForIdle()
@@ -266,6 +300,9 @@ class FullPlayerLayoutTest {
      * the strip's colour while the player is open, and go back when it closes.
      */
     private fun assertImmersiveArtworkUnderTheHandle(room: Boolean) {
+        // Home under the sheet without Spotlight, which sets the status bar from its cover: the
+        // collapse below should hand the icons back to the theme's.
+        core.fake.dispatch(app.hocket.core.Commands.setSetting(app.hocket.core.SettingKeys.HOME_SECTIONS, """[{"id":"spotlight","on":false}]"""))
         startExpanded()
         val first = core.client.nowPlaying.value!!.track
         val next = core.fake.library.tracks.first { it.coverArt != null && it.coverArt != first.coverArt && it.id != first.id }
@@ -273,7 +310,7 @@ class FullPlayerLayoutTest {
         val controller = androidx.core.view.WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
         controller.isAppearanceLightStatusBars = false
         try {
-            core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(next.id), 0, "Style"))
+            core.client.dispatch(Commands.playTracks((listOf(next.id)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Style"))
             compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == next.id }
             compose.mainClock.advanceTimeBy(1_000)
             compose.waitForIdle()
@@ -311,7 +348,7 @@ class FullPlayerLayoutTest {
         startExpanded()
         val lib = core.fake.library
         val duet = lib.tracks.first { (it.artists?.size ?: 0) == 2 }
-        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(duet.id), 0, "Duet"))
+        core.client.dispatch(Commands.playTracks((listOf(duet.id)).map { TrackRef(lib.serverId, it) }, 0, "Duet"))
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == duet.id }
         compose.waitForIdle()
         val (first, second) = duet.artists!!
@@ -345,7 +382,7 @@ class FullPlayerLayoutTest {
             return results.first()
         }
         fun queue(label: String) {
-            core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[3].id, lib.tracks[4].id), 0, label))
+            core.client.dispatch(Commands.playTracks((listOf(lib.tracks[3].id, lib.tracks[4].id)).map { TrackRef(lib.serverId, it) }, 0, label))
             compose.waitUntil(5_000) { core.client.queue.value.contextLabel == label }
             compose.waitForIdle()
         }
@@ -372,7 +409,7 @@ class FullPlayerLayoutTest {
         }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
-        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[0].id), 0, "Long"))
+        core.client.dispatch(Commands.playTracks((listOf(lib.tracks[0].id)).map { TrackRef(lib.serverId, it) }, 0, "Long"))
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.title == LONG_TITLE }
         compose.waitUntil(5_000) { exists("miniPlayer") }
         compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
@@ -705,6 +742,8 @@ class FullPlayerLayoutTest {
         assertEquals("About this song", title.config[SemanticsActions.OnClick].label)
         tap("player.title")
         compose.waitUntil(5_000) { exists("player.about") }
+        // The file's details are under the File tab.
+        tap("player.about.tab.2")
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Format").fetchSemanticsNodes().isNotEmpty() }
     }
 
@@ -771,7 +810,7 @@ class FullPlayerLayoutTest {
     fun halfASwipeShowsTheNextCoverAndSkipsNothing() {
         startExpanded()
         val before = core.client.nowPlaying.value!!.item.key
-        val next = core.client.queue.value.let { it.playingNext.firstOrNull() ?: it.upcoming.first() }
+        val next = core.client.queue.value.let { it.groupEntries.firstOrNull() ?: it.restEntries.first() }
         assertFalse("the next cover waits off screen", displayed("player.artwork.next"))
         val width = bounds("player.artwork").width
         // Slowly, under half the width: the next cover peeks in.
@@ -791,8 +830,8 @@ class FullPlayerLayoutTest {
     fun aFullSwipeSkipsToTheNextSongOnce() {
         startExpanded()
         val q = core.client.queue.value
-        val next = q.playingNext.firstOrNull() ?: q.upcoming.first()
-        val history = q.history.size
+        val next = q.groupEntries.firstOrNull() ?: q.restEntries.first()
+        val history = q.historyEntries.size
         val width = bounds("player.artwork").width
         dragArtwork(width * 0.7f)
         compose.mainClock.advanceTimeBy(500)
@@ -801,7 +840,7 @@ class FullPlayerLayoutTest {
         compose.mainClock.advanceTimeBy(1_500)
         compose.waitForIdle()
         assertEquals("one skip", next.item.key, core.client.nowPlaying.value!!.item.key)
-        assertEquals(history + 1, core.client.queue.value.history.size)
+        assertEquals(history + 1, core.client.queue.value.historyEntries.size)
         // The strip is back under the new current cover.
         assertTrue(displayed("player.artwork"))
         assertFalse(displayed("player.artwork.next"))
@@ -812,8 +851,8 @@ class FullPlayerLayoutTest {
         startExpanded()
         val track = core.client.nowPlaying.value!!.track.id
         core.client.dispatch(Commands.setAutoplay(false))
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "One track"))
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
+        core.client.dispatch(Commands.playTracks((listOf(track)).map { TrackRef(core.fake.library.serverId, it) }, 0, "One track"))
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
         compose.waitForIdle()
         val rest = bounds("player.artwork")
         // Under the rubber band's threshold: no neighbour, the cover lags the finger, springs back.

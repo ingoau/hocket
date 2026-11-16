@@ -4,7 +4,6 @@
 use crate::actions::canonical_id;
 use crate::api::*;
 use crate::connect::engine::Input;
-use crate::connect::wire::SessionOp;
 use crate::core::actor::Actor;
 use crate::core::handlers::session::DbResolver;
 use crate::settings::{keys, ConfigInputs};
@@ -41,33 +40,26 @@ impl Actor {
         self.emit(Event::SettingChanged {
             setting: setting.clone(),
         });
-        self.apply_setting_side_effects(&setting.key, local);
+        self.apply_setting_side_effects(&setting.key);
         if local && setting.scope == SettingScope::AccountSynced && self.settings.sync_enabled() {
             self.engine_input(Input::SettingChanged(setting));
         }
     }
 
     /// What a changed key means for the running subsystems.
-    pub(crate) fn apply_setting_side_effects(&mut self, key: &str, local: bool) {
+    pub(crate) fn apply_setting_side_effects(&mut self, key: &str) {
         match key {
-            keys::QUEUE_MODE => {
-                let mode = match self.settings.get_string(key).as_deref() {
-                    Some("youTube") => QueueMode::YouTube,
-                    _ => QueueMode::Apple,
-                };
-                if local && self.doc().is_some_and(|d| d.mode != mode) {
-                    self.local_op(SessionOp::SetQueueMode { mode });
-                }
+            keys::QUEUE_SECTION => {
+                // "Add to queue" comes and goes with it.
+                self.emit(Event::ActionsChanged {
+                    surface: "contextMenu".into(),
+                });
             }
             keys::QUEUE_SAVED_CAP => {
-                let cap = self.settings.get_i64(key).max(0) as u32;
-                let (_, mut saved) = self.reducer_policy.get();
-                saved = saved.with_cap(cap);
-                self.reducer_policy.set_saved(saved);
-            }
-            keys::QUEUE_HISTORY_CAP => {
-                self.reducer_policy
-                    .set_history_cap(self.settings.get_i64(key).max(10) as usize);
+                // Only how many unpinned queues are shown (the document keeps
+                // the protocol's own count): show the new number.
+                let queues = self.visible_saved_queues();
+                self.emit(Event::SavedQueuesChanged { queues });
             }
             keys::AUTOPLAY_SETTINGS => {
                 if let (Some(a), Some(s)) = (
@@ -83,11 +75,26 @@ impl Actor {
                     a.set_overrides(overrides);
                 }
             }
+            keys::PLAYBACK_TRANSITIONS => {
+                // Off → on may start preloading (gapless off), on → off drops the plan.
+                if self.playback.loaded {
+                    if self.preloads_next() {
+                        self.replan_next();
+                    } else {
+                        self.refresh_next();
+                    }
+                }
+            }
             keys::AUDIO_SETTINGS => {
                 if let Some(a) = self.settings.get_typed::<AudioSettings>(key) {
                     if a != self.audio {
+                        let exclusive_changed = a.exclusive != self.audio.exclusive;
                         self.audio = a;
                         self.apply_audio_to_backend();
+                        if exclusive_changed {
+                            // Exclusive output never mixes.
+                            self.replan_next();
+                        }
                         self.emit(Event::AudioSettingsChanged {
                             settings: self.audio.clone(),
                         });
@@ -98,7 +105,8 @@ impl Actor {
                 self.apply_transcoding_settings();
                 self.mark_prefetch_check();
             }
-            keys::BATTERY_PAUSE_PREFETCH | keys::STORAGE_PREFETCH_ON_MOBILE_DATA => {
+            keys::STORAGE_PREFETCH_ON_MOBILE_DATA => {
+                self.apply_storage_settings();
                 self.mark_prefetch_check();
             }
             keys::STORAGE_WARN_THRESHOLD_BYTES | keys::STORAGE_CACHE_MAX_BYTES => {
@@ -120,6 +128,7 @@ impl Actor {
             }
             keys::CONNECT_COORDINATOR_URL => {
                 let url = self.settings.get_string(key);
+                self.coordinator_url_changed(url.as_deref());
                 self.engine_input(Input::SetCoordinatorUrl(url));
             }
             keys::DEVELOPER_MODE => {
@@ -173,10 +182,11 @@ impl Actor {
                     self.engine_input(Input::Tick);
                 }
             }
-            keys::BATTERY_SMALL_ARTWORK => {
-                self.media_art = None;
-                self.emit_media_session();
-            }
+            keys::BATTERY_LEVEL
+            | keys::BATTERY_AUTO_LEVEL
+            | keys::BATTERY_CUSTOM
+            | keys::BATTERY_AUTO_ENGAGE => self.refresh_battery_saver(),
+            keys::PLAYBACK_RESUME_ALBUMS => self.emit_album_resumes(),
             keys::LIBRARY_SYNC_INTERVAL_MINUTES | keys::LIBRARY_FULL_RECONCILE_DAYS => {
                 self.last_sync_check = 0.0;
             }
@@ -188,6 +198,10 @@ impl Actor {
         let warn = self.settings.get_f64(keys::STORAGE_WARN_THRESHOLD_BYTES);
         self.downloads
             .set_warn_threshold(if warn > 0.0 { Some(warn) } else { None });
+        self.downloads.set_prefetch_on_mobile_data(
+            self.settings
+                .get_bool(keys::STORAGE_PREFETCH_ON_MOBILE_DATA),
+        );
         self.apply_cache_budget();
     }
 
@@ -252,21 +266,20 @@ impl Actor {
     }
 
     pub(crate) fn apply_audio_to_backend(&mut self) {
-        if let Err(e) = self.backend.set_gapless(self.audio.gapless) {
-            self.log("debug", format!("set_gapless: {e}"));
-        }
+        // DSP chain (ReplayGain, EQ, normalisation) plus gapless and
+        // exclusive go as one update, so a backend that can retune
+        // mid-stream applies them to the playing track right away; one
+        // that can't still takes the pieces it supports, and the DSP
+        // settings apply with the next load.
+        // Device first: exclusive then opens the device it applies to.
         if let Err(e) = self
             .backend
             .set_output_device(self.audio.output_device.clone())
         {
             self.log("debug", format!("set_output_device: {e}"));
         }
-        if let Err(e) = self.backend.set_exclusive(self.audio.exclusive) {
-            self.log("debug", format!("set_exclusive: {e}"));
-        }
-        #[cfg(feature = "native-audio")]
-        {
-            let _ = &self.audio;
+        if let Err(e) = self.backend.set_audio_settings(&self.audio) {
+            self.log("debug", format!("set_audio_settings: {e}"));
         }
         // ReplayGain/preamp/normalisation reach the backend through the
         // per-item gain, so the loaded items are refreshed.
@@ -287,12 +300,65 @@ impl Actor {
                 .filter(|f| !crate::filters::is_builtin(&f.id))
                 .collect(),
             shortcuts: self.registry.shortcuts(),
-            servers: self.server_infos(),
+            servers: self.account_infos(),
             audio: Some(self.audio.clone()),
             autoplay: self.settings.get_typed(keys::AUTOPLAY_SETTINGS),
         };
         let doc = crate::settings::build_document(inputs, include_secrets, self.now());
         crate::settings::to_json(&doc).unwrap_or_default()
+    }
+
+    /// Apply the settings a setup link carried ([`Command::ApplySetupSettings`]):
+    /// account-synced keys only, each stamped now, then announced like an
+    /// import. Quiet: the new device is being set up, so no toast.
+    pub(crate) fn apply_setup_settings(&mut self, settings: &str) {
+        let map = match serde_json::from_str::<serde_json::Value>(settings) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => {
+                self.log("warn", "setup settings: not a JSON object".to_string());
+                return;
+            }
+        };
+        let now = self.now();
+        let incoming: Vec<Setting> = map
+            .into_iter()
+            .filter(|(k, _)| {
+                crate::settings::lookup(k).is_some_and(|d| d.scope == SettingScope::AccountSynced)
+            })
+            .map(|(key, value)| Setting {
+                key,
+                value: value.to_string(),
+                scope: SettingScope::AccountSynced,
+                updated_at: now,
+            })
+            .collect();
+        let out = self.settings.import_settings(&incoming, now, false);
+        self.save_settings();
+        self.announce_imported_settings(&out);
+    }
+
+    /// After an import: every setting goes to the UI; changed synced keys go
+    /// through the local-edit path, which also feeds the engine (otherwise the
+    /// next merge from a peer would revert them).
+    fn announce_imported_settings(&mut self, out: &crate::settings::ImportOutcome) {
+        let changed_synced: std::collections::HashSet<&str> =
+            out.changed_synced.iter().map(String::as_str).collect();
+        let all = self.settings.to_api();
+        for s in &all {
+            if !changed_synced.contains(s.key.as_str()) {
+                self.emit(Event::SettingChanged { setting: s.clone() });
+            }
+        }
+        for key in &out.applied {
+            if !changed_synced.contains(key.as_str()) {
+                self.apply_setting_side_effects(key);
+            }
+        }
+        for s in all {
+            if changed_synced.contains(s.key.as_str()) {
+                self.after_setting_changed(s, true);
+            }
+        }
     }
 
     /// Import a config document. Synced keys the document changes are
@@ -347,26 +413,7 @@ impl Actor {
             }
         }
         self.save_settings();
-        let changed_synced: std::collections::HashSet<&str> =
-            out.changed_synced.iter().map(String::as_str).collect();
-        // Everything is announced to the UI; changed synced keys go through
-        // the local-edit path below, which also feeds the engine.
-        let all = self.settings.to_api();
-        for s in &all {
-            if !changed_synced.contains(s.key.as_str()) {
-                self.emit(Event::SettingChanged { setting: s.clone() });
-            }
-        }
-        for key in &out.applied {
-            if !changed_synced.contains(key.as_str()) {
-                self.apply_setting_side_effects(key, true);
-            }
-        }
-        for s in all {
-            if changed_synced.contains(s.key.as_str()) {
-                self.after_setting_changed(s, true);
-            }
-        }
+        self.announce_imported_settings(&out);
         let shortcuts = self.registry.shortcuts();
         self.emit(Event::ShortcutsChanged { shortcuts });
         let mut notes = Vec::new();
@@ -428,6 +475,15 @@ impl Actor {
     }
 
     pub(crate) fn set_action_order(&mut self, surface: &str, action_ids: Vec<String>) {
+        // Stash starts after shuffle, repeat and love, past the two custom
+        // buttons Android shows. Move it up only for this edit. A reload or a
+        // synced copy must keep a drag the user already made.
+        let action_ids = if surface == "mediaSession" {
+            let previous = self.registry.order(crate::actions::Surface::MediaSession);
+            crate::actions::show_new_stash(&previous, action_ids)
+        } else {
+            action_ids
+        };
         match self.registry.set_order_str(surface, action_ids) {
             Ok(()) => {
                 self.persist_registry();

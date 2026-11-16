@@ -816,14 +816,16 @@ mod tests {
         let rec = ScrobbleRecorder::new(db.clone(), outbox.clone(), "dev");
         let started_at = 4_000.0;
         let shared = crate::connect::wire::PlayRecord {
-            track_id: "t".into(),
+            track_id: crate::api::TrackRef::new("srv", "t"),
             played_at: started_at,
             played_ms: 60_000,
             device_id: "other".into(),
             seq: 1,
         };
-        db.with_tx(|tx| crate::db::queries::import_plays_in(tx, "srv", &[shared], "log"))
-            .unwrap();
+        db.with_tx(|tx| {
+            crate::db::queries::import_plays_in(tx, &[shared], &["srv".to_string()], "log")
+        })
+        .unwrap();
         rec.record_verdict("srv", "t", started_at, 126_260, Verdict::Submit, |_| Ok(()))
             .unwrap();
         let submissions = outbox

@@ -8,7 +8,22 @@ description = "Hocket shared core: session document, queue reducer, Connect prot
 [features]
 default = ["mdns"]
 # Symphonia decoding + cpal output. Used by desktop and the coordinator never needs it.
-native-audio = ["dep:symphonia", "dep:cpal", "dep:rubato"]
+native-audio = ["decode", "resample", "dep:cpal"]
+# Windowed-sinc sample-rate conversion (rubato), pure Rust. Native audio, and Android's AutoMix tails.
+resample = ["dep:rubato"]
+# Symphonia file decoding without an audio output (no cpal, no ALSA).
+decode = ["dep:symphonia"]
+# AutoMix analysis: decoding + Beat This! beat/downbeat tracking + YAMNet voice detection +
+# loudness -> AnalysisRecord.
+# Desktop (hocket-node) and the coordinator; never Android.
+automix-analysis = [
+    "decode",
+    "resample",
+    "dep:beat-this",
+    "dep:rten",
+    "dep:rten-tensor",
+    "dep:realfft",
+]
 # LAN discovery. Off on the headless coordinator.
 mdns = ["dep:mdns-sd"]
 # Deterministic simulation harness (virtual clock, in-memory network). Also used by the coordinator's tests.
@@ -34,23 +49,35 @@ uuid.workspace = true
 md-5.workspace = true
 hmac.workspace = true
 sha2.workspace = true
+sha1.workspace = true
 hex.workspace = true
+ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
 url.workspace = true
 parking_lot.workspace = true
 indexmap.workspace = true
 bytes.workspace = true
 base64.workspace = true
+unicode-normalization.workspace = true
 mdns-sd = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
 rubato = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
+beat-this = { workspace = true, optional = true }
+rten = { workspace = true, optional = true }
+rten-tensor = { workspace = true, optional = true }
+realfft = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 criterion.workspace = true
+# The fake coordinator the report upload tests run against.
+axum.workspace = true
 
 [[bench]]
 name = "perf"

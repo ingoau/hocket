@@ -40,7 +40,7 @@ Deterministic simulation. The core exposes a harness with a virtual clock and an
 - JSON over WebSocket, Rust types as schema authority, TypeScript generated from them. Being able to read the protocol in a log is worth more than the bytes saved.
 - Session documents carry a schema version; the handshake negotiates a minimum common protocol and refuses below a hard floor. **Older devices must round-trip unknown fields untouched**, or a stale device silently strips new state every time it writes.
 - Forward-only numbered migrations locally. The mirror is a cache, so a failed migration can drop and re-sync; downloads, outbox, saved queues and settings are not rebuildable and get real migrations plus a backup.
-- No network telemetry. Local crash logs with a copy-diagnostics action.
+- No network telemetry. Local crash logs with a copy-diagnostics action. *(Since: with developer mode on, a bundle can also collect the Connect room's state and the other devices' bundles over Connect. Each device answers only while its own developer mode is on. The hosted coordinator adds its version, and its whole process log only for the accounts its operator names with `--diagnostics-user`. Nothing goes anywhere but the user's own devices. Those accounts can also save a report — a note, the bundle, screenshots and a screen recording — on that coordinator from the diagnostics page; see `docs/reports.md`.)*
 - Strings externalised from the first commit.
 
 
@@ -62,24 +62,70 @@ Deterministic simulation. The core exposes a harness with a virtual clock and an
 
 
 ## Queue model  
-*Status: decided*
+*Status: decided (redesigned 2026-11)*
 
-The queue is derived, never a stored flat list. Four pieces: a context with its order, a cursor, a shuffle permutation, and an insertion list. Apple Music behaviour and YouTube Music behaviour are two reducers over identical state.
+The queue is **one flat list with a pointer**. There are no queue modes. Next and Previous move the pointer one place along the list; tapping a song N rows away moves it N places. Navigation never adds, removes or reorders anything — only edits do (adding, dragging, removing, shuffle, starting something new). So pressing Next X times then Previous X times always lands back on the same song, and after tapping a song X rows down, Previous X times returns to where you were. The only exceptions are the ends of the list and the "Previous restarts the song after 3 s" rule (a restart is not a step; the step itself still mirrors Next exactly).
 
-> Figure: Shuffle is a permutation over the context, so turning it off restores the original order and your place in it.
+Everything behind the pointer is history; nothing is consumed. Playing a song you queued does not remove it — it stays where it is and Previous reaches it again.
 
+### Items
 
-### Nothing is consumed
+Each list entry carries a stable key (all ops name entries by key, never by index, so trimming and concurrent edits don't misdirect), the track, and two flags:
 
-Advancing does not destroy a queued item. The session holds a materialised history of what actually played, with the cursor at the boundary. Next pops from the future and appends to history; previous pops from history and pushes back to the front of the future, preserving what kind of item it was. Next and previous stay inverses, so one stray tap loses nothing.
+- **`added`** — the user put it there (Play next, Add to queue, Play later). Never changes. Drives a small queue icon in the UI when the entry is outside the "Next in queue" group.
+- **`queued`** — the entry is in the "Next in queue" group. The group is the contiguous run of `queued` entries directly after the current song. Because group membership is just a flag that rides with the entry, Next/Previous keep it consistent: play A (queued), press Previous, and A is back at the head of the group.
 
-> Figure: In the consume-on-advance model used by some players, tracks 2 and 3 would both be gone by this point, unreachable in either direction.
+Autoplay entries are appended at the end, flagged as autoplay and not `added`.
 
-- Played queued items don't replay. Persisting in the timeline means reachable by pressing back, not played again.
-- History caps around 200 items; past that, previous falls back to context order. History travels inside saved-queue snapshots.
-- Previous walks real history rather than running the shuffle permutation backwards, so reshuffling mid-session doesn't scramble where you've been.
-- Repeat-all loops the context only. Repeat-one repeats whatever is playing regardless of where it came from.
-- The queue view is one scrollable timeline: history above, current, upcoming below. The model should be visible rather than inferred.
+### Actions
+
+The meaning of each action is fixed; the **Queue section** setting (on by default) only decides which appear.
+
+| Action | Effect | Setting off | Setting on |
+|---|---|---|---|
+| Play next | Directly after the current song (ahead of the group), `queued` | shown | shown |
+| Add to queue | End of the "Next in queue" group, `queued` | hidden | shown |
+| Play later | End of the whole list, not `queued` | shown | shown |
+
+With the setting off no new group is ever started: Play next inserts after current, unflagged but `added`, so normally there is no group and the list is exactly the flat list. If a group already exists (started by a Connect peer that has the setting on, or before the setting was turned off), it is still shown, and Play next joins it at its head rather than splitting it from the current song, so the group stays contiguous with current. The flag is decided by the sending device and carried in the op, so every replica agrees.
+
+Play next / Add to queue on a song that is already ahead of the pointer **moves** it; on a song in history it inserts a copy, so history is never rewritten.
+
+### The "Next in queue" group
+
+- Shown as its own section with a count, a **Stash** button and a **Clear** button.
+- Entries inside it carry no per-row marker (the heading says it). `added` entries outside it show the queue icon.
+- Dragging decides membership by drop zone: dropping above the "Next from" heading puts the entry in the group, below takes it out. The move op carries the target position *and* an explicit `in_group` flag, so every replica applies the same result without re-deriving it from neighbours. Nothing can be dropped above Now playing.
+- Dragging every entry out removes the heading; the next Add to queue starts a new group right after the current song.
+- Dropping songs from the library onto a queue slot is one op, **insert tracks**: the songs (or queue entries, moved or copied as for Play next) go directly after a named entry, in or out of the group, placed exactly like a drag (`after` + `in_group`, clamped the same way). It takes any number of songs at once.
+
+### Starting something new
+
+Playing a new album, playlist, etc. **replaces the whole list** (group included). The outgoing list is auto-saved as a saved queue (see below), so it can be restored.
+
+### Shuffle and repeat
+
+- Shuffle reorders only the entries after the "Next in queue" group; the group and history stay put. Turning shuffle off restores the original order, with added entries back where they were added (each entry remembers its unshuffled position).
+- Repeat all wraps Next from the last entry to the first, and Previous from the first to the last. It loops the whole list, so added songs replay.
+- Repeat one repeats only on natural track end; Next/Previous still step.
+
+### Limits
+
+The whole session document travels as one Connect frame (joining, resyncing, undo's whole-document replace), so every list in it is bounded. These are **protocol constants**, not settings: every replica and the coordinator must trim at the same place or Previous at the boundary would diverge between devices.
+
+| Limit | Value |
+|---|---|
+| History (entries behind the pointer) | 5,000, trimmed from the oldest end |
+| Whole list (history + current + upcoming) | 10,000. Past it the oldest history goes first, then the far end of the list. A context longer than that (a huge playlist, "all songs") plays a 10,000-track window: up to 5,000 before the chosen track and the rest after it. Ops are cut to the same bound before they are sent. |
+| Saved queues | 50 unpinned in the document and a 512 KiB budget for all snapshots, pinned included (see Saved queues) |
+| Connect frame | 8 MiB. A document at every cap above, with real key and id lengths and every entry marked offline, is about 4 MiB (asserted by a test). |
+
+The queue view is windowed in both directions around the pointer, so long histories cost the same as long upcoming lists; the UI pages in more rows on scroll.
+
+### Sync
+
+The reducer is shared by every Connect replica and the coordinator, so it stays deterministic and keyed. The wire protocol version is bumped; a peer on the old queue model can't join a session on the new one. No migration of old session documents — they are dropped.
+
 
 
 ## Saved queues  
@@ -90,14 +136,14 @@ Playing something new replaces the queue and the old one is kept. Snapshotting d
 | Rule | Behaviour |
 |---|---|
 | Auto-save | On context replacement. Skips trivial queues: single tracks, contexts never played from. |
-| Cap | 10 unpinned, configurable 0–50. Zero disables auto-save, leaving only pinned queues. |
+| Cap | The document keeps up to 50 unpinned (a protocol constant, so every replica evicts alike). The setting (default 10, 0–50) decides how many of the most recent are shown; zero shows only pinned queues. |
 | Eviction | Least recently interacted with, where interaction means played from or restored. |
 | Expiry | Unpinned entries drop after 30 days regardless of position. |
 | Dedupe | Keyed on context identity, so replaying an album bumps one entry rather than adding three. |
-| Pinned | Never evicted, never expire, don't count toward the cap. |
+| Pinned | Never expire and don't count toward the cap. Evicted only if the pinned queues alone exceed the byte budget (least recently used first), which keeps the document under the frame limit. |
 | Restore | Includes history and playback position, so you land mid-track with your back button intact. |
 | Sync | A last-write-wins set keyed on context identity; pin state rides along as another LWW field. |
-| Size | Most reference their context by ID. Ad-hoc contexts — a search result, an arbitrary selection — store the track list, so cap on total bytes with 10 as the count ceiling. |
+| Size | Most reference their context by ID. Ad-hoc contexts — a search result, an arbitrary selection — store the track list, so cap on total bytes (512 KiB, a protocol constant). A snapshot keeps the latest 200 history entries and at most 1,000 entries in all; past that it stores only the current entry and rebuilds the rest from the context on restore (shuffled again if it was shuffled). |
 
 Surfaced in the queue view's selector (the queue's name drops down the recent and pinned queues to restore) and in the side panel's Recent queues drill-in, with a save-as-playlist action writing through `updatePlaylist`.
 
@@ -161,6 +207,20 @@ Not instant, deliberately. When the picker opens, targets pre-buffer while the c
 - **Accumulated `playedMs` travels with the track**, so taking over 90 seconds in doesn't silently eat the scrobble.
 - **Dedupe is the coordinator's one optional job** — a short log of submitted `(trackId, startedAt)` pairs.
 - **Unplayable items skip.** A device that can't play an item marks it unavailable and moves on, with a line in the player. The handoff doesn't fail, playback doesn't stop, and nothing scrobbles.
+- **Headphone handoff (beta, off by default, Advanced settings).** Headphones connecting to a device pull playback there when another device plays, or paused within 15 s (the same headphones leaving it usually pause it). It is the one exception to never resuming on connect: moving your headphones is a deliberate act. A toast says "Moved from X", with Undo only when X was playing: a handoff always lands playing, and a paused play moved back would start on a device whose headphones just left. Android counts Bluetooth, wired and USB outputs appearing, so a car or Bluetooth speaker counts too. Desktop counts an output that connected in the last 10 s and is now the system default, from Chromium's device list (ALSA doesn't show PipeWire's Bluetooth sinks), polled on Linux, where Chromium only hears udev. On Android it only works while the playback service runs (the app is open, playing, or was in the last 5 minutes); on desktop, while the app runs. Either way the device must be in the room.
+
+### Cast
+
+Android casts to Chromecasts through the Google Cast SDK, as a stopgap until a Rust CastV2 renderer in the core can do it on every platform. A Cast receiver is a **renderer of the phone, not a Connect peer**: it can't hold the lease or speak the wire protocol, so the phone keeps both, and the receiver is just where its audio comes out.
+
+- **One seam.** `Command::SetRenderer` tells the core the backend now plays elsewhere. Sources then resolve to the server's stream URL, which the receiver fetches itself; downloads, the stream cache and `hocket-stream://` can't reach it. Formats the Default Media Receiver can't play are transcoded to mp3 (320 kbps), unless the network profile already transcodes them to something it plays. The current item reloads at its position.
+- **Receivers that claim too much.** Some receivers accept a format and then crash on it (the Pixel Tablet's, on FLAC: its renderer process dies right after `play()`). Nothing is hard-coded: a session that ends with an error within 10 s of starting an untranscoded track sends `Command::RendererFailed`, the core notes that format for that receiver id (only hi-res files of it, until a plain one fails too), and the phone reconnects, once per track, which reloads the track transcoded at the position it stopped. Ends that mean the receiver app was stopped or replaced don't count, and mp3 (the transcode target) is never noted. Every other receiver stays lossless. The Rust renderer later sets the same state.
+- **Current plus next.** The follow-up is always preloaded on a renderer, gapless setting or not, so the receiver's own queue carries on while the phone dozes. The phone holds a wake lock and a Wi-Fi lock while the receiver plays, to queue the item after and keep the lease alive. A phone gone for good stops the music after the queued track: the detach-and-keep-playing property is the one thing this gives up.
+- **Coming back pauses.** A session ending from either end brings playback back to the phone, paused where it was, rather than bursting out of its speaker.
+- **Others see it.** Stamps carry the renderer's name, so other devices show "Pixel → Living Room TV" and control it through Connect as usual.
+- **Volume** is the receiver's: hardware keys, the notification and the Connect volume all drive it. Per-track gain has nowhere to go on the Default Media Receiver.
+- **Offline, nothing casts.** The receiver can't reach a download, so offline every item skips.
+- **Trade-offs.** Stream URLs carry the account's non-expiring Subsonic token and salt, and go to Google Play services and the receiver. A receiver that can't reach the server (a VPN-only or `.local` address, an untrusted certificate) ends the session with a message saying so. The SDK is proprietary, so a FOSS build (`-Phocket.foss=true`) leaves it out.
 
 
 ## Resume and recovery  
@@ -180,7 +240,7 @@ The coordinator keeps a replica of the session and the saved queues so a device 
 
 ### Split-brain, not storage, is the hard part
 
-A device going quiet might have died or might have lost network and kept playing. Transport ownership is a lease with an expiry, renewed by heartbeat every 5 seconds and lapsing after 20, carrying a monotonic epoch that increments on every ownership change. A device reconnecting inside the window keeps ownership. Deliberate takeover from the picker always works immediately — the lease only covers failure.
+A device going quiet might have died or might have lost network and kept playing. Transport ownership is a lease with an expiry, renewed by heartbeat every 5 seconds and lapsing after 20 (slower, with the window scaled to match, while a device is alone or in battery saver), carrying a monotonic epoch that increments on every ownership change. A device reconnecting inside the window keeps ownership. Deliberate takeover from the picker always works immediately — the lease only covers failure.
 
 > Figure: Without a fencing token both devices end up playing at once, and it only shows up on flaky wifi.
 
@@ -236,6 +296,26 @@ Desktop playback does not go through Web Audio. `decodeAudioData` holds the whol
 | Gapless | On by default with a toggle. It's the natural behaviour of one continuous output stream; encoder padding is trimmed using LAME and iTunes headers, and FLAC has nothing to trim. |
 | Formats | Transcoding profiles carry a "can't decode natively" list rather than only a bitrate preference, and vary per network *and per platform*. Symphonia covers ALAC and WavPack behind feature flags, so on desktop the list shrinks to roughly APE and DSD; Android still has ExoPlayer's constraints. |
 | Errors | Inline in the player bar, auto-skip after a couple of consecutive failures, detail logged to the problems list. A failed track never scrobbles and doesn't count as played. |
+
+
+## AutoMix  
+*Status: decided*
+
+Transitions between consecutive tracks, from a plain crossfade up to beat-matched blends in the manner of Apple Music's AutoMix. This reverses the earlier deferral of crossfade: it does invent audio that isn't in either file, so it is **opt-in**, with a three-way setting — **Off** (the default), **Crossfade** (a fixed-length equal-power fade, seconds set by the user) and **AutoMix** — synced across devices like the other playback settings. `docs/automix.md` is the implementation spec.
+
+| Concern | Decision |
+|---|---|
+| Where it mixes | On the playing device, always. Connect moves control, not audio, and offline playback must keep working; a server-side mix (Music Assistant's model) would give up both. |
+| When not to mix | The next track follows on the same album in track order; either track is tagged gapless (`iTunPGAP`) or the pair joins without a gap; Classical, Spoken word (audiobook, podcast), Live and Soundtrack/Score; repeat-one; the sleep timer's end-of-track mode; a Cast renderer or bit-perfect output. Gapless still applies to everything not mixed. |
+| Handover | Each transition has one handover point, usually mid-blend. `Ended` and `TransitionedToNext` fire there, so scrobbling, now-playing, lyrics and Connect stamps switch at the moment the incoming track takes over. The incoming track's reported position is its real position, already a few seconds in. The progress bar keeps the real file length and hands over early. |
+| Controls mid-blend | Next before the handover completes the transition at once; after it, it's an ordinary skip. Seek cancels the mix. Pause pauses both. A Connect handoff mid-blend starts the incoming track on the new device, unmixed. |
+| Late queue edits | The transition is committed about 30 s before the mix-out point. An edit to what plays next after that still wins and gets a plain fade; it is never silently pushed to the track after. |
+| Analysis | Beat This! (CPJKU, MIT code and weights) through `beat-this-rs` for beats and downbeats (its small checkpoint, embedded in the binary, run by the pure-Rust `rten`), plus a loudness envelope of each track's head and tail, plus where someone sings or raps in the first and last ~36 s (musicnn's MagnaTagATune model, ISC). One versioned record per track. Never computed on phones. |
+| Vocals | A singing-voice *detector*, not synced lyrics and not stem separation (Demucs-class is too slow for the worker on CPU). Blends keep one voice at a time: the usual length with the handover between A's last voice and B's first, else a blend short enough for the instrumental gap, else a short blend with an early bass swap and a presence cut on A. Without voice data (old or loudness-only records) the planner is unchanged. |
+| Where analysis comes from | An opt-in worker in the coordinator, with its own non-admin Navidrome account, analyses the whole library once at low priority. Desktops analyse on a miss and upload. Phones only read; with no record they fall back to a loudness-based plain fade. |
+| Where analysis lives | The coordinator stores records in SQLite per Navidrome server, readable and writable by any verified user of that server. Devices keep a local copy so offline playback still mixes. This is the coordinator's first state that isn't per room, and the worker its first contact with audio; with the worker off it still never holds credentials. |
+| Tempo | Only the outgoing track is time-stretched, and only when the tempo gap is within 8%, ramping over the bars before the overlap. Pitch-preserving stretch was deferred as "not wanted" for playback speed; it is wanted here, over seconds rather than whole tracks. |
+| Android | Stays on ExoPlayer — audio focus, routing and offload-free power behaviour remain the platform's. A Rust DSP stage runs as a Media3 `AudioProcessor` (which also gives Android the in-app EQ and ReplayGain boost), and transitions mix a pre-rendered outgoing tail into the incoming track there. |
 
 
 ## OS media session  
@@ -350,7 +430,13 @@ AMLL's own guidance: mainstream CPUs from the last five years manage 30fps, 60fp
 
 ### Battery saver
 
-A mode, not a toggle, with "engage automatically on battery" on by default: animated background off with a static blurred still in its place, lyrics capped at 30fps, artwork resolved at the smaller cache size, background prefetch and speculative pre-buffering paused.
+A level, not a toggle: Off, Light, Medium or Max, each turning off more, and on mobile a Custom set built from the same switches. "Engage automatically" (the system's power saver, or a laptop on battery) is on by default and raises the level to a chosen one (Medium unless changed), never lowering one picked by hand.
+
+- **Light:** animated backgrounds hold still (a cached blurred still), the seek bar's wave stops moving (Android; the desktop's seek bar is straight), lyrics run at 30fps without their depth blur.
+- **Medium:** also caps the player and lyrics at 60 Hz, and Connect keeps in touch less often even with other devices around.
+- **Max:** also simple lyrics (a whole line lights at once), no immersive artwork, no blurred artwork, smaller artwork.
+
+The levels only cost looks. What saves the most battery is on for everyone: progress bars update four times a second, Connect pings rarely while a device is alone, a playing track is fetched to its end in one burst so the radio can sleep, and the Wi-Fi lock is dropped while the audio is on the device. Battery saver does not pause prefetch: fetching ahead in one go is what lets the radio rest.
 
 
 ## Player features  
@@ -378,14 +464,19 @@ Every user-visible action is a first-class object: id, label, icon, applicabilit
 
 ### Desktop layout
 
-Material 3 Expressive throughout: the shape scale, toggle buttons that fill and square off when on, a press that squeezes a button toward a rounded square on a spring, emphasized type, and 40px icon buttons (44px in the fullscreen player).
+Panes, the desktop's own look (Android stays Material 3 Expressive): the window is the brand's deep violet (the tile colours: ground `#1B1730`, panes `#241F3D`; a light theme on a pale violet ground with white panes), and the sidebar, the content and the side panel are rounded panes (12px) floating on it with an 8px gutter. Modest corners elsewhere (8px cards and tiles), full pills only for chips, the search field and round buttons; nothing changes shape when pressed and motion is quiet (short fades and decelerating moves, no overshoot). The arrow cursor everywhere but real links. Unbounded for the word mark and the brand page titles, Geist (bundled, docs/brand.md) for everything else, 40px icon buttons (44px in the fullscreen player).
 
-- Left sidebar for navigation, main content area, the now playing side panel on the right, and the player bar along the bottom on the window's own surface (no divider). The content and the side panel are floating panes with an 8px gutter.
-- **Player bar.** Left: the artwork, title and artist, the rating (Settings → Appearance can hide it in the player), add to playlist and More (the song's menu, which carries love). Centre: shuffle, previous, a wide filled play/pause that morphs from a pill (paused) to a rounded square (playing), next, repeat, and the wavy seek bar with the elapsed time and the duration either side. Right: the sleep and battery badges, volume, then toggles for the side panel, lyrics and queue, the Connect pill (the device icon; the other device's name on the accent only while another device plays), the mini player and the fullscreen player. Below 900px it takes two rows.
+- **One title bar**, the app's own top bar: macOS keeps its inset traffic lights; Windows draws its caption buttons over the top bar's right end (`titleBarOverlay`, in the theme's colours); Linux has no frame and the app's own minimise, maximise and close. The window opens in the last theme the app used (no dark flash for a light theme).
+- **Top bar**, on the ground: the sidebar toggle (Ctrl/Cmd+B), back and forward, the search field (a pill, left-aligned after them), then the stash chip, jobs and problems, and the window controls where the app draws them.
+- **Sidebar**, one scrolling pane: the places (Settings → Customisation chooses and orders them), the pins, then **Your library** — every playlist and the albums and artists played lately (as a queue's context or through their songs), pinned ones left out. Its header sticks while the list scrolls: the title, a filter field, the sort (Recents, the default; Recently added; Alphabetical) and New playlist, then Playlists / Albums / Artists chips. A row is the cover (round for an artist), the title and the kind with the owner or artist; the playing one is marked; click opens, right-click is the item's menu, and it drags onto the queue. The chips and the sort are remembered on the device. Settings sits at the foot. Resizable by its right edge; **collapsed** (the toggle) it is a rail of the places' icons and the covers, the names as tooltips, as it always is below 900px.
+- **Detail pages** (album, artist, playlist): a cover with the pixels to fill the header runs edge to edge and fades into the page (the immersive header); a smaller one sits at its size on a wash of its own colour (darkened until white text holds at 4.5:1) that carries on behind the actions and fades into the pane.
+
+- The sidebar on the left, the content, the now playing side panel on the right, and the player bar along the bottom on the ground (no divider).
+- **Player bar.** Left: the artwork, title and artist, the rating (Settings → Appearance can hide it in the player), add to playlist and More (the song's menu, which carries love). Centre: shuffle, previous, a round play/pause in the ink colour, next, repeat (shuffle and repeat show a dot when on), and the seek bar — a straight track whose thumb shows while hovered, held or focused — with the elapsed time and the duration either side. Right: the sleep and battery badges, volume, then toggles for the side panel, lyrics and queue, the Connect pill (the device icon; the other device's name on the accent only while another device plays), the mini player and the fullscreen player. Below 900px it takes two rows.
 - **Side panel.** One scrolling pane, resizable by its left edge (a drawer below 900px). The overview: the artwork (crossfading on track change; a cover whose bottom edge the classifier carries on runs edge to edge at the top of the pane, see Immersive artwork), title and artist with add to playlist and More, then tonal cards: Lyrics (the previous, current and next lines, following playback; hidden when the song has none), Up next (the next three songs) and About (album, genre, plays, format). Each card's link drills in, with a back arrow: Lyrics (the synced lyrics; a tune button in its header opens Lyrics options), Queue, About this song (the details, the file with Show in folder, similar tracks; the same view as the fullscreen player's) and, from the queue, Recent queues. Drill-ins slide along the x axis. The bar's lyrics and queue buttons (and L, Q) open the panel straight on that view, and close it when it is already showing it; the side panel button opens the overview. Open, view and width are remembered on the device. The old queue/lyrics split is gone: one view at a time has the whole height.
 - **The artist** under the title (the bar, the side panel's overview, the fullscreen card) is the track's artist string as given ("Marlowe Reed feat. Juno"), one line, no album. Clicking it opens a small menu anchored to it: each artist on the track (to that artist's page, leaving the fullscreen player), a divider, then the album (cover, name, album artist; to the album's page). The title still opens the album.
 - **Queue view** (side panel and fullscreen): a header with the queue selector (the queue's name and a chevron, dropping down the recent and pinned saved queues to restore, each with its menu for pin, save as playlist and delete, and a link to them all) and the Autoplay toggle; then the timeline (history above, now playing, playing next, the rest of the context, drag to reorder) and, with autoplay on, a note that it carries on with similar songs.
-- **Fullscreen player** (F): the blurred, moving Kawarp background; the collapse button top right with the window fullscreen toggle beside it (no "Playing from" header: the queue's name is the queue view's selector); a controls card (title, artist, love, add to playlist and More, the rating, the wavy seek bar, the transport) as glass; and a pill bottom right with the Connect device (named only when another device plays), the Lyrics, Queue and About toggles (the one that is on goes back to the artwork alone), the sleep timer and volume (a popover). It opens on the view it was left on, the queue the first time; Q, L and Escape work as elsewhere. Three layouts:
+- **Fullscreen player** (F): the blurred, moving Kawarp background; the collapse button top right with the window fullscreen toggle beside it (no "Playing from" header: the queue's name is the queue view's selector); a controls card (title, artist, love, add to playlist and More, the rating, the seek bar, the transport with a round play button) as glass; and a pill bottom right with the Connect device (named only when another device plays), the Lyrics, Queue and About toggles (the one that is on goes back to the artwork alone), the sleep timer and volume (a popover). It opens on the view it was left on, the queue the first time; Q, L and Escape work as elsewhere. Three layouts:
   - *Columns* (card covers, windows wider than tall): the rounded artwork with the card under it, centred; a view moves the column to the left and takes the right. In every wide layout a view is one width, clamp(400px, 36vw, 640px), so its lines are as long whatever the cover; only where it sits differs.
   - *Immersive* (3:2 or wider, with a cover the classifier carries on): the artwork runs full height, flush to the top and bottom; the card floats over its bottom like Cider's. When both its left and right edges carry on, the artwork is centred with a continuation either side; when only the right does, it sits on the left, carried on to the right (a cover whose right edge is a card is a card). Opening a view slides a centred artwork to the left (a spring; with reduced motion it fades in there), its card with it, the left continuation going off the edge with it while the right one dissolves as below; closing the view slides it back. With the artwork alone, during playback, the card, the pill and the header fade out once the mouse has rested three seconds, and come back on any movement or key; never while paused, while the keyboard is in them, or with a menu open, and a local setting turns it off. A view shortens the carried-on part, which dissolves into the moving blur over a wide, soft edge (for a crisp flat extension the artwork's own last 30% fades too, so there is no hard seam against the view), with a scrim coming in beside the artwork, so the view's white text holds 4.5:1 even over a light continuation; the view sits on that; the card does not move and keeps its glass.
   - *Stacked* (narrow or tall windows): the phone's layout, the artwork (or the view, with a thumbnail by the title) over the card; a tall window's immersive cover runs full width on top, carried on below.
@@ -402,14 +493,15 @@ Apple Music's full-bleed artwork, without its animated covers (which we don't ha
 | Style | What it draws | When |
 |---|---|---|
 | Mirror | The artwork flipped past its edge, blurring more with distance, fading into the moving background. | Nothing near the edge looks wrong flipped: no close-up face, no text, logo or sticker in the zone a reflection shows, not so busy the controls drown. |
-| Extend | The colours along the edge carried on, softening sideways with distance. An edge already in one colour carries it on with a crisp edge, no fade: a white cover stays white all the way down, with dark controls. | The edge is plain: its very last row is one colour (a border, a band, a backdrop), or most of the strip is (text on a plain background); or each column holds its colour (a horizon, a gradient). Crisp only when the row or 95% of the strip is one colour; a plain but textured edge (dark ground, grain) fades in like any other. |
+| Extend | The colours along the edge carried on, softening sideways with distance. An edge already in one colour carries it on with a crisp edge, no fade: a white cover stays white all the way down, with dark controls. | The edge is plain: its very last row is one colour and the rows just above it are too (a band, a backdrop; a thin border under busy art is not), or most of the strip is (text on a plain background); or each column holds its colour (a horizon, a gradient). Crisp only when the row or 95% of the strip is one colour and the cover is smooth there (a fine grain, measured on the ~256 px cover the apps send rather than the 128 px resample, rules it out); a plain but textured edge (dark ground, grain, a ceiling tile) fades in like any other. A cover that ends in a solid strip (its outermost row on the ~256 px cover one colour, no grainier than a crisp edge may be, close to the few rows inside it, and backed by that colour in the strip above) carries it on crisp whatever the texture further in: a plain margin under a patterned band, a caption on it. |
 | Card | The artwork as a rounded card on its own blurred, moving colours. | Everything else: close-up portraits, busy covers, text across the bottom, non-square art. |
 
 - **The decision is the core's** (`hocket_core::artwork`), a pure function of the cover's pixels and the faces the platform found: both platforms decide the same, and it is tested once. Everything is measured on the cover resampled to 128 px in OKLab. Text and logos are small shapes standing out from the median of their surroundings (a median keeps edges, so the boundary of a large shape never counts) on a plain background (foliage and crowds are texture, not text), at two scales so bold titles count too.
 - **Faces**: platform-side, only close-ups (at least a tenth of the width; a figure seen whole reflects like one standing by water). One rules a mirror out when it reaches into the zone a reflection shows sharply (the outer 12%, as for text): a portrait whose face ends clear of the edge mirrors its neck and shoulders, the face itself blurred past reading. Any face, wherever it is, rules out extending column by column (it would smear skin and clothes down the screen). Android's box, worked out from the eyes, ends between the mouth and the chin: a chin tip alone at the seam doesn't read as a face upside down, the mouth and nose do. YuNet's box takes in the chin, so it rules out a little more. Android uses the framework's `FaceDetector`, no dependency; the desktop has none yet. On a 504-cover library a frontal-only detector found faces on 72 covers where YuNet found 170: a better detector is the main thing left.
 - **Four edges at once**: the bottom for portrait screens and narrow windows (and the desktop side panel's overview), the top for the room above the artwork on a phone (under the status bar and the player's handle; the art at the bottom of that strip, carried on upwards), the right and the left for wide windows (the artwork at the window's full height; the desktop floats its controls over the artwork's bottom). The left edge is decided like the right on the cover mirrored left to right, so a cover plain on one side only carries on that side. Wide, the desktop centres the artwork when both sides carry on, keeps it on the left when only the right does, and shows a card otherwise; a view always puts it on the left. Between the shapes, a card. Android reads `bottom` and `top`; the desktop reads `bottom`, `right` and `left`, plus `topLight` (the strip under its header). (`left` and `top` are newer: a layout from before them decodes to a card there, and a reader that doesn't know them ignores the keys.)
 - **The side panel's overview** (desktop): with a bottom edge that carries on, the artwork runs edge to edge at the top of the pane (the pane's own corners clip it, no inset or shadow) and an extension fills the whole overview in its colour (its columns carrying on where it has them), down to the end of the scroll and never fading back, and every card is glass in the edge's tone over it (light with dark text over a light extension, dark with light text over a dark one), title, links and accents included. A reflection runs on behind the title and fades, behind the first card under it (Lyrics, or Up next without lyrics; from the title's bottom to that card's bottom, along a long smoothstep; that card near-opaque in the end colour so its text reads the same throughout), into its end colour: the cover's bottom strip averaged, toned (keeping its hue) so the text over it reaches 4.5:1; that colour then fills the rest of the overview like an extension's. Near the artwork, where its own detail still shows through a reflection or an extension's bridge, the canvas adds whatever scrim the text there needs, measured on what was drawn. The panel's scrollbars are hidden (wheel, trackpad and keys still scroll). It scrolls with the overview, switches with the scene on track change and redraws when the panel's width changes. The drill-ins are unchanged; a card cover keeps the rounded card.
-- **The seam never cuts over**: the artwork's last stretch (18% on Android, 30% on the desktop, with a vignette there so the fade curves in towards the corners) fades onto a blurred copy of itself, and the continuation starts from that same blur, as one image. Except a crisp extension, where the artwork already ends in the colour carried on.
+- **Detail pages** (Android): an album's page shows its cover as the full player would (the same classifier, asked with the same setting, so a cover the player keeps as a card is a card here too): a mirror or an extension from the very top of the screen, under the status bar and the bar's icons with a shade over its top, the title centred under it. A mirror and a crisp extension meet the page as in the player; any other extension doesn't fade at all, its last rows stretched down from the edge into its colours, so the join is seamless. The whole page then carries on in the edge's colour under its scrim (light with dark text over a light one), every card, button and accent in a scheme built around it, and the bottom bar and its scrim follow it too, crossfading with the pages as they push and pop (a predictive back gesture included). A playlist (often a mosaic of its albums), a card cover, an artist's photo (a circle), a genre (its first album only stands in) or Never show a centred tile over the title instead, the page tinted from the cover's seed. Under the title: the artist, then the genre and year; then Play, Shuffle and the page's menu; then the album's notes (three lines, More for the rest). No heading over the songs; how many and how long go at the foot. An album's rating is in its menu, as a song's is. Covers are upscaled when the server has nothing bigger.
+- **The seam never cuts over**: the artwork's last stretch (18% on Android, 30% on the desktop, with a vignette there so the fade curves in towards the corners) fades onto a blurred copy of itself, and the continuation starts from that same blur, as one image. Except a crisp extension, where the artwork already ends in the colour carried on: only its last 4% fades, onto that colour, so a cover a level or a grain off it shows no line; and the colour carries the cover's grain (the core's measure, at least a faint dither), top and bottom, so a texture the classifier missed in the thumbnail doesn't stop dead at the seam.
 - **Contrast**: the controls follow the app's theme, unless what sits behind them (the continuation, not the whole cover) is almost all dark or light (80%), when they follow it. Centred, one tone serves both sides: theirs where they agree, the theme's where they do not, with the scrim that tone needs over the side that disagreed. The core sizes the scrim over the continuation for 4.5:1, and from the controls down the player fades partway (60%) to black under light controls, white under dark ones.
 - **Rendering is a still**: drawn once per cover and window size (the desktop's canvas, Compose layers on Android); only the background beneath moves. Mirror's progressive blur needs Android 12; before it the reflection only fades.
 - **Changing track, collapsing**: the desktop switches the artwork, its layout and the continuation together once the new cover is decoded and classified (the next track's ahead of time), crossfading the whole scene, so a new cover never sits beside the last one's continuation. On Android the artwork flying back to the mini player carries its fade out as it goes, its corners rounding to the thumbnail's.
@@ -425,6 +517,7 @@ Apple Music's full-bleed artwork, without its animated covers (which we don't ha
 | Space | Play / pause |
 | ← → | Seek |
 | Shift+← → | Previous / next track |
+| Ctrl/Cmd+B | Collapse or expand the sidebar |
 | Q · L · F · M | Queue · lyrics (the side panel's views, or the fullscreen player's) · fullscreen player · mini player |
 | 0–5 | Rate the selection |
 | Ctrl+Z · Ctrl+Shift+Z | Undo · redo |
@@ -441,6 +534,10 @@ Server setup is the entire first screen, nothing else. Every other empty state n
 ### Android v1
 
 Media notification only. Lockscreen comes free with MediaSession. Now-playing screen with queue and lyrics reachable by swipe or tab rather than a side panel — the split panel and fullscreen player are desktop shapes. Widget, quick settings tile, Auto and Wear come later; they're shallow but they multiply the surface area of every playback state bug not yet found. *(Since: Auto, Wear and media browsers through the library session; system playback resumption; a now-playing widget naming the Connect device that plays; launcher shortcuts; Assistant's play-from-search; the audio-effect session broadcast for equalizer apps.)*
+
+### Android on large screens
+
+Phones (under 600 dp wide) keep the stacked, centred bar and mini player. Wider, the floating pill sits at the bottom start and the mini player at the end, on one row (as long as a mini player of 320 dp fits beside the widest pill); with the floating bar off, a standing rail takes the start edge (its menu shows the labels) and the mini player still sits at the end. Landscape pages lay the full player out in two columns, artwork beside the controls, so a phone on its side never scrolls; an upright tablet keeps the one column, its controls in a centred column. Landscape windows of 960 dp and wider open the player as a side panel grown out of the mini player rather than over the page — the desktop's split panel, the one exception to the line above: the page stays usable beside it, its Lyrics and Queue take over the main screen (lyrics in a readable column, the queue at full size), and its own button goes full screen and back. A panel left open is remembered across restarts; a rotation to portrait folds it back to the mini player rather than turning it into the full-screen player. The panel's tall shape takes an immersive artwork even on a landscape screen.
 
 
 ## Licence  
@@ -459,6 +556,7 @@ It's also arguably the more fitting licence for something whose whole shape is s
 | playwire | MIT OR Apache-2.0 | Permissive, no constraints. |
 | Symphonia | MPL-2.0 | GPL-compatible through MPL's secondary-licence clause. |
 | cpal, UniFFI, napi-rs | Unconfirmed, expected permissive | Check before shipping. |
+| Beat This! / `beat-this-rs` | MIT (code and model weights) | Keep both copyright notices. CPJKU note that some training data is copyrighted or under limited CC licences; that doesn't change the weights' licence. |
 
 > The alternative, recorded for the avoidance of doubt Staying GPLv3 would mean dropping AMLL and writing the desktop lyric renderer directly — less absurd than it sounds given a native Compose renderer is being built for Android anyway, but it throws away the single biggest shortcut in the plan. A third reading holds that the Rust core and coordinator, containing no AMLL code, stay separable under GPLv3; that's a judgement about what counts as one work and shouldn't be relied on without advice.
 
@@ -468,10 +566,9 @@ It's also arguably the more fitting licence for something whose whole shape is s
 
 | Item | Reason |
 |---|---|
-| Chromecast | Dropped. It would have been a backend rather than a Connect peer, but the detach-and-keep-playing property depends on stream URLs being reachable and CORS-clean from the receiver, and the usual workaround — proxying through the sender — destroys exactly that property. The backend seam leaves the slot open for it, or DLNA or AirPlay, later. |
-| Crossfade | Worst value per unit of effort, and unlike gapless it invents audio that isn't in the file. |
+| Cast beyond the SDK | A Rust CastV2 renderer for every platform, without the proprietary SDK (see Cast); then DLNA or AirPlay behind the same renderer seam. Expiring share URLs in place of the account token. |
 | findSonicPath | Sonic paths from one track to another are a genuinely novel queue-building idea, but not now. |
-| Playback speed | Pitch-preserving resampling is a real chunk of DSP work for a feature not wanted. |
+| Playback speed | Pitch-preserving resampling of whole tracks is a real chunk of DSP work for a feature not wanted. AutoMix stretches only short outgoing tails (see AutoMix). |
 | Tag editing | Out of scope — Subsonic can't write tags and Navidrome is scanner-driven. Playlists are the management surface. |
 | Multi-server UI | Framework now, interface later. |
 | Direct Last.fm / ListenBrainz | Navidrome already fronts these. |
@@ -484,7 +581,7 @@ It's also arguably the more fitting licence for something whose whole shape is s
 | Question | What turns on it |
 |---|---|
 | Name availability | Confirm before committing: `github.com/hocket`, `npm view hocket`, `hocket.app` and `hocket.dev`, and IP Australia classes 9 and 42. The only known collision is `ryolang/hocket`, a one-commit protocol spec under another org — not a conflict in any sense that binds. Fallback: Ripieno. |
-| Distribution | Which channels — Play Store, F-Droid, GitHub releases, Flathub. With Cast dropped there's no proprietary dependency left, so the whole app can be FOSS and no build flavour split is needed. |
+| Distribution | Which channels — Play Store, F-Droid, GitHub releases, Flathub. The Google Cast SDK is the one proprietary dependency: the Play build includes it, a FOSS build (`-Phocket.foss=true`) leaves it out, until the Rust CastV2 renderer replaces it. |
 | Auto-update | Blocked on distribution. Different per channel, and some channels handle it for you. |
 | Code signing | Blocked on distribution. macOS notarisation applies to the native addons as much as the app. |
 | Remaining licences | Kawarp's own LICENSE file (the org states GPLv3, but an org README isn't authoritative per repo), cpal, UniFFI and napi-rs. All expected to be fine; none load-bearing enough to block. |

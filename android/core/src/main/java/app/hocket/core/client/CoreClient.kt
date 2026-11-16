@@ -4,6 +4,7 @@ import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.Queries
+import app.hocket.core.QueueWindows
 import app.hocket.core.api.*
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -11,9 +12,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -41,6 +44,9 @@ data class HandoffPicker(val open: Boolean = false, val targets: List<DeviceInfo
 /** What kind of ids a selection holds, so toolbar actions can be queried for the right target. */
 enum class SelectionKind { Tracks, Albums, Artists, Playlists, QueueItems }
 
+/** A room diagnostics collection this recent is reused rather than asked again (the room's limit is one per 10 s). */
+const val REUSE_ROOM_COLLECTION_MS = 15_000.0
+
 /**
  * The app-side view of the core: forwards commands and queries, folds the event stream into
  * StateFlows for each snapshot piece, extrapolates position, caches list pages and holds the
@@ -65,14 +71,29 @@ class CoreClient(
     val kind: CoreKind get() = core.kind
 
     // -- snapshot pieces ---------------------------------------------------------------------------
-    private val _servers = MutableStateFlow<List<ServerInfo>>(emptyList())
-    val servers: StateFlow<List<ServerInfo>> = _servers.asStateFlow()
+    private val _servers = MutableStateFlow<List<AccountInfo>>(emptyList())
+    /** Every account, highest priority first. */
+    val accounts: StateFlow<List<AccountInfo>> = _servers.asStateFlow()
     private val _session = MutableStateFlow<SessionDocument?>(null)
     val session: StateFlow<SessionDocument?> = _session.asStateFlow()
     private val _queue = MutableStateFlow(emptyQueue())
+    /**
+     * The queue view: the core's window around the pointer, extended with the rows the queue
+     * screen paged in ([extendQueue]) with `Query.QueueRange`.
+     */
     val queue: StateFlow<QueueView> = _queue.asStateFlow()
+    /** The core's own window, as last sent. */
+    private var queueBase: QueueView = emptyQueue()
+    /** [queueBase] plus the pages fetched since it came (all current), where paging carries on from. */
+    private var queueFetched: QueueView = emptyQueue()
+    /** Rows wanted behind and ahead of the pointer ([extendQueue]); the core's window covers [QUEUE_WINDOW_SIDE] each way. */
+    private var queueWant = QUEUE_WINDOW_SIDE to QUEUE_WINDOW_SIDE
+    private var queuePaging: kotlinx.coroutines.Job? = null
     private val _transport = MutableStateFlow(emptyTransport())
     val transport: StateFlow<TransportState> = _transport.asStateFlow()
+    private val _preview = MutableStateFlow<PreviewState?>(null)
+    /** The song preview, or null when nothing is being previewed. */
+    val preview: StateFlow<PreviewState?> = _preview.asStateFlow()
     /**
      * Latest stamp, including ~1 Hz ticks that do not republish [transport]. Written off the main
      * thread for those ticks (see [collector]); a flow so a paused [position] can wait on it.
@@ -87,6 +108,24 @@ class CoreClient(
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
     private val _devices = MutableStateFlow<List<DeviceInfo>>(emptyList())
     val devices: StateFlow<List<DeviceInfo>> = _devices.asStateFlow()
+    private val _identity = MutableStateFlow(IdentityInfo(id = "", deviceId = "", devices = emptyList(), removed = false, credentialSync = false))
+    /** This device's Hocket identity: its devices, credential sync, the coordinator. */
+    val identity: StateFlow<IdentityInfo> = _identity.asStateFlow()
+    private val _pairingInvite = MutableStateFlow<EventPairingInviteInner?>(null)
+    /** The pairing invite this device shows (Add a device), until it is used or replaced. */
+    val pairingInvite: StateFlow<EventPairingInviteInner?> = _pairingInvite.asStateFlow()
+    private val _coordinatorInvites = MutableStateFlow<EventCoordinatorInvitesInner?>(null)
+    /** The coordinator's invites (owner only), with the code just made. */
+    val coordinatorInvites: StateFlow<EventCoordinatorInvitesInner?> = _coordinatorInvites.asStateFlow()
+    private val _coordinatorYtm = MutableStateFlow<EventCoordinatorYtmStatusInner?>(null)
+    /** The coordinator's YouTube Music analysis (owner only), once asked: on, signed in as, a refusal. */
+    val coordinatorYtm: StateFlow<EventCoordinatorYtmStatusInner?> = _coordinatorYtm.asStateFlow()
+    private val _identityEvents = MutableSharedFlow<Event>(extraBufferCapacity = 8)
+    /**
+     * Pairing and coordinator answers as they arrive: `DevicePaired`, `PairingFinished`,
+     * `PairingFailed`, `CredentialsSynced`, `CoordinatorJoined`, `CoordinatorFailed`.
+     */
+    val identityEvents: SharedFlow<Event> = _identityEvents.asSharedFlow()
     private val _handoff = MutableStateFlow(HandoffPicker())
     val handoffPicker: StateFlow<HandoffPicker> = _handoff.asStateFlow()
     private val _jobs = MutableStateFlow<List<Job>>(emptyList())
@@ -107,12 +146,25 @@ class CoreClient(
     val sleepTimer: StateFlow<SleepTimer?> = _sleepTimer.asStateFlow()
     private val _network = MutableStateFlow<NetworkState?>(null)
     val network: StateFlow<NetworkState?> = _network.asStateFlow()
-    private val _batterySaver = MutableStateFlow(false)
-    val batterySaver: StateFlow<Boolean> = _batterySaver.asStateFlow()
+    private val _batterySaver = MutableStateFlow(app.hocket.core.Saver.OFF)
+    /** Battery saver as engaged now; test a feature with [app.hocket.core.has]. */
+    val batterySaver: StateFlow<BatterySaver> = _batterySaver.asStateFlow()
     private val _syncProgress = MutableStateFlow<SyncProgress?>(null)
     val syncProgress: StateFlow<SyncProgress?> = _syncProgress.asStateFlow()
     private val _savedQueues = MutableStateFlow<List<SavedQueue>>(emptyList())
     val savedQueues: StateFlow<List<SavedQueue>> = _savedQueues.asStateFlow()
+    private val _stash = MutableStateFlow<List<StashItem>>(emptyList())
+    /** The song stash, in order (#150). */
+    val stash: StateFlow<List<StashItem>> = _stash.asStateFlow()
+    private val _snoozes = MutableStateFlow<List<SnoozeItem>>(emptyList())
+    /** Songs snoozed right now, soonest ending first (#157). */
+    val snoozes: StateFlow<List<SnoozeItem>> = _snoozes.asStateFlow()
+    private val _albumResumeRevision = MutableStateFlow(0)
+    /** Bumped when album resume points change, so an open album page refetches. */
+    val albumResumeRevision: StateFlow<Int> = _albumResumeRevision.asStateFlow()
+    private val _albumResumes = MutableStateFlow<List<AlbumResumePoint>>(emptyList())
+    /** Every album with a resume point (empty while resume is off), as the core last announced. */
+    val albumResumes: StateFlow<List<AlbumResumePoint>> = _albumResumes.asStateFlow()
     private val _pins = MutableStateFlow<List<Pin>>(emptyList())
     val pins: StateFlow<List<Pin>> = _pins.asStateFlow()
     private val _storage = MutableStateFlow(StorageSummary(0.0, 0.0, 0.0))
@@ -164,12 +216,33 @@ class CoreClient(
     private val _exports = MutableSharedFlow<Event>(extraBufferCapacity = 4)
     /** `NspExported` and `ConfigExported`, for the share sheet. */
     val exports: SharedFlow<Event> = _exports.asSharedFlow()
+    private val _diagnosticsRequests = MutableSharedFlow<EventDiagnosticsRequestedInner>(extraBufferCapacity = 4)
+    /** Another device in the Connect room asks for this one's diagnostics (developer mode is on here). */
+    val diagnosticsRequests: SharedFlow<EventDiagnosticsRequestedInner> = _diagnosticsRequests.asSharedFlow()
+    private val _roomDiagnostics = MutableStateFlow<RoomDiagnosticsStatus?>(null)
+    /**
+     * The newest room diagnostics collection, as it goes. [collectRoomDiagnostics] runs one at a
+     * time, so this is always the one it is running (or ran last).
+     */
+    val roomDiagnostics: StateFlow<RoomDiagnosticsStatus?> = _roomDiagnostics.asStateFlow()
+    private val _reportUpload = MutableStateFlow<ReportUploadStatus?>(null)
+    /**
+     * Where the "Save to Coordinator" report upload stands (`null`: none), from
+     * `ReportUploadChanged` and a `Query.ReportUpload` when the core starts (an upload interrupted by
+     * quitting resumes then). Drives the app-wide upload bar and the upload's foreground service.
+     */
+    val reportUpload: StateFlow<ReportUploadStatus?> = _reportUpload.asStateFlow()
+    /** Bumped by every `ReportUploadChanged`, so a slower startup query never overwrites a newer event. */
+    @Volatile private var reportUploadEvents = 0
+    private var roomCollection: Deferred<String?>? = null
+    /** The newest finished collection's text, and when it finished. */
+    private var lastRoomCollection: Pair<String, Double>? = null
     private val _actionsChanged = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val actionsChanged: SharedFlow<String> = _actionsChanged.asSharedFlow()
 
     // -- derived -----------------------------------------------------------------------------------
-    /** The single configured server (multi-server has no UI yet). */
-    val server: StateFlow<ServerInfo?> = _servers.mapState(scope) { it.firstOrNull() }
+    /** The first account: the session's, and the one list queries name for the unified library. */
+    val server: StateFlow<AccountInfo?> = _servers.mapState(scope) { it.firstOrNull() }
     val isPlaying: StateFlow<Boolean> = _transport.mapState(scope) { it.position.isPlaying }
     /** Buffering only: the mini player should not recompose on every transport stamp. */
     val buffering: StateFlow<Boolean> = _transport.mapState(scope) { it.buffering }
@@ -206,17 +279,52 @@ class CoreClient(
 
     /**
      * ~30 Hz position while subscribed and playing; nothing runs when no screen collects it, and a
-     * paused player is not polled ([awaitPositionMayMove]). Lyrics uses [positionNow] on its own
-     * frame loop.
+     * paused player is not polled ([awaitPositionMayMove]). For smooth motion only: progress bars
+     * use [progress]. Lyrics uses [positionNow] on its own frame loop.
      */
-    val position: StateFlow<Long> = flow {
+    val position: StateFlow<Long> = positionTicker(POSITION_TICK_MS)
+
+    /**
+     * Position at ~4 Hz, for progress bars and clocks (the mini player's line, the seek bar, the
+     * playing queue's time): a quarter second on a track of minutes is about a pixel, and waking
+     * the UI 30 times a second for it costs battery. Runs only while subscribed, like [position].
+     */
+    val progress: StateFlow<Long> = positionTicker(PROGRESS_TICK_MS)
+
+    /**
+     * Emits [positionNow] every [periodMs] while playing, and at once when the position jumps (a
+     * seek, play or pause, another track) rather than at the next tick: a slow ticker would
+     * otherwise show a seek up to a period late. Paused, it waits for the next stamp.
+     */
+    private fun positionTicker(periodMs: Long): StateFlow<Long> = flow {
         while (true) {
             val mark = positionMark()
             emit(positionNow())
-            delay(POSITION_TICK_MS)
-            awaitPositionMayMove(mark)
+            if (mark.moving) withTimeoutOrNull(periodMs) { awaitPositionJump(mark) }
+            else awaitPositionMayMove(mark)
         }
     }.stateIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 500), 0L)
+
+    /**
+     * Suspends until the position stops following [mark]: another track, play or pause, or a
+     * stamp that puts it more than [POSITION_JUMP_MS] from where [mark] would (a seek). The
+     * playing player's routine re-stamps (~1 Hz) agree with [mark] and do not count.
+     */
+    private suspend fun awaitPositionJump(mark: PositionMark) {
+        combine(_clock, _nowPlaying) { t, e ->
+            when {
+                e !== mark.entry -> true
+                t === mark.stamp -> false
+                t.position.isPlaying != mark.stamp.position.isPlaying -> true
+                else -> {
+                    val at = now()
+                    val offset = _connection.value.clockOffsetMs
+                    val duration = e?.track?.durationMs?.toLong()
+                    kotlin.math.abs(PositionClock.extrapolate(t, at, offset, duration) - PositionClock.extrapolate(mark.stamp, at, offset, duration)) > POSITION_JUMP_MS
+                }
+            }
+        }.first { it }
+    }
 
     // -- page caches -------------------------------------------------------------------------------
     val trackPages = PageCache<TrackListKey, Track>(scope) { key, offset, limit ->
@@ -250,11 +358,31 @@ class CoreClient(
 
     private fun unavailable(): Nothing = throw IllegalStateException("the core did not answer")
 
+    /**
+     * The source filter chip: the account the library lists, search and playlists show ("" for
+     * every account, [app.hocket.core.MIXED_SOURCE] for the Mixed playlists). This device's own.
+     */
+    val librarySource = MutableStateFlow("")
+
     // -- selection ---------------------------------------------------------------------------------
     private val _selection = MutableStateFlow(Selection())
     val selection: StateFlow<Selection> = _selection.asStateFlow()
     private val _selectionKind = MutableStateFlow(SelectionKind.Tracks)
     val selectionKind: StateFlow<SelectionKind> = _selectionKind.asStateFlow()
+
+    /** Selected songs' references by id: the selection lists ids, commands name references. */
+    private val selectedRefs = mutableMapOf<String, TrackRef>()
+
+    /** Toggle a song in the selection (it remembers the song's account). */
+    fun toggleSelected(track: TrackRef) {
+        selectedRefs[track.id] = track
+        toggleSelected(SelectionKind.Tracks, track.id)
+    }
+
+    private fun trackRefs(ids: List<String>): List<TrackRef> {
+        val fallback = accounts.value.firstOrNull()?.id.orEmpty()
+        return ids.map { selectedRefs[it] ?: TrackRef(fallback, it) }
+    }
 
     fun toggleSelected(kind: SelectionKind, id: String) {
         if (_selectionKind.value != kind && _selection.value.active) clearSelection()
@@ -283,7 +411,7 @@ class CoreClient(
         val sel = _selection.value
         val ids = sel.ids.toList()
         val target = if (!sel.active) ActionTarget.None else when (_selectionKind.value) {
-            SelectionKind.Tracks -> Commands.tracks(ids)
+            SelectionKind.Tracks -> Commands.tracks(trackRefs(ids))
             SelectionKind.Albums -> Commands.albums(ids)
             SelectionKind.Artists -> Commands.artists(ids)
             SelectionKind.Playlists -> Commands.playlists(ids)
@@ -296,7 +424,7 @@ class CoreClient(
     fun selectionTarget(): ActionTarget {
         val ids = _selection.value.ids.toList()
         return when (_selectionKind.value) {
-            SelectionKind.Tracks -> Commands.tracks(ids)
+            SelectionKind.Tracks -> Commands.tracks(trackRefs(ids))
             SelectionKind.Albums -> Commands.albums(ids)
             SelectionKind.Artists -> Commands.artists(ids)
             SelectionKind.Playlists -> Commands.playlists(ids)
@@ -337,6 +465,74 @@ class CoreClient(
 
     fun dispatch(command: Command) = core.dispatch(command)
 
+    /** Asks for a new pairing invite; the previous one is gone until it arrives (never shown again). */
+    fun createPairingInvite() {
+        _pairingInvite.value = null
+        core.dispatch(Command.CreatePairingInvite)
+    }
+
+    /** Saves a report on the coordinator (`docs/reports.md`); progress arrives on [reportUpload]. */
+    fun startReportUpload(note: String, bundle: String, attachments: List<ReportAttachment>) =
+        dispatch(Command.StartReportUpload(CommandStartReportUploadInner(note, bundle, attachments)))
+
+    /** Tries the failed report upload again, from where it stopped. */
+    fun retryReportUpload() = dispatch(Command.RetryReportUpload)
+
+    /** Forgets the report upload, cancelling it if it is still running. */
+    fun dismissReportUpload() = dispatch(Command.DismissReportUpload)
+
+    private var stashEvents = 0
+    private var snoozeEvents = 0
+
+    /** The snapshot carries no stash: ask, unless an event answers first. */
+    private fun refreshStash() {
+        val seen = stashEvents
+        scope.launch {
+            val result = query(Query.Stash) as? QueryResult.StashItems ?: return@launch
+            if (stashEvents == seen) _stash.value = result.data
+        }
+    }
+
+    /** The snapshot carries no snoozes: ask, unless an event answers first. */
+    private fun refreshSnoozes() {
+        val seen = snoozeEvents
+        scope.launch {
+            val result = query(Query.Snoozes) as? QueryResult.SnoozeItems ?: return@launch
+            if (snoozeEvents == seen) _snoozes.value = result.data
+        }
+    }
+
+    /** Asks where the report upload stands (core start, snapshots), unless an event answers first. */
+    private fun refreshReportUpload() {
+        val seen = reportUploadEvents
+        scope.launch {
+            val result = query(Query.ReportUpload) as? QueryResult.ReportUpload ?: return@launch
+            if (reportUploadEvents == seen) _reportUpload.value = result.data
+        }
+    }
+
+    /**
+     * `Query.RoomDiagnostics`, one at a time: a call while one runs joins it. It runs in the
+     * client's scope, so a caller that stops waiting (a page that closes) leaves it to finish for
+     * the next one rather than starting a second collection alongside. The room turns away a
+     * second request within 10 s (the core then answers with the collection before), so unless
+     * [force]d (Refresh) a collection that recent is reused. Only the room's answers count: "not
+     * collected" (developer mode off, Connect not running) is asked again next time.
+     */
+    suspend fun collectRoomDiagnostics(force: Boolean = false): String? {
+        val running = synchronized(this) {
+            roomCollection?.takeIf { it.isActive }?.let { return@synchronized it }
+            val last = lastRoomCollection
+            if (!force && last != null && now() - last.second < REUSE_ROOM_COLLECTION_MS) return last.first
+            scope.async {
+                val text = (query(Query.RoomDiagnostics) as? QueryResult.Text)?.data
+                if (text != null && !text.startsWith("Other devices: not collected")) synchronized(this@CoreClient) { lastRoomCollection = text to now() }
+                text
+            }.also { roomCollection = it }
+        }
+        return running.await()
+    }
+
     /**
      * Async request/response, failing soft: `null` when the core cannot answer (it has shut down or
      * been freed while a screen was still composing, the release build's dead core, a query the core
@@ -372,9 +568,10 @@ class CoreClient(
         (query(Queries.actions(surface, target)) as? QueryResult.Actions)?.data ?: emptyList()
 
     fun applySnapshot(s: Snapshot) {
-        _servers.value = s.servers
+        _servers.value = s.accounts
+        _identity.value = s.identity
         _session.value = s.session
-        _queue.value = s.queue
+        setQueue(s.queue)
         clockTransport = s.transport
         _transport.value = s.transport
         _nowPlaying.value = s.queue.current
@@ -398,9 +595,18 @@ class CoreClient(
     fun onEvent(event: Event) {
         when (event) {
             // `Started` once per core; `Snapshot` on every RequestSnapshot (UI attach, service reconnect).
-            is Event.Started -> applySnapshot(event.data.snapshot)
-            is Event.Snapshot -> applySnapshot(event.data.snapshot)
-            is Event.ServersChanged -> _servers.value = event.data.servers
+            is Event.Started -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
+            is Event.Snapshot -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
+            is Event.AccountsChanged -> _servers.value = event.data.accounts
+            is Event.IdentityChanged -> _identity.value = event.data.identity
+            is Event.PairingInvite -> _pairingInvite.value = event.data
+            is Event.CoordinatorInvites -> _coordinatorInvites.value = event.data
+            is Event.CoordinatorYtmStatus -> _coordinatorYtm.value = event.data
+            is Event.DevicePaired -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
+            // A failed invite leaves no stale one up (a failed join has none to show either).
+            is Event.PairingFailed -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
+            is Event.PairingFinished, is Event.CredentialsSynced,
+            is Event.CoordinatorJoined, is Event.CoordinatorFailed -> _identityEvents.tryEmit(event)
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {
                 val sid = event.data.server_id
@@ -417,6 +623,8 @@ class CoreClient(
                 val items = event.data.items
                 // The core re-emits these when the item is queued; patching now keeps the player
                 // and the queue in step with the rows that change below.
+                queueBase = LibraryPatches.queue(queueBase, items)
+                queueFetched = LibraryPatches.queue(queueFetched, items)
                 _queue.update { prev ->
                     val next = LibraryPatches.queue(prev, items)
                     if (next === prev) prev else next
@@ -435,7 +643,7 @@ class CoreClient(
                 _savedQueues.value = event.data.document.savedQueues
             }
             is Event.QueueChanged -> {
-                _queue.value = event.data.queue
+                setQueue(event.data.queue)
                 _nowPlaying.value = event.data.queue.current
             }
             is Event.TransportChanged -> {
@@ -444,8 +652,12 @@ class CoreClient(
                 clockTransport = next
                 if (!prev.isPositionTick(next)) _transport.value = next
             }
+            is Event.PreviewChanged -> _preview.value = event.data.preview
             is Event.NowPlayingChanged -> _nowPlaying.value = event.data.entry
             is Event.SavedQueuesChanged -> _savedQueues.value = event.data.queues
+            is Event.StashChanged -> { stashEvents++; _stash.value = event.data.items }
+            is Event.SnoozesChanged -> { snoozeEvents++; _snoozes.value = event.data.items }
+            is Event.AlbumResumesChanged -> { _albumResumes.value = event.data.points; _albumResumeRevision.value++ }
             is Event.UndoChanged -> _undo.value = event.data.state
             is Event.Toast -> _toasts.tryEmit(event.data.toast)
             is Event.PlayerNotice -> _playerNotice.value = event.data.takeIf { it.message != null || it.code != null }
@@ -454,7 +666,7 @@ class CoreClient(
             is Event.ConnectionChanged -> _connection.value = event.data.state
             // The core announces every SetNetworkState change (and replays it on attach).
             is Event.NetworkChanged -> _network.value = event.data.network
-            is Event.BatterySaverChanged -> _batterySaver.value = event.data.enabled
+            is Event.BatterySaverChanged -> _batterySaver.value = event.data.saver
             is Event.DevicesChanged -> _devices.value = event.data.devices
             is Event.HandoffPickerChanged -> _handoff.value = HandoffPicker(event.data.open, event.data.targets)
             is Event.ResumeOfferChanged -> _resumeOffer.value = event.data.offer
@@ -475,12 +687,75 @@ class CoreClient(
             is Event.ShortcutsChanged -> Unit // desktop only
             is Event.ActionsChanged -> _actionsChanged.tryEmit(event.data.surface)
             is Event.NspExported, is Event.ConfigExported -> _exports.tryEmit(event)
+            is Event.DiagnosticsRequested -> _diagnosticsRequests.tryEmit(event.data)
+            is Event.RoomDiagnosticsChanged -> _roomDiagnostics.value = event.data.status
+            is Event.ReportUploadChanged -> { reportUploadEvents++; _reportUpload.value = event.data.status }
             // Who owns transport after a handoff, and voice search waiting for playback, follow this
             // (not only snapshots). The core sends it on real changes, never on position reports.
             is Event.MediaSession -> _mediaSession.value = event.data.state
             is Event.Backend -> Unit // consumed by the playback service
             is Event.Error -> _errors.tryEmit(event.data)
             is Event.Log -> Unit
+            // CoreHost answers the JS host (a hidden WebView); the core toasts an expired sign-in itself.
+            is Event.YtmJsRequest, is Event.YtmSignInExpired -> Unit
+        }
+    }
+
+    /**
+     * A new window from the core. Rows paged in beyond it stay on screen while they still fit: the
+     * list keeps its shape, or only the pointer moved (same total, the rows both hold line up).
+     * They are refetched right away, as an edit may have moved them. Otherwise the old rows stay
+     * until the refetched pages are published, so the list never shrinks to the core's window
+     * under the user's scroll position.
+     */
+    private fun setQueue(base: QueueView) {
+        queueBase = base
+        queueFetched = base
+        val prev = _queue.value
+        val paged = QueueWindows.missing(base, queueWant.first, queueWant.second) != null
+        _queue.value = when {
+            !paged || prev === base -> base
+            QueueWindows.sameShape(prev, base) -> QueueWindows.merge(base, prev)
+            else -> QueueWindows.realign(base, prev) ?: prev
+        }
+        pageQueue()
+    }
+
+    /**
+     * Have [queue] reach at least [before] rows behind the pointer and [after] ahead of it, paging
+     * them in from the core; the queue screen calls this as it scrolls near either loaded end.
+     */
+    fun extendQueue(before: Int, after: Int) {
+        val (b, a) = queueWant
+        if (before <= b && after <= a) return
+        queueWant = maxOf(b, before) to maxOf(a, after)
+        pageQueue()
+    }
+
+    /** Back to the core's window alone (the queue screen closed). */
+    fun resetQueueWindow() {
+        queueWant = QUEUE_WINDOW_SIDE to QUEUE_WINDOW_SIDE
+    }
+
+    /** Page in what [queueWant] still lacks, carrying on from the pages already fetched for this window. */
+    private fun pageQueue() {
+        val base = queueBase
+        val (before, after) = queueWant
+        queuePaging?.cancel()
+        if (QueueWindows.missing(queueFetched, before, after) == null) return
+        queuePaging = scope.launch {
+            var view = queueFetched
+            while (true) {
+                val (start, count) = QueueWindows.missing(view, before, after) ?: break
+                val page = (query(Commands.queueRange(start, count)) as? QueryResult.Queue)?.data ?: break
+                // A newer window from the core cancels this; it may already have replaced the base.
+                if (queueBase !== base) return@launch
+                val merged = QueueWindows.merge(view, page)
+                if (merged === view) break
+                view = merged
+                queueFetched = view
+            }
+            _queue.value = view
         }
     }
 
@@ -491,7 +766,9 @@ class CoreClient(
 
     companion object {
         private const val TAG = "CoreClient"
-        fun emptyQueue() = QueueView(null, emptyList(), null, emptyList(), emptyList(), false, RepeatMode.Off, false, QueueMode.Apple, 0u)
+        /** Rows the core's queue window carries on each side of the pointer. */
+        const val QUEUE_WINDOW_SIDE = 100
+        fun emptyQueue() = QueueView(null, emptyList(), 0u, 0u, 0u, null, 0u, 0u, null, false, RepeatMode.Off, false)
         fun emptyTransport() = TransportState(TransportLease(null, 0u, 0.0), PositionStamp(0u, 0.0, 1.0, false), false, 0u, 1.0)
         fun emptyConnection() = ConnectionState(ConnectionTier.Local, false, null, 0.0, null, 0u, null)
         fun emptyUndo() = UndoState(false, null, false, null, emptyList())
@@ -501,6 +778,10 @@ class CoreClient(
         const val LYRICS_CACHE_CAP = 12
         /** [position]'s period while playing (~30 Hz). */
         const val POSITION_TICK_MS = 32L
+        /** [progress]'s period while playing (~4 Hz). */
+        const val PROGRESS_TICK_MS = 250L
+        /** A re-stamp that moves the position further than this is a jump (a seek): tickers show it at once. */
+        const val POSITION_JUMP_MS = 300L
     }
 }
 

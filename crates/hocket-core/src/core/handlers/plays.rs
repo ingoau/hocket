@@ -34,8 +34,17 @@ pub(crate) struct PlaysSync {
     next_batch: u32,
 }
 
+/// How far this device read each room's play log, and the accounts it had
+/// then: plays of an account it did not have were not kept, so a new
+/// account reads every log from the start again.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct Marks(Vec<PlayLogMark>);
+#[serde(rename_all = "camelCase")]
+struct Marks {
+    #[serde(default)]
+    marks: Vec<PlayLogMark>,
+    #[serde(default)]
+    sources: Vec<String>,
+}
 
 fn marks_key(scope: &str) -> String {
     format!("playLogMarks:{scope}")
@@ -54,13 +63,17 @@ impl Actor {
             self.log("debug", format!("prune play relays: {e}"));
         }
         let mut marks = self.load_play_marks();
-        if !marks.0.is_empty() && !self.has_play_history() {
-            // Marks left from before the server was removed (or its history
-            // lost): read every log from the start again.
-            marks.0.clear();
+        let sources = self.play_sources();
+        if sources.iter().any(|s| !marks.sources.contains(s)) {
+            // An account this device did not have when it last read: its
+            // plays were skipped, so read every log from the start again.
+            marks.marks.clear();
+        }
+        if marks.sources != sources {
+            marks.sources = sources;
             self.save_play_marks(&marks);
         }
-        self.engine_input(Input::RequestPlays { marks: marks.0 });
+        self.engine_input(Input::RequestPlays { marks: marks.marks });
     }
 
     pub(crate) fn on_plays_pushed(&mut self, batch: u32, log_id: String) {
@@ -83,12 +96,10 @@ impl Actor {
     }
 
     pub(crate) fn on_plays_received(&mut self, log_id: String, after: u32, plays: Vec<PlayRecord>) {
-        let Some(server_id) = self.server_id() else {
-            return;
-        };
+        let sources = self.play_sources();
         let added = match self
             .db
-            .with_tx(|tx| queries::import_plays_in(tx, &server_id, &plays, &log_id))
+            .with_tx(|tx| queries::import_plays_in(tx, &plays, &sources, &log_id))
         {
             Ok(n) => n,
             Err(e) => {
@@ -100,12 +111,12 @@ impl Actor {
         // relay that overtakes a catch-up page never skips that page.
         let last = plays.iter().map(|p| p.seq).max().unwrap_or(after);
         let mut marks = self.load_play_marks();
-        let mark = marks.0.iter_mut().find(|m| m.log_id == log_id);
+        let mark = marks.marks.iter_mut().find(|m| m.log_id == log_id);
         let current = mark.as_ref().map(|m| m.seq).unwrap_or(0);
         if after <= current && last > current {
             match mark {
                 Some(m) => m.seq = last,
-                None => marks.0.push(PlayLogMark {
+                None => marks.marks.push(PlayLogMark {
                     log_id: log_id.clone(),
                     seq: last,
                 }),
@@ -117,12 +128,25 @@ impl Actor {
                 "info",
                 format!("{added} plays from other devices added to history"),
             );
-            let ids = plays.iter().map(|p| p.track_id.clone()).collect();
-            self.emit(Event::LibraryChanged {
-                server_id,
-                tables: vec!["tracks".into(), "play_history".into()],
-                ids,
-            });
+            let mut by_source: Vec<(String, Vec<String>)> = vec![];
+            for p in plays
+                .iter()
+                .filter(|p| sources.contains(&p.track_id.source))
+            {
+                match by_source.iter_mut().find(|(s, _)| *s == p.track_id.source) {
+                    Some((_, ids)) => ids.push(p.track_id.id.clone()),
+                    None => {
+                        by_source.push((p.track_id.source.clone(), vec![p.track_id.id.clone()]))
+                    }
+                }
+            }
+            for (server_id, ids) in by_source {
+                self.emit(Event::LibraryChanged {
+                    server_id,
+                    tables: vec!["tracks".into(), "play_history".into()],
+                    ids,
+                });
+            }
         }
         if self.plays_sync.log_id.as_deref() != Some(log_id.as_str()) {
             self.plays_sync.log_id = Some(log_id);
@@ -139,14 +163,13 @@ impl Actor {
         if self.plays_sync.in_flight.is_some() || self.engine.is_none() {
             return;
         }
-        let (Some(log_id), Some(server_id)) = (self.plays_sync.log_id.clone(), self.server_id())
-        else {
+        let Some(log_id) = self.plays_sync.log_id.clone() else {
             return;
         };
         let since = self.now() - PLAY_LOG_TTL_MS;
         let rows = match self
             .db
-            .with_tx(|tx| queries::unrelayed_plays_in(tx, &server_id, &log_id, since, PLAY_PAGE))
+            .with_tx(|tx| queries::unrelayed_plays_in(tx, &log_id, since, PLAY_PAGE))
         {
             Ok(r) => r,
             Err(e) => {
@@ -164,19 +187,16 @@ impl Actor {
         self.engine_input(Input::PushPlays { batch, plays });
     }
 
-    fn has_play_history(&self) -> bool {
-        let Some(server_id) = self.server_id() else {
-            return false;
-        };
-        self.db
-            .with_conn(|c| {
-                Ok(c.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM play_history WHERE server_id = ?1)",
-                    [&server_id],
-                    |r| r.get::<_, bool>(0),
-                )?)
-            })
-            .unwrap_or(true)
+    /// The sources (account ids) this device keeps plays of, sorted.
+    fn play_sources(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .accounts
+            .iter()
+            .map(|a| a.info.source.clone())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
 
     fn load_play_marks(&self) -> Marks {

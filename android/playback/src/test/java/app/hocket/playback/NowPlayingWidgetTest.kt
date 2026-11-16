@@ -25,7 +25,7 @@ import org.robolectric.annotation.Config
 class NowPlayingWidgetTest {
     private val app: Application get() = ApplicationProvider.getApplicationContext()
     private fun session(playing: Boolean) = MediaSessionState(
-        MediaSessionMetadata("Blue Train", "John Coltrane", "Blue Train", 643_000u, null, "t1", false, 0u),
+        MediaSessionMetadata("Blue Train", "John Coltrane", "Blue Train", 643_000u, null, "t1", null, false, 0u),
         playing, PositionStamp(0u, 0.0, 1.0, playing), false, RepeatMode.Off, 1.0, false, emptyList(), true,
     )
 

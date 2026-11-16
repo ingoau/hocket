@@ -62,11 +62,11 @@ fn submissions(t: &TestCore, id: &str) -> usize {
 /// tracks are 200 s; the threshold is 100 s), then pauses.
 async fn play_through(t: &TestCore, others: &[&TestCore], track: &str) {
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec![track.into()],
+        tracks: TrackRef::list(&t.server_id, [track]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     let mut all = vec![t];

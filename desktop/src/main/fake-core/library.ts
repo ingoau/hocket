@@ -104,6 +104,8 @@ export function generateLibrary(serverId: string, seed = 7, trackTarget = 3200):
       musicBrainzId: undefined,
       replayGain: { albumGainDb: -(rng.int(30, 110) / 10), albumPeak: 0.98 },
       offline: rng.chance(0.06) ? "downloaded" : "none",
+      // Not from the rng, so the rest of the library stays as it was.
+      releaseTypes: albumNo % 9 === 0 ? ["single"] : albumNo % 7 === 0 ? ["ep"] : ["album"],
     };
     const ids: string[] = [];
     const discs = songCount > 12 && rng.chance(0.3) ? 2 : 1;

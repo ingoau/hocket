@@ -10,7 +10,7 @@ use hocket_core::core::test_support::{seeded_server, TestCore};
 fn album_args(server_id: &str, album: &str) -> PlayContextArgs {
     PlayContextArgs {
         context: QueueContext {
-            server_id: server_id.into(),
+            source: server_id.into(),
             kind: ContextKind::Album { id: album.into() },
             label: String::new(),
             sort: SortOrder::Default,
@@ -19,6 +19,7 @@ fn album_args(server_id: &str, album: &str) -> PlayContextArgs {
         start_index: Some(0),
         shuffle: false,
         save_outgoing: true,
+        start_position_ms: None,
     }
 }
 
@@ -35,6 +36,43 @@ async fn synced_core(name: &str) -> TestCore {
     t
 }
 
+/// The skip swipe's PreviousTrack goes back however far into the track it
+/// is (Previous would restart it), and from a context's later track with no
+/// history too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previous_track_never_restarts() {
+    let t = synced_core("a").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.run(Command::Next).await;
+    t.run_for(5_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+    t.run(Command::PreviousTrack).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t0"));
+
+    // Started from the third track: nothing in history, the album before it.
+    t.run(Command::PlayContext {
+        args: PlayContextArgs {
+            start_index: Some(2),
+            ..album_args(&sid, "al0")
+        },
+    })
+    .await;
+    t.run_for(5_000.0).await;
+    assert!(
+        t.queue().await.history_count == 2,
+        "the songs before it are behind the pointer"
+    );
+    t.run(Command::PreviousTrack).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn play_album_then_next_previous_and_undo() {
     let t = synced_core("a").await;
@@ -48,7 +86,7 @@ async fn play_album_then_next_previous_and_undo() {
     let q = t.queue().await;
     assert_eq!(q.context_label.as_deref(), Some("Album al0"));
     assert_eq!(q.current.as_ref().unwrap().track.id, "t0");
-    assert_eq!(q.upcoming.len(), 3);
+    assert_eq!(q.total_upcoming as usize, 3);
     assert!(t.backend.is_playing(), "the owner drives audio");
     let snap = t.snapshot().await;
     assert!(snap.transport.position.is_playing);
@@ -81,8 +119,8 @@ async fn play_album_then_next_previous_and_undo() {
     t.run_for(500.0).await;
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t0");
-    assert_eq!(q.upcoming.len(), 3);
-    assert!(q.history.is_empty());
+    assert_eq!(q.total_upcoming as usize, 3);
+    assert!(q.history_count == 0);
 
     // Previous after 3 s restarts the track instead.
     t.run(Command::Next).await;
@@ -151,8 +189,14 @@ async fn playing_something_new_saves_the_outgoing_queue_and_restore_lands_mid_tr
     t.run_for(500.0).await;
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t1");
-    assert_eq!(q.history.len(), 1, "history travels with the snapshot");
-    assert_eq!(q.upcoming.len(), 2, "context re-resolved on restore");
+    assert_eq!(
+        q.history_count as usize, 1,
+        "history travels with the snapshot"
+    );
+    assert_eq!(
+        q.total_upcoming as usize, 2,
+        "context re-resolved on restore"
+    );
     let pos = t.backend.current().unwrap().1;
     assert!(pos >= 40_000, "landed mid-track at {pos}");
     // Restoring bumps the entry (dedupe on identity) and al1 was saved.
@@ -188,11 +232,11 @@ async fn a_play_scrobbles_exactly_once_and_lands_in_history() {
     let t = synced_core("c").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     // 200 s track: threshold is 100 s. Now playing goes out at start.
@@ -248,11 +292,11 @@ async fn seeking_does_not_count_as_listening() {
     let t = synced_core("d").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(10_000.0).await;
@@ -274,11 +318,11 @@ async fn unplayable_items_are_skipped_with_a_notice() {
     let t = synced_core("e").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -294,9 +338,8 @@ async fn unplayable_items_are_skipped_with_a_notice() {
         "skipped to the next playable item"
     );
     assert!(q
-        .history
-        .iter()
-        .any(|e| e.item.track_id == "t1" && e.item.unavailable));
+        .history()
+        .any(|e| e.item.track == "t1" && e.item.unavailable));
     assert!(t
         .events
         .all()
@@ -326,11 +369,11 @@ async fn sleep_timer_stops_at_end_of_track() {
     let t = synced_core("f").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run(Command::SetSleepTimer {
@@ -356,11 +399,11 @@ async fn a_play_with_scrobbling_off_is_recorded_but_not_marked_scrobbled() {
     .await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Selection".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(110_000.0).await;
@@ -396,11 +439,11 @@ async fn auto_advance_follows_the_backend(name: &str, transition_only: bool) {
     t.backend.set_transition_only(transition_only);
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1", "t2", "t3"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -459,6 +502,39 @@ async fn gapless_auto_advance_without_ended_moves_the_session() {
     auto_advance_follows_the_backend("h", true).await;
 }
 
+/// A lyric hit starts the song at the matched line in the same command, so the
+/// load is already there and nothing seeks the track that was playing before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn play_tracks_loads_at_the_given_position() {
+    let t = synced_core("pos").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        tracks: TrackRef::list(&sid, ["t0"]),
+        start_index: 0,
+        label: "Lyric".into(),
+        shuffle: false,
+        start_position_ms: 12_000,
+    })
+    .await;
+    assert!(
+        t.backend.log().iter().any(|c| matches!(
+            c,
+            ScriptedCall::Load {
+                position_ms: 12_000,
+                ..
+            }
+        )),
+        "the new song loads at the lyric"
+    );
+    assert!(
+        !t.backend
+            .log()
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::Seek { .. })),
+        "no separate seek that could land on the previous song"
+    );
+}
+
 /// A transient focus loss (a call, a navigation prompt) must not pause the
 /// platform player: it resumes by itself when focus returns and reports
 /// `Playing`. A pause the user asks for meanwhile does reach it.
@@ -467,11 +543,11 @@ async fn transient_focus_loss_resumes_when_focus_returns() {
     let t = synced_core("i").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -516,11 +592,11 @@ async fn lease_renewals_during_a_call_do_not_resume_playback() {
     let t = synced_core("j").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -558,11 +634,11 @@ async fn a_stream_error_during_a_call_retries_quietly() {
     let t = synced_core("l").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -605,11 +681,11 @@ async fn a_permanent_focus_loss_during_a_call_pauses_for_good() {
     let t = synced_core("k").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(1_500.0).await;
@@ -644,11 +720,11 @@ async fn an_adopted_item_the_backend_never_starts_is_loaded_explicitly() {
     t.backend.set_drop_next(true);
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -709,16 +785,10 @@ async fn play_next_on_an_upcoming_item_moves_it() {
     })
     .await;
     t.run_for(500.0).await;
-    let ids = |q: &QueueView| {
-        q.playing_next
-            .iter()
-            .chain(q.upcoming.iter())
-            .map(|e| e.track.id.clone())
-            .collect::<Vec<_>>()
-    };
+    let ids = |q: &QueueView| q.upcoming().map(|e| e.track.id.clone()).collect::<Vec<_>>();
     let q = t.queue().await;
     assert_eq!(ids(&q), ["t1", "t2", "t3"]);
-    let last = q.upcoming.last().unwrap().clone();
+    let last = q.upcoming().last().unwrap().clone();
     t.run(Command::RunAction {
         action_id: "playNext".into(),
         target: ActionTarget::QueueItems {
@@ -753,21 +823,15 @@ async fn play_next_on_several_upcoming_items_moves_each_of_them() {
     })
     .await;
     t.run_for(500.0).await;
-    let ids = |q: &QueueView| {
-        q.playing_next
-            .iter()
-            .chain(q.upcoming.iter())
-            .map(|e| e.track.id.clone())
-            .collect::<Vec<_>>()
-    };
+    let ids = |q: &QueueView| q.upcoming().map(|e| e.track.id.clone()).collect::<Vec<_>>();
     let q = t.queue().await;
     assert_eq!(ids(&q), ["t1", "t2", "t3"]);
     t.run(Command::RunAction {
         action_id: "playNext".into(),
         target: ActionTarget::QueueItems {
             keys: vec![
-                q.upcoming[2].item.key.clone(),
-                q.upcoming[0].item.key.clone(),
+                q.upcoming().nth(2).unwrap().item.key.clone(),
+                q.upcoming().next().unwrap().item.key.clone(),
             ],
         },
     })
@@ -825,6 +889,43 @@ async fn a_volume_saved_as_a_linear_gain_keeps_its_loudness() {
     assert_eq!(snapshot_volume(&t).await, 0.9);
 }
 
+/// An EQ or normalisation change reaches the backend as one settings
+/// update, so a backend that retunes mid-stream applies it to the playing
+/// track without a restart.
+#[tokio::test]
+async fn an_audio_settings_change_reaches_the_backend_while_playing() {
+    let t = synced_core("eq").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(500.0).await;
+
+    let mut settings = hocket_core::core::default_audio_settings();
+    settings.eq.enabled = true;
+    settings.eq.preamp_db = -6.0;
+    settings.normalisation = true;
+    t.run(Command::SetAudioSettings {
+        settings: settings.clone(),
+    })
+    .await;
+
+    assert!(
+        t.backend.log().iter().any(|c| matches!(
+            c,
+            ScriptedCall::SetAudioSettings { settings: s }
+                if s.eq.enabled
+                    && s.eq.preamp_db == -6.0
+                    && s.normalisation
+                    && s.gapless == settings.gapless
+                    && s.exclusive == settings.exclusive
+        )),
+        "no settings update reached the backend: {:?}",
+        t.backend.log()
+    );
+}
+
 #[tokio::test]
 async fn mute_survives_clearing_the_queue() {
     let t = synced_core("mute").await;
@@ -862,7 +963,7 @@ async fn removing_the_next_song_replaces_the_gapless_preload() {
     .await;
     t.run_for(500.0).await;
     let q = t.queue().await;
-    let next = q.upcoming[0].clone();
+    let next = q.upcoming().next().unwrap().clone();
     assert_eq!(next.track.id, "t1");
     t.backend.clear_log();
 
@@ -872,8 +973,8 @@ async fn removing_the_next_song_replaces_the_gapless_preload() {
     .await;
     t.run_for(500.0).await;
     let q = t.queue().await;
-    assert_eq!(q.upcoming[0].track.id, "t2");
-    let replacement = q.upcoming[0].item.key.clone();
+    assert_eq!(q.upcoming().next().unwrap().track.id, "t2");
+    let replacement = q.upcoming().next().unwrap().item.key.clone();
     assert_ne!(replacement, next.item.key, "another song, another key");
     assert!(
         t.backend
@@ -945,8 +1046,8 @@ async fn autoplay_is_fetched_and_preloaded_before_the_queue_ends() {
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t3", "still playing");
     let pick = q
-        .playing_next
-        .first()
+        .upcoming()
+        .next()
         .cloned()
         .expect("autoplay joined the queue ahead of the end");
     assert!(matches!(pick.item.source, QueueSource::Autoplay { .. }));
@@ -995,13 +1096,12 @@ async fn autoplay_fetched_ahead_does_not_jump_a_new_queue() {
     let q = t.queue().await;
     assert_eq!(q.current.as_ref().unwrap().track.id, "t4");
     assert!(
-        !q.playing_next
-            .iter()
+        !q.upcoming()
             .any(|e| matches!(e.item.source, QueueSource::Autoplay { .. })),
         "the stale batch stayed out: {:?}",
-        q.playing_next
+        q.entries
     );
-    assert_eq!(q.upcoming.len(), 3);
+    assert_eq!(q.total_upcoming as usize, 3);
 }
 
 /// Autoplay asked for when the queue ran out does not skip a song the user
@@ -1022,11 +1122,11 @@ async fn autoplay_at_the_end_does_not_skip_a_song_started_meanwhile() {
     t.dispatch(Command::PlayContext { args });
     t.dispatch(Command::Next);
     t.dispatch(Command::PlayTracks {
-        server_id: sid.clone(),
-        track_ids: vec!["t5".into()],
+        tracks: TrackRef::list(&sid, ["t5"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     });
     t.run_for(2000.0).await;
     assert_eq!(t.current_track_id().await.as_deref(), Some("t5"));
@@ -1184,7 +1284,10 @@ async fn rating_off_queue_does_not_emit_queue() {
     t.run_for(500.0).await;
     t.events.clear();
     t.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t7".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t7".into(),
+            source: String::new(),
+        }],
         rating: 5,
     })
     .await;
@@ -1209,4 +1312,150 @@ async fn rating_off_queue_does_not_emit_queue() {
         session, 0,
         "off-queue ratings must not rebuild MediaSession"
     );
+}
+
+async fn source_t1(t: &TestCore) -> hocket_core::api::MediaSource {
+    match t
+        .query(Query::MediaSource {
+            track_id: "t1".into(),
+        })
+        .await
+    {
+        QueryResult::Source(Some(s)) => s,
+        other => panic!("no source: {other:?}"),
+    }
+}
+
+fn living_room() -> hocket_core::api::Renderer {
+    hocket_core::api::Renderer {
+        id: "cast-1".into(),
+        name: "Living Room TV".into(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_receiver_that_failed_on_a_format_gets_it_transcoded_from_then_on() {
+    let t = synced_core("renderer-failed").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    t.run(Command::SetRenderer {
+        renderer: Some(living_room()),
+    })
+    .await;
+    assert!(!source_t1(&t).await.transcoded);
+
+    // Its session died on t1 (FLAC); the platform reconnects to it.
+    t.run(Command::RendererFailed {
+        track_id: "t1".into(),
+    })
+    .await;
+    t.backend.clear_log();
+    t.run(Command::SetRenderer {
+        renderer: Some(living_room()),
+    })
+    .await;
+    t.run_for(200.0).await;
+    assert!(t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { play: true, .. })));
+    let s = source_t1(&t).await;
+    assert!(s.transcoded);
+    assert!(
+        s.url.contains("format=mp3") && s.url.contains("maxBitRate=320"),
+        "{}",
+        s.url
+    );
+
+    // Another receiver still gets it lossless.
+    t.run(Command::SetRenderer {
+        renderer: Some(hocket_core::api::Renderer {
+            id: "cast-2".into(),
+            name: "Kitchen".into(),
+        }),
+    })
+    .await;
+    assert!(!source_t1(&t).await.transcoded);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_renderer_reloads_at_the_position_and_pauses_on_the_way_back() {
+    let t = synced_core("renderer").await;
+    let sid = t.server_id.clone();
+    t.run(Command::SetBackendCapabilities { core_stream: true })
+        .await;
+    t.run(Command::PlayContext {
+        args: album_args(&sid, "al0"),
+    })
+    .await;
+    t.run_for(5_000.0).await;
+    t.backend.clear_log();
+
+    t.run(Command::SetRenderer {
+        renderer: Some(living_room()),
+    })
+    .await;
+    t.run_for(200.0).await;
+    let load = t
+        .backend
+        .log()
+        .into_iter()
+        .find(|c| matches!(c, ScriptedCall::Load { .. }))
+        .expect("reloaded for the renderer");
+    match load {
+        ScriptedCall::Load {
+            key,
+            next,
+            position_ms,
+            play,
+        } => {
+            assert!(key.len() > 0);
+            assert!(next.is_some(), "the follow-up goes to the renderer's queue");
+            assert!(position_ms >= 4_000, "kept its place: {position_ms}");
+            assert!(play);
+        }
+        _ => unreachable!(),
+    }
+    // The renderer fetches the server URL itself, never a core stream.
+    match t
+        .query(Query::MediaSource {
+            track_id: "t1".into(),
+        })
+        .await
+    {
+        QueryResult::Source(Some(s)) => {
+            assert!(s.url.starts_with("https://"), "{}", s.url);
+            assert!(!s.transcoded, "FLAC plays as it is");
+        }
+        other => panic!("no source: {other:?}"),
+    }
+    let tr = t.transport().await;
+    assert_eq!(tr.renderer.as_deref(), Some("Living Room TV"));
+    assert!(tr.position.is_playing);
+
+    t.backend.clear_log();
+    t.run(Command::SetRenderer { renderer: None }).await;
+    t.run_for(200.0).await;
+    assert!(t
+        .backend
+        .log()
+        .iter()
+        .any(|c| matches!(c, ScriptedCall::Load { play: false, position_ms, .. } if *position_ms >= 4_000)));
+    let tr = t.transport().await;
+    assert_eq!(tr.renderer, None);
+    assert!(!tr.position.is_playing, "back here it waits, paused");
+    match t
+        .query(Query::MediaSource {
+            track_id: "t1".into(),
+        })
+        .await
+    {
+        QueryResult::Source(Some(s)) => assert!(!s.url.starts_with("https://"), "{}", s.url),
+        other => panic!("no source: {other:?}"),
+    }
 }

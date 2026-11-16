@@ -3,92 +3,127 @@
 //! A room is *transport and replica, never authority*: it orders ops against
 //! the document revision, relays what it accepted, arbitrates the transport
 //! lease, keeps presence, answers clock pings, holds the resume replica and
-//! the scrobble dedupe log. It never plays audio and never keeps a credential
-//! beyond the handshake (verification is delegated to the host through
-//! [`RoomOutput::Verify`]).
+//! the scrobble dedupe log. It never plays audio. It admits only current
+//! members of its identity (a mutual signature handshake, [`auth`]), keeps
+//! the identity's shared state ([`crate::identity::SharedState`]) in step
+//! with its members, drops a member the moment the list removes it, and
+//! relays pairing exchanges to the member that offered the invite.
 //!
 //! The same struct runs inside every app (embedded in the engine, driven over
 //! a loopback when the device is alone or is the elected LAN coordinator) and
 //! inside the hosted coordinator binary. Pure and clock-injected: the host
 //! feeds [`RoomInput`]s and performs every [`RoomOutput`].
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackId, TransportLease};
-use crate::connect::auth::{self, LanKey, Role};
-use crate::connect::lease::{LeaseError, LeaseEvent, LeaseMachine};
+use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackRef, TransportLease};
+use crate::connect::auth::{self, Role};
+use crate::connect::channel::{self, Channel, End, Ephemeral};
+use crate::connect::diagnostics;
+use crate::connect::lease::{
+    cadence_slack_ms, clamp_cadence, lease_window_ms, LeaseError, LeaseEvent, LeaseMachine,
+    HEARTBEAT_INTERVAL_MS, LEASE_DURATION_MS,
+};
 use crate::connect::replica::{
     new_replica, same_start, ReplicaExt, ScrobbleClaim, PLAY_FUTURE_SLACK_MS, PLAY_LOG_CAP,
     PLAY_PAGE,
 };
 use crate::connect::wire::{
-    negotiate, scope_key, Credential, LastStamp, Msg, PlayRecord, RefuseReason, RejectReason,
-    ReplicaState, WireMessage,
+    negotiate, LastStamp, Msg, PlayRecord, RefuseReason, RejectReason, ReplicaState, WireMessage,
 };
 use crate::connect::{apply_op, op_context, PeerId, ReducerHandle, LOOPBACK};
+use crate::identity::crypto::DeviceSecret;
+use crate::identity::pairing::PairJoin;
+use crate::identity::SharedState;
 use crate::util::Clock;
 
 /// A member that has sent nothing for this long is dropped. Clients ping
-/// every 5 s, so this is six missed pings.
+/// every 5 s, so this is six missed pings. A member that announced a slower
+/// [`Msg::Cadence`] gets [`cadence_slack_ms`] on top
+/// ([`Room::member_timeout_ms`]).
 pub const MEMBER_TIMEOUT_MS: f64 = 30_000.0;
 /// How often the replica's expiring parts are swept.
 const SWEEP_INTERVAL_MS: f64 = 60_000.0;
 /// Sockets connected but not admitted are capped at this many per room
 /// (beyond it they are closed at once).
 pub const UNKNOWN_CAP: usize = 64;
+/// Room events kept for diagnostics ([`Room::diagnostics_text`]).
+const EVENTS_CAP: usize = 200;
 
-/// How a room authenticates inbound LAN peers (anything but the loopback).
-#[derive(Clone, PartialEq, Eq)]
-pub enum LanAuth {
-    /// Admit on `Hello` alone. Only for a hosted coordinator run with
-    /// `--no-verify` (it verifies credentials otherwise) and unit tests.
+/// Pairing offers one room keeps at most.
+const OFFERS_CAP: usize = 16;
+
+/// How a room authenticates inbound peers (anything but the loopback).
+#[derive(Clone)]
+pub enum RoomAuth {
+    /// Admit on `Hello` alone. Unit tests only.
     Open,
-    /// Mutual challenge/response with this key ([`crate::connect::auth`]);
-    /// `device_id` is what the room's own proofs name.
-    Key { key: LanKey, device_id: DeviceId },
-    /// No key available: refuse every inbound peer.
+    /// The mutual signature handshake ([`crate::connect::auth`]): our proofs
+    /// name `device_id` and are signed with `secret` (a member device's key,
+    /// or the hosted coordinator's own), and joiners must be current members
+    /// of the identity state set with [`Room::set_identity`].
+    Identity {
+        device_id: DeviceId,
+        secret: DeviceSecret,
+    },
+    /// No identity: refuse every inbound peer.
     Closed,
 }
 
-impl std::fmt::Debug for LanAuth {
+impl PartialEq for RoomAuth {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (RoomAuth::Open, RoomAuth::Open) | (RoomAuth::Closed, RoomAuth::Closed) => true,
+            (RoomAuth::Identity { device_id: a, .. }, RoomAuth::Identity { device_id: b, .. }) => {
+                a == b
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for RoomAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LanAuth::Open => write!(f, "Open"),
-            LanAuth::Key { device_id, .. } => write!(f, "Key{{device_id: {device_id:?}}}"),
-            LanAuth::Closed => write!(f, "Closed"),
+            RoomAuth::Open => write!(f, "Open"),
+            RoomAuth::Identity { device_id, .. } => {
+                write!(f, "Identity{{device_id: {device_id:?}}}")
+            }
+            RoomAuth::Closed => write!(f, "Closed"),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct RoomConfig {
-    /// The scope this room serves. `Hello.scope` must match.
+    /// The identity this room serves. `Hello.scope` must match.
     pub scope: String,
-    /// Require a credential and delegate a ping to the host before admitting.
-    pub verify: bool,
-    /// Refuse joins past this many members (pending verifications count).
+    /// Refuse joins past this many members.
     pub max_members: usize,
     /// Session id for a fresh document (tests pass a fixed one).
     pub session_id: Option<String>,
-    /// LAN peer authentication. The engine sets `Key`/`Closed`; the hosted
-    /// coordinator keeps `Open` (its credential check is `verify`).
-    pub lan_auth: LanAuth,
+    /// Peer authentication.
+    pub auth: RoomAuth,
+    /// The host keeps AutoMix analysis records (the hosted coordinator with
+    /// its store): `Welcome.analysis_store`.
+    pub analysis_store: bool,
+    /// Joiners must set up the sealed LAN channel
+    /// ([`crate::connect::channel`]): a device's own LAN room. The hosted
+    /// coordinator is reached over TLS and doesn't.
+    pub require_channel: bool,
 }
 
 impl RoomConfig {
     pub fn new(scope: impl Into<String>) -> Self {
         RoomConfig {
             scope: scope.into(),
-            verify: false,
             max_members: 32,
             session_id: None,
-            lan_auth: LanAuth::Open,
+            auth: RoomAuth::Open,
+            analysis_store: false,
+            require_channel: false,
         }
-    }
-
-    pub fn verified(mut self) -> Self {
-        self.verify = true;
-        self
     }
 }
 
@@ -101,11 +136,6 @@ pub enum RoomInput {
     Connected(PeerId),
     Message(PeerId, WireMessage),
     Disconnected(PeerId),
-    /// The host finished verifying a pending `Hello`.
-    Verified {
-        peer: PeerId,
-        ok: bool,
-    },
     Tick,
 }
 
@@ -115,11 +145,16 @@ pub enum RoomOutput {
     Send(PeerId, WireMessage),
     /// Close the socket (after any preceding `Send`s were flushed).
     Close(PeerId),
-    /// Proxy a Subsonic `ping` with this credential and answer with
-    /// [`RoomInput::Verified`]. The room does not keep the credential.
-    Verify {
+    /// The identity's shared state changed (a member or joiner synced, or a
+    /// device was seen): the host merges and persists it. Read the whole
+    /// state with [`Room::identity`].
+    IdentityChanged,
+    /// A new device wants to pair and no member offered the invite: the
+    /// host answers it (with `Msg::PairAccept` or `Msg::Refuse`) if it made
+    /// the invite.
+    PairJoin {
         peer: PeerId,
-        credential: Credential,
+        join: PairJoin,
     },
     /// The replica changed in a way worth persisting soon (op, lease change,
     /// play/pause, track change, join). Read it with [`Room::replica`].
@@ -135,15 +170,13 @@ struct Member {
     device: DeviceInfo,
     protocol: u32,
     last_seen: EpochMs,
+    /// Its accepted keepalive period ([`Msg::Cadence`], clamped).
+    cadence_ms: f64,
     /// Pre-buffered and ready for this key.
     ready_key: Option<QueueKey>,
     picker_open: bool,
-}
-
-#[derive(Debug, Clone)]
-struct PendingHello {
-    device: DeviceInfo,
-    protocol: u32,
+    /// Said in its `Hello` that it answers diagnostics requests ([`diagnostics::HELLO_FLAG`]).
+    answers_diagnostics: bool,
 }
 
 /// A socket that has not been admitted yet, and how far its LAN
@@ -154,8 +187,21 @@ struct Unknown {
     since: EpochMs,
     /// The nonce we challenged it with.
     nonce: Option<String>,
-    /// The device id it proved knowledge of the key for.
+    /// The member it proved to be.
     proven: Option<DeviceId>,
+    /// Waiting for a pairing answer from this member.
+    pairing_with: Option<DeviceId>,
+    /// The LAN channel being set up: our ephemeral key, the joiner's, and
+    /// the nonce it challenged us with.
+    lan: Option<(Ephemeral, String, String)>,
+}
+
+/// A member's standing invite: joins for it are relayed to that member.
+#[derive(Debug, Clone)]
+struct Offer {
+    invite_id: String,
+    device_id: DeviceId,
+    expires_at: EpochMs,
 }
 
 /// A scrobble the room's own device (the loopback, so this is a LAN
@@ -168,7 +214,7 @@ struct Unknown {
 /// on local judgement after the grace ([`Room::confirm_scrobble`]).
 #[derive(Debug, Clone)]
 struct UnconfirmedScrobble {
-    track_id: TrackId,
+    track_id: TrackRef,
     started_at: EpochMs,
     device_id: DeviceId,
     /// Loopback queries waiting for the verdict.
@@ -187,15 +233,24 @@ pub struct Room {
     replica: ReplicaState,
     lease: LeaseMachine,
     members: Vec<Member>,
-    pending: Vec<(PeerId, PendingHello)>,
+    /// The identity's shared state (with [`RoomAuth::Identity`]).
+    identity: Option<SharedState>,
+    offers: Vec<Offer>,
     /// Sockets connected but not yet admitted.
     unknown: Vec<Unknown>,
+    /// Sealed LAN channels by peer: everything to and from them is sealed.
+    channels: HashMap<PeerId, Channel>,
     dirty: bool,
     touched: bool,
     /// Some peer was admitted since this room was opened (or restored).
     admitted_any: bool,
     unconfirmed: Vec<UnconfirmedScrobble>,
     last_sweep: EpochMs,
+    /// Recent joins, leaves, refusals and lease changes, for diagnostics.
+    events: VecDeque<(EpochMs, String)>,
+    /// When each device last asked for diagnostics (kept across reconnects; see
+    /// [`diagnostics::REQUEST_INTERVAL_MS`]).
+    diagnostics_requests: HashMap<DeviceId, EpochMs>,
     out: Vec<RoomOutput>,
 }
 
@@ -234,13 +289,17 @@ impl Room {
             replica,
             lease,
             members: vec![],
-            pending: vec![],
+            identity: None,
+            offers: vec![],
             unknown: vec![],
+            channels: HashMap::new(),
             dirty: false,
             touched: false,
             admitted_any: false,
             unconfirmed: vec![],
             last_sweep: now,
+            events: VecDeque::new(),
+            diagnostics_requests: HashMap::new(),
             out: vec![],
         }
     }
@@ -265,14 +324,32 @@ impl Room {
         &self.cfg.scope
     }
 
-    /// Change how inbound LAN peers authenticate (a key change). Members
-    /// already admitted stay; the caller decides whether to drop them.
-    pub fn set_lan_auth(&mut self, auth: LanAuth) {
-        self.cfg.lan_auth = auth;
+    /// Change how inbound peers authenticate. Members already admitted
+    /// stay; the caller decides whether to drop them.
+    pub fn set_auth(&mut self, auth: RoomAuth) {
+        self.cfg.auth = auth;
         for u in &mut self.unknown {
             u.nonce = None;
             u.proven = None;
         }
+    }
+
+    /// The identity's shared state as this room knows it.
+    pub fn identity(&self) -> Option<&SharedState> {
+        self.identity.as_ref()
+    }
+
+    /// Set the identity's shared state (the host's own copy, which it keeps
+    /// merged with what [`RoomOutput::IdentityChanged`] reports). Passed on
+    /// to the members when it changed; a member it no longer lists is
+    /// dropped.
+    pub fn set_identity(&mut self, shared: SharedState) -> Vec<RoomOutput> {
+        if self.identity.as_ref() != Some(&shared) {
+            self.identity = Some(shared);
+            self.broadcast_identity(None);
+            self.drop_non_members();
+        }
+        std::mem::take(&mut self.out)
     }
 
     pub fn replica(&self) -> &ReplicaState {
@@ -320,7 +397,7 @@ impl Room {
 
     /// Pre-load the dedupe log with pairs the host already knows were
     /// scrobbled (the log follows the session when the LAN role moves).
-    pub fn seed_scrobbles(&mut self, pairs: &[(crate::api::TrackId, EpochMs, DeviceId)]) {
+    pub fn seed_scrobbles(&mut self, pairs: &[(crate::api::TrackRef, EpochMs, DeviceId)]) {
         let now = self.now();
         for (track_id, started_at, device_id) in pairs {
             self.replica
@@ -330,7 +407,7 @@ impl Room {
 
     /// Whether our own device's claim on this pair still waits for a member
     /// to acknowledge it (see [`UnconfirmedScrobble`]).
-    pub fn is_unconfirmed_scrobble(&self, track_id: &str, started_at: EpochMs) -> bool {
+    pub fn is_unconfirmed_scrobble(&self, track_id: &TrackRef, started_at: EpochMs) -> bool {
         self.unconfirmed_index(track_id, started_at).is_some()
     }
 
@@ -358,7 +435,11 @@ impl Room {
     /// The host judged a pair on its own after the grace: the claim stands
     /// without an acknowledgement. Loopback queries are not answered (the
     /// host already has its verdict); held member queries are.
-    pub fn confirm_scrobble(&mut self, track_id: &str, started_at: EpochMs) -> Vec<RoomOutput> {
+    pub fn confirm_scrobble(
+        &mut self,
+        track_id: &TrackRef,
+        started_at: EpochMs,
+    ) -> Vec<RoomOutput> {
         let now = self.now();
         if let Some(i) = self.unconfirmed_index(track_id, started_at) {
             let c = self.unconfirmed.remove(i);
@@ -367,10 +448,10 @@ impl Room {
         self.flush()
     }
 
-    fn unconfirmed_index(&self, track_id: &str, started_at: EpochMs) -> Option<usize> {
+    fn unconfirmed_index(&self, track_id: &TrackRef, started_at: EpochMs) -> Option<usize> {
         self.unconfirmed
             .iter()
-            .position(|c| c.track_id == track_id && same_start(c.started_at, started_at))
+            .position(|c| &c.track_id == track_id && same_start(c.started_at, started_at))
     }
 
     /// Members other than the loopback.
@@ -425,7 +506,7 @@ impl Room {
         peer: &str,
         device_id: &str,
         query_id: String,
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         now: EpochMs,
     ) {
@@ -468,6 +549,11 @@ impl Room {
 
     /// Outputs of a direct call (as [`Room::handle`] returns them).
     fn flush(&mut self) -> Vec<RoomOutput> {
+        for o in &self.out {
+            if let RoomOutput::Close(p) = o {
+                self.channels.remove(p);
+            }
+        }
         if self.dirty {
             self.dirty = false;
             self.touched = false;
@@ -476,13 +562,30 @@ impl Room {
         std::mem::take(&mut self.out)
     }
 
-    /// When a member other than the loopback was last heard from.
-    pub fn last_member_seen(&self) -> Option<EpochMs> {
+    /// Whether a member other than the loopback was heard from within
+    /// `quiet_ms` (its 5 s-cadence limit), each member's limit stretched by
+    /// its announced cadence ([`cadence_slack_ms`]).
+    pub fn member_heard_within(&self, quiet_ms: f64) -> bool {
+        let now = self.now();
         self.members
             .iter()
             .filter(|m| m.peer != LOOPBACK)
-            .map(|m| m.last_seen)
-            .fold(None, |acc, t| Some(acc.map_or(t, |a: EpochMs| a.max(t))))
+            .any(|m| now - m.last_seen <= quiet_ms + cadence_slack_ms(m.cadence_ms))
+    }
+
+    /// How long a member may stay silent before it is dropped.
+    fn member_timeout_ms(m: &Member) -> f64 {
+        MEMBER_TIMEOUT_MS + cadence_slack_ms(m.cadence_ms)
+    }
+
+    /// The lease window for `device_id` at its announced cadence.
+    fn lease_window_for(&self, device_id: &str) -> f64 {
+        let cadence = self
+            .members
+            .iter()
+            .find(|m| m.device.id == device_id)
+            .map_or(HEARTBEAT_INTERVAL_MS, |m| m.cadence_ms);
+        lease_window_ms(cadence)
     }
 
     /// Live transport owner, if any.
@@ -492,6 +595,102 @@ impl Room {
 
     fn now(&self) -> EpochMs {
         self.clock.now_ms()
+    }
+
+    /// Remember a room event for [`Room::diagnostics_text`].
+    fn note(&mut self, event: String) {
+        let now = self.now();
+        if self.events.len() >= EVENTS_CAP {
+            self.events.pop_front();
+        }
+        self.events.push_back((now, event));
+    }
+
+    /// The room's state and recent events, for a developer diagnostics bundle (the room's
+    /// answer to a [`Msg::DiagnosticsRequest`]). Only this scope's own state: a hosted
+    /// coordinator sends it to any member.
+    pub fn diagnostics_text(&self) -> String {
+        let now = self.now();
+        let ts = |ms: EpochMs| crate::devlog::format_timestamp(ms.max(0.0) as u64);
+        let ago = |ms: EpochMs| format!("{:.0} s ago", ((now - ms) / 1000.0).max(0.0));
+        let r = &self.replica;
+        let mut out = String::new();
+        out.push_str(&format!("scope: {}\n", self.cfg.scope));
+        out.push_str(&format!(
+            "built with core {} (protocol {}..={}), auth={:?} max_members={}\n",
+            env!("CARGO_PKG_VERSION"),
+            crate::connect::wire::PROTOCOL_MIN,
+            crate::connect::wire::PROTOCOL,
+            self.cfg.auth,
+            self.cfg.max_members
+        ));
+        out.push_str(&format!(
+            "session: {} revision {}, replica updated {}\n",
+            r.document.session_id,
+            r.document.revision,
+            ago(r.updated_at)
+        ));
+        let lease = self.lease.lease();
+        match &lease.owner {
+            Some(owner) => out.push_str(&format!(
+                "lease: owner {owner} epoch {} expires {} (live owner {:?})\n",
+                lease.epoch,
+                ts(lease.expires_at),
+                self.lease.live_owner(now)
+            )),
+            None => out.push_str(&format!("lease: nobody (epoch {})\n", lease.epoch)),
+        }
+        match &r.last_stamp {
+            Some(s) => out.push_str(&format!(
+                "last stamp: {} ({}) key={:?} playing={} position={} ms taken {}\n",
+                s.device_name,
+                s.device_id,
+                s.key,
+                s.position.is_playing,
+                s.position.position_ms,
+                ago(s.position.taken_at)
+            )),
+            None => out.push_str("last stamp: none\n"),
+        }
+        out.push_str(&format!(
+            "replica: {} saved queues, {} settings, {} stash entries, {} scrobbles in the dedupe log, {} known devices\n",
+            r.saved_queues.len(),
+            r.settings.len(),
+            r.stash.len(),
+            r.scrobbles.len(),
+            r.devices.len()
+        ));
+        out.push_str(&format!(
+            "sockets: {} not admitted yet; {} pairing offers; {} unconfirmed scrobble claims\n",
+            self.unknown.len(),
+            self.offers.len(),
+            self.unconfirmed.len()
+        ));
+        out.push_str(&format!("members ({}):\n", self.members.len()));
+        for m in &self.members {
+            let d = &m.device;
+            out.push_str(&format!(
+                "  - {} ({}) {:?} app {} protocol {} peer {} last heard {}{}{}\n",
+                d.name,
+                d.id,
+                d.platform,
+                d.app_version,
+                m.protocol,
+                m.peer,
+                ago(m.last_seen),
+                if m.picker_open { ", picker open" } else { "" },
+                if m.ready_key.is_some() {
+                    ", pre-buffered"
+                } else {
+                    ""
+                },
+            ));
+        }
+        out.push_str(&format!("\nrecent room events ({}):\n", self.events.len()));
+        for (at, e) in &self.events {
+            out.push_str(&format!("{} {e}\n", ts(*at)));
+        }
+        out
     }
 
     /// Drive the room. Perform every output in order.
@@ -509,12 +708,28 @@ impl Room {
                         since: now,
                         nonce: None,
                         proven: None,
+                        pairing_with: None,
+                        lan: None,
                     });
                 }
             }
-            RoomInput::Message(peer, msg) => self.on_message(peer, msg),
+            RoomInput::Message(peer, msg) => {
+                // A sealed peer sends only the next sealed frame; anything
+                // else (plain, replayed, forged) ends the connection.
+                let msg = match self.channels.get_mut(&peer) {
+                    None => Some(msg),
+                    Some(ch) => ch.open(&msg),
+                };
+                match msg {
+                    Some(m) if !matches!(m.msg, Msg::Sealed { .. }) => self.on_message(peer, m),
+                    _ => {
+                        tracing::info!(scope = %self.cfg.scope, peer, "bad sealed frame");
+                        self.on_disconnected(&peer);
+                        self.out.push(RoomOutput::Close(peer));
+                    }
+                }
+            }
             RoomInput::Disconnected(peer) => self.on_disconnected(&peer),
-            RoomInput::Verified { peer, ok } => self.on_verified(&peer, ok),
             RoomInput::Tick => self.on_tick(),
         }
         if self.dirty {
@@ -530,9 +745,21 @@ impl Room {
 
     // -- helpers ------------------------------------------------------------
 
+    /// `msg` as it must go to `peer`: sealed when the peer has a LAN
+    /// channel (for frames the host sends a room peer itself, a goodbye).
+    pub fn seal_for(&mut self, peer: &str, msg: WireMessage) -> WireMessage {
+        match self.channels.get_mut(peer) {
+            Some(ch) => ch.seal(&msg),
+            None => msg,
+        }
+    }
+
     fn send(&mut self, peer: &str, msg: Msg) {
-        self.out
-            .push(RoomOutput::Send(peer.to_string(), WireMessage::new(msg)));
+        let mut wire = WireMessage::new(msg);
+        if let Some(ch) = self.channels.get_mut(peer) {
+            wire = ch.seal(&wire);
+        }
+        self.out.push(RoomOutput::Send(peer.to_string(), wire));
     }
 
     fn broadcast(&mut self, msg: Msg, except: Option<&str>) {
@@ -593,6 +820,10 @@ impl Room {
 
     fn broadcast_lease(&mut self) {
         let lease = self.lease.lease().clone();
+        self.note(format!(
+            "lease: owner {:?} epoch {}",
+            lease.owner, lease.epoch
+        ));
         let now = self.now();
         self.replica.set_lease(lease.clone(), now);
         self.dirty = true;
@@ -617,6 +848,7 @@ impl Room {
     }
 
     fn refuse(&mut self, peer: &str, reason: RefuseReason, message: &str) {
+        self.note(format!("refused {peer}: {reason:?}: {message}"));
         self.send(
             peer,
             Msg::Refuse {
@@ -641,14 +873,41 @@ impl Room {
                 protocol_min,
                 protocol_max,
                 scope,
-                credential,
+                extra,
                 ..
-            } => self.on_hello(&peer, device, protocol_min, protocol_max, scope, credential),
-            Msg::Challenge { nonce } if self.member_by_peer(&peer).is_none() => {
-                self.on_challenge(&peer, nonce)
+            } => {
+                let answers_diagnostics = extra
+                    .get(diagnostics::HELLO_FLAG)
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                self.on_hello(
+                    &peer,
+                    device,
+                    protocol_min,
+                    protocol_max,
+                    scope,
+                    answers_diagnostics,
+                )
             }
-            Msg::Proof { device_id, mac } if self.member_by_peer(&peer).is_none() => {
-                self.on_proof(&peer, device_id, mac)
+            Msg::Challenge {
+                nonce,
+                identity,
+                heads,
+                eph,
+            } if self.member_by_peer(&peer).is_none() => {
+                self.on_challenge(&peer, nonce, identity, heads, eph)
+            }
+            Msg::Proof {
+                device_id,
+                sig,
+                heads,
+                sync,
+                ..
+            } if self.member_by_peer(&peer).is_none() => {
+                self.on_proof(&peer, device_id, sig, heads, sync.map(|s| *s))
+            }
+            Msg::PairJoin { identity, join, .. } if self.member_by_peer(&peer).is_none() => {
+                self.on_pair_join(&peer, identity, join)
             }
             other => {
                 if self.member_by_peer(&peer).is_none() {
@@ -660,15 +919,22 @@ impl Room {
         }
     }
 
-    /// An inbound peer wants us to prove we hold the LAN key: answer, and
-    /// challenge it back.
-    fn on_challenge(&mut self, peer: &str, nonce: String) {
-        let LanAuth::Key { key, device_id } = self.cfg.lan_auth.clone() else {
-            if self.cfg.lan_auth == LanAuth::Closed {
+    /// An inbound peer wants us to prove we are a member: answer with our
+    /// proof and the ops its heads lack, and challenge it back.
+    fn on_challenge(
+        &mut self,
+        peer: &str,
+        nonce: String,
+        identity: Option<String>,
+        heads: Vec<String>,
+        eph: Option<String>,
+    ) {
+        let RoomAuth::Identity { device_id, secret } = self.cfg.auth.clone() else {
+            if self.cfg.auth == RoomAuth::Closed {
                 self.refuse(
                     peer,
                     RefuseReason::Unauthorised,
-                    "no LAN key on this device",
+                    "no identity on this device",
                 );
             }
             return;
@@ -676,52 +942,276 @@ impl Room {
         if peer == LOOPBACK {
             return;
         }
-        let Some(u) = self.unknown.iter_mut().find(|u| u.peer == peer) else {
+        let Some(u) = self.unknown.iter().find(|u| u.peer == peer) else {
             return;
         };
-        if !auth::nonce_valid(&nonce) || u.nonce.is_some() {
+        if !auth::nonce_valid(&nonce) || u.nonce.is_some() || heads.len() > 64 {
             self.refuse(peer, RefuseReason::Unauthorised, "bad challenge");
             return;
         }
-        let ours = auth::new_nonce();
-        u.nonce = Some(ours.clone());
-        let mac = auth::prove(&key, Role::Leader, &nonce, &device_id);
-        self.send(peer, Msg::Proof { device_id, mac });
-        self.send(peer, Msg::Challenge { nonce: ours });
-    }
-
-    /// The peer's answer to our challenge.
-    fn on_proof(&mut self, peer: &str, device_id: DeviceId, mac: String) {
-        let LanAuth::Key {
-            key,
-            device_id: ours,
-        } = self.cfg.lan_auth.clone()
-        else {
-            if self.cfg.lan_auth == LanAuth::Closed {
+        // A LAN room only talks over the sealed channel: a challenge without
+        // a key (or with a bad one) may be a relay stripping it.
+        let lan = match eph {
+            Some(k) if channel::valid_key(&k) => Some((Ephemeral::new(), k, nonce.clone())),
+            Some(_) => {
+                self.refuse(peer, RefuseReason::Unauthorised, "bad channel key");
+                return;
+            }
+            None if self.cfg.require_channel => {
                 self.refuse(
                     peer,
                     RefuseReason::Unauthorised,
-                    "no LAN key on this device",
+                    "this room needs a sealed channel",
+                );
+                return;
+            }
+            None => None,
+        };
+        if identity.as_deref().is_some_and(|i| i != self.cfg.scope) {
+            self.refuse(peer, RefuseReason::ScopeMismatch, "another identity");
+            return;
+        }
+        let Some(shared) = &self.identity else {
+            self.refuse(peer, RefuseReason::Unauthorised, "no identity here");
+            return;
+        };
+        let ours = auth::new_nonce();
+        let my_heads = shared.log.heads();
+        let signed_nonce = match &lan {
+            Some((e, theirs, _)) => auth::bind_nonce(
+                &nonce,
+                &channel::leader_binding(theirs, &e.public, &nonce, &device_id),
+            ),
+            None => nonce.clone(),
+        };
+        let sig = auth::prove(
+            &secret,
+            Role::Leader,
+            &self.cfg.scope,
+            &signed_nonce,
+            &device_id,
+            &my_heads,
+        );
+        let sync = shared.sync_for(&heads);
+        let our_eph = lan.as_ref().map(|(e, _, _)| e.public.clone());
+        if let Some(u) = self.unknown.iter_mut().find(|u| u.peer == peer) {
+            u.nonce = Some(ours.clone());
+            u.lan = lan;
+        }
+        self.send(
+            peer,
+            Msg::Proof {
+                device_id,
+                sig,
+                heads: my_heads,
+                sync: Some(Box::new(sync)),
+                eph: our_eph,
+            },
+        );
+        self.send(
+            peer,
+            Msg::Challenge {
+                nonce: ours,
+                identity: None,
+                heads: vec![],
+                eph: None,
+            },
+        );
+    }
+
+    /// The peer's answer to our challenge: take the ops it sent, then check
+    /// it is a current member.
+    fn on_proof(
+        &mut self,
+        peer: &str,
+        device_id: DeviceId,
+        sig: String,
+        heads: Vec<String>,
+        sync: Option<SharedState>,
+    ) {
+        let RoomAuth::Identity {
+            device_id: ours, ..
+        } = self.cfg.auth.clone()
+        else {
+            if self.cfg.auth == RoomAuth::Closed {
+                self.refuse(
+                    peer,
+                    RefuseReason::Unauthorised,
+                    "no identity on this device",
                 );
             }
             return;
         };
-        let Some(u) = self.unknown.iter_mut().find(|u| u.peer == peer) else {
+        let Some(u) = self.unknown.iter().find(|u| u.peer == peer) else {
             return;
         };
-        let ok = match &u.nonce {
-            Some(nonce) => {
-                u.proven.is_none()
-                    && device_id != ours
-                    && auth::verify(&key, Role::Joiner, nonce, &device_id, &mac)
-            }
-            None => false,
+        let (nonce, already, lan) = (u.nonce.clone(), u.proven.is_some(), u.lan.clone());
+        let scope = self.cfg.scope.clone();
+        // With a LAN channel, the proof binds the whole transcript, and the
+        // keys come from it.
+        let transcript = match (&lan, &nonce) {
+            (Some((e, theirs, their_nonce)), Some(n)) => Some(channel::joiner_binding(
+                theirs,
+                &e.public,
+                their_nonce,
+                n,
+                &ours,
+                &device_id,
+            )),
+            _ => None,
         };
+        let signed_nonce = match (&transcript, &nonce) {
+            (Some(t), Some(n)) => Some(auth::bind_nonce(n, t)),
+            (None, n) => n.clone(),
+            (Some(_), None) => None,
+        };
+        // Check the proof against our list plus the ops it sent (they are
+        // signed, so a peer with a newer list than ours still proves), and
+        // take nothing from it until it has proved it is a member.
+        let ok = match (&signed_nonce, self.identity.as_ref()) {
+            (Some(nonce), Some(shared)) => {
+                !already
+                    && device_id != ours
+                    && heads.len() <= 64
+                    && auth::verify_member_with_sync(
+                        &shared.log,
+                        sync.as_ref().map(|s| &s.log),
+                        Role::Joiner,
+                        &scope,
+                        nonce,
+                        &device_id,
+                        &heads,
+                        &sig,
+                    )
+            }
+            _ => false,
+        };
+        let channel = match (&lan, &transcript) {
+            (Some((e, theirs, _)), Some(t)) => Channel::new(End::Leader, e, theirs, t),
+            _ => None,
+        };
+        let ok = ok && (lan.is_none() || channel.is_some());
         if ok {
-            u.proven = Some(device_id);
+            if let Some(ch) = channel {
+                self.channels.insert(peer.to_string(), ch);
+            }
+            if let Some(sync) = sync {
+                self.merge_identity(sync, None);
+            }
+            if let Some(u) = self.unknown.iter_mut().find(|u| u.peer == peer) {
+                u.proven = Some(device_id);
+            }
         } else {
-            tracing::info!(scope = %self.cfg.scope, peer, "LAN proof rejected");
-            self.refuse(peer, RefuseReason::Unauthorised, "proof rejected");
+            tracing::info!(scope = %self.cfg.scope, peer, "proof rejected");
+            self.refuse(
+                peer,
+                RefuseReason::Unauthorised,
+                "not a member of this identity",
+            );
+        }
+    }
+
+    /// A new device's pairing request: relay it to the member that offered
+    /// the invite, or hand it to the host.
+    fn on_pair_join(&mut self, peer: &str, identity: String, join: PairJoin) {
+        if identity != self.cfg.scope {
+            self.refuse(peer, RefuseReason::ScopeMismatch, "another identity");
+            return;
+        }
+        if !self.unknown.iter().any(|u| u.peer == peer) {
+            return;
+        }
+        let now = self.now();
+        self.offers.retain(|o| o.expires_at > now);
+        let target = self
+            .offers
+            .iter()
+            .find(|o| o.invite_id == join.invite_id)
+            .and_then(|o| {
+                self.members
+                    .iter()
+                    .find(|m| m.device.id == o.device_id)
+                    .map(|m| (m.peer.clone(), o.device_id.clone()))
+            });
+        match target {
+            Some((member_peer, device_id)) => {
+                if let Some(u) = self.unknown.iter_mut().find(|u| u.peer == peer) {
+                    u.pairing_with = Some(device_id);
+                }
+                self.note(format!("pairing request on {peer} relayed"));
+                self.send(
+                    &member_peer,
+                    Msg::PairJoin {
+                        identity,
+                        join,
+                        relay: Some(peer.to_string()),
+                    },
+                );
+            }
+            None => self.out.push(RoomOutput::PairJoin {
+                peer: peer.to_string(),
+                join,
+            }),
+        }
+    }
+
+    /// Merge a peer's identity state; pass on what changed.
+    fn merge_identity(&mut self, sync: SharedState, from: Option<&str>) {
+        let Some(shared) = &mut self.identity else {
+            return;
+        };
+        let now = self.clock.now_ms();
+        match shared.merge(sync, now) {
+            Ok(ch) if ch.any() => {
+                self.out.push(RoomOutput::IdentityChanged);
+                self.broadcast_identity(from);
+                if ch.members {
+                    self.drop_non_members();
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::debug!(scope = %self.cfg.scope, error = %e, "identity sync refused"),
+        }
+    }
+
+    /// Send the whole identity state to every member but `except` (and the
+    /// loopback, whose host has it).
+    fn broadcast_identity(&mut self, except: Option<&str>) {
+        let Some(shared) = &self.identity else {
+            return;
+        };
+        let msg = Msg::IdentitySync {
+            sync: Box::new(shared.clone()),
+        };
+        let peers: Vec<PeerId> = self
+            .members
+            .iter()
+            .filter(|m| m.peer != LOOPBACK && Some(m.peer.as_str()) != except)
+            .map(|m| m.peer.clone())
+            .collect();
+        for p in peers {
+            self.send(&p, msg.clone());
+        }
+    }
+
+    /// Drop members the identity no longer lists.
+    fn drop_non_members(&mut self) {
+        if !matches!(self.cfg.auth, RoomAuth::Identity { .. }) {
+            return;
+        }
+        let Some(shared) = &mut self.identity else {
+            return;
+        };
+        let state = shared.state().clone();
+        let gone: Vec<PeerId> = self
+            .members
+            .iter()
+            .filter(|m| m.peer != LOOPBACK && !state.is_member(&m.device.id))
+            .map(|m| m.peer.clone())
+            .collect();
+        for p in gone {
+            self.refuse(&p, RefuseReason::Unauthorised, "this device was removed");
+            self.on_disconnected(&p);
         }
     }
 
@@ -733,7 +1223,7 @@ impl Room {
         protocol_min: u32,
         protocol_max: u32,
         scope: String,
-        credential: Option<Credential>,
+        answers_diagnostics: bool,
     ) {
         let protocol = match negotiate(protocol_min, protocol_max) {
             Ok(p) => p,
@@ -755,22 +1245,22 @@ impl Room {
             );
             return;
         }
-        if self.members.len() + self.pending.len() >= self.cfg.max_members {
+        if self.members.len() >= self.cfg.max_members {
             self.refuse(peer, RefuseReason::Full, "room is full");
             return;
         }
         if peer != LOOPBACK {
-            match &self.cfg.lan_auth {
-                LanAuth::Open => {}
-                LanAuth::Closed => {
+            match &self.cfg.auth {
+                RoomAuth::Open => {}
+                RoomAuth::Closed => {
                     self.refuse(
                         peer,
                         RefuseReason::Unauthorised,
-                        "no LAN key on this device",
+                        "no identity on this device",
                     );
                     return;
                 }
-                LanAuth::Key { .. } => {
+                RoomAuth::Identity { .. } => {
                     let proven = self
                         .unknown
                         .iter()
@@ -778,54 +1268,22 @@ impl Room {
                         .and_then(|u| u.proven.as_deref())
                         == Some(device.id.as_str());
                     if !proven {
-                        self.refuse(peer, RefuseReason::Unauthorised, "LAN proof required");
+                        self.refuse(peer, RefuseReason::Unauthorised, "proof required");
                         return;
                     }
                 }
             }
         }
-        if self.cfg.verify && peer != LOOPBACK {
-            let Some(cred) = credential else {
-                self.refuse(peer, RefuseReason::Unauthorised, "credential required");
-                return;
-            };
-            if scope_key(&cred.server_url, &cred.username) != self.cfg.scope {
-                self.refuse(
-                    peer,
-                    RefuseReason::ScopeMismatch,
-                    "credential does not match scope",
-                );
-                return;
-            }
-            self.pending.retain(|(p, _)| p != peer);
-            self.pending
-                .push((peer.to_string(), PendingHello { device, protocol }));
-            self.out.push(RoomOutput::Verify {
-                peer: peer.to_string(),
-                credential: cred,
-            });
-            return;
-        }
-        self.admit(peer, device, protocol);
+        self.admit(peer, device, protocol, answers_diagnostics);
     }
 
-    fn on_verified(&mut self, peer: &str, ok: bool) {
-        let Some(idx) = self.pending.iter().position(|(p, _)| p == peer) else {
-            return;
-        };
-        let (_, pending) = self.pending.remove(idx);
-        if !ok {
-            self.refuse(
-                peer,
-                RefuseReason::Unauthorised,
-                "server rejected credential",
-            );
-            return;
-        }
-        self.admit(peer, pending.device, pending.protocol);
-    }
-
-    fn admit(&mut self, peer: &str, mut device: DeviceInfo, protocol: u32) {
+    fn admit(
+        &mut self,
+        peer: &str,
+        mut device: DeviceInfo,
+        protocol: u32,
+        answers_diagnostics: bool,
+    ) {
         let now = self.now();
         self.unknown.retain(|u| u.peer != peer);
         // A device reconnecting on a new socket replaces its old one.
@@ -847,8 +1305,26 @@ impl Room {
         }
         device.is_self = false;
         device.last_seen = now;
+        // An owner alone until now renewed for its long solo window. It hears
+        // of this join through the presence below, drops to the normal
+        // cadence and renews within a beat, so the normal window is enough
+        // from here; one that died alone lapses 20 s after the join instead
+        // of up to 100 s, and the joiner can play.
+        if self
+            .lease
+            .live_owner(now)
+            .is_some_and(|owner| owner != &device.id)
+            && self.lease.cap_expiry(now + LEASE_DURATION_MS)
+        {
+            self.replica.set_lease(self.lease.lease().clone(), now);
+        }
         self.admitted_any = true;
         self.replica.touch_device(&device, now);
+        if let Some(shared) = &mut self.identity {
+            if shared.touch(&device.id, now) {
+                self.out.push(RoomOutput::IdentityChanged);
+            }
+        }
         // A second Hello on the same socket re-admits rather than duplicates.
         self.members.retain(|m| m.peer != peer);
         let members_before = self.presence_list();
@@ -857,8 +1333,10 @@ impl Room {
             device,
             protocol,
             last_seen: now,
+            cadence_ms: HEARTBEAT_INTERVAL_MS,
             ready_key: None,
             picker_open: false,
+            answers_diagnostics,
         });
         // Always sent, even when empty: the joiner adopts the room's session
         // identity from it (or pushes its own document into a trivial one).
@@ -872,17 +1350,25 @@ impl Room {
                 accepted_protocol: protocol,
                 replica,
                 members: members_before,
+                analysis_store: self.cfg.analysis_store,
                 extra: Default::default(),
             },
         );
         self.dirty = true;
         self.broadcast_presence();
         tracing::info!(scope = %self.cfg.scope, peer, protocol, members = self.members.len(), "member joined");
+        let joined = self.members.last().map(|m| m.device.clone());
+        if let Some(d) = joined {
+            self.note(format!(
+                "joined: {} ({}) {:?} app {} protocol {protocol} on {peer}",
+                d.name, d.id, d.platform, d.app_version
+            ));
+        }
     }
 
     fn on_disconnected(&mut self, peer: &str) {
         self.unknown.retain(|u| u.peer != peer);
-        self.pending.retain(|(p, _)| p != peer);
+        self.channels.remove(peer);
         let Some(idx) = self.members.iter().position(|m| m.peer == peer) else {
             return;
         };
@@ -891,6 +1377,10 @@ impl Room {
             c.held.retain(|(p, _)| p != peer);
         }
         tracing::info!(scope = %self.cfg.scope, peer, device = %m.device.id, "member left");
+        self.note(format!(
+            "left: {} ({}) on {peer}",
+            m.device.name, m.device.id
+        ));
         if m.picker_open {
             self.broadcast(
                 Msg::HandoffPickerClose {
@@ -917,10 +1407,75 @@ impl Room {
         match msg {
             Msg::Hello { .. }
             | Msg::Challenge { .. }
+            | Msg::Sealed { .. }
             | Msg::Proof { .. }
             | Msg::Welcome { .. }
             | Msg::Refuse { .. }
+            | Msg::AnalysisFetch { .. }
+            | Msg::AnalysisRecords { .. }
+            | Msg::AnalysisUpload { .. }
+            | Msg::PairJoin { .. }
+            | Msg::CoordClaim { .. }
+            | Msg::CoordRedeem { .. }
+            | Msg::CoordAdmitted { .. }
+            | Msg::CoordInviteCreate
+            | Msg::CoordInviteRevoke { .. }
+            | Msg::CoordInviteList
+            | Msg::CoordInvites { .. }
+            | Msg::CoordYtmSignIn { .. }
+            | Msg::CoordYtmQuery
+            | Msg::CoordYtmStatus { .. }
             | Msg::Unknown => {}
+            Msg::IdentitySync { sync } => {
+                if peer != LOOPBACK {
+                    self.merge_identity(*sync, Some(peer));
+                }
+            }
+            Msg::PairOffer {
+                invite_id,
+                expires_at,
+            } => {
+                self.offers
+                    .retain(|o| o.invite_id != invite_id && o.expires_at > now);
+                if self.offers.len() < OFFERS_CAP {
+                    self.offers.push(Offer {
+                        invite_id,
+                        device_id: device_id.clone(),
+                        expires_at: expires_at.min(now + crate::identity::pairing::INVITE_TTL_MS),
+                    });
+                }
+            }
+            Msg::PairRefuse { relay, message } => {
+                let waiting = self
+                    .unknown
+                    .iter()
+                    .find(|u| u.peer == relay && u.pairing_with.as_deref() == Some(&device_id))
+                    .map(|u| u.peer.clone());
+                if let Some(p) = waiting {
+                    self.refuse(&p, RefuseReason::Unauthorised, &message);
+                }
+            }
+            Msg::PairAccept { accept, relay } => {
+                // Only to the socket that was relayed to this member.
+                let waiting = relay.as_deref().and_then(|r| {
+                    self.unknown
+                        .iter()
+                        .find(|u| u.peer == r && u.pairing_with.as_deref() == Some(&device_id))
+                        .map(|u| u.peer.clone())
+                });
+                if let Some(p) = waiting {
+                    self.offers.retain(|o| o.invite_id != accept.invite_id);
+                    self.send(
+                        &p,
+                        Msg::PairAccept {
+                            accept,
+                            relay: None,
+                        },
+                    );
+                    self.out.push(RoomOutput::Close(p.clone()));
+                    self.unknown.retain(|u| u.peer != p);
+                }
+            }
             Msg::Bye { .. } => {
                 self.out.push(RoomOutput::Close(peer.to_string()));
                 self.on_disconnected(peer);
@@ -1037,6 +1592,7 @@ impl Room {
                 scrobbled,
                 epoch,
                 volume,
+                renderer,
                 ..
             } => {
                 if let Err(LeaseError::Fenced { current } | LeaseError::Held { current }) =
@@ -1079,6 +1635,10 @@ impl Room {
                         persist = true;
                     }
                 }
+                if self.replica.document.transport.renderer != renderer {
+                    self.replica.document.transport.renderer = renderer.clone();
+                    persist = true;
+                }
                 if persist {
                     self.dirty = true;
                 }
@@ -1091,6 +1651,7 @@ impl Room {
                     scrobbled,
                     epoch,
                     volume,
+                    renderer,
                 };
                 self.broadcast(relay, Some(peer));
             }
@@ -1136,7 +1697,8 @@ impl Room {
                 }
             }
             Msg::LeaseHeartbeat { epoch, sent_at } => {
-                match self.lease.heartbeat(&device_id, epoch, now) {
+                let window = lease_window_ms(me.cadence_ms);
+                match self.lease.heartbeat(&device_id, epoch, now, window) {
                     Ok(LeaseEvent::Renewed { lease }) | Ok(LeaseEvent::Changed { lease, .. }) => {
                         let now = self.now();
                         self.replica.set_lease(lease.clone(), now);
@@ -1160,7 +1722,11 @@ impl Room {
                 takeover,
                 sent_at,
             } => {
-                match self.lease.claim(&device_id, epoch_expected, takeover, now) {
+                let window = lease_window_ms(me.cadence_ms);
+                match self
+                    .lease
+                    .claim(&device_id, epoch_expected, takeover, now, window)
+                {
                     Ok(LeaseEvent::Changed { .. }) => {
                         // The claimant gets its echo first, then everyone the change.
                         let lease = self.lease.lease().clone();
@@ -1209,6 +1775,19 @@ impl Room {
                 self.send(peer, Msg::ClockPong { t0, t1: t, t2: t });
             }
             Msg::ClockPong { .. } => {}
+            Msg::Cadence { interval_ms } => {
+                let cadence = clamp_cadence(interval_ms);
+                if let Some(m) = self.member_mut_by_peer(peer) {
+                    m.cadence_ms = cadence;
+                }
+                self.send(
+                    peer,
+                    Msg::CadenceAck {
+                        interval_ms: cadence,
+                    },
+                );
+            }
+            Msg::CadenceAck { .. } => {}
 
             Msg::HandoffPickerOpen { .. } => {
                 if let Some(m) = self.member_mut_by_peer(peer) {
@@ -1280,7 +1859,8 @@ impl Room {
                     // Target vanished: nothing to transfer to; the source keeps playing.
                     return;
                 }
-                match self.lease.transfer(&device_id, epoch, &target, now) {
+                let window = self.lease_window_for(&target);
+                match self.lease.transfer(&device_id, epoch, &target, now, window) {
                     Ok(_) => {
                         let lease = self.lease.lease().clone();
                         if let Some(p) = self.peer_of_device(&target) {
@@ -1369,6 +1949,47 @@ impl Room {
                     self.broadcast(Msg::SettingsSync { settings: merged }, None);
                 } else if merged.len() != settings.len() {
                     self.send(peer, Msg::SettingsSync { settings: merged });
+                }
+            }
+            Msg::StashSync { entries } => {
+                let changed = self.replica.merge_stash(&entries, now);
+                let merged = self.replica.stash.clone();
+                if changed {
+                    self.dirty = true;
+                    self.broadcast(Msg::StashSync { entries: merged }, None);
+                } else if crate::stash::merge(&entries, &merged).1 {
+                    // The sender is behind: catch it up.
+                    self.send(peer, Msg::StashSync { entries: merged });
+                }
+            }
+            Msg::SnoozeSync { entries } => {
+                let changed = self.replica.merge_snoozes(&entries, now);
+                let merged = self.replica.snoozes.clone();
+                if changed {
+                    self.dirty = true;
+                    self.broadcast(Msg::SnoozeSync { entries: merged }, None);
+                } else if crate::snooze::merge(&entries, &merged).1 {
+                    self.send(peer, Msg::SnoozeSync { entries: merged });
+                }
+            }
+            Msg::LibraryRecordsSync { records } => {
+                let changed = self.replica.merge_library_records(&records, now);
+                let merged = self.replica.library_records.clone();
+                if changed {
+                    self.dirty = true;
+                    self.broadcast(Msg::LibraryRecordsSync { records: merged }, None);
+                } else if crate::library::merge(&records, &merged).1 {
+                    self.send(peer, Msg::LibraryRecordsSync { records: merged });
+                }
+            }
+            Msg::AlbumResumeSync { entries } => {
+                let changed = self.replica.merge_album_resumes(&entries, now);
+                let merged = self.replica.album_resumes.clone();
+                if changed {
+                    self.dirty = true;
+                    self.broadcast(Msg::AlbumResumeSync { entries: merged }, None);
+                } else if crate::album_resume::merge(&entries, &merged).1 {
+                    self.send(peer, Msg::AlbumResumeSync { entries: merged });
                 }
             }
             Msg::UndoEntryShared {
@@ -1485,6 +2106,135 @@ impl Room {
                     Some(peer),
                 );
             }
+            Msg::DiagnosticsRequest { request_id, .. } => {
+                self.on_diagnostics_request(peer, &me, request_id, now)
+            }
+            Msg::DiagnosticsReply {
+                request_id,
+                to,
+                part,
+                parts,
+                text,
+                declined,
+                ..
+            } => {
+                // Routed under the member's identity, never the one the frame claimed;
+                // a device named like the room or the coordinator could pass for them.
+                if diagnostics::is_reserved(&device_id) {
+                    return;
+                }
+                if let Some(p) = self.peer_of_device(&to) {
+                    self.send(
+                        &p,
+                        Msg::DiagnosticsReply {
+                            request_id,
+                            from: device_id,
+                            from_name: me.device.name.clone(),
+                            to,
+                            part,
+                            parts,
+                            text,
+                            declined,
+                            asked: vec![],
+                            report_grant: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Answer a diagnostics request with the room's own state and pass it on to every other
+    /// member. At most one per member per [`diagnostics::REQUEST_INTERVAL_MS`]: every answer can
+    /// be megabytes.
+    fn on_diagnostics_request(
+        &mut self,
+        peer: &str,
+        me: &Member,
+        request_id: String,
+        now: EpochMs,
+    ) {
+        let reply = |part: u32,
+                     parts: u32,
+                     text: String,
+                     declined: Option<String>,
+                     asked: Vec<DeviceInfo>| Msg::DiagnosticsReply {
+            request_id: request_id.clone(),
+            from: diagnostics::ROOM.into(),
+            from_name: "Room".into(),
+            to: me.device.id.clone(),
+            part,
+            parts,
+            text,
+            declined,
+            asked,
+            report_grant: None,
+        };
+        self.diagnostics_requests
+            .retain(|_, t| now - *t < diagnostics::REQUEST_INTERVAL_MS);
+        if self.diagnostics_requests.contains_key(&me.device.id) {
+            let msg = reply(
+                0,
+                1,
+                String::new(),
+                Some("asked again too soon; try in a few seconds".into()),
+                vec![],
+            );
+            self.send(peer, msg);
+            return;
+        }
+        self.diagnostics_requests.insert(me.device.id.clone(), now);
+        self.note(format!(
+            "diagnostics requested by {} ({})",
+            me.device.name, me.device.id
+        ));
+        let (asked, older): (Vec<DeviceInfo>, Vec<DeviceInfo>) = self
+            .presence_list()
+            .into_iter()
+            .filter(|d| d.id != me.device.id)
+            .partition(|d| {
+                self.members
+                    .iter()
+                    .any(|m| m.device.id == d.id && m.answers_diagnostics)
+            });
+        let mut text = self.diagnostics_text();
+        if !older.is_empty() {
+            text.push_str("\nnot asked (a build that doesn't answer diagnostics requests):\n");
+            for d in &older {
+                text.push_str(&format!(
+                    "  - {} ({}) app {}\n",
+                    d.name, d.id, d.app_version
+                ));
+            }
+        }
+        // The asked list rides on the first part, so the asking device knows whom to wait for.
+        let parts = diagnostics::parts(&text);
+        let count = parts.len() as u32;
+        let mut asked = Some(asked.clone());
+        for (i, part) in parts.into_iter().enumerate() {
+            let msg = reply(
+                i as u32,
+                count,
+                part,
+                None,
+                asked.take().unwrap_or_default(),
+            );
+            self.send(peer, msg);
+        }
+        let targets: Vec<PeerId> = self
+            .members
+            .iter()
+            .filter(|m| m.peer != peer && m.answers_diagnostics)
+            .map(|m| m.peer.clone())
+            .collect();
+        for p in targets {
+            self.send(
+                &p,
+                Msg::DiagnosticsRequest {
+                    request_id: request_id.clone(),
+                    from: me.device.id.clone(),
+                },
+            );
         }
     }
 
@@ -1492,16 +2242,18 @@ impl Room {
         let now = self.now();
         if let Some(LeaseEvent::Changed { previous_owner, .. }) = self.lease.tick(now) {
             tracing::info!(scope = %self.cfg.scope, ?previous_owner, "transport lease lapsed");
+            self.note(format!("transport lease of {previous_owner:?} lapsed"));
             self.broadcast_lease();
         }
         let idle: Vec<PeerId> = self
             .members
             .iter()
-            .filter(|m| m.peer != LOOPBACK && now - m.last_seen >= MEMBER_TIMEOUT_MS)
+            .filter(|m| m.peer != LOOPBACK && now - m.last_seen >= Self::member_timeout_ms(m))
             .map(|m| m.peer.clone())
             .collect();
         for p in idle {
             tracing::info!(scope = %self.cfg.scope, peer = %p, "member timed out");
+            self.note(format!("timed out: {p}"));
             self.send(
                 &p,
                 Msg::Bye {
@@ -1563,7 +2315,6 @@ mod tests {
             protocol_min: crate::connect::wire::PROTOCOL_MIN,
             protocol_max: crate::connect::wire::PROTOCOL,
             scope: "scope".into(),
-            credential: None,
             session_id: None,
             session_revision: 0,
             held_epoch: None,
@@ -1652,98 +2403,6 @@ mod tests {
     }
 
     #[test]
-    fn verification_is_delegated_and_credential_not_kept() {
-        let clock = Arc::new(TestClock(AtomicU64::new(0)));
-        let scope = scope_key("https://music.example", "bob");
-        let r_cfg = RoomConfig::new(scope.clone()).verified();
-        let mut r = Room::new(r_cfg, clock, RealReducer::shared(), None);
-        r.handle(RoomInput::Connected("p".into()));
-        let mut h = hello("a");
-        if let Msg::Hello {
-            scope: s,
-            credential,
-            ..
-        } = &mut h.msg
-        {
-            *s = scope.clone();
-            *credential = Some(Credential {
-                server_url: "https://music.example/".into(),
-                username: "bob".into(),
-                token: Some("t".into()),
-                salt: Some("s".into()),
-                api_key: None,
-                client: "hocket".into(),
-                api_version: "1.16.1".into(),
-            });
-        }
-        let outs = r.handle(RoomInput::Message("p".into(), h.clone()));
-        assert!(
-            matches!(&outs[0], RoomOutput::Verify { peer, credential } if peer == "p" && credential.username == "bob")
-        );
-        assert_eq!(r.member_count(), 0);
-        let outs = r.handle(RoomInput::Verified {
-            peer: "p".into(),
-            ok: false,
-        });
-        assert!(matches!(
-            sent(&outs, "p")[0],
-            Msg::Refuse {
-                reason: RefuseReason::Unauthorised,
-                ..
-            }
-        ));
-        // again, accepted this time
-        r.handle(RoomInput::Connected("q".into()));
-        r.handle(RoomInput::Message("q".into(), h));
-        let outs = r.handle(RoomInput::Verified {
-            peer: "q".into(),
-            ok: true,
-        });
-        assert!(matches!(sent(&outs, "q")[0], Msg::Welcome { .. }));
-        assert_eq!(r.member_count(), 1);
-        // no credential anywhere in the replica
-        let json = serde_json::to_string(r.replica()).unwrap();
-        assert!(!json.contains("\"token\""));
-        // missing credential refused
-        r.handle(RoomInput::Connected("z".into()));
-        let mut h2 = hello("c");
-        if let Msg::Hello { scope: s, .. } = &mut h2.msg {
-            *s = scope.clone();
-        }
-        let outs = r.handle(RoomInput::Message("z".into(), h2));
-        assert!(matches!(
-            sent(&outs, "z")[0],
-            Msg::Refuse {
-                reason: RefuseReason::Unauthorised,
-                ..
-            }
-        ));
-    }
-
-    fn op(base: u32, op: SessionOp, dev: &str, id: &str, epoch: Option<u32>) -> WireMessage {
-        WireMessage::new(Msg::Op {
-            base_revision: base,
-            op,
-            device_id: dev.into(),
-            op_id: id.into(),
-            epoch,
-            at: 5.0,
-            position_ms: 0,
-        })
-    }
-
-    fn play_op() -> SessionOp {
-        SessionOp::PlayTracks {
-            server_id: "srv".into(),
-            track_ids: vec!["t1".into(), "t2".into(), "t3".into()],
-            start_index: 0,
-            label: "sel".into(),
-            shuffle: false,
-            save_outgoing: false,
-        }
-    }
-
-    #[test]
     fn ops_are_ordered_acked_and_relayed() {
         let (mut r, _) = room();
         join(&mut r, "p1", "a");
@@ -1779,10 +2438,7 @@ mod tests {
             matches!(sent(&outs_b, "p2")[0], Msg::OpReject { reason: RejectReason::Stale, current_revision: 2, document, .. } if document.revision == 2)
         );
         assert_eq!(r.revision(), 2);
-        assert_eq!(
-            r.replica().document.current.as_ref().unwrap().track_id,
-            "t2"
-        );
+        assert_eq!(r.replica().document.current.as_ref().unwrap().track, "t2");
     }
 
     #[test]
@@ -1896,6 +2552,7 @@ mod tests {
                 scrobbled: false,
                 epoch: 1,
                 volume: None,
+                renderer: None,
             }),
         ));
         assert!(matches!(
@@ -1949,6 +2606,7 @@ mod tests {
                 scrobbled: false,
                 epoch: 1,
                 volume: None,
+                renderer: None,
             })
         };
         let outs = r.handle(RoomInput::Message("p1".into(), stamp(0, true)));
@@ -2181,7 +2839,7 @@ mod tests {
             }],
             "the member hears of the claim"
         );
-        assert!(r.is_unconfirmed_scrobble("t", 100.0));
+        assert!(r.is_unconfirmed_scrobble(&crate::api::TrackRef::from("t"), 100.0));
         // the leader's retry re-announces it (a lossy link ate the first)
         let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
         assert!(answers(&outs, LOOPBACK).is_empty());
@@ -2193,7 +2851,7 @@ mod tests {
         let outs = r.handle(scrobble_submitted("p1", "leader"));
         assert_eq!(answers(&outs, LOOPBACK), vec![("q1".to_string(), false)]);
         assert_eq!(answers(&outs, "p1"), vec![("m1".to_string(), true)]);
-        assert!(!r.is_unconfirmed_scrobble("t", 100.0));
+        assert!(!r.is_unconfirmed_scrobble(&crate::api::TrackRef::from("t"), 100.0));
         // settled: a later retry is answered at once
         let outs = r.handle(scrobble_query(LOOPBACK, "leader", "q2"));
         assert_eq!(answers(&outs, LOOPBACK), vec![("q2".to_string(), false)]);
@@ -2242,7 +2900,7 @@ mod tests {
         let mut r = leader_room();
         r.handle(scrobble_query(LOOPBACK, "leader", "q1"));
         r.handle(scrobble_query("p1", "a", "m1"));
-        let outs = r.confirm_scrobble("t", 100.0);
+        let outs = r.confirm_scrobble(&crate::api::TrackRef::from("t"), 100.0);
         assert!(answers(&outs, LOOPBACK).is_empty());
         assert_eq!(answers(&outs, "p1"), vec![("m1".to_string(), true)]);
         assert_eq!(r.replica().scrobbles[0].device_id, "leader");
@@ -2261,6 +2919,167 @@ mod tests {
         assert!(outs.contains(&RoomOutput::Close("p2".into())));
         assert_eq!(r.member_count(), 1);
         assert_eq!(r.member_device_ids(), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn a_slower_cadence_is_acked_clamped_and_stretches_timeout_and_lease() {
+        let (mut r, clock) = room();
+        join(&mut r, "p1", "a");
+        join(&mut r, "p2", "b");
+        let cadence = |r: &mut Room, peer: &str, ms: f64| {
+            r.handle(RoomInput::Message(
+                peer.into(),
+                WireMessage::new(Msg::Cadence { interval_ms: ms }),
+            ))
+        };
+        // Clamped both ways, and never relayed.
+        let outs = cadence(&mut r, "p2", 1_000.0);
+        assert!(
+            matches!(sent(&outs, "p2")[..], [Msg::CadenceAck { interval_ms }] if *interval_ms == 5_000.0)
+        );
+        let outs = cadence(&mut r, "p2", 600_000.0);
+        assert!(
+            matches!(sent(&outs, "p2")[..], [Msg::CadenceAck { interval_ms }] if *interval_ms == 60_000.0)
+        );
+        assert!(sent(&outs, "p1").is_empty());
+        let outs = cadence(&mut r, "p1", 45_000.0);
+        assert!(
+            matches!(sent(&outs, "p1")[..], [Msg::CadenceAck { interval_ms }] if *interval_ms == 45_000.0)
+        );
+
+        // The lease lasts 20 s + 2 × 40 s at a 45 s cadence.
+        r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::LeaseClaim {
+                epoch_expected: None,
+                takeover: false,
+                sent_at: 1_000.0,
+            }),
+        ));
+        assert_eq!(r.lease().expires_at, 1_000.0 + 100_000.0);
+        clock.0.store(46_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::LeaseHeartbeat {
+                epoch: 1,
+                sent_at: 46_000.0,
+            }),
+        ));
+        assert!(
+            matches!(sent(&outs, "p1")[0], Msg::LeaseGranted { lease, .. } if lease.expires_at == 146_000.0)
+        );
+
+        // a, silent since 46 s, outlasts the 30 s timeout (110 s at its
+        // cadence); b, silent since 1 s at 60 s, is held to 140 s.
+        clock.0.store(130_000, Ordering::SeqCst);
+        assert!(r.member_heard_within(12_000.0), "a: 12 s + 80 s");
+        clock.0.store(140_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Tick);
+        assert!(!outs.contains(&RoomOutput::Close("p1".into())));
+        assert!(!outs.contains(&RoomOutput::Close("p2".into())));
+        clock.0.store(141_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Tick);
+        assert!(!outs.contains(&RoomOutput::Close("p1".into())));
+        assert!(outs.contains(&RoomOutput::Close("p2".into())));
+        clock.0.store(156_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Tick);
+        assert!(outs.contains(&RoomOutput::Close("p1".into())));
+
+        // Back to normal: the next renewal is the plain 20 s again.
+        let (mut r, clock) = room();
+        join(&mut r, "p1", "a");
+        cadence(&mut r, "p1", 45_000.0);
+        cadence(&mut r, "p1", 5_000.0);
+        r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::LeaseClaim {
+                epoch_expected: None,
+                takeover: false,
+                sent_at: 1_000.0,
+            }),
+        ));
+        assert_eq!(r.lease().expires_at, 21_000.0);
+        clock.0.store(31_000, Ordering::SeqCst);
+        let outs = r.handle(RoomInput::Tick);
+        assert!(outs.contains(&RoomOutput::Close("p1".into())));
+    }
+
+    #[test]
+    fn company_shortens_a_solo_owners_long_window() {
+        let solo_owner = || {
+            let (mut r, clock) = room();
+            join(&mut r, "p1", "a");
+            r.handle(RoomInput::Message(
+                "p1".into(),
+                WireMessage::new(Msg::Cadence {
+                    interval_ms: 45_000.0,
+                }),
+            ));
+            r.handle(RoomInput::Message(
+                "p1".into(),
+                WireMessage::new(Msg::LeaseClaim {
+                    epoch_expected: None,
+                    takeover: false,
+                    sent_at: 1_000.0,
+                }),
+            ));
+            assert_eq!(r.lease().expires_at, 101_000.0);
+            clock.0.store(11_000, Ordering::SeqCst);
+            (r, clock)
+        };
+        // The owner on a new socket is no company.
+        let (mut r, _) = solo_owner();
+        join(&mut r, "p3", "a");
+        assert_eq!(r.lease().expires_at, 101_000.0);
+        // Another device is: the window drops to the normal one from now,
+        // and the joiner is welcomed with it.
+        let (mut r, clock) = solo_owner();
+        let outs = join(&mut r, "p2", "b");
+        assert_eq!(r.lease().expires_at, 31_000.0);
+        assert!(sent(&outs, "p2").iter().any(|m| matches!(m, Msg::Welcome { replica: Some(rep), .. } if rep.transport_lease.expires_at == 31_000.0)));
+        // An owner that never answers lapses then, and b may play.
+        clock.0.store(31_000, Ordering::SeqCst);
+        r.handle(RoomInput::Tick);
+        assert_eq!(r.live_owner(), None);
+    }
+
+    #[test]
+    fn a_handoff_target_gets_the_window_of_its_own_cadence() {
+        let (mut r, _) = room();
+        join(&mut r, "p1", "a");
+        join(&mut r, "p2", "b");
+        r.handle(RoomInput::Message(
+            "p2".into(),
+            WireMessage::new(Msg::Cadence {
+                interval_ms: 15_000.0,
+            }),
+        ));
+        r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::LeaseClaim {
+                epoch_expected: None,
+                takeover: false,
+                sent_at: 1_000.0,
+            }),
+        ));
+        assert_eq!(r.lease().expires_at, 21_000.0);
+        r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::HandoffTakeover {
+                from: "a".into(),
+                target: "b".into(),
+                key: "k".into(),
+                track_id: "t".into(),
+                position_ms: 0,
+                played_ms: 0,
+                started_at: 5.0,
+                scrobbled: false,
+                epoch: 1,
+                lease: None,
+            }),
+        ));
+        assert_eq!(r.live_owner().as_deref(), Some("b"));
+        assert_eq!(r.lease().expires_at, 1_000.0 + 40_000.0);
     }
 
     #[test]
@@ -2315,51 +3134,210 @@ mod tests {
         );
     }
 
-    fn key() -> LanKey {
-        auth::test_key(b"test-key")
+    fn op(base: u32, op: SessionOp, dev: &str, id: &str, epoch: Option<u32>) -> WireMessage {
+        WireMessage::new(Msg::Op {
+            base_revision: base,
+            op,
+            device_id: dev.into(),
+            op_id: id.into(),
+            epoch,
+            at: 5.0,
+            position_ms: 0,
+        })
     }
 
-    fn lan_room() -> (Room, Arc<TestClock>) {
+    fn play_op() -> SessionOp {
+        SessionOp::PlayTracks {
+            track_ids: vec!["t1".into(), "t2".into(), "t3".into()],
+            start_index: 0,
+            label: "sel".into(),
+            shuffle: false,
+            save_outgoing: false,
+            start_position_ms: 0,
+        }
+    }
+
+    use crate::identity::Identity;
+
+    /// A leader device "leader" and a member "a" of one identity whose id
+    /// is the room's scope ("scope" is not an identity id, but rooms only
+    /// compare it).
+    fn identities() -> (Identity, Identity) {
+        let mut leader = Identity::create_with(
+            "scope",
+            "leader",
+            "Leader",
+            crate::identity::crypto::DeviceSecret::from_seed(b"leader"),
+            0.0,
+        );
+        let a = crate::identity::testing::pair(&mut leader, "a", 1.0);
+        (leader, a)
+    }
+
+    fn id_room(leader: &Identity) -> (Room, Arc<TestClock>) {
         let clock = Arc::new(TestClock(AtomicU64::new(1_000)));
         let mut cfg = RoomConfig::new("scope");
         cfg.session_id = Some("sid".into());
-        cfg.lan_auth = LanAuth::Key {
-            key: key(),
+        cfg.auth = RoomAuth::Identity {
             device_id: "leader".into(),
+            secret: leader.secret().clone(),
         };
-        let r = Room::new(cfg, clock.clone(), RealReducer::shared(), None);
+        let mut r = Room::new(cfg, clock.clone(), RealReducer::shared(), None);
+        let _ = r.set_identity(leader.shared.clone());
         (r, clock)
     }
 
-    /// Run the joiner side of the handshake against `r` with `key`; returns
+    /// Run the joiner side of the handshake against `r` as `me`; returns
     /// the room's nonce (so the caller can answer it however it likes).
-    fn challenge(r: &mut Room, peer: &str, key: &LanKey) -> String {
+    fn challenge(r: &mut Room, peer: &str, me: &mut Identity) -> String {
         r.handle(RoomInput::Connected(peer.into()));
         let nonce = auth::new_nonce();
         let outs = r.handle(RoomInput::Message(
             peer.into(),
             WireMessage::new(Msg::Challenge {
                 nonce: nonce.clone(),
+                identity: Some("scope".into()),
+                heads: me.heads(),
+                eph: None,
             }),
         ));
         let msgs = sent(&outs, peer);
-        // the room proves itself first, then challenges
+        // the room proves itself first (with what we lack), then challenges
         match msgs[0] {
-            Msg::Proof { device_id, mac } => {
+            Msg::Proof {
+                device_id,
+                sig,
+                heads,
+                sync,
+                ..
+            } => {
                 assert_eq!(device_id, "leader");
-                assert!(auth::verify(key, Role::Leader, &nonce, device_id, mac));
+                if let Some(sync) = sync {
+                    me.merge((**sync).clone(), f64::INFINITY).unwrap();
+                }
+                assert!(auth::verify_member(
+                    me.state(),
+                    Role::Leader,
+                    "scope",
+                    &nonce,
+                    device_id,
+                    heads,
+                    sig
+                ));
             }
             other => panic!("expected a proof, got {other:?}"),
         }
         match msgs[1] {
-            Msg::Challenge { nonce } => nonce.clone(),
+            Msg::Challenge { nonce, .. } => nonce.clone(),
             other => panic!("expected a challenge, got {other:?}"),
         }
     }
 
+    fn proof(me: &Identity, as_id: &str, role: Role, nonce: &str) -> WireMessage {
+        WireMessage::new(Msg::Proof {
+            device_id: as_id.into(),
+            sig: auth::prove(me.secret(), role, "scope", nonce, as_id, &me.heads()),
+            heads: me.heads(),
+            sync: Some(Box::new(me.sync())),
+            eph: None,
+        })
+    }
+
+    /// A peer that fails its proof gets nothing into the identity: not its
+    /// blob, grants or sync times.
     #[test]
-    fn lan_auth_admits_a_proven_joiner_and_refuses_everything_else() {
-        let (mut r, _) = lan_room();
+    fn a_failed_proof_merges_nothing() {
+        let (leader, mut a) = identities();
+        let (mut r, _) = id_room(&leader);
+        let before = r.identity().unwrap().clone();
+        let stranger = Identity::create_with(
+            "scope",
+            "x",
+            "X",
+            crate::identity::crypto::DeviceSecret::from_seed(b"x"),
+            0.0,
+        );
+        let mut sync = leader.sync();
+        sync.blob = Some(crate::identity::CredentialBlob {
+            key_id: "junk".into(),
+            author: "a".into(),
+            at: 1e300,
+            sealed: crate::identity::crypto::seal(&[0; 32], b"", b"junk"),
+        });
+        sync.last_synced.insert("a".into(), 1e300);
+        let nonce = challenge(&mut r, "p1", &mut a);
+        let outs = r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::Proof {
+                device_id: "a".into(),
+                sig: auth::prove(
+                    stranger.secret(),
+                    Role::Joiner,
+                    "scope",
+                    &nonce,
+                    "a",
+                    &leader.heads(),
+                ),
+                heads: leader.heads(),
+                sync: Some(Box::new(sync)),
+                eph: None,
+            }),
+        ));
+        assert!(matches!(sent(&outs, "p1")[0], Msg::Refuse { .. }));
+        assert_eq!(r.identity().unwrap(), &before);
+    }
+
+    /// A stranger's proof is checked before any of the ops it sent are
+    /// merged: a big unsigned-for sync costs nothing.
+    #[test]
+    fn a_strangers_sync_is_never_merged_to_check_its_proof() {
+        let (leader, mut a) = identities();
+        let (mut r, _) = id_room(&leader);
+        let stranger = Identity::create_with(
+            "scope",
+            "x",
+            "X",
+            crate::identity::crypto::DeviceSecret::from_seed(b"x"),
+            0.0,
+        );
+        let nonce = challenge(&mut r, "p1", &mut a);
+        let mut sync = stranger.sync();
+        // Many ops of the right identity id, none naming x.
+        let mut big = leader.clone();
+        for i in 0..800 {
+            big.rotate(i as f64).unwrap();
+        }
+        sync.log = big.sync().log;
+        let t = std::time::Instant::now();
+        let outs = r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::Proof {
+                device_id: "x".into(),
+                sig: auth::prove(
+                    stranger.secret(),
+                    Role::Joiner,
+                    "scope",
+                    &nonce,
+                    "x",
+                    &stranger.heads(),
+                ),
+                heads: stranger.heads(),
+                sync: Some(Box::new(sync)),
+                eph: None,
+            }),
+        ));
+        assert!(matches!(sent(&outs, "p1")[0], Msg::Refuse { .. }));
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(1500),
+            "{:?}",
+            t.elapsed()
+        );
+    }
+
+    #[test]
+    fn identity_auth_admits_a_member_and_refuses_everything_else() {
+        let (leader, mut a) = identities();
+        let (mut r, _) = id_room(&leader);
         // no proof at all: refused
         r.handle(RoomInput::Connected("p0".into()));
         let outs = r.handle(RoomInput::Message("p0".into(), hello("a")));
@@ -2371,15 +3349,18 @@ mod tests {
             }
         ));
         assert!(outs.contains(&RoomOutput::Close("p0".into())));
-        // wrong key: refused at the proof
-        let nonce = challenge(&mut r, "p1", &key());
-        let wrong = auth::test_key(b"other");
+        // a device of another identity: refused at the proof
+        let stranger = Identity::create_with(
+            "scope",
+            "x",
+            "X",
+            crate::identity::crypto::DeviceSecret::from_seed(b"x"),
+            0.0,
+        );
+        let nonce = challenge(&mut r, "p1", &mut a.clone());
         let outs = r.handle(RoomInput::Message(
             "p1".into(),
-            WireMessage::new(Msg::Proof {
-                device_id: "a".into(),
-                mac: auth::prove(&wrong, Role::Joiner, &nonce, "a"),
-            }),
+            proof(&stranger, "x", Role::Joiner, &nonce),
         ));
         assert!(matches!(
             sent(&outs, "p1")[0],
@@ -2388,36 +3369,41 @@ mod tests {
                 ..
             }
         ));
+        // claiming a member's id with the wrong key
+        let nonce = challenge(&mut r, "p1b", &mut a.clone());
+        let outs = r.handle(RoomInput::Message(
+            "p1b".into(),
+            proof(&stranger, "a", Role::Joiner, &nonce),
+        ));
+        assert!(matches!(sent(&outs, "p1b")[0], Msg::Refuse { .. }));
         // reflecting the leader's own proof (role/id) is refused
-        let nonce = challenge(&mut r, "p2", &key());
+        let nonce = challenge(&mut r, "p2", &mut a);
         let outs = r.handle(RoomInput::Message(
             "p2".into(),
-            WireMessage::new(Msg::Proof {
-                device_id: "leader".into(),
-                mac: auth::prove(&key(), Role::Leader, &nonce, "leader"),
-            }),
+            proof(&leader, "leader", Role::Leader, &nonce),
         ));
         assert!(matches!(sent(&outs, "p2")[0], Msg::Refuse { .. }));
+        // a member's proof signed for the wrong role
+        let nonce = challenge(&mut r, "p2b", &mut a);
+        let outs = r.handle(RoomInput::Message(
+            "p2b".into(),
+            proof(&a, "a", Role::Leader, &nonce),
+        ));
+        assert!(matches!(sent(&outs, "p2b")[0], Msg::Refuse { .. }));
         // a good proof for device "a", then a Hello claiming "b": refused
-        let nonce = challenge(&mut r, "p3", &key());
+        let nonce = challenge(&mut r, "p3", &mut a);
         let outs = r.handle(RoomInput::Message(
             "p3".into(),
-            WireMessage::new(Msg::Proof {
-                device_id: "a".into(),
-                mac: auth::prove(&key(), Role::Joiner, &nonce, "a"),
-            }),
+            proof(&a, "a", Role::Joiner, &nonce),
         ));
-        assert!(outs.is_empty());
+        assert!(sent(&outs, "p3").is_empty());
         let outs = r.handle(RoomInput::Message("p3".into(), hello("b")));
         assert!(matches!(sent(&outs, "p3")[0], Msg::Refuse { .. }));
         // the real thing
-        let nonce = challenge(&mut r, "p4", &key());
+        let nonce = challenge(&mut r, "p4", &mut a);
         r.handle(RoomInput::Message(
             "p4".into(),
-            WireMessage::new(Msg::Proof {
-                device_id: "a".into(),
-                mac: auth::prove(&key(), Role::Joiner, &nonce, "a"),
-            }),
+            proof(&a, "a", Role::Joiner, &nonce),
         ));
         let outs = r.handle(RoomInput::Message("p4".into(), hello("a")));
         assert!(matches!(sent(&outs, "p4")[0], Msg::Welcome { .. }));
@@ -2428,6 +3414,9 @@ mod tests {
             "p5".into(),
             WireMessage::new(Msg::Challenge {
                 nonce: "short".into(),
+                identity: None,
+                heads: vec![],
+                eph: None,
             }),
         ));
         assert!(matches!(sent(&outs, "p5")[0], Msg::Refuse { .. }));
@@ -2437,16 +3426,123 @@ mod tests {
     }
 
     #[test]
+    fn a_joiner_with_a_newer_list_brings_the_room_up_to_date() {
+        let (mut leader, mut a) = identities();
+        let (mut r, _) = id_room(&leader);
+        // a paired "c" the leader hasn't heard of.
+        let mut c = crate::identity::testing::pair(&mut a, "c", 2.0);
+        // c joins the leader's room: its proof carries the op that admits it.
+        let nonce = challenge(&mut r, "pc", &mut c);
+        let outs = r.handle(RoomInput::Message(
+            "pc".into(),
+            proof(&c, "c", Role::Joiner, &nonce),
+        ));
+        assert!(outs.contains(&RoomOutput::IdentityChanged));
+        let outs = r.handle(RoomInput::Message("pc".into(), hello("c")));
+        assert!(matches!(sent(&outs, "pc")[0], Msg::Welcome { .. }));
+        leader
+            .merge(r.identity().unwrap().clone(), f64::INFINITY)
+            .unwrap();
+        assert!(leader.state().is_member("c"));
+    }
+
+    #[test]
+    fn a_removed_member_is_dropped_and_refused() {
+        let (mut leader, mut a) = identities();
+        let (mut r, _) = id_room(&leader);
+        let nonce = challenge(&mut r, "pa", &mut a);
+        r.handle(RoomInput::Message(
+            "pa".into(),
+            proof(&a, "a", Role::Joiner, &nonce),
+        ));
+        r.handle(RoomInput::Message("pa".into(), hello("a")));
+        assert_eq!(r.member_count(), 1);
+        leader.remove_device("a", 5.0).unwrap();
+        let outs = r.set_identity(leader.shared.clone());
+        assert!(outs.contains(&RoomOutput::Close("pa".into())));
+        assert_eq!(r.member_count(), 0);
+        // and it can't come back, even with its old (stale) list
+        let mut stale = a.clone();
+        let nonce = challenge(&mut r, "pa2", &mut stale);
+        let outs = r.handle(RoomInput::Message(
+            "pa2".into(),
+            proof(&a, "a", Role::Joiner, &nonce),
+        ));
+        assert!(matches!(sent(&outs, "pa2")[0], Msg::Refuse { .. }));
+    }
+
+    #[test]
+    fn pairing_joins_are_relayed_to_the_member_that_offered() {
+        let (leader, mut a) = identities();
+        let (mut r, _) = id_room(&leader);
+        let nonce = challenge(&mut r, "pa", &mut a);
+        r.handle(RoomInput::Message(
+            "pa".into(),
+            proof(&a, "a", Role::Joiner, &nonce),
+        ));
+        r.handle(RoomInput::Message("pa".into(), hello("a")));
+        let invite = a.invite(Default::default(), vec![], None, 1_000.0);
+        r.handle(RoomInput::Message(
+            "pa".into(),
+            WireMessage::new(Msg::PairOffer {
+                invite_id: invite.invite_id(),
+                expires_at: invite.expires_at,
+            }),
+        ));
+        let joiner = crate::identity::pairing::Joiner::new(invite, "n", "New", 1_000.0).unwrap();
+        r.handle(RoomInput::Connected("new".into()));
+        let outs = r.handle(RoomInput::Message(
+            "new".into(),
+            WireMessage::new(Msg::PairJoin {
+                identity: "scope".into(),
+                join: joiner.join.clone(),
+                relay: None,
+            }),
+        ));
+        let relayed = sent(&outs, "pa");
+        let Msg::PairJoin { join, relay, .. } = relayed[0] else {
+            panic!("expected the join relayed, got {relayed:?}")
+        };
+        assert_eq!(relay.as_deref(), Some("new"));
+        let accept = a.accept_join(join, 1_001.0).unwrap();
+        let outs = r.handle(RoomInput::Message(
+            "pa".into(),
+            WireMessage::new(Msg::PairAccept {
+                accept: Box::new(accept),
+                relay: Some("new".into()),
+            }),
+        ));
+        assert!(matches!(sent(&outs, "new")[0], Msg::PairAccept { .. }));
+        assert!(outs.contains(&RoomOutput::Close("new".into())));
+        // no offer: the host gets it
+        r.handle(RoomInput::Connected("new2".into()));
+        let outs = r.handle(RoomInput::Message(
+            "new2".into(),
+            WireMessage::new(Msg::PairJoin {
+                identity: "scope".into(),
+                join: joiner.join,
+                relay: None,
+            }),
+        ));
+        assert!(outs
+            .iter()
+            .any(|o| matches!(o, RoomOutput::PairJoin { peer, .. } if peer == "new2")));
+    }
+
+    #[test]
     fn closed_room_refuses_every_inbound_peer() {
         let clock = Arc::new(TestClock(AtomicU64::new(1_000)));
         let mut cfg = RoomConfig::new("scope");
-        cfg.lan_auth = LanAuth::Closed;
+        cfg.auth = RoomAuth::Closed;
         let mut r = Room::new(cfg, clock, RealReducer::shared(), None);
         r.handle(RoomInput::Connected("p".into()));
         let outs = r.handle(RoomInput::Message(
             "p".into(),
             WireMessage::new(Msg::Challenge {
                 nonce: auth::new_nonce(),
+                identity: None,
+                heads: vec![],
+                eph: None,
             }),
         ));
         assert!(matches!(
@@ -2597,44 +3693,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_verifications_count_towards_the_cap_and_unknown_is_capped() {
-        let clock = Arc::new(TestClock(AtomicU64::new(0)));
-        let scope = scope_key("https://music.example", "bob");
-        let mut cfg = RoomConfig::new(scope.clone()).verified();
-        cfg.max_members = 1;
-        let mut r = Room::new(cfg, clock, RealReducer::shared(), None);
-        let cred = Credential {
-            server_url: "https://music.example/".into(),
-            username: "bob".into(),
-            token: Some("t".into()),
-            salt: Some("s".into()),
-            api_key: None,
-            client: "hocket".into(),
-            api_version: "1.16.1".into(),
-        };
-        let mut h = hello("a");
-        if let Msg::Hello {
-            scope: s,
-            credential,
-            ..
-        } = &mut h.msg
-        {
-            *s = scope.clone();
-            *credential = Some(cred);
-        }
-        r.handle(RoomInput::Connected("p".into()));
-        let outs = r.handle(RoomInput::Message("p".into(), h.clone()));
-        assert!(matches!(&outs[0], RoomOutput::Verify { .. }));
-        // a second socket while the first is still being verified: full
-        r.handle(RoomInput::Connected("q".into()));
-        let outs = r.handle(RoomInput::Message("q".into(), h));
-        assert!(matches!(
-            sent(&outs, "q")[0],
-            Msg::Refuse {
-                reason: RefuseReason::Full,
-                ..
-            }
-        ));
+    fn unknown_sockets_are_capped() {
         // unadmitted sockets are capped
         let (mut r, _) = room();
         for i in 0..UNKNOWN_CAP {

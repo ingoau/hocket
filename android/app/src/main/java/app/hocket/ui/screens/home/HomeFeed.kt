@@ -43,7 +43,7 @@ private val REDISCOVER: FilterNode = FilterNode.All(listOf(
 ))
 
 /** Listening stats for favourites: the last month's, or the year's when the month has no plays. */
-private suspend fun favouriteStats(client: CoreClient): ListeningStats? {
+internal suspend fun favouriteStats(client: CoreClient): ListeningStats? {
     val month = (client.query(Queries.stats(30)) as? QueryResult.Stats)?.data
     if (month != null && month.totalPlays != 0u) return month
     return (client.query(Queries.stats(365)) as? QueryResult.Stats)?.data ?: month
@@ -55,15 +55,23 @@ suspend fun moreFromArtist(client: CoreClient): Artist? = favouriteStats(client)
 /**
  * Loads the sections in [shown] (only those: a hidden section costs nothing). Listening stats are
  * read once and shared; a month with no plays falls back to the year, so a quiet month still has
- * favourites.
+ * favourites. [onSection] sees the feed so far after each section, so a slow section needn't hold
+ * back the ones already read.
  */
-suspend fun loadHomeFeed(client: CoreClient, serverId: String, shown: Set<HomeSection>): Map<HomeSection, SectionContent> {
+suspend fun loadHomeFeed(
+    client: CoreClient,
+    serverId: String,
+    shown: Set<HomeSection>,
+    onSection: (Map<HomeSection, SectionContent>) -> Unit = {},
+): Map<HomeSection, SectionContent> {
     val needsStats = shown.any { it == HomeSection.FavouriteArtists || it == HomeSection.TopGenre || it == HomeSection.MoreFromArtist || it == HomeSection.OnRepeat }
     val stats = if (needsStats) favouriteStats(client) else null
     val out = LinkedHashMap<HomeSection, SectionContent>()
     for (section in shown) {
         val content: SectionContent? = when (section) {
-            HomeSection.Rediscover -> (client.query(Queries.tracks(serverId, Page(0u, SECTION_ITEMS.toUInt()), SortOrder.Rating, descending = true, filter = REDISCOVER)) as? QueryResult.Tracks)
+            // Loaded on its own (HomeScreen), not with the feed.
+            HomeSection.Spotlight -> null
+            HomeSection.Rediscover -> (client.query(Queries.tracks("", Page(0u, SECTION_ITEMS.toUInt()), SortOrder.Rating, descending = true, filter = REDISCOVER)) as? QueryResult.Tracks)
                 ?.data?.items?.map { it.toSummary() }?.let { SectionContent.Tracks(it) }
             HomeSection.Filters, HomeSection.RecentQueues -> SectionContent.FromFlow
             HomeSection.FavouriteArtists -> SectionContent.Artists(stats?.topArtists.orEmpty().take(SECTION_ITEMS))
@@ -71,7 +79,7 @@ suspend fun loadHomeFeed(client: CoreClient, serverId: String, shown: Set<HomeSe
             HomeSection.TopGenre -> {
                 val genre = stats?.topAlbums.orEmpty().mapNotNull { it.genre?.takeIf(String::isNotBlank) }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
                 if (genre == null) SectionContent.Albums(emptyList())
-                else (client.query(Queries.albums(serverId, Page(0u, SECTION_ITEMS.toUInt()), SortOrder.PlayCount, descending = true, genre = genre)) as? QueryResult.Albums)
+                else (client.query(Queries.albums("", Page(0u, SECTION_ITEMS.toUInt()), SortOrder.PlayCount, descending = true, genre = genre)) as? QueryResult.Albums)
                     ?.data?.items?.let { SectionContent.Albums(it, title = genre) }
             }
             HomeSection.MoreFromArtist -> {
@@ -79,17 +87,12 @@ suspend fun loadHomeFeed(client: CoreClient, serverId: String, shown: Set<HomeSe
                 if (artist == null) SectionContent.Tracks(emptyList())
                 else (client.query(Queries.artistTopSongs(artist.id, SECTION_ITEMS)) as? QueryResult.TrackList)?.data?.map { it.toSummary() }?.let { SectionContent.Tracks(it, title = artist.name) }
             }
-            HomeSection.NewInLibrary -> (client.query(Queries.albums(serverId, Page(0u, SECTION_ITEMS.toUInt()), SortOrder.DateAdded, descending = true)) as? QueryResult.Albums)
-                ?.data?.items?.let { SectionContent.Albums(it) }
-            HomeSection.RecentlyPlayed -> {
-                val ids = (client.query(Queries.recentlyPlayed(100)) as? QueryResult.History)?.data.orEmpty().mapNotNull { it.track.albumId }.distinct().take(SECTION_ITEMS)
-                SectionContent.Albums(ids.mapNotNull { (client.query(Queries.album(it)) as? QueryResult.AlbumDetail)?.data })
-            }
             HomeSection.Stats -> (client.query(Queries.stats(7)) as? QueryResult.Stats)?.data?.let { s ->
                 SectionContent.Listening(s.totalMs, s.totalPlays.toInt(), s.playsByWeekday.map { it.toInt() })
             }
         }
         if (content != null) out[section] = content
+        onSection(LinkedHashMap(out))
     }
     return out
 }

@@ -6,7 +6,10 @@ import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -14,11 +17,15 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
@@ -42,8 +49,8 @@ import kotlin.math.sqrt
  *   scrim settles over it. The incoming page's leading corners round while it travels.
  * - Pops reverse the same motion. Predictive back scrubs that pop 1:1 with the finger, always in
  *   that trailing-edge direction — never away from whichever edge the swipe started at.
- * - Switching places from the bottom bar or rail is a quick fade-through with a short slide in the
- *   direction of the tab, so it reads as a lateral move, not a push.
+ * - Switching places from the bottom bar or rail is Material's shared axis (X): the new place
+ *   slides a short way in from its tab's side as it fades in, the old one fades out in place.
  * - With reduced motion everything is a plain short crossfade (predictive back scrubs a crossfade).
  */
 
@@ -81,6 +88,8 @@ internal const val PUSH_MS = 500
 internal const val PREDICTIVE_MS = 400
 private const val TAB_MS = 280
 private const val TAB_EXIT_MS = 100
+/** How far the incoming place slides in from the side of its tab. */
+private val TAB_SHIFT = 30.dp
 private const val REDUCED_MS = 150
 /** Covered page travels a quarter of the width toward the leading edge. */
 private const val COVER_PARALLAX = 0.25f
@@ -109,6 +118,8 @@ internal class ShellTransitionInfo {
     var tabForward: Boolean = true
     var reducedMotion: Boolean = false
     var layoutDirection: LayoutDirection = LayoutDirection.Ltr
+    /** Pixels per dp, for the tab switch's fixed slide. */
+    var density: Float = 1f
 
     /**
      * The in-flight motion and which entries are the sliding top vs the covered page, so
@@ -116,6 +127,16 @@ internal class ShellTransitionInfo {
      */
     var motion: PageMotion = PageMotion.Push
         private set
+
+    /**
+     * True from a destination change until the NavHost has settled on the new entry, i.e. while a
+     * push or pop animation (or the tail of a released back gesture) is still playing. A predictive
+     * back gesture must not start then: NavHost would seek its transition toward the previous entry
+     * while the interrupted animation keeps running underneath, leaving both pages blended under the
+     * scrim and not tracking the finger (report R-20261102-yyrs). Snapshot state, so the shell's
+     * back interceptor follows it.
+     */
+    var navigating: Boolean by mutableStateOf(false)
     var topEntryId: String? = null
         private set
     var coveredEntryId: String? = null
@@ -223,13 +244,17 @@ internal class ShellTransitionInfo {
         }
     }
 
+    /**
+     * Material's shared axis (X): the new place slides in a short way from the side of its tab
+     * while it fades in; the old one fades out where it is, quickly, so the two barely overlap.
+     */
     private fun tabEnter(): EnterTransition {
         val dir = if (tabForward) sign else -sign
-        return fadeIn(tween(TAB_MS, delayMillis = TAB_EXIT_MS / 2, easing = LinearEasing)) +
-            slideInHorizontally(tween(TAB_MS + 40, easing = MiuixEasing)) { w -> dir * w / 12 }
+        return fadeIn(tween(TAB_MS, delayMillis = TAB_EXIT_MS / 2, easing = LinearOutSlowInEasing)) +
+            slideInHorizontally(tween(TAB_MS + 60, easing = FastOutSlowInEasing)) { dir * (TAB_SHIFT.value * density).roundToInt() }
     }
 
-    private fun tabExit(): ExitTransition = fadeOut(tween(TAB_EXIT_MS, easing = LinearEasing))
+    private fun tabExit(): ExitTransition = fadeOut(tween(TAB_EXIT_MS, easing = FastOutLinearInEasing))
 }
 
 /**
@@ -253,6 +278,12 @@ internal fun AnimatedVisibilityScope.PageTransitionLayer(transitions: ShellTrans
         if (!involved || transitions.motion == PageMotion.Tab || transitions.motion == PageMotion.Reduced) 0f
         else if (state == EnterExitState.Visible) 0f else 1f
     }
+    // The bottom bar crossfades between the moving pages' colours with this progress ([PageChrome]).
+    val chrome = LocalPageChrome.current
+    androidx.compose.runtime.LaunchedEffect(chrome, entryId) {
+        androidx.compose.runtime.snapshotFlow { progress }.collect { chrome.reportProgress(entryId, it, transitions.topEntryId, transitions.coveredEntryId) }
+    }
+    androidx.compose.runtime.DisposableEffect(chrome, entryId) { onDispose { chrome.clearProgress(entryId) } }
     Box(
         Modifier
             .fillMaxSize()
@@ -271,6 +302,10 @@ internal fun AnimatedVisibilityScope.PageTransitionLayer(transitions: ShellTrans
                 if (f > 0f && entryId == transitions.coveredEntryId) {
                     drawRect(Color.Black.copy(alpha = DIM_AMOUNT * f))
                 }
-            },
+            }
+            // Every page is opaque, whether or not it has its own Scaffold: during a push, pop or
+            // predictive back both pages are drawn at once, and a see-through page (Search is a plain
+            // Column) would show the one underneath straight through it.
+            .background(MaterialTheme.colorScheme.background),
     ) { content() }
 }

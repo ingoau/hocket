@@ -85,14 +85,14 @@ export async function setTheme(page: Page, theme: "light" | "dark"): Promise<voi
 }
 
 export async function serverId(page: Page): Promise<string> {
-  const servers = await page.evaluate(async () => (await window.hocket.query({ type: "servers" })) as { type: string; data: { id: string }[] });
+  const servers = await page.evaluate(async () => (await window.hocket.query({ type: "accounts" })) as { type: string; data: { id: string }[] });
   return servers.data[0]!.id;
 }
 
 /** The FakeCore's "Word by Word": syllable-tier lyrics with background vocals. */
 export async function playShowcase(page: Page): Promise<void> {
   const sid = await serverId(page);
-  await page.evaluate((s) => window.hocket.dispatch({ type: "playTracks", data: { server_id: s, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } }), sid);
+  await page.evaluate((s) => window.hocket.dispatch({ type: "playTracks", data: { tracks: ["tr-1"].map((id) => ({ source: s, id })), start_index: 0, label: "e2e", shuffle: false } }), sid);
   await expect(page.getByTestId("player-bar").locator(".now .title")).toContainText("Word by Word");
 }
 
@@ -107,6 +107,12 @@ export async function keyboardSetup(page: Page): Promise<void> {
   await page.keyboard.press("Tab");
   await expect(page.getByTestId("setup-password")).toBeFocused();
   await page.keyboard.type("secret");
+  await page.keyboard.press("Enter");
+  // The summary takes focus on Continue: Enter goes in.
+  await expect(page.getByTestId("setup-continue")).toBeFocused({ timeout: 15_000 });
+  await page.keyboard.press("Enter");
+  // "Add another source?" takes focus on Not now: Enter goes in.
+  await expect(page.getByTestId("setup-done")).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }

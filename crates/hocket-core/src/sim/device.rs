@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use crate::api::{
     DeviceId, DeviceInfo, EpochMs, LibraryItemState, Ms, Platform, PlaylistId, PositionStamp,
-    QueueKey, SavedQueue, TrackId,
+    QueueKey, SavedQueue, Snooze, StashEntry, Track, TrackId,
 };
 use crate::connect::discovery::PeerAdvert;
 use crate::connect::engine::{Engine, EngineConfig, Input, Output, ResumeOfferDraft};
 use crate::connect::session_adapter::RealReducer;
-use crate::connect::wire::{Credential, PlaylistEdit, TransportCommand, WireMessage};
+use crate::connect::wire::{PlaylistEdit, TransportCommand, WireMessage};
 use crate::connect::{PeerId, SessionOp, SyncPoint};
 use crate::sim::clock::{quantize, DeviceClock};
 use crate::util::Clock;
@@ -68,10 +68,6 @@ pub enum DeviceEffect {
     StartListener,
     StopListener,
     Advertise(Option<PeerAdvert>),
-    Verify {
-        peer: PeerId,
-        credential: Credential,
-    },
     /// Submit to the (fake) Navidrome.
     Scrobble {
         track_id: TrackId,
@@ -101,10 +97,21 @@ pub struct Persisted {
     pub document: crate::api::SessionDocument,
     pub sync_base: Option<SyncPoint>,
     pub saved_queues: Vec<SavedQueue>,
+    pub stash: Vec<StashEntry>,
+    pub snoozes: Vec<Snooze>,
     /// Scrobbles reached but without a verdict yet (the outbox).
     pub outbox: Vec<(TrackId, EpochMs)>,
     /// What the engine knows was scrobbled (persisted with the sync base).
     pub known_scrobbled: Vec<crate::connect::engine::KnownScrobble>,
+}
+
+/// A stash edit, by listed index.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StashEdit {
+    Add(Vec<TrackId>),
+    Remove(usize),
+    Move(usize, usize),
+    Clear,
 }
 
 pub struct SimDevice {
@@ -114,6 +121,12 @@ pub struct SimDevice {
     pub library: Arc<Library>,
     pub playback: Playback,
     pub saved_queues: Vec<SavedQueue>,
+    /// The account's stash as the actor holds it (tombstones included).
+    pub stash: Vec<StashEntry>,
+    /// The account's snoozes as the actor holds them (tombstones included).
+    pub snoozes: Vec<Snooze>,
+    /// The identity's library records as the actor holds them.
+    pub library_records: Vec<crate::library::LibraryRecord>,
     pub outbox: Vec<(TrackId, EpochMs)>,
     pub resume_offer: Option<ResumeOfferDraft>,
     pub picker_open: bool,
@@ -160,49 +173,40 @@ pub fn device_info(id: &str) -> DeviceInfo {
     }
 }
 
-/// The LAN key every honest simulated device holds (the app derives it with
-/// `auth::derive_lan_key`; here a fixed digest).
-pub fn sim_lan_key() -> crate::connect::auth::LanKey {
-    crate::connect::auth::test_key(b"hocket-sim-lan-key")
-}
-
 impl SimDevice {
+    /// `identity` is the device's (its id is the session scope); it
+    /// outlives the device across restarts, like the app's database.
     pub fn new(
         id: &str,
-        scope: &str,
+        identity: crate::identity::SharedIdentity,
         clock: Arc<DeviceClock>,
         library: Arc<Library>,
         coordinator_url: Option<String>,
         lan: bool,
         persisted: Option<Persisted>,
     ) -> Self {
+        let scope = identity.lock().id.clone();
+        let scope = scope.as_str();
         let mut cfg = EngineConfig::new(device_info(id), scope);
         cfg.coordinator_url = coordinator_url;
         cfg.lan_enabled = lan;
-        // Every honest device of the scope derives the same LAN key from the
-        // account password; the simulation uses a fixed digest instead.
-        cfg.lan_key = Some(sim_lan_key());
-        cfg.credential = Some(Credential {
-            server_url: "https://music.example".into(),
-            username: "user".into(),
-            token: Some("tok".into()),
-            salt: Some("salt".into()),
-            api_key: None,
-            client: "hocket-sim".into(),
-            api_version: "1.16.1".into(),
-        });
+        cfg.identity = Some(identity);
         let now = clock.now_ms();
-        let (doc, sync_base, saved, outbox, known) = match persisted {
+        let (doc, sync_base, saved, stash, snoozes, outbox, known) = match persisted {
             Some(p) => (
                 p.document,
                 p.sync_base,
                 p.saved_queues,
+                p.stash,
+                p.snoozes,
                 p.outbox,
                 p.known_scrobbled,
             ),
             None => (
                 crate::session::new_document(scope, format!("session-{id}"), now),
                 None,
+                vec![],
+                vec![],
                 vec![],
                 vec![],
                 vec![],
@@ -219,6 +223,9 @@ impl SimDevice {
             library,
             playback: Playback::default(),
             saved_queues: saved.clone(),
+            stash: stash.clone(),
+            snoozes: snoozes.clone(),
+            library_records: vec![],
             outbox: vec![],
             resume_offer: None,
             picker_open: false,
@@ -241,11 +248,17 @@ impl SimDevice {
         if !saved.is_empty() {
             d.handle(Input::SavedQueuesChanged(saved));
         }
+        if !stash.is_empty() {
+            d.handle(Input::StashChanged(stash));
+        }
+        if !snoozes.is_empty() {
+            d.handle(Input::SnoozesChanged(snoozes));
+        }
         // The outbox retries: ask again for every scrobble without a verdict.
         for (t, s) in outbox {
             d.outbox.push((t.clone(), s));
             d.handle(Input::ScrobbleReached {
-                track_id: t,
+                track_id: crate::api::TrackRef::from(t),
                 started_at: s,
             });
         }
@@ -254,11 +267,20 @@ impl SimDevice {
         d
     }
 
+    /// An identity library record, as the actor puts it: put the record, hand the set to the engine.
+    pub fn put_library_record(&mut self, record: crate::library::LibraryRecord) {
+        let now = self.now();
+        crate::library::put(&mut self.library_records, record, now);
+        self.handle(Input::LibraryRecordsChanged(self.library_records.clone()));
+    }
+
     pub fn persisted(&self) -> Persisted {
         Persisted {
             document: self.engine.document().clone(),
             sync_base: self.engine.sync_base().cloned(),
             saved_queues: self.saved_queues.clone(),
+            stash: self.stash.clone(),
+            snoozes: self.snoozes.clone(),
             outbox: self.outbox.clone(),
             known_scrobbled: self.engine.known_scrobbled(),
         }
@@ -294,6 +316,77 @@ impl SimDevice {
     pub fn edit_library(&mut self, items: Vec<LibraryItemState>, playlists: Vec<PlaylistEdit>) {
         self.apply_library(&items, &playlists);
         self.handle(Input::LibraryEdited { items, playlists });
+    }
+
+    /// The listed stash, as track ids in order.
+    pub fn stash_tracks(&self) -> Vec<TrackId> {
+        crate::stash::track_ids(&self.stash)
+            .into_iter()
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// The entry id listed at `index`.
+    pub fn stash_entry(&self, index: usize) -> Option<String> {
+        crate::stash::live(&self.stash)
+            .get(index)
+            .map(|e| e.entry_id.clone())
+    }
+
+    /// What the actor does for a stash command: edit its copy, then hand the engine the whole set.
+    pub fn edit_stash(&mut self, edit: StashEdit) {
+        let now = self.now();
+        match edit {
+            StashEdit::Add(ids) => {
+                let tracks: Vec<Track> = ids
+                    .into_iter()
+                    .map(|id| Track {
+                        id,
+                        ..Track::default()
+                    })
+                    .collect();
+                let device = self.id.clone();
+                crate::stash::add(&mut self.stash, &tracks, &device, now);
+            }
+            StashEdit::Remove(index) => {
+                if let Some(id) = self.stash_entry(index) {
+                    crate::stash::set_removed(&mut self.stash, &[id], true, now);
+                }
+            }
+            StashEdit::Move(index, to) => {
+                if let Some(id) = self.stash_entry(index) {
+                    crate::stash::move_to(&mut self.stash, &id, to, now);
+                }
+            }
+            StashEdit::Clear => {
+                crate::stash::clear(&mut self.stash, now);
+            }
+        }
+        self.handle(Input::StashChanged(self.stash.clone()));
+    }
+
+    /// Track ids snoozed right now.
+    pub fn snoozed_tracks(&self) -> Vec<TrackId> {
+        crate::snooze::active_ids(&self.snoozes, self.now())
+            .into_iter()
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// What the actor does for a snooze: edit its copy, then hand the engine the whole set.
+    pub fn edit_snooze(&mut self, track: &str, until: Option<EpochMs>, removed: bool) {
+        let now = self.now();
+        if removed {
+            crate::snooze::clear(&mut self.snoozes, &crate::api::TrackRef::from(track), now);
+        } else {
+            crate::snooze::set(
+                &mut self.snoozes,
+                &crate::api::TrackRef::from(track),
+                until,
+                now,
+            );
+        }
+        self.handle(Input::SnoozesChanged(self.snoozes.clone()));
     }
 
     fn apply_library(&mut self, items: &[LibraryItemState], playlists: &[PlaylistEdit]) {
@@ -348,14 +441,21 @@ impl SimDevice {
             Output::StartListener => self.effects.push(DeviceEffect::StartListener),
             Output::StopListener => self.effects.push(DeviceEffect::StopListener),
             Output::Advertise(a) => self.effects.push(DeviceEffect::Advertise(a)),
-            Output::VerifyCredential { peer, credential } => {
-                self.effects.push(DeviceEffect::Verify { peer, credential })
-            }
-            Output::DocumentChanged { document, cause } => {
+            Output::IdentityChanged => self.note("identity changed".into()),
+            Output::Paired { device_id, name } => self.note(format!("paired {name} ({device_id})")),
+            Output::PairFailed { message } => self.note(format!("pairing refused: {message}")),
+            Output::CoordinatorInvites { .. }
+            | Output::CoordinatorYtm { .. }
+            | Output::CoordinatorUnreachable => {}
+            Output::DocumentChanged {
+                document,
+                cause,
+                start_position_ms,
+            } => {
                 self.note(format!(
                     "doc rev {} ({cause:?}) current={:?}",
                     document.revision,
-                    document.current.as_ref().map(|c| &c.track_id)
+                    document.current.as_ref().map(|c| &c.track)
                 ));
                 if self.owns() {
                     let key = document.current.as_ref().map(|c| c.key.clone());
@@ -364,8 +464,8 @@ impl SimDevice {
                         match document.current.clone() {
                             Some(item) => self.load(
                                 item.key,
-                                item.track_id,
-                                0,
+                                (item.track).id,
+                                start_position_ms,
                                 0,
                                 self.engine.now_session_ms(),
                                 false,
@@ -386,7 +486,7 @@ impl SimDevice {
                         if let Some(item) = self.engine.document().current.clone() {
                             self.load(
                                 item.key,
-                                item.track_id,
+                                (item.track).id,
                                 0,
                                 0,
                                 self.engine.now_session_ms(),
@@ -415,7 +515,7 @@ impl SimDevice {
                 ));
                 self.load(
                     key,
-                    track_id,
+                    (track_id).id,
                     position_ms,
                     played_ms,
                     started_at,
@@ -446,7 +546,7 @@ impl SimDevice {
                         self.engine
                     ));
                     self.effects.push(DeviceEffect::Scrobble {
-                        track_id,
+                        track_id: track_id.id,
                         started_at,
                     });
                 } else {
@@ -475,6 +575,17 @@ impl SimDevice {
                 }
             }
             Output::SavedQueuesMerged(list) => self.saved_queues = list,
+            Output::StashMerged(list) => {
+                // What the actor does: merge into its own copy (an edit may have raced it).
+                self.stash = crate::stash::merge(&self.stash, &list).0;
+            }
+            Output::SnoozesMerged(list) => {
+                self.snoozes = crate::snooze::merge(&self.snoozes, &list).0;
+            }
+            Output::AlbumResumeMerged(_) => {}
+            Output::LibraryRecordsMerged(list) => {
+                self.library_records = crate::library::merge(&self.library_records, &list).0;
+            }
             Output::LibraryEditReceived {
                 from,
                 items,
@@ -501,8 +612,15 @@ impl SimDevice {
             | Output::PlaysSyncReady
             | Output::PlaysPushed { .. }
             | Output::PlaysReceived { .. }
-            | Output::ReplicaChanged(_) => {}
+            | Output::DiagnosticsRequested { .. }
+            | Output::DiagnosticsReply(_)
+            | Output::ReplicaChanged(_)
+            | Output::AnalysisStore(_)
+            | Output::AnalysisRecords(_) => {}
             Output::Log { level, message } => self.note(format!("{level}: {message}")),
+            Output::HeadphonePull { from, .. } => {
+                self.note(format!("headphones pulled from {from}"))
+            }
         }
     }
 
@@ -573,7 +691,7 @@ impl SimDevice {
         let p = &self.playback;
         let input = Input::LocalStamp {
             key: p.key.clone(),
-            track_id: p.track_id.clone(),
+            track_id: p.track_id.clone().map(crate::api::TrackRef::from),
             position: PositionStamp {
                 position_ms: p.position_ms,
                 taken_at: p.position_at,
@@ -584,6 +702,7 @@ impl SimDevice {
             started_at: p.started_at,
             scrobbled: p.scrobbled,
             volume: None,
+            renderer: None,
         };
         self.queued.push(input);
     }
@@ -608,7 +727,7 @@ impl SimDevice {
             self.scrobbles_reached.push((t.clone(), s));
             self.outbox.push((t.clone(), s));
             self.queued.push(Input::ScrobbleReached {
-                track_id: t,
+                track_id: crate::api::TrackRef::from(t),
                 started_at: s,
             });
             self.stamp();

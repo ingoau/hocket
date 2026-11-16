@@ -84,15 +84,15 @@ class JsonRoundTripTest {
 
     @Test
     fun structVariantsEncodeAdjacently() {
-        val text = HocketJson.encodeCommand(Commands.playNext("srv", listOf("a", "b")))
-        assertEquals("""{"type":"playNext","data":{"server_id":"srv","track_ids":["a","b"]}}""", text)
+        val text = HocketJson.encodeCommand(Commands.playNext((listOf("a", "b")).map { TrackRef("srv", it) }))
+        assertEquals("""{"type":"playNext","data":{"tracks":[{"source":"srv","id":"a"},{"source":"srv","id":"b"}]}}""", text)
     }
 
     @Test
     fun nullsAreOmittedSoRustDefaultsApply() {
         val text = HocketJson.encodeCommand(Commands.setSleepTimer(null))
         assertEquals("""{"type":"setSleepTimer","data":{}}""", text)
-        val item = json.encodeToString(QueueItem.serializer(), QueueItem("k", "t", QueueSource.Inserted, null))
+        val item = json.encodeToString(QueueItem.serializer(), QueueItem("k", TrackRef("s", "t"), QueueSource.Inserted, null))
         assertTrue(item, "unavailable" !in item)
     }
 

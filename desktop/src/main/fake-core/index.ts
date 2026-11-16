@@ -4,16 +4,18 @@
 // addon is missing (the renderer shows a dev banner in that case).
 //
 // It is deliberately a simulation, not a reimplementation: queue semantics
-// follow docs/design.md "Queue model" (nothing consumed, history above,
-// insertions, shuffle permutation), undo is snapshot-based, jobs progress on
+// follow docs/design.md "Queue model" (one flat list with a pointer, mirrored
+// from the Rust reducer in ./queue.ts), undo is snapshot-based, jobs progress on
 // timers, and there is one fake remote device ("Pixel 8") so Connect UI has
 // something to show.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  ActionTarget, Album, Artist, AudioSettings, RatingTarget, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, Problem, Query, QueryResult, QueueContext, QueueMode, QueueEntry, QueueItem, QueueView, RelatedTrack, RepeatMode, ResumeOffer, SavedQueue, SearchResults, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StorageSummary, Toast, Track, TrackSummary, TransportState, UndoEntry, UndoState,
+  TrackRef, IdentityInfo, CoordinatorInviteInfo, HomeShelf,
+  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
+import { accountIdFor } from "../account-id";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
 import { coverPng } from "../png";
 import { describeActions, shortcutDefaults, DEFAULT_ORDERS } from "./actions";
@@ -21,12 +23,18 @@ import { generateLibrary, summary, coverSeed, type FakeLibrary } from "./library
 import { lyricsFor } from "./lyrics";
 import { Rng, hash32 } from "./random";
 import { FakeStreamCache, trackBytes } from "./stream-cache";
+import { DEFAULT_CUSTOM, parseCustom, parseLevel, resolveSaver } from "./saver";
+import * as Q from "./queue";
 import { AVAILABLE_OFFLINE_FILTER_ID, OFFLINE_NOTICE_CODES } from "@shared/constants";
 
 const ARTWORK_SIZES = [64, 300, 1000];
 const SEEK_STEP_MS = 10_000;
-const HISTORY_CAP = 200;
-const UPCOMING_VIEW_CAP = 100;
+/** The queue view's window: rows behind the pointer and past the current entry. */
+const VIEW_BEFORE = 100;
+const VIEW_AFTER = 100;
+/** The core's saved-queue snapshot limits (session/saved.rs). */
+const SNAPSHOT_HISTORY = 200;
+const SNAPSHOT_MAX_ENTRIES = 1000;
 /** Played this long (real time), the current track is complete in the stream cache and the next two are prefetched. */
 const CACHE_FILL_AFTER_MS = 5000;
 /** Items skipped in a row as unavailable offline before playback stops (the core's MAX_OFFLINE_SKIPS). */
@@ -48,18 +56,9 @@ function builtinFilters(): Filter[] {
   ];
 }
 
-interface SessionState {
+interface SessionState extends Q.FlatQueue {
   context?: QueueContext;
-  /** Permuted order: indices into context.tracks. */
-  order: number[];
-  cursor: number;
-  current?: QueueItem;
-  history: QueueItem[];
-  insertions: QueueItem[];
-  shuffle?: { seed: number; anchor?: number };
-  repeat: RepeatMode;
   autoplay: boolean;
-  mode: QueueMode;
   revision: number;
 }
 
@@ -81,6 +80,11 @@ interface FakeOptions {
   trackCount?: number;
 }
 
+/** The track credits the artist: as its artist or one of its artists. */
+function creditsArtist(tr: Track, id: string): boolean {
+  return tr.artistId === id || (tr.artists ?? []).some((x) => x.id === id);
+}
+
 function clone<T>(v: T): T {
   return structuredClone(v);
 }
@@ -96,18 +100,9 @@ function newId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}${idCounter}`;
 }
 
-function permutation(n: number, seed: number, anchor: number | undefined): number[] {
-  const rng = new Rng(seed);
-  const order = Array.from({ length: n }, (_, i) => i);
-  rng.shuffle(order);
-  if (anchor !== undefined && anchor < n) {
-    const at = order.indexOf(anchor);
-    if (at > 0) {
-      order.splice(at, 1);
-      order.unshift(anchor);
-    }
-  }
-  return order;
+/** A shuffle seed (the fake isn't replicated, so any value will do). */
+function newSeed(): number {
+  return Date.now() & 0xffff;
 }
 
 /** Artwork ids are server-supplied strings; only a safe subset may name a cache file (never `../`). */
@@ -122,12 +117,21 @@ export class FakeCore implements CoreHandle {
   private readonly config: CoreConfig;
   private readonly opts: Required<FakeOptions>;
   private lib: FakeLibrary | undefined;
-  private servers: ServerInfo[] = [];
-  private session: SessionState = { order: [], cursor: 0, history: [], insertions: [], repeat: "off", autoplay: true, mode: "apple", revision: 1 };
+  private servers: AccountInfo[] = [];
+  private identity!: IdentityInfo;
+  private coordinatorInvites: CoordinatorInviteInfo[] = [];
+  private coordinatorYtm: string | undefined;
+  private session: SessionState = { list: [], ptr: 0, shuffle: false, repeat: "off", autoplay: true, revision: 1 };
   private transport: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 0.8, muted: false, volumeDevice: undefined };
   /** Each device's own volume (Connect: the control drives the device playing). */
   private volumes = new Map<string, { volume: number; muted: boolean }>();
   private savedQueues: SavedQueue[] = [];
+  /** The song stash, in order (no sync here: one fake device). */
+  private stash: { entryId: string; trackId: string; addedAt: number; removed: boolean }[] = [];
+  /** track id → when the snooze ends. Null means it doesn't. */
+  private snoozes = new Map<string, number | null>();
+  /** Resume points the album page reads. Tests can replace this. */
+  albumResumes: { albumId: string; trackId: string; trackIndex: number; positionMs: number; durationMs: number; updatedAt: number }[] = [];
   private savedQueueCap = 10;
   private undoStack: UndoRecord[] = [];
   private redoStack: UndoRecord[] = [];
@@ -136,7 +140,10 @@ export class FakeCore implements CoreHandle {
   private devices: DeviceInfo[] = [];
   private connection: ConnectionState = { tier: "local", connected: false, coordinatorUrl: undefined, clockOffsetMs: 0, roundTripMs: undefined, peerCount: 0, error: undefined };
   private settings = new Map<string, Setting>();
+  /** Each seeded setting's default (JSON), for setupSettings. */
+  private settingDefaults = new Map<string, string>();
   private audio: AudioSettings;
+  private transitions: TransitionSettings = { mode: "off", crossfadeSeconds: 6 };
   private outputDevices: OutputDevice[] = [
     { id: "default", name: "System default", isDefault: true },
     { id: "hdmi", name: "HDMI / DisplayPort", isDefault: false },
@@ -148,10 +155,14 @@ export class FakeCore implements CoreHandle {
   private filters: Filter[] = [];
   private lyricsOffsets = new Map<string, number>();
   private externalLyrics = false;
-  private batterySaver = false;
+  private batterySaver: BatterySaver = { level: "off", automatic: false, features: [] };
+  /** The device's power-save state (SetPowerSave): on battery, for a laptop. */
+  private powerSave = false;
   private network: Snapshot["network"] = { kind: "wifi", metered: false, networkId: "home" };
   private resumeOffer: ResumeOffer | undefined;
   private sleepTimer: SleepTimer | undefined;
+  /** The report upload (Save to Coordinator), as the native core's `Query::ReportUpload`. */
+  private reportUpload: { status: ReportUploadStatus; attachments: ReportAttachment[]; failOnce: boolean; run: number } | undefined;
   private selection: ActionTarget = { type: "none" };
   private playHistory: PlayHistoryEntry[] = [];
   /** The current PlayerNotice's code (the core's English message goes with it). */
@@ -172,6 +183,7 @@ export class FakeCore implements CoreHandle {
 
   constructor(config: CoreConfig, opts: FakeOptions = {}) {
     this.config = config;
+    this.identity = this.freshIdentity();
     this.opts = { timeScale: opts.timeScale ?? 1, seed: opts.seed ?? 7, trackCount: opts.trackCount ?? 3200 };
     this.audio = {
       replayGain: "auto",
@@ -209,6 +221,8 @@ export class FakeCore implements CoreHandle {
     if (this.ticker) clearInterval(this.ticker);
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    for (const resolve of this.roomDiagnosticsWaiting) resolve("Other devices: not collected (the core shut down).\n");
+    this.roomDiagnosticsWaiting.clear();
   }
 
   private emit(e: Event): void {
@@ -255,7 +269,7 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "storageChanged", data: { storage: this.storage() } });
         this.emit({ type: "filtersChanged", data: { filters: this.filters } });
         this.emit({ type: "networkChanged", data: { network: this.network } });
-        this.emit({ type: "batterySaverChanged", data: { enabled: this.batterySaver } });
+        this.emit({ type: "batterySaverChanged", data: { saver: this.batterySaver } });
         return;
       case "setNetworkState": {
         const wasOffline = this.isOffline();
@@ -271,24 +285,44 @@ export class FakeCore implements CoreHandle {
       }
       case "setVisibility":
         return;
-      case "setBatterySaver":
-        if (this.batterySaver === cmd.data.enabled) return;
-        this.batterySaver = cmd.data.enabled;
-        this.emit({ type: "batterySaverChanged", data: { enabled: this.batterySaver } });
+      case "setPowerSave":
+        this.powerSave = cmd.data.enabled;
+        this.refreshSaver();
         return;
-      case "addServer":
-        this.addServer(cmd.data.url, cmd.data.username, cmd.data.name ?? new URL(cmd.data.url).host, false);
+      case "addAccount": {
+        if (cmd.data.setup.type === "youtubeMusic") {
+          this.addYoutubeMusic(!!cmd.data.setup.data.cookies);
+          return;
+        }
+        const a = cmd.data.setup.data;
+        const id = accountIdFor(a.url, a.username);
+        if (this.lib && this.servers.length && !this.servers.some((s) => s.id === id) && /^https?:\/\//.test(a.url)) {
+          // Another account beside the first (the source chip, the Mixed playlist choice). The
+          // fake keeps one library, the first account's; the new one lists nothing.
+          const first = this.servers[0]!;
+          this.servers = [...this.servers, { ...first, id, source: id, url: a.url, username: a.username, name: a.name ?? new URL(a.url).host, priority: this.servers.length, lastSync: undefined }];
+          this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
+          return;
+        }
+        this.addServer(a.url, a.username, a.name ?? new URL(a.url).host, false);
         return;
-      case "removeServer":
-        this.servers = this.servers.filter((s) => s.id !== cmd.data.server_id);
+      }
+      case "reorderAccounts": {
+        const order = cmd.data.account_ids;
+        this.servers = [...this.servers].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)).map((a, i) => ({ ...a, priority: i }));
+        this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
+        return;
+      }
+      case "removeAccount":
+        this.servers = this.servers.filter((s) => s.id !== cmd.data.account_id);
         this.lib = undefined;
         // Like the core: its syncs must not read as the next server's.
         this.jobs = this.jobs.filter((j) => j.kind !== "librarySync");
         this.emitJobs();
-        this.emit({ type: "serversChanged", data: { servers: this.servers } });
+        this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
         this.persistServer(undefined);
         return;
-      case "probeServer":
+      case "probeAccount":
       case "syncLibrary":
         this.runSyncJob(cmd.type === "syncLibrary" && cmd.data.full);
         return;
@@ -301,7 +335,7 @@ export class FakeCore implements CoreHandle {
         this.setPlaying(false);
         return;
       case "togglePlay":
-        if (!this.session.current && this.lib) {
+        if (!this.cur() && this.lib) {
           // Nothing loaded: play something sensible rather than nothing.
           return;
         }
@@ -315,6 +349,9 @@ export class FakeCore implements CoreHandle {
         return;
       case "previous":
         this.previous();
+        return;
+      case "previousTrack":
+        this.previous(false);
         return;
       case "seekTo":
         this.seek(cmd.data.position_ms);
@@ -330,17 +367,48 @@ export class FakeCore implements CoreHandle {
         this.volumes.set(this.volumeTarget(), { ...this.volumeOf(this.volumeTarget()), muted: cmd.data.muted });
         this.emitTransport();
         return;
+      case "previewStart":
+        this.previewStart(cmd.data.track.id);
+        return;
+      case "previewToggle":
+        this.previewToggle();
+        return;
+      case "previewSeek":
+        this.previewSeek(cmd.data.position_ms);
+        return;
+      case "previewStop":
+        this.previewStop(true);
+        return;
       case "playContext":
         this.playContext(cmd.data.args.context, cmd.data.args.startIndex, cmd.data.args.shuffle, cmd.data.args.saveOutgoing);
         return;
+      case "resumeAlbum": {
+        const p = this.albumResumes.find((x) => x.albumId === cmd.data.album_id);
+        const album = this.lib?.albums.find((x) => x.id === cmd.data.album_id);
+        const ctx: QueueContext = { source: this.servers[0]?.id ?? "", kind: { type: "album" as const, data: { id: cmd.data.album_id } }, label: album?.name ?? "", sort: "default" as const, tracks: [] };
+        if (!p) this.playContext(ctx, 0, false, true);
+        else {
+          this.playContext(ctx, p.trackIndex, false, true);
+          this.seek(p.positionMs);
+        }
+        return;
+      }
+      case "clearAlbumResume":
+        this.albumResumes = this.albumResumes.filter((x) => x.albumId !== cmd.data.album_id);
+        this.emitAlbumResumes();
+        return;
       case "playTracks":
-        this.playContext({ serverId: cmd.data.server_id, kind: { type: "adHoc", data: { label: cmd.data.label } }, label: cmd.data.label, sort: "default", tracks: cmd.data.track_ids }, cmd.data.start_index, cmd.data.shuffle, true);
+        this.playContext({ source: cmd.data.tracks[0]?.source ?? "", kind: { type: "adHoc", data: { label: cmd.data.label } }, label: cmd.data.label, sort: "default", tracks: cmd.data.tracks }, cmd.data.start_index, cmd.data.shuffle, true);
+        if (cmd.data.start_position_ms) this.seek(cmd.data.start_position_ms);
         return;
       case "playNext":
-        this.insert(cmd.data.track_ids, true);
+        this.insert(cmd.data.tracks.map((r) => r.id), cmd.data.keys ?? [], "next");
+        return;
+      case "addToQueue":
+        this.insert(cmd.data.tracks.map((r) => r.id), cmd.data.keys ?? [], "group");
         return;
       case "playLater":
-        this.insert(cmd.data.track_ids, false);
+        this.insert(cmd.data.tracks.map((r) => r.id), cmd.data.keys ?? [], "later");
         return;
       case "jumpToQueueItem":
         this.jumpTo(cmd.data.key);
@@ -349,19 +417,34 @@ export class FakeCore implements CoreHandle {
         this.removeItems(cmd.data.keys);
         return;
       case "moveQueueItem":
-        this.moveItem(cmd.data.key, cmd.data.to_index);
+        this.moveItem(cmd.data.key, cmd.data.after, cmd.data.in_group);
+        return;
+      case "insertTracks":
+        this.insertAfter(cmd.data.tracks.map((r) => r.id), cmd.data.keys ?? [], cmd.data.after, cmd.data.in_group);
         return;
       case "clearQueue":
-        this.withUndo("Clear queue", () => {
-          this.session = { ...this.session, context: undefined, order: [], cursor: 0, current: undefined, insertions: [], history: [] };
-          this.stop();
-        }, true);
+        this.clearQueue();
         return;
-      case "clearInsertions":
-        this.withUndo("Clear playing next", () => {
-          this.session.insertions = [];
+      case "clearQueueGroup":
+        if (Q.groupEnd(this.session) > Q.afterCurrent(this.session)) {
+          this.withUndo("Clear next in queue", () => {
+            Q.clearGroup(this.session);
+          });
+        }
+        return;
+      case "stashQueueGroup": {
+        const group = this.session.list.slice(Q.afterCurrent(this.session), Q.groupEnd(this.session));
+        if (!group.length) return;
+        this.stashAdd(group.map((i) => i.track.id));
+        // Only what is in the stash now leaves the queue; a song it could not take stays queued.
+        const stashed = new Set(this.stash.filter((e) => !e.removed).map((e) => e.trackId));
+        const keys = group.filter((i) => stashed.has(i.track.id)).map((i) => i.key);
+        if (!keys.length) return;
+        this.withUndo("Stash next in queue", () => {
+          Q.removeKeys(this.session, keys);
         });
         return;
+      }
       case "setShuffle":
         this.setShuffle(cmd.data.enabled);
         return;
@@ -371,11 +454,6 @@ export class FakeCore implements CoreHandle {
         return;
       case "setAutoplay":
         this.session.autoplay = cmd.data.enabled;
-        this.emitQueue();
-        return;
-      case "setQueueMode":
-        this.session.mode = cmd.data.mode;
-        this.setSettingValue("queue.mode", JSON.stringify(cmd.data.mode));
         this.emitQueue();
         return;
       case "skipUnavailable":
@@ -397,6 +475,22 @@ export class FakeCore implements CoreHandle {
         this.savedQueues = this.savedQueues.filter((s) => s.id !== cmd.data.id);
         this.emitSavedQueues();
         return;
+      case "renameQueue": {
+        const label = cmd.data.label.trim();
+        if (!label) return;
+        if (cmd.data.saved_queue_id) {
+          const q = this.savedQueues.find((s) => s.id === cmd.data.saved_queue_id);
+          if (!q) return;
+          q.label = label;
+          q.context = { ...q.context, label };
+          q.updatedAt = Date.now();
+          this.emitSavedQueues();
+        } else if (this.session.context) {
+          this.session.context = { ...this.session.context, label };
+          this.emitQueue();
+        }
+        return;
+      }
       case "saveQueueAsPlaylist":
         this.saveQueueAsPlaylist(cmd.data.saved_queue_id, cmd.data.name);
         return;
@@ -424,6 +518,14 @@ export class FakeCore implements CoreHandle {
       case "setLoved":
         this.setLoved(cmd.data.targets, cmd.data.loved);
         return;
+      case "linkTracks":
+      case "unlinkTrack":
+        // One library on one account: there is nothing to link.
+        return;
+      case "setInLibrary":
+        return;
+      case "convertPlaylistToMixed":
+        return;
       case "setArtistLoved": {
         const a = this.lib?.artists.find((x) => x.id === cmd.data.artist_id);
         if (a) {
@@ -442,7 +544,7 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "createPlaylist":
-        this.createPlaylist(cmd.data.name, cmd.data.track_ids);
+        this.createPlaylist(cmd.data.name, cmd.data.tracks.map((r) => r.id));
         return;
       case "deletePlaylist":
         if (this.lib) {
@@ -473,7 +575,7 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "playlistAdd":
-        this.playlistAdd(cmd.data.playlist_id, cmd.data.track_ids, cmd.data.at_index);
+        this.playlistAdd(cmd.data.playlist_id, cmd.data.tracks.map((r) => r.id), cmd.data.at_index);
         return;
       case "playlistRemove":
         this.playlistRemove(cmd.data.playlist_id, cmd.data.indices);
@@ -502,7 +604,7 @@ export class FakeCore implements CoreHandle {
         return;
       }
       case "primeTrack":
-        this.prime("track", cmd.data.track_id, cmd.data.track_id);
+        this.prime("track", cmd.data.track.id, cmd.data.track.id);
         return;
       case "setStorageWarnThreshold":
         this.setSettingValue("storage.warnThresholdBytes", JSON.stringify(cmd.data.bytes ?? 4 * 1024 ** 3));
@@ -577,7 +679,7 @@ export class FakeCore implements CoreHandle {
       case "setExternalLyricsEnabled":
         this.externalLyrics = cmd.data.enabled;
         this.setSettingValue("lyrics.external.enabled", JSON.stringify(cmd.data.enabled));
-        if (this.session.current) this.emitLyrics(this.session.current.trackId);
+        if (this.cur()) this.emitLyrics(this.cur()!.track.id);
         return;
       case "fetchLyrics":
         this.emitLyrics(cmd.data.track_id);
@@ -596,8 +698,13 @@ export class FakeCore implements CoreHandle {
       case "exportConfig":
         this.emit({ type: "configExported", data: { document: JSON.stringify(this.configDocument(cmd.data.include_secrets), null, 2) } });
         return;
+      case "answerDiagnosticsRequest":
+        return;
       case "importConfig":
         this.importConfig(cmd.data.document);
+        return;
+      case "applySetupSettings":
+        this.applySetupSettings(cmd.data.settings);
         return;
       case "setAudioSettings":
         this.audio = cmd.data.settings;
@@ -616,7 +723,9 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "connectionChanged", data: { state: this.connection } });
         return;
       case "connectCoordinator":
-        this.connection = { ...this.connection, tier: "coordinator", connected: true, roundTripMs: 48, peerCount: this.devices.length - 1, error: undefined };
+        // As the core: nothing to connect to without an address.
+        if (!this.connection.coordinatorUrl) return;
+        this.connection ={ ...this.connection, tier: "coordinator", connected: true, roundTripMs: 48, peerCount: this.devices.length - 1, error: undefined };
         this.emit({ type: "connectionChanged", data: { state: this.connection } });
         return;
       case "disconnectCoordinator":
@@ -641,6 +750,8 @@ export class FakeCore implements CoreHandle {
         for (const d of this.devices) if (!d.isSelf) d.ready = false;
         this.emit({ type: "handoffPickerChanged", data: { open: false, targets: [] } });
         return;
+      case "headphonesConnected":
+        return;
       case "handoffTo":
         this.handoffTo(cmd.data.device_id);
         return;
@@ -655,6 +766,15 @@ export class FakeCore implements CoreHandle {
         this.sleepTimer = cmd.data.timer;
         this.emit({ type: "sleepTimerChanged", data: { timer: this.sleepTimer } });
         return;
+      case "startReportUpload":
+        this.startReportUpload(cmd.data.note, cmd.data.bundle, cmd.data.attachments);
+        return;
+      case "retryReportUpload":
+        if (this.reportUpload?.status.state === "failed") this.runReportUpload();
+        return;
+      case "dismissReportUpload":
+        this.finishReportUpload();
+        return;
       case "backendReport":
         return;
       case "mediaSessionCommand":
@@ -667,11 +787,14 @@ export class FakeCore implements CoreHandle {
         this.shortcutOverrides.set(cmd.data.action_id, cmd.data.shortcut);
         this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });
         return;
-      case "setActionOrder":
-        this.actionOrders.set(cmd.data.surface, cmd.data.action_ids.map(canonicalActionId));
-        this.setSettingValue(`actions.order.${cmd.data.surface}`, JSON.stringify(cmd.data.action_ids.map(canonicalActionId)));
+      case "setActionOrder": {
+        let ids = cmd.data.action_ids.map(canonicalActionId);
+        if (cmd.data.surface === "mediaSession") ids = showNewStash(this.actionOrders.get("mediaSession") ?? DEFAULT_ORDERS.mediaSession ?? [], ids);
+        this.actionOrders.set(cmd.data.surface, ids);
+        this.setSettingValue(`actions.order.${cmd.data.surface}`, JSON.stringify(ids));
         this.emit({ type: "actionsChanged", data: { surface: cmd.data.surface } });
         return;
+      }
       case "setSelection":
         this.selection = cmd.data.target;
         return;
@@ -680,11 +803,231 @@ export class FakeCore implements CoreHandle {
       case "setBackendCapabilities":
         // The fake core serves plain URLs; it has no core stream reader to switch to.
         return;
+      case "setRenderer":
+      case "rendererFailed":
+        // Only Android casts (its Cast SDK backend); the desktop never sends it.
+        return;
+      case "stashAdd":
+        this.stashAdd(cmd.data.tracks.map((r) => r.id));
+        return;
+      case "stashRemove": {
+        const ids = new Set(cmd.data.entry_ids);
+        const removed = this.stash.filter((e) => !e.removed && ids.has(e.entryId));
+        if (!removed.length) return;
+        removed.forEach((e) => (e.removed = true));
+        this.emitStash();
+        this.stashToast(`Removed ${removed.length === 1 ? "1 song" : `${removed.length} songs`} from the stash`, removed.map((e) => e.entryId));
+        return;
+      }
+      case "stashMove": {
+        // Indices are into the list as shown (one entry per track, resolved), like the real core's.
+        const shown = new Set(this.stashItems().map((x) => x.entryId));
+        const live = this.stash.filter((e) => shown.has(e.entryId));
+        const from = live.findIndex((e) => e.entryId === cmd.data.entry_id);
+        if (from < 0) return;
+        const [entry] = live.splice(from, 1);
+        if (entry) live.splice(Math.min(cmd.data.to_index, live.length), 0, entry);
+        this.stash = [...live, ...this.stash.filter((e) => !shown.has(e.entryId))];
+        this.emitStash();
+        return;
+      }
+      case "stashClear": {
+        const removed = this.stash.filter((e) => !e.removed);
+        if (!removed.length) return;
+        removed.forEach((e) => (e.removed = true));
+        this.emitStash();
+        this.stashToast("Stash cleared", removed.map((e) => e.entryId));
+        return;
+      }
+      case "stashRestore": {
+        const ids = new Set(cmd.data.entry_ids);
+        let changed = false;
+        for (const e of this.stash) if (e.removed && ids.has(e.entryId)) { e.removed = false; changed = true; }
+        if (changed) this.emitStash();
+        return;
+      }
+      case "snooze":
+        this.applySnooze(cmd.data.tracks.map((r) => r.id), cmd.data.duration);
+        return;
+      case "snoozeUntil":
+        this.applySnoozeUntil(cmd.data.tracks.map((r) => r.id), cmd.data.until);
+        return;
+      case "unsnooze":
+        this.clearSnooze(cmd.data.tracks.map((r) => r.id));
+        return;
+      case "setTransitionSettings":
+        this.transitions = cmd.data.settings;
+        return;
+      case "storeAnalysisRecord":
+        return;
+      case "createPairingInvite":
+        this.emit({ type: "pairingInvite", data: { link: "hocket://pair?d=ZmFrZS1wYWlyaW5nLWludml0ZQ", expires_at: Date.now() + 600_000 } });
+        return;
+      case "pairWithInvite":
+        // e2e: an invite whose payload is "expired-fake-invite" fails, the same way every time.
+        if (/[?&]d=expired-fake-invite\b/.test(cmd.data.link)) this.emit({ type: "pairingFailed", data: { message: "This pairing link has expired." } });
+        else this.emit({ type: "pairingFinished", data: { accounts: [] } });
+        return;
+      case "removeDevice": {
+        const self = cmd.data.device_id === this.config.deviceId;
+        this.identity = self
+          ? this.freshIdentity()
+          : { ...this.identity, devices: this.identity.devices.filter((d) => d.id !== cmd.data.device_id) };
+        this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        return;
+      }
+      case "resetIdentity":
+        this.identity = this.freshIdentity();
+        this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        return;
+      case "setCredentialSync":
+        this.identity = { ...this.identity, credentialSync: cmd.data.on };
+        this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        return;
+      case "claimCoordinator":
+      case "redeemCoordinatorInvite": {
+        const owner = cmd.type === "claimCoordinator";
+        const url = cmd.data.url || "wss://coordinator.example/ws";
+        this.identity = { ...this.identity, coordinator: { url, owner, holdsKey: this.identity.credentialSync } };
+        this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        // As the core does: the pinned coordinator becomes the one to connect to, and it connects.
+        this.connection = { ...this.connection, coordinatorUrl: url, tier: "coordinator", connected: true, roundTripMs: 48, peerCount: this.devices.length - 1, error: undefined };
+        this.setSettingValue("connect.coordinatorUrl", JSON.stringify(url));
+        this.emit({ type: "connectionChanged", data: { state: this.connection } });
+        this.emit({ type: "coordinatorJoined", data: { url, owner } });
+        return;
+      }
+      case "createCoordinatorInvite": {
+        const code = `FAKE-${String(this.coordinatorInvites.length + 1).padStart(4, "0")}`;
+        this.coordinatorInvites.push({ code, createdAt: Date.now(), expiresAt: Date.now() + 7 * 86_400_000, redeemed: false });
+        this.emit({ type: "coordinatorInvites", data: { invites: this.coordinatorInvites, created: code } });
+        return;
+      }
+      case "revokeCoordinatorInvite":
+        this.coordinatorInvites = this.coordinatorInvites.filter((i) => i.code !== cmd.data.code);
+        this.emit({ type: "coordinatorInvites", data: { invites: this.coordinatorInvites, created: undefined } });
+        return;
+      case "listCoordinatorInvites":
+        this.emit({ type: "coordinatorInvites", data: { invites: this.coordinatorInvites, created: undefined } });
+        return;
+      case "ytmJsAnswer":
+        return;
+      // A coordinator with YouTube Music analysis on: the sign-in is taken as given.
+      case "signCoordinatorInToYoutubeMusic":
+        this.coordinatorYtm = cmd.data.cookies ? "Test User" : undefined;
+        this.emit({ type: "coordinatorYtmStatus", data: { enabled: true, signed_in: !!this.coordinatorYtm, account: this.coordinatorYtm, error: undefined } });
+        return;
+      case "coordinatorYtmStatus":
+        this.emit({ type: "coordinatorYtmStatus", data: { enabled: true, signed_in: !!this.coordinatorYtm, account: this.coordinatorYtm, error: undefined } });
+        return;
       default: {
         const never: never = cmd;
         void never;
       }
     }
+  }
+
+  // ---- Room diagnostics -----------------------------------------------
+  /**
+   * As the native core's `Query::RoomDiagnostics`, played out over about two seconds: the
+   * coordinator (when connected to one) sends its version, every other device its bundle, with
+   * `roomDiagnosticsChanged` along the way.
+   */
+  private roomDiagnosticsWaiting = new Set<(text: string) => void>();
+
+  private roomDiagnostics(): Promise<string> {
+    const requestId = `room-diag-${Date.now()}`;
+    const base: RoomDiagnosticsStatus = { requestId, done: false, elapsedMs: 0, unavailable: undefined, roomAnswered: false, roomDeclined: undefined, coordinator: undefined, coordinatorLog: false, devices: [] };
+    const unavailable: RoomDiagnosticsUnavailable | undefined = this.settings.get("developer.mode")?.value !== "true" ? "developerModeOff" : !this.connection.connected ? "notConnected" : undefined;
+    if (unavailable) {
+      this.emit({ type: "roomDiagnosticsChanged", data: { status: { ...base, done: true, unavailable } } });
+      return Promise.resolve(`Other devices: not collected (${unavailable === "developerModeOff" ? "developer mode is off on this device" : "Connect is not running"}).\n`);
+    }
+    const others = this.devices.filter((d) => !d.isSelf);
+    const viaCoordinator = this.connection.tier === "coordinator";
+    const source = (id: string, name: string, state: DiagnosticsSourceState, partsReceived: number, parts: number): DiagnosticsSourceStatus => ({ id, name, state, partsReceived, parts, bytes: partsReceived * 131_072, reason: undefined });
+    const started = Date.now();
+    const status = (step: number): RoomDiagnosticsStatus => ({
+      ...base,
+      done: step >= 4,
+      elapsedMs: Date.now() - started,
+      roomAnswered: step >= 1,
+      coordinator: viaCoordinator && step >= 1 ? source("coordinator", "Coordinator", "received", 1, 1) : undefined,
+      devices: step >= 1 ? others.map((d) => source(d.id, d.name, step >= 3 ? "received" : step >= 2 ? "receiving" : "waiting", step >= 3 ? 3 : step >= 2 ? 1 : 0, step >= 2 ? 3 : 0)) : [],
+      // The fake coordinator keeps reports for everyone.
+      reportUpload: viaCoordinator && step >= 1,
+    });
+    return new Promise((resolve) => {
+      // Settled at shutdown too (later() never fires then), so nobody waits on it forever.
+      this.roomDiagnosticsWaiting.add(resolve);
+      this.emit({ type: "roomDiagnosticsChanged", data: { status: status(0) } });
+      for (const step of [1, 2, 3]) this.later(step * 500, () => this.emit({ type: "roomDiagnosticsChanged", data: { status: status(step) } }));
+      this.later(2000, () => {
+        this.emit({ type: "roomDiagnosticsChanged", data: { status: status(4) } });
+        const sections = [viaCoordinator ? "Coordinator\n-----------\nhocket-coordinator (fake)\n" : "", ...others.map((d) => `Device: ${d.name} (${d.id})\n${"-".repeat(d.name.length + d.id.length + 11)}\n(the fake core's stand-in for ${d.name}'s bundle)\n`)];
+        this.roomDiagnosticsWaiting.delete(resolve);
+        resolve(`Other devices in the Connect room (${others.length} of ${others.length} sent a bundle, 2.0 s)\n\n${sections.filter(Boolean).join("\n")}`);
+      });
+    });
+  }
+
+  // ---- Report upload ---------------------------------------------------
+  /**
+   * As the native core's report upload, played out over about 1.5 s in steps. A note starting
+   * with "fail:" fails once at about half way (network), so e2e can see Retry.
+   */
+  private startReportUpload(note: string, bundle: string, attachments: ReportAttachment[]): void {
+    if (this.reportUpload?.status.state === "uploading") {
+      this.emit({ type: "log", data: { level: "warn", target: "fake_core::report", message: "a report is already uploading: ignored" } });
+      return;
+    }
+    // The previous one (done or failed) goes: a new upload replaces it.
+    this.finishReportUpload(false);
+    let total = new TextEncoder().encode(bundle).length;
+    for (const a of attachments) {
+      try {
+        total += statSync(a.path).size;
+      } catch {
+        /* the native core fails with `unreadable`; the fake one doesn't mind */
+      }
+    }
+    this.reportUpload = { status: { state: "uploading", sentBytes: 0, totalBytes: total, reportId: undefined, error: undefined, errorDetail: undefined, startedAt: Date.now() }, attachments, failOnce: note.startsWith("fail:"), run: 0 };
+    this.runReportUpload();
+  }
+
+  private runReportUpload(): void {
+    const job = this.reportUpload;
+    if (!job) return;
+    const run = ++job.run;
+    const steps = 6;
+    const from = job.status.sentBytes;
+    job.status = { ...job.status, state: "uploading", error: undefined, errorDetail: undefined, reportId: job.status.reportId ?? "R-20261101-test" };
+    this.emit({ type: "reportUploadChanged", data: { status: job.status } });
+    for (let step = 1; step <= steps; step++) {
+      // Real time, whatever the time scale: e2e watches it go.
+      this.later(step * 250 * this.opts.timeScale, () => {
+        if (this.reportUpload !== job || job.run !== run || job.status.state !== "uploading") return;
+        const sentBytes = Math.round(from + ((job.status.totalBytes - from) * step) / steps);
+        if (job.failOnce && step === steps / 2) {
+          job.failOnce = false;
+          job.status = { ...job.status, sentBytes, state: "failed", error: "network", errorDetail: "fake core: connection reset" };
+        } else {
+          job.status = { ...job.status, sentBytes, state: step === steps ? "done" : "uploading" };
+          // As the native core: the platform's copies go once the coordinator has them.
+          if (step === steps) for (const a of job.attachments) if (a.deleteAfter) rmSync(a.path, { force: true });
+        }
+        this.emit({ type: "reportUploadChanged", data: { status: job.status } });
+      });
+    }
+  }
+
+  /** Dismiss: forget it, deleting the copies the platform made for it. */
+  private finishReportUpload(emit = true): void {
+    const job = this.reportUpload;
+    if (!job) return;
+    this.reportUpload = undefined;
+    for (const a of job.attachments) if (a.deleteAfter) rmSync(a.path, { force: true });
+    if (emit) this.emit({ type: "reportUploadChanged", data: { status: undefined } });
   }
 
   // ---- Lifecycle -------------------------------------------------------
@@ -712,7 +1055,7 @@ export class FakeCore implements CoreHandle {
       this.connection = { ...this.connection, tier: "lan", connected: true, roundTripMs: 6, peerCount: 1 };
       this.emit({ type: "devicesChanged", data: { devices: this.devices } });
       this.emit({ type: "connectionChanged", data: { state: this.connection } });
-      if (!this.session.current && !this.resumeOffer) {
+      if (!this.cur() && !this.resumeOffer) {
         const track = this.lib.tracks[42];
         if (track) {
           this.resumeOffer = { deviceName: "Pixel 8", track: summary(track), positionMs: 83_000, lastSeen: Date.now() - 60_000 };
@@ -727,9 +1070,21 @@ export class FakeCore implements CoreHandle {
     this.emit({ type: "started", data: { snapshot: s } });
   }
 
+  private freshIdentity(): IdentityInfo {
+    return {
+      id: "fake-identity",
+      deviceId: this.config.deviceId,
+      devices: [{ id: this.config.deviceId, name: this.config.deviceName, isSelf: true, lastSynced: Date.now() }],
+      removed: false,
+      credentialSync: false,
+      coordinator: undefined,
+    };
+  }
+
   private snapshot(): Snapshot {
     return {
-      servers: this.servers,
+      identity: this.identity,
+      accounts: this.servers,
       session: this.sessionDocument(),
       queue: this.queueView(),
       transport: this.transport,
@@ -758,12 +1113,10 @@ export class FakeCore implements CoreHandle {
       revision: this.session.revision,
       updatedAt: Date.now(),
       context: this.session.context,
-      mode: this.session.mode,
-      cursor: this.session.cursor,
-      current: this.session.current,
-      history: this.session.history,
-      insertions: this.session.insertions,
-      shuffle: this.session.shuffle ? { seed: this.session.shuffle.seed, anchor: this.session.shuffle.anchor } : undefined,
+      history: this.session.list.slice(0, this.session.ptr),
+      current: this.cur(),
+      upcoming: this.session.list.slice(this.session.ptr + 1),
+      shuffle: this.session.shuffle,
       repeat: this.session.repeat,
       autoplay: this.session.autoplay,
       transport: this.transport,
@@ -772,6 +1125,31 @@ export class FakeCore implements CoreHandle {
   }
 
   // ---- Servers and sync ------------------------------------------------
+  /**
+   * YouTube Music, anonymous or signed in: an account of its own after any other. The fake has
+   * no YouTube Music library (search, home and the catalogue are the real core's).
+   */
+  private addYoutubeMusic(signedIn: boolean): void {
+    const id = signedIn ? "UCfakeChannel" : "ytm:anon";
+    this.later(300, () => {
+      const account: AccountInfo = {
+        id,
+        kind: "youtubeMusic",
+        priority: this.servers.length,
+        source: "ytm",
+        features: { librarySync: signedIn, search: true, browse: true, stream: true, download: false, transcode: false, coverArt: true, star: signedIn, rate: false, playlists: signedIn, smartPlaylists: false, reportPlay: signedIn, lyrics: true, radio: true, homeShelves: true, share: true, libraryEdit: signedIn },
+        url: "https://music.youtube.com",
+        username: signedIn ? "Test User" : "",
+        name: signedIn ? "YouTube Music (Test User)" : "YouTube Music",
+        capabilities: { serverVersion: undefined, openSubsonic: false, extensions: [], transcodeOffset: false, formPost: false, songLyrics: false, sonicSimilarity: false, apiKeyAuthentication: false, transcodingExtension: false, nativeApi: false, meetsFloor: false },
+        lastSync: undefined,
+        reachable: true,
+      };
+      this.servers = [...this.servers.filter((s) => s.kind !== "youtubeMusic"), account];
+      this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
+    });
+  }
+
   private addServer(url: string, username: string, name: string, silent: boolean): void {
     if (!silent && !/^https?:\/\//.test(url)) {
       this.emit({ type: "error", data: { kind: "network", message: "Server URL must start with http:// or https://", detail: undefined } });
@@ -785,9 +1163,14 @@ export class FakeCore implements CoreHandle {
       });
       return;
     }
-    const id = `srv-${hash32(url + username).toString(16)}`;
-    const server: ServerInfo = {
+    // The core's AccountId, as credentials are keyed.
+    const id = accountIdFor(url, username);
+    const server: AccountInfo = {
       id,
+      kind: "navidrome",
+      priority: 0,
+      source: id,
+      features: { librarySync: true, search: true, browse: true, stream: true, download: true, transcode: true, coverArt: true, star: true, rate: true, playlists: true, smartPlaylists: true, reportPlay: true, lyrics: true, radio: true, homeShelves: false, share: true },
       url,
       username,
       name,
@@ -813,7 +1196,7 @@ export class FakeCore implements CoreHandle {
     if (!silent) {
       this.persistServer({ url, username, name });
       this.later(400, () => {
-        this.emit({ type: "serversChanged", data: { servers: this.servers } });
+        this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
         this.emit({ type: "filtersChanged", data: { filters: this.filters } });
         this.emit({ type: "storageChanged", data: { storage: this.storage() } });
         this.runSyncJob(true);
@@ -860,7 +1243,7 @@ export class FakeCore implements CoreHandle {
         server.lastSync = Date.now();
         server.lastSyncTracks = total;
         this.emit({ type: "syncProgress", data: { progress: { serverId: server.id, phase: "done", done: total, total, readyTables: phases, finished: true } } });
-        this.emit({ type: "serversChanged", data: { servers: this.servers } });
+        this.emit({ type: "accountsChanged", data: { accounts: this.servers } });
         this.emit({ type: "libraryChanged", data: { server_id: server.id, tables: [], ids: [] } });
         this.emitJobs();
         return;
@@ -871,9 +1254,15 @@ export class FakeCore implements CoreHandle {
   }
 
   // ---- Queue -----------------------------------------------------------
+  /** Track references for this (single-account) library's ids. */
+  private refs(ids: string[]): TrackRef[] {
+    const source = this.servers[0]?.id ?? "";
+    return ids.map((id) => ({ source, id }));
+  }
+
   private contextTracks(ctx: QueueContext): string[] {
     if (!this.lib) return [];
-    if (ctx.tracks && ctx.tracks.length) return ctx.tracks;
+    if (ctx.tracks && ctx.tracks.length) return ctx.tracks.map((t) => t.id);
     const k = ctx.kind;
     switch (k.type) {
       case "album":
@@ -888,33 +1277,50 @@ export class FakeCore implements CoreHandle {
         return this.evaluateFilter(k.data.filter).map((t) => t.id);
       case "adHoc":
       case "autoplay":
-        return ctx.tracks ?? [];
+        return (ctx.tracks ?? []).map((t) => t.id);
     }
+  }
+
+  private cur(): QueueItem | undefined {
+    return Q.currentItem(this.session);
+  }
+
+  /** The Queue section setting: with it off, Play next is not `queued` and Add to queue isn't offered. */
+  private queueSection(): boolean {
+    return this.setting<boolean>("queue.section", true);
+  }
+
+  private fresh(trackId: string, source: QueueSource, added: boolean): QueueItem {
+    return { key: newKey(), track: { source: this.servers[0]?.id ?? "", id: trackId }, source, unavailable: false, added, queued: false, ordinal: 0 };
   }
 
   private playContext(ctx: QueueContext, startIndex: number | undefined, shuffle: boolean, saveOutgoing: boolean): void {
     if (!this.lib) return;
-    const tracks = this.contextTracks(ctx);
+    const raw = this.contextTracks(ctx);
+    const { tracks, start: startIndexFiltered } = this.filterSnoozed(ctx.kind, raw, startIndex);
+    startIndex = startIndexFiltered;
     if (!tracks.length) return;
-    const resolved: QueueContext = { ...ctx, tracks };
+    const resolved: QueueContext = { ...ctx, tracks: this.refs(tracks) };
     const before = this.captureSession();
     const outgoingPos = this.positionNow();
     if (saveOutgoing) this.autoSaveQueue();
-    const start = Math.min(startIndex ?? 0, tracks.length - 1);
-    const seed = shuffle ? (Date.now() & 0xffff) : 0;
-    const order = shuffle ? permutation(tracks.length, seed, startIndex) : tracks.map((_, i) => i);
-    this.session = {
-      ...this.session,
-      context: resolved,
-      order,
-      cursor: shuffle ? 0 : start,
-      current: { key: newKey(), trackId: tracks[shuffle ? order[0]! : start]!, source: { type: "context", data: { index: shuffle ? order[0]! : start } }, unavailable: false },
-      insertions: [],
-      history: [],
-      shuffle: shuffle ? { seed, anchor: startIndex } : undefined,
-      revision: this.session.revision + 1,
-    };
+    // A new context replaces the whole list (group included).
+    const list = tracks.map((t, i) => ({ ...this.fresh(t, { type: "context", data: { index: i } }, false), ordinal: i }));
+    const start = startIndex === undefined ? undefined : Math.min(startIndex, tracks.length - 1);
+    let ptr = start ?? 0;
+    if (shuffle) {
+      const seed = newSeed();
+      if (start !== undefined) {
+        // The chosen track plays first; the rest follow shuffled.
+        const [chosen] = list.splice(start, 1);
+        Q.shuffleInPlace(list, seed);
+        list.unshift(chosen!);
+      } else Q.shuffleInPlace(list, seed);
+      ptr = 0;
+    }
+    this.session = { ...this.session, context: resolved, list, ptr, shuffle, revision: this.session.revision + 1 };
     this.loadCurrent(0, true);
+    this.noteAlbumResume();
     this.pushUndo(`Play ${ctx.label}`, () => {
       this.restoreSession(before);
       this.seek(outgoingPos);
@@ -923,201 +1329,171 @@ export class FakeCore implements CoreHandle {
     this.emitAll();
   }
 
-  private insert(trackIds: string[], next: boolean): void {
+  /** Play next / Add to queue / Play later, of tracks or of queue entries (`keys`). */
+  private insert(trackIds: string[], keys: string[], placement: Q.QueuePlacement): void {
     if (!this.lib) return;
-    const items: QueueItem[] = trackIds.filter((id) => this.lib?.tracksById.has(id)).map((id) => ({ key: newKey(), trackId: id, source: { type: "inserted" }, unavailable: false }));
-    if (!items.length) return;
-    this.withUndo(next ? `Play next (${items.length})` : `Play later (${items.length})`, () => {
-      if (next) this.session.insertions.unshift(...items);
-      else this.session.insertions.push(...items);
-      if (!this.session.current) {
-        const first = this.session.insertions.shift();
-        if (first) {
-          this.session.current = first;
-          this.loadCurrent(0, true);
-        }
-      }
+    const ids = trackIds.filter((id) => this.lib?.tracksById.has(id));
+    if (!ids.length && !keys.length) return;
+    const s = this.session;
+    if (!s.context && !s.list.length && !keys.length) {
+      // Nothing to queue behind: this becomes the queue and starts playing.
+      this.playContext(this.adhocContext(ids), 0, false, false);
+      return;
+    }
+    const probe = clone(s);
+    if (!Q.queueItems(probe, ids, keys, placement, true, (t) => this.fresh(t, { type: "inserted" }, true))) return;
+    const label = placement === "next" ? "Play next" : placement === "group" ? "Add to queue" : "Play later";
+    const hadCurrent = Q.hasCurrent(s);
+    this.withUndo(`${label} (${ids.length + keys.length})`, () => {
+      Q.queueItems(this.session, ids, keys, placement, this.queueSection(), (t) => this.fresh(t, { type: "inserted" }, true));
+      if (!hadCurrent && Q.hasCurrent(this.session)) this.loadCurrent(0, true);
     });
   }
 
+  private adhocContext(tracks: string[]): QueueContext {
+    return { source: this.session.context?.source ?? this.servers[0]?.id ?? "", kind: { type: "adHoc", data: { label: "Queue" } }, label: "Queue", sort: "default", tracks: this.refs(tracks) };
+  }
+
+  /** Move the pointer onto an entry; the list is untouched. */
   private jumpTo(key: string): void {
-    const s = this.session;
-    const hIdx = s.history.findIndex((i) => i.key === key);
-    const iIdx = s.insertions.findIndex((i) => i.key === key);
-    const uIdx = s.order.slice(s.cursor + 1).findIndex((ci) => this.upcomingKey(ci) === key);
+    if (Q.indexOfKey(this.session, key) < 0) return;
     this.withUndo("Jump in queue", () => {
-      if (hIdx >= 0) {
-        const item = s.history[hIdx]!;
-        // Items after it in history go back to the future (insertions keep type).
-        const after = s.history.splice(hIdx);
-        after.shift();
-        if (s.current) s.history.push(s.current);
-        // Reverse-move: things that were played after the target were context items; leave cursor at target.
-        if (item.source.type === "context") s.cursor = s.order.indexOf(item.source.data.index);
-        else s.insertions.unshift(...after.filter((a) => a.source.type === "inserted"));
-        s.current = { ...item, key: newKey() };
-      } else if (iIdx >= 0) {
-        if (s.current) s.history.push(s.current);
-        const skipped = s.insertions.splice(0, iIdx + 1);
-        s.current = skipped.pop();
-        s.history.push(...skipped);
-      } else if (uIdx >= 0) {
-        if (s.current) s.history.push(s.current);
-        s.history.push(...s.insertions);
-        s.insertions = [];
-        s.cursor = s.cursor + 1 + uIdx;
-        const ci = s.order[s.cursor]!;
-        s.current = { key: newKey(), trackId: s.context?.tracks?.[ci] ?? "", source: { type: "context", data: { index: ci } }, unavailable: false };
-      }
-      this.trimHistory();
+      Q.jump(this.session, key);
       this.loadCurrent(0, true);
     });
   }
 
-  private upcomingKey(contextIndex: number): string {
-    return `ctx-${this.session.revision}-${contextIndex}`;
-  }
-
   private removeItems(keys: string[]): void {
-    const set = new Set(keys);
+    if (!this.session.list.some((i) => keys.includes(i.key))) return;
     this.withUndo(`Remove ${keys.length} from queue`, () => {
-      const s = this.session;
-      s.insertions = s.insertions.filter((i) => !set.has(i.key));
-      s.history = s.history.filter((i) => !set.has(i.key));
-      // Upcoming context entries removed => drop from order (explicit permutation).
-      const removedCtx = new Set<number>();
-      s.order.slice(s.cursor + 1).forEach((ci) => {
-        if (set.has(this.upcomingKey(ci))) removedCtx.add(ci);
-      });
-      if (removedCtx.size) {
-        const cursorCi = s.order[s.cursor];
-        s.order = s.order.filter((ci) => !removedCtx.has(ci));
-        s.cursor = cursorCi === undefined ? 0 : Math.max(0, s.order.indexOf(cursorCi));
+      const r = Q.removeKeys(this.session, keys);
+      if (r.currentRemoved) {
+        this.loadCurrent(0, this.transport.position.isPlaying && Q.hasCurrent(this.session));
+        if (r.stopped) this.stop();
       }
-      if (s.current && set.has(s.current.key)) this.next(false);
     });
   }
 
-  private moveItem(key: string, toIndex: number): void {
+  /** Insert tracks (or queue entries by key) directly after `after`, in or out of the group: a library drop. */
+  private insertAfter(trackIds: string[], keys: string[], after: string, inGroup: boolean): void {
+    if (!this.lib) return;
+    const ids = trackIds.filter((id) => this.lib?.tracksById.has(id));
+    if (!ids.length && !keys.length) return;
+    const fresh = (t: string) => this.fresh(t, { type: "inserted" }, true);
+    if (!Q.insertItems(clone(this.session), ids, keys, after, inGroup, fresh)) return;
+    this.withUndo(`Add to queue (${ids.length + keys.length})`, () => {
+      Q.insertItems(this.session, ids, keys, after, inGroup, fresh);
+    });
+  }
+
+  private moveItem(key: string, after: string, inGroup: boolean): void {
+    if (!Q.moveItem(clone(this.session), key, after, inGroup)) return;
     this.withUndo("Reorder queue", () => {
-      const s = this.session;
-      const combined: { key: string; item?: QueueItem; ci?: number }[] = [
-        ...s.insertions.map((i) => ({ key: i.key, item: i })),
-        ...s.order.slice(s.cursor + 1).map((ci) => ({ key: this.upcomingKey(ci), ci })),
-      ];
-      const from = combined.findIndex((c) => c.key === key);
-      if (from < 0) return;
-      const [moved] = combined.splice(from, 1);
-      combined.splice(Math.max(0, Math.min(toIndex, combined.length)), 0, moved!);
-      // Split back: leading inserted items stay insertions; a context item moved
-      // into the insertions region becomes an insertion (YouTube-style splice is
-      // the mode's job; the fake keeps it simple and honest).
-      const newIns: QueueItem[] = [];
-      const newOrderTail: number[] = [];
-      let seenCtx = false;
-      for (const c of combined) {
-        if (c.item) {
-          if (!seenCtx) newIns.push(c.item);
-          else newOrderTail.push(this.adoptAsContext(c.item));
-        } else if (c.ci !== undefined) {
-          seenCtx = true;
-          newOrderTail.push(c.ci);
-        }
-      }
-      s.insertions = newIns;
-      s.order = [...s.order.slice(0, s.cursor + 1), ...newOrderTail];
-      s.revision += 1;
+      Q.moveItem(this.session, key, after, inGroup);
     });
   }
 
-  /** An inserted item dragged into the context region: append its track to the context. */
-  private adoptAsContext(item: QueueItem): number {
-    const s = this.session;
-    if (!s.context) {
-      s.context = { serverId: this.servers[0]?.id ?? "", kind: { type: "adHoc", data: { label: "Queue" } }, label: "Queue", sort: "default", tracks: [] };
-    }
-    s.context.tracks = [...(s.context.tracks ?? []), item.trackId];
-    return s.context.tracks.length - 1;
+  /** Clear: the outgoing list is saved; only the current entry stays, as a one-song queue. */
+  private clearQueue(): void {
+    this.withUndo("Clear queue", () => {
+      this.autoSaveQueue();
+      const s = this.session;
+      const cur = Q.currentItem(s);
+      s.shuffle = false;
+      if (cur) {
+        s.context = this.adhocContext([cur.track.id]);
+        s.list = [{ ...cur, source: { type: "context", data: { index: 0 } }, queued: false, ordinal: 0 }];
+        s.ptr = 0;
+      } else {
+        s.context = undefined;
+        s.list = [];
+        s.ptr = 0;
+      }
+    }, true);
   }
 
   private setShuffle(enabled: boolean): void {
     this.withUndo(enabled ? "Shuffle on" : "Shuffle off", () => {
-      const s = this.session;
-      if (!s.context?.tracks) return;
-      const curCi = s.order[s.cursor];
-      if (enabled) {
-        const seed = Date.now() & 0xffff;
-        s.shuffle = { seed, anchor: curCi };
-        s.order = permutation(s.context.tracks.length, seed, curCi);
-        s.cursor = 0;
-      } else {
-        s.shuffle = undefined;
-        s.order = s.context.tracks.map((_, i) => i);
-        s.cursor = curCi ?? 0;
-      }
-      s.revision += 1;
+      Q.setShuffle(this.session, enabled, newSeed());
     });
   }
 
+  /** Something autoplay would pick after the current track, or nothing. */
+  private autoplayPick(): RelatedTrack | undefined {
+    const s = this.session;
+    const cur = Q.currentItem(s);
+    if (!this.lib || !cur) return undefined;
+    const seedTrack = this.lib.tracksById.get(cur.track.id);
+    // Offline, autoplay picks from what plays offline (the core's offline autoplay).
+    const offline = this.isOffline();
+    const played = new Set(s.list.slice(0, s.ptr + 1).map((h) => h.track.id));
+    const fresh = (id: string) => !played.has(id);
+    let pick = this.related(seedTrack?.id ?? "", 5).find((r) => fresh(r.track.id) && (!offline || FakeStreamCache.availableOffline(r.track)));
+    if (!pick && offline) {
+      const t = this.lib.tracks.find((x) => FakeStreamCache.availableOffline(x) && fresh(x.id));
+      if (t) pick = { track: summary(t), provider: "random", reason: "Available offline", score: undefined };
+    }
+    return pick;
+  }
+
+  /** Next: the pointer moves one playable entry on; nothing is consumed. At the end, autoplay appends or playback stops. */
   private next(userInitiated: boolean): void {
     const s = this.session;
-    if (!s.current) return;
+    if (!Q.hasCurrent(s)) return;
     if (s.repeat === "one" && !userInitiated) {
       this.loadCurrent(0, true);
       return;
     }
     this.recordPlay();
-    s.history.push(s.current);
-    this.trimHistory();
-    if (s.insertions.length) {
-      s.current = s.insertions.shift();
-    } else if (s.cursor + 1 < s.order.length) {
-      s.cursor += 1;
-      const ci = s.order[s.cursor]!;
-      s.current = { key: newKey(), trackId: s.context?.tracks?.[ci] ?? "", source: { type: "context", data: { index: ci } }, unavailable: false };
-    } else if (s.repeat === "all" && s.order.length) {
-      s.cursor = 0;
-      const ci = s.order[0]!;
-      s.current = { key: newKey(), trackId: s.context?.tracks?.[ci] ?? "", source: { type: "context", data: { index: ci } }, unavailable: false };
-    } else if (s.autoplay && this.lib) {
-      const seedTrack = this.lib.tracksById.get(s.current.trackId);
-      // Offline, autoplay picks from what plays offline (the core's offline autoplay).
-      const offline = this.isOffline();
-      const fresh = (id: string) => !s.history.some((h) => h.trackId === id) && id !== s.current?.trackId;
-      let pick = this.related(seedTrack?.id ?? "", 5).find((r) => fresh(r.track.id) && (!offline || FakeStreamCache.availableOffline(r.track)));
-      if (!pick && offline) {
-        const t = this.lib.tracks.find((x) => FakeStreamCache.availableOffline(x) && fresh(x.id));
-        if (t) pick = { track: summary(t), provider: "random", reason: "Available offline", score: undefined };
-      }
+    let step = Q.advance(s);
+    if (!step.moved && s.autoplay) {
+      const pick = this.autoplayPick();
       if (pick) {
-        s.current = { key: newKey(), trackId: pick.track.id, source: { type: "autoplay", data: { provider: pick.provider, reason: pick.reason, score: pick.score } }, unavailable: false };
-      } else {
-        s.current = undefined;
+        const at = s.list.length;
+        s.list.push(this.fresh(pick.track.id, { type: "autoplay", data: { provider: pick.provider, reason: pick.reason, score: pick.score } }, false));
+        Q.ordinalsAtEnd(s, at, 1);
+        step = Q.advance(s);
       }
-    } else {
-      s.current = undefined;
     }
+    Q.settle(s);
     s.revision += 1;
-    this.loadCurrent(0, s.current !== undefined && this.transport.position.isPlaying);
-    if (!s.current) this.stop();
+    if (step.moved) this.loadCurrent(0, this.transport.position.isPlaying);
+    else this.stop();
+    this.noteAlbumResume(!step.moved);
     this.emitAll();
   }
 
-  private previous(): void {
+  /** The same rules as the core, so the album page can show Resume without a native addon. */
+  private noteAlbumResume(finished = false): void {
+    const ctx = this.session.context;
+    const albumId = ctx?.kind.type === "album" ? ctx.kind.data.id : undefined;
+    if (!albumId || this.session.shuffle) return;
+    const cur = this.cur();
+    const index = cur?.source.type === "context" ? cur.source.data.index : undefined;
+    const drop = finished || index === undefined || index === 0 || cur?.source.type === "autoplay";
+    if (drop || !this.resumeAlbumsEnabled()) {
+      if (drop) this.albumResumes = this.albumResumes.filter((x) => x.albumId !== albumId);
+      this.emitAlbumResumes();
+      return;
+    }
+    const track = this.lib?.tracksById.get(cur!.track.id);
+    const point = { albumId, trackId: cur!.track.id, trackIndex: index, positionMs: Math.round(this.positionNow()), durationMs: track?.durationMs ?? 0, updatedAt: Date.now() };
+    this.albumResumes = [...this.albumResumes.filter((x) => x.albumId !== albumId), point];
+    this.emitAlbumResumes();
+  }
+
+  private resumeAlbumsEnabled(): boolean {
+    const raw = this.settings.get("playback.resumeAlbums")?.value;
+    return raw === undefined || raw === "true";
+  }
+
+  /** Previous; `restart` false is PreviousTrack, which never restarts a track it can go back from. */
+  private previous(restart = true): void {
     const s = this.session;
-    if (this.positionNow() > 3000 || !s.history.length) {
+    if ((restart && this.positionNow() >= 3000) || !Q.stepBack(s)) {
       this.seek(0);
       return;
     }
-    const item = s.history.pop()!;
-    if (s.current) {
-      if (s.current.source.type === "inserted" || s.current.source.type === "autoplay") s.insertions.unshift(s.current);
-    }
-    if (item.source.type === "context") {
-      const at = s.order.indexOf(item.source.data.index);
-      if (at >= 0) s.cursor = at;
-    }
-    s.current = item;
     s.revision += 1;
     this.loadCurrent(0, this.transport.position.isPlaying);
     this.emitAll();
@@ -1125,20 +1501,18 @@ export class FakeCore implements CoreHandle {
 
   private markUnavailable(key: string): void {
     const s = this.session;
-    if (s.current?.key === key) {
-      s.current.unavailable = true;
+    const i = Q.indexOfKey(s, key);
+    if (i < 0) return;
+    s.list[i]!.unavailable = true;
+    if (i === s.ptr) {
       this.playerNotice = undefined;
-      this.setNotice("couldNotPlaySkipped", this.trackTitle(s.current.trackId));
-      this.next(false);
-    }
-  }
-
-  private trimHistory(): void {
-    if (this.session.history.length > HISTORY_CAP) this.session.history.splice(0, this.session.history.length - HISTORY_CAP);
+      this.setNotice("couldNotPlaySkipped", this.trackTitle(s.list[i]!.track.id));
+      this.next(true);
+    } else this.emitQueue();
   }
 
   private loadCurrent(positionMs: number, play: boolean): void {
-    const cur = this.session.current;
+    const cur = this.cur();
     if (this.skipIfUnavailableOffline(cur, play)) return;
     this.transport = {
       ...this.transport,
@@ -1149,7 +1523,7 @@ export class FakeCore implements CoreHandle {
     };
     this.consecutiveFailures = 0;
     this.cacheFilledKey = undefined;
-    const curTrack = cur ? this.lib?.tracksById.get(cur.trackId) : undefined;
+    const curTrack = cur ? this.lib?.tracksById.get(cur.track.id) : undefined;
     if (curTrack && play) this.cache.playStarted(curTrack);
     // The offline notices stay until something has played a moment (tick), like the core's clear on Playing.
     if (cur && this.playerNotice && !cur.unavailable && this.playerNotice !== "offlineSkipping") {
@@ -1157,7 +1531,7 @@ export class FakeCore implements CoreHandle {
     }
     this.emitNowPlaying();
     this.emitTransport();
-    if (cur) this.emitLyrics(cur.trackId);
+    if (cur) this.emitLyrics(cur.track.id);
   }
 
   /**
@@ -1173,7 +1547,7 @@ export class FakeCore implements CoreHandle {
       }
       return false;
     }
-    const t = this.lib?.tracksById.get(cur.trackId);
+    const t = this.lib?.tracksById.get(cur.track.id);
     if (!this.isOffline() || !t || FakeStreamCache.availableOffline(t)) {
       this.offlineSkips = 0;
       return false;
@@ -1191,19 +1565,27 @@ export class FakeCore implements CoreHandle {
     this.transport = { ...this.transport, position: { positionMs: 0, takenAt: Date.now(), rate: 1, isPlaying: play }, playedMs: 0 };
     // Skipped on the next turn, never from inside the load.
     this.later(0, () => {
-      if (this.session.current?.key === cur.key) this.next(false);
+      if (this.cur()?.key !== cur.key) return;
+      this.next(false);
+      // Next doesn't move past the end of the list (the pointer stays on the last entry):
+      // skipping ran out of queue, so nothing in it is available offline.
+      if (this.cur()?.key === cur.key && this.offlineSkips > 0) {
+        this.offlineSkips = 0;
+        this.setNotice("nothingAvailableOffline");
+      }
     });
     return true;
   }
 
   private setPlaying(playing: boolean): void {
-    if (!this.session.current) {
+    if (!this.cur()) {
       if (playing && this.resumeOffer) this.resumeHere();
       return;
     }
     const pos = this.positionNow();
     this.transport.position = { positionMs: pos, takenAt: Date.now(), rate: 1, isPlaying: playing };
     if (!this.transport.lease.owner) this.transport.lease = { owner: this.config.deviceId, epoch: this.transport.lease.epoch + 1, expiresAt: Date.now() + 20_000 };
+    if (!playing) this.noteAlbumResume();
     this.emitTransport();
   }
 
@@ -1218,6 +1600,7 @@ export class FakeCore implements CoreHandle {
     const max = cur?.durationMs ?? 0;
     const pos = Math.max(0, Math.min(max, Math.round(ms)));
     this.transport.position = { ...this.transport.position, positionMs: pos, takenAt: Date.now() };
+    this.noteAlbumResume();
     this.emitTransport();
   }
 
@@ -1232,7 +1615,7 @@ export class FakeCore implements CoreHandle {
     if (!cur || !this.transport.position.isPlaying) return;
     const pos = this.positionNow();
     this.transport.playedMs += 250;
-    if (this.transport.playedMs >= 3000 && this.playerNotice === "offlineSkipping" && !this.session.current?.unavailable) this.setNotice(undefined);
+    if (this.transport.playedMs >= 3000 && this.playerNotice === "offlineSkipping" && !this.cur()?.unavailable) this.setNotice(undefined);
     this.fillCache();
     if (this.sleepTimer?.endsAt !== undefined && Date.now() >= this.sleepTimer.endsAt) {
       this.sleepTimer = undefined;
@@ -1260,7 +1643,7 @@ export class FakeCore implements CoreHandle {
   }
 
   private currentTrack(): Track | undefined {
-    const id = this.session.current?.trackId;
+    const id = this.cur()?.track.id;
     return id ? this.lib?.tracksById.get(id) : undefined;
   }
 
@@ -1278,27 +1661,30 @@ export class FakeCore implements CoreHandle {
     this.playHistory.unshift({ track: summary(t), playedAt: Date.now(), playedMs: played, scrobbled: true, deviceId: this.config.deviceId });
   }
 
-  private queueView(): QueueView {
+  /** The windowed view (`start`/`count` for Query.QueueRange; default 100 rows either side of the pointer). */
+  private queueView(range?: { start: number; count: number }): QueueView {
     const s = this.session;
-    const entry = (item: QueueItem): QueueEntry | undefined => {
-      const t = this.lib?.tracksById.get(item.trackId);
-      return t ? { item, track: summary(t) } : undefined;
+    const d = range ? Q.deriveRange(s, range.start, range.count) : Q.deriveWindow(s, VIEW_BEFORE, VIEW_AFTER);
+    const entry = (item: QueueItem, inGroup = false): QueueEntry => {
+      const t = this.lib?.tracksById.get(item.track.id);
+      const track: TrackSummary = t ? summary(t) : { id: item.track.id, serverId: s.context?.source ?? "", title: item.track.id, durationMs: 0, rating: 0, loved: false, offline: "none" };
+      return { item, track, inGroup, autoplay: item.source.type === "autoplay" };
     };
-    const upcomingCis = s.order.slice(s.cursor + 1);
     return {
       contextLabel: s.context?.label,
-      history: s.history.map(entry).filter((e): e is QueueEntry => !!e),
-      current: s.current ? entry(s.current) : undefined,
-      playingNext: s.insertions.map(entry).filter((e): e is QueueEntry => !!e),
-      upcoming: upcomingCis
-        .slice(0, UPCOMING_VIEW_CAP)
-        .map((ci) => entry({ key: this.upcomingKey(ci), trackId: s.context?.tracks?.[ci] ?? "", source: { type: "context", data: { index: ci } }, unavailable: false }))
-        .filter((e): e is QueueEntry => !!e),
-      shuffle: !!s.shuffle,
+      entries: d.entries.map((e) => entry(e.item, e.inGroup)),
+      windowStart: d.windowStart,
+      total: d.total,
+      historyCount: d.historyCount,
+      currentIndex: d.currentIndex,
+      groupCount: d.groupCount,
+      totalUpcoming: d.totalUpcoming,
+      current: d.current ? entry(d.current) : undefined,
+      shuffle: s.shuffle,
       repeat: s.repeat,
       autoplay: s.autoplay,
-      mode: s.mode,
-      totalUpcoming: upcomingCis.length,
+      wrapNext: d.wrapNext ? entry(d.wrapNext) : undefined,
+      previous: d.previous ? entry(d.previous) : undefined,
     };
   }
 
@@ -1315,36 +1701,38 @@ export class FakeCore implements CoreHandle {
       case "filter":
         return `filter:${k.data.filter.id}`;
       case "adHoc":
-        return `adhoc:${hash32((ctx.tracks ?? []).join(","))}`;
+        return `adhoc:${hash32((ctx.tracks ?? []).map((t) => t.id).join(","))}`;
       case "autoplay":
         return "autoplay";
     }
   }
 
+  /** Snapshot the outgoing list (the core's `snapshot_parts`): skips trivial queues and ones with nothing current. */
   private autoSaveQueue(): void {
     const s = this.session;
-    if (!s.context || !s.current) return;
-    if ((s.context.tracks?.length ?? 0) <= 1 && !s.insertions.length) return;
+    const cur = Q.currentItem(s);
+    if (!s.context || !cur || s.list.length <= 1) return;
     if (this.savedQueueCap === 0) return;
     const identity = this.contextIdentity(s.context);
     const existing = this.savedQueues.find((q) => this.contextIdentity(q.context) === identity && !q.pinned);
     const cover = this.currentTrack()?.coverArt;
+    const historyStart = Math.max(0, s.ptr - SNAPSHOT_HISTORY);
+    const tooLong = s.list.length - historyStart > SNAPSHOT_MAX_ENTRIES;
     const snap: SavedQueue = {
       id: existing?.id ?? newId("sq"),
       context: { ...s.context, tracks: s.context.kind.type === "adHoc" ? s.context.tracks : [] },
       label: s.context.label,
-      cursor: s.cursor,
-      current: s.current,
-      history: s.history.slice(-HISTORY_CAP),
-      insertions: s.insertions,
-      shuffle: s.shuffle ? { seed: s.shuffle.seed, anchor: s.shuffle.anchor } : undefined,
+      history: tooLong ? [] : clone(s.list.slice(historyStart, s.ptr)),
+      current: clone(cur),
+      upcoming: tooLong ? [] : clone(s.list.slice(s.ptr + 1)),
+      shuffle: s.shuffle,
       repeat: s.repeat,
       positionMs: Math.round(this.positionNow()),
       pinned: existing?.pinned ?? false,
       createdAt: existing?.createdAt ?? Date.now(),
       lastInteractedAt: Date.now(),
       updatedAt: Date.now(),
-      trackCount: (s.context.tracks?.length ?? 0) + s.insertions.length,
+      trackCount: s.list.length,
       coverArt: cover,
     };
     this.savedQueues = [snap, ...this.savedQueues.filter((q) => q.id !== snap.id)];
@@ -1365,18 +1753,32 @@ export class FakeCore implements CoreHandle {
     const before = this.captureSession();
     this.autoSaveQueue();
     const tracks = this.contextTracks(q.context);
+    let list = [...clone(q.history), ...(q.current ? [clone(q.current)] : []), ...clone(q.upcoming)];
+    let ptr = q.history.length;
+    if (list.length <= 1 && tracks.length) {
+      // Stored without its entries (too long to keep): rebuild them around the current one.
+      const cur = list[0];
+      list = tracks.map((t, i) => ({ ...this.fresh(t, { type: "context", data: { index: i } }, false), ordinal: i }));
+      const at = cur ? (cur.source.type === "context" && tracks[cur.source.data.index] === cur.track.id ? cur.source.data.index : tracks.indexOf(cur.track.id)) : 0;
+      if (cur && at >= 0) list[at] = { ...cur, ordinal: at };
+      else if (cur) list.unshift(cur);
+      ptr = Math.max(0, at);
+    }
+    const rebuilt = list.length > 1 && q.history.length + q.upcoming.length === 0;
     this.session = {
       ...this.session,
-      context: { ...q.context, tracks },
-      order: q.shuffle ? permutation(tracks.length, q.shuffle.seed, q.shuffle.anchor) : tracks.map((_, i) => i),
-      cursor: q.cursor,
-      current: q.current,
-      history: [...q.history],
-      insertions: [...q.insertions],
-      shuffle: q.shuffle ? { seed: q.shuffle.seed, anchor: q.shuffle.anchor } : undefined,
+      context: { ...q.context, tracks: this.refs(tracks) },
+      list,
+      ptr,
+      shuffle: q.shuffle,
       repeat: q.repeat,
       revision: this.session.revision + 1,
     };
+    // A rebuilt list comes back in context order: shuffle what follows the current entry, as the core does.
+    if (rebuilt && q.shuffle) {
+      Q.renumber(this.session);
+      Q.shuffleTail(this.session, newSeed());
+    }
     q.lastInteractedAt = Date.now();
     this.loadCurrent(q.positionMs, false);
     this.pushUndo(`Restore ${q.label}`, () => {
@@ -1391,10 +1793,10 @@ export class FakeCore implements CoreHandle {
     if (savedQueueId) {
       const q = this.savedQueues.find((s) => s.id === savedQueueId);
       if (!q) return;
-      ids = [...q.history, ...(q.current ? [q.current] : []), ...q.insertions].map((i) => i.trackId).concat(this.contextTracks(q.context).slice(q.cursor + 1));
+      const entries = [...q.history, ...(q.current ? [q.current] : []), ...q.upcoming];
+      ids = entries.length > 1 ? entries.map((i) => i.track.id) : this.contextTracks(q.context);
     } else {
-      const v = this.queueView();
-      ids = [...v.history, ...(v.current ? [v.current] : []), ...v.playingNext, ...v.upcoming].map((e) => e.track.id);
+      ids = this.session.list.map((i) => i.track.id);
     }
     this.createPlaylist(name, [...new Set(ids)]);
   }
@@ -1414,6 +1816,7 @@ export class FakeCore implements CoreHandle {
     const before = this.captureSession();
     const selection = clone(this.selection);
     mutate();
+    Q.settle(this.session);
     this.session.revision += 1;
     const after = this.captureSession();
     this.pushUndo(label, () => {
@@ -1462,6 +1865,119 @@ export class FakeCore implements CoreHandle {
     const rtop = this.redoStack[this.redoStack.length - 1];
     const history: UndoEntry[] = [...this.undoStack].reverse().slice(0, 20).map((u) => ({ id: u.id, label: u.label, deviceId: this.config.deviceId, at: u.at, note: undefined, replacesQueue: u.replacesQueue }));
     return { canUndo: !!top, undoLabel: top?.label, canRedo: !!rtop, redoLabel: rtop?.label, history };
+  }
+
+  private stashItems(): StashItem[] {
+    const seen = new Set<string>();
+    const out: StashItem[] = [];
+    for (const e of this.stash) {
+      if (e.removed || seen.has(e.trackId)) continue;
+      seen.add(e.trackId);
+      const track = this.lib?.tracksById.get(e.trackId);
+      if (track) out.push({ entryId: e.entryId, addedAt: e.addedAt, track });
+    }
+    return out;
+  }
+
+  private filterSnoozed(kind: QueueContext["kind"], tracks: string[], start: number | undefined): { tracks: string[]; start: number | undefined } {
+    const leaves = kind.type === "playlist" || kind.type === "artist" || kind.type === "genre" || kind.type === "filter" || kind.type === "autoplay";
+    if (!leaves || this.snoozes.size === 0) return { tracks, start };
+    const keep = start !== undefined && start >= 0 && start < tracks.length ? start : undefined;
+    const filtered = tracks.filter((id, i) => i === keep || !this.snoozes.has(id));
+    if (!filtered.length) return { tracks, start };
+    if (keep === undefined) return { tracks: filtered, start: undefined };
+    // Count what stays ahead of the picked song, as the core does: an earlier copy of it isn't it.
+    const at = tracks.slice(0, keep).filter((id) => !this.snoozes.has(id)).length;
+    return { tracks: filtered, start: at };
+  }
+
+  private snoozeItems(): import("@core/api").SnoozeItem[] {
+    const out: import("@core/api").SnoozeItem[] = [];
+    for (const [trackId, until] of this.snoozes) {
+      const track = this.lib?.tracksById.get(trackId);
+      if (track) out.push({ trackRef: { source: track.serverId, id: trackId }, until: until ?? undefined, track });
+    }
+    return out;
+  }
+
+  private emitSnoozes(): void {
+    this.emit({ type: "snoozesChanged", data: { items: this.snoozeItems() } });
+  }
+
+  private untilFor(duration: import("@core/api").SnoozeFor): number | null {
+    const day = 86_400_000;
+    const now = Date.now();
+    switch (duration) {
+      case "day": return now + day;
+      case "threeDays": return now + 3 * day;
+      case "week": return now + 7 * day;
+      case "month": return now + 30 * day;
+      case "indefinite": return null;
+    }
+  }
+
+  private applySnooze(trackIds: string[], duration: import("@core/api").SnoozeFor): void {
+    const until = this.untilFor(duration);
+    let n = 0;
+    for (const id of trackIds) {
+      if (!this.lib?.tracksById.has(id)) continue;
+      this.snoozes.set(id, until);
+      n++;
+    }
+    if (!n) return;
+    this.emitSnoozes();
+    const length = duration === "day" ? "1 day" : duration === "threeDays" ? "3 days" : duration === "week" ? "1 week" : duration === "month" ? "1 month" : "indefinitely";
+    this.toast(duration === "indefinite" ? (n === 1 ? "Snoozed indefinitely" : `Snoozed ${n} songs indefinitely`) : (n === 1 ? `Snoozed for ${length}` : `Snoozed ${n} songs for ${length}`));
+  }
+
+  private applySnoozeUntil(trackIds: string[], until: number): void {
+    if (until <= Date.now()) {
+      this.toast("Pick a time in the future to snooze until");
+      return;
+    }
+    let n = 0;
+    for (const id of trackIds) {
+      if (!this.lib?.tracksById.has(id)) continue;
+      this.snoozes.set(id, until);
+      n++;
+    }
+    if (!n) return;
+    this.emitSnoozes();
+    this.toast(n === 1 ? "Snoozed" : `Snoozed ${n} songs`);
+  }
+
+  private clearSnooze(trackIds: string[]): void {
+    let n = 0;
+    for (const id of trackIds) if (this.snoozes.delete(id)) n++;
+    if (!n) return;
+    this.emitSnoozes();
+    this.toast(n === 1 ? "Unsnoozed" : `Unsnoozed ${n} songs`);
+  }
+
+  private emitStash(): void {
+    this.emit({ type: "stashChanged", data: { items: this.stashItems() } });
+  }
+
+  private emitAlbumResumes(): void {
+    this.emit({ type: "albumResumesChanged", data: { points: this.albumResumes } });
+  }
+
+  private stashAdd(trackIds: string[]): void {
+    const listed = new Set(this.stash.filter((e) => !e.removed).map((e) => e.trackId));
+    let added = 0;
+    for (const id of trackIds) {
+      if (listed.has(id) || !this.lib?.tracksById.has(id)) continue;
+      listed.add(id);
+      this.stash.push({ entryId: newId("stash"), trackId: id, addedAt: Date.now(), removed: false });
+      added++;
+    }
+    if (added) this.emitStash();
+    this.toast(added ? `Stashed ${added === 1 ? "1 song" : `${added} songs`}` : "Already in the stash");
+  }
+
+  private stashToast(message: string, entryIds: string[]): void {
+    const toast: Toast = { id: newId("toast"), message, actionLabel: "Undo", actionCommand: JSON.stringify({ type: "stashRestore", data: { entry_ids: entryIds } } satisfies Command), durationMs: 5000 };
+    this.emit({ type: "toast", data: { toast } });
   }
 
   private toast(message: string): void {
@@ -1758,23 +2274,23 @@ export class FakeCore implements CoreHandle {
   /** The album primer, on the transport owner (this device in the fake), gated on its network and battery. */
   private prime(kind: "album" | "track", id: string, trackId: string | undefined): void {
     const t = trackId ? this.lib?.tracksById.get(trackId) : undefined;
-    const rec = this.cache.prime(kind, id, t, { offline: this.isOffline(), metered: !!this.network?.metered, batterySaver: this.batterySaver }, Date.now());
+    const rec = this.cache.prime(kind, id, t, { offline: this.isOffline(), metered: !!this.network?.metered }, Date.now());
     this.emit({ type: "log", data: { level: "debug", target: "fake_core::prime", message: `prime ${kind} ${id} -> ${rec.trackId ?? "?"}: ${rec.outcome}${rec.reason ? ` (${rec.reason})` : ""}` } });
     if (rec.outcome === "primed") this.emit({ type: "storageChanged", data: { storage: this.storage() } });
   }
 
-  /** Played a while: the current track is complete in the cache, and the next two are prefetched (network and battery permitting). */
+  /** Played a while: the current track is complete in the cache, and the next two are prefetched (network permitting; battery saver doesn't hold it back: one burst lets the radio sleep). */
   private fillCache(): void {
     const s = this.session;
-    const cur = s.current;
+    const cur = this.cur();
     if (!cur || !this.lib || this.cacheFilledKey === cur.key || this.transport.playedMs < CACHE_FILL_AFTER_MS) return;
     this.cacheFilledKey = cur.key;
     const changed: string[] = [];
-    const t = this.lib.tracksById.get(cur.trackId);
+    const t = this.lib.tracksById.get(cur.track.id);
     if (t && !this.isOffline() && this.cache.fill(t, false)) changed.push(t.id);
-    const prefetchOk = !this.isOffline() && (!this.network?.metered || this.setting<boolean>("storage.prefetchOnMobileData", false)) && !(this.batterySaver && this.setting<boolean>("battery.pausePrefetch", true));
+    const prefetchOk = !this.isOffline() && (!this.network?.metered || this.setting<boolean>("storage.prefetchOnMobileData", false));
     if (prefetchOk) {
-      const upcoming = [...s.insertions.map((i) => i.trackId), ...s.order.slice(s.cursor + 1).map((ci) => s.context?.tracks?.[ci] ?? "")].slice(0, 2);
+      const upcoming = s.list.slice(s.ptr + 1).filter((i) => !i.unavailable).map((i) => i.track.id).slice(0, 2);
       for (const id of upcoming) {
         const u = this.lib.tracksById.get(id);
         if (u && this.cache.fill(u, true)) changed.push(u.id);
@@ -1808,9 +2324,8 @@ export class FakeCore implements CoreHandle {
   private seedSettings(onlyKey?: string): void {
     // Mirrors crates/hocket-core/src/settings/registry.rs (keys, scopes, defaults).
     const defaults: [string, unknown, Setting["scope"]][] = [
-      ["queue.mode", "apple", "accountSynced"],
+      ["queue.section", true, "accountSynced"],
       ["queue.savedCap", 10, "accountSynced"],
-      ["queue.historyCap", 200, "accountSynced"],
       ["lyrics.external.enabled", false, "accountSynced"],
       ["lyrics.external.provider", "lrclib", "accountSynced"],
       ["lyrics.defaultOffsetMs", 0, "accountSynced"],
@@ -1820,8 +2335,9 @@ export class FakeCore implements CoreHandle {
       ["battery.autoEngage", true, "deviceLocal"],
       ["media.externalControl", false, "deviceLocal"],
       ["battery.lyricsFps", 30, "deviceLocal"],
-      ["battery.smallArtwork", true, "deviceLocal"],
-      ["battery.pausePrefetch", true, "deviceLocal"],
+      ["battery.level", "off", "deviceLocal"],
+      ["battery.autoLevel", "medium", "deviceLocal"],
+      ["battery.custom", DEFAULT_CUSTOM, "deviceLocal"],
       ["display.animatedBackground", true, "deviceLocal"],
       ["display.lyricsFps", 30, "deviceLocal"],
       ["display.theme", "system", "deviceLocal"],
@@ -1830,6 +2346,8 @@ export class FakeCore implements CoreHandle {
       ["display.queuePanelSplit", 0.5, "deviceLocal"],
       ["display.immersiveArtwork", "automatic", "deviceLocal"],
       ["display.playerRating", true, "accountSynced"],
+      ["display.albumTrackArtists", false, "accountSynced"],
+      ["playback.resumeAlbums", true, "accountSynced"],
       ["actions.order.contextMenu", [], "accountSynced"],
       ["actions.order.sidebar", [], "accountSynced"],
       ["actions.order.mediaSession", [], "accountSynced"],
@@ -1838,6 +2356,7 @@ export class FakeCore implements CoreHandle {
       ["library.pins", [], "accountSynced"],
       ["shortcuts", {}, "deviceLocal"],
       ["developer.mode", false, "deviceLocal"],
+      ["connect.headphone_handoff", false, "deviceLocal"],
       ["sync.enabled", true, "deviceLocal"],
       ["connect.coordinatorUrl", null, "deviceLocal"],
       ["connect.lanDiscovery", true, "deviceLocal"],
@@ -1859,8 +2378,24 @@ export class FakeCore implements CoreHandle {
       if (onlyKey && key !== onlyKey) continue;
       const setting: Setting = { key, value: JSON.stringify(value), scope, updatedAt: Date.now() };
       this.settings.set(key, setting);
+      this.settingDefaults.set(key, setting.value);
       if (onlyKey) this.emit({ type: "settingChanged", data: { setting } });
     }
+    if (onlyKey?.startsWith("battery.")) this.refreshSaver();
+  }
+
+  /** Battery saver as the settings and the power-save state put it; announced when it changes. */
+  private refreshSaver(): void {
+    const next = resolveSaver(
+      parseLevel(this.setting<unknown>("battery.level", "off"), "off"),
+      parseLevel(this.setting<unknown>("battery.autoLevel", "medium"), "medium"),
+      this.setting<boolean>("battery.autoEngage", true) !== false,
+      this.powerSave,
+      parseCustom(this.setting<unknown>("battery.custom", DEFAULT_CUSTOM)),
+    );
+    if (JSON.stringify(next) === JSON.stringify(this.batterySaver)) return;
+    this.batterySaver = next;
+    this.emit({ type: "batterySaverChanged", data: { saver: next } });
   }
 
   /** `library.pins` as stored (entries that don't parse are dropped). */
@@ -1876,7 +2411,7 @@ export class FakeCore implements CoreHandle {
   private libraryPinOf(target: ActionTarget): { kind: string; id: string } | undefined {
     if (target.type !== "albums" && target.type !== "artists" && target.type !== "playlists" && target.type !== "tracks") return undefined;
     const kind = target.type === "albums" ? "album" : target.type === "artists" ? "artist" : target.type === "playlists" ? "playlist" : "track";
-    const ids = target.data.ids;
+    const ids = target.type === "tracks" ? target.data.tracks.map((r) => r.id) : target.data.ids;
     const id = ids.length === 1 ? ids[0] : undefined;
     return id ? { kind, id } : undefined;
   }
@@ -1896,6 +2431,7 @@ export class FakeCore implements CoreHandle {
       this.emitSavedQueues();
     }
     this.emit({ type: "settingChanged", data: { setting } });
+    if (key.startsWith("battery.")) this.refreshSaver();
   }
 
   private settingNumber(key: string): number {
@@ -1928,6 +2464,29 @@ export class FakeCore implements CoreHandle {
     };
   }
 
+  /** Like the core: the account-synced settings changed from their defaults, key → value. */
+  private setupSettings(): string {
+    const out: Record<string, unknown> = {};
+    for (const s of this.settings.values()) {
+      if (s.scope === "accountSynced" && this.settingDefaults.get(s.key) !== s.value) out[s.key] = JSON.parse(s.value);
+    }
+    return JSON.stringify(out);
+  }
+
+  /** Like the core: known account-synced keys only. */
+  private applySetupSettings(json: string): void {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(json);
+    } catch {
+      return;
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    for (const [key, value] of Object.entries(obj)) {
+      if (this.settings.get(key)?.scope === "accountSynced") this.setSettingValue(key, JSON.stringify(value));
+    }
+  }
+
   private importConfig(document: string): void {
     try {
       const doc = JSON.parse(document) as ConfigDocument;
@@ -1936,6 +2495,7 @@ export class FakeCore implements CoreHandle {
       for (const s of doc.shortcuts ?? []) this.shortcutOverrides.set(s.actionId, s.shortcut);
       if (doc.audio) this.audio = doc.audio;
       if (doc.autoplay) this.autoplaySettings = doc.autoplay;
+      this.refreshSaver();
       this.emitSnapshot();
       this.emit({ type: "filtersChanged", data: { filters: this.filters } });
       this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });
@@ -1947,6 +2507,57 @@ export class FakeCore implements CoreHandle {
   }
 
   // ---- Connect ---------------------------------------------------------
+  private preview: PreviewState | undefined;
+  /** Set when this device's own playback was paused for the preview. */
+  private previewHold: { wasPlaying: boolean } | undefined;
+
+  private previewStart(trackId: string): void {
+    if (this.preview?.trackId === trackId) {
+      this.previewToggle();
+      return;
+    }
+    const t = this.lib?.tracksById.get(trackId);
+    const duration = t?.durationMs ?? 0;
+    const remote = !!this.transport.lease.owner && this.transport.lease.owner !== this.config.deviceId;
+    if (!this.preview) {
+      this.previewHold = remote ? undefined : { wasPlaying: this.transport.position.isPlaying };
+      if (!remote && this.transport.position.isPlaying) this.setPlaying(false);
+    }
+    this.preview = { trackId, title: t?.title ?? trackId, durationMs: duration, positionMs: Math.floor(duration * 0.3), playing: true, takenAt: Date.now() };
+    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+  }
+
+  private previewToggle(): void {
+    const current = this.preview;
+    if (!current) return;
+    const position = this.previewPosition(current);
+    this.preview = { ...current, playing: !current.playing, positionMs: position, takenAt: Date.now() };
+    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+  }
+
+  private previewSeek(positionMs: number): void {
+    const current = this.preview;
+    if (!current) return;
+    const cap = current.durationMs > 0 ? current.durationMs : positionMs;
+    this.preview = { ...current, positionMs: Math.max(0, Math.min(cap, positionMs)), takenAt: Date.now() };
+    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+  }
+
+  private previewStop(restore: boolean): void {
+    if (!this.preview) return;
+    const hold = this.previewHold;
+    this.preview = undefined;
+    this.previewHold = undefined;
+    this.emit({ type: "previewChanged", data: { preview: undefined } });
+    if (restore && hold?.wasPlaying && this.transport.lease.owner === this.config.deviceId) this.setPlaying(true);
+  }
+
+  private previewPosition(current: PreviewState): number {
+    const extra = current.playing ? Math.max(0, Date.now() - current.takenAt) : 0;
+    const at = current.positionMs + extra;
+    return current.durationMs > 0 ? Math.min(current.durationMs, at) : at;
+  }
+
   private handoffTo(deviceId: string): void {
     const target = this.devices.find((d) => d.id === deviceId);
     if (!target) return;
@@ -1970,7 +2581,7 @@ export class FakeCore implements CoreHandle {
     const idx = tracks.indexOf(t.id);
     this.resumeOffer = undefined;
     this.emit({ type: "resumeOfferChanged", data: { offer: undefined } });
-    this.playContext({ serverId: this.lib.serverId, kind: { type: "album", data: { id: t.albumId } }, label: album?.name ?? "Album", sort: "default", tracks: [] }, idx, false, true);
+    this.playContext({ source: this.lib.serverId, kind: { type: "album", data: { id: t.albumId } }, label: album?.name ?? "Album", sort: "default", tracks: [] }, idx, false, true);
     this.seek(offer.positionMs);
   }
 
@@ -2006,12 +2617,20 @@ export class FakeCore implements CoreHandle {
       }
       case "love": {
         const t = this.currentTrack();
-        if (t) this.setLoved([{ type: "track", data: { id: t.id } }], !t.loved);
+        if (t) this.setLoved([{ type: "track", data: { id: t.id, source: t.serverId } }], !t.loved);
         break;
       }
       case "rate": {
         const t = this.currentTrack();
-        if (t && value !== undefined) this.setRating([{ type: "track", data: { id: t.id } }], Math.round(value));
+        if (t && value !== undefined) this.setRating([{ type: "track", data: { id: t.id, source: t.serverId } }], Math.round(value));
+        break;
+      }
+      case "stash": {
+        const t = this.currentTrack();
+        if (!t) break;
+        const listed = this.stash.filter((e) => !e.removed && e.trackId === t.id).map((e) => e.entryId);
+        if (listed.length) this.handle({ type: "stashRemove", data: { entry_ids: listed } });
+        else this.stashAdd([t.id]);
         break;
       }
     }
@@ -2021,11 +2640,11 @@ export class FakeCore implements CoreHandle {
   private mediaSessionState(): MediaSessionState {
     const t = this.currentTrack();
     const order = this.actionOrders.get("mediaSession") ?? DEFAULT_ORDERS.mediaSession ?? [];
-    const map: Record<string, MediaSessionAction[]> = { togglePlay: ["play", "pause"], pause: ["pause"], stop: ["stop"], next: ["next"], previous: ["previous"], shuffle: ["shuffle"], repeat: ["repeat"], love: ["love"], rate: ["rate"] };
+    const map: Record<string, MediaSessionAction[]> = { togglePlay: ["play", "pause"], pause: ["pause"], stop: ["stop"], next: ["next"], previous: ["previous"], shuffle: ["shuffle"], repeat: ["repeat"], love: ["love"], rate: ["rate"], stash: ["stash"] };
     const actions = [...new Set(order.flatMap((id) => map[canonicalActionId(id)] ?? []))];
     actions.push("seek");
     return {
-      metadata: t ? { title: t.title, artist: t.artist, album: t.album, durationMs: t.durationMs, artworkPath: t.coverArt ? this.artworkPath(t.coverArt, 300) : undefined, trackId: t.id, loved: t.loved, rating: t.rating } : undefined,
+      metadata: t ? { title: t.title, artist: t.artist, album: t.album, durationMs: t.durationMs, artworkPath: t.coverArt ? this.artworkPath(t.coverArt, 300) : undefined, trackId: t.id, loved: t.loved, rating: t.rating, stashed: this.stash.some((e) => !e.removed && e.trackId === t.id) } : undefined,
       isPlaying: this.transport.position.isPlaying,
       position: this.transport.position,
       shuffle: !!this.session.shuffle,
@@ -2041,45 +2660,61 @@ export class FakeCore implements CoreHandle {
     const actionId = canonicalActionId(rawId);
     const trackIds = this.targetTrackIds(target);
     const sid = this.lib?.serverId ?? "";
-    const ratingTargets = target.type === "albums" ? target.data.ids.map((id) => ({ type: "album" as const, data: { id } })) : trackIds.map((id) => ({ type: "track" as const, data: { id } }));
+    const ratingTargets: RatingTarget[] = target.type === "albums" ? target.data.ids.map((id) => ({ type: "album" as const, data: { id } })) : trackIds.map((id) => ({ type: "track" as const, data: { id, source: sid } }));
     switch (actionId) {
       case "play":
         if (target.type === "albums" && target.data.ids.length === 1) {
           const a = this.lib?.albums.find((x) => x.id === target.data.ids[0]);
-          if (a) this.playContext({ serverId: sid, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, 0, false, true);
+          if (a) this.playContext({ source: sid, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, 0, false, true);
         } else if (target.type === "playlists" && target.data.ids.length === 1) {
           const p = this.lib?.playlists.find((x) => x.playlist.id === target.data.ids[0]);
-          if (p) this.playContext({ serverId: sid, kind: { type: "playlist", data: { id: p.playlist.id } }, label: p.playlist.name, sort: "default", tracks: [] }, 0, false, true);
+          if (p) this.playContext({ source: sid, kind: { type: "playlist", data: { id: p.playlist.id } }, label: p.playlist.name, sort: "default", tracks: [] }, undefined, false, true);
         } else if (target.type === "artists" && target.data.ids.length === 1) {
           const a = this.lib?.artists.find((x) => x.id === target.data.ids[0]);
-          if (a) this.playContext({ serverId: sid, kind: { type: "artist", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, 0, false, true);
+          if (a) this.playContext({ source: sid, kind: { type: "artist", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, undefined, false, true);
         } else if (trackIds.length) {
-          this.playContext({ serverId: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: "Selection", sort: "default", tracks: trackIds }, 0, false, true);
+          this.playContext({ source: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: "Selection", sort: "default", tracks: this.refs(trackIds) }, 0, false, true);
         }
         return;
       case "playShuffled":
-        if (trackIds.length) this.playContext({ serverId: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: this.targetLabel(target), sort: "default", tracks: trackIds }, undefined, true, true);
+        if (trackIds.length) this.playContext({ source: sid, kind: { type: "adHoc", data: { label: "Selection" } }, label: this.targetLabel(target), sort: "default", tracks: this.refs(trackIds) }, undefined, true, true);
         return;
       case "playNext":
-        if (target.type === "queueItems") {
-          const keys = new Set(target.data.keys);
-          this.withUndo("Play next", () => {
-            const s = this.session;
-            const moved = [...s.insertions.filter((i) => keys.has(i.key)), ...s.history.filter((i) => keys.has(i.key)).map((i) => ({ ...i, key: newKey() }))];
-            s.insertions = [...moved, ...s.insertions.filter((i) => !keys.has(i.key))];
-            s.history = s.history.filter((i) => !keys.has(i.key));
-          });
-        } else this.insert(trackIds, true);
+      case "addToQueue":
+      case "playLater": {
+        if (actionId === "addToQueue" && !this.queueSection()) return;
+        const placement: Q.QueuePlacement = actionId === "playNext" ? "next" : actionId === "addToQueue" ? "group" : "later";
+        if (target.type === "queueItems") this.insert([], target.data.keys, placement);
+        else this.insert(trackIds, [], placement);
         return;
-      case "playLater":
-        this.insert(trackIds, false);
+      }
+      case "clearQueueGroup":
+        this.handle({ type: "clearQueueGroup" });
+        return;
+      case "stashQueueGroup":
+        this.handle({ type: "stashQueueGroup" });
+        return;
+      case "preview":
+        if (trackIds.length === 1) this.previewStart(trackIds[0]!);
+        return;
+      case "stash":
+        this.stashAdd(trackIds);
+        return;
+      case "snooze":
+        this.applySnooze(trackIds, "week");
+        return;
+      case "unsnooze":
+        this.clearSnooze(trackIds);
+        return;
+      case "clearStash":
+        this.handle({ type: "stashClear" });
         return;
       case "love":
       case "unlove": {
         const loved = actionId === "love";
         if (target.type === "none") {
           const t = this.currentTrack();
-          if (t) this.setLoved([{ type: "track", data: { id: t.id } }], loved);
+          if (t) this.setLoved([{ type: "track", data: { id: t.id, source: t.serverId } }], loved);
         } else if (target.type === "artists") for (const id of target.data.ids) this.handle({ type: "setArtistLoved", data: { artist_id: id, loved } });
         else this.setLoved(ratingTargets, loved);
         return;
@@ -2165,7 +2800,7 @@ export class FakeCore implements CoreHandle {
       default:
         if (/^rate[0-5]$/.test(actionId)) {
           const r = Number(actionId.slice(4));
-          const targets = ratingTargets.length ? ratingTargets : this.currentTrack() ? [{ type: "track" as const, data: { id: this.currentTrack()!.id } }] : [];
+          const targets = ratingTargets.length ? ratingTargets : this.currentTrack() ? [{ type: "track" as const, data: { id: this.currentTrack()!.id, source: this.currentTrack()!.serverId } }] : [];
           if (targets.length) this.setRating(targets, r);
           return;
         }
@@ -2178,7 +2813,7 @@ export class FakeCore implements CoreHandle {
     if (!this.lib) return [];
     switch (target.type) {
       case "tracks":
-        return target.data.ids;
+        return target.data.tracks.map((r) => r.id);
       case "albums":
         return target.data.ids.flatMap((id) => this.lib?.albumTracks.get(id) ?? []);
       case "artists":
@@ -2186,9 +2821,8 @@ export class FakeCore implements CoreHandle {
       case "playlists":
         return target.data.ids.flatMap((id) => this.lib?.playlists.find((p) => p.playlist.id === id)?.trackIds ?? []);
       case "queueItems": {
-        const v = this.queueView();
-        const all = [...v.history, ...(v.current ? [v.current] : []), ...v.playingNext, ...v.upcoming];
-        return target.data.keys.map((k) => all.find((e) => e.item.key === k)?.track.id).filter((x): x is string => !!x);
+        const all = this.session.list;
+        return target.data.keys.map((k) => all.find((i) => i.key === k)?.track.id).filter((x): x is string => !!x);
       }
       case "savedQueue":
       case "none":
@@ -2217,8 +2851,8 @@ export class FakeCore implements CoreHandle {
   }
 
   private emitNowPlaying(): void {
-    const cur = this.session.current;
-    const t = cur ? this.lib?.tracksById.get(cur.trackId) : undefined;
+    const cur = this.cur();
+    const t = cur ? this.lib?.tracksById.get(cur.track.id) : undefined;
     this.emit({ type: "nowPlayingChanged", data: { entry: cur && t ? { item: cur, track: summary(t) } : undefined } });
     this.emitMediaSession();
   }
@@ -2283,6 +2917,11 @@ export class FakeCore implements CoreHandle {
 
   // ---- Queries ---------------------------------------------------------
   async query(q: Query): Promise<QueryResult> {
+    // The one query that waits on the (simulated) network.
+    if (q.type === "roomDiagnostics") return { type: "text", data: await this.roomDiagnostics() };
+    // Share links come from the server or Squigly; e2e can make them slow to see the busy toast.
+    const shareDelay = Number(process.env.HOCKET_FAKE_SHARE_DELAY_MS) || 0;
+    if (shareDelay > 0 && (q.type === "createShare" || q.type === "songLink")) await new Promise((r) => setTimeout(r, shareDelay));
     try {
       return this.answer(q);
     } catch (err) {
@@ -2292,12 +2931,15 @@ export class FakeCore implements CoreHandle {
   }
 
   private answer(q: Query): QueryResult {
-    const lib = this.lib;
+    // A list query naming an account other than the library's (the source filter chip) lists
+    // nothing: the fake core keeps one library, on the first account.
+    const elsewhere = (sid: string | undefined) => !!sid && sid !== this.lib?.serverId;
+    const lib = "data" in q && q.data && typeof q.data === "object" && "server_id" in q.data && elsewhere((q.data as { server_id?: string }).server_id) && q.type !== "playlistMembership" ? undefined : this.lib;
     switch (q.type) {
       case "snapshot":
         return { type: "snapshotResult", data: this.snapshot() };
-      case "servers":
-        return { type: "servers", data: this.servers };
+      case "accounts":
+        return { type: "accounts", data: this.servers };
       case "tracks": {
         const all = this.sortTracks(q.data.filter ? this.evaluateNode(q.data.filter) : (lib?.tracks ?? []), q.data.sort, q.data.descending);
         return { type: "tracks", data: { items: all.slice(q.data.page.offset, q.data.page.offset + q.data.page.limit), offset: q.data.page.offset, total: all.length } };
@@ -2305,9 +2947,20 @@ export class FakeCore implements CoreHandle {
       case "trackCount":
         return { type: "count", data: q.data.filter ? this.evaluateNode(q.data.filter).length : (lib?.tracks.length ?? 0) };
       case "track":
-        return { type: "trackDetail", data: lib?.tracksById.get(q.data.id) };
+        return { type: "trackDetail", data: lib?.tracksById.get(q.data.track.id) };
       case "tracksByIds":
-        return { type: "trackList", data: q.data.ids.map((id) => lib?.tracksById.get(id)).filter((t): t is Track => !!t) };
+        return { type: "trackList", data: q.data.tracks.map((r) => lib?.tracksById.get(r.id)).filter((t): t is Track => !!t) };
+      case "trackSources": {
+        const tr = lib?.tracksById.get(q.data.track.id);
+        const account = this.servers.find((s) => s.id === tr?.serverId);
+        return { type: "trackSources", data: tr ? [{ track: tr, accountId: tr.serverId, accountName: account?.name ?? "", available: true, manual: false, preferred: true }] : [] };
+      }
+      case "linkCandidates": {
+        // One library: nothing on another account to link to.
+        return { type: "trackList", data: [] };
+      }
+      case "homeShelves":
+        return { type: "homeShelves", data: this.homeShelves() };
       case "albums": {
         let items = lib?.albums ?? [];
         if (q.data.artist_id) items = items.filter((a) => a.artistId === q.data.artist_id);
@@ -2329,8 +2982,45 @@ export class FakeCore implements CoreHandle {
         const items = this.sortArtists(lib?.artists ?? [], q.data.sort ?? "default", q.data.descending ?? false);
         return { type: "artists", data: { items: items.slice(q.data.page.offset, q.data.page.offset + q.data.page.limit), offset: q.data.page.offset, total: items.length } };
       }
-      case "artist":
-        return { type: "artistDetail", data: lib?.artists.find((a) => a.id === q.data.id) };
+      case "artist": {
+        const found = lib?.artists.find((a) => a.id === q.data.id);
+        if (found || !lib) return { type: "artistDetail", data: found };
+        // As the core: a guest with no artist row is made from the tracks that credit them.
+        const credited = lib.tracks.filter((tr) => creditsArtist(tr, q.data.id));
+        const first = credited[0];
+        if (!first) return { type: "artistDetail", data: undefined };
+        const name = first.artists?.find((x) => x.id === q.data.id)?.name ?? first.artist ?? "";
+        return { type: "artistDetail", data: { id: q.data.id, serverId: first.serverId, name, albumCount: 0, songCount: credited.length, coverArt: undefined, artistImageUrl: undefined, loved: false, musicBrainzId: undefined, biography: undefined } };
+      }
+      case "artistAppearsOn": {
+        const on = new Set((lib?.tracks ?? []).filter((tr) => creditsArtist(tr, q.data.id)).map((tr) => tr.albumId));
+        const items = this.sortAlbums((lib?.albums ?? []).filter((a) => a.artistId !== q.data.id && on.has(a.id)), "year", true);
+        return { type: "albums", data: { items, offset: 0, total: items.length } };
+      }
+      case "artistInfo": {
+        const artist = lib?.artists.find((a) => a.id === q.data.id);
+        if (!artist) return { type: "externalInfo", data: undefined };
+        return {
+          type: "externalInfo",
+          data: {
+            text: `${artist.name} make quiet, close-miked songs about leaving and coming home. They record in kitchens and church halls and tour mostly by train.`,
+            lastFmUrl: `https://www.last.fm/music/${encodeURIComponent(artist.name)}`,
+            similarArtists: (lib?.artists ?? []).filter((a) => a.id !== artist.id).slice(0, 5),
+          },
+        };
+      }
+      case "albumInfo": {
+        const album = lib?.albums.find((a) => a.id === q.data.id);
+        if (!album) return { type: "externalInfo", data: undefined };
+        return {
+          type: "externalInfo",
+          data: {
+            text: `${album.name} was recorded over two winters with the windows open, so you can hear the street in the quiet parts.`,
+            lastFmUrl: `https://www.last.fm/music/${encodeURIComponent(album.artist ?? "")}/${encodeURIComponent(album.name)}`,
+            similarArtists: [],
+          },
+        };
+      }
       case "artistTopSongs": {
         const ids = (lib?.artistAlbums.get(q.data.id) ?? []).flatMap((a) => lib?.albumTracks.get(a) ?? []);
         const tracks = ids.map((id) => lib?.tracksById.get(id)).filter((t): t is Track => !!t).sort((a, b) => b.playCount - a.playCount);
@@ -2349,7 +3039,7 @@ export class FakeCore implements CoreHandle {
       }
       case "playlistMembership": {
         // Like the core: every playlist (name order) with the indices where it holds any of the tracks.
-        const wanted = new Set(q.data.track_ids);
+        const wanted = new Set(q.data.tracks.map((r) => r.id));
         const data = [...(lib?.playlists ?? [])].sort((a, b) => a.playlist.name.localeCompare(b.playlist.name)).map((p) => ({
           playlistId: p.playlist.id,
           entries: p.trackIds.flatMap((trackId, index) => (wanted.has(trackId) ? [{ trackId, index }] : [])),
@@ -2358,9 +3048,11 @@ export class FakeCore implements CoreHandle {
         return { type: "membership", data };
       }
       case "search":
-        return { type: "search", data: this.search(q.data.query, q.data.limit, q.data.request_id, q.data.include_server) };
+        return { type: "search", data: lib ? this.search(q.data.query, q.data.limit, q.data.request_id, q.data.include_server) : ({ query: q.data.query, tracks: [], albums: [], artists: [], playlists: [], lyrics: [], requestId: q.data.request_id, fromServer: false } satisfies SearchResults) };
       case "queue":
         return { type: "queue", data: this.queueView() };
+      case "queueRange":
+        return { type: "queue", data: this.queueView({ start: q.data.start, count: q.data.count }) };
       case "savedQueues":
         return { type: "savedQueues", data: this.savedQueues };
       case "lyrics": {
@@ -2394,6 +3086,10 @@ export class FakeCore implements CoreHandle {
         return { type: "settingDetail", data: this.settings.get(q.data.key) };
       case "audioSettings":
         return { type: "audio", data: this.audio };
+      case "transitions":
+        return { type: "transitions", data: this.transitions };
+      case "trackAnalysis":
+        return { type: "analysis", data: undefined };
       case "outputDevices":
         return { type: "outputDevices", data: this.outputDevices };
       case "connection":
@@ -2410,12 +3106,39 @@ export class FakeCore implements CoreHandle {
         return { type: "path", data: this.artworkPath(q.data.id, q.data.size) };
       case "mediaSource": {
         const t = lib?.tracksById.get(q.data.track_id);
-        return { type: "source", data: t ? { key: this.session.current?.key ?? "", track: summary(t), url: `${this.servers[0]?.url ?? "https://fake"}/rest/stream?id=${t.id}`, headers: {}, mimeType: t.contentType, gainDb: 0, transcoded: false } : undefined };
+        return { type: "source", data: t ? { key: this.cur()?.key ?? "", track: summary(t), url: `${this.servers[0]?.url ?? "https://fake"}/rest/stream?id=${t.id}`, headers: {}, mimeType: t.contentType, gainDb: 0, transcoded: false } : undefined };
       }
       case "diagnostics":
         return { type: "text", data: this.diagnostics() };
+      case "roomDiagnostics":
+        throw new Error("roomDiagnostics is answered by query()");
+      case "setupSettings":
+        return { type: "text", data: this.setupSettings() };
       case "configDocument":
         return { type: "text", data: JSON.stringify(this.configDocument(q.data.include_secrets), null, 2) };
+      case "createShare": {
+        const ids = q.data.ids.filter((id) => id.length > 0);
+        return { type: "share", data: ids.length ? { url: `https://navidrome.example/share/${ids.join("-")}` } : undefined };
+      }
+      case "exportAudio":
+        return { type: "audioFile", data: undefined };
+      case "songLink": {
+        const id = q.data.track_id || q.data.album_id;
+        return { type: "songLink", data: id ? `https://squigly.link/${q.data.track_id ? "song" : "album"}/fake/${id}` : undefined };
+      }
+      case "reportUpload":
+        return { type: "reportUpload", data: this.reportUpload?.status };
+      case "stash":
+        return { type: "stashItems", data: this.stashItems() };
+      case "snoozes":
+        return { type: "snoozeItems", data: this.snoozeItems() };
+      case "albumResume":
+        return { type: "albumResumeState", data: this.albumResumes.find((x) => x.albumId === q.data.id) };
+      case "identity":
+        return { type: "identity", data: this.identity };
+      case "ytmJsHostScript":
+        // The fake never sends ytmJsRequest.
+        return { type: "text", data: "" };
       default: {
         const never: never = q;
         void never;
@@ -2431,7 +3154,9 @@ export class FakeCore implements CoreHandle {
     const anyDownloaded = tracks.some((t) => t.offline === "downloaded") || (target.type === "playlists" && this.pins.some((p) => p.target.type === "playlist" && target.data.ids.includes(p.target.data.id)));
     const sq = target.type === "savedQueue" ? this.savedQueues.find((s) => s.id === target.data.id) : undefined;
     return describeActions(surface, target, this.actionOrders.get(surface), {
-      hasCurrent: !!this.session.current,
+      hasCurrent: !!this.cur(),
+      queueSection: this.queueSection(),
+      queueGroupCount: Q.groupEnd(this.session) - Q.afterCurrent(this.session),
       currentLoved: this.currentTrack()?.loved,
       canUndo: this.undoStack.length > 0,
       canRedo: this.redoStack.length > 0,
@@ -2482,25 +3207,77 @@ export class FakeCore implements CoreHandle {
   }
   private coverFiles: string[] | undefined;
 
+  /** Like the core's: Continue listening, then the library's account's shelves. */
+  private homeShelves(): HomeShelf[] {
+    const lib = this.lib;
+    if (!lib) return [];
+    const account = this.servers.find((s) => s.id === lib.serverId);
+    const several = this.servers.length > 1;
+    const title = (base: string) => (several && account?.name ? `${base} \u00b7 ${account.name}` : base);
+    const recent: Album[] = [];
+    for (const h of this.playHistory) {
+      const a = lib.albums.find((x) => x.id === lib.tracksById.get(h.track.id)?.albumId);
+      if (a && !recent.includes(a)) recent.push(a);
+      if (recent.length >= 20) break;
+    }
+    const by = (key: (a: Album) => number) => [...lib.albums].sort((x, y) => key(y) - key(x)).slice(0, 20);
+    const shelf = (id: string, name: string, albums: Album[], defaultOn: boolean, accountId?: string): HomeShelf => ({ id, accountId, title: name, kind: "albums", albums, tracks: [], playlists: [], defaultOn });
+    return [
+      shelf("hocket/continueListening", "Continue listening", recent, true),
+      shelf(`${lib.serverId}/recentlyAdded`, title("Recently added"), by((a) => a.created ?? 0), true, lib.serverId),
+      shelf(`${lib.serverId}/mostPlayed`, title("Most played"), by((a) => a.playCount ?? 0), false, lib.serverId),
+      shelf(`${lib.serverId}/recentlyPlayed`, title("Recently played"), recent, false, lib.serverId),
+    ];
+  }
+
   private search(query: string, limit: number, requestId: string, includeServer: boolean): SearchResults {
     const q = query.trim().toLowerCase();
     const lib = this.lib;
-    const empty: SearchResults = { requestId, query, tracks: [], albums: [], artists: [], playlists: [], fromServer: false };
+    const empty: SearchResults = { requestId, query, tracks: [], albums: [], artists: [], playlists: [], fromServer: false, lyrics: [] };
     if (!q || !lib) return empty;
     const tracks = lib.tracks.filter((t) => t.title.toLowerCase().includes(q) || t.artist?.toLowerCase().includes(q) || t.album?.toLowerCase().includes(q));
     const albums = lib.albums.filter((a) => a.name.toLowerCase().includes(q) || a.artist?.toLowerCase().includes(q));
     const artists = lib.artists.filter((a) => a.name.toLowerCase().includes(q));
     const playlists = lib.playlists.filter((p) => p.playlist.name.toLowerCase().includes(q)).map((p) => p.playlist);
-    const local: SearchResults = { requestId, query, tracks: tracks.slice(0, limit).map(summary), albums: albums.slice(0, limit), artists: artists.slice(0, limit), playlists: playlists.slice(0, limit), fromServer: false };
+    const lyrics = this.lyricHits(q, limit);
+    const local: SearchResults = { requestId, query, tracks: tracks.slice(0, limit).map(summary), albums: albums.slice(0, limit), artists: artists.slice(0, limit), playlists: playlists.slice(0, limit), fromServer: false, lyrics };
     if (includeServer) {
       // "search3 fires in parallel only when local results are thin": server batch after a delay.
       this.later(450, () => {
         const extraTracks = tracks.slice(limit, limit + Math.max(3, Math.floor(limit / 2)));
         const extraAlbums = albums.slice(limit, limit + 3);
-        this.emit({ type: "searchResults", data: { results: { requestId, query, tracks: extraTracks.map(summary), albums: extraAlbums, artists: artists.slice(limit, limit + 3), playlists: [], fromServer: true } } });
+        this.emit({ type: "searchResults", data: { results: { requestId, query, tracks: extraTracks.map(summary), albums: extraAlbums, artists: artists.slice(limit, limit + 3), playlists: [], fromServer: true, lyrics: [] } } });
       });
     }
     return local;
+  }
+
+  /** Lyrics the fake has "cached" because those songs were played. */
+  private lyricHits(q: string, limit: number): LyricHit[] {
+    const lib = this.lib;
+    if (!lib || !q) return [];
+    const verses = [
+      "We drove out past the harbour lights",
+      "And the radio was only static",
+      "You said the city never sleeps",
+      "But tonight it's holding its breath",
+    ];
+    const out: LyricHit[] = [];
+    for (let i = 0; i < lib.tracks.length && out.length < limit; i++) {
+      if (i % 4 === 3) continue;
+      const track = summary(lib.tracks[i]!);
+      const lines = verses.map((text, n) => ({ text, startMs: i % 4 === 2 ? undefined : 8_000 + n * 6_000 }));
+      for (let n = 0; n < lines.length; n++) {
+        const here = lines[n]!;
+        const next = lines[n + 1];
+        const joined = next ? `${here.text}\n${next.text}` : here.text;
+        const at = joined.toLowerCase().indexOf(q);
+        if (at < 0) continue;
+        out.push({ track, line: at + q.length <= here.text.length ? here.text : joined, matchStart: at, matchEnd: at + q.length, startMs: here.startMs });
+        break;
+      }
+    }
+    return out;
   }
 
   private related(trackId: string, count: number): RelatedTrack[] {
@@ -2584,7 +3361,7 @@ export class FakeCore implements CoreHandle {
       `tracks: ${this.lib?.tracks.length ?? 0}`,
       `jobs: ${this.jobs.length}, problems: ${this.problems.length}`,
       `undo depth: ${this.undoStack.length}`,
-      `battery saver: ${this.batterySaver}`,
+      `battery saver: ${this.batterySaver.level}${this.batterySaver.automatic ? " (automatic)" : ""}, power save: ${this.powerSave}`,
       `network: ${JSON.stringify(this.network)}`,
       `stream cache: ${this.lib ? this.cache.usedBytes(this.lib.tracksById) : 0} bytes (${this.cache.partialBytes()} partial), budget ${this.cacheBudget().bytes}${this.cacheBudget().auto ? " (automatic)" : ""}`,
       `primes: ${this.cache.primes.length}`,
@@ -2853,4 +3630,19 @@ function noticeMessage(code: PlayerNoticeCode, detail = ""): string {
     case "couldNotPlayStopped": return `Couldn't play ${detail}; stopped after 3 unplayable tracks`;
     case "autoplayFoundNothing": return "Autoplay found nothing to add";
   }
+}
+
+/** The media-session transport rows; mirrors `MEDIA_SESSION_TRANSPORT` in the core. */
+const MEDIA_SESSION_TRANSPORT = new Set(["previous", "togglePlay", "play", "pause", "next"]);
+
+/** Mirrors the core's `show_new_stash`: a newly enabled Stash moves right after the transport rows. */
+function showNewStash(previous: readonly string[], ids: string[]): string[] {
+  if (!ids.includes("stash") || previous.includes("stash")) return ids;
+  const rest = ids.filter((id) => id !== "stash");
+  let at = 0;
+  rest.forEach((id, i) => {
+    if (MEDIA_SESSION_TRANSPORT.has(id)) at = i + 1;
+  });
+  rest.splice(at, 0, "stash");
+  return rest;
 }

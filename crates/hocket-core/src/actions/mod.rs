@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{
     ActionDescriptor, ActionTarget, Command, ContextKind, MediaSessionAction, PinTarget, Platform,
     PlayContextArgs, PlaylistId, QueueContext, QueueKey, RatingTarget, RepeatMode, ServerId,
-    Shortcut, SortOrder, TrackId,
+    Shortcut, SortOrder, SourceId, TrackId, TrackRef,
 };
 
 pub mod chord;
@@ -106,6 +106,8 @@ pub struct StateView {
     pub repeat: RepeatMode,
     pub autoplay: bool,
     pub current_track_id: Option<TrackId>,
+    /// The current track, named by its account.
+    pub current_track: Option<TrackRef>,
     pub current_album_id: Option<String>,
     pub current_artist_id: Option<String>,
     pub current_loved: bool,
@@ -135,6 +137,16 @@ pub struct StateView {
     pub volume_unknown: bool,
     /// What's pinned to the Library (`library.pins`), in order.
     pub library_pins: Vec<LibraryPin>,
+    /// Track ids snoozed right now.
+    pub snoozed_tracks: Vec<TrackId>,
+    /// The Queue section setting (`queue.section`): "Add to queue" and the
+    /// "Next in queue" group are offered.
+    pub queue_section: bool,
+    /// Entries in the "Next in queue" group.
+    pub queue_group_count: u32,
+    /// Sources whose accounts keep no library of their own (anonymous
+    /// YouTube Music): their songs go into the Hocket library.
+    pub hocket_library_sources: Vec<SourceId>,
 }
 
 /// One entry of `library.pins`.
@@ -170,23 +182,33 @@ impl LibraryPin {
 /// Resolves what handlers need from the mirror. The actor implements it;
 /// [`NoResolver`] answers nothing (tests, pure descriptors).
 pub trait Resolver {
-    fn track_for_key(&self, key: &QueueKey) -> Option<TrackId>;
-    /// The queue item is still to play (in playing next or upcoming).
+    fn track_for_key(&self, key: &QueueKey) -> Option<TrackRef>;
+    /// A bare track id from a UI target, named by its account: the
+    /// highest-priority account whose mirror has it, else `fallback`.
+    fn track_ref(&self, id: &TrackId, fallback: &str) -> TrackRef {
+        TrackRef::new(fallback, id.clone())
+    }
+    /// The account an album, artist or playlist id belongs to (as for
+    /// [`Resolver::track_ref`]).
+    fn source_of(&self, _kind: &ContextKind) -> Option<SourceId> {
+        None
+    }
+    /// The queue item is still to play (after the pointer).
     fn is_upcoming(&self, _key: &QueueKey) -> bool {
         false
     }
-    fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId>;
-    fn context_label(&self, server_id: &str, kind: &ContextKind) -> String;
+    fn context_tracks(&self, source: &str, kind: &ContextKind) -> Vec<TrackRef>;
+    fn context_label(&self, source: &str, kind: &ContextKind) -> String;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoResolver;
 
 impl Resolver for NoResolver {
-    fn track_for_key(&self, _key: &QueueKey) -> Option<TrackId> {
+    fn track_for_key(&self, _key: &QueueKey) -> Option<TrackRef> {
         None
     }
-    fn context_tracks(&self, _server_id: &str, _kind: &ContextKind) -> Vec<TrackId> {
+    fn context_tracks(&self, _server_id: &str, _kind: &ContextKind) -> Vec<TrackRef> {
         vec![]
     }
     fn context_label(&self, _server_id: &str, kind: &ContextKind) -> String {
@@ -239,15 +261,45 @@ fn customisation_version() -> u32 {
     1
 }
 
+/// Actions version 3 added with a default chord (the stash's).
+const NEW_DEFAULT_CHORDS_V3: &[&str] = &["stash", "openStash"];
+
 /// The customisation version this build writes. 2: the Library holds the places the sidebar used to
-/// list, and things can be pinned to it (see [`migrate_order`]).
-const CUSTOMISATION_VERSION: u32 = 2;
+/// list, and things can be pinned to it; 3: the stash; 4: snooze (see [`migrate_order`]).
+const CUSTOMISATION_VERSION: u32 = 4;
+
+/// Transport rows of the media-session editor. Custom buttons (shuffle, repeat,
+/// love, stash) come after these; Android shows about two of the custom ones.
+const MEDIA_SESSION_TRANSPORT: &[&str] = &["previous", "togglePlay", "play", "pause", "next"];
+
+/// Put a newly enabled `stash` immediately after the transport rows, so it is
+/// one of the custom buttons the notification can show. A stash the user
+/// already had, including one they dragged down, stays where they put it.
+///
+/// Only the user-edit path (`set_action_order`) calls this. Loading a saved
+/// order must not: a reload has no previous order, so it would look like
+/// Stash had just been turned on.
+pub(crate) fn show_new_stash(previous: &[String], ids: Vec<String>) -> Vec<String> {
+    let turning_on = ids.iter().any(|id| id == "stash") && !previous.iter().any(|id| id == "stash");
+    if !turning_on {
+        return ids;
+    }
+    let rest: Vec<String> = ids.into_iter().filter(|id| id != "stash").collect();
+    let at = rest
+        .iter()
+        .rposition(|id| MEDIA_SESSION_TRANSPORT.contains(&id.as_str()))
+        .map_or(0, |i| i + 1);
+    let mut out = rest;
+    out.insert(at, "stash".to_string());
+    out
+}
 
 /// Brings an order saved by an older build up to date: a version-1 sidebar gains the Library (after
 /// Home), whose page now holds the places it used to list, and a version-1 context menu gains Pin /
-/// Unpin to Library (after Go to artist). Done once; the user can remove them again.
+/// Unpin to Library (after Go to artist); before version 3, the context menu and the now-playing
+/// menu gain Stash (after Add to playlist). Done once; the user can remove them again.
 fn migrate_order(surface: Surface, version: u32, mut ids: Vec<String>) -> Vec<String> {
-    if version >= 2 {
+    if version >= CUSTOMISATION_VERSION {
         return ids;
     }
     let mut insert_after = |anchor: &str, new: &[&str]| {
@@ -262,10 +314,26 @@ fn migrate_order(surface: Surface, version: u32, mut ids: Vec<String>) -> Vec<St
             .map_or(ids.len(), |i| i + 1);
         ids.splice(at..at, missing);
     };
-    match surface {
-        Surface::Sidebar => insert_after("navigateHome", &["navigateLibrary"]),
-        Surface::ContextMenu => insert_after("goToArtist", &["pinToLibrary", "unpinFromLibrary"]),
-        _ => {}
+    if version < 2 {
+        match surface {
+            Surface::Sidebar => insert_after("navigateHome", &["navigateLibrary"]),
+            Surface::ContextMenu => {
+                insert_after("goToArtist", &["pinToLibrary", "unpinFromLibrary"])
+            }
+            _ => {}
+        }
+    }
+    // 3: Stash, after Add to playlist.
+    if version < 3 && matches!(surface, Surface::ContextMenu | Surface::NowPlaying) {
+        insert_after("addToPlaylist", &["stash"]);
+    }
+    // 4: Snooze, on the song menu. Shown unless the listener takes it off.
+    if version < 4 && surface == Surface::ContextMenu {
+        for id in ["snooze", "unsnooze"] {
+            if !ids.iter().any(|existing| existing == id) {
+                ids.push(id.to_string());
+            }
+        }
     }
     ids
 }
@@ -403,8 +471,15 @@ impl ActionRegistry {
             .iter()
             .filter_map(|id| self.get(id))
             .filter(|d| Self::applies(d, target, Some(surface)))
+            .filter(|d| Self::offered(d, target, state))
             .map(|d| self.describe(d, target, state))
             .collect()
+    }
+
+    /// The action's availability hook: hidden actions (e.g. "Add to queue"
+    /// with the Queue section setting off) are left out of every surface.
+    pub fn offered(def: &ActionDef, target: &ActionTarget, state: &StateView) -> bool {
+        def.visible.is_none_or(|v| v(target, state))
     }
 
     pub fn actions_for_str(
@@ -423,7 +498,9 @@ impl ActionRegistry {
     pub fn all_for(&self, target: &ActionTarget, state: &StateView) -> Vec<ActionDescriptor> {
         defs::all()
             .iter()
+            .filter(|d| d.id != "preview")
             .filter(|d| Self::applies(d, target, Some(Surface::Palette)))
+            .filter(|d| Self::offered(d, target, state))
             .map(|d| self.describe(d, target, state))
             .collect()
     }
@@ -524,6 +601,10 @@ impl ActionRegistry {
         if self.get(id).is_none() {
             return Err(ActionError::UnknownAction(id.into()));
         }
+        // A preview has no menu to close it. It is not a bindable shortcut.
+        if id == "preview" {
+            return Err(ActionError::NotApplicable(id.into()));
+        }
         let chord = match chord {
             Some(c) => Some(normalise(c, self.platform)?),
             None => None,
@@ -597,8 +678,22 @@ impl ActionRegistry {
                 self.set_order(s, migrate_order(s, c.version, ids.clone()));
             }
         }
-        for (id, chord) in &c.shortcuts {
-            let _ = self.set_shortcut(id, chord.as_deref());
+        // Unbindings first, so a chord freed by one is there for the binding that takes it.
+        let (unbound, bound): (Vec<_>, Vec<_>) = c.shortcuts.iter().partition(|(_, c)| c.is_none());
+        for (id, chord) in unbound.into_iter().chain(bound) {
+            if let Err(ActionError::Conflict {
+                other_action_id, ..
+            }) = self.set_shortcut(id, chord.as_deref())
+            {
+                // A chord the user bound before a newer build gave it to a new action by default:
+                // the user's binding wins and the new action starts unbound (once; saved after).
+                if c.version < CUSTOMISATION_VERSION
+                    && NEW_DEFAULT_CHORDS_V3.contains(&other_action_id.as_str())
+                {
+                    self.overrides.insert(other_action_id, None);
+                    let _ = self.set_shortcut(id, chord.as_deref());
+                }
+            }
         }
     }
 
@@ -698,20 +793,20 @@ pub fn canonical_id(id: &str) -> &str {
 
 // -- helpers shared with the definitions ------------------------------------
 
-fn ids_of(target: &ActionTarget) -> &[String] {
+fn ids_of(target: &ActionTarget) -> Vec<&str> {
     match target {
-        ActionTarget::Tracks { ids }
-        | ActionTarget::Albums { ids }
+        ActionTarget::Tracks { tracks } => tracks.iter().map(|t| t.id.as_str()).collect(),
+        ActionTarget::Albums { ids }
         | ActionTarget::Artists { ids }
-        | ActionTarget::Playlists { ids } => ids,
-        ActionTarget::QueueItems { keys } => keys,
-        _ => &[],
+        | ActionTarget::Playlists { ids } => ids.iter().map(String::as_str).collect(),
+        ActionTarget::QueueItems { keys } => keys.iter().map(String::as_str).collect(),
+        _ => vec![],
     }
 }
 
 fn single_id(target: &ActionTarget) -> Option<&str> {
     let ids = ids_of(target);
-    (ids.len() == 1).then(|| ids[0].as_str())
+    (ids.len() == 1).then(|| ids[0])
 }
 
 fn context_of(
@@ -729,41 +824,58 @@ fn context_of(
         }
         _ => return None,
     };
+    let source = resolver
+        .source_of(&kind)
+        .unwrap_or_else(|| server_id.to_string());
     Some(QueueContext {
-        server_id: server_id.into(),
-        label: resolver.context_label(server_id, &kind),
-        tracks: resolver.context_tracks(server_id, &kind),
+        label: resolver.context_label(&source, &kind),
+        tracks: resolver.context_tracks(&source, &kind),
+        source,
         kind,
         sort: SortOrder::Default,
     })
 }
 
-/// Track ids a target stands for (resolving queue keys and containers).
-fn track_ids_of(target: &ActionTarget, state: &StateView, resolver: &dyn Resolver) -> Vec<TrackId> {
+/// The songs a target stands for (resolving queue keys and containers).
+fn track_refs_of(
+    target: &ActionTarget,
+    state: &StateView,
+    resolver: &dyn Resolver,
+) -> Vec<TrackRef> {
     let server = state.server_id.clone().unwrap_or_default();
+    let context = |kind: ContextKind| {
+        let source = resolver.source_of(&kind).unwrap_or_else(|| server.clone());
+        resolver.context_tracks(&source, &kind)
+    };
     match target {
-        ActionTarget::Tracks { ids } => ids.clone(),
+        ActionTarget::Tracks { tracks } => tracks.clone(),
         ActionTarget::QueueItems { keys } => keys
             .iter()
             .filter_map(|k| resolver.track_for_key(k))
             .collect(),
         ActionTarget::Albums { ids } => ids
             .iter()
-            .flat_map(|id| resolver.context_tracks(&server, &ContextKind::Album { id: id.clone() }))
+            .flat_map(|id| context(ContextKind::Album { id: id.clone() }))
             .collect(),
         ActionTarget::Artists { ids } => ids
             .iter()
-            .flat_map(|id| {
-                resolver.context_tracks(&server, &ContextKind::Artist { id: id.clone() })
-            })
+            .flat_map(|id| context(ContextKind::Artist { id: id.clone() }))
             .collect(),
         ActionTarget::Playlists { ids } => ids
             .iter()
-            .flat_map(|id| {
-                resolver.context_tracks(&server, &ContextKind::Playlist { id: id.clone() })
-            })
+            .flat_map(|id| context(ContextKind::Playlist { id: id.clone() }))
             .collect(),
-        ActionTarget::None => state.current_track_id.iter().cloned().collect(),
+        ActionTarget::None => state
+            .current_track
+            .clone()
+            .or_else(|| {
+                state
+                    .current_track_id
+                    .as_ref()
+                    .map(|id| TrackRef::new(server.clone(), id.clone()))
+            })
+            .into_iter()
+            .collect(),
         ActionTarget::SavedQueue { .. } => vec![],
     }
 }
@@ -778,9 +890,12 @@ fn rating_targets(
             .iter()
             .map(|id| RatingTarget::Album { id: id.clone() })
             .collect(),
-        _ => track_ids_of(target, state, resolver)
+        _ => track_refs_of(target, state, resolver)
             .into_iter()
-            .map(|id| RatingTarget::Track { id })
+            .map(|t| RatingTarget::Track {
+                id: t.id,
+                source: t.source,
+            })
             .collect(),
     }
 }
@@ -799,9 +914,9 @@ fn pin_targets(
             .iter()
             .map(|id| PinTarget::Playlist { id: id.clone() })
             .collect(),
-        _ => track_ids_of(target, state, resolver)
+        _ => track_refs_of(target, state, resolver)
             .into_iter()
-            .map(|id| PinTarget::Track { id })
+            .map(|t| PinTarget::Track { id: t.id })
             .collect(),
     }
 }
@@ -827,77 +942,55 @@ fn play_commands(
         ActionTarget::SavedQueue { id } => vec![Command::RestoreSavedQueue { id: id.clone() }],
         _ => {
             if let Some(context) = context_of(target, &server, resolver) {
+                // No start index: this is the whole context, not a song the listener picked.
+                // A snoozed first song stays out, including when shuffle would otherwise anchor it.
                 return vec![Command::PlayContext {
                     args: PlayContextArgs {
                         context,
-                        start_index: Some(0),
+                        start_index: None,
                         shuffle,
                         save_outgoing: true,
+                        start_position_ms: None,
                     },
                 }];
             }
-            let track_ids = track_ids_of(target, state, resolver);
-            if track_ids.is_empty() {
+            let tracks = track_refs_of(target, state, resolver);
+            if tracks.is_empty() {
                 return vec![];
             }
             vec![Command::PlayTracks {
-                server_id: server,
-                track_ids,
+                tracks,
                 start_index: 0,
                 label: "Selection".into(),
                 shuffle,
+                start_position_ms: 0,
             }]
         }
     }
 }
 
-fn queue_commands(
+/// Play next / add to queue / play later. Queue rows are named by key, so
+/// the reducer can move the ones still to play and copy the ones already
+/// played (it decides which; every replica agrees).
+pub(crate) fn queue_commands(
     target: &ActionTarget,
     state: &StateView,
     resolver: &dyn Resolver,
-    next: bool,
+    placement: crate::session::QueuePlacement,
 ) -> Vec<Command> {
-    let server_id = state.server_id.clone().unwrap_or_default();
-    // Play next on queue items still to play moves them up rather than queueing them again (#37):
-    // they are removed and queued again by the same PlayNext, behind the played ones (history, the
-    // current item), which are queued again as before. Removing them all in one op keeps every key
-    // valid even when a peer still keys context items by index (`ctx-<n>`), where a MoveQueueItem per
-    // key would renumber the others.
-    let (track_ids, remove) = match target {
-        ActionTarget::QueueItems { keys } if next => {
-            let (upcoming, played): (Vec<_>, Vec<_>) =
-                keys.iter().cloned().partition(|k| resolver.is_upcoming(k));
-            let mut track_ids =
-                track_ids_of(&ActionTarget::QueueItems { keys: played }, state, resolver);
-            let upcoming: Vec<_> = upcoming
-                .into_iter()
-                .filter_map(|k| resolver.track_for_key(&k).map(|t| (k, t)))
-                .collect();
-            let (remove, moved): (Vec<_>, Vec<_>) = upcoming.into_iter().unzip();
-            track_ids.extend(moved);
-            (track_ids, remove)
-        }
-        _ => (track_ids_of(target, state, resolver), vec![]),
+    use crate::session::QueuePlacement;
+    let (tracks, keys) = match target {
+        ActionTarget::QueueItems { keys } => (vec![], keys.clone()),
+        _ => (track_refs_of(target, state, resolver), vec![]),
     };
-    if track_ids.is_empty() {
+    if tracks.is_empty() && keys.is_empty() {
         return vec![];
     }
-    let mut out = vec![];
-    if !remove.is_empty() {
-        out.push(Command::RemoveQueueItems { keys: remove });
-    }
-    out.push(if next {
-        Command::PlayNext {
-            server_id,
-            track_ids,
-        }
-    } else {
-        Command::PlayLater {
-            server_id,
-            track_ids,
-        }
-    });
-    out
+    vec![match placement {
+        QueuePlacement::Next => Command::PlayNext { tracks, keys },
+        QueuePlacement::Group => Command::AddToQueue { tracks, keys },
+        QueuePlacement::Later => Command::PlayLater { tracks, keys },
+    }]
 }
 
 #[cfg(test)]

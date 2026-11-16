@@ -4,7 +4,8 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSP
 import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
-import { useApp } from "./store/app";
+import { showToast } from "./lib/ui-toast";
+import { SIDEBAR_RAIL, useApp } from "./store/app";
 import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
 import { Sidebar } from "./components/Sidebar";
@@ -18,7 +19,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Toasts } from "./components/Toasts";
 import { Dialogs } from "./components/Dialogs";
 import { Router } from "./views/Router";
-import { Setup } from "./views/Setup";
+import { Setup, useSetupSummary } from "./views/Setup";
 import { executeAction } from "./store/actions";
 import { nowPlayingAnnouncement } from "./lib/a11y";
 import { NARROW, useMediaQuery } from "./lib/media";
@@ -29,6 +30,8 @@ import { useTheme } from "./lib/theme";
 import { handOnFocus } from "./lib/focus";
 import { loadAmll } from "./lib/amll";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ReportUploadBar } from "./components/ReportUploadBar";
+import { useHeadphoneWatch } from "./lib/headphone-watch";
 
 // One retry: React.lazy keeps a failed import for good, which would leave fullscreen broken.
 const loadFullscreen = () => import("./views/FullscreenPlayer").then((m) => ({ default: m.FullscreenPlayer }));
@@ -37,7 +40,8 @@ const FullscreenPlayer = lazy(() => loadFullscreen().catch(loadFullscreen));
 export function App() {
   const ready = useApp((s) => s.ready);
   // The core probes before installing: ServersChanged only arrives once a server is real.
-  const hasServer = useApp((s) => s.servers.length > 0);
+  const hasServer = useApp((s) => s.accounts.length > 0);
+  const setupSummary = useSetupSummary();
   const coreKind = useApp((s) => s.meta?.coreKind);
   const network = useApp((s) => s.network);
   const panels = useApp((s) => s.panels);
@@ -49,6 +53,7 @@ export function App() {
   const narrow = useMediaQuery(NARROW);
   const loadedFs = useFullscreenChunk(ready, fullscreen);
   useLyricPlayerPreload();
+  useHeadphoneWatch();
   // The fullscreen player makes the rest of the window inert: if it fails it closes (the
   // window works again) and the next open starts afresh.
   const [fsFailures, setFsFailures] = useState(0);
@@ -57,25 +62,42 @@ export function App() {
     useApp.getState().setFullscreen(false);
   };
   useTheme();
+  useWindowChrome(fullscreen);
   useGlobalKeyboard(true);
   useDeepLinks();
+  useIdentityToasts();
   useQueueDropReveal();
+  // A pairing link that arrived before the accounts loaded (a cold start from the link): once this
+  // device turns out to be set up, it asks before leaving its own devices for theirs.
+  const pendingPair = useApp((s) => s.pendingPair);
+  useEffect(() => {
+    if (!ready || !hasServer || setupSummary || !pendingPair) return;
+    useApp.getState().setPendingPair(undefined);
+    useApp.getState().openDialog({
+      kind: "confirm",
+      title: t("pairDevice.joinTitle"),
+      message: t("pairDevice.joinBody"),
+      confirmLabel: t("pairDevice.joinConfirm"),
+      onConfirm: () => bridge().dispatch({ type: "pairWithInvite", data: { link: pendingPair } }),
+    });
+  }, [ready, hasServer, setupSummary, pendingPair]);
 
   if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
-  if (!hasServer) return <Setup />;
+  if (!hasServer || setupSummary) return <Setup />;
   const skip = (e: React.MouseEvent) => {
     e.preventDefault();
     document.getElementById("main")?.focus();
   };
   return (
-    <div className={`app ${narrow ? "narrow" : ""}`} data-testid="app">
+    <div className={`app ${narrow ? "narrow" : ""} ${fullscreen ? "player-open" : ""}`} data-testid="app">
       <header className="app-header" inert={modal}>
         <a href="#main" className="skip-link" onClick={skip} data-testid="skip-link">{t("a11y.skipToContent")}</a>
         {coreKind === "fake" ? <div className="dev-banner" data-testid="dev-banner">{t("app.devBanner")}</div> : null}
         <OfflineBanner offline={network?.kind === "offline"} />
+        <ReportUploadBar />
         <TopBar />
       </header>
-        <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
+        <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarCollapsed ? SIDEBAR_RAIL : panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
         <Sidebar />
         <main className="content" id="main" tabIndex={-1} data-testid="content">
           {/* Edit pins opens at the content's leading edge, beside the sidebar it edits. */}
@@ -95,6 +117,20 @@ export function App() {
       <Toasts />
     </div>
   );
+}
+
+/**
+ * The window chrome around the app: the platform on the root (Windows keeps the fullscreen player's
+ * buttons clear of its caption buttons), and main told when the fullscreen player covers the window.
+ */
+function useWindowChrome(playerOpen: boolean): void {
+  const platform = useApp((s) => s.meta?.platform);
+  useEffect(() => {
+    if (platform) document.documentElement.dataset.platform = platform;
+  }, [platform]);
+  useEffect(() => {
+    bridge().window.setPlayerOpen(playerOpen);
+  }, [playerOpen]);
 }
 
 /**
@@ -174,16 +210,31 @@ function useLyricPlayerPreload(): void {
 /** A `hocket://track/<id>` link becomes a toast with a Play-next action when the id is one of the current server's tracks. */
 async function confirmDeepLinkTrack(id: string): Promise<void> {
   const b = bridge();
-  const serverId = useApp.getState().servers[0]?.id;
+  const serverId = useApp.getState().accounts[0]?.id;
   if (!serverId) return;
   try {
-    const r = await b.query({ type: "track", data: { id } });
+    const r = await b.query({ type: "track", data: { track: { source: serverId, id } } });
     if (r.type !== "trackDetail" || !r.data || r.data.serverId !== serverId) return;
-    const command: Command = { type: "playNext", data: { server_id: serverId, track_ids: [id] } };
+    const command: Command = { type: "playNext", data: { tracks: [{ source: serverId, id }] } };
     useApp.getState().applyEvent({ type: "toast", data: { toast: { id: `deeplink-${id}`, message: t("toast.deepLinkTrack", { title: r.data.title }), actionLabel: t("toast.deepLinkPlay"), actionCommand: JSON.stringify(command), durationMs: 8000 } } });
   } catch (err) {
     console.warn("deep link track lookup failed", err);
   }
+}
+
+/** Toasts for pairing and the coordinator, as their answers arrive. */
+function useIdentityToasts() {
+  const paired = useApp((s) => s.pairing.paired);
+  const finished = useApp((s) => s.pairing.finished);
+  const joined = useApp((s) => s.coordinator.joined);
+  const failures = useApp((s) => s.pairing.failures);
+  useEffect(() => { if (paired) showToast(t("pairDevice.paired", { name: paired.name })); }, [paired]);
+  useEffect(() => { if (finished) showToast(t("pairDevice.joined")); }, [finished]);
+  useEffect(() => { if (joined) showToast(joined.owner ? t("identity.claimed") : t("identity.joinedCoordinator")); }, [joined]);
+  useEffect(() => {
+    const error = useApp.getState().pairing.error;
+    if (failures && error && useApp.getState().dialog?.kind !== "pairDevice") showToast(t("pairDevice.failed", { message: error }));
+  }, [failures]);
 }
 
 function useDeepLinks() {
@@ -194,6 +245,30 @@ function useDeepLinks() {
       // Main already validated and canonicalised the link.
       const link = parseDeepLink(url);
       if (!link || link.kind === "open") return;
+      if (link.kind === "pair") {
+        // Another device's pairing invite: the setup screen joins with it; a set-up device asks first
+        // (it leaves its own devices and queue for theirs).
+        if (useApp.getState().accounts.length === 0) return useApp.getState().setPendingPair(url);
+        useApp.getState().openDialog({
+          kind: "confirm",
+          title: t("pairDevice.joinTitle"),
+          message: t("pairDevice.joinBody"),
+          confirmLabel: t("pairDevice.joinConfirm"),
+          onConfirm: () => bridge().dispatch({ type: "pairWithInvite", data: { link: url } }),
+        });
+        return;
+      }
+      if (link.kind === "claim") {
+        // A coordinator's claim code: never claimed without asking.
+        useApp.getState().openDialog({
+          kind: "confirm",
+          title: t("identity.claim"),
+          message: `${link.url} · ${link.code}`,
+          confirmLabel: t("identity.claim"),
+          onConfirm: () => bridge().dispatch({ type: "claimCoordinator", data: { url: link.url, code: link.code } }),
+        });
+        return;
+      }
       if (link.kind === "track") {
         // Never mutate the queue on an external request: confirm with a
         // toast, and only for a track the current server knows.

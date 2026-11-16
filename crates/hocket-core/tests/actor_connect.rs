@@ -44,11 +44,11 @@ async fn pair_on() -> (TestCore, TestCore, std::sync::Arc<MemoryNet>) {
 async fn queue_is_shared_and_handoff_moves_transport_with_position() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -149,11 +149,11 @@ async fn queue_is_shared_and_handoff_moves_transport_with_position() {
 async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 10_000.0).await;
@@ -246,11 +246,11 @@ async fn a_buffering_stall_on_the_owner_does_not_leave_others_ahead() {
 async fn an_output_latency_correction_reaches_the_room() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 10_000.0).await;
@@ -278,11 +278,11 @@ async fn a_handed_off_play_is_scrobbled_with_its_original_start_time() {
     let (a, b) = pair().await;
     let started = a.clock.now_ms();
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -391,11 +391,11 @@ async fn synced_settings_merge_last_write_wins() {
 async fn session_undo_is_shared_but_only_the_author_can_undo() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -409,11 +409,11 @@ async fn session_undo_is_shared_but_only_the_author_can_undo() {
 async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -484,36 +484,18 @@ async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
     assert_eq!(last_load, 0);
 }
 
-/// Mutual LAN auth: the engine's LAN key is derived from the account
-/// password (`connect/mod.rs` rule 7), so a device on the same network with
-/// a different password for the same account never joins the room.
+/// Rooms admit members of the identity only (`connect/mod.rs` rule 7): a
+/// device of another identity on the same network never joins. Pairing by
+/// invite (no password anywhere in it) makes it one of them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_lan_peer_with_a_different_password_never_pairs() {
+async fn a_device_of_another_identity_joins_only_once_paired() {
     let server = seeded_server(6, 200.0);
     let net = MemoryNet::new();
     let clock = SimTime::new(1_700_000_000_000.0);
-    let start = |name: &'static str, seed: u64, password: &'static str| {
-        let server = server.clone();
-        let net = net.clone();
-        let clock = clock.clone();
-        async move {
-            let dir = tempfile::tempdir().unwrap();
-            TestCore::start_in_with(
-                name,
-                server,
-                Some(net),
-                seed,
-                clock,
-                dir,
-                true,
-                "https://music.example/",
-                password,
-            )
-            .await
-        }
-    };
-    let a = start("a", 1, "secret").await;
-    let b = start("b", 2, "wrong").await;
+    // b has an identity of its own.
+    net.isolate("dev-b");
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
     TestCore::run_all_for(&[&a, &b], 8_000.0).await;
     for c in [&a, &b] {
         let snap = c.snapshot().await;
@@ -531,21 +513,106 @@ async fn a_lan_peer_with_a_different_password_never_pairs() {
             snap.connection
         );
     }
-    // The same password on both sides is what `pair()` relies on.
-    let c = start("c", 3, "secret").await;
-    TestCore::run_all_for(&[&a, &b, &c], 8_000.0).await;
-    assert_eq!(a.snapshot().await.devices.len(), 2, "a and c pair");
-    assert_eq!(b.snapshot().await.devices.len(), 1, "b still alone");
+    // a shows an invite; b opens it.
+    a.run(Command::CreatePairingInvite).await;
+    let link = a
+        .events
+        .all()
+        .iter()
+        .find_map(|e| match e {
+            Event::PairingInvite { link, .. } => Some(link.clone()),
+            _ => None,
+        })
+        .expect("an invite");
+    assert!(link.starts_with("hocket://pair?d="));
+    assert!(!link.contains("secret"), "no password in the link");
+    b.run(Command::PairWithInvite { link }).await;
+    b.wait_until(10_000.0, |b| {
+        b.events.all().iter().any(|e| {
+            matches!(
+                e,
+                Event::PairingFinished { .. } | Event::PairingFailed { .. }
+            )
+        })
+    })
+    .await;
+    assert!(
+        b.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::PairingFinished { .. })),
+        "{:?}",
+        b.events
+            .all()
+            .iter()
+            .filter(|e| matches!(e, Event::PairingFailed { .. }))
+            .collect::<Vec<_>>()
+    );
+    assert!(a
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, Event::DevicePaired { device_id, .. } if device_id == &b.device_id)));
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    let (ia, ib) = (a.snapshot().await.identity, b.snapshot().await.identity);
+    assert_eq!(ia.id, ib.id, "one identity");
+    assert!(ia.devices.iter().any(|d| d.id == b.device_id));
+    let logs = |c: &TestCore| {
+        c.events
+            .all()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Log { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        a.snapshot().await.devices.len(),
+        2,
+        "a and b share a room: {:?}\n{:?}\n{:?}\n{:?}",
+        a.snapshot().await.connection,
+        b.snapshot().await.connection,
+        logs(&a),
+        logs(&b)
+    );
+    assert_eq!(b.snapshot().await.devices.len(), 2);
+}
+
+/// Removing a device: the others carry on, and the removed one is turned away.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removed_device_leaves_the_room() {
+    let (a, b) = pair().await;
+    a.run(Command::RemoveDevice {
+        device_id: b.device_id.clone(),
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    let ia = a.snapshot().await.identity;
+    assert!(!ia.devices.iter().any(|d| d.id == b.device_id));
+    assert!(b.snapshot().await.identity.removed);
+    assert!(!b.snapshot().await.connection.connected);
+    for _ in 0..30 {
+        if a.snapshot().await.devices.len() == 1 {
+            break;
+        }
+        TestCore::run_all_for(&[&a, &b], 1_000.0).await;
+    }
+    assert_eq!(
+        a.snapshot().await.devices.len(),
+        1,
+        "b is gone from a's room"
+    );
 }
 
 async fn play_on(owner: &TestCore, other: &TestCore) {
     owner
         .run(Command::PlayTracks {
-            server_id: owner.server_id.clone(),
-            track_ids: vec!["t0".into(), "t1".into()],
+            tracks: TrackRef::list(&owner.server_id, ["t0", "t1"]),
             start_index: 0,
             label: "Sel".into(),
             shuffle: false,
+            start_position_ms: 0,
         })
         .await;
     TestCore::run_all_for(&[owner, other], 2_000.0).await;
@@ -740,11 +807,11 @@ async fn previous_goes_back_once_the_playing_devices_lease_lapses() {
 async fn restarted_while_the_room_still_names_it(start_index: u32) -> (TestCore, TestCore) {
     let (a, b, net) = pair_on().await;
     b.run(Command::PlayTracks {
-        server_id: b.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&b.server_id, ["t0", "t1", "t2"]),
         start_index,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -781,11 +848,11 @@ async fn play_after_a_restart_the_room_outlived_starts_here() {
 async fn new_music_after_a_restart_the_room_outlived_plays_here() {
     let (b, a) = restarted_while_the_room_still_names_it(0).await;
     b.run(Command::PlayTracks {
-        server_id: b.server_id.clone(),
-        track_ids: vec!["t3".into(), "t4".into()],
+        tracks: TrackRef::list(&b.server_id, ["t3", "t4"]),
         start_index: 0,
         label: "New".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
@@ -823,11 +890,11 @@ fn starts_playing(log: &[hocket_core::audio::scripted::ScriptedCall]) -> bool {
 async fn a_track_changed_elsewhere_during_a_call_stays_quiet() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -854,11 +921,11 @@ async fn a_track_changed_elsewhere_during_a_call_stays_quiet() {
 async fn play_after_handing_off_during_a_call_starts_at_once() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -882,4 +949,302 @@ async fn play_after_handing_off_during_a_call_starts_at_once() {
     // Less than a lease renewal: the press itself must start it.
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
     assert!(a.backend.is_playing(), "play started at once");
+}
+
+/// Applies ops as a build that keys entries differently would: a song made
+/// current gets another key than this build gives it. Everything else is
+/// this build's reducer.
+struct OlderReducer;
+
+impl hocket_core::connect::SessionReducer for OlderReducer {
+    fn apply(
+        &self,
+        doc: &SessionDocument,
+        op: &hocket_core::connect::wire::SessionOp,
+        ctx: &hocket_core::connect::OpContext,
+    ) -> Result<SessionDocument, hocket_core::connect::ReduceFailure> {
+        let mut next =
+            hocket_core::connect::session_adapter::RealReducer::default().apply(doc, op, ctx)?;
+        let before = doc.current.as_ref().map(|c| c.key.clone());
+        if let Some(c) = next.current.as_mut() {
+            if Some(&c.key) != before.as_ref() {
+                c.key = format!("{}-old", c.key);
+            }
+        }
+        Ok(next)
+    }
+}
+
+/// The room (a leads it) runs an older build that keys the current item
+/// differently. When b, playing, rejoins after a network blip and adopts the
+/// room's document, the song keeps playing where it was: a new key for the
+/// same item is not a new item.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_room_rekeying_the_current_item_does_not_restart_it() {
+    use hocket_core::audio::scripted::ScriptedCall;
+    let server = seeded_server(6, 200.0);
+    let net = MemoryNet::new_partitionable();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_with_reducer(
+        "a",
+        server.clone(),
+        Some(net.clone()),
+        1,
+        clock.clone(),
+        std::sync::Arc::new(OlderReducer),
+    )
+    .await;
+    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    let (ca, cb) = (a.snapshot().await.connection, b.snapshot().await.connection);
+    assert!(ca.connected && cb.connected, "{ca:?} {cb:?}");
+
+    b.run(Command::PlayTracks {
+        tracks: TrackRef::list(&b.server_id, ["t0", "t1", "t2"]),
+        start_index: 1,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 30_000.0).await;
+    assert!(b.backend.is_playing());
+    let ours = b.queue().await.current.unwrap().item.key;
+    let theirs = a.queue().await.current.unwrap().item.key;
+    assert_ne!(ours, theirs, "the room keyed the item its own way");
+
+    let loads = |t: &TestCore| {
+        t.backend
+            .log()
+            .iter()
+            .filter(|c| matches!(c, ScriptedCall::Load { .. }))
+            .count()
+    };
+    let loads_before = loads(&b);
+    net.set_partitioned(true);
+    TestCore::run_all_for(&[&a, &b], 3_000.0).await;
+    net.set_partitioned(false);
+    TestCore::run_all_for(&[&a, &b], 10_000.0).await;
+
+    assert!(b.snapshot().await.connection.connected, "b rejoined");
+    let current = b.queue().await.current.unwrap();
+    assert_eq!(current.item.key, theirs, "b adopted the room's document");
+    assert_eq!(current.item.track, "t1");
+    assert_eq!(loads(&b), loads_before, "{:?}", b.backend.log());
+    assert!(b.backend.is_playing());
+    let (_, pos) = b.backend.current().unwrap();
+    assert!(pos >= 40_000, "still where it was, at {pos}");
+}
+
+/// The persisted sync point (`connect:<scope>`) of a core's database.
+fn persisted_sync_base(t: &TestCore) -> serde_json::Value {
+    let db = t.open_db();
+    let key = db
+        .saved_state_keys("connect:")
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("connect state persisted");
+    let json = db.saved_state_get_raw(&key).unwrap().unwrap();
+    serde_json::from_str::<serde_json::Value>(&json).unwrap()["syncBase"].clone()
+}
+
+/// The room acknowledges a skip only after the document was saved (a slow
+/// network): the sync point that ack moves is saved too. Were it not, skips
+/// made after a restart and before the device rejoins would look like a fork
+/// of a session that moved on without it, and be replaced by the room's
+/// state (the queue jumping back to where it was).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skips_made_before_rejoining_after_a_restart_are_kept() {
+    let server = seeded_server(6, 200.0);
+    let net = MemoryNet::new_partitionable();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    let ids: Vec<String> = (0..6).map(|i| format!("t{i}")).collect();
+    a.run(Command::PlayTracks {
+        tracks: TrackRef::list(&a.server_id, ids.clone()),
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    // The follower is the one that records a sync point with the leader.
+    let ((leader, _), (follower, slot)) = if persisted_sync_base(&a).is_null() {
+        ((a, 1), (b, 2))
+    } else {
+        ((b, 2), (a, 1))
+    };
+    let name = if slot == 1 { "a" } else { "b" };
+    leader.run(Command::OpenHandoffPicker).await;
+    TestCore::run_all_for(&[&leader, &follower], 2_000.0).await;
+    leader
+        .run(Command::HandoffTo {
+            device_id: follower.device_id.clone(),
+        })
+        .await;
+    TestCore::run_all_for(&[&leader, &follower], 2_000.0).await;
+    assert!(follower.backend.is_playing(), "the follower plays");
+
+    net.set_held(true);
+    follower.run(Command::Next).await;
+    // The document is saved; the ack is still on its way.
+    follower.run_for(1_000.0).await;
+    net.set_held(false);
+    TestCore::run_all_for(&[&leader, &follower], 1_000.0).await;
+    assert_eq!(leader.current_track_id().await.as_deref(), Some("t1"));
+    let acked = follower
+        .snapshot()
+        .await
+        .session
+        .expect("a session")
+        .revision;
+    follower.core.shutdown().await;
+    assert_eq!(
+        persisted_sync_base(&follower)["revision"],
+        serde_json::json!(acked),
+        "the acked revision is the saved sync point"
+    );
+
+    // Restarted out of reach of the room, the follower skips twice...
+    net.set_partitioned(true);
+    let TestCore {
+        clock, server, dir, ..
+    } = follower;
+    let follower = TestCore::start_in(name, server, Some(net.clone()), slot, clock, dir).await;
+    follower.run_for(1_000.0).await;
+    follower.run(Command::Play).await;
+    follower.run(Command::Next).await;
+    follower.run(Command::Next).await;
+    follower.run_for(1_000.0).await;
+    assert_eq!(follower.current_track_id().await.as_deref(), Some("t3"));
+
+    // ...and rejoining keeps them: the room never moved on.
+    net.set_partitioned(false);
+    TestCore::run_all_for(&[&leader, &follower], 10_000.0).await;
+    assert!(follower.snapshot().await.connection.connected, "rejoined");
+    assert_eq!(follower.current_track_id().await.as_deref(), Some("t3"));
+    assert_eq!(leader.current_track_id().await.as_deref(), Some("t3"));
+    leader.core.shutdown().await;
+    follower.core.shutdown().await;
+}
+
+async fn play_for_headphones(a: &TestCore, b: &TestCore) {
+    a.run(Command::PlayTracks {
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[a, b], 5_000.0).await;
+    assert!(a.backend.is_playing());
+}
+
+async fn headphone_handoff(c: &TestCore, on: bool) {
+    c.run(Command::SetSetting {
+        key: "connect.headphone_handoff".into(),
+        value: on.to_string(),
+    })
+    .await;
+}
+
+async fn headphones_connect(c: &TestCore) {
+    c.run(Command::HeadphonesConnected {
+        name: Some("Buds".into()),
+    })
+    .await;
+}
+
+fn moved_toast(c: &TestCore) -> Option<Toast> {
+    c.events.all().into_iter().find_map(|e| match e {
+        Event::Toast { toast } if toast.message.starts_with("Moved from") => Some(toast),
+        _ => None,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headphone_handoff_is_off_by_default() {
+    let (a, b) = pair().await;
+    play_for_headphones(&a, &b).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(a.backend.is_playing());
+    assert!(!b.backend.is_playing());
+    assert!(moved_toast(&b).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headphones_connecting_pull_playback_from_the_playing_device() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(b.backend.is_playing(), "b took over");
+    assert!(!a.backend.is_playing(), "a stopped");
+    assert_eq!(
+        b.snapshot().await.transport.lease.owner.as_deref(),
+        Some(b.device_id.as_str())
+    );
+    let toast = moved_toast(&b).expect("moved toast");
+    assert_eq!(toast.action_label.as_deref(), Some("Undo"));
+    assert!(toast.action_command.unwrap().contains(a.device_id.as_str()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headphones_pull_a_play_that_paused_moments_ago() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    // The headphones leaving a paused it (becoming noisy).
+    a.run(Command::Pause).await;
+    TestCore::run_all_for(&[&a, &b], 3_000.0).await;
+    assert!(!a.backend.is_playing());
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(b.backend.is_playing(), "b resumed the paused play");
+    assert!(!a.backend.is_playing());
+    // Undo would start it out loud on a: no Undo for a paused play.
+    assert_eq!(moved_toast(&b).expect("moved toast").action_label, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headphones_leave_a_long_paused_play_alone() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    a.run(Command::Pause).await;
+    TestCore::run_all_for(&[&a, &b], 30_000.0).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(!b.backend.is_playing());
+    assert_eq!(
+        b.snapshot().await.transport.lease.owner.as_deref(),
+        Some(a.device_id.as_str()),
+        "a keeps the paused play"
+    );
+    assert!(moved_toast(&b).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_connect_reported_twice_pulls_once() {
+    let (a, b) = pair().await;
+    headphone_handoff(&b, true).await;
+    play_for_headphones(&a, &b).await;
+    headphones_connect(&b).await;
+    headphones_connect(&b).await;
+    TestCore::run_all_for(&[&a, &b], 5_000.0).await;
+    assert!(b.backend.is_playing());
+    let toasts = b
+        .events
+        .all()
+        .into_iter()
+        .filter(|e| matches!(e, Event::Toast { toast } if toast.message.starts_with("Moved from")))
+        .count();
+    assert_eq!(toasts, 1);
 }

@@ -6,7 +6,8 @@ import type { ActionTarget, Album, Artist, Playlist, Track } from "@core/api";
 import { expectResult } from "@shared/core-handle";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
-import { resolveTrackIds, type ActionContext } from "../store/actions";
+import { useApp } from "../store/app";
+import { resolveTrackRefs, type ActionContext } from "../store/actions";
 import { fmtDuration } from "./format";
 import type { MenuFacts } from "./menu-model";
 
@@ -40,13 +41,22 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
   switch (target.type) {
     case "tracks":
     case "queueItems": {
-      const ids = await resolveTrackIds(target);
+      const refs = await resolveTrackRefs(target);
+      const ids = refs.map((r) => r.id);
       if (!ids.length) return undefined;
-      if (ids.length > MAX_DETAIL) return { kind: "song", count: ids.length, trackIds: ids };
-      const found = expectResult(await b.query({ type: "tracksByIds", data: { ids } }), "trackList");
+      // Counted before the detail lookups, so a large or partly unresolved selection still gets
+      // Unsnooze rather than Snooze for songs already snoozed.
+      const snoozes = useApp.getState().snoozes;
+      const mine = ids.map((id) => snoozes.find((s) => s.trackRef.id === id)).filter((s) => !!s);
+      const snoozeFacts = {
+        snoozed: mine.length,
+        snoozeUntil: ids.length === 1 ? (mine[0] ? (mine[0].until ?? null) : undefined) : undefined,
+      };
+      if (ids.length > MAX_DETAIL) return { kind: "song", count: ids.length, trackIds: ids, trackRefs: refs, ...snoozeFacts };
+      const found = expectResult(await b.query({ type: "tracksByIds", data: { tracks: refs } }), "trackList");
       const byId = new Map(found.map((x) => [x.id, x]));
       const tracks = ids.map((id) => byId.get(id)).filter((x): x is Track => !!x);
-      if (tracks.length !== ids.length) return { kind: "song", count: ids.length, trackIds: ids };
+      if (tracks.length !== ids.length) return { kind: "song", count: ids.length, trackIds: ids, trackRefs: refs, ...snoozeFacts };
       const first = tracks[0] as Track;
       const header = tracks.length === 1
         ? { covers: [first.coverArt], title: first.title, subtitle: joined([first.artist, first.album]) }
@@ -63,6 +73,8 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
         ratings: tracks.map((x) => x.rating),
         header,
         trackIds: ids,
+        trackRefs: refs,
+        ...snoozeFacts,
       };
     }
     case "albums": {
@@ -79,7 +91,10 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
         header: albums.length === 1
           ? { covers: [first.coverArt], title: first.name, subtitle: joined([first.artist, first.year]) }
           : { covers: albums.slice(0, 3).map((a) => a.coverArt), title: t("menu.albums", { n: target.data.ids.length }), subtitle: albums.slice(0, 12).map((a) => a.name).join(", ") },
-        trackIds: await resolveTrackIds(target),
+        ...(await (async () => {
+          const refs = await resolveTrackRefs(target);
+          return { trackIds: refs.map((r) => r.id), trackRefs: refs };
+        })()),
       };
     }
     case "artists": {

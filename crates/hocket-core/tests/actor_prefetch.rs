@@ -21,11 +21,11 @@ async fn started(name: &str, server: FakeServer) -> TestCore {
 
 async fn play_album(t: &TestCore, n: usize, start: u32) {
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: (0..n).map(|i| format!("t{i}")).collect(),
+        tracks: TrackRef::list(&t.server_id, (0..n).map(|i| format!("t{i}"))),
         start_index: start,
         label: "Album".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
 }
@@ -70,8 +70,7 @@ async fn the_next_two_items_are_prefetched_and_play_from_disk() {
     // The queue shows them cached.
     let q = t.queue().await;
     let up: Vec<_> = q
-        .upcoming
-        .iter()
+        .upcoming()
         .map(|e| (e.track.id.clone(), e.track.offline))
         .collect();
     assert_eq!(up[0], ("t1".into(), OfflineState::Cached), "{up:?}");
@@ -118,11 +117,11 @@ async fn a_queue_change_cancels_a_stale_prefetch() {
     );
     // Another context: t1 is no longer among the next two.
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t3".into(), "t4".into(), "t5".into()],
+        tracks: TrackRef::list(&t.server_id, ["t3", "t4", "t5"]),
         start_index: 0,
         label: "Other".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     wait_cached(&t, "t4").await;
@@ -141,18 +140,15 @@ async fn a_queue_change_cancels_a_stale_prefetch() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn battery_saver_with_pause_prefetch_stops_prefetch() {
+async fn battery_saver_keeps_prefetching() {
+    // Fetching ahead in one go lets the radio sleep in between: saver leaves it on.
     let t = started("battery", seeded_server(4, 100.0)).await;
-    t.run(Command::SetBatterySaver { enabled: true }).await;
-    play_album(&t, 4, 0).await;
-    run_real(&t, 5000.0).await;
-    assert!(t.upstream.calls().is_empty(), "{:?}", t.upstream.calls());
-    // `battery.pausePrefetch` off lets it run even in battery saver.
     t.run(Command::SetSetting {
-        key: "battery.pausePrefetch".into(),
-        value: "false".into(),
+        key: "battery.level".into(),
+        value: "\"max\"".into(),
     })
     .await;
+    play_album(&t, 4, 0).await;
     wait_cached(&t, "t1").await;
     t.core.shutdown().await;
 }
@@ -248,11 +244,11 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
     b.upstream
         .set_behaviour("t2", UpstreamBehaviour::StallAfter(20_000));
     b.run(Command::PlayTracks {
-        server_id: b.server_id.clone(),
-        track_ids: (0..6).map(|i| format!("t{i}")).collect(),
+        tracks: TrackRef::list(&b.server_id, (0..6).map(|i| format!("t{i}"))),
         start_index: 0,
         label: "Album".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     let mut in_flight = false;

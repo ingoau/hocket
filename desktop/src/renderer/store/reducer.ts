@@ -1,18 +1,28 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, Problem, QueueEntry, QueueView, ResumeOffer, SavedQueue, ServerInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState,
+  AudioSettings, BatterySaver, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, AccountInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem, SaverFeature, IdentityInfo, PairingAccount, CoordinatorInviteInfo,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
 import type { PlayerNotice } from "../lib/notice";
 
+export const SAVER_OFF: BatterySaver = { level: "off", automatic: false, features: [] };
+
+/** Whether battery saver currently turns off `feature`. */
+export const saverHas = (saver: BatterySaver, feature: SaverFeature): boolean => saver.features.includes(feature);
+
+/** Whether battery saver is engaged at all (some level that turns something off). */
+export const saverEngaged = (saver: BatterySaver): boolean => saver.features.length > 0;
+
 export interface CoreState {
   ready: boolean;
-  servers: ServerInfo[];
+  accounts: AccountInfo[];
   session: SessionDocument | undefined;
   queue: QueueView;
   transport: TransportState;
+  /** A song preview playing beside the queue, or none. */
+  preview: PreviewState | undefined;
   nowPlaying: QueueEntry | undefined;
   connection: ConnectionState;
   devices: DeviceInfo[];
@@ -27,9 +37,16 @@ export interface CoreState {
   resumeOffer: ResumeOffer | undefined;
   sleepTimer: SleepTimer | undefined;
   network: NetworkState | undefined;
-  batterySaver: boolean;
+  /** Battery saver as the core has it engaged; components test `features` ({@link saverHas}). */
+  batterySaver: BatterySaver;
   syncProgress: SyncProgress | undefined;
   savedQueues: SavedQueue[];
+  /** The song stash, in order (core's `StashChanged`). */
+  stash: StashItem[];
+  /** Songs snoozed right now (core's `SnoozesChanged`). */
+  snoozes: SnoozeItem[];
+  /** Albums that offer resume (core's `AlbumResumesChanged`). */
+  albumResumes: AlbumResumePoint[];
   pins: Pin[];
   storage: StorageSummary | undefined;
   filters: Filter[];
@@ -51,18 +68,50 @@ export interface CoreState {
   /** Undo entry ids whose action replaced or cleared the queue: the only ones that get toasts. */
   queueReplacingUndo: string[];
   exported: { kind: "nsp" | "config"; document: string; path?: string; at: number } | undefined;
+  /** The newest room diagnostics collection, for the developer diagnostics page. */
+  roomDiagnostics: RoomDiagnosticsStatus | undefined;
+  /** The Save to Coordinator upload, for the bar across the top of the window. */
+  reportUpload: ReportUploadStatus | undefined;
+  /** This device's Hocket identity: its devices, credential sync, the coordinator. */
+  identity: IdentityInfo;
+  /** Pairing: the invite this device shows, and how the last exchange ended. */
+  pairing: PairingState;
+  /** The coordinator's invites (owner only), and how the last claim or request ended. */
+  coordinator: {
+    invites: CoordinatorInviteInfo[];
+    created: string | undefined;
+    joined: { url: string; owner: boolean } | undefined;
+    error: string | undefined;
+    /** Its YouTube Music analysis (`coordinatorYtmStatus`), once asked. */
+    ytm: { enabled: boolean; signedIn: boolean; account: string | undefined; error: string | undefined } | undefined;
+  };
 }
 
-export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, history: [], current: undefined, playingNext: [], upcoming: [], shuffle: false, repeat: "off", autoplay: false, mode: "apple", totalUpcoming: 0 };
+export interface PairingState {
+  invite: { link: string; expiresAt: number } | undefined;
+  /** A device that just joined through this device's invite. */
+  paired: { deviceId: string; name: string } | undefined;
+  /** This device joined another's identity: the accounts it still needs passwords for. */
+  finished: PairingAccount[] | undefined;
+  error: string | undefined;
+  /** How many pairings have failed so far (never reset): the same error twice is still news. */
+  failures: number;
+}
+
+export const EMPTY_IDENTITY: IdentityInfo = { id: "", deviceId: "", devices: [], removed: false, credentialSync: false, coordinator: undefined };
+export const EMPTY_PAIRING: PairingState = { invite: undefined, paired: undefined, finished: undefined, error: undefined, failures: 0 };
+
+export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: false, repeat: "off", autoplay: false };
 
 export const EMPTY_TRANSPORT: TransportState = { lease: { owner: undefined, epoch: 0, expiresAt: 0 }, position: { positionMs: 0, takenAt: 0, rate: 1, isPlaying: false }, buffering: false, playedMs: 0, volume: 1, muted: false, volumeDevice: undefined };
 
 export const initialCoreState: CoreState = {
   ready: false,
-  servers: [],
+  accounts: [],
   session: undefined,
   queue: EMPTY_QUEUE,
   transport: EMPTY_TRANSPORT,
+  preview: undefined,
   nowPlaying: undefined,
   connection: { tier: "local", connected: false, coordinatorUrl: undefined, clockOffsetMs: 0, roundTripMs: undefined, peerCount: 0, error: undefined },
   devices: [],
@@ -77,9 +126,12 @@ export const initialCoreState: CoreState = {
   resumeOffer: undefined,
   sleepTimer: undefined,
   network: undefined,
-  batterySaver: false,
+  batterySaver: SAVER_OFF,
   syncProgress: undefined,
   savedQueues: [],
+  stash: [],
+  snoozes: [],
+  albumResumes: [],
   pins: [],
   storage: undefined,
   filters: [],
@@ -93,6 +145,11 @@ export const initialCoreState: CoreState = {
   lastServerSearch: undefined,
   lastError: undefined,
   exported: undefined,
+  roomDiagnostics: undefined,
+  reportUpload: undefined,
+  identity: EMPTY_IDENTITY,
+  pairing: EMPTY_PAIRING,
+  coordinator: { invites: [], created: undefined, joined: undefined, error: undefined, ytm: undefined },
   announcedUndo: [],
   queueReplacingUndo: [],
 };
@@ -102,7 +159,8 @@ export function applySnapshot(state: CoreState, s: Snapshot): CoreState {
   return {
     ...state,
     ready: true,
-    servers: s.servers,
+    accounts: s.accounts,
+    identity: s.identity ?? state.identity,
     session: s.session,
     queue: s.queue,
     transport: s.transport,
@@ -135,8 +193,31 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "snapshot":
       // Handled above (snapshotOf); kept so the exhaustiveness check below stays.
       return applySnapshot(state, e.data.snapshot);
-    case "serversChanged":
-      return { ...state, servers: e.data.servers };
+    case "accountsChanged":
+      return { ...state, accounts: e.data.accounts };
+    case "identityChanged":
+      return { ...state, identity: e.data.identity };
+    case "pairingInvite":
+      return { ...state, pairing: { ...EMPTY_PAIRING, failures: state.pairing.failures, invite: { link: e.data.link, expiresAt: e.data.expires_at } } };
+    case "devicePaired":
+      return { ...state, pairing: { ...state.pairing, invite: undefined, paired: { deviceId: e.data.device_id, name: e.data.name } } };
+    case "pairingFinished":
+      return { ...state, pairing: { ...EMPTY_PAIRING, failures: state.pairing.failures, finished: e.data.accounts } };
+    case "pairingFailed":
+      return { ...state, pairing: { ...state.pairing, error: e.data.message, failures: state.pairing.failures + 1 } };
+    case "credentialsSynced": // main stores them
+      return state;
+    case "coordinatorJoined":
+      return { ...state, coordinator: { ...state.coordinator, joined: { url: e.data.url, owner: e.data.owner }, error: undefined } };
+    case "coordinatorFailed":
+      return { ...state, coordinator: { ...state.coordinator, error: e.data.message } };
+    case "coordinatorYtmStatus":
+      return {
+        ...state,
+        coordinator: { ...state.coordinator, ytm: { enabled: e.data.enabled, signedIn: e.data.signed_in, account: e.data.account ?? undefined, error: e.data.error ?? undefined } },
+      };
+    case "coordinatorInvites":
+      return { ...state, coordinator: { ...state.coordinator, invites: e.data.invites, created: e.data.created ?? undefined, error: undefined } };
     case "syncProgress":
       return { ...state, syncProgress: e.data.progress, libraryVersion: e.data.progress.finished ? state.libraryVersion + 1 : state.libraryVersion };
     case "libraryChanged":
@@ -162,10 +243,18 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, queue: e.data.queue, nowPlaying: e.data.queue.current ?? state.nowPlaying };
     case "transportChanged":
       return isPositionTick(state.transport, e.data.transport) ? state : { ...state, transport: e.data.transport };
+    case "previewChanged":
+      return { ...state, preview: e.data.preview };
     case "nowPlayingChanged":
       return { ...state, nowPlaying: e.data.entry };
     case "savedQueuesChanged":
       return { ...state, savedQueues: e.data.queues };
+    case "stashChanged":
+      return { ...state, stash: e.data.items };
+    case "snoozesChanged":
+      return { ...state, snoozes: e.data.items };
+    case "albumResumesChanged":
+      return { ...state, albumResumes: e.data.points };
     case "undoChanged": {
       // design.md "Global undo": a fresh mutation that throws the queue away gets
       // one toast with the single Undo action; everything else stays quiet (the
@@ -198,7 +287,7 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "networkChanged":
       return { ...state, network: e.data.network ?? undefined };
     case "batterySaverChanged":
-      return { ...state, batterySaver: e.data.enabled };
+      return { ...state, batterySaver: e.data.saver };
     case "devicesChanged":
       return { ...state, devices: e.data.devices };
     case "handoffPickerChanged":
@@ -229,7 +318,16 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, exported: { kind: "nsp", document: e.data.document, path: e.data.path, at: Date.now() } };
     case "configExported":
       return { ...state, exported: { kind: "config", document: e.data.document, at: Date.now() } };
+    case "roomDiagnosticsChanged":
+      return { ...state, roomDiagnostics: e.data.status };
+    case "reportUploadChanged":
+      return { ...state, reportUpload: e.data.status };
+    // ytmJsRequest: main answers it (a hidden window: ytm-js-host.ts). ytmSignInExpired: the
+    // core toasts it itself.
     case "backend":
+    case "diagnosticsRequested": // main answers it
+    case "ytmJsRequest":
+    case "ytmSignInExpired":
       return state;
     case "mediaSession":
       // OS media session is owned by the main process; the renderer uses transport / nowPlaying.
@@ -269,12 +367,10 @@ function sameEntryRefs(a: QueueEntry[], b: QueueEntry[]): boolean {
 }
 
 function patchQueue(q: QueueView, items: LibraryItemState[]): QueueView {
-  const history = q.history.map((e) => patchEntry(e, items));
+  const entries = q.entries.map((e) => patchEntry(e, items));
   const current = q.current && patchEntry(q.current, items);
-  const playingNext = q.playingNext.map((e) => patchEntry(e, items));
-  const upcoming = q.upcoming.map((e) => patchEntry(e, items));
-  if (sameEntryRefs(history, q.history) && current === q.current && sameEntryRefs(playingNext, q.playingNext) && sameEntryRefs(upcoming, q.upcoming)) return q;
-  return { ...q, history, current, playingNext, upcoming };
+  if (sameEntryRefs(entries, q.entries) && current === q.current) return q;
+  return { ...q, entries, current };
 }
 
 /** ~1 Hz position reports: keep the previous object so zustand subscribers do not re-render. */
@@ -291,6 +387,10 @@ export function patchSearch(r: SearchResults, items: LibraryItemState[]): Search
     artists: r.artists.map((a) => {
       const s = findItem(items, "artist", a.id);
       return s ? { ...a, loved: s.loved } : a;
+    }),
+    lyrics: (r.lyrics ?? []).map((h) => {
+      const track = patchTrack(h.track, items);
+      return track === h.track ? h : { ...h, track };
     }),
   };
 }

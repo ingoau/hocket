@@ -9,8 +9,8 @@
 //!   ignore it). With no remote owner this device primes.
 //! - Gating, with the priming device's own state: never on the coordinator,
 //!   only on an unmetered, non-cellular network (no mobile-data override;
-//!   an unknown network counts as unmetered, as for prefetch), not in
-//!   battery saver, not offline.
+//!   an unknown network counts as unmetered, as for prefetch), not offline.
+//!   Battery saver does not stop it: a burst on Wi-Fi lets the radio rest.
 //! - Size: about [`PRIME_SECONDS`] of audio, estimated from the bit rate the
 //!   stream will have (the transcoding profile, else size/duration, else the
 //!   track's bit rate), clamped to [`PRIME_MIN_BYTES`]..[`PRIME_MAX_BYTES`].
@@ -45,7 +45,7 @@ pub const PRIME_MAX_PER_WINDOW: usize = 20;
 pub const PRIME_WINDOW_MS: f64 = 10.0 * 60_000.0;
 
 pub(crate) struct PrimeRunning {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub generation: u64,
     pub cancel: CancellationToken,
 }
@@ -54,7 +54,7 @@ pub(crate) struct PrimeRunning {
 pub(crate) struct PrimeState {
     /// Waiting for the running prime (or a queue prefetch) to finish; a
     /// newer request replaces it.
-    pub pending: Option<TrackId>,
+    pub pending: Option<TrackRef>,
     pub running: Option<PrimeRunning>,
     /// When recent primes started (the rate limit's window).
     pub started: VecDeque<f64>,
@@ -67,7 +67,7 @@ impl Actor {
         match self.db.album_tracks(&album_id) {
             Ok(tracks) => {
                 if let Some(first) = tracks.into_iter().next() {
-                    self.request_prime(first.id);
+                    self.request_prime(TrackRef::new(first.server_id, first.id));
                 }
             }
             Err(e) => self.log("debug", format!("prime album {album_id}: {e}")),
@@ -76,7 +76,7 @@ impl Actor {
 
     /// `Command::PrimeTrack` (and the album's first track): ask the device
     /// that owns playback to prime it.
-    pub(crate) fn request_prime(&mut self, track_id: TrackId) {
+    pub(crate) fn request_prime(&mut self, track_id: TrackRef) {
         if self.cfg.platform == Platform::Coordinator {
             return;
         }
@@ -88,7 +88,7 @@ impl Actor {
     }
 
     /// Prime a track on this device (the engine decided it is the one).
-    pub(crate) fn prime_here(&mut self, track_id: TrackId) {
+    pub(crate) fn prime_here(&mut self, track_id: TrackRef) {
         if !self.prime_allowed() {
             self.log("debug", format!("prime of {track_id} not allowed here"));
             return;
@@ -97,8 +97,8 @@ impl Actor {
             return;
         };
         let running = self.prime.running.as_ref().map(|r| r.track_id.clone());
-        if running.as_deref() == Some(track_id.as_str())
-            || self.prime.pending.as_deref() == Some(track_id.as_str())
+        if running.as_ref() == Some(&track_id)
+            || self.prime.pending.as_ref() == Some(&track_id)
             || !self.prime_needed(&track)
         {
             return;
@@ -115,9 +115,8 @@ impl Actor {
     fn prime_allowed(&self) -> bool {
         if self.cfg.platform == Platform::Coordinator
             || self.stream_reader.is_none()
-            || self.api().is_none()
+            || !self.any_provider()
             || self.shutting_down
-            || self.battery_saver
         {
             return false;
         }
@@ -132,7 +131,7 @@ impl Actor {
     /// Bytes a prime of this track fetches.
     pub(crate) fn prime_bytes(&self, track: &Track) -> u64 {
         let seconds = f64::from(track.duration_ms) / 1000.0;
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         let rate = if let Some(kbps) = profile.as_ref().and_then(|p| p.max_bit_rate) {
             f64::from(kbps) * 1000.0 / 8.0
         } else if let (Some(size), true) = (track.size_bytes.filter(|b| *b > 0.0), seconds > 0.0) {
@@ -159,7 +158,7 @@ impl Actor {
         ) {
             return false;
         }
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         if matches!(
             self.downloads
                 .cache_lookup(&track.server_id, &track.id, profile.as_ref(), false),
@@ -181,6 +180,10 @@ impl Actor {
     }
 
     fn start_prime(&mut self, track: &Track) {
+        // A remote renderer fetches its own audio: a primed start here is never read.
+        if self.renderer.is_some() {
+            return;
+        }
         let now = self.now();
         while self
             .prime
@@ -194,7 +197,10 @@ impl Actor {
             self.log("debug", format!("prime of {} rate-limited", track.id));
             return;
         }
-        let (Some(reader), Some(api)) = (self.stream_reader.clone(), self.api()) else {
+        let (Some(reader), Some(api)) = (
+            self.stream_reader.clone(),
+            self.provider_for(&track.server_id),
+        ) else {
             return;
         };
         let source = match self.downloads.resolve_with(
@@ -224,7 +230,7 @@ impl Actor {
         let generation = self.prime.generation;
         let cancel = CancellationToken::new();
         self.prime.running = Some(PrimeRunning {
-            track_id: track.id.clone(),
+            track_id: TrackRef::new(track.server_id.clone(), track.id.clone()),
             generation,
             cancel: cancel.clone(),
         });

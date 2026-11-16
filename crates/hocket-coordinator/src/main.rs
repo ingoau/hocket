@@ -1,21 +1,78 @@
 //! Headless coordinator binary. Owner: core-connect. See the crate docs in `lib.rs`.
 
+use std::io::IsTerminal;
+
 use clap::Parser;
 use tracing::info;
 
-use hocket_coordinator::{serve, App, Args};
+use hocket_coordinator::{reports, serve, worker, ytm, App, Args, Command, ReportsCommand};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=warn".into()),
-        )
-        .with_target(false)
-        .init();
     let args = Args::parse();
+    if let Some(Command::Pair { url, minutes }) = &args.command {
+        let dir = args
+            .data_dir
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("pair needs --data-dir (the running coordinator's)"))?;
+        let claim = hocket_coordinator::identities::write_claim(
+            dir,
+            hocket_core::util::now_ms() as u64,
+            minutes.max(&1) * 60_000,
+        )?;
+        print!(
+            "{}",
+            hocket_coordinator::pair_text(&claim, url.as_deref(), *minutes)
+        );
+        return Ok(());
+    }
+    if let Some(Command::Reports { action }) = &args.command {
+        let dir = args
+            .data_dir
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("reports need --data-dir"))?;
+        let out = match action {
+            ReportsCommand::List => reports::list(dir)?,
+            ReportsCommand::Show { id } => reports::show(dir, id)?,
+        };
+        print!("{out}");
+        return Ok(());
+    }
+    // The usual stderr log, plus the in-memory capture of the last hour that
+    // `--diagnostics-user` accounts can receive (nothing is written to disk).
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,tower_http=warn".into());
+    hocket_core::devlog::install(&filter, None, std::io::stderr().is_terminal());
     let app = App::new(args.clone())?;
+    // The opt-in analysis worker: its own thread, stopped with the server.
+    let tmp_dir = match &args.data_dir {
+        Some(dir) => dir.join("analysis-tmp"),
+        None => std::env::temp_dir().join(format!("hocket-analysis-{}", std::process::id())),
+    };
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let worker = match (args.worker.resolve(tmp_dir)?, app.analysis_store()) {
+        (Some(settings), Some(store)) => Some(worker::spawn(
+            settings,
+            store.clone(),
+            app.worker_status_slot(),
+            app.worker_priority()
+                .expect("--analysis-server gives the app a priority queue"),
+            cancel.clone(),
+        )?),
+        _ => None,
+    };
+    let ytm_worker = match (app.ytm(), app.analysis_store()) {
+        (Some(y), Some(store)) => Some(ytm::spawn(
+            y,
+            store.clone(),
+            match &args.data_dir {
+                Some(dir) => dir.join("analysis-tmp-ytm"),
+                None => std::env::temp_dir().join(format!("hocket-ytm-{}", std::process::id())),
+            },
+            std::time::Duration::from_secs(args.worker.analysis_pause_secs),
+            cancel.clone(),
+        )?),
+        _ => None,
+    };
     let shutdown = async {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
@@ -35,9 +92,30 @@ async fn main() -> anyhow::Result<()> {
         info!("shutting down");
     };
     let (addr, handle) = serve(app.clone(), args.listen, shutdown).await?;
-    info!(%addr, data_dir = ?args.data_dir, verify = !args.no_verify, "hocket-coordinator listening");
+    info!(
+        %addr,
+        data_dir = ?args.data_dir,
+        owner = ?app.identities().owner(),
+        "hocket-coordinator listening"
+    );
+    if app.identities().owner().is_none() {
+        info!("not claimed yet: run `hocket-coordinator --data-dir <dir> pair` and enter the code in Hocket");
+    }
     handle.await?;
     // Flush every open room's replica on the way out.
     app.flush_all();
+    cancel.cancel();
+    drop(ytm_worker);
+    if let Some(w) = worker {
+        // A track being analysed finishes on its own time; don't wait long for it.
+        cancel.cancel();
+        let joined = tokio::task::spawn_blocking(move || w.join());
+        if tokio::time::timeout(std::time::Duration::from_secs(3), joined)
+            .await
+            .is_err()
+        {
+            info!("analysis worker still busy; leaving it");
+        }
+    }
     Ok(())
 }

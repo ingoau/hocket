@@ -16,6 +16,7 @@ crates/hocket-core/           the shared Rust core (library)
   src/actions/                action registry
   src/connect/                Connect protocol: wire, clock sync, lease/epoch, election, discovery, handoff, replica
   src/sim/                    deterministic simulation harness (feature "sim")
+  src/provider/               Provider trait (source-neutral music service), NavidromeProvider, ProviderSet
   src/subsonic/               Subsonic/OpenSubsonic/Navidrome client, auth, capability probe
   src/db/                     SQLite mirror, migrations, library sync, queries
   src/outbox/                 durable mutations, retry, conflict, scrobbler
@@ -72,7 +73,7 @@ files are gitignored and produced by the build.
 
 `Core` (in `core.rs`) owns: a tokio runtime (or borrows one), the session
 subsystem, the undo stack, the action registry, the Connect engine, the
-Subsonic client per server, the SQLite mirror, outbox, job queue, downloads,
+account registry (a provider per account), the SQLite mirror, outbox, job queue, downloads,
 caches, filters, autoplay, settings, stats, the playback backend and the
 media-session state. The actor loop receives `Command`s on an unbounded
 channel and handles them sequentially; long work is spawned onto the runtime
@@ -112,7 +113,9 @@ that the harness can swap for an in-memory implementation.
 - Rust 2021, `cargo fmt`, `cargo clippy -D warnings` clean, tests via `cargo test`.
 - Errors: `thiserror` per subsystem, `anyhow` at the actor boundary, never `unwrap` on I/O.
 - Logging: `tracing`. No network telemetry, ever.
-- All persisted state has a schema version and forward-only numbered migrations.
+- All persisted state has a schema version. Until Hocket has users the SQLite schema is one
+  file (`db/schema.sql`); a change bumps the version and an older database is backed up and
+  recreated.
   The mirror is a cache and may be dropped and rebuilt; downloads, outbox,
   saved queues and settings are not and get a backup before migrating.
 - Strings shown to users come from the platform layer's resources, keyed by
@@ -141,7 +144,7 @@ xvfb-run -a pnpm test:e2e                        # Playwright Electron e2e (fake
 pnpm dist:dir                                    # electron-builder unpacked build
 
 # Android (Gradle 9, AGP 9, Kotlin 2.4, compileSdk 37.1, Material 3 Expressive)
-scripts/build-android-core.sh release            # cargo-ndk -> android/core/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
+scripts/build-android-core.sh release            # one multi-target cargo build -> android/core/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
 cd android && ./gradlew testDebugUnitTest assembleDebug :app:lintDebug   # ANDROID_HOME=/opt/android-sdk
 
 # Pebble watchapp (uv tool install pebble-tool && pebble sdk install latest)
@@ -150,6 +153,14 @@ cd pebble && HOCKET_DEMO=1 pebble build          # sample data, for emulator scr
 
 # Coordinator
 cargo run -p hocket-coordinator -- --listen 0.0.0.0:8790 --data-dir /var/lib/hocket
+# … claim it: prints a short-lived code and QR; the first device to enter it owns the coordinator
+# (its devices get the whole log in developer diagnostics, and can invite other identities)
+cargo run -p hocket-coordinator -- --data-dir /var/lib/hocket pair --url wss://coordinator.example.net/ws
+# … the owner's devices can save reports there (docs/reports.md); read them with
+cargo run -p hocket-coordinator -- --data-dir /var/lib/hocket reports list
+# … and analyse the library for AutoMix with a dedicated non-admin account (docs/automix.md → Coordinator worker)
+HOCKET_ANALYSIS_PASSWORD=… cargo run --release -p hocket-coordinator -- --data-dir /var/lib/hocket \
+  --analysis-server https://music.example.net --analysis-user hocket-analysis
 ```
 
 Linux builds of the core need `libasound2-dev` (cpal). The desktop app's OS media

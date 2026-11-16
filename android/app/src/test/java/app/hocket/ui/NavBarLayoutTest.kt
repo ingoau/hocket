@@ -65,7 +65,7 @@ class NavBarLayoutTest {
 
     @Test
     fun navBarHeightIsKnownBeforeItIsMeasured() {
-        // The shell lays out content and the sheet's anchor from the bar's fixed height (64 dp plus
+        // The shell lays out content and the sheet's anchor from the bar's fixed height (the 56 dp pill and its 8 dp margin, plus
         // the system navigation-bar inset, none here) on the first frame; measuring must agree, or
         // the layout jumps once at startup.
         val core = TestCore()
@@ -94,6 +94,25 @@ class NavBarLayoutTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("detail.header").fetchSemanticsNodes().isEmpty() }
         compose.onAllNodesWithTag("library.album")[0].assertIsDisplayed()
         compose.onNodeWithTag("navBar.library").assertIsSelected()
+    }
+
+    @Test
+    fun floatingBarIsCompactAndTheStandardBarSpansTheScreen() {
+        val core = TestCore()
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.waitForIdle()
+        val width = compose.onNodeWithTag("navBar").getBoundsInRoot().right.value
+        // The floating pill is centred and only as wide as its places: the last stops well short of the edge.
+        val floatingEnd = compose.onNodeWithTag("navBar.library").getBoundsInRoot().right.value
+        assertTrue("floating bar's last place ends at $floatingEnd of $width", floatingEnd < width * 0.8f)
+        // Off: the standard bar, its places spread across the whole width.
+        core.client.dispatch(app.hocket.core.Commands.setSetting(app.hocket.core.SettingKeys.DISPLAY_FLOATING_NAV_BAR, "false"))
+        compose.waitUntil(5_000) { compose.onNodeWithTag("navBar.library").getBoundsInRoot().right.value > width * 0.9f }
+        compose.onNodeWithTag("navBar.home").assertIsSelected()
+        val bar = compose.onNodeWithTag("navBar").getBoundsInRoot()
+        assertTrue("standard bar height ${(bar.bottom - bar.top).value} should be 64dp", kotlin.math.abs((bar.bottom - bar.top).value - 64f) < 1f)
     }
 
     private fun Int.dpTolerance(): androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(this.toFloat())

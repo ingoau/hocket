@@ -1,5 +1,8 @@
 package app.hocket.ui.a11y
 
+import app.hocket.core.groupEntries
+import app.hocket.core.historyEntries
+import app.hocket.core.restEntries
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -62,16 +65,16 @@ class RowSemanticsTest {
         assertEquals("playing", row.config[SemanticsProperties.StateDescription])
         assertEquals("Play", row.config[SemanticsActions.OnClick].label)
         assertEquals("Select", row.config[SemanticsActions.OnLongClick].label)
-        assertEquals(listOf("Play next", "Add to queue", "Go to album", "Go to artist", "Download", "Rate", "More options"), row.actions())
+        assertEquals(listOf("Play next", "Add to queue", "Play later", "Go to album", "Go to artist", "Download", "Rate", "More options"), row.actions())
         // Icons inside the row say nothing of their own (their meaning is in the label/state).
         assertTrue("one row item plus its menu button", row.children.size == 1)
         assertEquals("More options for ${track.title}", row.children.single().desc())
 
         fun run(label: String) = compose.onNodeWithTag("row").performCustomAction(compose, label)
         run("Play next")
-        compose.waitUntil(5_000) { core.client.queue.value.playingNext.any { it.track.id == track.id } }
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.any { it.track.id == track.id } }
         run("Add to queue")
-        compose.waitUntil(5_000) { core.client.queue.value.playingNext.count { it.track.id == track.id } + core.client.queue.value.upcoming.count { it.track.id == track.id } >= 2 }
+        compose.waitUntil(5_000) { core.client.queue.value.groupEntries.count { it.track.id == track.id } + core.client.queue.value.restEntries.count { it.track.id == track.id } >= 2 }
         run("Go to album"); run("Go to artist")
         assertEquals(listOf("album:${track.albumId}", "artist:${track.artistId}"), opened)
         run("More options")
@@ -101,7 +104,7 @@ class RowSemanticsTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         val queue = core.client.queue.value
-        val movable = queue.playingNext + queue.upcoming
+        val movable = queue.groupEntries + queue.restEntries
         assertTrue(movable.size >= 3)
         fun actionsOf(title: String): List<String> {
             compose.onNodeWithTag("queue.list").performScrollToNode(hasText(title))
@@ -109,16 +112,16 @@ class RowSemanticsTest {
         }
         assertFalse("the first movable item cannot move up", "Move up" in actionsOf(movable[0].track.title))
         // Two items of the context section: move the first below the second.
-        val first = queue.upcoming[0]
-        val second = queue.upcoming[1]
+        val first = queue.restEntries[0]
+        val second = queue.restEntries[1]
         val actions = actionsOf(first.track.title)
         assertTrue(actions.toString(), "Remove from queue" in actions && "Move down" in actions)
         compose.onAllNodesWithText(first.track.title)[0].performCustomAction(compose, "Move down")
-        compose.waitUntil(5_000) { core.client.queue.value.upcoming.take(2).map { it.track.id } == listOf(second.track.id, first.track.id) }
-        val moved = core.client.queue.value.upcoming[1]
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.take(2).map { it.track.id } == listOf(second.track.id, first.track.id) }
+        val moved = core.client.queue.value.restEntries[1]
         compose.onNodeWithTag("queue.list").performScrollToNode(hasText(first.track.title))
         compose.onAllNodesWithText(first.track.title)[0].performCustomAction(compose, "Remove from queue")
-        compose.waitUntil(5_000) { (core.client.queue.value.playingNext + core.client.queue.value.upcoming).none { it.item.key == moved.item.key } }
+        compose.waitUntil(5_000) { (core.client.queue.value.groupEntries + core.client.queue.value.restEntries).none { it.item.key == moved.item.key } }
         // The drag handle and the swipe background are drawn only.
         assertTrue(compose.onAllNodesWithText("Drag to reorder").fetchSemanticsNodes().isEmpty())
         compose.onNodeWithText("Now playing").assertExists()
