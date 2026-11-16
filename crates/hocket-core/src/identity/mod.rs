@@ -735,7 +735,7 @@ impl Identity {
         let grant_ok =
             |g: &Grant| g.to != me || self.shared.open_grant(&self.holder(), g).is_some();
         sync.grants.retain(|g| grant_ok(g));
-        let mine_ok: Vec<bool> = self.shared.grants.iter().map(|g| grant_ok(g)).collect();
+        let mine_ok: Vec<bool> = self.shared.grants.iter().map(grant_ok).collect();
         let mut i = 0;
         self.shared.grants.retain(|_| {
             i += 1;

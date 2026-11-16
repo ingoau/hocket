@@ -715,9 +715,9 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
             .collect();
         let apply = |rs: &[usize], next: &mut Vec<bool>| {
             for &r in rs {
-                for j in 0..n {
+                for (j, v) in next.iter_mut().enumerate() {
                     if voids(r, j) {
-                        next[j] = true;
+                        *v = true;
                     }
                 }
             }

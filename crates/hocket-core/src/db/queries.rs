@@ -117,7 +117,7 @@ pub fn track_from_offset_row(row: &Row, o: usize) -> rusqlite::Result<Track> {
         valence: row.get(o + 36)?,
     };
     let mut t = Track {
-        id: row.get(o + 0)?,
+        id: row.get(o)?,
         server_id: row.get(o + 1)?,
         title: row.get(o + 2)?,
         album_id: row.get(o + 3)?,
