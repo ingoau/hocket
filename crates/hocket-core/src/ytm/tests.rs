@@ -380,7 +380,8 @@ async fn premium_is_detected_by_the_web_client_offering_141() {
     assert_eq!(s.variant, "141");
     assert!(p.premium());
 
-    // One that only offers 140 there is free, whatever the menu said.
+    // 140 alone on one video proves nothing (141 isn't on every video):
+    // the menu's answer stands.
     let http = fake(Arc::new(Mutex::new(vec![
         ("WEB_REMIX", fx("player_visionos")),
         ("VISIONOS", fx("player_visionos")),
@@ -393,12 +394,40 @@ async fn premium_is_detected_by_the_web_client_offering_141() {
         .await
         .unwrap();
     assert_eq!(s.variant, "140");
-    assert!(!p.premium());
-    let s = p
-        .resolve_stream("b", &StreamRequest::default())
+    assert!(p.premium(), "one video without 141 doesn't make it free");
+}
+
+/// An inconclusive probe is tried again later, on another video, and a
+/// positive one then counts.
+#[tokio::test]
+async fn an_inconclusive_premium_probe_is_tried_again_on_another_video() {
+    let players = Arc::new(Mutex::new(vec![
+        ("WEB_REMIX", fx("player_visionos")),
+        ("VISIONOS", fx("player_visionos")),
+    ]));
+    let http = fake(players.clone());
+    let clock = Arc::new(FixedClock::new(1_763_200_000_000.0));
+    let cookies = Some(Cookies::parse("SAPISID=abc; SID=x").unwrap());
+    let it = Arc::new(InnerTube::new(Arc::new(http), clock.clone(), cookies));
+    let p = YtmProvider::new("UCme", it, clock.clone());
+    p.set_js_host(Some(Arc::new(FakeJs(Arc::default()))));
+    p.resolve_stream("a", &StreamRequest::default())
         .await
         .unwrap();
-    assert_eq!(s.variant, "140");
+    assert!(!p.premium());
+    // The account does have Premium; this other video offers 141.
+    players.lock()[0].1 = web_with_141();
+    p.resolve_stream("b", &StreamRequest::default())
+        .await
+        .unwrap();
+    assert!(!p.premium(), "not before the retry");
+    clock.advance(31.0 * 60_000.0);
+    let s = p
+        .resolve_stream("c", &StreamRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(s.variant, "141");
+    assert!(p.premium());
 }
 
 #[test]
@@ -668,6 +697,38 @@ async fn playlist_edits_land_in_place_around_hidden_videos() {
     );
 }
 
+/// A retried insert whose add landed last time (the add is deduplicated
+/// now, nothing new comes back) still moves the song into place: it is the
+/// playlist's last entry.
+#[tokio::test]
+async fn a_retried_insert_moves_the_song_it_added_last_time() {
+    let e = mixed_entries();
+    let set = |i: usize| e[i].set_video_id.clone().unwrap();
+    let id = |i: usize| e[i].video_id.clone();
+    let inner = fake(players(&[]));
+    let http = FakeYtmHttp::new(move |r| {
+        if endpoint(r) == "browse/edit_playlist" {
+            return ok(&json!({"status": "STATUS_SUCCEEDED", "playlistEditResults": []}));
+        }
+        inner.answer(r)
+    });
+    let p = provider_with(http.clone(), true);
+    // e5 (last listed) was appended by the attempt that failed to move it.
+    p.write(ProviderWrite::PlaylistAdd {
+        id: "PLmixed".into(),
+        track_ids: vec![id(5)],
+        at_index: Some(1),
+    })
+    .await
+    .unwrap();
+    let got = edits(&http);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(
+        got[1],
+        json!([{"action": "ACTION_MOVE_VIDEO_BEFORE", "setVideoId": set(5), "movedSetVideoIdSuccessor": set(2)}])
+    );
+}
+
 #[tokio::test]
 async fn library_sync_walks_liked_songs_library_songs_albums_and_artists() {
     let http = fake(players(&[]));
@@ -762,6 +823,57 @@ async fn downloads_go_in_bounded_ranges_and_re_resolve_on_a_refusal() {
             .any(|(u, a, _)| u.ends_with("n=2") && *a == 1024 * 1024),
         "resumed at the same offset"
     );
+}
+
+/// A stream of unknown length downloads to its end: full ranges carry on,
+/// a short one ends it, and a server answering more than asked doesn't
+/// trip the arithmetic.
+#[tokio::test]
+async fn a_download_of_unknown_length_ends_on_a_short_range() {
+    const LEN: usize = 2 * 1024 * 1024 + 4321;
+    let bytes: Arc<Vec<u8>> = Arc::new((0..LEN).map(|i| (i * 7 % 251) as u8).collect());
+    for overshoot in [false, true] {
+        let http = {
+            let bytes = bytes.clone();
+            FakeYtmHttp::new(move |r| {
+                if r.url.contains("sw.js_data") {
+                    return Some(HttpResponse::json(200, SW_JS_DATA));
+                }
+                if endpoint(r) == "player" {
+                    return ok(
+                        &json!({"playabilityStatus": {"status": "OK"}, "streamingData": {"expiresInSeconds": "21540", "adaptiveFormats": [
+                        {"itag": 140, "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+                         "url": "https://rr1.googlevideo.com/videoplayback?itag=140&n=1"}]}}),
+                    );
+                }
+                let range = r.header("Range")?.strip_prefix("bytes=")?.to_string();
+                let (a, b) = range.split_once('-')?;
+                let (a, b): (usize, usize) = (a.parse().ok()?, b.parse().ok()?);
+                if a >= LEN {
+                    return Some(HttpResponse::json(416, ""));
+                }
+                // More than asked: the rest of the stream in one go.
+                let b = if overshoot { LEN - 1 } else { b.min(LEN - 1) };
+                Some(HttpResponse {
+                    status: 206,
+                    body: bytes::Bytes::copy_from_slice(&bytes[a..=b]),
+                    content_range: Some(format!("bytes {a}-{b}/*")),
+                    content_type: Some("audio/mp4".into()),
+                })
+            })
+        };
+        let p = provider_with(http, false);
+        let mut s = p
+            .resolve_stream("vid", &StreamRequest::default())
+            .await
+            .unwrap();
+        s.content_length = None;
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("x.m4a");
+        let out = p.download_to_file(&s, &dest).await.unwrap();
+        assert_eq!(out.bytes as usize, LEN, "overshoot={overshoot}");
+        assert_eq!(std::fs::read(&dest).unwrap(), *bytes);
+    }
 }
 
 /// The coordinator's kind of JS host: no PO tokens, so the TV app only.

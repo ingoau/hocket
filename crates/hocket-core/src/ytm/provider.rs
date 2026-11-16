@@ -59,11 +59,16 @@ pub struct YtmProvider {
     chooser: StreamChooser,
     js: RwLock<Option<Arc<dyn JsHost>>>,
     premium: AtomicBool,
-    /// What the web client showed through the JS host: itag 141 offered
-    /// (Premium) or not. Overrides the account-menu heuristic once known.
+    /// The web client offered itag 141 through the JS host (Premium only):
+    /// `Some(true)` overrides the account-menu heuristic. A video offering
+    /// 140 alone proves nothing (141 isn't on every video), so only a
+    /// positive is kept.
     premium_seen: Mutex<Option<bool>>,
-    /// No probe for 141 before this (the web client failed last time).
+    /// No probe for 141 before this (the last probe failed or was
+    /// inconclusive).
     premium_probe_after: Mutex<f64>,
+    /// The video the last inconclusive probe was on: the next is another.
+    premium_probed: Mutex<Option<String>>,
     clock: Arc<dyn Clock>,
     /// Resolved streams by video id, reused until shortly before they expire.
     streams: Mutex<HashMap<String, ChosenStream>>,
@@ -87,6 +92,7 @@ impl YtmProvider {
             premium: AtomicBool::new(false),
             premium_seen: Mutex::new(None),
             premium_probe_after: Mutex::new(0.0),
+            premium_probed: Mutex::new(None),
             clock,
             streams: Mutex::default(),
             catalogue: Mutex::default(),
@@ -168,7 +174,8 @@ impl YtmProvider {
             .is_some_and(|j| j.clients().contains(&super::clients::ClientKind::WebRemix))
             && self.signed_in()
             && self.premium_seen.lock().is_none()
-            && *self.premium_probe_after.lock() <= now;
+            && *self.premium_probe_after.lock() <= now
+            && self.premium_probed.lock().as_deref() != Some(id);
         let s = self
             .chooser
             .choose(
@@ -179,12 +186,15 @@ impl YtmProvider {
             )
             .await?;
         if probe {
-            if s.client == super::clients::ClientKind::WebRemix {
-                let premium = s.itag == super::player::ITAG_AAC_256;
-                tracing::info!(target: "hocket::ytm", premium, "Premium, as the web client shows it");
-                *self.premium_seen.lock() = Some(premium);
+            if s.client == super::clients::ClientKind::WebRemix
+                && s.itag == super::player::ITAG_AAC_256
+            {
+                tracing::info!(target: "hocket::ytm", "Premium, as the web client shows it");
+                *self.premium_seen.lock() = Some(true);
             } else {
+                // Failed, or 140 alone on this video: try another later.
                 *self.premium_probe_after.lock() = now + PREMIUM_PROBE_RETRY_MS;
+                *self.premium_probed.lock() = Some(id.to_string());
             }
         }
         self.streams.lock().insert(id.to_string(), s.clone());
@@ -363,10 +373,26 @@ impl YtmProvider {
                 // Adds append; an insert moves each new entry before the
                 // entry that held the position (hidden videos skipped).
                 if let Some(before) = before {
-                    let moves: Vec<EditAction> = added
-                        .iter()
-                        .map(|(_, set)| EditAction::Move {
-                            set_video_id: set.clone(),
+                    let mut sets: Vec<String> = added.iter().map(|(_, set)| set.clone()).collect();
+                    if sets.len() < track_ids.len() {
+                        // A retry whose add landed last time (deduplicated
+                        // now) and whose move didn't: the songs are the
+                        // playlist's last entries; move those.
+                        let c = self.playlist_live(&id).await?;
+                        let visible: Vec<&PlaylistEntry> =
+                            c.entries.iter().filter(|e| e.visible).collect();
+                        let tail = &visible[visible.len().saturating_sub(track_ids.len())..];
+                        if tail.len() == track_ids.len()
+                            && tail.iter().zip(&track_ids).all(|(e, t)| &e.track.id == t)
+                        {
+                            sets = tail.iter().filter_map(|e| e.entry_id.clone()).collect();
+                        }
+                    }
+                    let moves: Vec<EditAction> = sets
+                        .into_iter()
+                        .filter(|set| *set != before)
+                        .map(|set| EditAction::Move {
+                            set_video_id: set,
                             before: Some(before.clone()),
                         })
                         .collect();
@@ -1076,8 +1102,13 @@ impl YtmProvider {
                     file.write_all(&r.body)
                         .await
                         .map_err(|e| ProviderError::Io(e.to_string()))?;
-                    at += r.body.len() as u64;
-                    if total.is_none() && (r.body.len() as u64) < end - at + 1 {
+                    // What this range asked for, before `at` moves on: a
+                    // shorter answer is the end of a stream of unknown
+                    // length (a longer one, more than asked, just moves on).
+                    let asked = (end + 1).saturating_sub(at);
+                    let got = r.body.len() as u64;
+                    at = at.saturating_add(got);
+                    if total.is_none() && got < asked {
                         break;
                     }
                 }
