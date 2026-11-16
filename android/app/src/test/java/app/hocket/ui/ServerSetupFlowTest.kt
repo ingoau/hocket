@@ -110,6 +110,42 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.url").performScrollTo().assertIsDisplayed()
     }
 
+    @Test
+    fun addAccountFromSettingsOffersEverySourceAndYouTubeMusicReachesItsStep() {
+        val core = TestCore(startWithServer = true, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+        try {
+            app.hocket.ui.screens.setup.SetupRequests.addAccount()
+            // The kinds of source first, not straight into Navidrome's form; pairing is first-run only.
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.add.ytm") == 1 }
+            compose.onNodeWithTag("setup.add.navidrome").assertIsDisplayed()
+            compose.onNodeWithTag("setup.add.ytm").assertIsDisplayed()
+            assertEquals(0, compose.onAllNodesWithTagCount("setup.url"))
+            assertEquals(0, compose.onAllNodesWithTagCount("setup.device"))
+            // YouTube Music: its sign-in step; its Cancel comes back to the choice.
+            compose.onNodeWithTag("setup.add.ytm").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.ytm.signIn") == 1 }
+            compose.onNodeWithTag("setup.ytm.anonymous").assertIsDisplayed()
+            compose.onNodeWithTag("setup.ytm.back").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.add.navidrome") == 1 }
+            // Navidrome: the existing form, whose Cancel goes back to the app.
+            compose.onNodeWithTag("setup.add.navidrome").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
+            compose.onNodeWithTag("setup.cancel").performScrollTo().performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+            // Cancel on the choice itself goes back to the app too.
+            app.hocket.ui.screens.setup.SetupRequests.addAccount()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.add.cancel") == 1 }
+            compose.onNodeWithTag("setup.add.cancel").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+            assertEquals(false, app.hocket.ui.screens.setup.SetupRequests.adding.value)
+        } finally {
+            app.hocket.ui.screens.setup.SetupRequests.done()
+        }
+    }
+
     private fun textOf(tag: String): String =
         compose.onNodeWithTag(tag).fetchSemanticsNode().config.getOrElseNullable(androidx.compose.ui.semantics.SemanticsProperties.EditableText) { null }?.text ?: ""
 

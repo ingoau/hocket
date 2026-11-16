@@ -1093,7 +1093,7 @@ const STRINGS = {
   "settings.accounts.up": "Move {name} up",
   "settings.accounts.down": "Move {name} down",
   "settings.accounts.add": "Add account",
-  "settings.accounts.addHint": "Another Navidrome server or login. Its songs join the same library.",
+  "settings.accounts.addHint": "A Navidrome server or YouTube Music. Its songs join the same library.",
   "settings.serverRemove": "Remove server",
   "settings.serverResync": "Resync library",
   "settings.serverFullResync": "Full reconcile",

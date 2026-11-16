@@ -77,8 +77,11 @@ import app.hocket.playback.ServerCredential
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 
-/** Where setup is: the welcome, the sign-in form, or the summary of the server just connected. */
-private enum class SetupStep { Welcome, Form, Summary, Another, Ytm }
+/**
+ * Where setup is: the welcome, the sign-in form, the summary of the server just connected, "Add
+ * another source?", YouTube Music's sign-in, or Settings' Add account choosing a kind of source.
+ */
+private enum class SetupStep { Welcome, Form, Summary, Another, Ytm, Add }
 
 /**
  * Server setup is the entire first screen (design: empty states, the Setup board): a welcome (the
@@ -89,6 +92,7 @@ private enum class SetupStep { Welcome, Form, Summary, Another, Ytm }
  * Continue ([onContinue]), or the clear error for servers below 0.63.0. [needsRelogin]: a login is
  * stored but unreadable right now; the form says so instead of looking like a sign-out.
  * [summary]: show the summary for [existing] (signed in, or too old) rather than the form. [onConnecting] runs when the form signs in, so the app holds setup open for the summary.
+ * [adding]: Settings > Add account; the source cards (Navidrome, YouTube Music) come first, and Cancel goes back to the app.
  */
 @Composable
 fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, summary: Boolean = existing != null && !needsRelogin, adding: Boolean = false, onConnecting: () -> Unit = {}, onContinue: () -> Unit = {}) {
@@ -104,6 +108,8 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     var started by rememberSaveable { mutableStateOf(needsRelogin || adding) }
     // Adding another account: the one installed when the form opened, until a new one arrives.
     var addingFrom by rememberSaveable { mutableStateOf(if (adding) existing?.id ?: "" else null) }
+    // Adding from Settings, before a kind of source is picked: the source cards come first.
+    var choosing by rememberSaveable { mutableStateOf(adding) }
     // "Add another source?", after the summary's Continue.
     var another by rememberSaveable { mutableStateOf(false) }
     // The other device's card: the form says to paste its setup link.
@@ -124,6 +130,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     val step = when {
         another -> SetupStep.Another
         ytm -> SetupStep.Ytm
+        choosing -> SetupStep.Add
         addingFrom != null -> SetupStep.Form
         existing != null && summary -> SetupStep.Summary
         started -> SetupStep.Form
@@ -148,6 +155,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
         pairing = true
         fromDevice = true
         started = true
+        choosing = false
         error = null
         client.dispatch(Command.PairWithInvite(app.hocket.core.api.CommandPairWithInviteInner(link)))
     }
@@ -178,6 +186,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
         val cookies = result.data?.getStringExtra(app.hocket.YtmSignInActivity.EXTRA_COOKIES)
         if (result.resultCode == android.app.Activity.RESULT_OK && cookies != null) {
             ytm = false
+            choosing = false
             addingFrom = null
             onConnecting()
             CoreHost.ytmLogin(client::dispatch, cookies)
@@ -185,6 +194,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     }
     fun ytmAnonymous() {
         ytm = false
+        choosing = false
         addingFrom = null
         onConnecting()
         CoreHost.ytmLogin(client::dispatch, null)
@@ -195,9 +205,9 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     BoxWithConstraints(Modifier.fillMaxSize().background(ground)) {
         val tooOld = existing != null && !CoreHost.meetsFloor(existing)
         // The mark: centred and large on the welcome, small over the form, mid-size over the summary.
-        val tile by animateDpAsState(when (step) { SetupStep.Welcome -> 104.dp; SetupStep.Form -> 72.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm -> 104.dp }, label = "setupTile")
-        val mark by animateDpAsState(when (step) { SetupStep.Welcome -> 40.dp; SetupStep.Form -> 26.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm -> 30.dp }, label = "setupMark")
-        val top by animateDpAsState(when (step) { SetupStep.Welcome -> maxHeight * 0.14f; SetupStep.Form -> 40.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm -> 72.dp }, label = "setupTop")
+        val tile by animateDpAsState(when (step) { SetupStep.Welcome -> 104.dp; SetupStep.Form -> 72.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm, SetupStep.Add -> 104.dp }, label = "setupTile")
+        val mark by animateDpAsState(when (step) { SetupStep.Welcome -> 40.dp; SetupStep.Form -> 26.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm, SetupStep.Add -> 30.dp }, label = "setupMark")
+        val top by animateDpAsState(when (step) { SetupStep.Welcome -> maxHeight * 0.14f; SetupStep.Form -> 40.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm, SetupStep.Add -> 72.dp }, label = "setupTop")
         Column(Modifier.fillMaxWidth().systemBarsPadding().padding(top = top).alpha(if (tooOld) 0.45f else 1f), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(if (step == SetupStep.Welcome) 28.dp else 14.dp)) {
             AppTile(tile)
@@ -230,6 +240,15 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                 }
                 Button(onClick = { another = false; onContinue() }, shapes = ButtonDefaults.shapes(), modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.LargeContainerHeight).padding(top = 8.dp).testTag("setup.done"),
                     contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.LargeContainerHeight)) { Text(stringResource(R.string.setup_another_done), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight)) }
+            }
+            // Settings > Add account: a card per kind of source this set-up device can add (pairing
+            // with another device is first-run only), and Cancel back to the app.
+            SetupStep.Add -> Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 480.dp).systemBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.setup_add_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().semantics { heading() })
+                Text(stringResource(R.string.setup_another_body), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
+                SourceCard(HocketIcons.Filled.LibraryMusic, stringResource(R.string.setup_source_navidrome), stringResource(R.string.setup_source_navidrome_body), "setup.add.navidrome") { fromDevice = false; choosing = false }
+                SourceCard(HocketIcons.Filled.PlayCircle, stringResource(R.string.setup_source_ytm), stringResource(R.string.setup_source_ytm_body), "setup.add.ytm") { ytmError = false; ytm = true }
+                TextButton(onClick = { choosing = false; addingFrom = null; onContinue() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(top = 4.dp).testTag("setup.add.cancel")) { Text(stringResource(R.string.setup_cancel)) }
             }
             SetupStep.Form -> Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
@@ -317,7 +336,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                     Text(stringResource(R.string.setup_ytm_sign_in), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
                 }
                 TextButton(onClick = ::ytmAnonymous, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.anonymous")) { Text(stringResource(R.string.setup_ytm_anonymous)) }
-                TextButton(onClick = { ytm = false; if (existing != null && summary) another = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.back")) { Text(stringResource(R.string.setup_cancel)) }
+                TextButton(onClick = { ytm = false; if (!choosing && existing != null && summary) another = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.back")) { Text(stringResource(R.string.setup_cancel)) }
             }
             SetupStep.Summary -> existing?.let { server ->
                 Column(
