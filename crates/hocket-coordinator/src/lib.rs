@@ -1007,7 +1007,7 @@ impl App {
             self.save_off_lock(scope, replica);
         }
         if let Some(shared) = identity_changed {
-            self.identities.update(scope, shared);
+            self.identities.update(scope, shared, self.now_ms());
         }
     }
 

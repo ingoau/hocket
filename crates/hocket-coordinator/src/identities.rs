@@ -267,7 +267,10 @@ impl Identities {
     }
 
     /// A room's newer view of an identity's state.
-    pub fn update(&self, identity: &str, shared: SharedState) {
+    /// Merged into what is kept, never replacing it: two drives of one
+    /// room may hand in their snapshots in either order, and an older one
+    /// must not undo a newer one.
+    pub fn update(&self, identity: &str, shared: SharedState, now: u64) {
         let mut r = self.inner.lock();
         let Some(e) = r.identities.get_mut(identity) else {
             return;
@@ -275,8 +278,11 @@ impl Identities {
         if e.shared == shared {
             return;
         }
-        e.shared = shared;
-        self.save(&r);
+        match e.shared.merge(shared, now as f64) {
+            Ok(ch) if ch.any() => self.save(&r),
+            Ok(_) => {}
+            Err(err) => tracing::warn!(identity, error = %err, "room identity not kept"),
+        }
     }
 
     /// Admit (or refresh) an identity from what its device sent.
@@ -285,14 +291,19 @@ impl Identities {
         if !is_identity_id(&id) {
             return Err(AdmitError::BadIdentity);
         }
-        match r.identities.get_mut(&id) {
-            Some(e) => {
-                // Known already: what it sent can only add to the list.
-                e.shared
-                    .merge(sync, now as f64)
-                    .map_err(|_| AdmitError::BadIdentity)?;
-            }
+        match r.identities.get(&id) {
+            // Known already: nothing it sent is taken. Nothing in it is
+            // proved (a code proves an invite, not membership); its device
+            // syncs after its handshake proof, like any other.
+            Some(_) => {}
             None => {
+                // New: only what signatures prove (the member list and the
+                // signed records). The blob, grants and sync times come
+                // after a proof.
+                let mut sync = sync;
+                sync.blob = None;
+                sync.grants.clear();
+                sync.last_synced.clear();
                 if r.identities.len() >= IDENTITIES_MAX {
                     return Err(AdmitError::Full);
                 }
@@ -518,6 +529,42 @@ mod tests {
         assert_eq!(ids.keys(), keys);
         assert!(ids.is_owner(&a.id));
         assert!(ids.shared(&a.id).is_some());
+    }
+
+    /// A redeem for a known identity takes nothing from its unproved sync
+    /// (not its sync times or blob); a new identity's takes only what
+    /// signatures prove.
+    #[test]
+    fn a_redeem_merges_nothing_unproved() {
+        let ids = Identities::open(None).unwrap();
+        let owner = device();
+        let c = ids.issue_claim(0, 60_000).unwrap();
+        ids.claim(&c.code, owner.sync(), 1).unwrap();
+        assert!(ids.shared(&owner.id).unwrap().last_synced.is_empty());
+        let before = ids.shared(&owner.id).unwrap();
+        let code = ids.create_invite(&owner.id, 1).unwrap();
+        let mut sync = owner.sync();
+        sync.last_synced.insert("dev".into(), 100_000.0);
+        ids.redeem(&code, sync, 2).unwrap();
+        assert_eq!(ids.shared(&owner.id).unwrap(), before);
+    }
+
+    /// Room snapshots are merged in: an older one handed in after a newer
+    /// one doesn't undo it.
+    #[test]
+    fn room_updates_never_go_back() {
+        let ids = Identities::open(None).unwrap();
+        let mut owner = device();
+        let c = ids.issue_claim(0, 60_000).unwrap();
+        ids.claim(&c.code, owner.sync(), 1).unwrap();
+        let old = ids.shared(&owner.id).unwrap();
+        let _b = hocket_core::identity::testing::pair(&mut owner, "b", 2.0);
+        let mut newer = old.clone();
+        newer.merge(owner.sync(), 10.0).unwrap();
+        ids.update(&owner.id, newer, 10);
+        ids.update(&owner.id, old, 11);
+        let mut kept = ids.shared(&owner.id).unwrap();
+        assert!(kept.state().is_member("b"));
     }
 
     #[test]
