@@ -488,7 +488,7 @@ internal fun NewPlaylistDialog(onCreate: (name: String, accountId: String) -> Un
     val accounts by client.accounts.collectAsStateWithLifecycleCompat()
     var name by remember { mutableStateOf("") }
     // With several accounts the playlist lives on one of them, or Hocket keeps it (Mixed).
-    var account by remember(accounts, songs) { mutableStateOf(NewPlaylistChoice.initial(accounts.map { it.id }, songs)) }
+    var account by remember(accounts, songs) { mutableStateOf(NewPlaylistChoice.initial(accounts, songs)) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.playlist_new)) },

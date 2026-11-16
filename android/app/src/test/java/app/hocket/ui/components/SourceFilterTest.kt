@@ -34,10 +34,13 @@ class SourceFilterTest {
 
     @Test
     fun aNewPlaylistGoesWhereItsSongsAre() {
-        val accounts = listOf("a", "b")
+        val accounts = listOf(account("a", "Home"), account("b", "Work"))
         assertEquals("b", NewPlaylistChoice.initial(accounts, listOf(TrackRef("b", "1"), TrackRef("b", "2"))))
         assertEquals(MIXED_SOURCE, NewPlaylistChoice.initial(accounts, listOf(TrackRef("a", "1"), TrackRef("b", "2"))))
         assertEquals("a", NewPlaylistChoice.initial(accounts, emptyList()))
-        assertEquals("a", NewPlaylistChoice.initial(listOf("a"), listOf(TrackRef("a", "1"), TrackRef("x", "2"))))
+        assertEquals("a", NewPlaylistChoice.initial(listOf(account("a", "Home")), listOf(TrackRef("a", "1"), TrackRef("x", "2"))))
+        // YouTube Music songs carry the source `ytm`; the account's id is its channel id.
+        val ytm = account("UCme", "YouTube Music").copy(kind = AccountKind.YoutubeMusic, source = "ytm")
+        assertEquals("UCme", NewPlaylistChoice.initial(accounts + ytm, listOf(TrackRef("ytm", "v1"), TrackRef("ytm", "v2"))))
     }
 }

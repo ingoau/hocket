@@ -2,6 +2,7 @@ package app.hocket.ui.components
 
 import app.hocket.core.Commands
 import app.hocket.core.MIXED_SOURCE
+import app.hocket.core.api.AccountInfo
 import app.hocket.core.api.Command
 import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Playlist
@@ -208,14 +209,17 @@ sealed interface PickerOutcome {
 object NewPlaylistChoice {
     /**
      * The songs' own account when they share one this device has; Mixed when they come from
-     * several; otherwise the first account ("" with none).
+     * several; otherwise the first account ("" with none). A song's source is its account's
+     * [AccountInfo.source]: a Navidrome account's id, but `ytm` for YouTube Music, whose account
+     * id is a channel id or `ytm:anon`.
      */
-    fun initial(accounts: List<String>, songs: List<TrackRef>): String {
+    fun initial(accounts: List<AccountInfo>, songs: List<TrackRef>): String {
         val sources = songs.map { it.source }.distinct()
+        val own = sources.singleOrNull()?.let { s -> accounts.firstOrNull { it.source == s } }
         return when {
-            sources.size == 1 && sources[0] in accounts -> sources[0]
+            own != null -> own.id
             sources.size > 1 && accounts.size > 1 -> MIXED_SOURCE
-            else -> accounts.firstOrNull().orEmpty()
+            else -> accounts.firstOrNull()?.id.orEmpty()
         }
     }
 }
