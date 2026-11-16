@@ -846,4 +846,4 @@ Protocol and security changes from the PR review (Rust core and coordinator):
   (permanent), and a sign-in clears them.
 - **Platform API.** `Event::Error` gains `account_id` (JSON `account_id`; set for an account's probe failures), so a
   platform drops the right stored login on an auth error. YouTube Music accounts report
-  `capabilities.meets_floor = true`.
+  `capabilities.meetsFloor = true`.
