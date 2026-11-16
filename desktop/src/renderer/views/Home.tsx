@@ -23,7 +23,7 @@ import { refOf } from "../lib/track-ref";
 /** How many items a section loads. */
 const SECTION_ITEMS = 12;
 
-/** "Loved or rated 4+, and not played in the last 90 days". */
+/** Songs "loved or rated 4+, and not played in the last 90 days": Rediscover shows their albums. */
 const REDISCOVER = {
   type: "all",
   data: [
@@ -225,7 +225,7 @@ function useSectionData(id: string): SectionData {
     return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   }, [stats]);
   const topArtist = stats?.topArtists[0];
-  const rediscover = useQuery(() => (id === "rediscover" ? { type: "tracks", data: { server_id: "", page: { offset: 0, limit: SECTION_ITEMS }, sort: "rating", descending: true, filter: REDISCOVER as never } } : null), "tracks", [id, serverId]);
+  const rediscover = useQuery(() => (id === "rediscover" ? { type: "albumsOfTracks", data: { server_id: "", limit: SECTION_ITEMS, sort: "rating", descending: true, filter: REDISCOVER as never } } : null), "albums", [id, serverId]);
   const genreAlbums = useQuery(() => (id === "topGenre" && genre ? { type: "albums", data: { server_id: "", artist_id: undefined, genre, sort: "playCount", descending: true, page: { offset: 0, limit: SECTION_ITEMS } } } : null), "albums", [id, serverId, genre]);
   const artistSongs = useQuery(() => (id === "moreFromArtist" && topArtist ? { type: "artistTopSongs", data: { id: topArtist.id, count: SECTION_ITEMS } } : null), "trackList", [id, topArtist?.id]);
   const week = useQuery(() => (id === "stats" ? { type: "stats", data: { period_days: 7 } } : null), "stats", [id, nowId]);
@@ -267,7 +267,7 @@ function useSectionData(id: string): SectionData {
       // Drawn by HomeSpotlight, never as a section.
       return { ready: true, items: [] };
     case "rediscover":
-      return { ready: !!rediscover.data, items: trackItems((rediscover.data?.items ?? []).map(toSummary), t("home.section.rediscover")) };
+      return { ready: !!rediscover.data, items: (rediscover.data?.items ?? []).map(albumItem) };
     case "filters":
       return { ready: true, items: filters.slice(0, SECTION_ITEMS).map(filterItem) };
     case "favouriteArtists":

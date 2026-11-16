@@ -42,7 +42,7 @@ enum class HomeSection(
     val pinned: Boolean = false,
 ) {
     Spotlight("spotlight", R.string.home_section_spotlight, R.string.home_section_spotlight_desc, listOf(SectionStyle.Hero), true, SectionStyle.Hero, pinned = true),
-    Rediscover("rediscover", R.string.home_section_rediscover, R.string.home_section_rediscover_desc, listOf(SectionStyle.Row, SectionStyle.List), true, SectionStyle.Row),
+    Rediscover("rediscover", R.string.home_section_rediscover, R.string.home_section_rediscover_desc, listOf(SectionStyle.Row, SectionStyle.Grid, SectionStyle.List), true, SectionStyle.Row),
     Filters("filters", R.string.home_section_filters, R.string.home_section_filters_desc, listOf(SectionStyle.Row, SectionStyle.Grid, SectionStyle.List), true, SectionStyle.Row),
     FavouriteArtists("favouriteArtists", R.string.home_section_favourite_artists, R.string.home_section_favourite_artists_desc, listOf(SectionStyle.Row, SectionStyle.Grid), true, SectionStyle.Row),
     TopGenre("topGenre", R.string.home_section_top_genre, R.string.home_section_top_genre_desc, listOf(SectionStyle.Row, SectionStyle.Grid, SectionStyle.List), true, SectionStyle.Grid),
