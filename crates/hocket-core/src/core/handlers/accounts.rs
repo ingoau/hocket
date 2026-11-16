@@ -715,6 +715,24 @@ impl Actor {
             // stars and the Mixed playlists' rows are redone over the mirror.
             self.apply_library_records();
             self.reconcile_playlist_pins();
+            // Pins restored from a version-10 backup come without their
+            // jobs: plan their wanted tracks after the account's first
+            // sync, once (a job the user cancelled or that failed since is
+            // theirs to retry).
+            let replan = crate::db::restore_v10::replan_key(&p.server_id);
+            if matches!(self.db.saved_state_get_raw(&replan), Ok(Some(_))) {
+                match self.downloads.replan_wanted(&p.server_id) {
+                    Ok(specs) => {
+                        for spec in specs {
+                            if let Err(e) = self.jobs.submit(spec) {
+                                self.error(ErrorKind::Storage, "download job", Some(e.to_string()));
+                            }
+                        }
+                        let _ = self.db.saved_state_delete(&replan);
+                    }
+                    Err(e) => self.log("warn", format!("planning restored downloads: {e}")),
+                }
+            }
             // Cached audio of tracks whose file changed on the server is stale.
             match self.downloads.invalidate_changed_sources() {
                 Ok(changed) if !changed.is_empty() => self.on_stream_cache_changed(changed),

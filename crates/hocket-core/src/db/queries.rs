@@ -1722,8 +1722,17 @@ pub(crate) fn upsert_tracks_in(
     sync_gen: i64,
 ) -> DbResult<usize> {
     let mut st = tx.prepare_cached(
-        "INSERT INTO tracks(id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, changed, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, mood, music_brainz_id, explicit, comment, is_compilation, sync_gen, artists, isrc)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, COALESCE((SELECT is_compilation FROM albums WHERE albums.server_id = ?2 AND albums.id = ?4), 0), ?38, ?39, ?40)
+        "INSERT INTO tracks(id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, changed, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, mood, music_brainz_id, explicit, comment, is_compilation, sync_gen, artists, isrc, offline)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, COALESCE((SELECT is_compilation FROM albums WHERE albums.server_id = ?2 AND albums.id = ?4), 0), ?38, ?39, ?40,
+           -- A new row learns what is already on the device (pins and the
+           -- stream cache outlive the mirror): `Downloads::refresh_offline`'s
+           -- order, codes as in `offline_to_i64`.
+           CASE
+             WHEN EXISTS (SELECT 1 FROM pin_tracks p WHERE p.server_id = ?2 AND p.track_id = ?1 AND p.state = 'done') THEN 2
+             WHEN EXISTS (SELECT 1 FROM pin_tracks p WHERE p.server_id = ?2 AND p.track_id = ?1 AND p.state IN ('wanted', 'downloading')) THEN 3
+             WHEN EXISTS (SELECT 1 FROM cache_entries c WHERE c.server_id = ?2 AND c.track_id = ?1 AND c.complete = 1) THEN 1
+             ELSE 0
+           END)
          ON CONFLICT(server_id, id) DO UPDATE SET
            title = excluded.title, album_id = excluded.album_id, album = excluded.album, artist_id = excluded.artist_id, artist = excluded.artist, album_artist = excluded.album_artist,
            track_number = excluded.track_number, disc_number = excluded.disc_number, year = excluded.year, genre = excluded.genre, duration_ms = excluded.duration_ms,
@@ -2032,6 +2041,51 @@ mod tests {
             created: Some(1.0),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_new_track_row_learns_what_is_already_on_the_device() {
+        // Pins and the stream cache outlive a mirror rebuild (or a restore):
+        // the first sync's rows say what's downloaded, wanted and cached.
+        let db = Db::open_in_memory().unwrap();
+        db.with_conn(|c| {
+            c.execute_batch(
+                "INSERT INTO pin_tracks(server_id, target_kind, target_id, track_id, state) VALUES
+                   ('s', 'album', 'al', 'done', 'done'), ('s', 'album', 'al', 'wanted', 'wanted'),
+                   ('s', 'album', 'al', 'both', 'done'), ('other', 'album', 'al', 'elsewhere', 'done');
+                 INSERT INTO cache_entries(server_id, track_id, path, created_at, last_used_at, complete) VALUES
+                   ('s', 'cached', '/c', 1, 1, 1), ('s', 'partial', '/p', 1, 1, 0), ('s', 'both', '/b', 1, 1, 1);",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let ids = [
+            "done",
+            "wanted",
+            "both",
+            "cached",
+            "partial",
+            "elsewhere",
+            "none",
+        ];
+        let tracks: Vec<Track> = ids.iter().map(|id| t(id, id, "A", "B")).collect();
+        db.upsert_tracks(&tracks, &[], 1).unwrap();
+        let offline = |id: &str| db.track(id).unwrap().unwrap().offline;
+        assert_eq!(offline("done"), OfflineState::Downloaded);
+        assert_eq!(offline("both"), OfflineState::Downloaded);
+        assert_eq!(offline("wanted"), OfflineState::Downloading);
+        assert_eq!(offline("cached"), OfflineState::Cached);
+        assert_eq!(offline("partial"), OfflineState::None);
+        assert_eq!(
+            offline("elsewhere"),
+            OfflineState::None,
+            "another account's pin"
+        );
+        assert_eq!(offline("none"), OfflineState::None);
+        // An update leaves the column to the downloads layer.
+        db.set_track_offline("none", OfflineState::Cached).unwrap();
+        db.upsert_tracks(&tracks, &[], 2).unwrap();
+        assert_eq!(offline("none"), OfflineState::Cached);
     }
 
     #[test]

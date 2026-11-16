@@ -18,6 +18,7 @@
 pub mod catalogue;
 pub mod links;
 pub mod queries;
+pub mod restore_v10;
 pub mod sync;
 
 use std::path::{Path, PathBuf};
@@ -107,6 +108,9 @@ pub struct OpenReport {
     pub backup_path: Option<PathBuf>,
     /// The mirror was dropped and must be re-synced.
     pub mirror_rebuilt: bool,
+    /// What was restored from the backup of a version-10 database
+    /// ([`restore_v10`]); `None` when no restore ran.
+    pub restore: Option<restore_v10::RestoreReport>,
 }
 
 struct Inner {
@@ -411,6 +415,9 @@ fn migrate(
     }
     let pending: Vec<_> = MIGRATIONS.iter().filter(|(v, _, _)| *v > from).collect();
     if pending.is_empty() {
+        if path.is_some() {
+            report.restore = restore_v10::after_open(conn);
+        }
         return Ok(report);
     }
     if from > 0 {
@@ -431,28 +438,117 @@ fn migrate(
         }
     }
     if from > 0 && from < MIGRATIONS[0].0 {
-        // Older than the squashed schema: nothing to migrate from (no users
-        // yet). The backup above keeps the old file; start over.
+        // Older than the squashed schema: nothing to migrate from. The
+        // backup above keeps the old file; start over and restore what the
+        // server can't give back from the first version-10 backup (the copy
+        // taken before any interrupted attempt), all in one transaction.
         tracing::warn!(from, "database predates the squashed schema; recreating it");
-        drop_all_tables(conn)?;
         report.mirror_rebuilt = true;
-    }
-    for (version, name, sql) in pending {
-        match apply_migration(conn, *version, sql) {
-            Ok(()) => tracing::info!(version, name, "applied migration"),
-            Err(first) => {
-                tracing::warn!(version, name, error = %first, "migration failed; rebuilding mirror tables");
-                drop_mirror_tables(conn)?;
-                report.mirror_rebuilt = true;
-                apply_migration(conn, *version, sql).map_err(|source| DbError::Migration {
-                    version: *version,
-                    source,
-                })?;
+        let backup = if from == restore_v10::FROM_VERSION {
+            path.zip(backup_dir)
+                .and_then(|(p, d)| restore_v10::first_backup(d, p))
+                .or_else(|| report.backup_path.clone())
+        } else {
+            tracing::info!(from, "no restore from a version-{from} database");
+            None
+        };
+        report.restore = recreate(conn, backup.as_deref())?;
+        report.to_version = MIGRATIONS[0].0;
+    } else {
+        for (version, name, sql) in pending {
+            match apply_migration(conn, *version, sql) {
+                Ok(()) => tracing::info!(version, name, "applied migration"),
+                Err(first) => {
+                    tracing::warn!(version, name, error = %first, "migration failed; rebuilding mirror tables");
+                    drop_mirror_tables(conn)?;
+                    report.mirror_rebuilt = true;
+                    apply_migration(conn, *version, sql).map_err(|source| DbError::Migration {
+                        version: *version,
+                        source,
+                    })?;
+                }
             }
+            report.to_version = *version;
         }
-        report.to_version = *version;
+    }
+    if report.restore.is_none() && path.is_some() {
+        report.restore = restore_v10::after_open(conn);
     }
     Ok(report)
+}
+
+/// Drop everything and apply the current schema, then restore from
+/// `backup`, in one transaction: a crash leaves the old database whole. A
+/// restore SQLite rolled back takes the recreation with it; the recreation
+/// is then redone without it, recording in the same transaction that the
+/// next open retries the restore (`restore_v10::after_open`).
+fn recreate(
+    conn: &Connection,
+    backup: Option<&Path>,
+) -> DbResult<Option<restore_v10::RestoreReport>> {
+    // Not inside a transaction (it would be a no-op there): dropping a
+    // parent table before its children must not trip foreign keys.
+    conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+    let result = match recreate_once(conn, backup, None) {
+        Ok(Err(aborted)) => recreate_once(conn, None, backup).map(|_| Some(aborted)),
+        other => other.map(|r| r.ok().flatten()),
+    };
+    conn.execute_batch("PRAGMA foreign_keys = ON")?;
+    result
+}
+
+/// `Ok(Err(report))`: the restore was aborted and nothing was committed.
+/// `retry_from`: no restore now, the next open restores from that backup.
+#[allow(clippy::type_complexity)]
+fn recreate_once(
+    conn: &Connection,
+    backup: Option<&Path>,
+    retry_from: Option<&Path>,
+) -> DbResult<Result<Option<restore_v10::RestoreReport>, restore_v10::RestoreReport>> {
+    let (version, _, sql) = MIGRATIONS[0];
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let out = drop_all_tables(conn)
+        .and_then(|()| {
+            conn.execute_batch(sql)
+                .and_then(|()| {
+                    conn.execute(
+                        "INSERT INTO schema_version(version, applied_at) VALUES (?1, ?2)",
+                        rusqlite::params![version, now_ms()],
+                    )
+                })
+                .and_then(|_| match retry_from {
+                    Some(b) => restore_v10::mark_retry(conn, b),
+                    None => Ok(()),
+                })
+                .map_err(|source| DbError::Migration { version, source })
+        })
+        .map(|_| match backup {
+            Some(b) => restore_v10::restore_in(conn, b, false)
+                .map(Some)
+                .map_err(|restore_v10::Aborted(r)| r),
+            None => Ok(None),
+        });
+    match out {
+        Ok(Ok(restored)) => match conn.execute_batch("COMMIT") {
+            Ok(()) => Ok(Ok(restored)),
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e.into())
+            }
+        },
+        Ok(Err(aborted)) => {
+            if !conn.is_autocommit() {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+            Ok(Err(aborted))
+        }
+        Err(e) => {
+            if !conn.is_autocommit() {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+            Err(e)
+        }
+    }
 }
 
 fn drop_all_tables(conn: &Connection) -> DbResult<()> {
@@ -464,13 +560,11 @@ fn drop_all_tables(conn: &Connection) -> DbResult<()> {
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<Result<_, _>>()?
     };
-    conn.execute_batch("PRAGMA foreign_keys = OFF")?;
     for (kind, name) in names {
         // FTS shadow tables vanish with their virtual table.
         let kind = kind.to_uppercase();
         conn.execute_batch(&format!("DROP {kind} IF EXISTS \"{name}\""))?;
     }
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL, applied_at REAL NOT NULL); PRAGMA foreign_keys = ON")?;
     Ok(())
 }
 
