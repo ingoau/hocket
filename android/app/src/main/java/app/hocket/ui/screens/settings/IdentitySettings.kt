@@ -5,6 +5,7 @@ import android.text.format.DateUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -112,7 +113,7 @@ private fun ColumnScope.Coordinator() {
     // The search's "coordinator" entry lands here.
     SettingsSection(stringResource(R.string.identity_coordinator), tag = "connect.coordinator")
     if (pin == null) {
-        SettingRow(stringResource(R.string.identity_coordinator_none), tag = "identity.coordinatorNone")
+        Box(Modifier.testTag("identity.coordinatorNone")) { SettingRow(stringResource(R.string.identity_coordinator_none)) }
         OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.identity_coordinator_url)) }, placeholder = { Text(stringResource(R.string.identity_coordinator_url_hint)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("identity.coordinatorUrl"))
         OutlinedTextField(value = code, onValueChange = { code = it }, label = { Text(stringResource(R.string.identity_coordinator_code)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("identity.coordinatorCode"))
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -126,20 +127,20 @@ private fun ColumnScope.Coordinator() {
         }
     } else {
         // Pinned: where it is, whose it is, and how this device is connected to it.
-        SettingRow(stringResource(if (pin.owner) R.string.identity_coordinator_owner else R.string.identity_coordinator_guest, pin.url), tag = "identity.coordinatorPin")
+        Box(Modifier.testTag("identity.coordinatorPin")) { SettingRow(stringResource(if (pin.owner) R.string.identity_coordinator_owner else R.string.identity_coordinator_guest, pin.url)) }
         val status = when (connection.tier) {
             ConnectionTier.Local -> stringResource(R.string.connection_local)
             ConnectionTier.Lan -> pluralStringResource(R.plurals.connection_lan, connection.peerCount.toInt(), connection.peerCount.toInt())
             ConnectionTier.Coordinator -> pluralStringResource(R.plurals.connection_coordinator, connection.peerCount.toInt(), connection.peerCount.toInt())
         }
         val connected = connection.connected && connection.tier == ConnectionTier.Coordinator
-        SettingRow(status, connection.error ?: connection.roundTripMs?.let { "${it.toInt()} ms" }, tag = "identity.coordinatorStatus", trailing = {
+        Box(Modifier.testTag("identity.coordinatorStatus")) { SettingRow(status, connection.error ?: connection.roundTripMs?.let { "${it.toInt()} ms" }, trailing = {
             if (connected) {
                 TextButton(onClick = { client.dispatch(Command.DisconnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorDisconnect")) { Text(stringResource(R.string.identity_coordinator_disconnect)) }
             } else {
                 TextButton(onClick = { client.dispatch(Command.ConnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorReconnect")) { Text(stringResource(R.string.identity_coordinator_reconnect)) }
             }
-        })
+        }) }
     }
     if (pin?.owner == true) {
         SettingsSection(stringResource(R.string.identity_invites))

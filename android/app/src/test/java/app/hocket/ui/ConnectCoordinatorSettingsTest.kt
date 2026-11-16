@@ -64,11 +64,11 @@ class ConnectCoordinatorSettingsTest {
     fun withNoCoordinatorItOffersClaimAndRedeem() {
         openConnect()
         await("setting.connect.coordinator")
-        for (tag in listOf("setting.identity.coordinatorNone", "identity.coordinatorUrl", "identity.coordinatorCode", "identity.claim", "identity.redeem")) {
+        for (tag in listOf("identity.coordinatorNone", "identity.coordinatorUrl", "identity.coordinatorCode", "identity.claim", "identity.redeem")) {
             assertTrue("$tag shown", exists(tag))
         }
         assertFalse(exists("identity.coordinatorDisconnect"))
-        assertFalse(exists("setting.identity.coordinatorStatus"))
+        assertFalse(exists("identity.coordinatorStatus"))
     }
 
     @Test
@@ -78,12 +78,12 @@ class ConnectCoordinatorSettingsTest {
         compose.onNodeWithTag("identity.coordinatorUrl").performScrollTo().performTextInput("wss://coordinator.example/ws")
         compose.onNodeWithTag("identity.coordinatorCode").performScrollTo().performTextInput("ABCD-EFGH")
         click("identity.claim")
-        await("setting.identity.coordinatorPin")
+        await("identity.coordinatorPin")
         assertEquals("wss://coordinator.example/ws", core.client.identity.value.coordinator?.url)
         assertEquals("wss://coordinator.example/ws", core.client.connection.value.coordinatorUrl)
         await("identity.coordinatorDisconnect")
-        assertTrue(exists("setting.identity.coordinatorStatus"))
-        for (tag in listOf("identity.coordinatorUrl", "identity.coordinatorCode", "identity.claim", "identity.redeem", "setting.identity.coordinatorNone")) {
+        assertTrue(exists("identity.coordinatorStatus"))
+        for (tag in listOf("identity.coordinatorUrl", "identity.coordinatorCode", "identity.claim", "identity.redeem", "identity.coordinatorNone")) {
             assertFalse("$tag gone", exists(tag))
         }
         // Disconnect, then Reconnect.
