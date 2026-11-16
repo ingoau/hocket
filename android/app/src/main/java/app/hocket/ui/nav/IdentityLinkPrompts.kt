@@ -7,7 +7,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.AppLinks
@@ -29,15 +31,7 @@ fun IdentityLinkPrompts(snackbar: SnackbarHostState) {
     val context = LocalContext.current
     val pair by AppLinks.pair.collectAsStateWithLifecycle()
     val claim by AppLinks.claim.collectAsStateWithLifecycle()
-    pair?.let { link ->
-        AlertDialog(
-            onDismissRequest = { AppLinks.consumePair(link) },
-            title = { Text(stringResource(R.string.pair_join_title)) },
-            text = { Text(stringResource(R.string.pair_join_body)) },
-            confirmButton = { TextButton(onClick = { AppLinks.consumePair(link); client.dispatch(Command.PairWithInvite(CommandPairWithInviteInner(link))) }) { Text(stringResource(R.string.pair_join_confirm)) } },
-            dismissButton = { TextButton(onClick = { AppLinks.consumePair(link) }) { Text(stringResource(R.string.action_cancel)) } },
-        )
-    }
+    pair?.let { link -> PairLinkPrompt(link) { client.dispatch(Command.PairWithInvite(CommandPairWithInviteInner(link))) } }
     claim?.let { link ->
         AlertDialog(
             onDismissRequest = { AppLinks.consumeClaim(link) },
@@ -60,4 +54,21 @@ fun IdentityLinkPrompts(snackbar: SnackbarHostState) {
             if (text != null) snackbar.showSnackbar(text)
         }
     }
+}
+
+/**
+ * Asks before pairing with [link], another device's pairing link opened from outside the app (a
+ * web page can open one): pairing moves this device to the other's identity. Either answer
+ * consumes the link; [onPair] runs on Pair.
+ */
+@Composable
+fun PairLinkPrompt(link: String, onPair: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = { AppLinks.consumePair(link) },
+        title = { Text(stringResource(R.string.pair_join_title)) },
+        text = { Text(stringResource(R.string.pair_join_body)) },
+        confirmButton = { TextButton(onClick = { AppLinks.consumePair(link); onPair() }, modifier = Modifier.testTag("pair.prompt.confirm")) { Text(stringResource(R.string.pair_join_confirm)) } },
+        dismissButton = { TextButton(onClick = { AppLinks.consumePair(link) }, modifier = Modifier.testTag("pair.prompt.cancel")) { Text(stringResource(R.string.action_cancel)) } },
+        modifier = Modifier.testTag("pair.prompt"),
+    )
 }

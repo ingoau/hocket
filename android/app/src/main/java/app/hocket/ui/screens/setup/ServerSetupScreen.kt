@@ -169,14 +169,11 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     fun scan() = app.hocket.SetupScanner.scan(context,
         onResult = { text -> PairingLinks.pair(text)?.let(::pairWith) ?: run { started = true; error = invalidCode } },
         onError = { started = true; error = scanFailed })
-    // A pairing link opened from outside (the camera, a shared link), while the form can take it.
+    // A pairing link opened from outside (the camera, a shared link, a web page), while the form can
+    // take it: asked first, since pairing moves this device (and on Settings > Add account, an
+    // already set-up one) to another identity. The in-app scanner and paste pair at once.
     val pendingLink by app.hocket.AppLinks.pair.collectAsStateWithLifecycle()
-    LaunchedEffect(pendingLink, step) {
-        val link = pendingLink ?: return@LaunchedEffect
-        if (step == SetupStep.Summary) return@LaunchedEffect
-        app.hocket.AppLinks.consumePair(link)
-        pairWith(link)
-    }
+    pendingLink?.takeIf { step != SetupStep.Summary }?.let { link -> app.hocket.ui.nav.PairLinkPrompt(link) { pairWith(link) } }
     val ytmSignIn = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
         val cookies = result.data?.getStringExtra(app.hocket.YtmSignInActivity.EXTRA_COOKIES)
         if (result.resultCode == android.app.Activity.RESULT_OK && cookies != null) {

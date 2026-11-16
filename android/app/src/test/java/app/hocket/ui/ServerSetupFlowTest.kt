@@ -49,6 +49,31 @@ class ServerSetupFlowTest {
     }
 
     @Test
+    fun anOutsidePairingLinkAsksBeforePairing() {
+        val core = TestCore(startWithServer = false, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        try {
+            app.hocket.AppLinks.openPair("hocket://pair?v=1&invite=abc")
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("pair.prompt") == 1 }
+            // Nothing is dispatched yet: setup is still on its welcome.
+            compose.onNodeWithTag("setup.start").assertIsDisplayed()
+            compose.onNodeWithTag("pair.prompt.cancel").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("pair.prompt") == 0 }
+            assertEquals(null, app.hocket.AppLinks.pair.value)
+            compose.onNodeWithTag("setup.start").assertIsDisplayed()
+            // Pair goes on to the device form.
+            app.hocket.AppLinks.openPair("hocket://pair?v=1&invite=abc")
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("pair.prompt") == 1 }
+            compose.onNodeWithTag("pair.prompt.confirm").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 0 }
+        } finally {
+            app.hocket.AppLinks.pair.value?.let(app.hocket.AppLinks::consumePair)
+        }
+    }
+
+    @Test
     fun serverBelowTheFloorShowsAClearError() {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
