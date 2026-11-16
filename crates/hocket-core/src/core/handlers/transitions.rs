@@ -73,11 +73,8 @@ impl Actor {
         // usable one.
         if let Ok(Some(track)) = self.db.track_ref(&track) {
             match unusable(&record, &store::fingerprint_of(&track)) {
-                None => {}
-                Some(Unusable::Version) => {
-                    self.analysis_version_skew(&track_id, &record, via);
-                    return false;
-                }
+                // Versions were checked above.
+                None | Some(Unusable::Version) => {}
                 Some(Unusable::OtherFile) => {
                     tracing::debug!(target: "hocket::automix", track = %track_id, via, "analysis record not for this file: dropped");
                     return false;

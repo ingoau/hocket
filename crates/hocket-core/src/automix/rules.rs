@@ -196,7 +196,9 @@ pub fn should_mix(a: &MixTrack<'_>, b: &MixTrack<'_>, ctx: &MixContext) -> MixDe
 
 /// Both sides are the same library file (same server and track id).
 pub fn is_same_track(a: &MixTrack<'_>, b: &MixTrack<'_>) -> bool {
-    a.track_id.is_some() && a.track_id == b.track_id && a.server_id == b.server_id
+    a.track_id.is_some_and(|id| !id.is_empty())
+        && a.track_id == b.track_id
+        && a.server_id == b.server_id
 }
 
 /// Same album id and `b` is the next track: same disc and track n+1, or the
@@ -534,6 +536,8 @@ mod tests {
             ..t("ten", 1, 5)
         };
         let same = MixDecision::NoMix(NoMixReason::SameTrack);
+        // An empty id names no track.
+        assert_ne!(should_mix(&ten("s", ""), &ten("s", ""), &ctx()), same);
         assert_eq!(should_mix(&ten("s", "t1"), &ten("s", "t1"), &ctx()), same);
         // Also with transitions as a plain crossfade.
         let crossfade = MixContext {

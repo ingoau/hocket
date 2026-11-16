@@ -656,6 +656,8 @@ impl Actor {
     }
 
     pub(crate) fn unload(&mut self) {
+        let now = self.now();
+        self.mix_log_with(|log, out| log.unloaded(now, out));
         if self.playback.loaded {
             let _ = self.backend.stop();
         }

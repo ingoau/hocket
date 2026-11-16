@@ -23,6 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -169,10 +170,7 @@ class ExoBackendClipTest {
         assertEquals("a", backend.player.currentMediaItem!!.mediaId)
         assertEquals(99_145L, backend.player.currentPosition)
         assertEquals(listOf("a", "b"), playlist())
-        // The guard leaves the late clip for its tail to render.
-        idle()
-        assertEquals(lateAt(99_145), clipEnd())
-        // Another seek in the late zone moves the late fade along.
+        // Another seek in the late zone (before the late render is done) moves the late fade along.
         seek(99_400)
         assertEquals(lateAt(99_400), clipEnd())
         // Far enough back, the planned mix again.
@@ -180,6 +178,34 @@ class ExoBackendClipTest {
         assertEquals(100_000L, clipEnd())
         assertEquals(60_000L, backend.player.currentPosition)
         assertEquals(listOf("a", "b"), playlist())
+    }
+
+    @Test
+    fun aSeekAfterAFailedRenderPlaysAOut() {
+        load(30_000u)
+        idle()
+        seek(99_145)
+        // The guard leaves the late clip for its tail to render (here it fails, off the main thread).
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!backend.armedRenderFailed && System.currentTimeMillis() < deadline) {
+            idle()
+            Thread.sleep(5)
+        }
+        assertTrue(backend.armedRenderFailed)
+        assertEquals(lateAt(99_145), clipEnd())
+        // A render that failed would fail again: no second late fade, A plays out.
+        seek(99_400)
+        assertEquals(C.TIME_END_OF_SOURCE, clipEnd())
+        assertEquals(99_400L, backend.player.currentPosition)
+    }
+
+    @Test
+    fun aSeekInsideTheRenderLeadMixesLateAtOnce() {
+        // Outside the guard's 2 s margin but too close to render the planned tail: mix late now,
+        // not after a second re-buffer from the guard.
+        load(30_000u)
+        seek(100_000 - ExoBackend.LATE_TAIL_MS - 500)
+        assertEquals(lateAt(100_000 - ExoBackend.LATE_TAIL_MS - 500), clipEnd())
     }
 
     @Test
@@ -193,7 +219,7 @@ class ExoBackendClipTest {
     @Test
     fun aSeekWellBeforeTheMixPointKeepsTheClip() {
         load(30_000u)
-        seek(100_000 - ExoBackend.LATE_TAIL_MS - 1)
+        seek(100_000 - ExoBackend.LATE_TAIL_MS - ExoBackend.LATE_FADE_LEAD_MS - 1)
         assertEquals(100_000L, clipEnd())
     }
 

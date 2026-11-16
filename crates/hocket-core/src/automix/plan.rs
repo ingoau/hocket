@@ -221,8 +221,9 @@ pub fn late_edit_fade(
 /// A short fade into `plan`'s B from a later tail start, for a backend that
 /// can't render `plan`'s tail before its tail start (a seek landed just
 /// before it, or past it): at most [`LATE_FADE_MAX_MS`] of the planned
-/// overlap, at least [`LATE_EDIT_MIN_MS`] (less only as A runs out, down to
-/// a second). B starts where the plan starts it. `None` when less than a
+/// overlap, at least [`LATE_EDIT_MIN_MS`] (less only when the planned overlap
+/// is shorter, which keeps a short B's limit, or as A runs out, down to a
+/// second). B starts where the plan starts it. `None` when less than a
 /// second of A is left after `tail_start_ms`: A then plays to its end.
 pub fn late_fade_at(
     plan: &TransitionPlan,
@@ -233,9 +234,12 @@ pub fn late_fade_at(
     if left < 1_000 {
         return None;
     }
+    // The planned overlap already fits B (half its span at most); never
+    // lengthen one that is shorter than the usual minimum.
     let overlap = plan
         .tail_len_ms
-        .clamp(LATE_EDIT_MIN_MS, LATE_FADE_MAX_MS)
+        .min(LATE_FADE_MAX_MS)
+        .max(LATE_EDIT_MIN_MS.min(plan.tail_len_ms))
         .min(left);
     Some(fade_plan(
         tail_start_ms,
@@ -1376,15 +1380,22 @@ mod tests {
         assert_eq!(p.handover_ms, LATE_FADE_MAX_MS / 2);
         assert!(p.tempo.is_none() && p.bass_swap.is_none());
         assert_eq!(p.incoming_gain_db, 0.0);
-        // A planned 1 s fade still gets the late-edit minimum.
+        // A short planned overlap (a short B, or a 1 s crossfade) is kept:
+        // lengthening it could outlast B.
         let short = TransitionPlan {
             tail_len_ms: 1_000,
             ..planned.clone()
         };
         assert_eq!(
             late_fade_at(&short, 139_500, DUR).unwrap().tail_len_ms,
-            LATE_EDIT_MIN_MS
+            1_000
         );
+        // Between the minimum and the cap, the planned length.
+        let mid = TransitionPlan {
+            tail_len_ms: 3_000,
+            ..planned.clone()
+        };
+        assert_eq!(late_fade_at(&mid, 139_500, DUR).unwrap().tail_len_ms, 3_000);
         // Near A's end: what is left of A, then nothing.
         let p = late_fade_at(&planned, DUR - 1_500, DUR).unwrap();
         assert_eq!((p.tail_len_ms, p.tail_source_ms), (1_500, 1_500));

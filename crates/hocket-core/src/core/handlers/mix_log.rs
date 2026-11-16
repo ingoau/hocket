@@ -104,17 +104,25 @@ impl MixLog {
     pub fn arm(&mut self, now: EpochMs, plan: Option<Planned>, out: &mut Vec<OutcomeLine>) {
         self.tick(now, out);
         match self.armed.take() {
-            Some((old, true)) => {
-                if plan.as_ref().is_some_and(|p| p.from_key == old.to_key) {
-                    // The handover came before its report did.
-                    self.hand_over(old, now, out);
-                } else {
-                    // The core never replaces the follow-up during the
-                    // overlap; keep the running one.
+            Some((old, true)) => match plan.as_ref() {
+                // The handover came before its report did.
+                Some(p) if p.from_key == old.to_key => self.hand_over(old, now, out),
+                // The same pair armed again (A reloaded, e.g. a retry): its
+                // transition has to be reported again.
+                Some(p) if p.from_key == old.from_key && p.to_key == old.to_key => {}
+                // The core never replaces the follow-up during the overlap;
+                // keep the running one.
+                Some(p) if p.from_key == old.from_key => {
                     self.armed = Some((old, true));
                     return;
                 }
-            }
+                None => {
+                    self.armed = Some((old, true));
+                    return;
+                }
+                // Another source: the running mix was abandoned.
+                Some(_) => out.push(Self::line(old, Outcome::Stopped)),
+            },
             Some((old, false)) => {
                 let same_pair = plan
                     .as_ref()
@@ -174,6 +182,12 @@ impl MixLog {
     /// The backend reported `TransitionedToNext` for `key`.
     pub fn transitioned(&mut self, now: EpochMs, key: &str, out: &mut Vec<OutcomeLine>) {
         self.tick(now, out);
+        if self.handed.as_ref().is_some_and(|(p, _)| p.to_key != key) {
+            // The mixed-in B moved on to its own follow-up inside the
+            // window: the mix stood.
+            let (plan, _) = self.handed.take().expect("checked");
+            out.push(Self::line(plan, Outcome::Mixed));
+        }
         if !self.armed.as_ref().is_some_and(|(p, _)| p.to_key == key) {
             return;
         }
@@ -328,6 +342,48 @@ mod tests {
 
     fn o(from: &str, to: &str, outcome: Outcome) -> (String, String, Outcome) {
         (from.into(), to.into(), outcome)
+    }
+
+    #[test]
+    fn a_new_source_during_the_overlap_stops_the_running_mix() {
+        // Unloaded without a hook (queue cleared), then something else plays.
+        let (mut log, mut out) = (MixLog::default(), vec![]);
+        log.arm(0.0, Some(plan("a", "b")), &mut out);
+        log.started(1_000.0, "a", "b", &mut out);
+        log.arm(5_000.0, Some(plan("x", "y")), &mut out);
+        assert_eq!(outcomes(&out), vec![o("a", "b", Outcome::Stopped)]);
+        // The new pair is tracked.
+        log.started(6_000.0, "x", "y", &mut out);
+        log.ended(10_000.0, "x", &mut out);
+        log.transitioned(10_000.0, "y", &mut out);
+        log.tick(10_001.0 + SKIP_WINDOW_MS, &mut out);
+        assert_eq!(outcomes(&out)[1], o("x", "y", Outcome::Mixed));
+    }
+
+    #[test]
+    fn a_reloaded_source_must_start_its_transition_again() {
+        let (mut log, mut out) = (MixLog::default(), vec![]);
+        log.arm(0.0, Some(plan("a", "b")), &mut out);
+        log.started(1_000.0, "a", "b", &mut out);
+        // A failed and was reloaded: same pair armed again, never restarted.
+        log.arm(2_000.0, Some(plan("a", "b")), &mut out);
+        log.ended(30_000.0, "a", &mut out);
+        assert_eq!(outcomes(&out), vec![o("a", "b", Outcome::NotStarted)]);
+    }
+
+    #[test]
+    fn a_mixed_in_track_moving_on_settles_its_mix() {
+        let (mut log, mut out) = (MixLog::default(), vec![]);
+        log.arm(0.0, Some(plan("a", "b")), &mut out);
+        log.started(1_000.0, "a", "b", &mut out);
+        log.transitioned(5_000.0, "b", &mut out);
+        // B joins C gaplessly (no plan) inside the window; a skip of C
+        // is not B's mix's fault.
+        log.arm(5_000.0, None, &mut out);
+        log.transitioned(10_000.0, "c", &mut out);
+        assert_eq!(outcomes(&out), vec![o("a", "b", Outcome::Mixed)]);
+        log.left(12_000.0, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
     }
 
     #[test]

@@ -575,15 +575,18 @@ The planner is deterministic: same inputs → same plan on every device.
     load to within 2 s of the tail start, or past it; or a render still
     running 2 s before it), A is rebuilt the same way but clipped 3.5 s after
     its position instead, and the plan becomes `late_fade_at` from there: a
-    `Fade` of the planned overlap clamped to 2–4 s (less as A runs out, none
-    under 1 s left), B from the plan's `incoming_from_ms`. Its tail is only a
+    `Fade` of the planned overlap clamped to 2–4 s (never longer than the
+    planned overlap, which fits B; less as A runs out, none under 1 s left), B from the plan's `incoming_from_ms`. Its tail is only a
     few seconds of A, so it renders in the 1.5 s before the 2 s margin. The
     reports carry the late plan's numbers (`TransitionStarted`, A's position
     from the new tail start), so the core follows. Once only: a late fade
     whose tail isn't ready either, or after a failed render, plays A out. A
     `set_next` with the planned plan is retargeted to the late clip; a seek
-    back to more than 2 s before the planned tail start restores the planned
-    clip and mix, and a seek with a ready tail still ahead keeps it.
+    to within 3.5 s of the planned tail start mixes late at once (no second
+    re-buffer from the guard); a seek back to before that restores the
+    planned clip and mix while A is still clipped (once A was unclipped to
+    play out, it stays unclipped); a seek with a ready tail still ahead keeps
+    it.
   - These waits (and the tail render's
     60 s lead) sleep until the time left at the playback speed, or until
     play state, a seek or the item changes; nothing runs while paused. A

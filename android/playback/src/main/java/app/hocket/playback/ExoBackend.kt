@@ -242,6 +242,9 @@ class ExoBackend(
     private val main = Handler(Looper.getMainLooper())
     private val mixControl = MixControl()
 
+    /** Whether the armed tail's render failed (main thread; for tests). */
+    internal val armedRenderFailed: Boolean get() = mixControl.armed?.failed == true
+
     /** Which transition the playback thread started mixing; consumed at ExoPlayer's item transition. */
     private var mixHeard: MixControl.Armed? = null
     private val mixListener = object : MixListener {
@@ -748,8 +751,13 @@ class ExoBackend(
         val planned = source.mixOutMs?.toLong() ?: return false
         val armed = mixControl.armed?.takeIf { it.from == key && it.to == next.key }
         val want = when {
-            positionMs < planned - LATE_TAIL_MS -> planned
             armed?.tail != null && armed.tailStartMs == clip && positionMs < clip -> clip
+            // Room for the planned tail to render before the guard's margin;
+            // nearer, mix late now (a seek re-buffers anyway) rather than
+            // have the guard rebuild A again a moment later.
+            positionMs < planned - LATE_TAIL_MS - LATE_FADE_LEAD_MS -> planned
+            // A render that failed would fail again: A plays out.
+            armed?.failed == true -> null
             else -> lateClipFor(source, next, positionMs)
         }
         if (want == clip) return false
