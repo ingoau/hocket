@@ -812,3 +812,38 @@ didn't fit the code.*
   coordinator and checking it analyses an upload or an account-only track through the TV app;
   the coordinator on the deployed server (and whether Google flags a session, or the TV client,
   used from a datacenter address); the Android button on a device.
+
+### Review fixes
+
+Protocol and security changes from the PR review (Rust core and coordinator):
+
+- **LAN channel encryption (protocol 6).** A LAN joiner's `Challenge` carries an ephemeral X25519
+  key and the room answers with its own in its `Proof`. The leader signs both keys, the joiner's
+  nonce and its id; the joiner signs the whole transcript (both keys, both nonces, both ids).
+  Keys per direction come from HKDF over the shared secret salted with the transcript, and every
+  frame after the joiner's proof travels as `Msg::Sealed` (ChaCha20-Poly1305 with a frame counter
+  in the associated data: no replay, reorder or reflection). A device's own room requires the
+  channel, a joiner requires the leader's key, and anything plain or unopenable afterwards drops
+  the socket, so a relay in the middle can neither read nor inject. The coordinator (TLS, pinned
+  key) is unchanged. `PROTOCOL` and `PROTOCOL_MIN` are 6 (`connect::channel`).
+- **Removal conflict rule.** Two removals of each other's authors, neither in the other's causal
+  past, are *contested*: both devices are out, neither removal's new key is used, and a remaining
+  member rotates (`MemberState::rekey`). This replaces "lowest op hash wins", which a removed
+  device could win by signing a counter-removal from before its own removal (and retrying `at`).
+  A removal only acts while no other removal voids it; a cycle of three or more falls back to the
+  lowest hash.
+- **Member list hygiene.** Signatures are lowercase hex only (one hash per op). A merge refuses
+  batches over `MAX_OPS` before any work, orders ops parents-first in one pass, and drops void ops
+  by removed devices that nothing kept builds on, so a removed device can't fill the log. The
+  device id `coordinator` can't be added.
+- **Identity sync only after proof.** Rooms and LAN joiners check a proof against a scratch copy of
+  the member list plus the ops it carried, and merge the peer's sync only once it proved
+  membership. Unsigned times (blob, last synced) beyond now + 5 min are refused; key holders keep
+  only a blob and a grant to them that open.
+- **Coordinator.** Each room has its own lock (a heavy merge in one room no longer stalls the
+  others); `coordinator-key.json` and the YouTube Music session are written 0600 from creation;
+  YouTube Music analysis failures back off (transient) or are remembered in a bounded set
+  (permanent), and a sign-in clears them.
+- **Platform API.** `Event::Error` gains `accountId` (set for an account's probe failures), so a
+  platform drops the right stored login on an auth error. YouTube Music accounts report
+  `capabilities.meetsFloor = true`.
