@@ -146,6 +146,31 @@ class ServerSetupFlowTest {
         }
     }
 
+    @Test
+    fun youTubeMusicAddedFromSettingsEndsOnItsOwnSummaryNotTheOldAccounts() {
+        val core = TestCore(startWithServer = true, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+        try {
+            app.hocket.ui.screens.setup.SetupRequests.addAccount()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.add.ytm") == 1 }
+            compose.onNodeWithTag("setup.add.ytm").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.ytm.anonymous") == 1 }
+            compose.onNodeWithTag("setup.ytm.anonymous").performClick()
+            // The new YouTube Music account's summary (who is signed in: nobody), never the Navidrome
+            // one that was already there, whose "Use a different server" would remove it.
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.ytm.who") == 1 }
+            compose.onNodeWithTag("setup.continue").performScrollTo().performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.done") == 1 }
+            compose.onNodeWithTag("setup.done").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+            assertEquals(false, app.hocket.ui.screens.setup.SetupRequests.adding.value)
+        } finally {
+            app.hocket.ui.screens.setup.SetupRequests.done()
+        }
+    }
+
     private fun textOf(tag: String): String =
         compose.onNodeWithTag(tag).fetchSemanticsNode().config.getOrElseNullable(androidx.compose.ui.semantics.SemanticsProperties.EditableText) { null }?.text ?: ""
 

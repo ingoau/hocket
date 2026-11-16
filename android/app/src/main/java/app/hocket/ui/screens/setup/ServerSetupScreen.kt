@@ -117,14 +117,19 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     // YouTube Music's card: sign in, or carry on without an account.
     var ytm by rememberSaveable { mutableStateOf(false) }
     var ytmError by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(existing?.id) { if (addingFrom != null && existing != null && existing.id != addingFrom) addingFrom = null }
+    // Adding from Settings: YouTube Music asked for, its step held (busy) until the account arrives
+    // or the core says why not, never falling back to the summary of an account already there.
+    var ytmBusy by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(existing?.id) {
+        if (addingFrom != null && existing != null && existing.id != addingFrom) { addingFrom = null; choosing = false; ytm = false; ytmBusy = false }
+    }
     // Pairing with another device (its link scanned, pasted or opened), until the core answers.
     var pairing by rememberSaveable { mutableStateOf(false) }
     // Paired: the account the other device named, whose password this one still needs.
     var pairedAccount by rememberSaveable { mutableStateOf<String?>(null) }
     val sync by client.syncProgress.collectAsStateWithLifecycle()
 
-    LaunchedEffect(client) { client.errors.collect { e -> connecting = false; error = e.detail?.let { "${e.message}\n$it" } ?: e.message } }
+    LaunchedEffect(client) { client.errors.collect { e -> connecting = false; ytmBusy = false; error = e.detail?.let { "${e.message}\n$it" } ?: e.message } }
     LaunchedEffect(existing) { if (existing != null) connecting = false }
 
     val step = when {
@@ -182,23 +187,23 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     // already set-up one) to another identity. The in-app scanner and paste pair at once.
     val pendingLink by app.hocket.AppLinks.pair.collectAsStateWithLifecycle()
     pendingLink?.takeIf { step != SetupStep.Summary }?.let { link -> app.hocket.ui.nav.PairLinkPrompt(link) { pairWith(link) } }
+    fun ytmAdd(cookies: String?) {
+        error = null
+        // Adding from Settings keeps this step until the new account arrives (see ytmBusy).
+        if (addingFrom != null) ytmBusy = true
+        else { ytm = false; choosing = false }
+        onConnecting()
+        CoreHost.ytmLogin(client::dispatch, cookies)
+    }
     val ytmSignIn = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
         val cookies = result.data?.getStringExtra(app.hocket.YtmSignInActivity.EXTRA_COOKIES)
-        if (result.resultCode == android.app.Activity.RESULT_OK && cookies != null) {
-            ytm = false
-            choosing = false
-            addingFrom = null
-            onConnecting()
-            CoreHost.ytmLogin(client::dispatch, cookies)
-        } else ytmError = true
+        if (result.resultCode == android.app.Activity.RESULT_OK && cookies != null) ytmAdd(cookies)
+        else ytmError = true
     }
-    fun ytmAnonymous() {
-        ytm = false
-        choosing = false
-        addingFrom = null
-        onConnecting()
-        CoreHost.ytmLogin(client::dispatch, null)
-    }
+    fun ytmAnonymous() = ytmAdd(null)
+    // Back on Settings' source choice goes back to the app, as its Cancel does; on YouTube Music's step, to the choice.
+    androidx.activity.compose.BackHandler(enabled = step == SetupStep.Add) { choosing = false; addingFrom = null; onContinue() }
+    androidx.activity.compose.BackHandler(enabled = step == SetupStep.Ytm && choosing) { ytm = false; ytmBusy = false }
     val cleartext = url.trim().startsWith("http://", ignoreCase = true)
     val ground = Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainer))
 
@@ -247,7 +252,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                 Text(stringResource(R.string.setup_add_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().semantics { heading() })
                 Text(stringResource(R.string.setup_another_body), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
                 SourceCard(HocketIcons.Filled.LibraryMusic, stringResource(R.string.setup_source_navidrome), stringResource(R.string.setup_source_navidrome_body), "setup.add.navidrome") { fromDevice = false; choosing = false }
-                SourceCard(HocketIcons.Filled.PlayCircle, stringResource(R.string.setup_source_ytm), stringResource(R.string.setup_source_ytm_body), "setup.add.ytm") { ytmError = false; ytm = true }
+                SourceCard(HocketIcons.Filled.PlayCircle, stringResource(R.string.setup_source_ytm), stringResource(R.string.setup_source_ytm_body), "setup.add.ytm") { ytmError = false; error = null; ytm = true }
                 TextButton(onClick = { choosing = false; addingFrom = null; onContinue() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(top = 4.dp).testTag("setup.add.cancel")) { Text(stringResource(R.string.setup_cancel)) }
             }
             SetupStep.Form -> Surface(
@@ -328,15 +333,20 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
             SetupStep.Ytm -> Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 480.dp).systemBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(stringResource(R.string.setup_ytm_title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().semantics { heading() })
                 Text(stringResource(R.string.setup_ytm_body), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
-                if (ytmError) Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().testTag("setup.error")) {
-                    Text(stringResource(R.string.setup_ytm_cancelled), color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
+                val ytmMessage = if (ytmError) stringResource(R.string.setup_ytm_cancelled) else error.takeIf { addingFrom != null }
+                if (ytmMessage != null) Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().testTag("setup.error")) {
+                    Text(ytmMessage, color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
                 }
-                Button(onClick = { ytmError = false; ytmSignIn.launch(android.content.Intent(context, app.hocket.YtmSignInActivity::class.java)) }, shapes = ButtonDefaults.shapes(),
+                Button(onClick = { ytmError = false; ytmSignIn.launch(android.content.Intent(context, app.hocket.YtmSignInActivity::class.java)) }, enabled = !ytmBusy, shapes = ButtonDefaults.shapes(),
                     modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.LargeContainerHeight).testTag("setup.ytm.signIn"), contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.LargeContainerHeight)) {
-                    Text(stringResource(R.string.setup_ytm_sign_in), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
+                    if (ytmBusy) {
+                        LoadingIndicator(modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.size(12.dp))
+                        Text(stringResource(R.string.setup_connecting), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
+                    } else Text(stringResource(R.string.setup_ytm_sign_in), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
                 }
-                TextButton(onClick = ::ytmAnonymous, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.anonymous")) { Text(stringResource(R.string.setup_ytm_anonymous)) }
-                TextButton(onClick = { ytm = false; if (!choosing && existing != null && summary) another = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.back")) { Text(stringResource(R.string.setup_cancel)) }
+                TextButton(onClick = ::ytmAnonymous, enabled = !ytmBusy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.anonymous")) { Text(stringResource(R.string.setup_ytm_anonymous)) }
+                TextButton(onClick = { ytm = false; ytmBusy = false; if (!choosing && existing != null && summary) another = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("setup.ytm.back")) { Text(stringResource(R.string.setup_cancel)) }
             }
             SetupStep.Summary -> existing?.let { server ->
                 Column(
