@@ -619,13 +619,13 @@ impl Db {
 
     /// The albums of the tracks `q` matches, in the order of each album's first matching track,
     /// at most `limit` of them (`q.page` is ignored); `total` counts them all. Albums missing
-    /// from the mirror are left out.
+    /// from this server's mirror are left out.
     pub fn albums_of_tracks(&self, q: &TrackQuery, limit: u32) -> DbResult<api::AlbumPage> {
         let seed = self.random_seed();
-        let (ids, total) = self.with_conn(|c| {
+        self.with_conn(|c| {
             let (where_sql, params) = track_where(&q.server_id, &q.filter);
             let sql = format!(
-                "SELECT album_id FROM tracks WHERE ({where_sql}) AND album_id IN (SELECT id FROM albums) ORDER BY {}",
+                "SELECT album_id FROM tracks WHERE ({where_sql}) AND album_id IN (SELECT al.id FROM albums al WHERE al.server_id = tracks.server_id) ORDER BY {}",
                 track_order(q.sort, q.descending, seed),
             );
             let mut st = c.prepare_cached(&sql)?;
@@ -638,12 +638,23 @@ impl Db {
                     ids.push(id);
                 }
             }
-            Ok((ids, seen.len() as u32))
-        })?;
-        Ok(api::AlbumPage {
-            items: self.albums_by_ids(&ids)?,
-            offset: 0,
-            total,
+            let mut album = c.prepare_cached(&format!(
+                "SELECT {ALBUM_COLUMNS} FROM albums WHERE server_id = ?1 AND id = ?2"
+            ))?;
+            let mut items = vec![];
+            for id in &ids {
+                if let Some(a) = album
+                    .query_row([q.server_id.as_str(), id.as_str()], album_from_row)
+                    .optional()?
+                {
+                    items.push(a);
+                }
+            }
+            Ok(api::AlbumPage {
+                items,
+                offset: 0,
+                total: seen.len() as u32,
+            })
         })
     }
 
@@ -1816,7 +1827,7 @@ mod tests {
             ..Default::default()
         };
         let page = db.track_page(&q).unwrap();
-        assert_eq!(page.total, 2);
+        assert_eq!(page.total, 3);
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.items[0].id, "1");
         assert_eq!(page.items[1].id, "2");
@@ -2300,6 +2311,12 @@ mod tests {
         };
         db.upsert_albums(&[album("al-low"), album("al-high")], &[None, None], 1)
             .unwrap();
+        // The same id on another server is not this server's album.
+        let elsewhere = Album {
+            server_id: "t".into(),
+            ..album("al-gone")
+        };
+        db.upsert_albums(&[elsewhere], &[None], 1).unwrap();
         let q = TrackQuery {
             server_id: "s".into(),
             filter: None,
