@@ -2490,16 +2490,10 @@ impl Engine {
                             &h.our_nonce,
                             &channel::leader_binding(&ours.public, theirs, &h.our_nonce, device_id),
                         );
-                        let mut log = id.shared.log.clone();
-                        if let Some(sync) = sync {
-                            if !sync.log.is_empty() {
-                                let _ = log.merge(sync.log.ops());
-                            }
-                        }
                         Some(device_id) == leader.as_ref()
-                            && log.knows(heads)
-                            && auth::verify_member(
-                                log.state(),
+                            && auth::verify_member_with_sync(
+                                &id.shared.log,
+                                sync.as_ref().map(|s| &s.log),
                                 Role::Leader,
                                 &scope,
                                 &signed,

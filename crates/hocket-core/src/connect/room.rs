@@ -1051,18 +1051,12 @@ impl Room {
         // take nothing from it until it has proved it is a member.
         let ok = match (&signed_nonce, self.identity.as_ref()) {
             (Some(nonce), Some(shared)) => {
-                let mut log = shared.log.clone();
-                if let Some(sync) = &sync {
-                    if !sync.log.is_empty() {
-                        let _ = log.merge(sync.log.ops());
-                    }
-                }
                 !already
                     && device_id != ours
                     && heads.len() <= 64
-                    && log.knows(&heads)
-                    && auth::verify_member(
-                        log.state(),
+                    && auth::verify_member_with_sync(
+                        &shared.log,
+                        sync.as_ref().map(|s| &s.log),
                         Role::Joiner,
                         &scope,
                         nonce,
@@ -3183,6 +3177,53 @@ mod tests {
         ));
         assert!(matches!(sent(&outs, "p1")[0], Msg::Refuse { .. }));
         assert_eq!(r.identity().unwrap(), &before);
+    }
+
+    /// A stranger's proof is checked before any of the ops it sent are
+    /// merged: a big unsigned-for sync costs nothing.
+    #[test]
+    fn a_strangers_sync_is_never_merged_to_check_its_proof() {
+        let (leader, mut a) = identities();
+        let (mut r, _) = id_room(&leader);
+        let stranger = Identity::create_with(
+            "scope",
+            "x",
+            "X",
+            crate::identity::crypto::DeviceSecret::from_seed(b"x"),
+            0.0,
+        );
+        let nonce = challenge(&mut r, "p1", &mut a);
+        let mut sync = stranger.sync();
+        // Many ops of the right identity id, none naming x.
+        let mut big = leader.clone();
+        for i in 0..800 {
+            big.rotate(i as f64).unwrap();
+        }
+        sync.log = big.sync().log;
+        let t = std::time::Instant::now();
+        let outs = r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::Proof {
+                device_id: "x".into(),
+                sig: auth::prove(
+                    stranger.secret(),
+                    Role::Joiner,
+                    "scope",
+                    &nonce,
+                    "x",
+                    &stranger.heads(),
+                ),
+                heads: stranger.heads(),
+                sync: Some(Box::new(sync)),
+                eph: None,
+            }),
+        ));
+        assert!(matches!(sent(&outs, "p1")[0], Msg::Refuse { .. }));
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(1500),
+            "{:?}",
+            t.elapsed()
+        );
     }
 
     #[test]

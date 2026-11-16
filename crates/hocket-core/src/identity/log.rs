@@ -41,7 +41,7 @@
 //! Voiding is monotonic (a voided op stays void), so the fixpoint in
 //! [`compute`] terminates, and it depends only on the set of ops.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -204,8 +204,51 @@ pub struct MemberLog {
     pub identity: String,
     #[serde(with = "ops_as_list")]
     ops: BTreeMap<String, MemberOp>,
+    /// Ops [`MemberLog::prune`] dropped, with their parents: still known
+    /// (a peer's head may be one, and an op built on one before its author
+    /// was removed still arrives), and passed through for ancestry.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pruned: BTreeMap<String, Vec<String>>,
     #[serde(skip)]
     state: Option<MemberState>,
+}
+
+/// Most pruned ops remembered.
+pub const MAX_PRUNED: usize = 4 * MAX_OPS;
+
+/// `parents` with pruned ones replaced by theirs (transitively), so
+/// ancestry passes through what was pruned.
+fn resolve_parents(
+    parents: &[String],
+    ops: &BTreeMap<String, MemberOp>,
+    pruned: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    if parents.iter().all(|p| ops.contains_key(p)) {
+        return parents.to_vec();
+    }
+    if pruned.is_empty() {
+        return parents
+            .iter()
+            .filter(|p| ops.contains_key(*p))
+            .cloned()
+            .collect();
+    }
+    let mut out = vec![];
+    let mut seen = HashSet::new();
+    let mut stack: Vec<&String> = parents.iter().collect();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(p) {
+            continue;
+        }
+        if ops.contains_key(p) {
+            out.push(p.clone());
+        } else if let Some(pp) = pruned.get(p) {
+            stack.extend(pp.iter());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 impl MemberLog {
@@ -250,6 +293,7 @@ impl MemberLog {
         MemberLog {
             identity: identity.to_string(),
             ops: ops.into_iter().map(|o| (o.hash(), o)).collect(),
+            pruned: BTreeMap::new(),
             state: None,
         }
     }
@@ -272,7 +316,7 @@ impl MemberLog {
 
     /// Every op, parents before children.
     pub fn ops(&self) -> Vec<MemberOp> {
-        topo_order(&self.ops)
+        topo_order(&self.ops, &self.pruned)
             .into_iter()
             .map(|h| self.ops[&h].clone())
             .collect()
@@ -295,9 +339,12 @@ impl MemberLog {
         crypto::sha256_hex(c.finish())
     }
 
-    /// Whether every op in `heads` is already here.
+    /// Whether every op in `heads` is already here (or was, and was
+    /// pruned).
     pub fn knows(&self, heads: &[String]) -> bool {
-        heads.iter().all(|h| self.ops.contains_key(h))
+        heads
+            .iter()
+            .all(|h| self.ops.contains_key(h) || self.pruned.contains_key(h))
     }
 
     /// The ops a peer whose heads are `theirs` is missing: everything not in
@@ -307,7 +354,7 @@ impl MemberLog {
         let mut known: BTreeSet<String> = BTreeSet::new();
         let mut stack: Vec<String> = theirs
             .iter()
-            .filter(|h| self.ops.contains_key(*h))
+            .filter(|h| self.ops.contains_key(*h) || self.pruned.contains_key(*h))
             .cloned()
             .collect();
         while let Some(h) = stack.pop() {
@@ -316,6 +363,8 @@ impl MemberLog {
             }
             if let Some(op) = self.ops.get(&h) {
                 stack.extend(op.parents.iter().cloned());
+            } else if let Some(pp) = self.pruned.get(&h) {
+                stack.extend(pp.iter().cloned());
             }
         }
         self.ops()
@@ -352,9 +401,11 @@ impl MemberLog {
         // Parents first, so one pass decides every op (children of a dropped
         // op have a missing parent and are dropped too).
         let mut inserted: Vec<String> = vec![];
-        for h in topo_order(&pending) {
+        let mut walk = AuthorWalk::new(&self.ops);
+        for h in topo_order(&pending, &BTreeMap::new()) {
             let op = pending.remove(&h).expect("ordered from the map");
-            if self.structurally_ok(&op) == Some(true) {
+            if self.structurally_ok(&op, &h, &mut walk) == Some(true) {
+                walk.inserted(&h, &op);
                 self.ops.insert(h.clone(), op);
                 inserted.push(h);
             }
@@ -370,12 +421,21 @@ impl MemberLog {
                 self.ops.remove(h);
             }
             for (h, op) in pruned {
+                self.pruned.remove(&h);
                 if !new.contains(&h) {
                     self.ops.insert(h, op);
                 }
             }
             self.state = None;
             return Err(LogError::Full);
+        }
+        for h in &inserted {
+            if self.ops.contains_key(h) {
+                self.pruned.remove(h);
+            }
+        }
+        while self.pruned.len() > MAX_PRUNED {
+            self.pruned.pop_first();
         }
         let kept = inserted
             .iter()
@@ -393,8 +453,8 @@ impl MemberLog {
     fn prune(&mut self) -> Vec<(String, MemberOp)> {
         let mut dropped = vec![];
         loop {
-            let state = compute(&self.ops);
-            let order = topo_order(&self.ops);
+            let state = compute(&self.ops, &self.pruned);
+            let order = topo_order(&self.ops, &self.pruned);
             let mut needed: BTreeSet<&String> = BTreeSet::new();
             let mut drop: Vec<String> = vec![];
             for h in order.iter().rev() {
@@ -412,6 +472,7 @@ impl MemberLog {
             }
             for h in drop {
                 if let Some(op) = self.ops.remove(&h) {
+                    self.pruned.insert(h.clone(), op.parents.clone());
                     dropped.push((h, op));
                 }
             }
@@ -419,7 +480,7 @@ impl MemberLog {
     }
 
     /// `Some(ok)` when decidable now; `None` while a parent is missing.
-    fn structurally_ok(&self, op: &MemberOp) -> Option<bool> {
+    fn structurally_ok(&self, op: &MemberOp, hash: &str, walk: &mut AuthorWalk) -> Option<bool> {
         if op.parents.len() > MAX_PARENTS
             || op.parents.windows(2).any(|w| w[0] >= w[1])
             || op.author.is_empty()
@@ -440,43 +501,21 @@ impl MemberLog {
                         && crypto::verify(&device.keys.sign, &op.signed_bytes(), &op.sig));
             return Some(ok);
         }
-        if op.parents.iter().any(|p| !self.ops.contains_key(p)) {
+        if op
+            .parents
+            .iter()
+            .any(|p| !self.ops.contains_key(p) && !self.pruned.contains_key(p))
+        {
             return None;
         }
         // The author's key comes from an Add in the op's causal past.
-        Some(self.author_signed_in_past(op))
-    }
-
-    /// Whether an `Add` of `op`'s author in its causal past carries a key
-    /// that verifies its signature. Stops at the first one that does.
-    fn author_signed_in_past(&self, op: &MemberOp) -> bool {
-        let signed = op.signed_bytes();
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut tried: Vec<&str> = vec![];
-        let mut stack: Vec<&String> = op.parents.iter().collect();
-        while let Some(h) = stack.pop() {
-            if !seen.insert(h.as_str()) {
-                continue;
-            }
-            let Some(o) = self.ops.get(h) else { continue };
-            if let OpBody::Add { device, .. } = &o.body {
-                let k = device.keys.sign.as_str();
-                if device.id == op.author && !tried.contains(&k) {
-                    if crypto::verify(k, &signed, &op.sig) {
-                        return true;
-                    }
-                    tried.push(k);
-                }
-            }
-            stack.extend(o.parents.iter());
-        }
-        false
+        Some(walk.signed_in_past(self, op, hash))
     }
 
     /// The member list (computed once per change).
     pub fn state(&mut self) -> &MemberState {
         if self.state.is_none() {
-            self.state = Some(compute(&self.ops));
+            self.state = Some(compute(&self.ops, &self.pruned));
         }
         self.state.as_ref().expect("just computed")
     }
@@ -485,7 +524,7 @@ impl MemberLog {
     pub fn compute_state(&self) -> MemberState {
         match &self.state {
             Some(s) => s.clone(),
-            None => compute(&self.ops),
+            None => compute(&self.ops, &self.pruned),
         }
     }
 
@@ -501,6 +540,87 @@ impl MemberLog {
         self.ops.insert(op.hash(), op.clone());
         self.state = None;
         op
+    }
+}
+
+/// What a merge knows about authors' keys: every `Add` per device id, and
+/// per `Add` the ops seen to have it in their past, so a chain of ops by
+/// one author is checked in constant time each, not by walking the log.
+struct AuthorWalk {
+    adds: HashMap<String, Vec<(String, String)>>,
+    below: HashMap<String, HashSet<String>>,
+}
+
+impl AuthorWalk {
+    fn new(ops: &BTreeMap<String, MemberOp>) -> AuthorWalk {
+        let mut w = AuthorWalk {
+            adds: HashMap::new(),
+            below: HashMap::new(),
+        };
+        for (h, o) in ops {
+            w.inserted(h, o);
+        }
+        w
+    }
+
+    fn inserted(&mut self, hash: &str, op: &MemberOp) {
+        if let OpBody::Add { device, .. } = &op.body {
+            self.adds
+                .entry(device.id.clone())
+                .or_default()
+                .push((hash.to_string(), device.keys.sign.clone()));
+        }
+    }
+
+    /// Whether an `Add` of `op`'s author in its causal past carries a key
+    /// that verifies its signature.
+    fn signed_in_past(&mut self, log: &MemberLog, op: &MemberOp, hash: &str) -> bool {
+        let Some(adds) = self.adds.get(&op.author).cloned() else {
+            return false;
+        };
+        let signed = op.signed_bytes();
+        let mut verdicts: Vec<(&str, bool)> = vec![];
+        for (add, key) in &adds {
+            let good = match verdicts.iter().find(|(k, _)| *k == key) {
+                Some((_, g)) => *g,
+                None => {
+                    let g = crypto::verify(key, &signed, &op.sig);
+                    verdicts.push((key, g));
+                    g
+                }
+            };
+            if good && self.in_past(log, op, add) {
+                self.below
+                    .entry(add.clone())
+                    .or_default()
+                    .insert(hash.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether `add` is an ancestor of `op`: a parent is it or known to be
+    /// below it, else a walk that stops at those.
+    fn in_past(&self, log: &MemberLog, op: &MemberOp, add: &str) -> bool {
+        let below = self.below.get(add);
+        let hit = |h: &str| h == add || below.is_some_and(|b| b.contains(h));
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&String> = op.parents.iter().collect();
+        while let Some(h) = stack.pop() {
+            if hit(h) {
+                return true;
+            }
+            if !seen.insert(h.as_str()) {
+                continue;
+            }
+            if let Some(o) = log.ops.get(h) {
+                stack.extend(o.parents.iter());
+            } else if let Some(pp) = log.pruned.get(h) {
+                stack.extend(pp.iter());
+            }
+        }
+        false
     }
 }
 
@@ -528,13 +648,17 @@ mod ops_as_list {
 }
 
 /// Parents before children; among ops ready at once, lowest hash first.
-fn topo_order(ops: &BTreeMap<String, MemberOp>) -> Vec<String> {
+fn topo_order(
+    ops: &BTreeMap<String, MemberOp>,
+    pruned: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
     let mut indegree: BTreeMap<&String, usize> = BTreeMap::new();
     let mut children: BTreeMap<&String, Vec<&String>> = BTreeMap::new();
     for (h, op) in ops {
-        let n = op.parents.iter().filter(|p| ops.contains_key(*p)).count();
+        let parents = resolve_parents(&op.parents, ops, pruned);
+        let n = parents.len();
         indegree.insert(h, n);
-        for p in &op.parents {
+        for p in &parents {
             if let Some((pk, _)) = ops.get_key_value(p) {
                 children.entry(pk).or_default().push(h);
             }
@@ -581,8 +705,11 @@ impl Bits {
 }
 
 /// The member list of a set of structurally valid ops. See the module docs.
-pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
-    let order = topo_order(ops);
+pub fn compute(
+    ops: &BTreeMap<String, MemberOp>,
+    pruned: &BTreeMap<String, Vec<String>>,
+) -> MemberState {
+    let order = topo_order(ops, pruned);
     let n = order.len();
     let index: BTreeMap<&String, usize> = order.iter().enumerate().map(|(i, h)| (h, i)).collect();
     let op_at: Vec<&MemberOp> = order.iter().map(|h| &ops[h]).collect();
@@ -590,7 +717,7 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
     let mut past: Vec<Bits> = Vec::with_capacity(n);
     for op in &op_at {
         let mut b = Bits::new(n);
-        for p in &op.parents {
+        for p in &resolve_parents(&op.parents, ops, pruned) {
             if let Some(&j) = index.get(p) {
                 b.set(j);
                 let pj = past[j].clone();
@@ -611,7 +738,7 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
         let mut void = vec![false; n];
         let mut valid = vec![false; n];
         let mut contested = vec![false; n];
-        let mut partner: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut partner: BTreeMap<usize, usize>;
         loop {
             valid.iter_mut().for_each(|v| *v = false);
             // Valid adds and removes per device id, in order.
@@ -1126,6 +1253,45 @@ mod tests {
         remove(&mut ld, &d, "a", "kda");
         ld.merge(vec![counter(&base, &a, "d", 3.0)]).unwrap();
         assert_eq!(members(&mut ld), ["a"]);
+    }
+
+    /// A void op pruned here stays known (a peer's head may be it), and an
+    /// op an honest device built on it before the removal still lands, and
+    /// counts the same as where the pruned op was kept.
+    #[test]
+    fn pruned_ops_stay_known_and_their_children_land() {
+        let (a, c, d) = (Dev::new("a"), Dev::new("c"), Dev::new("d"));
+        let mut base = genesis(&a);
+        add(&mut base, &a, &c);
+        add(&mut base, &a, &d);
+        // c saw d's op before d's removal and built on it.
+        let mut lc = base.clone();
+        let p = lc.append(
+            "d",
+            5.0,
+            OpBody::Rotate {
+                key_id: "kd".into(),
+            },
+            &d.secret,
+        );
+        let e = Dev::new("e");
+        let child = add(&mut lc, &c, &e);
+        // a removed d meanwhile; d's op reaches it alone and is pruned.
+        let mut la = base.clone();
+        remove(&mut la, &a, "d", "k1");
+        let len = la.len();
+        la.merge(vec![p.clone()]).unwrap();
+        assert_eq!(la.len(), len);
+        assert!(la.knows(&[p.hash()]));
+        // Then c's op on top of it.
+        assert_eq!(la.merge(vec![child]).unwrap(), 1);
+        assert!(la.state().is_member("e"));
+        let mut full = la.clone();
+        full.pruned.clear();
+        full.merge(lc.ops()).unwrap();
+        lc.merge(la.ops()).unwrap();
+        assert_eq!(la.state().members, lc.state().members);
+        assert_eq!(la.state().key_id, lc.state().key_id);
     }
 
     #[test]

@@ -123,6 +123,61 @@ pub fn verify_member(
         .is_some_and(|k| verify_with_key(k, role, identity_id, nonce, device_id, heads, sig))
 }
 
+/// Check a peer's proof against our member list, merging the ops it sent
+/// only when needed: when it is a member here and we know its heads, our
+/// list decides; otherwise its proof must first verify with a key it could
+/// have (its current one, or one an `Add` it sent names) before the ops are
+/// merged into a scratch copy, so a stranger can't make us do the merge.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_member_with_sync(
+    log: &identity::log::MemberLog,
+    sync: Option<&identity::log::MemberLog>,
+    role: Role,
+    identity_id: &str,
+    nonce: &str,
+    device_id: &str,
+    heads: &[String],
+    sig: &str,
+) -> bool {
+    let state = log.compute_state();
+    if state.is_member(device_id) && log.knows(heads) {
+        return verify_member(&state, role, identity_id, nonce, device_id, heads, sig);
+    }
+    let Some(sync) = sync.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let mut keys: Vec<String> = state
+        .sign_key(device_id)
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    for op in sync.ops() {
+        if let identity::log::OpBody::Add { device, .. } = &op.body {
+            if device.id == device_id && !keys.contains(&device.keys.sign) {
+                keys.push(device.keys.sign.clone());
+            }
+        }
+    }
+    if !keys
+        .iter()
+        .any(|k| verify_with_key(k, role, identity_id, nonce, device_id, heads, sig))
+    {
+        return false;
+    }
+    let mut scratch = log.clone();
+    let _ = scratch.merge(sync.ops());
+    scratch.knows(heads)
+        && verify_member(
+            scratch.state(),
+            role,
+            identity_id,
+            nonce,
+            device_id,
+            heads,
+            sig,
+        )
+}
+
 /// A fresh random nonce, hex encoded (what travels in `Msg::Challenge`).
 pub fn new_nonce() -> String {
     use rand::RngCore;
