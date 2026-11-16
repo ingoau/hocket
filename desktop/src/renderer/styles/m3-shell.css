@@ -422,6 +422,7 @@
 .palette-search > svg { position: absolute; left: 20px; color: var(--fg-muted); pointer-events: none; }
 .palette .palette-search .input { padding-left: 52px; }
 .palette .list { height: min(400px, 52vh); max-height: none; flex: 0 0 auto; }
+.palette .palette-empty { position: absolute; top: 76px; left: 10px; right: 10px; }
 .palette .pi .grow { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .palette .pi .pi-title { flex: 0 1 auto; min-width: 0; }
 .palette .pi .sub { flex: 1 1 0; min-width: 0; color: var(--fg-muted); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

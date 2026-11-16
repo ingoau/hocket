@@ -89,6 +89,14 @@ test.describe("command palette", () => {
     await expect(menu).toHaveCount(0);
     await page.getByTestId("palette-actions-button").click();
     await expect(menu).toBeVisible();
+    // A press outside the menu only dismisses it: the row clicked doesn't run.
+    await firstSong.click({ position: { x: 40, y: 10 } });
+    await expect(menu).toHaveCount(0);
+    await expect(palette).toBeVisible();
+    // Enter on the focused Actions button presses it (it doesn't play the row).
+    await page.getByTestId("palette-actions-button").focus();
+    await page.keyboard.press("Enter");
+    await expect(menu).toBeVisible();
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
     await expect(palette).toHaveCount(0);

@@ -57,6 +57,12 @@ export function CommandPalette() {
   const filterInput = useRef<HTMLInputElement>(null);
   const popover = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
+  /** Bumped per opening: a run that resolves after the palette closed (or reopened) is dropped. */
+  const session = useRef(0);
+  /** A deferred run is in flight: a second Enter doesn't run it twice. */
+  const pending = useRef(false);
+  /** The press that closed the actions menu: its click activates nothing. */
+  const dismissed = useRef(false);
   /** Each row's actions, fetched once per opening (prefetched for the active row). */
   const loading = useRef(new Map<string, Promise<PaletteAction[][]>>());
   const loaded = useRef(new Map<string, PaletteAction[][]>());
@@ -79,6 +85,8 @@ export function CommandPalette() {
 
   useEffect(() => {
     if (!open) return;
+    session.current++;
+    pending.current = false;
     loading.current.clear();
     loaded.current.clear();
     setRecents(sanitizeRecents(loadLocal<unknown>(RECENTS_KEY, [])));
@@ -189,7 +197,12 @@ export function CommandPalette() {
   const runPrimary = (entry: PaletteEntry) => {
     if (entry.kind === "action") return perform(entry, { key: "run", label: entry.label, run: { type: "command", id: rawId(entry) } });
     if (entry.kind !== "track") return perform(entry, { key: "open", label: "", run: { type: "open" } });
+    const s = session.current;
+    if (pending.current) return;
+    pending.current = true;
     void load(entry).then((g) => {
+      pending.current = false;
+      if (s !== session.current || !useApp.getState().paletteOpen) return;
       const primary = g.flat().find((a) => a.shortcut === "Enter");
       if (primary) return perform(entry, primary);
       // No registry Play: play the song alone, as the palette always has.
@@ -210,9 +223,13 @@ export function CommandPalette() {
     }
     if (!isPaletteChord(chord)) return false;
     e.preventDefault();
+    const s = session.current;
+    if (pending.current) return true;
+    pending.current = true;
     void load(entry).then((g) => {
+      pending.current = false;
       const a = actionForChord(g, chord);
-      if (a && useApp.getState().paletteOpen) perform(entry, a);
+      if (a && s === session.current && useApp.getState().paletteOpen) perform(entry, a);
     });
     return true;
   };
@@ -233,13 +250,16 @@ export function CommandPalette() {
     const chord = chordFromEvent(e, platform);
     const toggle = !!chord && (keymap.lookup(chord).includes("openCommandPalette") || (chord.mod && !chord.alt && !chord.shift && chord.key === "K"));
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+    // Enter and Space on a focused button press it (the footer's Actions, Play).
+    if ((e.key === "Enter" || e.key === " ") && (e.target as HTMLElement).tagName === "BUTTON") return;
     if (menu) {
       if (e.key === "Escape" || toggle) { e.preventDefault(); closeMenu(); }
       else if (e.key === "ArrowDown") { e.preventDefault(); setMenu({ ...menu, active: Math.min(menuFlat.length - 1, menu.active + 1) }); }
       else if (e.key === "ArrowUp") { e.preventDefault(); setMenu({ ...menu, active: Math.max(0, menu.active - 1) }); }
       else if (e.key === "Enter" && plain) { e.preventDefault(); const a = menuFlat[menu.active]; if (a) perform(menu.entry, a); }
       else if (chord && runChord(menu.entry, chord, e)) { /* ran */ }
-      else trapTab(e);
+      // Tab stays in the menu: its filter is the one stop.
+      else if (e.key === "Tab") { e.preventDefault(); filterInput.current?.focus(); }
       return;
     }
     if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
@@ -264,21 +284,25 @@ export function CommandPalette() {
         aria-modal="true"
         aria-label={t("action.palette")}
         onKeyDown={onKey}
-        onMouseDown={(e) => { if (menu && !popover.current?.contains(e.target as Node)) { e.preventDefault(); closeMenu(); } }}
+        onMouseDown={(e) => {
+          dismissed.current = false;
+          if (menu && !popover.current?.contains(e.target as Node)) { e.preventDefault(); dismissed.current = true; closeMenu(); }
+        }}
+        onClickCapture={(e) => { if (dismissed.current) { dismissed.current = false; e.stopPropagation(); e.preventDefault(); } }}
         data-testid="palette"
       >
         <div className="palette-search">
           <Icon name="search" size={20} />
           <input ref={input} className="input" placeholder={t("palette.placeholder")} value={query} onChange={(e) => setQuery(e.target.value)} role="combobox" aria-label={t("action.palette")} aria-autocomplete="list" aria-expanded={rows.length > 0} aria-controls="palette-list" aria-activedescendant={rows[active] ? `pal-opt-${active}` : undefined} data-testid="palette-input" />
         </div>
+        {rows.length === 0 ? <div className="group palette-empty" role="status">{t("palette.empty")}</div> : null}
         <div className="list" id="palette-list" role="listbox" aria-label={t("a11y.paletteResults")}>
-          {rows.length === 0 ? <div className="group" role="status">{t("palette.empty")}</div> : null}
           {groups.map((g) => (
             <div key={g.id} role="group" aria-labelledby={`pal-group-${g.id}`} data-testid={`palette-group-${g.id}`}>
               <div className="group" id={`pal-group-${g.id}`} role="presentation">{groupLabel(g.id)}</div>
               {g.rows.map((r) => {
                 const i = ++index;
-                return <Row key={r.item.id} row={r} index={i} active={i === active} platform={platform} onHover={() => setActive(i)} onRun={() => runPrimary(r.item)} onMenu={() => { setActive(i); openMenu(r.item); }} />;
+                return <Row key={r.item.id} row={r} index={i} active={i === active} platform={platform} onHover={() => { if (!menu) setActive(i); }} onRun={() => runPrimary(r.item)} onMenu={() => { setActive(i); openMenu(r.item); }} />;
               })}
             </div>
           ))}
@@ -296,10 +320,10 @@ export function CommandPalette() {
           </button>
         </div>
         {menu ? (
-          <div ref={popover} className="palette-actions" role="dialog" aria-label={t("palette.actionsFor", { name: menu.entry.label })} data-testid="palette-actions">
+          <div ref={popover} className="palette-actions" role="dialog" aria-label={t("palette.actionsFor", { name: menu.entry.label })} data-testid="palette-actions" onMouseDown={(e) => { if (e.target !== filterInput.current) e.preventDefault(); }}>
             <div className="pa-title truncate">{menu.entry.label}</div>
+            {menu.groups && !menuFlat.length ? <div className="pa-empty" role="status">{t("palette.actionsEmpty")}</div> : null}
             <div className="pa-list" id="palette-actions-list" role="listbox" aria-label={t("palette.actionsFor", { name: menu.entry.label })}>
-              {menu.groups && !menuFlat.length ? <div className="pa-empty" role="status">{t("palette.actionsEmpty")}</div> : null}
               {menuShown.map((g, gi) => (
                 <div key={gi} role="group" className="pa-group">
                   {g.map((a) => {
