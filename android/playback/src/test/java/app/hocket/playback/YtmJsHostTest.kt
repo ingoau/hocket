@@ -4,7 +4,9 @@ import app.hocket.core.api.Command
 import app.hocket.core.api.YtmJsRequest
 import app.hocket.core.api.YtmJsRequestDecipherInner
 import app.hocket.core.api.YtmJsRequestPrepareInner
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -25,6 +27,8 @@ private class FakePage : JsPage {
     val calls = mutableListOf<String>()
     override var closed = false
     var failNext: String? = null
+    /** The next call waits for this before answering. */
+    var hold: CompletableDeferred<Unit>? = null
 
     override suspend fun load(script: String) {
         check(script == SCRIPT)
@@ -32,6 +36,7 @@ private class FakePage : JsPage {
     }
 
     override suspend fun run(code: String): String {
+        hold?.let { hold = null; it.await() }
         check(!closed) { "the page is gone" }
         check(scripts > 0) { "hocketYtm is not defined" }
         calls += code
@@ -110,6 +115,30 @@ class YtmJsHostTest {
         advanceTimeBy(1_500)
         runCurrent()
         assertTrue(pages[0].closed)
+    }
+
+    @Test
+    fun theIdleTimerWaitsForEveryRequestInFlight() = runTest {
+        val pages = mutableListOf<FakePage>()
+        val sent = mutableListOf<Command>()
+        val host = YtmJsHost(backgroundScope, { FakePage().also { pages += it } }, { SCRIPT }, { sent += it }, idleMs = 1_000)
+        host.handle("r0", prepare)
+        val gate = CompletableDeferred<Unit>()
+        pages[0].hold = gate
+        val slow = launch { host.handle("r1", prepare) }
+        runCurrent()
+        // r2 finishes while r1 is still running: no timer may close the page under r1.
+        host.handle("r2", prepare)
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertFalse(pages[0].closed)
+        gate.complete(Unit)
+        slow.join()
+        assertNull(answers(sent).single { it.request_id == "r1" }.error)
+        assertFalse(pages[0].closed)
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertTrue("idle once the last request is answered", pages[0].closed)
     }
 
     @Test

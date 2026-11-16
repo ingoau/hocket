@@ -2,6 +2,8 @@ package app.hocket.playback
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -63,7 +65,9 @@ class WebViewJsPage private constructor(private val web: WebView) : JsPage {
         closed = true
         pending.values.forEach { it.completeExceptionally(IllegalStateException("the JS host page closed")) }
         pending.clear()
-        web.post { web.destroy() }
+        // Not `web.post`: a WebView that was never attached to a window queues its posts until it
+        // is, so destroy would never run and every closed page would leak its renderer.
+        Handler(Looper.getMainLooper()).post { web.destroy() }
     }
 
     companion object {
@@ -85,7 +89,14 @@ class WebViewJsPage private constructor(private val web: WebView) : JsPage {
             val page = WebViewJsPage(web)
             web.addJavascriptInterface(page.Bridge(), BRIDGE)
             web.loadDataWithBaseURL(ORIGIN, "<!DOCTYPE html><html><head></head><body></body></html>", "text/html", "utf-8", null)
-            withTimeout(TIMEOUT_MS) { loaded.await() }
+            try {
+                withTimeout(TIMEOUT_MS) { loaded.await() }
+            } catch (e: Throwable) {
+                // A page that never loaded (or an open that was cancelled) is never handed out.
+                page.closed = true
+                web.destroy()
+                throw e
+            }
             page
         }
     }

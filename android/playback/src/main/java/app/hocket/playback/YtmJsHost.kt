@@ -6,10 +6,13 @@ import app.hocket.core.api.YtmJsAnswer
 import app.hocket.core.api.YtmJsRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -47,28 +50,55 @@ class YtmJsHost(
 ) {
     private val lock = Mutex()
     private var page: JsPage? = null
+
+    /** Requests being answered; the idle timer runs only while none is. Both under [lock]. */
+    private var inFlight = 0
     private var idle: Job? = null
 
     /** Answer one request; never throws (a failure is the answer's `error`). */
     suspend fun handle(requestId: String, request: YtmJsRequest) {
-        idle?.cancel()
-        val result = runCatching {
-            val p = ready()
-            answerOf(request, p.run(callFor(request)))
+        lock.withLock {
+            inFlight++
+            idle?.cancel()
+            idle = null
+        }
+        val result = try {
+            runCatching {
+                val p = ready()
+                answerOf(request, p.run(callFor(request)))
+            }
+        } finally {
+            withContext(NonCancellable) {
+                lock.withLock {
+                    inFlight--
+                    if (inFlight == 0) {
+                        idle?.cancel()
+                        idle = scope.launch { delay(idleMs); closeIdle() }
+                    }
+                }
+            }
         }
         val e = result.exceptionOrNull()
         if (e is kotlinx.coroutines.CancellationException) throw e
         if (e != null) lock.withLock { if (page?.closed == true) page = null }
         dispatch(Command.YtmJsAnswer(CommandYtmJsAnswerInner(requestId, result.getOrNull(), e?.let { it.message ?: it.javaClass.simpleName })))
-        idle = scope.launch {
-            delay(idleMs)
-            close()
+    }
+
+    /** The idle timer: closes the page unless a request came in since it was armed. */
+    private suspend fun closeIdle() {
+        val me = currentCoroutineContext()[Job]
+        lock.withLock {
+            if (idle !== me || inFlight > 0) return
+            idle = null
+            page?.close()
+            page = null
         }
     }
 
     suspend fun close() {
-        idle?.cancel()
         lock.withLock {
+            idle?.cancel()
+            idle = null
             page?.close()
             page = null
         }
