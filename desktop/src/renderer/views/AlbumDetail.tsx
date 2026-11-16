@@ -10,6 +10,7 @@ import { openContextMenu, openMenuFromButton } from "../components/ContextMenu";
 import { fmtDuration } from "../lib/format";
 import { offlineLabel } from "../components/OfflineBadge";
 import { useAlbumDwellPrime, usePlayIntent } from "../lib/use-prime";
+import { dragSource } from "../lib/drag";
 
 export function AlbumDetail({ id }: { id: string }) {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -26,7 +27,7 @@ export function AlbumDetail({ id }: { id: string }) {
   const play = (start = 0, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   return (
     <div className="view" data-testid="view-album">
-      <div className="detail-head" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })}>
+      <div className="detail-head" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} {...dragSource(a ? { target: { type: "albums", data: { ids: [a.id] } }, label: a.name } : undefined)}>
         <Artwork id={a?.coverArt} size={300} className="art" />
         <div className="meta">
           <div className="muted small">{t("nav.albums")}{offlineLabel(a?.offline) ? <span className="badge ok" style={{ marginLeft: 8 }} data-testid="album-offline">{offlineLabel(a?.offline)}</span> : null}</div>

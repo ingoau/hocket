@@ -29,6 +29,7 @@ import { Stars } from "./Stars";
 import { Slider } from "./controls";
 import { WavySeek } from "./WavySeek";
 import { ConnectPill } from "./ConnectPill";
+import { dragSource } from "../lib/drag";
 
 export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const now = useApp((s) => s.nowPlaying);
@@ -60,7 +61,9 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
     <div className="player" role="region" aria-label={t("misc.nowPlaying")} inert={inert} data-testid="player-bar">
       {notice ? <div className="notice"><Icon name="warn" size={12} /> {notice}</div> : null}
 
-      <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }) : undefined}>
+      <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }) : undefined}
+        // The song playing drags (art or title) to a playlist, or onto the queue to play it again.
+        {...dragSource(track ? { target: { type: "tracks", data: { ids: [track.id] } }, label: track.title } : undefined, { allowControls: true })} data-testid="bar-now">
         {track ? <Artwork id={track.coverArt} size={128} className="art" /> : <div className="art placeholder"><Icon name="music" /></div>}
         <div className="text">
           {track ? (

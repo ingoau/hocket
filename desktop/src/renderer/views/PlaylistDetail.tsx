@@ -9,6 +9,8 @@ import { Icon } from "../components/Icon";
 import { openContextMenu, openMenuFromButton } from "../components/ContextMenu";
 import { fmtDuration } from "../lib/format";
 import { usePlayIntent } from "../lib/use-prime";
+import { dragSource } from "../lib/drag";
+import { dropOnPlaylist, playlistAccepts, playlistDropZone } from "../lib/playlist-drop";
 
 export function PlaylistDetail({ id }: { id: string }) {
   const serverId = useApp((s) => s.servers[0]?.id ?? "");
@@ -26,8 +28,9 @@ export function PlaylistDetail({ id }: { id: string }) {
   const editable = !!p && !p.isSmart && p.isMine;
   const play = (start = 0, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "playlist", data: { id } }, label: p?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
   return (
-    <div className="view" data-testid="view-playlist">
-      <div className="detail-head" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })}>
+    // Your own playlist takes songs, albums and queue rows dropped anywhere on it (at the end), or between its rows.
+    <div className="view" data-testid="view-playlist" {...(editable && p ? playlistDropZone(id, p.name) : {})}>
+      <div className="detail-head" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} {...dragSource(p ? { target: { type: "playlists", data: { ids: [p.id] } }, label: p.name } : undefined)}>
         <Artwork id={p?.coverArt} size={300} className="art" />
         <div className="meta">
           <div className="muted small">{p?.isSmart ? t("playlists.smart") : t("nav.playlists")}{p && !p.isMine && p.owner ? ` · ${t("playlists.owner", { owner: p.owner })}` : ""}</div>
@@ -44,6 +47,7 @@ export function PlaylistDetail({ id }: { id: string }) {
       <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TrackTable tracks={rows} total={total} columns={["index", "art", "title", "artist", "album", "rating", "love", "duration", "offline"]} scope={`playlist:${id}`} label={p?.name} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} context={{ playlistId: id }}
           onReorder={editable ? (from, to) => bridge().dispatch({ type: "playlistMove", data: { playlist_id: id, from_index: from, to_index: to } }) : undefined}
+          onDropItems={editable && p ? (d, at) => void dropOnPlaylist(d, id, p.name, at) : undefined} acceptsDrop={(d) => playlistAccepts(d, id)}
           onDelete={editable ? (indices) => bridge().dispatch({ type: "playlistRemove", data: { playlist_id: id, indices } }) : undefined}
           emptyMessage={t("songs.empty")} testId="playlist-tracks" primer={primer} />
       </div>

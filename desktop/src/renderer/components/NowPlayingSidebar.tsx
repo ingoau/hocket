@@ -34,6 +34,7 @@ import { ArtistChooser } from "./ArtistChooser";
 import { Icon } from "./Icon";
 import { LyricsOptionsButton } from "./LyricsOptions";
 import { drawContinuation, endColour, isFlat, prepareScene, scrimOver, toneForText, useScene, withTone, type Scene } from "../lib/immersive";
+import { dragSource, type DragPayload } from "../lib/drag";
 
 const MIN_W = 300;
 const MAX_W = 560;
@@ -174,11 +175,11 @@ function Overview() {
           {layers.map((l, i) => (l.edge ? <SideContinuation key={l.scene.coverArt} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
         </div>
       ) : null}
-      <div className="side-art" data-testid="sidebar-art" data-immersive={edge ? edge.style : undefined}>
+      <div className="side-art" data-testid="sidebar-art" data-immersive={edge ? edge.style : undefined} {...dragSource(nowDrag(track), { allowControls: true })}>
         {layers.length ? layers.map((l, i) => (l.scene.url ? <img key={l.scene.coverArt} src={l.scene.url} alt="" draggable={false} className={fading && i === layers.length - 1 ? "fade-in-art" : ""} onAnimationEnd={settle} /> : <div key={l.scene.coverArt} className="placeholder"><Icon name="music" size={48} /></div>)) : <div className="placeholder"><Icon name="music" size={48} /></div>}
       </div>
       <div className="side-title-row">
-        <div className="side-titles">
+        <div className="side-titles" {...dragSource(nowDrag(track), { allowControls: true })} data-testid="sidebar-titles">
           <h2 className="side-title" title={track.title}>{track.albumId ? <button type="button" className="side-text-link" onClick={() => navigate({ view: "album", id: track.albumId as string })}>{track.title}</button> : track.title}</h2>
           <div className="side-artist"><ArtistChooser track={track} className="artist-chooser" onNavigate={navigate} testId="sidebar-artist" /></div>
         </div>
@@ -367,6 +368,11 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
   );
 }
 
+/** The song playing, as a drag (to a playlist, or onto the queue to hear it again). */
+function nowDrag(track: { id: string; title: string }): DragPayload {
+  return { target: { type: "tracks", data: { ids: [track.id] } }, label: track.title };
+}
+
 function UpNextCard() {
   const queue = useApp((s) => s.queue);
   const next: QueueEntry[] = [...queue.playingNext, ...queue.upcoming].slice(0, 3);
@@ -379,7 +385,7 @@ function UpNextCard() {
             // A double-click plays the song, like a queue row; so do Enter and Space (a button,
             // which the pointer's single click leaves alone).
             <li key={e.item.key}>
-              <button type="button" className="upnext-row" onClick={(ev) => { if (ev.detail === 0) d({ type: "jumpToQueueItem", data: { key: e.item.key } }); }} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => void openContextMenu(ev, { type: "queueItems", data: { keys: [e.item.key] } })} data-testid="sidebar-upnext-row">
+              <button type="button" className="upnext-row" {...dragSource({ target: { type: "queueItems", data: { keys: [e.item.key] } }, label: e.track.title }, { allowControls: true })} onClick={(ev) => { if (ev.detail === 0) d({ type: "jumpToQueueItem", data: { key: e.item.key } }); }} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => void openContextMenu(ev, { type: "queueItems", data: { keys: [e.item.key] } })} data-testid="sidebar-upnext-row">
                 <Artwork id={e.track.coverArt} size={100} className="art" />
                 <span className="text">
                   <span className="t1">{e.track.title}</span>

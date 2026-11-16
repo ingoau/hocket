@@ -26,9 +26,6 @@
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.5.2",
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^10.0.0",
-    "@dnd-kit/utilities": "^3.2.2",
     "@kawarp/core": "^1.2.2",
     "@tanstack/react-virtual": "^3.13.12",
     "react": "^19.1.1",

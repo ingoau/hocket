@@ -11,6 +11,8 @@ import { Artwork } from "./Artwork";
 import { useResolvedPins, performPin, type ResolvedPin } from "../lib/use-pins";
 import { editPinsItem, pinMenuItems } from "../lib/pin-menus";
 import { pinTap } from "../lib/library-pins";
+import { dragSource, toDragTarget } from "../lib/drag";
+import { playlistDropZone } from "../lib/playlist-drop";
 
 export function Sidebar() {
   const route = useApp((s) => s.route);
@@ -81,6 +83,9 @@ export function Sidebar() {
                   if (rp.target) void openContextMenu(e, rp.target, undefined, items);
                   else openItemsMenu(e, items);
                 }}
+                // A pin drags what it names (onto the queue or a playlist); a playlist's pin takes songs dropped on it.
+                {...pinDrag(rp)}
+                {...(rp.kind === "playlist" ? playlistDropZone(rp.pin.id, rp.title) : {})}
                 data-testid="sidebar-pin"
                 data-pin={`${rp.pin.kind}:${rp.pin.id}`}
               >
@@ -104,6 +109,12 @@ export function Sidebar() {
         data-testid="sidebar-resize" />
     </nav>
   );
+}
+
+function pinDrag(rp: ResolvedPin) {
+  const target = rp.target ? toDragTarget(rp.target) : undefined;
+  // The pin is a link; dragging it is the drag, not the browser's link drag.
+  return target ? dragSource({ target, label: rp.title }, { allowControls: true }) : { draggable: false };
 }
 
 /** A pin's artwork in its kind's shape; genres and filters (no cover) draw their icon. [large]: Edit pins' tiles. */

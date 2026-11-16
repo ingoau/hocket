@@ -3,16 +3,14 @@
 // at the top (Now playing, "Playing next" with Clear, "Continue playing —
 // from <context>"), and scrolling up reveals History (with Clear). Follows
 // the current item when it changes unless the user is scrolling or working
-// in the list. Drag-and-drop reorder (dnd-kit, the whole row), library items
-// drop in to Play next (or a place in the timeline). Delete removes, double-click
-// jumps. Selection keyed by queue key.
+// in the list. Drag-and-drop (the shared HTML5 drag in lib/drag.ts, the whole row):
+// rows (the selection, when the row is in it) move within the timeline, or go out
+// to a playlist; library items drop in to Play next (or a place in the timeline).
+// Delete removes, double-click jumps. Selection keyed by queue key.
 // Keyboard: a listbox with aria-activedescendant (one Tab stop); arrows move,
 // Enter plays from the item, Delete removes, Alt+Up/Down reorders (the
 // keyboard equivalent of dragging), Shift+F10 opens the item's menu.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import type { QueueEntry } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -24,7 +22,8 @@ import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import { fmtTime } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/media";
-import { addToQueue, endLibraryDrag, isLibraryDrag, libraryDragTarget } from "../lib/queue-drag";
+import { dropOnQueue } from "../lib/queue-drag";
+import { currentDrag, dragSource, finishDrag, insertIndex, onDragEnded, type DragPayload } from "../lib/drag";
 import { EmptyState } from "./EmptyState";
 import { QueueHeader } from "./QueueSelector";
 
@@ -40,9 +39,10 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const [focusKey, setFocusKey] = useState<string | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Pointer drag the whole row (the keyboard reorders with Alt+Up/Down on the listbox).
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+  // Drag the whole row (the keyboard reorders with Alt+Up/Down on the listbox).
   const [dropIndex, setDropIndex] = useState<number | undefined>(undefined);
+  const [draggingKeys, setDraggingKeys] = useState<ReadonlySet<string>>(NO_KEYS);
+  useEffect(() => onDragEnded(() => { setDraggingKeys(NO_KEYS); setDropIndex(undefined); }), []);
   const d = bridge().dispatch;
 
   const all = useMemo(() => [...queue.history, ...(queue.current ? [queue.current] : []), ...queue.playingNext, ...queue.upcoming], [queue]);
@@ -104,11 +104,11 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); e.stopPropagation(); publish({ ids: new Set(reorderable), all: false, total: reorderable.length, anchor: undefined, focus: undefined }); }
   };
-  const onDragEnd = (ev: DragEndEvent) => {
-    const { active, over } = ev;
-    if (!over || active.id === over.id) return;
-    const to = reorderable.indexOf(String(over.id));
-    if (to >= 0) d({ type: "moveQueueItem", data: { key: String(active.id), to_index: to } });
+  // A row drags the selection when it is in it, else itself.
+  const rowPayload = (e: QueueEntry): DragPayload => {
+    const key = e.item.key;
+    const ks = isSelected(selection, key) && selection.ids.size > 1 ? selectedKeys() : [key];
+    return { target: { type: "queueItems", data: { keys: ks } }, label: ks.length === 1 ? e.track.title : undefined };
   };
 
   // Rest with the current item at the top; follow it when it changes, unless
@@ -137,27 +137,29 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   }, [currentKey, reducedMotion]);
 
   const onLibraryOver = (e: React.DragEvent, kind?: "history" | "current" | "next" | "upcoming", key?: string) => {
-    if (!isLibraryDrag(e.dataTransfer)) return;
+    const p = currentDrag(e.dataTransfer);
+    if (!p) return;
     e.preventDefault();
     e.stopPropagation();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    const moving = p.target.type === "queueItems" && p.target.data.keys.every((k) => reorderable.includes(k));
+    if (e.dataTransfer) e.dataTransfer.dropEffect = moving ? "move" : "copy";
     if (!kind || !key || kind === "history" || kind === "current") {
+      // Over the list's background: keep the line where it was (a gap between rows), else the front.
+      if (!kind && dropIndex !== undefined) return;
       setDropIndex(0);
       return;
     }
     const i = reorderable.indexOf(key);
-    const r = e.currentTarget.getBoundingClientRect();
-    const after = e.clientY > r.top + r.height / 2;
-    setDropIndex(i < 0 ? 0 : after ? i + 1 : i);
+    setDropIndex(i < 0 ? 0 : insertIndex(i, e.clientY, e.currentTarget.getBoundingClientRect()));
   };
   const onLibraryDrop = (e: React.DragEvent) => {
-    const target = libraryDragTarget(e.dataTransfer);
-    if (!target) return;
+    const p = currentDrag(e.dataTransfer);
+    if (!p) return;
     e.preventDefault();
     e.stopPropagation();
-    addToQueue(target, dropIndex ?? 0);
+    dropOnQueue(p.target, dropIndex ?? 0);
     setDropIndex(undefined);
-    endLibraryDrag();
+    finishDrag();
   };
   const onLibraryLeave = (e: React.DragEvent) => {
     if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropIndex(undefined);
@@ -188,6 +190,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const lastKey = reorderable[reorderable.length - 1];
   const row = (e: QueueEntry, kind: "history" | "current" | "next" | "upcoming") => (
     <QueueRow key={e.item.key} id={optionId(e.item.key)} entry={e} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "next" || kind === "upcoming"}
+      dragging={draggingKeys.has(e.item.key)} onDragStart={(ev) => { const p = rowPayload(e); dragSource(p, { onStart: () => setDraggingKeys(new Set(p.target.type === "queueItems" ? p.target.data.keys : [])) }).onDragStart?.(ev); }}
       dropAt={dropAt(kind, e.item.key, e.item.key === lastKey)} onLibraryOver={(ev) => onLibraryOver(ev, kind, e.item.key)}
       onClick={(ev) => click(ev, e.item.key)} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => onContext(ev, e.item.key)} />
   );
@@ -222,14 +225,10 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
       {header}
       <div ref={scrollRef} className="pane-body queue-scroll" onScroll={touched} onWheel={touched} onPointerDown={touched} data-testid="queue-scroll">
         <div ref={listRef} className="queue-list" role="listbox" aria-multiselectable="true" aria-label={t("queue.title")} aria-describedby={`${idPrefix}-hint`} aria-activedescendant={activeId} tabIndex={0} onKeyDown={onKey} onFocus={onFocus} data-testid="queue-timeline">
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd} accessibility={{ container: document.body }}>
-            {group("history", t("queue.history"), queue.history, "history")}
-            {queue.current ? group("current", t("queue.nowPlaying"), [queue.current], "current") : null}
-            <SortableContext items={reorderable} strategy={verticalListSortingStrategy}>
-              {group("next", t("queue.playingNext"), queue.playingNext, "next")}
-              {group("upcoming", t("queue.continuePlaying"), queue.upcoming, "upcoming", queue.contextLabel ? t("queue.fromContext", { context: queue.contextLabel }) : undefined)}
-            </SortableContext>
-          </DndContext>
+          {group("history", t("queue.history"), queue.history, "history")}
+          {queue.current ? group("current", t("queue.nowPlaying"), [queue.current], "current") : null}
+          {group("next", t("queue.playingNext"), queue.playingNext, "next")}
+          {group("upcoming", t("queue.continuePlaying"), queue.upcoming, "upcoming", queue.contextLabel ? t("queue.fromContext", { context: queue.contextLabel }) : undefined)}
         </div>
         {queue.history.length ? clearButton("history", t("queue.clearHistory"), "queue-clear-history", () => { d({ type: "removeQueueItems", data: { keys: queue.history.map((e) => e.item.key) } }); publish(EMPTY_SELECTION); }) : null}
         {queue.playingNext.length ? clearButton("next", t("queue.clearInsertions"), "queue-clear-next", () => d({ type: "clearInsertions" })) : null}
@@ -241,14 +240,15 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   );
 }
 
-const QueueRow = memo(function QueueRow({ id, entry, kind, large, selected, focused, sortable, dropAt, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; kind: string; large: boolean; selected: boolean; focused: boolean; sortable: boolean; dropAt?: "before" | "after"; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
-  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.item.key, disabled: !sortable });
+const NO_KEYS: ReadonlySet<string> = new Set();
+
+const QueueRow = memo(function QueueRow({ id, entry, kind, large, selected, focused, sortable, dragging, dropAt, onDragStart, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; kind: string; large: boolean; selected: boolean; focused: boolean; sortable: boolean; dragging: boolean; dropAt?: "before" | "after"; onDragStart: (e: React.DragEvent) => void; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
   const src = entry.item.source;
   const sub = src.type === "autoplay" ? t("queue.autoplayFrom", { reason: src.data.reason }) : entry.track.artist ?? "";
   return (
-    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`qrow ${kind} ${selected ? "selected" : ""} ${isDragging ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
+    <div className={`qrow ${kind} ${selected ? "selected" : ""} ${dragging ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
       onClick={onClick} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} onDragOver={onLibraryOver} title={entry.item.unavailable ? t("queue.unavailable") : undefined}
-      {...(sortable ? listeners : {})}
+      draggable onDragStart={onDragStart} onDragEnd={finishDrag}
       {...(focused ? { "data-focused": true } : {})}>
       <Artwork id={entry.track.coverArt} size={large ? 100 : 64} className="art" />
       <div className="text">

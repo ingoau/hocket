@@ -10,6 +10,7 @@ import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { usePlayIntent } from "../lib/use-prime";
 import { dragFromControl, endLibraryDrag, startLibraryDrag } from "../lib/queue-drag";
+import { playlistDropZone } from "../lib/playlist-drop";
 
 export interface GridItem {
   id: string;
@@ -186,8 +187,10 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
                     onDoubleClick={() => onOpen(it)}
                     onContextMenu={(e) => { if (!isSelected(selection, it.id)) publish(selectOnly(it.id)); void openContextMenu(e, targetFor(it)); }}
                     draggable
-                    onDragStart={(e) => { if (dragFromControl(e)) { e.preventDefault(); return; } startLibraryDrag(e, targetFor(it)); }}
+                    onDragStart={(e) => { if (dragFromControl(e)) { e.preventDefault(); return; } startLibraryDrag(e, targetFor(it), it.title); }}
                     onDragEnd={endLibraryDrag}
+                    // A playlist tile takes songs and albums dropped on it.
+                    {...(targetKind === "playlists" ? playlistDropZone(it.id, it.title) : {})}
                     data-testid="grid-tile"
                     data-id={it.id}
                   >

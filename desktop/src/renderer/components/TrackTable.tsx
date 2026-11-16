@@ -16,7 +16,7 @@ import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import type { Primer } from "../lib/use-prime";
 import { evictPages, materializePages } from "../lib/paged-window";
-import { dragFromControl, endLibraryDrag, startLibraryDrag } from "../lib/queue-drag";
+import { currentDrag, dragFromControl, beginDrag, finishDrag, insertIndex, onDragEnded, type DragPayload } from "../lib/drag";
 
 export type ColumnId = "index" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
 
@@ -90,6 +90,9 @@ export interface TrackTableProps {
   context?: ActionContext;
   /** Playlist rows can be reordered by drag. */
   onReorder?: (from: number, to: number) => void;
+  /** Songs, albums or queue rows dragged in from elsewhere (accepted by `acceptsDrop`) land at the gap before `atIndex`. */
+  onDropItems?: (p: DragPayload, atIndex: number) => void;
+  acceptsDrop?: (p: DragPayload) => boolean;
   /** Delete removes from the containing list (playlist) when provided. */
   onDelete?: (indices: number[], ids: string[]) => void;
   emptyMessage?: string;
@@ -123,6 +126,44 @@ export function TrackTable(props: TrackTableProps) {
   const [focusIdx, setFocusIdx] = useState(0);
   const typeBuf = useRef({ text: "", at: 0 });
   const dragFrom = useRef<number | undefined>(undefined);
+  // The insertion line while something is dragged over the rows: the gap before this index.
+  const [dropGap, setDropGap] = useState<number | undefined>(undefined);
+  useEffect(() => onDragEnded(() => { dragFrom.current = undefined; setDropGap(undefined); }), []);
+  const { onDropItems, acceptsDrop } = props;
+  const external = (e: React.DragEvent): DragPayload | undefined => {
+    if (!onDropItems || dragFrom.current !== undefined) return undefined;
+    const p = currentDrag(e.dataTransfer);
+    return p && (acceptsDrop?.(p) ?? true) ? p : undefined;
+  };
+  const rowDragOver = (e: React.DragEvent<HTMLElement>, i: number) => {
+    if (e.defaultPrevented) return;
+    const from = dragFrom.current;
+    if (onReorder && from !== undefined) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setDropGap(i > from ? i + 1 : i);
+      return;
+    }
+    if (!external(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setDropGap(insertIndex(i, e.clientY, e.currentTarget.getBoundingClientRect()));
+  };
+  const rowDrop = (e: React.DragEvent<HTMLElement>, i: number) => {
+    if (e.defaultPrevented) return;
+    const from = dragFrom.current;
+    if (onReorder && from !== undefined) {
+      e.preventDefault();
+      if (from !== i) onReorder(from, i);
+      finishDrag();
+      return;
+    }
+    const p = external(e);
+    if (!p || !onDropItems) return;
+    e.preventDefault();
+    onDropItems(p, insertIndex(i, e.clientY, e.currentTarget.getBoundingClientRect()));
+    finishDrag();
+  };
 
   // The focused row is always rendered so the grid keeps its one Tab stop while scrolled away.
   const focusRef = useRef(focusIdx);
@@ -281,7 +322,11 @@ export function TrackTable(props: TrackTableProps) {
           })}
         </div>
       </div>
-      <div ref={parentRef} className="table-body" role="rowgroup" onKeyDown={onKey}>
+      <div ref={parentRef} className="table-body" role="rowgroup" onKeyDown={onKey}
+        // Below the last row: the end of the list.
+        onDragOver={onDropItems ? (e) => { if (e.defaultPrevented || !external(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setDropGap(total); } : undefined}
+        onDrop={onDropItems ? (e) => { if (e.defaultPrevented) return; const p = external(e); if (!p) return; e.preventDefault(); onDropItems(p, total); finishDrag(); } : undefined}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropGap(undefined); }}>
         {total === 0 ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name="song" size={32} /></span>{props.emptyMessage ?? t("songs.empty")}</div></div> : null}
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
           {items.map((vi) => {
@@ -292,7 +337,7 @@ export function TrackTable(props: TrackTableProps) {
             return (
               <div
                 key={vi.key}
-                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""}`}
+                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
                 role="row"
                 aria-selected={selected}
                 aria-rowindex={vi.index + 2}
@@ -308,12 +353,15 @@ export function TrackTable(props: TrackTableProps) {
                 draggable={!!tr}
                 onDragStart={tr ? (e) => {
                   if (dragFromControl(e)) { e.preventDefault(); return; }
-                  if (onReorder) { dragFrom.current = vi.index; e.dataTransfer.effectAllowed = "copyMove"; }
-                  startLibraryDrag(e, targetFor(vi.index));
+                  const target = targetFor(vi.index);
+                  if (target.type !== "tracks" || !target.data.ids.length) { e.preventDefault(); return; }
+                  beginDrag(e, { target, label: target.data.ids.length === 1 ? tr.title : undefined, origin: scope });
+                  // A selection of several moves as songs to elsewhere; reorder here is one row at a time.
+                  if (onReorder && target.data.ids.length === 1) dragFrom.current = vi.index;
                 } : undefined}
-                onDragEnd={() => { dragFrom.current = undefined; endLibraryDrag(); }}
-                onDragOver={onReorder ? (e) => e.preventDefault() : undefined}
-                onDrop={onReorder ? (e) => { e.preventDefault(); if (dragFrom.current !== undefined && dragFrom.current !== vi.index) onReorder(dragFrom.current, vi.index); dragFrom.current = undefined; } : undefined}
+                onDragEnd={finishDrag}
+                onDragOver={onReorder || onDropItems ? (e) => rowDragOver(e, vi.index) : undefined}
+                onDrop={onReorder || onDropItems ? (e) => rowDrop(e, vi.index) : undefined}
                 data-testid="track-row"
                 data-track-id={tr?.id}
               >

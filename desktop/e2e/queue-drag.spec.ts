@@ -61,13 +61,18 @@ test.describe("dragging onto the queue", () => {
     const second = page.getByTestId("queue-row-upcoming").nth(1);
     await expect(second).toBeVisible();
     const moving = await first.locator(".t1").textContent();
-    // From the title, not the grip on the trailing edge.
-    const a = (await first.locator(".text").boundingBox())!;
-    const b = (await second.locator(".text").boundingBox())!;
-    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 16 });
-    await page.mouse.up();
+    // From the title, not the grip on the trailing edge (the shared HTML5 drag, lib/drag.ts),
+    // dropped in the lower half of the second row: the gap after it.
+    await html5DragStart(page, first.locator(".text"));
+    await page.evaluate((el) => {
+      const dt = (window as unknown as { __hocketLibraryDrag?: DataTransfer }).__hocketLibraryDrag;
+      const r = el!.getBoundingClientRect();
+      const init: DragEventInit = { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: r.left + r.width / 2, clientY: r.bottom - 4 };
+      el!.dispatchEvent(new DragEvent("dragover", init));
+    }, await second.elementHandle());
+    // The line is drawn at the top of the row below the gap.
+    await expect(page.getByTestId("queue-row-upcoming").nth(2)).toHaveAttribute("data-drop", "before");
+    await html5Drop(page, second);
     await expect(page.getByTestId("queue-row-upcoming").nth(1).locator(".t1")).toHaveText(moving!);
   });
 });
