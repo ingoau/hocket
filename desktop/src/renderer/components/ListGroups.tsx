@@ -65,7 +65,7 @@ export function SongRows({ items, label, testId }: { items: GroupItem[]; label: 
     <ul ref={ref} className="plain-list group-songs" aria-label={label} {...roving}>
       {items.map((it) => (
         <li key={it.key} className="group-song" onContextMenu={it.menu} data-testid={testId}>
-          <button type="button" className="group-song-main" data-roving aria-label={it.subtitle ? `${it.title}, ${it.subtitle}` : it.title} onClick={it.open} {...libraryDragProps(it.dragTarget)}>
+          <button type="button" className="group-song-main" data-roving aria-label={it.subtitle ? `${it.title}, ${it.subtitle}` : it.title} onClick={it.open} {...libraryDragProps(it.dragTarget, it.title)}>
             <Artwork id={it.coverArt} size={96} className="art" />
             <span className="text"><span className="t1">{it.title}</span>{it.subtitle ? <span className="t2">{it.subtitle}</span> : null}</span>
           </button>

@@ -12,6 +12,7 @@ import { usePlayIntent } from "../lib/use-prime";
 import { executeAction } from "../store/actions";
 import { trackTableHeight } from "../lib/track-row";
 import { primeKey } from "../lib/track-ref";
+import { dropOnPlaylist, playlistAccepts, playlistDropZone } from "../lib/playlist-drop";
 
 export function PlaylistDetail({ id }: { id: string }) {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
@@ -32,7 +33,8 @@ export function PlaylistDetail({ id }: { id: string }) {
   // Downloaded or on its way; fully in the stream cache is not kept, so the button offers to download it.
   const kept = p?.offline === "downloaded" || p?.offline === "downloading";
   return (
-    <div className="view detail-page" data-testid="view-playlist">
+    // Your own playlist takes songs, albums and queue rows dropped anywhere on it (at the end), or between its rows.
+    <div className="view detail-page" data-testid="view-playlist" {...(editable && p ? playlistDropZone(id, p.name) : {})}>
       <DetailHead coverArt={p?.coverArt} icon="playlist" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} testId="playlist-head" actions={
         <>
           <button type="button" className="btn primary fab" onClick={() => play()} {...primer.bind(primeKey(rows[0]))} data-testid="playlist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
@@ -53,6 +55,7 @@ export function PlaylistDetail({ id }: { id: string }) {
           <div style={{ height: trackTableHeight(total), display: "flex", flexDirection: "column" }}>
             <TrackTable tracks={rows} total={total} columns={["position", "art", "title", "artist", "album", "love", "duration", "offline"]} scope={`playlist:${id}`} label={p?.name} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} context={{ playlistId: id }}
               onReorder={editable ? (from, to) => bridge().dispatch({ type: "playlistMove", data: { playlist_id: id, from_index: from, to_index: to } }) : undefined}
+              onDropItems={editable && p ? (d, at) => void dropOnPlaylist(d, id, p.name, at) : undefined} acceptsDrop={(d) => playlistAccepts(d, id)}
               onDelete={editable ? (indices) => bridge().dispatch({ type: "playlistRemove", data: { playlist_id: id, indices } }) : undefined}
               emptyMessage={t("songs.empty")} testId="playlist-tracks" primer={primer} />
           </div>
