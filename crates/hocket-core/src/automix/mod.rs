@@ -29,7 +29,7 @@ pub use crate::api::{
     TempoRamp, TransitionKind, TransitionMode, TransitionPlan, TransitionSettings,
 };
 pub use plan::{late_edit_fade, plan_transition, PlanInput, PlanTrack};
-pub use record::{fingerprint_matches, is_usable, pick_best, ANALYSIS_VERSION};
+pub use record::{fingerprint_matches, is_usable, pick_best, unusable, Unusable, ANALYSIS_VERSION};
 pub use render::{render_tail, IncomingShaper};
 pub use rules::{should_mix, MixContext, MixDecision, MixTrack, NoMixReason};
 

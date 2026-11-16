@@ -356,7 +356,7 @@ impl Actor {
             Command::StoreAnalysisRecord { track_id, record } => {
                 // A platform's own record (Android's loudness-only one): share it too.
                 let track = self.track_ref_of(&track_id);
-                if self.store_analysis_record(track.clone(), (*record).clone()) {
+                if self.store_analysis_record(track.clone(), (*record).clone(), "platform") {
                     self.share_analysis_record(&track.source, &track.id, &record);
                 }
             }

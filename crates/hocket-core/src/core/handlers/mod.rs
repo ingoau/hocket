@@ -14,6 +14,7 @@ pub(crate) mod home;
 pub(crate) mod identity;
 pub(crate) mod identity_library;
 pub(crate) mod library;
+pub(crate) mod mix_log;
 pub(crate) mod mixed_playlists;
 pub(crate) mod playback;
 pub(crate) mod plays;

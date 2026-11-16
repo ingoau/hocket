@@ -32,12 +32,35 @@ pub fn fingerprint_matches(record: &SourceFingerprint, track: &SourceFingerprint
     true
 }
 
+/// Why a record is no use for a track ([`unusable`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unusable {
+    /// Made by another analysis version than [`ANALYSIS_VERSION`] (a stale
+    /// or newer producer, e.g. a coordinator deployed from older code).
+    Version,
+    /// Empty or inconsistent (no duration, start after end).
+    Invalid,
+    /// Analysed from another file (the fingerprint doesn't match).
+    OtherFile,
+}
+
+/// Why the planner may not use `record` for the track fingerprinted
+/// `track`, or `None` when it may. Checked in this order.
+pub fn unusable(record: &AnalysisRecord, track: &SourceFingerprint) -> Option<Unusable> {
+    if record.version != ANALYSIS_VERSION {
+        Some(Unusable::Version)
+    } else if record.duration_ms == 0 || record.audible_start_ms > record.audible_end_ms {
+        Some(Unusable::Invalid)
+    } else if !fingerprint_matches(&record.source, track) {
+        Some(Unusable::OtherFile)
+    } else {
+        None
+    }
+}
+
 /// Whether the planner may use `record` for the track fingerprinted `track`.
 pub fn is_usable(record: &AnalysisRecord, track: &SourceFingerprint) -> bool {
-    record.version == ANALYSIS_VERSION
-        && record.duration_ms > 0
-        && record.audible_start_ms <= record.audible_end_ms
-        && fingerprint_matches(&record.source, track)
+    unusable(record, track).is_none()
 }
 
 fn producer_rank(p: AnalysisProducer) -> u8 {
@@ -182,6 +205,21 @@ mod tests {
         assert!(is_usable(&r, &fp(200_000)));
         r.version = ANALYSIS_VERSION + 1;
         assert!(!is_usable(&r, &fp(200_000)));
+        // The version is reported first, even for another file.
+        assert_eq!(unusable(&r, &fp(100_000)), Some(Unusable::Version));
+    }
+
+    #[test]
+    fn unusable_reasons() {
+        let r = rec(AnalysisProducer::Worker, true, 0.0);
+        assert_eq!(unusable(&r, &fp(200_000)), None);
+        assert_eq!(unusable(&r, &fp(100_000)), Some(Unusable::OtherFile));
+        let mut bad = r.clone();
+        bad.duration_ms = 0;
+        assert_eq!(unusable(&bad, &fp(200_000)), Some(Unusable::Invalid));
+        let mut bad = r;
+        bad.audible_start_ms = bad.audible_end_ms + 1;
+        assert_eq!(unusable(&bad, &fp(200_000)), Some(Unusable::Invalid));
     }
 
     #[test]

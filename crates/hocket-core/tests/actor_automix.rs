@@ -496,3 +496,165 @@ async fn a_follow_up_failing_mid_mix_ends_the_transition() {
         "{log:?}"
     );
 }
+
+/// The same track twice in a row (a duplicate queue entry) is never mixed
+/// into itself, not even as a crossfade: it joins gaplessly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_same_track_twice_is_not_mixed() {
+    let t = synced_core("dup").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t4", "t4", "t1"]).await;
+    let next = t.backend.next_source().expect("preloaded");
+    assert_eq!(next.track.id, "t4");
+    assert!(next.mix_in.is_none(), "{next:?}");
+    assert_eq!(t.backend.current_source().unwrap().mix_out_ms, None);
+    // The second t4 → t1 is mixed as usual.
+    assert!(next.mix_out_ms.is_some());
+}
+
+/// After lock-in, a duplicate of the current track put next drops the
+/// committed plan (unlike the other pair rules, the edit doesn't win).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_duplicate_drops_the_plan() {
+    let t = synced_core("latedup").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t0", "t4", "t1"]).await;
+    let committed = t.backend.current_source().unwrap().mix_out_ms.unwrap();
+    t.run_for(f64::from(committed) - 20_000.0).await;
+    t.run(Command::PlayNext {
+        tracks: TrackRef::list(&t.server_id, ["t0"]),
+        keys: vec![],
+    })
+    .await;
+    t.run_for(200.0).await;
+    let next = t.backend.next_source().unwrap();
+    assert_eq!(next.track.id, "t0");
+    assert!(next.mix_in.is_none(), "{next:?}");
+    t.run_for(25_000.0).await;
+    assert!(!transition_started(&t));
+}
+
+/// A record of another analysis version is dropped, and never replaces a
+/// usable one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_record_of_another_version_is_not_stored() {
+    let t = synced_core("ver").await;
+    store_audible_end(&t, "t0", 180_000).await;
+    let track = t.open_db().track("t0").unwrap().unwrap();
+    for version in [ANALYSIS_VERSION - 1, ANALYSIS_VERSION + 1] {
+        let record = AnalysisRecord {
+            version,
+            analyser: "old".into(),
+            produced_by: AnalysisProducer::Worker,
+            source: fingerprint_of(&track),
+            duration_ms: track.duration_ms,
+            audible_end_ms: 150_000,
+            ..Default::default()
+        };
+        t.run(Command::StoreAnalysisRecord {
+            track_id: "t0".into(),
+            record: Box::new(record),
+        })
+        .await;
+    }
+    match t
+        .query(Query::TrackAnalysis {
+            track_id: "t0".into(),
+        })
+        .await
+    {
+        QueryResult::Analysis(Some(r)) => {
+            assert_eq!(r.audible_end_ms, 180_000);
+            assert_eq!(r.version, ANALYSIS_VERSION);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn outcome_lines(t: &TestCore) -> Vec<String> {
+    match t.query(Query::Diagnostics).await {
+        QueryResult::Text(s) => s
+            .lines()
+            .filter(|l| l.contains("automix outcome="))
+            .map(|l| l.trim().to_string())
+            .collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// One outcome line per planned transition: a mix that stands is `mixed`
+/// once 20 s have passed after the handover.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mix_that_stands_logs_mixed() {
+    let t = synced_core("logmix").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t0", "t4", "t1"]).await;
+    t.run_for(200_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t4"));
+    assert!(
+        outcome_lines(&t).await.is_empty(),
+        "not yet: inside the window"
+    );
+    t.run_for(20_000.0).await;
+    let lines = outcome_lines(&t).await;
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let l = &lines[0];
+    assert!(
+        l.contains("outcome=mixed kind=Fade tail_len_ms=6000"),
+        "{l}"
+    );
+    assert!(l.contains("from=t0 (") && l.contains("to=t4 ("), "{l}");
+}
+
+/// Next during the overlap is `skipped`; a follow-up changed before the
+/// tail is `replanned`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skips_and_edits_log_their_outcome() {
+    let t = synced_core("logskip").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t0", "t4", "t1"]).await;
+    t.run(Command::PlayNext {
+        tracks: TrackRef::list(&t.server_id, ["t5"]),
+        keys: vec![],
+    })
+    .await;
+    t.run_for(200.0).await;
+    let lines = outcome_lines(&t).await;
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("outcome=replanned"), "{lines:?}");
+    assert!(lines[0].contains("to=t4 ("), "{lines:?}");
+
+    t.run_for(194_500.0 - 700.0).await;
+    assert!(transition_started(&t));
+    t.run(Command::Next).await;
+    t.run_for(200.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t5"));
+    let lines = outcome_lines(&t).await;
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[1].contains("outcome=skipped"), "{lines:?}");
+    assert!(lines[1].contains("from=t0 (") && lines[1].contains("to=t5 ("));
+    assert!(!lines[1].contains("after_handover_ms"), "{lines:?}");
+
+    // The completed transition logs nothing more.
+    t.run_for(25_000.0).await;
+    let lines = outcome_lines(&t).await;
+    assert_eq!(lines.len(), 2, "nothing new: {lines:?}");
+}
+
+/// Leaving the incoming track within 20 s of the handover is `skipped`, with
+/// how long after it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_skip_soon_after_the_handover_logs_skipped() {
+    let t = synced_core("logafter").await;
+    set_mode(&t, TransitionMode::Crossfade).await;
+    play(&t, &["t0", "t4", "t1"]).await;
+    t.run_for(205_000.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t4"));
+    t.run(Command::Next).await;
+    t.run_for(500.0).await;
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t1"));
+    let lines = outcome_lines(&t).await;
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("outcome=skipped"), "{lines:?}");
+    assert!(lines[0].contains("after_handover_ms="), "{lines:?}");
+}

@@ -153,6 +153,8 @@ pub(crate) struct Actor {
     pub(crate) analysis: super::handlers::analysis::AnalysisState,
     /// AutoMix records fetched from and uploaded to the coordinator.
     pub(crate) share: super::handlers::analysis_share::ShareState,
+    /// One log line per planned AutoMix transition, once its outcome is known.
+    pub(crate) mix_log: super::handlers::mix_log::MixLog,
     /// The album primer (first seconds of a track the user is about to play).
     pub prime: super::handlers::prime::PrimeState,
     /// Stream-cache bookkeeping (offline skips, budget checks).
@@ -515,6 +517,7 @@ impl Actor {
             prefetch: Default::default(),
             analysis: Default::default(),
             share: Default::default(),
+            mix_log: Default::default(),
             prime: Default::default(),
             cache: Default::default(),
             caches,
@@ -1254,6 +1257,15 @@ impl Actor {
         super::fanout_event(&self.sinks.lock(), event);
     }
 
+    /// Into the recent-log ring (diagnostics) only; [`Self::log`] also traces.
+    pub(crate) fn push_log_ring(&mut self, level: &str, message: impl AsRef<str>) {
+        self.log_ring
+            .push_back(format!("[{:.0}] {level}: {}", self.now(), message.as_ref()));
+        while self.log_ring.len() > LOG_RING {
+            self.log_ring.pop_front();
+        }
+    }
+
     pub(crate) fn log(&mut self, level: &str, message: impl Into<String>) {
         let message = message.into();
         match level {
@@ -1262,11 +1274,7 @@ impl Actor {
             "info" => tracing::info!(target: "hocket_core", "{message}"),
             _ => tracing::debug!(target: "hocket_core", "{message}"),
         }
-        self.log_ring
-            .push_back(format!("[{:.0}] {level}: {message}", self.now()));
-        while self.log_ring.len() > LOG_RING {
-            self.log_ring.pop_front();
-        }
+        self.push_log_ring(level, &message);
         if level == "error" || level == "warn" {
             self.emit(Event::Log {
                 level: level.into(),

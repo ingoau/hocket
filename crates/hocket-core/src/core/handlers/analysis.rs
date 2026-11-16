@@ -168,7 +168,7 @@ impl Actor {
                 // Shared only when kept: a record the store refused (another
                 // file, a better one held) is no use to other devices either.
                 let track = TrackRef::new(server_id.clone(), track_id.clone());
-                if self.store_analysis_record(track, (*record).clone()) {
+                if self.store_analysis_record(track, (*record).clone(), "analysis") {
                     self.on_analysis_produced(&server_id, &track_id, &record);
                 }
             }

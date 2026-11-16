@@ -184,6 +184,10 @@ async fn two_engines_hand_off_through_the_coordinator() {
         .await
         .unwrap();
     assert_eq!(health["status"], "ok");
+    assert_eq!(
+        health["analysis"]["version"],
+        hocket_core::automix::ANALYSIS_VERSION
+    );
 
     // a device of the identity it was never paired into is not admitted
     let mut forged = Identity::create_with(
