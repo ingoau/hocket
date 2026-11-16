@@ -14,6 +14,8 @@ import { pinTap } from "../lib/library-pins";
 import { isSidebarItemActive } from "../lib/sidebar-active";
 import { NARROW, useMediaQuery } from "../lib/media";
 import { SidebarLibrary, shownLibrary, useLibraryEntries, useLibraryView } from "./SidebarLibrary";
+import { libraryDragProps } from "../lib/queue-drag";
+import { playlistDropZone } from "../lib/playlist-drop";
 
 const clampWidth = (w: number) => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
 
@@ -103,6 +105,9 @@ export function Sidebar() {
                   if (rp.target) void openContextMenu(e, rp.target, undefined, items);
                   else openItemsMenu(e, items);
                 }}
+                // A pin drags what it names (onto the queue or a playlist); a playlist's pin takes songs dropped on it.
+                {...libraryDragProps(rp.target, rp.title, { allowControls: true })}
+                {...(rp.kind === "playlist" ? playlistDropZone(rp.pin.id, rp.title) : {})}
                 data-testid="sidebar-pin"
                 data-pin={`${rp.pin.kind}:${rp.pin.id}`}
               >

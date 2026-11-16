@@ -10,6 +10,7 @@ import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import type { IntentHandlers } from "../lib/use-prime";
 import { libraryDragProps } from "../lib/queue-drag";
+import { playlistDropZone } from "../lib/playlist-drop";
 
 export function TileList({ label, className = "", children, testId }: { label: string; className?: string; children: ReactNode; testId?: string }) {
   const ref = useRef<HTMLUListElement>(null);
@@ -48,7 +49,8 @@ export function Tile({ title, subtitle, coverArt, round, onOpen, onActivate, onP
         // A keyboard "click" has detail 0: Enter/Space activate even when the pointer needs a double click.
         onClick={(e) => { if (onOpen) onOpen(); else if (e.detail === 0) onActivate?.(); }}
         onDoubleClick={onActivate ?? onOpen}
-        {...libraryDragProps(dragTarget)}
+        {...libraryDragProps(dragTarget, title)}
+        {...(dragTarget?.type === "playlists" && dragTarget.data.ids.length === 1 ? playlistDropZone(dragTarget.data.ids[0] as string, title) : {})}
       >
         <Artwork id={coverArt} size={300} round={round} />
         <span className="t1" title={title}>{title}</span>

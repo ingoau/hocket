@@ -13,7 +13,7 @@
 // Enter plays from the item, Delete removes, Alt+Up/Down reorders (the
 // keyboard equivalent of dragging), Shift+F10 opens the item's menu.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
+import { DndContext, DragOverlay, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragMoveEvent, type DragStartEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { QueueEntry, QueueView } from "@core/api";
@@ -31,6 +31,8 @@ import { usePrefersReducedMotion } from "../lib/media";
 import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, previewMoves, queueDragLayout, sameOrder, stepMove, type QueueMove } from "../lib/queue-drag";
 import { queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange, windowEnd, mergePages, pagedFits, type QueueRowKind } from "../lib/queue-view";
 import { EmptyState } from "./EmptyState";
+import { clearDropHighlights, dragLabel, dragSource, highlightDrop, type DragPayload } from "../lib/drag";
+import { dropOnPlaylist, playlistAccepts, playlistTargetAt } from "../lib/playlist-drop";
 import { QueueHeader } from "./QueueSelector";
 
 /** How long after the last scroll, wheel or pointer activity the list may follow the current item again. */
@@ -142,6 +144,8 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   }, [setDropIndex]);
   // The keys travelling with a pointer reorder (more than one when it started on a selected row).
   const [dragBlock, setDragBlock] = useState<ReadonlySet<string> | undefined>(undefined);
+  const rowDrag = useRef<DragPayload | undefined>(undefined);
+  const [outside, setOutside] = useState(false);
   const d = bridge().dispatch;
 
   const sections = useMemo(() => queueSections(queue), [queue]);
@@ -210,9 +214,44 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const onDragStart = (ev: DragStartEvent) => {
     const block = blockFor(String(ev.active.id));
     setDragBlock(block.length > 1 ? new Set(block) : undefined);
+    const entry = queue.entries.find((e) => e.item.key === String(ev.active.id));
+    rowDrag.current = { target: { type: "queueItems", data: { keys: block } }, label: entry?.track.title };
+  };
+  // A row dragged out of the queue goes to a playlist under the pointer (dnd-kit moves
+  // it, so the playlist's HTML5 drop zone never hears it): found by the point, shown
+  // with the same highlight, and the drag image becomes the chip once outside the list.
+  const pointAt = (ev: DragMoveEvent | DragEndEvent): { x: number; y: number } | undefined => {
+    const a = ev.activatorEvent as PointerEvent | MouseEvent | null;
+    return a && "clientX" in a ? { x: a.clientX + ev.delta.x, y: a.clientY + ev.delta.y } : undefined;
+  };
+  const playlistAt = (ev: DragMoveEvent | DragEndEvent) => {
+    const pt = pointAt(ev);
+    const p = rowDrag.current;
+    const hit = pt && p ? playlistTargetAt(pt.x, pt.y) : undefined;
+    return hit && p && playlistAccepts(p, hit.id) ? hit : undefined;
+  };
+  const onDragMove = (ev: DragMoveEvent) => {
+    const hit = playlistAt(ev);
+    if (hit) highlightDrop(hit.el);
+    else clearDropHighlights();
+    const pt = pointAt(ev);
+    const box = scrollRef.current?.getBoundingClientRect();
+    setOutside(!!pt && !!box && (pt.x < box.left || pt.x > box.right || pt.y < box.top || pt.y > box.bottom));
+  };
+  const endRowDrag = () => {
+    setDragBlock(undefined);
+    setOutside(false);
+    rowDrag.current = undefined;
+    clearDropHighlights();
   };
   const onDragEnd = (ev: DragEndEvent) => {
-    setDragBlock(undefined);
+    const hit = playlistAt(ev);
+    const p = rowDrag.current;
+    endRowDrag();
+    if (hit && p) {
+      void dropOnPlaylist(p, hit.id, hit.name);
+      return;
+    }
     const { active, over } = ev;
     if (!over || !currentKey) return;
     const key = String(active.id);
@@ -335,7 +374,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const header = <QueueHeader large={large} />;
   const optionId = (key: string) => `${idPrefix}-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   const row = (e: QueueEntry, kind: QueueRowKind) => (
-    <QueueRow key={e.item.key} id={optionId(e.item.key)} entry={e} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "group" || kind === "rest"} carried={!!dragBlock?.has(e.item.key)}
+    <QueueRow key={e.item.key} id={optionId(e.item.key)} entry={e} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "group" || kind === "rest"} carried={!!dragBlock?.has(e.item.key) || (outside && rowDrag.current?.target.type === "queueItems" && rowDrag.current.target.data.keys.includes(e.item.key))}
       dropAt={dropAt(kind, e.item.key)} onLibraryOver={(ev) => onLibraryOver(ev, kind, e.item.key)}
       onClick={(ev) => click(ev, e.item.key)} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => onContext(ev, e.item.key)} />
   );
@@ -370,13 +409,16 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
       {header}
       <div ref={scrollRef} className="pane-body queue-scroll" onScroll={onScroll} onWheel={touched} onPointerDown={touched} data-testid="queue-scroll">
         <div ref={listRef} className="queue-list" role="listbox" aria-multiselectable="true" aria-label={t("queue.title")} aria-describedby={`${idPrefix}-hint`} aria-activedescendant={activeId} tabIndex={0} onKeyDown={onKey} onFocus={onFocus} data-testid="queue-timeline">
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragBlock(undefined)} accessibility={{ container: document.body }}>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onDragCancel={endRowDrag} accessibility={{ container: document.body }}>
             {group("history", t("queue.history"), sections.history, "history")}
             {sections.current ? group("current", t("queue.nowPlaying"), [sections.current], "current") : null}
             <SortableContext items={order} strategy={verticalListSortingStrategy}>
               {group("next", t("queue.nextInQueueCount", { count: queue.groupCount }), sections.group, "group")}
               {group("rest", restLabel(queue), sections.rest, "rest")}
             </SortableContext>
+            {/* Out of the list (on its way to a playlist) the row is shown as the shared drag chip. */}
+            {/* Mounted only then: an overlay stops dnd-kit moving the row itself, which in the list it should. */}
+            {outside && rowDrag.current ? <DragOverlay dropAnimation={null}><div className="drag-chip">{dragLabel(rowDrag.current)}</div></DragOverlay> : null}
           </DndContext>
         </div>
         {queue.historyCount ? sectionButtons("history", [{ label: t("queue.clearHistory"), short: t("queue.clearShort"), testId: "queue-clear-history", onClick: () => { void historyKeys(queue).then((ks) => { if (ks.length) d({ type: "removeQueueItems", data: { keys: ks } }); }); publish(EMPTY_SELECTION); } }]) : null}
@@ -413,7 +455,8 @@ const QueueRow = memo(function QueueRow({ id, entry, kind, large, selected, focu
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`qrow ${kind} ${selected ? "selected" : ""} ${isDragging || carried ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""} ${snoozed ? "snoozed" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
       onClick={onClick} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} onDragOver={onLibraryOver} title={entry.item.unavailable ? t("queue.unavailable") : undefined}
-      {...(sortable ? listeners : {})}
+      // Rows that can't move (history, the current song) still drag, as their songs: onto a playlist, or the queue to hear again.
+      {...(sortable ? listeners : dragSource({ target: { type: "queueItems", data: { keys: [entry.item.key] } }, label: entry.track.title }))}
       {...(focused ? { "data-focused": true } : {})}>
       <Artwork id={entry.track.coverArt} size={large ? 100 : 64} className="art" />
       <div className="text">
