@@ -4,8 +4,8 @@
 
 use crate::api::*;
 use crate::automix::{
-    is_usable, late_edit_fade, plan_transition, should_mix, store, MixContext, MixTrack, PlanInput,
-    PlanTrack, LOCK_IN_MS,
+    late_edit_fade, plan_transition, should_mix, store, unusable, MixContext, MixTrack, PlanInput,
+    PlanTrack, Unusable, ANALYSIS_VERSION, LOCK_IN_MS,
 };
 use crate::core::actor::Actor;
 use crate::settings::keys;
@@ -54,19 +54,35 @@ impl Actor {
 
     /// `Command::StoreAnalysisRecord` (and fetched records): keep it if it
     /// is the best known, and replan the follow-up when it is about a track
-    /// around the current one. Returns whether it was stored.
+    /// around the current one. `via` names where it came from (for logs).
+    /// Returns whether it was stored.
     pub(crate) fn store_analysis_record(
         &mut self,
         track: TrackRef,
         record: AnalysisRecord,
+        via: &'static str,
     ) -> bool {
         let (server_id, track_id) = (track.source.clone(), track.id.clone());
-        // A record for another file (or analysis version) is no use here and
-        // must not replace a usable one.
+        // A record of another analysis version is no use to this build,
+        // whatever file it is for.
+        if record.version != ANALYSIS_VERSION {
+            self.analysis_version_skew(&track_id, &record, via);
+            return false;
+        }
+        // A record for another file is no use here and must not replace a
+        // usable one.
         if let Ok(Some(track)) = self.db.track_ref(&track) {
-            if !is_usable(&record, &store::fingerprint_of(&track)) {
-                tracing::debug!(target: "hocket::automix", track = %track_id, "analysis record not for this file: dropped");
-                return false;
+            match unusable(&record, &store::fingerprint_of(&track)) {
+                // Versions were checked above.
+                None | Some(Unusable::Version) => {}
+                Some(Unusable::OtherFile) => {
+                    tracing::debug!(target: "hocket::automix", track = %track_id, via, "analysis record not for this file: dropped");
+                    return false;
+                }
+                Some(Unusable::Invalid) => {
+                    tracing::debug!(target: "hocket::automix", track = %track_id, via, "analysis record invalid: dropped");
+                    return false;
+                }
             }
         }
         let now = self.now();
@@ -86,6 +102,28 @@ impl Actor {
                 false
             }
         }
+    }
+
+    /// A record of another analysis version was dropped. Every record from
+    /// a stale producer is, so this is warned once per version per session
+    /// (a coordinator serving old records would otherwise turn every mix
+    /// into a plain fade with nothing above debug level to show for it).
+    fn analysis_version_skew(&mut self, track_id: &str, record: &AnalysisRecord, via: &str) {
+        if self.share.version_warned.contains(&record.version) {
+            tracing::debug!(target: "hocket::automix", track = %track_id, version = record.version, "analysis record of another version: dropped");
+            return;
+        }
+        self.share.version_warned.push(record.version);
+        tracing::warn!(
+            target: "hocket::automix",
+            track = %track_id,
+            got = record.version,
+            want = ANALYSIS_VERSION,
+            producer = ?record.produced_by,
+            analyser = %record.analyser,
+            via,
+            "analysis records of another version are dropped (stale or newer producer); warned once per version"
+        );
     }
 
     pub(crate) fn stored_analysis_record(&self, track: &TrackRef) -> Option<AnalysisRecord> {
@@ -146,9 +184,10 @@ impl Actor {
         // committed tail start (Android): a new follow-up the pair rules
         // refuse still gets the late-edit fade (the edit wins). A context
         // rule (Off, repeat-one, sleep end-of-track, Cast, exclusive output)
-        // drops the plan; the backend then plays A out unclipped.
-        let late_pair_refusal =
-            late && matches!(decision, crate::automix::MixDecision::NoMix(r) if !r.is_context());
+        // or the same track again drops the plan; the backend then plays A
+        // out unclipped and joins gaplessly.
+        let late_pair_refusal = late
+            && matches!(decision, crate::automix::MixDecision::NoMix(r) if !r.drops_locked_plan());
         if !decision.is_mix() && !late_pair_refusal {
             tracing::debug!(target: "hocket::automix", from = %a.track.id, to = %b.track.id, ?decision, "not mixed");
             return None;

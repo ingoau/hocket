@@ -38,6 +38,9 @@ pub(crate) struct ShareState {
     /// Tracks asked for, until when they are not asked again.
     asked: HashMap<TrackRef, f64>,
     uploads: Vec<AnalysisEntry>,
+    /// Analysis versions already warned about this session (records of
+    /// another version are dropped; one warning per version, not per file).
+    pub(crate) version_warned: Vec<u32>,
 }
 
 impl Actor {
@@ -153,7 +156,7 @@ impl Actor {
         self.share.in_flight = None;
         tracing::debug!(target: "hocket::automix", count = records.len(), "analysis records fetched");
         for e in records {
-            self.store_analysis_record(e.track_id, e.record);
+            self.store_analysis_record(e.track_id, e.record, "coordinator");
         }
         self.fetch_analysis_records(self.now());
     }

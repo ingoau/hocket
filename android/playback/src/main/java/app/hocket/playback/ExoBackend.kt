@@ -175,6 +175,11 @@ class ExoBackend(
          * sink and the decoder run up to about a second ahead of what is heard.
          */
         internal const val LATE_TAIL_MS = 2_000L
+        /**
+         * A late fade ([lateClipFor]) starts this long after [LATE_TAIL_MS] past the position: the
+         * time its short tail gets to render (a few seconds of A, well under a second).
+         */
+        internal const val LATE_FADE_LEAD_MS = 1_500L
         private val RECOVERY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
         /** Outputs that count as headphones for headphone handoff. */
         private val HEADPHONE_KINDS = setOf(AudioOutputs.Kind.Bluetooth, AudioOutputs.Kind.Wired, AudioOutputs.Kind.Usb)
@@ -236,6 +241,9 @@ class ExoBackend(
 
     private val main = Handler(Looper.getMainLooper())
     private val mixControl = MixControl()
+
+    /** Whether the armed tail's render failed (main thread; for tests). */
+    internal val armedRenderFailed: Boolean get() = mixControl.armed?.failed == true
 
     /** Which transition the playback thread started mixing; consumed at ExoPlayer's item transition. */
     private var mixHeard: MixControl.Armed? = null
@@ -598,7 +606,10 @@ class ExoBackend(
                 resetTransition()
                 sources.clear()
                 // Clipped only when a transition out of it is planned; a later plan finds it unclipped and plays gapless.
-                val items = listOfNotNull(mediaSource(d.source, clip = d.next?.mixIn != null), d.next?.let { mediaSource(it) })
+                val items = listOfNotNull(
+                    mediaSource(d.source, clipAtMs = d.source.mixOutMs?.toLong()?.takeIf { d.next?.mixIn != null }),
+                    d.next?.let { mediaSource(it) },
+                )
                 lastLoadedKey = d.source.key
                 cancelRecovery()
                 mixControl.items.keys.retainAll(sources.keys)
@@ -718,9 +729,42 @@ class ExoBackend(
             if (index != null) player.seekTo(index, positionMs) else player.seekTo(positionMs)
             r.held?.let { applySetNext(it.next) }
             applyGain(currentGainDb)
+            if (player.currentMediaItem?.mediaId == r.armed.from) seekClipped(r.armed.from, positionMs)
             return
         }
-        player.seekTo(positionMs)
+        val key = player.currentMediaItem?.mediaId
+        if (key == null || !seekClipped(key, positionMs)) player.seekTo(positionMs)
+    }
+
+    /**
+     * A seek on the current item [key] while it is clipped for a transition: rebuild it at
+     * [positionMs] with the clip the target needs and re-arm; false when a plain seek does (not
+     * clipped, no plan, or the clip stays). The planned point when the target is far enough before
+     * it for the tail to render ([LATE_TAIL_MS]), or when its tail is ready and still ahead; else a
+     * late fade from just after the target ([lateClipFor]), so a seek to just before the mix point
+     * or into the overlap still mixes; with no room for one A plays to its end.
+     */
+    private fun seekClipped(key: String, positionMs: Long): Boolean {
+        val clip = mixControl.items[key]?.clipEndMs ?: return false
+        val source = sources[key] ?: return false
+        val next = nextSource()?.takeIf { it.mixIn != null } ?: return false
+        val planned = source.mixOutMs?.toLong() ?: return false
+        val armed = mixControl.armed?.takeIf { it.from == key && it.to == next.key }
+        val want = when {
+            armed?.tail != null && armed.tailStartMs == clip && positionMs < clip -> clip
+            // Room for the planned tail to render before the guard's margin;
+            // nearer, mix late now (a seek re-buffers anyway) rather than
+            // have the guard rebuild A again a moment later.
+            positionMs < planned - LATE_TAIL_MS - LATE_FADE_LEAD_MS -> planned
+            // A render that failed would fail again: A plays out.
+            armed?.failed == true -> null
+            else -> lateClipFor(source, next, positionMs)
+        }
+        if (want == clip) return false
+        if (armed != null) disarm()
+        rebuildCurrent(want, positionMs, if (want == planned) "back to its planned mix" else "a seek too close to its mix point")
+        arm(source, next)
+        return true
     }
 
     private fun resetTransition() {
@@ -985,8 +1029,10 @@ class ExoBackend(
      * start, waiting for the time left rather than polling (nothing while paused).
      */
     private fun arm(current: CoreMediaSource?, next: CoreMediaSource?) {
-        val plan = next?.mixIn
-        if (current == null || next == null || plan == null || processor == null || mixControl.items[current.key]?.clipEndMs == null) {
+        val clip = current?.let { mixControl.items[it.key]?.clipEndMs }
+        // Clipped later than planned ([lateClipFor]): the plan becomes a short fade from the clip.
+        val plan = next?.mixIn?.let { p -> if (clip == null || clip == p.tailStartMs.toLong()) p else lateFade(p, clip, current) }
+        if (current == null || next == null || plan == null || processor == null || clip == null) {
             disarm()
             dropClip()
             return
@@ -1019,6 +1065,8 @@ class ExoBackend(
             if (tail != null && mixControl.armed === armed) {
                 armed.tail = tail
                 poke()
+            } else if (tail == null) {
+                armed.failed = true
             }
         }
     }
@@ -1064,30 +1112,71 @@ class ExoBackend(
         }
         val armed = mixControl.armed?.takeIf { it.from == key }
         if (armed?.tail != null) return null
-        val left = clip - LATE_TAIL_MS - position().toLong()
+        val p = position().toLong()
+        val left = clip - LATE_TAIL_MS - p
         if (left > 0) return playTimeFor(left)
         if (armed != null) disarm()
-        unclipCurrent(if (armed != null) "tail not ready" else "no transition planned")
+        // The planned tail is late (a seek just before the clip point): a short fade a moment later
+        // instead of A to its end and a hard join. Once only: a late fade that is late itself, or a
+        // render that failed (it would again), plays A out.
+        val source = sources[key]
+        val next = nextSource()
+        val late = if (armed != null && !armed.failed && source != null && next != null && clip == source.mixOutMs?.toLong()) lateClipFor(source, next, p) else null
+        if (source != null && late != null) {
+            rebuildCurrent(late, p, "tail not ready")
+            arm(source, next)
+            return null
+        }
+        rebuildCurrent(null, p, if (armed != null) "tail not ready" else "no transition planned")
         return null
     }
 
+    /** The source after the current item, if any. */
+    private fun nextSource(): CoreMediaSource? =
+        (player.currentMediaItemIndex + 1).takeIf { it < player.mediaItemCount }?.let { sources[player.getMediaItemAt(it).mediaId] }
+
     /**
-     * Rebuild the current item without its clip, at the same position (B's real one after a mixed
-     * transition): ExoPlayer can't change a clip in place, so the item is replaced, which re-buffers
-     * it (from the cache or the file) — a short gap instead of losing everything after the clip.
+     * Where a late fade out of [a] into [next] starts when its tail starts rendering at [positionMs]:
+     * [LATE_TAIL_MS] + [LATE_FADE_LEAD_MS] later, the margin [guardStep] keeps plus the render.
+     * Null when there is no plan, or too little of A left for a fade ([lateFade]).
      */
-    private fun unclipCurrent(why: String) {
+    private fun lateClipFor(a: CoreMediaSource, next: CoreMediaSource, positionMs: Long): Long? {
+        val plan = next.mixIn ?: return null
+        val at = positionMs.coerceAtLeast(0) + LATE_TAIL_MS + LATE_FADE_LEAD_MS
+        return at.takeIf { lateFade(plan, it, a) != null }
+    }
+
+    /** [plan] as a short fade from [tailStartMs] (`late_fade_at` in the core); null without room for one. */
+    private fun lateFade(plan: TransitionPlan, tailStartMs: Long, a: CoreMediaSource): TransitionPlan? = try {
+        ffi.lateFade(plan, tailStartMs, a.track.durationMs.toLong())
+    } catch (e: Exception) {
+        PlaybackLog.w("AutoMix: late fade for ${a.key} failed: ${e.javaClass.simpleName}: ${e.message}")
+        null
+    }
+
+    /** Rebuild the current item without its clip, at the same position (B's real one after a mixed transition). */
+    private fun unclipCurrent(why: String) = rebuildCurrent(null, position().toLong(), why)
+
+    /**
+     * Rebuild the current clipped item with its clip at [clipAtMs] (null: none), at [positionMs]:
+     * ExoPlayer can't change a clip in place, so the item is replaced, which re-buffers it (from the
+     * cache or the file) — a short gap instead of losing everything after the clip.
+     */
+    private fun rebuildCurrent(clipAtMs: Long?, positionMs: Long, why: String) {
         unclipWanted = null
         val index = player.currentMediaItemIndex
         val key = player.currentMediaItem?.mediaId ?: return
         if (mixControl.items[key]?.clipEndMs == null) return
         val source = sources[key] ?: return
-        val p = position().toLong()
-        PlaybackLog.i("AutoMix: $key plays to its end ($why), from $p ms")
+        when (clipAtMs) {
+            null -> PlaybackLog.i("AutoMix: $key plays to its end ($why), from $positionMs ms")
+            source.mixOutMs?.toLong() -> PlaybackLog.i("AutoMix: $key mixes at $clipAtMs ms again ($why), from $positionMs ms")
+            else -> PlaybackLog.i("AutoMix: $key mixes late, at $clipAtMs ms ($why), from $positionMs ms")
+        }
         clearOffset()
-        player.addMediaSource(index + 1, mediaSource(source, clip = false))
+        player.addMediaSource(index + 1, mediaSource(source, clipAtMs))
         player.removeMediaItem(index)
-        player.seekTo(index, p)
+        player.seekTo(index, positionMs)
         refreshLocality()
     }
 
@@ -1289,15 +1378,15 @@ class ExoBackend(
         DefaultMediaSourceFactory(CoreStreamDataSourceFactory(context, streams, headers))
             .setLoadErrorHandlingPolicy(CoreStreamLoadErrorPolicy())
 
-    /** [clip]: cut the item at its `mix_out_ms` (AutoMix, with the processor only). */
-    private fun mediaSource(source: CoreMediaSource, clip: Boolean = true): MediaSource {
+    /** [clipAtMs]: cut the item there, by default its `mix_out_ms` (AutoMix, with the processor only). */
+    private fun mediaSource(source: CoreMediaSource, clipAtMs: Long? = source.mixOutMs?.toLong()): MediaSource {
         val local = source.local == true || source.url.startsWith("file:")
         val extras = android.os.Bundle().apply {
             putDouble("gainDb", source.gainDb)
             putBoolean("local", local)
         }
         sources[source.key] = source
-        val clipEndMs = source.mixOutMs?.toLong()?.takeIf { clip && processor != null }
+        val clipEndMs = clipAtMs?.takeIf { processor != null }
         mixControl.items[source.key] = MixControl.Item(source.gainDb, clipEndMs)
         val builder = MediaItem.Builder()
             .setMediaId(source.key)

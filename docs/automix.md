@@ -187,23 +187,33 @@ struct ShelfMove { freq_hz: f32, from_db: f32, to_db: f32, start_ms: u32, len_ms
     plan into the track after is a full one from the source's `mix_out_ms`.
   - The edit wins over the pair rules: a new follow-up that `should_mix`
     refuses for the pair (album sequence, gapless, genre, release) still gets
-    the late-edit fade, since A may already be clipped there.
+    the late-edit fade, since A may already be clipped there. The same track
+    again is the exception: it drops the plan like a context rule.
   - A context rule (mode Off, repeat-one, sleep end-of-track, Cast, exclusive
     output) drops the plan even after lock-in, and no plan is sent. A backend
     that clipped A at `mix_out_ms` plays A out unclipped when the follow-up
     arrives without `mix_in` (Android un-clips itself).
 - **Next before handover** → `backend.complete_transition()`; the core then
   treats B as current. **Next after handover** is an ordinary skip.
-- `should_mix` returns false (→ `mix_in: None`) for: same album in track order
-  (same album id, same disc and track n+1, or disc n+1 track 1); gapless tags
-  or a gapless join; genres Classical / Opera / Orchestral, Audiobook /
-  Podcast / Spoken word, Live (genre, or "live" release type / album title
-  marker), Soundtrack / Score; repeat-one; sleep timer end-of-track; Cast
+- `should_mix` returns false (→ `mix_in: None`) for: the same track again
+  (same server and track id: a duplicate queue entry); same album in track
+  order (same album id, same disc and track n+1, or disc n+1 track 1);
+  gapless tags or a gapless join; genres Classical / Opera / Orchestral,
+  Audiobook / Podcast / Spoken word, Live (genre, "live" release type, album
+  title marker, or track title marker), Soundtrack / Score; repeat-one; sleep timer end-of-track; Cast
   renderer active; bit-perfect/exclusive output; mode Off.
   - Genres match whole words, case-insensitively, over the genre string
     (so "Hardcore" isn't "score"). Release types come from the album's
     OpenSubsonic `release_types` (`live`, `soundtrack`, `spokenword`,
     `audiobook`, `audio drama`, `interview`).
+  - Live markers: an album title counts with "(Live", "[Live", "- Live", a
+    trailing "Live" or "Live at/in/from/on" (`has_live_marker`). A track
+    title only with a bracketed or dashed one, "(Live…", "[Live…",
+    "- Live…" (`has_track_live_marker`), so "The Way I Live" or "Live
+    Forever" still mix. Both give `LiveRelease`.
+  - The same track again is not mixed even after lock-in (like a context
+    rule, not the edit-wins pair rules): the plan is dropped and the
+    backend un-clips A and joins gaplessly, as for repeat-one.
   - The library has no gapless tag (`iTunPGAP`) yet: `MixTrack::gapless` is
     `None` until it does. The gapless *join* is judged from both records: A
     audible to within 50 ms of its end and B from within 50 ms of its start,
@@ -212,6 +222,18 @@ struct ShelfMove { freq_hz: f32, from_db: f32, to_db: f32, start_ms: u32, len_ms
   off `TransitionedToNext` as today, so they switch at the handover.
 - Connect handoff during a transition: the target starts B at B's position,
   unmixed.
+- **Outcome log** (`core/handlers/mix_log.rs`): one info line per planned
+  transition on `hocket::player` ("automix outcome", also in the
+  diagnostics' recent log) once its outcome is known, with the from/to queue
+  keys and track ids, plan kind, `tail_len_ms` and `outcome`: `mixed`
+  (started, handed over, and B not left within 20 s), `skipped` (the user
+  left during the overlap, Next completing it included, or within 20 s
+  after the handover: `after_handover_ms`), `not_started` (A ended or B took
+  over without `TransitionStarted`), `replanned` (the follow-up or its plan
+  was dropped before the tail), `failed` (B failed during the overlap),
+  `stopped` (playback stopped or moved to another device during the
+  overlap). A skip away from A before its tail is not logged (debug only).
+  A replan of the same pair (a record arrived) is not an outcome.
 
 ## Planner (plan.rs)
 
@@ -273,7 +295,9 @@ nothing. Every overlap is limited to half of each track's audible span.
    audible A), plain 6 s `Fade`.
 
 `late_edit_fade` builds the lock-in replacement plan: `Fade` from the
-committed `tail_start_ms`, overlap max(2 s, crossfade / 2).
+committed `tail_start_ms`, overlap max(2 s, crossfade / 2). `late_fade_at`
+turns a plan into a `Fade` from a later tail start (Android, when a seek
+leaves no time to render the planned tail; see Fallback below).
 
 The planner is deterministic: same inputs → same plan on every device.
 
@@ -534,7 +558,8 @@ The planner is deterministic: same inputs → same plan on every device.
     keeps adding the offset until ExoPlayer's position shows the step, so the
     reported position stays continuous.
   - Seek before the handover goes back to A (B stays next, the tail stays
-    armed unless the target is past the tail start); after it B seeks.
+    armed unless the target is past the tail start, which takes a late fade,
+    below); after it B seeks.
     `complete_transition` hands over and seeks B to its position, which
     drops the tail queued in the sink. A `set_next` during the overlap is
     held until the handover. Pause/play pause both (one output).
@@ -544,8 +569,25 @@ The planner is deterministic: same inputs → same plan on every device.
     A's end): when the core drops its transition (a `set_next` without
     `mix_in` — mode Off, sleep at end of track — or with no next, gapless
     off), once a transition into it has stopped sounding; and 2 s before
-    the clip point when no tail is ready (render late or failed), so A plays
-    to its end and B joins gaplessly. These waits (and the tail render's
+    the clip point when no tail is ready and no late fade fits (below), so A
+    plays to its end and B joins gaplessly.
+  - **Late fade**: when the planned tail can't be ready in time (a seek or a
+    load to within 2 s of the tail start, or past it; or a render still
+    running 2 s before it), A is rebuilt the same way but clipped 3.5 s after
+    its position instead, and the plan becomes `late_fade_at` from there: a
+    `Fade` of the planned overlap clamped to 2–4 s (never longer than the
+    planned overlap, which fits B; less as A runs out, none under 1 s left), B from the plan's `incoming_from_ms`. Its tail is only a
+    few seconds of A, so it renders in the 1.5 s before the 2 s margin. The
+    reports carry the late plan's numbers (`TransitionStarted`, A's position
+    from the new tail start), so the core follows. Once only: a late fade
+    whose tail isn't ready either, or after a failed render, plays A out. A
+    `set_next` with the planned plan is retargeted to the late clip; a seek
+    to within 3.5 s of the planned tail start mixes late at once (no second
+    re-buffer from the guard); a seek back to before that restores the
+    planned clip and mix while A is still clipped (once A was unclipped to
+    play out, it stays unclipped); a seek with a ready tail still ahead keeps
+    it.
+  - These waits (and the tail render's
     60 s lead) sleep until the time left at the playback speed, or until
     play state, a seek or the item changes; nothing runs while paused. A
     tail at another format than B turned out to have → B starts unmixed at
@@ -641,6 +683,13 @@ Client (`core/handlers/analysis_share.rs`):
   so the re-ask half an hour later usually finds it.
 - Answers go through `store_analysis_record` (local store + replan when
   near the current track). Fetched records are never uploaded.
+- A record of another `ANALYSIS_VERSION` is dropped before anything else
+  (whatever file it is for) and warned about at warn level once per
+  version per session, naming both versions, the producer and where it came
+  from (`coordinator`, `analysis`, `platform`): a coordinator deployed from
+  older code otherwise turns every mix into a plain fade with nothing above
+  debug level. A record for another file is dropped at debug, per track.
+  `curl /health` shows the coordinator's version under `analysis.version`.
 - Records this device produced — desktop analysis (`on_analysis_produced`)
   and anything a platform stores with `Command::StoreAnalysisRecord`
   (Android's loudness-only records) — are queued (≤ 64, newest per track)
@@ -692,8 +741,10 @@ Client (`core/handlers/analysis_share.rs`):
 - Cost ≈ 30 s of one core and ~480 MB peak RSS per track: a first pass
   over 10 000 tracks takes about three days (measured on an 8-core x86
   host against a remote Navidrome: ~150 tracks an hour, downloads included). `/health` shows `analysis`:
-  `{state, passes, libraryTracks, remaining, analysed, failed, perHour,
-  priorityQueue}` (`priorityQueue`: ids waiting in the priority queue);
+  `{version, state, passes, libraryTracks, remaining, analysed, failed, perHour,
+  priorityQueue}` (`priorityQueue`: ids waiting in the priority queue;
+  `version`: the `ANALYSIS_VERSION` this build stores and serves, shown
+  whenever the store is on, worker or not);
   a progress line is logged at info every 5 minutes and at the end of each
   pass.
 - Shutdown cancels between tracks; a track being analysed is not waited

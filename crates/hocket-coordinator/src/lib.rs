@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! hocket-coordinator --listen 0.0.0.0:7373 --data-dir /var/lib/hocket
-//!   GET /health          → 200 {"status":"ok","rooms":n}
+//!   GET /health          → 200 {"status":"ok","rooms":n,"analysis":{"version":n,…}}
 //!   GET /ws              → WebSocket, first frame: Challenge, PairJoin,
 //!                          CoordClaim or CoordRedeem
 //!   POST /reports        → create a report (grant token), 201 {id, uploadKey, files}
@@ -67,7 +67,9 @@
 //! itself (never through the room). Every admitted identity using the same
 //! server shares its records. The opt-in [`worker`] (`--analysis-server`)
 //! logs in with its own account to analyse that library, and its progress
-//! shows in `/health` under `analysis`.
+//! shows in `/health` under `analysis`, next to the analysis `version` this
+//! build stores and serves (records of other versions are kept but never
+//! served, and the worker analyses their tracks again).
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -1116,10 +1118,24 @@ async fn health(State(app): State<Arc<App>>) -> impl IntoResponse {
         "rooms": app.room_count(),
         "connections": app.connections.load(Ordering::Relaxed),
     });
-    if let Some(status) = app.worker_status() {
-        body["analysis"] = serde_json::to_value(status).unwrap_or_default();
+    if let Some(analysis) = health_analysis(app.analysis.is_some(), app.worker_status()) {
+        body["analysis"] = analysis;
     }
     axum::Json(body)
+}
+
+/// `/health`'s `analysis`: with the store, the analysis version this build
+/// stores and serves (clients drop records of any other, so a stale deploy
+/// shows here), plus the worker's progress when it runs.
+fn health_analysis(store: bool, worker: Option<worker::WorkerStatus>) -> Option<serde_json::Value> {
+    if !store {
+        return None;
+    }
+    let mut v = worker
+        .and_then(|s| serde_json::to_value(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    v["version"] = hocket_core::automix::ANALYSIS_VERSION.into();
+    Some(v)
 }
 
 async fn ws_upgrade(
@@ -1698,5 +1714,22 @@ mod tests {
             adm.try_admit(b, &args, t0),
             Err(Refused::TooManyConnections)
         );
+    }
+
+    #[test]
+    fn health_shows_the_analysis_version() {
+        use hocket_core::automix::ANALYSIS_VERSION;
+        assert_eq!(health_analysis(false, None), None);
+        let v = health_analysis(true, None).unwrap();
+        assert_eq!(v, serde_json::json!({ "version": ANALYSIS_VERSION }));
+        let worker = worker::WorkerStatus {
+            state: "walking".into(),
+            passes: 2,
+            ..Default::default()
+        };
+        let v = health_analysis(true, Some(worker)).unwrap();
+        assert_eq!(v["version"], ANALYSIS_VERSION);
+        assert_eq!(v["state"], "walking");
+        assert_eq!(v["passes"], 2);
     }
 }

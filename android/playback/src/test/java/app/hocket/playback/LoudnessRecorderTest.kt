@@ -21,6 +21,8 @@ class LoudnessRecorderTest {
         override fun loudnessRecord(head: PcmDecoder.Pcm, tail: PcmDecoder.Pcm, tailStartMs: Long, durationMs: Long, transcoded: Boolean): AnalysisRecord? = null
         override fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, contextMs: Int, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double) =
             RenderedTail(FloatArray(0), FloatArray(0), FloatArray(0))
+
+        override fun lateFade(plan: app.hocket.core.api.TransitionPlan, tailStartMs: Long, aDurationMs: Long) = null
     }
 
     @Test

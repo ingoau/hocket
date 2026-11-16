@@ -262,6 +262,7 @@ impl Actor {
             self.playback.next = None;
             self.playback.next_doc_key = None;
             let _ = self.backend.set_next(None);
+            self.mix_log_arm();
             return;
         }
         let upcoming = self.upcoming_playable(2);
@@ -295,6 +296,7 @@ impl Actor {
         if let Err(e) = self.backend.set_next(source) {
             self.log("debug", format!("set_next: {e}"));
         }
+        self.mix_log_arm();
         self.protect_loaded_tracks();
     }
 
@@ -403,6 +405,15 @@ impl Actor {
         // the transition instead of loading it afresh.
         let completes = is_next && !transitioned && self.playback.transition.is_some();
         let transitioned = transitioned || completes;
+        // Leaving the current item for another, not by its end: what was
+        // planned out of it (or just mixed into it) did not stand.
+        if completes
+            || (!transitioned
+                && self.playback.loaded
+                && self.playback.doc_key.as_deref() != Some(item.key.as_str()))
+        {
+            self.mix_log_with(|log, out| log.left(now, out));
+        }
         self.note_cache_signals(item, &track, transitioned, play);
         let (played_ms, started_at, scrobbled) = match carried {
             Some((p, s, sc)) => (p, s, sc),
@@ -501,6 +512,7 @@ impl Actor {
             if let Err(e) = self.backend.load(source, next_source, position_ms, play) {
                 self.error(ErrorKind::Playback, "load", Some(e.to_string()));
             }
+            self.mix_log_arm();
         }
         self.playback.playing = play;
         if play {
@@ -539,6 +551,7 @@ impl Actor {
         let now = self.now();
         if self.playback.loaded && self.playback.backend_key.is_some() {
             // Leaving what the backend plays, as any skip would.
+            self.mix_log_with(|log, out| log.left(now, out));
             self.note_left_early();
             if let Some(id) = self.playback.track_id().map(str::to_string) {
                 let pos = self.playback.position_now(now);
@@ -643,6 +656,8 @@ impl Actor {
     }
 
     pub(crate) fn unload(&mut self) {
+        let now = self.now();
+        self.mix_log_with(|log, out| log.unloaded(now, out));
         if self.playback.loaded {
             let _ = self.backend.stop();
         }
@@ -966,6 +981,8 @@ impl Actor {
     /// when transport moves to another device. Clears the backend key so
     /// late reports for the old item no longer pass as ours.
     pub(crate) fn render_only(&mut self) {
+        let now = self.now();
+        self.mix_log_with(|log, out| log.unloaded(now, out));
         if self.playback.playing {
             self.set_playing(false);
         }
@@ -1099,7 +1116,9 @@ impl Actor {
         self.playback.buffering = false;
         // A seek cancels a transition still before its handover: the backend
         // drops the incoming side and the follow-up stays preloaded.
-        self.playback.transition = None;
+        if self.playback.transition.take().is_some() {
+            self.mix_log.cancelled();
+        }
         if let Err(e) = self.backend.seek(position_ms) {
             self.error(ErrorKind::Playback, "seek", Some(e.to_string()));
         }
@@ -1347,6 +1366,8 @@ impl Actor {
             tracing::debug!(target: "hocket::player", ?report, "player reported");
         }
         let current = |k: &QueueKey, me: &Actor| me.playback.backend_key.as_ref() == Some(k);
+        let now = self.now();
+        self.mix_log_with(|log, out| log.tick(now, out));
         if let BackendReport::TransitionedToNext { key } = &report {
             // A backend that moved on to the preloaded item without reporting
             // `Ended` for the one that finished (Media3's auto-advance): the
@@ -1469,6 +1490,7 @@ impl Actor {
                 if !current(&key, self) {
                     return;
                 }
+                self.mix_log_with(|log, out| log.ended(now, &key, out));
                 let duration = self.playback.duration_ms();
                 if let Some(id) = self.playback.track_id().map(str::to_string) {
                     let actions = self.scrobbler.track_ended(&id, Some(duration));
@@ -1507,6 +1529,7 @@ impl Actor {
                 }
             }
             BackendReport::TransitionedToNext { key } => {
+                self.mix_log_with(|log, out| log.transitioned(now, &key, out));
                 // The document moved first (TrackEnded); we adopted the item
                 // in `load_item`. Late arrival means the doc did not follow
                 // (repeat one, queue edited): reload what the document says.
@@ -1553,6 +1576,7 @@ impl Actor {
                     // afresh (with the usual retry and skip) when it comes up.
                     // A mix into it is over too: without this `refresh_next`
                     // would wait for a handover that never comes.
+                    self.mix_log_with(|log, out| log.failed(now, &key, out));
                     self.playback.next = None;
                     self.playback.next_doc_key = None;
                     self.playback.transition = None;
@@ -1648,6 +1672,7 @@ impl Actor {
                     return;
                 }
                 tracing::debug!(target: "hocket::player", %from, %to, tail_len_ms, handover_ms, "transition started");
+                self.mix_log_with(|log, out| log.started(now, &from, &to, out));
                 self.playback.transition = Some(crate::core::state::ActiveTransition { from, to });
             }
             BackendReport::PreBufferReady { key } => {

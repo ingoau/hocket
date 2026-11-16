@@ -14,6 +14,12 @@ use crate::api::{AnalysisRecord, Track, TransitionMode};
 /// The facts about one track the rules read.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MixTrack<'a> {
+    /// The library identity (`Track::server_id`, `Track::id`): the same pair
+    /// on both sides is the same file.
+    pub server_id: Option<&'a str>,
+    pub track_id: Option<&'a str>,
+    /// The track's own title (live markers on a single live cut).
+    pub title: Option<&'a str>,
     pub album_id: Option<&'a str>,
     pub disc_number: Option<u32>,
     pub track_number: Option<u32>,
@@ -31,6 +37,9 @@ impl<'a> MixTrack<'a> {
     /// From a library track. Release types and the record are added by the caller.
     pub fn from_track(t: &'a Track) -> Self {
         Self {
+            server_id: Some(&t.server_id),
+            track_id: Some(&t.id),
+            title: Some(&t.title),
             album_id: t.album_id.as_deref(),
             disc_number: t.disc_number,
             track_number: t.track_number,
@@ -80,6 +89,9 @@ pub enum NoMixReason {
     SleepEndOfTrack,
     CastActive,
     ExclusiveOutput,
+    /// The next track is the same file as the current one (a duplicate queue
+    /// entry): blending a song into itself sounds like a glitch.
+    SameTrack,
     /// The next track follows on the same album in track order.
     AlbumSequence,
     /// A file is tagged gapless.
@@ -87,7 +99,7 @@ pub enum NoMixReason {
     /// The pair runs into each other with no silence (from the records).
     GaplessJoin,
     Genre(GenreClass),
-    /// A live release (release type or album-title marker).
+    /// A live recording (release type, album-title or track-title marker).
     LiveRelease,
     /// A soundtrack or spoken-word release type.
     ReleaseType(GenreClass),
@@ -136,16 +148,27 @@ impl NoMixReason {
             ModeOff | RepeatOne | SleepEndOfTrack | CastActive | ExclusiveOutput
         )
     }
+
+    /// The rule drops the plan even after lock-in: the context rules, and a
+    /// track followed by itself (a late-edit fade of a song into itself is
+    /// as bad as a full blend; the backend un-clips and joins gaplessly, as
+    /// it does for repeat-one).
+    pub fn drops_locked_plan(self) -> bool {
+        self.is_context() || self == NoMixReason::SameTrack
+    }
 }
 
 /// Whether `a` (outgoing) → `b` (incoming) may be mixed. The first rule that
-/// matches wins, in the order: playback context, album sequence, gapless,
-/// genre, release.
+/// matches wins, in the order: playback context, same track, album sequence,
+/// gapless, genre, release.
 pub fn should_mix(a: &MixTrack<'_>, b: &MixTrack<'_>, ctx: &MixContext) -> MixDecision {
     use NoMixReason::*;
     let no = MixDecision::NoMix;
     if let Some(reason) = ctx.refusal() {
         return no(reason);
+    }
+    if is_same_track(a, b) {
+        return no(SameTrack);
     }
     if is_album_sequence(a, b) {
         return no(AlbumSequence);
@@ -169,6 +192,13 @@ pub fn should_mix(a: &MixTrack<'_>, b: &MixTrack<'_>, ctx: &MixContext) -> MixDe
         }
     }
     MixDecision::Mix
+}
+
+/// Both sides are the same library file (same server and track id).
+pub fn is_same_track(a: &MixTrack<'_>, b: &MixTrack<'_>) -> bool {
+    a.track_id.is_some_and(|id| !id.is_empty())
+        && a.track_id == b.track_id
+        && a.server_id == b.server_id
 }
 
 /// Same album id and `b` is the next track: same disc and track n+1, or the
@@ -259,10 +289,29 @@ fn release_reason(t: &MixTrack<'_>) -> Option<NoMixReason> {
             _ => {}
         }
     }
-    if t.album_title.is_some_and(has_live_marker) {
+    if t.album_title.is_some_and(has_live_marker) || t.title.is_some_and(has_track_live_marker) {
         return Some(NoMixReason::LiveRelease);
     }
     None
+}
+
+/// "Song (Live)", "Song [Live at X]", "Song - Live from Y": a live cut,
+/// from the track title. Stricter than [`has_live_marker`]: only a
+/// bracketed or dashed "live" counts, since bare words would catch "The Way
+/// I Live" or "Live Forever". The word must end there ("(Lively Mix)" is not
+/// live).
+pub fn has_track_live_marker(title: &str) -> bool {
+    let t = title.to_lowercase();
+    ["(live", "[live", "- live", "\u{2013} live", "\u{2014} live"]
+        .iter()
+        .any(|m| {
+            t.match_indices(m).any(|(i, _)| {
+                !t[i + m.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_alphanumeric)
+            })
+        })
 }
 
 /// "Album (Live)", "[Live at X]", "Live at Wembley", "Live in Paris",
@@ -435,6 +484,83 @@ mod tests {
     }
 
     #[test]
+    fn live_track_titles() {
+        for title in [
+            "Level of Concern (Live from Outside)",
+            "Song [Live at Budokan]",
+            "Song (live)",
+            "Song - Live",
+            "Song \u{2013} Live in Paris",
+            "Song (Remastered) [Live]",
+        ] {
+            assert!(has_track_live_marker(title), "{title}");
+        }
+        // Bare words are song titles, not markers; the album test would
+        // take some of them.
+        for title in [
+            "The Way I Live",
+            "Live Forever",
+            "Live and Let Die",
+            "Live in the Moment",
+            "Alive",
+            "Song (Lively Mix)",
+            "Song - Liveliness",
+        ] {
+            assert!(!has_track_live_marker(title), "{title}");
+        }
+        let live = MixTrack {
+            title: Some("Level of Concern (Live from Outside)"),
+            album_title: Some("Level of Concern"),
+            ..t("y", 1, 1)
+        };
+        assert_eq!(
+            should_mix(&t("x", 1, 1), &live, &ctx()),
+            MixDecision::NoMix(NoMixReason::LiveRelease)
+        );
+        assert_eq!(
+            should_mix(&live, &t("x", 1, 1), &ctx()),
+            MixDecision::NoMix(NoMixReason::LiveRelease)
+        );
+        let studio = MixTrack {
+            title: Some("The Way I Live"),
+            ..t("y", 1, 1)
+        };
+        assert!(should_mix(&t("x", 1, 1), &studio, &ctx()).is_mix());
+    }
+
+    #[test]
+    fn same_track_is_not_mixed() {
+        let ten = |server: &'static str, id: &'static str| MixTrack {
+            server_id: Some(server),
+            track_id: Some(id),
+            ..t("ten", 1, 5)
+        };
+        let same = MixDecision::NoMix(NoMixReason::SameTrack);
+        // An empty id names no track.
+        assert_ne!(should_mix(&ten("s", ""), &ten("s", ""), &ctx()), same);
+        assert_eq!(should_mix(&ten("s", "t1"), &ten("s", "t1"), &ctx()), same);
+        // Also with transitions as a plain crossfade.
+        let crossfade = MixContext {
+            mode: TransitionMode::Crossfade,
+            ..Default::default()
+        };
+        assert_eq!(
+            should_mix(&ten("s", "t1"), &ten("s", "t1"), &crossfade),
+            same
+        );
+        // Another file, or the same id on another server: mix.
+        assert!(should_mix(&ten("s", "t1"), &ten("s", "t2"), &ctx()).is_mix());
+        assert!(should_mix(&ten("s", "t1"), &ten("o", "t1"), &ctx()).is_mix());
+        // No ids (tests, synthetic tracks): never "the same".
+        assert!(!is_same_track(&MixTrack::default(), &MixTrack::default()));
+        // It drops a locked plan like a context rule; album order doesn't.
+        assert!(NoMixReason::SameTrack.drops_locked_plan());
+        assert!(!NoMixReason::SameTrack.is_context());
+        assert!(!NoMixReason::AlbumSequence.drops_locked_plan());
+        assert!(NoMixReason::RepeatOne.drops_locked_plan());
+    }
+
+    #[test]
     fn gapless_tag_and_join() {
         let mut a = t("x", 1, 1);
         a.gapless = Some(true);
@@ -485,6 +611,9 @@ mod tests {
     #[test]
     fn from_track_reads_library_fields() {
         let track = Track {
+            id: "t".into(),
+            server_id: "s".into(),
+            title: "So What".into(),
             album_id: Some("al".into()),
             disc_number: Some(2),
             track_number: Some(7),
@@ -493,6 +622,9 @@ mod tests {
             ..Default::default()
         };
         let m = MixTrack::from_track(&track);
+        assert_eq!(m.server_id, Some("s"));
+        assert_eq!(m.track_id, Some("t"));
+        assert_eq!(m.title, Some("So What"));
         assert_eq!(m.album_id, Some("al"));
         assert_eq!(m.disc_number, Some(2));
         assert_eq!(m.track_number, Some(7));

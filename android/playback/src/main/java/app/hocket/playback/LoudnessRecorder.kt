@@ -11,6 +11,7 @@ import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.QueryTrackAnalysisInner
 import app.hocket.core.api.TransitionMode
+import app.hocket.core.api.TransitionPlan
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -124,6 +125,9 @@ interface AutomixFfi {
      */
     fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, contextMs: Int, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double): RenderedTail
 
+    /** [plan] as a short fade from [tailStartMs] of an A of [aDurationMs] (`late_fade_at`); null without room. */
+    fun lateFade(plan: TransitionPlan, tailStartMs: Long, aDurationMs: Long): TransitionPlan?
+
     object Native : AutomixFfi {
         override fun usable(record: AnalysisRecord, durationMs: Long): Boolean =
             app.hocket.core.ffi.automixRecordUsable(HocketJson.json.encodeToString(AnalysisRecord.serializer(), record), durationMs.toUInt())
@@ -143,6 +147,11 @@ interface AutomixFfi {
             )
             return RenderedTail(floats(r.tail), floats(r.lead), floats(r.after))
         }
+
+        override fun lateFade(plan: TransitionPlan, tailStartMs: Long, aDurationMs: Long): TransitionPlan? =
+            app.hocket.core.ffi.automixLateFade(
+                HocketJson.json.encodeToString(TransitionPlan.serializer(), plan), tailStartMs.toUInt(), aDurationMs.toUInt(),
+            )?.let { HocketJson.json.decodeFromString(TransitionPlan.serializer(), it) }
 
         private fun floats(bytes: ByteArray): FloatArray {
             val floats = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
