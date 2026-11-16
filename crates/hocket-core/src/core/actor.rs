@@ -193,6 +193,8 @@ pub(crate) struct Actor {
     /// Plays waiting for the session's scrobble verdict (mirrors the durable
     /// [`super::state::PendingScrobble`] records of the open scope).
     pub pending_submits: HashMap<(TrackId, u64), super::state::PendingScrobble>,
+    /// The shared play-log exchange with the current room.
+    pub(crate) plays_sync: super::handlers::plays::PlaysSync,
     pub pending_cas: HashMap<String, PendingCas>,
     pub outbox_entries: HashMap<String, String>,
 
@@ -466,6 +468,7 @@ impl Actor {
             emitted_media_session: None,
             emitted_devices: None,
             pending_submits: HashMap::new(),
+            plays_sync: Default::default(),
             pending_cas: HashMap::new(),
             outbox_entries: HashMap::new(),
             playback: Playback {

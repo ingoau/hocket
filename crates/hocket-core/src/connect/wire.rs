@@ -217,6 +217,19 @@ pub struct ReplicaState {
     /// Short dedupe log of submitted scrobbles.
     #[serde(default)]
     pub scrobbles: Vec<ScrobbleRecord>,
+    /// Shared listening history: plays every device reported, so a play on
+    /// one shows in the others' history and stats. Never sent in `Welcome`
+    /// (a joiner asks for what it lacks with `PlaysRequest`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play_log: Vec<PlayRecord>,
+    /// Identity of this room's play log, so a device keeps one catch-up
+    /// mark per log and a reset (a new id) starts it over. Empty until the
+    /// first play arrives.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub play_log_id: String,
+    /// Last `seq` handed out in `play_log`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub play_seq: u32,
     pub updated_at: EpochMs,
     #[typeshare(skip)]
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
@@ -253,6 +266,45 @@ pub struct ScrobbleRecord {
     pub started_at: EpochMs,
     pub device_id: DeviceId,
     pub recorded_at: EpochMs,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// One play in the shared listening history. Its identity is
+/// `(trackId, playedAt)`: the play's start, which every device that held it
+/// shares (the same pair the scrobble dedupe log and the server use).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayRecord {
+    pub track_id: TrackId,
+    /// Epoch ms the play started.
+    pub played_at: EpochMs,
+    /// How much of it was heard.
+    #[serde(default)]
+    pub played_ms: Ms,
+    /// The device that recorded it.
+    pub device_id: DeviceId,
+    /// Position in the room's log, assigned by the room (0 on the way in).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub seq: u32,
+}
+
+impl PlayRecord {
+    pub fn same_play(&self, other: &PlayRecord) -> bool {
+        self.track_id == other.track_id && self.played_at == other.played_at
+    }
+}
+
+/// How far a device has read one room's play log.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayLogMark {
+    pub log_id: String,
+    pub seq: u32,
 }
 
 #[typeshare]
@@ -829,6 +881,36 @@ pub enum Msg {
         playlists: Vec<PlaylistEdit>,
     },
 
+    // -- listening history ----------------------------------------------
+    /// → room. Plays the sender knows of (its own, and any it learnt from
+    /// another room) that this room may not have. The room keeps the new
+    /// ones, answers `PlaysPushed` and relays them to every member in a
+    /// `PlaysLog`. Peers that do not know it ignore it, so the sender keeps
+    /// the plays and offers them again next time.
+    PlaysPush {
+        batch: u32,
+        plays: Vec<PlayRecord>,
+    },
+    /// → client. Everything in `PlaysPush { batch }` is in the log `logId`.
+    PlaysPushed {
+        batch: u32,
+        log_id: String,
+    },
+    /// → room. Send the plays of this room's log the device has not read:
+    /// those after the mark for its `logId`, or all of them.
+    PlaysRequest {
+        #[serde(default)]
+        marks: Vec<PlayLogMark>,
+    },
+    /// → client. Every play of log `logId` with `after < seq <= max seq`
+    /// that the log still holds (it forgets the oldest). Answers a
+    /// `PlaysRequest` (in pages, in order) and relays new plays.
+    PlaysLog {
+        log_id: String,
+        after: u32,
+        plays: Vec<PlayRecord>,
+    },
+
     /// Anything this build does not know. Ignored.
     #[serde(other)]
     Unknown,
@@ -874,6 +956,10 @@ impl Msg {
         "settingsSync",
         "undoEntryShared",
         "libraryEdited",
+        "playsPush",
+        "playsPushed",
+        "playsRequest",
+        "playsLog",
         "unknown",
     ];
 
@@ -921,6 +1007,10 @@ impl Msg {
             Msg::SettingsSync { .. } => "settingsSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
+            Msg::PlaysPush { .. } => "playsPush",
+            Msg::PlaysPushed { .. } => "playsPushed",
+            Msg::PlaysRequest { .. } => "playsRequest",
+            Msg::PlaysLog { .. } => "playsLog",
             Msg::Unknown => "unknown",
         }
     }
@@ -1194,6 +1284,9 @@ mod tests {
             transport_lease: TransportLease::default(),
             last_stamp: None,
             scrobbles: vec![],
+            play_log: vec![],
+            play_log_id: String::new(),
+            play_seq: 0,
             updated_at: 1.0,
             extra: HashMap::new(),
         };

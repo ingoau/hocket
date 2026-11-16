@@ -498,6 +498,9 @@ impl SimDevice {
             | Output::TransportChanged { .. }
             | Output::SettingsMerged(_)
             | Output::UndoEntryReceived { .. }
+            | Output::PlaysSyncReady
+            | Output::PlaysPushed { .. }
+            | Output::PlaysReceived { .. }
             | Output::ReplicaChanged(_) => {}
             Output::Log { level, message } => self.note(format!("{level}: {message}")),
         }

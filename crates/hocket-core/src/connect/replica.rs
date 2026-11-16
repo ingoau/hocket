@@ -9,7 +9,8 @@
 //! | Settings | account-synced keys, LWW |
 //! | Leases | per-device last-seen and the transport lease |
 //! | Scrobbles | a short dedupe log of `(trackId, startedAt)` |
-//! | Not stored | play history, library metadata, anything re-derivable |
+//! | Plays | the shared listening history: the last [`PLAY_LOG_CAP`] plays of [`PLAY_LOG_TTL_MS`] |
+//! | Not stored | library metadata, anything re-derivable |
 //!
 //! It is a cache with an expiry: every device persists its own complete
 //! session, and if the replica and a live device disagree, the live device
@@ -23,7 +24,8 @@ use crate::api::{
     DeviceId, DeviceInfo, EpochMs, SavedQueue, SessionDocument, Setting, TrackId, TransportLease,
 };
 use crate::connect::wire::{
-    merge_saved_queues, merge_settings, DeviceLease, LastStamp, ReplicaState, ScrobbleRecord,
+    merge_saved_queues, merge_settings, DeviceLease, LastStamp, PlayRecord, ReplicaState,
+    ScrobbleRecord,
 };
 
 /// Replicas idle for this long are dropped by [`ReplicaStore::purge_expired`].
@@ -33,6 +35,13 @@ pub const REPLICA_TTL_MS: f64 = 30.0 * 24.0 * 3_600_000.0;
 pub const SCROBBLE_LOG_TTL_MS: f64 = 24.0 * 3_600_000.0;
 /// Hard cap on the dedupe log, oldest first.
 pub const SCROBBLE_LOG_CAP: usize = 500;
+/// Plays older than this leave the shared log (by when they were played).
+pub const PLAY_LOG_TTL_MS: f64 = 90.0 * 24.0 * 3_600_000.0;
+/// Hard cap on the shared play log, oldest first.
+pub const PLAY_LOG_CAP: usize = 5_000;
+/// Plays per `PlaysLog` page (and per `PlaysPush` from a device): far
+/// below the frame cap.
+pub const PLAY_PAGE: usize = 500;
 /// Device leases not seen for this long are forgotten.
 pub const DEVICE_TTL_MS: f64 = 7.0 * 24.0 * 3_600_000.0;
 /// Cap on stored history (mirrors the session module's own cap).
@@ -67,6 +76,9 @@ pub fn new_replica(document: SessionDocument, now: EpochMs) -> ReplicaState {
         transport_lease: TransportLease::default(),
         last_stamp: None,
         scrobbles: vec![],
+        play_log: vec![],
+        play_log_id: String::new(),
+        play_seq: 0,
         updated_at: now,
         extra: HashMap::new(),
     }
@@ -88,6 +100,12 @@ pub trait ReplicaExt {
     /// Drop the record of a pair (a claim withdrawn before it was
     /// confirmed). Returns whether there was one.
     fn forget_scrobble(&mut self, track_id: &str, started_at: EpochMs, now: EpochMs) -> bool;
+    /// Keep the plays the log does not have yet (identity `(trackId,
+    /// playedAt)`), numbered in arrival order. Returns the new ones as
+    /// stored, with their `seq`.
+    fn add_plays(&mut self, plays: &[PlayRecord], now: EpochMs) -> Vec<PlayRecord>;
+    /// The log's id, minting one for a log that has none yet.
+    fn play_log_id(&mut self) -> String;
     fn set_document(&mut self, document: SessionDocument, now: EpochMs);
     fn set_stamp(&mut self, stamp: LastStamp, now: EpochMs);
     fn set_lease(&mut self, lease: TransportLease, now: EpochMs);
@@ -180,6 +198,40 @@ impl ReplicaExt for ReplicaState {
         changed
     }
 
+    fn add_plays(&mut self, plays: &[PlayRecord], now: EpochMs) -> Vec<PlayRecord> {
+        let mut added = Vec::new();
+        for p in plays {
+            if p.track_id.is_empty()
+                || !p.played_at.is_finite()
+                || now - p.played_at >= PLAY_LOG_TTL_MS
+                || self.play_log.iter().any(|q| q.same_play(p))
+                || added.iter().any(|q: &PlayRecord| q.same_play(p))
+            {
+                continue;
+            }
+            self.play_seq += 1;
+            let mut p = p.clone();
+            p.seq = self.play_seq;
+            added.push(p);
+        }
+        if !added.is_empty() {
+            self.play_log.extend(added.iter().cloned());
+            if self.play_log.len() > PLAY_LOG_CAP {
+                let drop = self.play_log.len() - PLAY_LOG_CAP;
+                self.play_log.drain(0..drop);
+            }
+            self.updated_at = now;
+        }
+        added
+    }
+
+    fn play_log_id(&mut self) -> String {
+        if self.play_log_id.is_empty() {
+            self.play_log_id = crate::util::new_id();
+        }
+        self.play_log_id.clone()
+    }
+
     fn set_document(&mut self, mut document: SessionDocument, now: EpochMs) {
         if document.history.len() > HISTORY_CAP {
             let drop = document.history.len() - HISTORY_CAP;
@@ -205,6 +257,8 @@ impl ReplicaExt for ReplicaState {
     fn expire(&mut self, now: EpochMs) {
         self.scrobbles
             .retain(|r| now - r.recorded_at < SCROBBLE_LOG_TTL_MS);
+        self.play_log
+            .retain(|p| now - p.played_at < PLAY_LOG_TTL_MS);
         self.devices.retain(|d| now - d.last_seen < DEVICE_TTL_MS);
     }
 
@@ -599,5 +653,59 @@ mod tests {
         };
         std::fs::write(store.path_for("s"), serde_json::to_vec(&stored).unwrap()).unwrap();
         assert!(store.load("s").unwrap().is_none());
+    }
+
+    fn play(track: &str, at: f64) -> PlayRecord {
+        PlayRecord {
+            track_id: track.into(),
+            played_at: at,
+            played_ms: 1,
+            device_id: "d".into(),
+            seq: 0,
+        }
+    }
+
+    #[test]
+    fn the_play_log_keeps_each_play_once_numbers_them_and_forgets_the_oldest() {
+        let mut r = new_replica(crate::session::new_document("s", "sid".into(), 0.0), 0.0);
+        let now = PLAY_LOG_TTL_MS;
+        let added = r.add_plays(
+            &[
+                play("a", now - 1.0),
+                play("a", now - 1.0),
+                play("b", now - 1.0),
+            ],
+            now,
+        );
+        assert_eq!(added.iter().map(|p| p.seq).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(
+            r.add_plays(&[play("a", now - 1.0)], now).is_empty(),
+            "known play"
+        );
+        assert!(
+            r.add_plays(&[play("c", 0.0)], now).is_empty(),
+            "too old to keep"
+        );
+        assert!(r.add_plays(&[play("", now)], now).is_empty(), "no track");
+        let id = r.play_log_id();
+        assert!(!id.is_empty());
+        assert_eq!(r.play_log_id(), id, "stable");
+
+        // Expiry by age, cap by count; numbering never restarts.
+        r.expire(now + PLAY_LOG_TTL_MS);
+        assert!(r.play_log.is_empty());
+        let many: Vec<_> = (0..PLAY_LOG_CAP + 5)
+            .map(|i| play(&format!("t{i}"), now))
+            .collect();
+        r.add_plays(&many, now);
+        assert_eq!(r.play_log.len(), PLAY_LOG_CAP);
+        assert_eq!(r.play_log[0].seq, 8, "the oldest five went");
+        assert_eq!(r.play_seq, 2 + PLAY_LOG_CAP as u32 + 5);
+
+        // Persisted and back.
+        let back: ReplicaState = serde_json::from_value(serde_json::to_value(&r).unwrap()).unwrap();
+        assert_eq!(back.play_log, r.play_log);
+        assert_eq!(back.play_log_id, id);
+        assert_eq!(back.play_seq, r.play_seq);
     }
 }

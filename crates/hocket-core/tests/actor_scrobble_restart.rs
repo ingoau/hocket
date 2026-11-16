@@ -146,7 +146,16 @@ async fn a_deferred_scrobble_survives_a_restart_and_is_submitted_once() {
         .collect();
     assert_eq!(hb.len(), 1, "{hb:?}");
     assert!(hb[0].played_ms >= 100_000, "{hb:?}");
-    assert!(history(&a).await.iter().all(|h| h.track.id != "t0"));
+    // a learns b's play through the room's shared play log: listed once,
+    // as b's, and never scrobbled by a.
+    let ha: Vec<_> = history(&a)
+        .await
+        .into_iter()
+        .filter(|h| h.track.id == "t0")
+        .collect();
+    assert_eq!(ha.len(), 1, "{ha:?}");
+    assert_eq!(ha[0].device_id, b.device_id);
+    assert_eq!(ha[0].played_at, hb[0].played_at);
 
     // Nothing left to ask about: another restart changes nothing.
     TestCore::run_all_for(&[&a, &b], 5_000.0).await;

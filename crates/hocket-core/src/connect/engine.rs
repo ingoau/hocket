@@ -40,8 +40,9 @@ use crate::connect::replica::ReplicaExt;
 use crate::connect::room::{LanAuth, Room, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::transport::Backoff;
 use crate::connect::wire::{
-    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, PlaylistEdit, RefuseReason,
-    RejectReason, ReplicaState, TransportCommand, WireMessage, PROTOCOL, PROTOCOL_MIN,
+    merge_saved_queues, merge_settings, Credential, LastStamp, Msg, PlayLogMark, PlayRecord,
+    PlaylistEdit, RefuseReason, RejectReason, ReplicaState, TransportCommand, WireMessage,
+    PROTOCOL, PROTOCOL_MIN,
 };
 use crate::connect::{
     apply_op, doc_is_trivial, op_context, same_session_state, PeerId, ReducerHandle, SessionOp,
@@ -313,6 +314,18 @@ pub enum Input {
         items: Vec<LibraryItemState>,
         playlists: Vec<PlaylistEdit>,
     },
+    /// Offer plays to the shared room (see [`Output::PlaysSyncReady`]).
+    /// Dropped while there is no shared room; the actor keeps them until a
+    /// `PlaysPushed` for `batch` says the room has them.
+    PushPlays {
+        batch: u32,
+        plays: Vec<PlayRecord>,
+    },
+    /// Ask the shared room for the plays after these marks. Dropped while
+    /// there is no shared room.
+    RequestPlays {
+        marks: Vec<PlayLogMark>,
+    },
 
     Tick,
 }
@@ -439,6 +452,24 @@ pub enum Output {
         from: DeviceId,
         items: Vec<LibraryItemState>,
         playlists: Vec<PlaylistEdit>,
+    },
+    /// A room other devices share is reachable now (the coordinator or a
+    /// LAN leader we follow, or our own room the moment it gains a member):
+    /// request what its play log has past our mark, and push the plays it
+    /// has not acknowledged yet.
+    PlaysSyncReady,
+    /// The room keeps everything in `PlaysPush { batch }`, in log `log_id`.
+    PlaysPushed {
+        batch: u32,
+        log_id: String,
+    },
+    /// Plays from the shared log: record each one not yet known. When
+    /// `after` is at or below the mark kept for `log_id`, the mark moves to
+    /// the last play's `seq`.
+    PlaysReceived {
+        log_id: String,
+        after: u32,
+        plays: Vec<PlayRecord>,
     },
     /// Our embedded room's replica changed (persist if you like).
     ReplicaChanged(ReplicaState),
@@ -619,6 +650,8 @@ pub struct Engine {
     /// Whether the lease we hold was granted by a remote room (as opposed to
     /// our own, while alone or cut off).
     held_from_remote: bool,
+    /// The room plays were last synced with (see [`Engine::plays_target`]).
+    plays_target: Option<PeerId>,
     detached: bool,
     held_remote_epoch: Option<u32>,
     stamp: Option<CurrentStamp>,
@@ -770,6 +803,7 @@ impl Engine {
             lease: TransportLease::default(),
             held: None,
             held_from_remote: false,
+            plays_target: None,
             detached: false,
             held_remote_epoch: None,
             stamp: None,
@@ -1324,10 +1358,37 @@ impl Engine {
                     });
                 }
             }
+            Input::PushPlays { batch, plays } => {
+                if self.plays_target().is_some() && !plays.is_empty() {
+                    self.upstream_send(Msg::PlaysPush { batch, plays });
+                }
+            }
+            Input::RequestPlays { marks } => {
+                if self.plays_target().is_some() {
+                    self.upstream_send(Msg::PlaysRequest { marks });
+                }
+            }
             Input::Tick => self.on_tick(),
         }
         self.drain_loops();
+        let target = self.plays_target();
+        if target != self.plays_target {
+            self.plays_target = target.clone();
+            if target.is_some() {
+                self.out.push(Output::PlaysSyncReady);
+            }
+        }
         std::mem::take(&mut self.out)
+    }
+
+    /// The room whose play log other devices share: the one we follow, or
+    /// our own while it serves members. `None` while alone (our own room
+    /// would be a log nobody reads).
+    fn plays_target(&self) -> Option<PeerId> {
+        if let Some(peer) = self.upstream_peer() {
+            return Some(peer);
+        }
+        self.is_serving().then(|| LOOPBACK.to_string())
     }
 
     // -- upstream plumbing ---------------------------------------------------
@@ -2657,6 +2718,18 @@ impl Engine {
                     });
                 }
             }
+            Msg::PlaysPushed { batch, log_id } => {
+                self.out.push(Output::PlaysPushed { batch, log_id })
+            }
+            Msg::PlaysLog {
+                log_id,
+                after,
+                plays,
+            } => self.out.push(Output::PlaysReceived {
+                log_id,
+                after,
+                plays,
+            }),
             Msg::Hello { .. }
             | Msg::Challenge { .. }
             | Msg::Proof { .. }
@@ -2668,6 +2741,8 @@ impl Engine {
             | Msg::ClockPing { .. }
             | Msg::HandoffRelease { .. }
             | Msg::ScrobbleDedupeQuery { .. }
+            | Msg::PlaysPush { .. }
+            | Msg::PlaysRequest { .. }
             | Msg::Unknown => {}
             Msg::ScrobbleSubmitted { .. } if from_loopback => {}
             Msg::ScrobbleSubmitted {

@@ -6,7 +6,10 @@
 //! playlists and `getGenres` for genres, then a mark-and-sweep by
 //! `sync_gen` that catches deletions. Incremental sync is cheap: scan status,
 //! new albums (`getAlbumList2 type=newest` until we reach what we know),
-//! starred state, playlists whose `changed` moved. A full reconcile runs
+//! starred state, play counts and last plays of recently played albums
+//! (`getAlbumList2 type=recent` until we reach what we know: every device
+//! and client that scrobbles moves them), playlists whose `changed` moved.
+//! A full reconcile runs
 //! when the last one is older than [`FULL_RECONCILE_INTERVAL_MS`].
 //!
 //! The cursor lives in `saved_state` under `sync:<serverId>` so a crash
@@ -38,6 +41,8 @@ use super::{Db, DbError};
 
 /// Page size for `search3` / `getAlbumList2` (Navidrome's maximum).
 pub const PAGE_SIZE: u32 = 500;
+/// Recently played albums an incremental sync looks at, at most.
+pub const RECENT_PLAYS_PAGE: u32 = 50;
 /// Full reconcile cadence: once a day.
 pub const FULL_RECONCILE_INTERVAL_MS: f64 = 24.0 * 3600.0 * 1000.0;
 
@@ -356,6 +361,9 @@ impl LibrarySync {
                     self.report(obs, &c, c.offset, total_tracks, false);
                 }
                 Phase::Playlists => {
+                    if !c.full {
+                        stats.tracks += self.sync_recent_plays().await?;
+                    }
                     let n = self.sync_playlists(c.gen, c.full).await?;
                     stats.playlists += n;
                     if !c.ready_tables.iter().any(|t| t == "playlists") {
@@ -545,6 +553,55 @@ impl LibrarySync {
             tracks += songs.len();
         }
         Ok((albums, tracks))
+    }
+
+    /// Play counts and last plays of the albums played since the mirror
+    /// last looked (`getAlbumList2 type=recent`, latest play first), and of
+    /// their songs. A scrobble from any device or client moves them on the
+    /// server, and the library scan status does not change, so without this
+    /// only the full reconcile would. Stops at the first album the mirror
+    /// already agrees with (anything played earlier is unchanged too).
+    /// Albums the mirror does not have are left to the new-albums pass.
+    /// Returns how many songs were refreshed.
+    async fn sync_recent_plays(&self) -> Result<usize, SyncError> {
+        let sid = self.server_id();
+        let page = self
+            .api
+            .album_list2(AlbumListType::Recent, RECENT_PLAYS_PAGE, 0)
+            .await?;
+        let mut songs = 0;
+        for a in page {
+            let Some(known) = self.db.album(&a.id)? else {
+                continue;
+            };
+            let remote = album_from_id3(sid, &a);
+            if known.play_count == remote.play_count && known.last_played == remote.last_played {
+                break;
+            }
+            let full = match self.api.album(&a.id).await {
+                Ok(f) => f,
+                Err(SubsonicError::NotFound(_)) => continue,
+                Err(e) => return Err(e.into()),
+            };
+            let album = album_from_id3(sid, &full.album);
+            let tracks: Vec<api::Track> =
+                full.song.iter().map(|c| track_from_child(sid, c)).collect();
+            self.db.with_tx(|tx| {
+                tx.execute(
+                    "UPDATE albums SET play_count = ?3, last_played = ?4 WHERE server_id = ?1 AND id = ?2",
+                    rusqlite::params![sid, album.id, album.play_count, album.last_played],
+                )?;
+                let mut st = tx.prepare_cached(
+                    "UPDATE tracks SET play_count = ?3, last_played = ?4 WHERE server_id = ?1 AND id = ?2",
+                )?;
+                for t in &tracks {
+                    st.execute(rusqlite::params![sid, t.id, t.play_count, t.last_played])?;
+                }
+                Ok(())
+            })?;
+            songs += tracks.len();
+        }
+        Ok(songs)
     }
 
     /// Reconcile loved flags from `getStarred2` (cheap and catches changes
@@ -949,8 +1006,8 @@ mod tests {
         assert_eq!(s.calls_to("search3"), calls);
         assert_eq!(
             s.calls_to("getAlbumList2"),
-            1,
-            "only the full run listed albums"
+            2,
+            "only the full run listed albums, plus one look at the recently played"
         );
         // a new album appears and the scan moves
         {
@@ -971,6 +1028,57 @@ mod tests {
             calls,
             "incremental never pages search3"
         );
+    }
+
+    /// A play scrobbled by another device (or any client) moves the
+    /// server's counts without a library scan: the next incremental sync
+    /// picks them up for the album and its songs, and reads only the
+    /// albums played since.
+    #[tokio::test]
+    async fn incremental_refreshes_play_counts_of_recently_played_albums() {
+        use crate::subsonic::SubsonicApi;
+        let db = Db::open_in_memory().unwrap();
+        let s = server();
+        s.state.lock().scan_status.last_scan = Some("2024-06-01T00:00:00Z".into());
+        let sync = sync_for(&db, &s, Arc::new(Mutex::new(vec![])));
+        sync.run(true, &NoopObserver).await.unwrap();
+        assert_eq!(db.track("s05").unwrap().unwrap().play_count, 0);
+
+        let t1 = 1_790_000_000_000.0;
+        s.scrobble("s05", Some(t1), true).await.unwrap();
+        s.scrobble("s05", Some(t1 + 300_000.0), true).await.unwrap();
+        s.scrobble("s09", Some(t1 + 600_000.0), true).await.unwrap();
+        let albums_before = s.calls_to("getAlbum");
+        let stats = sync.run(false, &NoopObserver).await.unwrap();
+        assert!(!stats.full);
+        let t = db.track("s05").unwrap().unwrap();
+        assert_eq!(t.play_count, 2);
+        assert_eq!(t.last_played, Some(t1 + 300_000.0));
+        assert_eq!(db.track("s09").unwrap().unwrap().play_count, 1);
+        let al = db.album("al1").unwrap().unwrap();
+        assert_eq!((al.play_count, al.last_played), (2, Some(t1 + 300_000.0)));
+        assert_eq!(db.album("al2").unwrap().unwrap().play_count, 1);
+        assert_eq!(s.calls_to("getAlbum") - albums_before, 2);
+
+        // Nothing played since: one list, no album read.
+        let albums_before = s.calls_to("getAlbum");
+        sync.run(false, &NoopObserver).await.unwrap();
+        assert_eq!(s.calls_to("getAlbum"), albums_before);
+        // One more play: only that album is read again.
+        s.scrobble("s04", Some(t1 + 900_000.0), true).await.unwrap();
+        sync.run(false, &NoopObserver).await.unwrap();
+        assert_eq!(s.calls_to("getAlbum") - albums_before, 1);
+        assert_eq!(db.track("s04").unwrap().unwrap().play_count, 1);
+        assert_eq!(db.album("al1").unwrap().unwrap().play_count, 3);
+    }
+
+    #[test]
+    fn fake_iso_timestamps_parse_back() {
+        use crate::subsonic::{fake::iso_from_ms, types::parse_iso_ms};
+        for ms in [951_782_400_000.0, 1_790_294_961_606.0, 4_102_444_799_999.0] {
+            assert_eq!(parse_iso_ms(&iso_from_ms(ms)), Some(ms));
+        }
+        assert_eq!(iso_from_ms(951_782_400_000.0), "2000-02-29T00:00:00.000Z");
     }
 
     #[tokio::test]

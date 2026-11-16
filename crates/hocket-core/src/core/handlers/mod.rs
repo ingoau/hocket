@@ -6,6 +6,7 @@ pub(crate) mod command;
 pub(crate) mod connect;
 pub(crate) mod library;
 pub(crate) mod playback;
+pub(crate) mod plays;
 pub(crate) mod prefetch;
 pub(crate) mod prime;
 pub(crate) mod servers;

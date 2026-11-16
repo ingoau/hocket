@@ -338,8 +338,10 @@ impl ScrobbleRecorder {
         self.db.with_tx(|tx| {
             // Asked again about a play already recorded here (it came back
             // after a handoff): one row, and at most one submission.
+            // A row another device shared does not count: its scrobble is
+            // that device's business, this verdict is ours.
             let recorded =
-                crate::db::queries::recorded_play_in(tx, server_id, track_id, played_at)?.is_some();
+                crate::db::queries::recorded_own_play_in(tx, server_id, track_id, played_at)?;
             let history_id = crate::db::queries::record_play_in(
                 tx,
                 server_id,
@@ -790,6 +792,65 @@ mod tests {
         )
         .unwrap();
         assert_eq!(db.recently_played(5).unwrap().len(), 2);
+    }
+
+    /// Another device shared this play first (it played it before handing
+    /// it over): this device's own verdict still counts. Its submission is
+    /// queued, the shared row becomes its own, and the play is counted once.
+    #[test]
+    fn a_play_another_device_shared_first_is_still_judged_here() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_tracks(
+            &[crate::api::Track {
+                id: "t".into(),
+                server_id: "srv".into(),
+                title: "T".into(),
+                ..Default::default()
+            }],
+            &[],
+            1,
+        )
+        .unwrap();
+        let clock = Arc::new(TestClock(Mutex::new(5_000.0)));
+        let outbox = Outbox::new(db.clone(), clock.clone());
+        let rec = ScrobbleRecorder::new(db.clone(), outbox.clone(), "dev");
+        let started_at = 4_000.0;
+        let shared = crate::connect::wire::PlayRecord {
+            track_id: "t".into(),
+            played_at: started_at,
+            played_ms: 60_000,
+            device_id: "other".into(),
+            seq: 1,
+        };
+        db.with_tx(|tx| crate::db::queries::import_plays_in(tx, "srv", &[shared], "log"))
+            .unwrap();
+        rec.record_verdict("srv", "t", started_at, 126_260, Verdict::Submit, |_| Ok(()))
+            .unwrap();
+        let submissions = outbox
+            .pending()
+            .unwrap()
+            .into_iter()
+            .filter(|p| {
+                matches!(
+                    p.mutation,
+                    Mutation::Scrobble {
+                        submission: true,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(submissions, 1);
+        let (remote, lpc): (i64, i64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT h.remote, t.local_play_count FROM play_history h JOIN tracks t ON t.id = h.track_id",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!((remote, lpc), (0, 1));
     }
 
     mod props {

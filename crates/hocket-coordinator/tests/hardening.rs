@@ -1,7 +1,8 @@
 //! The unauthenticated surface: refused sockets persist nothing, the verify
 //! proxy cannot be pointed at this host's own network and never follows a
 //! redirect, oversized frames end the socket, and one address cannot open
-//! connections without bound.
+//! connections without bound. Also: the shared play log a room keeps is on
+//! disk and outlives the room.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,7 +16,9 @@ use tokio_tungstenite::tungstenite::Message;
 
 use hocket_coordinator::{serve, App, Args, MAX_FRAME_BYTES};
 use hocket_core::api::{DeviceInfo, Platform};
-use hocket_core::connect::wire::{scope_key, Credential, Msg, RefuseReason, WireMessage};
+use hocket_core::connect::wire::{
+    scope_key, Credential, Msg, PlayLogMark, PlayRecord, RefuseReason, WireMessage,
+};
 use hocket_core::connect::wire::{PROTOCOL, PROTOCOL_MIN};
 
 /// A fake Subsonic that counts what reaches it. `/rest/ping.view` answers
@@ -393,4 +396,92 @@ async fn a_socket_that_never_says_hello_is_dropped() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(app.connection_count(), 0);
     assert_eq!(app.room_count(), 0);
+}
+
+/// Plays pushed to the coordinator are acknowledged, persisted with the
+/// room, and handed to a device that asks after the room was unloaded: all
+/// of them without a mark, only the newer ones past its mark.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_play_log_is_persisted_and_read_back_from_a_mark() {
+    let subsonic = fake_subsonic(false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = Args::for_tests();
+    args.data_dir = Some(dir.path().to_path_buf());
+    let (app, url, _stop) = start(args).await;
+    let base = format!("http://{}", subsonic.addr);
+    let scope = scope_key(&base, "alice");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as f64;
+    let play = |track: &str, at: f64| PlayRecord {
+        track_id: track.into(),
+        played_at: at,
+        played_ms: 120_000,
+        device_id: "raw".into(),
+        seq: 0,
+    };
+    let frame = |m: Msg| Message::text(WireMessage::new(m).encode().unwrap());
+    let good = || hello(&scope, Some(credential(&base, "good-token")));
+
+    let got = exchange(
+        &url,
+        vec![
+            good(),
+            frame(Msg::PlaysPush {
+                batch: 1,
+                plays: vec![play("t1", now - 60_000.0), play("t2", now - 30_000.0)],
+            }),
+        ],
+    )
+    .await;
+    let log_id = got
+        .iter()
+        .find_map(|m| match m {
+            Msg::PlaysPushed { batch: 1, log_id } => Some(log_id.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("acknowledged: {got:?}"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(app.room_count(), 0, "the room was unloaded");
+
+    let read = |got: Vec<Msg>| -> Vec<(String, u32, Vec<String>)> {
+        got.into_iter()
+            .filter_map(|m| match m {
+                Msg::PlaysLog {
+                    log_id,
+                    after,
+                    plays,
+                } => Some((
+                    log_id,
+                    after,
+                    plays.into_iter().map(|p| p.track_id).collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    };
+    let got = exchange(
+        &url,
+        vec![good(), frame(Msg::PlaysRequest { marks: vec![] })],
+    )
+    .await;
+    assert_eq!(
+        read(got),
+        vec![(log_id.clone(), 0, vec!["t1".to_string(), "t2".to_string()])]
+    );
+    let got = exchange(
+        &url,
+        vec![
+            good(),
+            frame(Msg::PlaysRequest {
+                marks: vec![PlayLogMark {
+                    log_id: log_id.clone(),
+                    seq: 1,
+                }],
+            }),
+        ],
+    )
+    .await;
+    assert_eq!(read(got), vec![(log_id, 1, vec!["t2".to_string()])]);
 }

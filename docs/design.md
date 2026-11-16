@@ -173,7 +173,8 @@ The coordinator keeps a replica of the session and the saved queues so a device 
 | Session | Context, cursor, history, shuffle permutation, insertion list, and `(position, takenAt, isPlaying)` as last received. |
 | Saved queues | The LWW set, scoped per Navidrome user. |
 | Leases | Per-device last-seen and the current transport lease. |
-| Not stored | Play history, library metadata, anything re-derivable. A resume point, not a log. |
+| Plays | The shared listening history: the last 5,000 plays of 90 days, `(trackId, playedAt, playedMs, deviceId)` numbered in arrival order under a log id. Devices push every play the log has not acknowledged (offline plays included, when the room is next reachable) and read what they have not seen past a per-log mark; the play's `(trackId, playedAt)` identity keeps it to one row everywhere. Never sent in `Welcome`. |
+| Not stored | Library metadata, anything re-derivable. |
 | Write cadence | Track change, queue mutation, play/pause, plus heartbeat. Never on position ticks. |
 
 
@@ -360,7 +361,7 @@ A mode, not a toggle, with "engage automatically on battery" on by default: anim
 | Ratings | Tracks and albums, not artists. Stars and loves fully independent; an optional one-way bridge sets loved above a configurable star threshold, off by default. Subsonic ratings are integers 0–5, so no half stars. |
 | Caching | Images, lyrics and metadata, each with its own policy, separate from downloads. Artwork requested at a small set of fixed sizes and cached per size — never downscale a large one for a grid. |
 | Sleep timer | Including stop-at-end-of-track. |
-| Listening stats | Built from local play history, so it works without server support. |
+| Listening stats | Built from local play history, so it works without server support. That history includes the plays of the account's other devices, shared through the room's play log; a play learnt that way counts toward stats but is never scrobbled by the device that learnt it. |
 | Settings | Every key carries a scope flag — device-local or account-synced. Synced keys ride through the coordinator, merged LWW. A master sync toggle, on by default. |
 | Config backup | A versioned document with migrations. Secrets handled separately. |
 | Customisation | Choose-and-order over a curated action set: context menu items, sidebar items, media session buttons, keyboard rebinding, and the swipe actions of song rows (left and right, the queue apart from other lists). Accent colour and dynamic colour from artwork. Not arbitrary layout, not a theming engine. |

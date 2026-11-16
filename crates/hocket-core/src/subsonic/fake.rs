@@ -450,6 +450,10 @@ impl SubsonicApi for FakeServer {
                 }
                 AlbumListType::AlphabeticalByName => all.sort_by(|a, b| a.name.cmp(&b.name)),
                 AlbumListType::Starred => all.retain(|a| a.starred.is_some()),
+                AlbumListType::Recent => {
+                    all.retain(|a| a.played.is_some());
+                    all.sort_by(|a, b| b.played.cmp(&a.played).then(b.id.cmp(&a.id)));
+                }
                 AlbumListType::ByGenre(g) => all.retain(|a| a.genre.as_deref() == Some(&g)),
                 _ => {}
             }
@@ -890,8 +894,21 @@ impl SubsonicApi for FakeServer {
             self.gate("scrobble")?;
             let mut st = self.state.lock();
             if submission {
+                // As Navidrome: the song's and its album's count and last play.
+                let played = time_ms.map(iso_from_ms);
+                let mut album_id = None;
                 if let Some(s) = st.songs.get_mut(&id) {
                     s.play_count = Some(s.play_count.unwrap_or(0) + 1);
+                    if played.is_some() {
+                        s.played = played.clone();
+                    }
+                    album_id = s.album_id.clone();
+                }
+                if let Some(a) = album_id.and_then(|a| st.albums.get_mut(&a)) {
+                    a.play_count = Some(a.play_count.unwrap_or(0) + 1);
+                    if played.is_some() {
+                        a.played = played;
+                    }
                 }
             }
             st.scrobbles.push(ScrobbleRecord {
@@ -1100,4 +1117,31 @@ impl SubsonicApi for FakeServer {
             Ok(id)
         })
     }
+}
+
+/// Epoch ms as the UTC RFC 3339 timestamp Navidrome sends
+/// (`2024-05-01T12:34:56.789Z`).
+pub fn iso_from_ms(ms: f64) -> String {
+    let total_ms = ms.max(0.0) as i64;
+    let (days, rem) = (
+        total_ms.div_euclid(86_400_000),
+        total_ms.rem_euclid(86_400_000),
+    );
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+        rem / 3_600_000,
+        rem / 60_000 % 60,
+        rem / 1_000 % 60,
+        rem % 1_000
+    )
 }

@@ -507,6 +507,13 @@ impl Actor {
                 items,
                 playlists,
             } => self.on_library_edit_received(from, items, playlists),
+            Output::PlaysSyncReady => self.on_plays_sync_ready(),
+            Output::PlaysPushed { batch, log_id } => self.on_plays_pushed(batch, log_id),
+            Output::PlaysReceived {
+                log_id,
+                after,
+                plays,
+            } => self.on_plays_received(log_id, after, plays),
             Output::ReplicaChanged(_) => {}
             Output::Log { level, message } => self.log(level, message),
         }
