@@ -68,6 +68,9 @@ pub const MAX_LONG_BLEND_MS: f64 = 32_000.0;
 pub const MIN_ALIGNED_FADE_MS: f64 = 4_000.0;
 /// Late-edit fades are at least this long.
 pub const LATE_EDIT_MIN_MS: u32 = 2_000;
+/// A [`late_fade_at`] takes at most this much of the planned overlap: its
+/// tail has to render in the second or so a seek left.
+pub const LATE_FADE_MAX_MS: u32 = 4_000;
 
 /// One side of a transition.
 #[derive(Debug, Clone, Copy, Default)]
@@ -136,12 +139,22 @@ fn automix(input: &PlanInput<'_>) -> TransitionPlan {
 
 /// A plain `Fade` of `overlap_ms` starting at `tail_start` (B from its audible start).
 fn fade_at(input: &PlanInput<'_>, tail_start: Ms, overlap_ms: Ms) -> TransitionPlan {
-    let tail_start = tail_start.min(input.a.duration_ms);
-    let b_from = input.b.audible_start();
+    fade_plan(
+        tail_start,
+        input.a.duration_ms,
+        input.b.audible_start(),
+        overlap_ms,
+    )
+}
+
+/// An equal-power fade of `overlap_ms` from `tail_start` of an A of
+/// `a_duration_ms`, B from `b_from`.
+fn fade_plan(tail_start: Ms, a_duration_ms: Ms, b_from: Ms, overlap_ms: Ms) -> TransitionPlan {
+    let tail_start = tail_start.min(a_duration_ms);
     TransitionPlan {
         kind: TransitionKind::Fade,
         tail_start_ms: tail_start,
-        tail_source_ms: overlap_ms.min(input.a.duration_ms - tail_start),
+        tail_source_ms: overlap_ms.min(a_duration_ms - tail_start),
         tail_len_ms: overlap_ms,
         incoming_at_ms: 0,
         incoming_from_ms: b_from,
@@ -203,6 +216,33 @@ pub fn late_edit_fade(
     let overlap = (settings.crossfade_ms() / 2).max(LATE_EDIT_MIN_MS);
     let b_span = b.duration_ms.saturating_sub(b.audible_start());
     fade_at(&input, tail_start_ms, overlap.min((b_span / 2).max(1)))
+}
+
+/// A short fade into `plan`'s B from a later tail start, for a backend that
+/// can't render `plan`'s tail before its tail start (a seek landed just
+/// before it, or past it): at most [`LATE_FADE_MAX_MS`] of the planned
+/// overlap, at least [`LATE_EDIT_MIN_MS`] (less only as A runs out, down to
+/// a second). B starts where the plan starts it. `None` when less than a
+/// second of A is left after `tail_start_ms`: A then plays to its end.
+pub fn late_fade_at(
+    plan: &TransitionPlan,
+    tail_start_ms: Ms,
+    a_duration_ms: Ms,
+) -> Option<TransitionPlan> {
+    let left = a_duration_ms.saturating_sub(tail_start_ms);
+    if left < 1_000 {
+        return None;
+    }
+    let overlap = plan
+        .tail_len_ms
+        .clamp(LATE_EDIT_MIN_MS, LATE_FADE_MAX_MS)
+        .min(left);
+    Some(fade_plan(
+        tail_start_ms,
+        a_duration_ms,
+        plan.incoming_from_ms,
+        overlap,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1307,6 +1347,49 @@ mod tests {
             &s,
         );
         assert_eq!(p.tail_len_ms, LATE_EDIT_MIN_MS);
+    }
+
+    #[test]
+    fn late_fade_is_short_and_keeps_bs_start() {
+        let planned = TransitionPlan {
+            kind: TransitionKind::TempoBlend,
+            tail_start_ms: 136_870,
+            tail_source_ms: 16_500,
+            tail_len_ms: 16_000,
+            incoming_at_ms: 2_000,
+            incoming_from_ms: 1_200,
+            handover_ms: 9_000,
+            out_curve: FadeCurve::Linear,
+            in_curve: FadeCurve::Linear,
+            tempo: None,
+            bass_swap: None,
+            high_cut: None,
+            incoming_gain_db: 1.5,
+        };
+        let p = late_fade_at(&planned, 139_500, DUR).unwrap();
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_start_ms, 139_500);
+        assert_eq!(p.tail_len_ms, LATE_FADE_MAX_MS);
+        assert_eq!(p.tail_source_ms, LATE_FADE_MAX_MS);
+        assert_eq!(p.incoming_at_ms, 0);
+        assert_eq!(p.incoming_from_ms, 1_200);
+        assert_eq!(p.handover_ms, LATE_FADE_MAX_MS / 2);
+        assert!(p.tempo.is_none() && p.bass_swap.is_none());
+        assert_eq!(p.incoming_gain_db, 0.0);
+        // A planned 1 s fade still gets the late-edit minimum.
+        let short = TransitionPlan {
+            tail_len_ms: 1_000,
+            ..planned.clone()
+        };
+        assert_eq!(
+            late_fade_at(&short, 139_500, DUR).unwrap().tail_len_ms,
+            LATE_EDIT_MIN_MS
+        );
+        // Near A's end: what is left of A, then nothing.
+        let p = late_fade_at(&planned, DUR - 1_500, DUR).unwrap();
+        assert_eq!((p.tail_len_ms, p.tail_source_ms), (1_500, 1_500));
+        assert!(late_fade_at(&planned, DUR - 999, DUR).is_none());
+        assert!(late_fade_at(&planned, DUR + 5_000, DUR).is_none());
     }
 
     #[test]

@@ -295,7 +295,9 @@ nothing. Every overlap is limited to half of each track's audible span.
    audible A), plain 6 s `Fade`.
 
 `late_edit_fade` builds the lock-in replacement plan: `Fade` from the
-committed `tail_start_ms`, overlap max(2 s, crossfade / 2).
+committed `tail_start_ms`, overlap max(2 s, crossfade / 2). `late_fade_at`
+turns a plan into a `Fade` from a later tail start (Android, when a seek
+leaves no time to render the planned tail; see Fallback below).
 
 The planner is deterministic: same inputs → same plan on every device.
 
@@ -556,7 +558,8 @@ The planner is deterministic: same inputs → same plan on every device.
     keeps adding the offset until ExoPlayer's position shows the step, so the
     reported position stays continuous.
   - Seek before the handover goes back to A (B stays next, the tail stays
-    armed unless the target is past the tail start); after it B seeks.
+    armed unless the target is past the tail start, which takes a late fade,
+    below); after it B seeks.
     `complete_transition` hands over and seeks B to its position, which
     drops the tail queued in the sink. A `set_next` during the overlap is
     held until the handover. Pause/play pause both (one output).
@@ -566,8 +569,22 @@ The planner is deterministic: same inputs → same plan on every device.
     A's end): when the core drops its transition (a `set_next` without
     `mix_in` — mode Off, sleep at end of track — or with no next, gapless
     off), once a transition into it has stopped sounding; and 2 s before
-    the clip point when no tail is ready (render late or failed), so A plays
-    to its end and B joins gaplessly. These waits (and the tail render's
+    the clip point when no tail is ready and no late fade fits (below), so A
+    plays to its end and B joins gaplessly.
+  - **Late fade**: when the planned tail can't be ready in time (a seek or a
+    load to within 2 s of the tail start, or past it; or a render still
+    running 2 s before it), A is rebuilt the same way but clipped 3.5 s after
+    its position instead, and the plan becomes `late_fade_at` from there: a
+    `Fade` of the planned overlap clamped to 2–4 s (less as A runs out, none
+    under 1 s left), B from the plan's `incoming_from_ms`. Its tail is only a
+    few seconds of A, so it renders in the 1.5 s before the 2 s margin. The
+    reports carry the late plan's numbers (`TransitionStarted`, A's position
+    from the new tail start), so the core follows. Once only: a late fade
+    whose tail isn't ready either, or after a failed render, plays A out. A
+    `set_next` with the planned plan is retargeted to the late clip; a seek
+    back to more than 2 s before the planned tail start restores the planned
+    clip and mix, and a seek with a ready tail still ahead keeps it.
+  - These waits (and the tail render's
     60 s lead) sleep until the time left at the playback speed, or until
     play state, a seek or the item changes; nothing runs while paused. A
     tail at another format than B turned out to have → B starts unmixed at

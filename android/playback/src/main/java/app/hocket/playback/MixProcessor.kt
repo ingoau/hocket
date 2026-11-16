@@ -48,6 +48,8 @@ class MixControl {
         val tailSourceMs: Long,
     ) {
         @Volatile var tail: Tail? = null
+        /** The render failed (main thread only): a late fade would fail too. */
+        var failed = false
     }
 
     val items = ConcurrentHashMap<String, Item>()

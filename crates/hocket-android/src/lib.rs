@@ -317,6 +317,23 @@ pub fn automix_prepare_tail(
     })
 }
 
+/// `plan_json`'s transition as a short fade from a later `tail_start_ms` (`late_fade_at`), for a
+/// tail that can't be ready at the planned tail start (a seek just before it). `None` when A, of
+/// `a_duration_ms`, has too little left: it then plays to its end.
+#[uniffi::export]
+pub fn automix_late_fade(
+    plan_json: String,
+    tail_start_ms: u32,
+    a_duration_ms: u32,
+) -> Result<Option<String>, HocketError> {
+    let failed = |reason: String| HocketError::Failed { reason };
+    let plan = dsp::parse_plan(&plan_json).map_err(failed)?;
+    hocket_core::automix::late_fade_at(&plan, tail_start_ms, a_duration_ms)
+        .map(|p| serde_json::to_string(&p))
+        .transpose()
+        .map_err(|e| failed(e.to_string()))
+}
+
 /// A loudness-only `AnalysisRecord` (JSON, producer Device) from a track's decoded head (from 0)
 /// and tail (from `tail_start_ms`), LE `f32` bytes, `channels` at `rate`.
 #[uniffi::export]

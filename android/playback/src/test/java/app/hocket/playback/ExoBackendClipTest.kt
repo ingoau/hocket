@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.AnalysisRecord
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.BackendCommandLoadInner
+import app.hocket.core.api.BackendCommandSeekInner
 import app.hocket.core.api.BackendCommandSetGaplessInner
 import app.hocket.core.api.BackendCommandSetNextInner
 import app.hocket.core.api.FadeCurve
@@ -56,13 +57,23 @@ class ExoBackendClipTest {
         override fun resamplerProcess(handle: Long, input: ByteBuffer, inSamples: Int, output: ByteBuffer, outOffset: Int, outCapacity: Int) = 0
     }
 
-    /** Every render fails, like a tail that never gets ready. */
-    private object FailingFfi : AutomixFfi {
+    /**
+     * Every render fails, like a tail that never gets ready; a late fade is the plan from the new
+     * tail start, unless [lateFades] is off (no room for one).
+     */
+    private class FailingFfi : AutomixFfi {
+        var lateFades = true
+
         override fun usable(record: AnalysisRecord, durationMs: Long) = true
         override fun loudnessRecord(head: PcmDecoder.Pcm, tail: PcmDecoder.Pcm, tailStartMs: Long, durationMs: Long, transcoded: Boolean): AnalysisRecord? = null
         override fun prepareTail(planJson: String, pcm: PcmDecoder.Pcm, contextMs: Int, outChannels: Int, outRate: Int, audioSettingsJson: String?, gainDb: Double): RenderedTail =
             throw IllegalStateException("no tail")
+
+        override fun lateFade(plan: TransitionPlan, tailStartMs: Long, aDurationMs: Long): TransitionPlan? =
+            if (lateFades) plan.copy(tailStartMs = tailStartMs.toUInt(), tailLenMs = 4_000u, tailSourceMs = 4_000u, incomingAtMs = 0u, handoverMs = 2_000u) else null
     }
+
+    private val ffi = FailingFfi()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var backend: ExoBackend
@@ -86,7 +97,7 @@ class ExoBackendClipTest {
 
     @Before
     fun setUp() {
-        backend = ExoBackend(ApplicationProvider.getApplicationContext(), scope, {}, query = { null }, dsp = PassDsp, ffi = FailingFfi)
+        backend = ExoBackend(ApplicationProvider.getApplicationContext(), scope, {}, query = { null }, dsp = PassDsp, ffi = ffi)
     }
 
     @After
@@ -141,9 +152,79 @@ class ExoBackendClipTest {
         assertEquals(C.TIME_END_OF_SOURCE, clipEnd())
     }
 
+    private fun seek(positionMs: Long) = backend.handle(BackendCommand.Seek(BackendCommandSeekInner(positionMs.toUInt())))
+
+    private fun playlist() = (0 until backend.player.mediaItemCount).map { backend.player.getMediaItemAt(it).mediaId }
+
+    /** Where a late fade starts after a seek to [positionMs]. */
+    private fun lateAt(positionMs: Long) = positionMs + ExoBackend.LATE_TAIL_MS + ExoBackend.LATE_FADE_LEAD_MS
+
+    @Test
+    fun aSeekJustBeforeTheMixPointMixesLate() {
+        // The diagnostics case: 855 ms before the tail start, too late to render the planned tail.
+        load(30_000u)
+        idle()
+        seek(99_145)
+        assertEquals(lateAt(99_145), clipEnd())
+        assertEquals("a", backend.player.currentMediaItem!!.mediaId)
+        assertEquals(99_145L, backend.player.currentPosition)
+        assertEquals(listOf("a", "b"), playlist())
+        // The guard leaves the late clip for its tail to render.
+        idle()
+        assertEquals(lateAt(99_145), clipEnd())
+        // Another seek in the late zone moves the late fade along.
+        seek(99_400)
+        assertEquals(lateAt(99_400), clipEnd())
+        // Far enough back, the planned mix again.
+        seek(60_000)
+        assertEquals(100_000L, clipEnd())
+        assertEquals(60_000L, backend.player.currentPosition)
+        assertEquals(listOf("a", "b"), playlist())
+    }
+
+    @Test
+    fun aSeekPastTheMixPointMixesLate() {
+        load(30_000u)
+        seek(104_000)
+        assertEquals(lateAt(104_000), clipEnd())
+        assertEquals(104_000L, backend.player.currentPosition)
+    }
+
+    @Test
+    fun aSeekWellBeforeTheMixPointKeepsTheClip() {
+        load(30_000u)
+        seek(100_000 - ExoBackend.LATE_TAIL_MS - 1)
+        assertEquals(100_000L, clipEnd())
+    }
+
+    @Test
+    fun aLoadJustBeforeTheMixPointMixesLate() {
+        load(99_000u)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (clipEnd() == 100_000L && System.currentTimeMillis() < deadline) {
+            idle()
+            Thread.sleep(5)
+        }
+        assertEquals(lateAt(99_000), clipEnd())
+        assertEquals(99_000L, backend.player.currentPosition)
+    }
+
+    @Test
+    fun aSeekWithNoRoomForALateFadePlaysAToItsEnd() {
+        ffi.lateFades = false
+        load(30_000u)
+        seek(99_145)
+        assertEquals(C.TIME_END_OF_SOURCE, clipEnd())
+        assertEquals(99_145L, backend.player.currentPosition)
+        // Unclipped, it stays so: A's end would play twice.
+        seek(50_000)
+        assertEquals(C.TIME_END_OF_SOURCE, clipEnd())
+    }
+
     @Test
     fun noTailNearTheClipPointUnclips() {
-        // Within LATE_TAIL_MS of the clip point and the render failed: A plays to its end.
+        // Within LATE_TAIL_MS of the clip point, the render failed and no room for a late fade: A plays to its end.
+        ffi.lateFades = false
         load((100_000 - ExoBackend.LATE_TAIL_MS + 500).toUInt())
         val deadline = System.currentTimeMillis() + 5_000
         while (clipEnd() != C.TIME_END_OF_SOURCE && System.currentTimeMillis() < deadline) {
