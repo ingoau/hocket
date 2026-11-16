@@ -431,7 +431,7 @@ impl Actor {
                         true,
                     );
                 }
-                Err((kind, e)) => self.probe_failed(kind, e),
+                Err((kind, e)) => self.probe_failed(&account_id, kind, e),
             }
             return;
         }
@@ -462,14 +462,14 @@ impl Actor {
             }
             Err((kind, e)) => {
                 s.info.reachable = false;
-                self.probe_failed(kind, e);
+                self.probe_failed(&account_id, kind, e);
             }
         }
         let accounts = self.account_infos();
         self.emit(Event::AccountsChanged { accounts });
     }
 
-    fn probe_failed(&mut self, kind: ErrorKind, detail: String) {
+    fn probe_failed(&mut self, account_id: &str, kind: ErrorKind, detail: String) {
         let message = match kind {
             ErrorKind::Auth => "Wrong username or password",
             ErrorKind::Network => "Couldn't reach the server",
@@ -480,6 +480,7 @@ impl Actor {
             kind,
             message: message.into(),
             detail: Some(detail),
+            account_id: Some(account_id.to_string()),
         });
     }
 

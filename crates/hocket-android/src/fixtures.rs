@@ -622,7 +622,8 @@ mod tests {
             json!(Event::Error {
                 kind: ErrorKind::Auth,
                 message: "bad password".into(),
-                detail: None
+                detail: None,
+                account_id: Some("srv".into()),
             }),
         );
         push(

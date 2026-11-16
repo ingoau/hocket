@@ -160,6 +160,7 @@ impl Actor {
                     kind,
                     message: "Couldn't reach YouTube Music".into(),
                     detail: Some(detail),
+                    account_id: None,
                 });
             }
         }
@@ -214,6 +215,8 @@ impl Actor {
             },
             capabilities: ServerCapabilities {
                 server_version: premium.then(|| "premium".to_string()),
+                // The version floor is a Navidrome one: nothing to meet.
+                meets_floor: true,
                 ..Default::default()
             },
             ..Default::default()

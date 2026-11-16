@@ -73,6 +73,8 @@ async fn anonymous_youtube_music_searches_browses_and_keeps_its_catalogue() {
     );
     assert!(!y.features.star && !y.features.library_sync && y.features.home_shelves);
     assert!(y.features.search && y.features.radio && !y.features.rate);
+    // No server version to fall short of: setup never gates on it.
+    assert!(y.capabilities.meets_floor);
 
     // A live search lands as server results, and its songs outlive it.
     let _ = t

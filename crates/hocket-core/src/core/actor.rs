@@ -1269,6 +1269,7 @@ impl Actor {
             kind,
             message: message.into(),
             detail,
+            account_id: None,
         });
     }
 

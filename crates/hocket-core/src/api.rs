@@ -4297,6 +4297,9 @@ pub enum Event {
         kind: ErrorKind,
         message: String,
         detail: Option<String>,
+        /// The account it is about, when it is one's (an `auth` error: the
+        /// platform drops that account's stored login, no other).
+        account_id: Option<AccountId>,
     },
     Log {
         level: String,

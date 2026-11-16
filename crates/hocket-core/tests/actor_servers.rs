@@ -154,6 +154,11 @@ async fn add_server_with_wrong_password_adds_nothing() {
         })
         .unwrap();
     assert_eq!(wait_for_error(&b).await, ErrorKind::Auth);
+    // It names the account, so a platform drops that login and no other.
+    assert!(b.events.all().iter().any(|e| matches!(
+        e,
+        Event::Error { kind: ErrorKind::Auth, account_id: Some(id), .. } if !id.is_empty()
+    )));
     assert_nothing_added(&b).await;
     let snap = match b.core.query(Query::Snapshot).await.unwrap() {
         QueryResult::SnapshotResult(s) => s,
