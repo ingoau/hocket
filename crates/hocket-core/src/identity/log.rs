@@ -599,150 +599,208 @@ pub fn compute(ops: &BTreeMap<String, MemberOp>) -> MemberState {
         }
         past.push(b);
     }
-    let mut void = vec![false; n];
-    let mut valid = vec![false; n];
-    let mut contested = vec![false; n];
-    loop {
-        valid.iter_mut().for_each(|v| *v = false);
-        // Valid adds and removes per device id, in order.
-        let mut adds: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-        let mut removes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-        let mut removed_keys: Vec<(usize, &str)> = vec![];
-        for i in 0..n {
-            if void[i] {
-                continue;
-            }
-            let op = op_at[i];
-            let member_in_past = |d: &str| -> bool {
-                adds.get(d)
-                    .is_some_and(|v| v.iter().any(|&a| past[i].has(a)))
-                    && !removes
-                        .get(d)
-                        .is_some_and(|v| v.iter().any(|&r| past[i].has(r)))
-            };
-            let ok = if op.parents.is_empty() {
-                // Genesis (structure already checked: exactly one).
-                true
-            } else {
-                member_in_past(&op.author)
-                    && match &op.body {
-                        OpBody::Add { device, key_id } => {
-                            key_id.is_none()
-                                && !removes
-                                    .get(device.id.as_str())
-                                    .is_some_and(|v| v.iter().any(|&r| past[i].has(r)))
-                                && device.id != COORDINATOR_ID
-                                && !removed_keys
-                                    .iter()
-                                    .any(|(r, k)| past[i].has(*r) && *k == device.keys.sign)
-                                && !(member_in_past(&device.id)
-                                    && current_key(&adds, &past[i], &op_at, &device.id)
-                                        .is_some_and(|k| k != device.keys.sign))
+    // Where each device's first Add sits: lower is more senior (the
+    // founding device is the most senior).
+    let seniority = |d: &str| -> usize {
+        (0..n)
+            .find(|&i| matches!(&op_at[i].body, OpBody::Add { device, .. } if device.id == d))
+            .unwrap_or(n)
+    };
+    // `losers`: removals that may not stand as contested (see below).
+    let run = |losers: &[bool]| -> (Vec<bool>, Vec<bool>, BTreeMap<usize, usize>) {
+        let mut void = vec![false; n];
+        let mut valid = vec![false; n];
+        let mut contested = vec![false; n];
+        let mut partner: BTreeMap<usize, usize> = BTreeMap::new();
+        loop {
+            valid.iter_mut().for_each(|v| *v = false);
+            // Valid adds and removes per device id, in order.
+            let mut adds: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+            let mut removes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+            let mut removed_keys: Vec<(usize, &str)> = vec![];
+            for i in 0..n {
+                if void[i] {
+                    continue;
+                }
+                let op = op_at[i];
+                let member_in_past = |d: &str| -> bool {
+                    adds.get(d)
+                        .is_some_and(|v| v.iter().any(|&a| past[i].has(a)))
+                        && !removes
+                            .get(d)
+                            .is_some_and(|v| v.iter().any(|&r| past[i].has(r)))
+                };
+                let ok = if op.parents.is_empty() {
+                    // Genesis (structure already checked: exactly one).
+                    true
+                } else {
+                    member_in_past(&op.author)
+                        && match &op.body {
+                            OpBody::Add { device, key_id } => {
+                                key_id.is_none()
+                                    && !removes
+                                        .get(device.id.as_str())
+                                        .is_some_and(|v| v.iter().any(|&r| past[i].has(r)))
+                                    && device.id != COORDINATOR_ID
+                                    && !removed_keys
+                                        .iter()
+                                        .any(|(r, k)| past[i].has(*r) && *k == device.keys.sign)
+                                    && !(member_in_past(&device.id)
+                                        && current_key(&adds, &past[i], &op_at, &device.id)
+                                            .is_some_and(|k| k != device.keys.sign))
+                            }
+                            OpBody::Remove { device_id, .. } => member_in_past(device_id),
+                            OpBody::Rotate { .. } => true,
                         }
-                        OpBody::Remove { device_id, .. } => member_in_past(device_id),
-                        OpBody::Rotate { .. } => true,
-                    }
-            };
-            if ok {
-                valid[i] = true;
-                match &op.body {
-                    OpBody::Add { device, .. } => adds.entry(&device.id).or_default().push(i),
-                    OpBody::Remove { device_id, .. } => {
-                        removes.entry(device_id).or_default().push(i);
-                        for &a in adds.get(device_id.as_str()).into_iter().flatten() {
-                            if let OpBody::Add { device, .. } = &op_at[a].body {
-                                removed_keys.push((i, &device.keys.sign));
+                };
+                if ok {
+                    valid[i] = true;
+                    match &op.body {
+                        OpBody::Add { device, .. } => adds.entry(&device.id).or_default().push(i),
+                        OpBody::Remove { device_id, .. } => {
+                            removes.entry(device_id).or_default().push(i);
+                            for &a in adds.get(device_id.as_str()).into_iter().flatten() {
+                                if let OpBody::Add { device, .. } = &op_at[a].body {
+                                    removed_keys.push((i, &device.keys.sign));
+                                }
                             }
                         }
+                        OpBody::Rotate { .. } => {}
                     }
-                    OpBody::Rotate { .. } => {}
                 }
             }
+            // Removal wins: a valid removal voids its target's ops outside its
+            // causal past. Two removals of each other's authors, neither in the
+            // other's past, are *contested*: both stand (both devices are out)
+            // and neither voids the other, so a removed device that signs a
+            // removal of its remover from before its own removal only takes the
+            // remover down with it; it never stays. Each removal pairs with at
+            // most one contester (the lowest hash), so signing many changes
+            // nothing.
+            let removals: Vec<usize> = (0..n)
+                .filter(|&i| valid[i] && matches!(op_at[i].body, OpBody::Remove { .. }))
+                .collect();
+            let target = |i: usize| match &op_at[i].body {
+                OpBody::Remove { device_id, .. } => device_id.as_str(),
+                _ => "",
+            };
+            let mutual = |r: usize, o: usize| {
+                o != r
+                    && target(o) == op_at[r].author
+                    && target(r) == op_at[o].author
+                    && !past[r].has(o)
+                    && !past[o].has(r)
+            };
+            let partner_of = |r: usize| -> Option<usize> {
+                if losers[r] {
+                    return None;
+                }
+                removals
+                    .iter()
+                    .copied()
+                    .filter(|&o| !losers[o] && mutual(r, o))
+                    .min_by(|a, b| order[*a].cmp(&order[*b]))
+            };
+            partner = removals
+                .iter()
+                .filter_map(|&r| Some((r, partner_of(r)?)))
+                .collect();
+            contested = vec![false; n];
+            for (&r, &o) in &partner {
+                if partner.get(&o) == Some(&r) {
+                    contested[r] = true;
+                }
+            }
+            // A contested removal is never voided by a removal of its author
+            // signed by its target (its partner, or further counter-removals,
+            // which lose). A removal another removal voids is challenged and
+            // waits: only unchallenged removals act this round, so a removal
+            // that is itself void never voids anything. A cycle of three or
+            // more (all challenged) falls back to the lowest hash.
+            //
+            // A contested removal is signed by a device its partner removes,
+            // and it may be backdated: it voids only what its target did from
+            // its partner on (never what the target did before removing its
+            // author: earlier removals, adds, rotations stand). A loser voids
+            // nothing.
+            let partner_ref = &partner;
+            let voids = |r: usize, j: usize| {
+                !losers[r]
+                    && j != r
+                    && op_at[j].author == target(r)
+                    && !past[r].has(j)
+                    && !(contested[j] && mutual(r, j))
+                    && !(contested[r] && partner_ref.get(&r).is_some_and(|&o| past[o].has(j)))
+            };
+            let challenged: Vec<bool> = (0..n)
+                .map(|j| removals.iter().any(|&r| valid[j] && voids(r, j)))
+                .collect();
+            let apply = |rs: &[usize], next: &mut Vec<bool>| {
+                for &r in rs {
+                    for (j, v) in next.iter_mut().enumerate() {
+                        if voids(r, j) {
+                            *v = true;
+                        }
+                    }
+                }
+            };
+            let mut next = void.clone();
+            let free: Vec<usize> = removals
+                .iter()
+                .copied()
+                .filter(|&r| !challenged[r])
+                .collect();
+            apply(&free, &mut next);
+            if next == void {
+                let mut rest: Vec<usize> = removals
+                    .iter()
+                    .copied()
+                    .filter(|&r| challenged[r])
+                    .collect();
+                rest.sort_by(|a, b| order[*a].cmp(&order[*b]));
+                apply(&rest[..rest.len().min(1)], &mut next);
+            }
+            if next == void {
+                break;
+            }
+            void = next;
         }
-        // Removal wins: a valid removal voids its target's ops outside its
-        // causal past. Two removals of each other's authors, neither in the
-        // other's past, are *contested*: both stand (both devices are out)
-        // and neither voids the other, so a removed device that signs a
-        // removal of its remover from before its own removal only takes the
-        // remover down with it; it never stays. Each removal pairs with at
-        // most one contester (the lowest hash), so signing many changes
-        // nothing.
-        let removals: Vec<usize> = (0..n)
-            .filter(|&i| valid[i] && matches!(op_at[i].body, OpBody::Remove { .. }))
-            .collect();
+        (valid, contested, partner)
+    };
+    // A contested pair removes both, unless that leaves nobody: then the
+    // senior device of the pair stays (its removal loses), so a stolen
+    // device can't brick a two-device identity, at the price that in one
+    // the senior device always survives.
+    let mut losers = vec![false; n];
+    loop {
+        let (valid, contested, partner) = run(&losers);
+        let state = finish(&valid, &contested, &order, &op_at, &past);
+        if !state.members.is_empty() {
+            return state;
+        }
         let target = |i: usize| match &op_at[i].body {
             OpBody::Remove { device_id, .. } => device_id.as_str(),
             _ => "",
         };
-        let mutual = |r: usize, o: usize| {
-            o != r
-                && target(o) == op_at[r].author
-                && target(r) == op_at[o].author
-                && !past[r].has(o)
-                && !past[o].has(r)
-        };
-        let partner_of = |r: usize| -> Option<usize> {
-            removals
-                .iter()
-                .copied()
-                .filter(|&o| mutual(r, o))
-                .min_by(|a, b| order[*a].cmp(&order[*b]))
-        };
-        let partner: BTreeMap<usize, usize> = removals
-            .iter()
-            .filter_map(|&r| Some((r, partner_of(r)?)))
-            .collect();
-        contested = vec![false; n];
-        for (&r, &o) in &partner {
-            if partner.get(&o) == Some(&r) {
-                contested[r] = true;
-            }
+        let pick = (0..n)
+            .filter(|&r| valid[r] && contested[r] && partner.contains_key(&r) && !losers[r])
+            .min_by_key(|&r| (seniority(target(r)), order[r].clone()));
+        match pick {
+            Some(r) => losers[r] = true,
+            None => return state,
         }
-        // A contested removal is never voided by a removal of its author
-        // signed by its target (its partner, or further counter-removals,
-        // which lose). A removal another removal voids is challenged and
-        // waits: only unchallenged removals act this round, so a removal
-        // that is itself void never voids anything. A cycle of three or
-        // more (all challenged) falls back to the lowest hash.
-        let voids = |r: usize, j: usize| {
-            j != r
-                && op_at[j].author == target(r)
-                && !past[r].has(j)
-                && !(contested[j] && mutual(r, j))
-        };
-        let challenged: Vec<bool> = (0..n)
-            .map(|j| removals.iter().any(|&r| valid[j] && voids(r, j)))
-            .collect();
-        let apply = |rs: &[usize], next: &mut Vec<bool>| {
-            for &r in rs {
-                for (j, v) in next.iter_mut().enumerate() {
-                    if voids(r, j) {
-                        *v = true;
-                    }
-                }
-            }
-        };
-        let mut next = void.clone();
-        let free: Vec<usize> = removals
-            .iter()
-            .copied()
-            .filter(|&r| !challenged[r])
-            .collect();
-        apply(&free, &mut next);
-        if next == void {
-            let mut rest: Vec<usize> = removals
-                .iter()
-                .copied()
-                .filter(|&r| challenged[r])
-                .collect();
-            rest.sort_by(|a, b| order[*a].cmp(&order[*b]));
-            apply(&rest[..rest.len().min(1)], &mut next);
-        }
-        if next == void {
-            break;
-        }
-        void = next;
     }
+}
+
+/// The member list from the fixpoint's valid and contested ops.
+fn finish(
+    valid: &[bool],
+    contested: &[bool],
+    order: &[String],
+    op_at: &[&MemberOp],
+    past: &[Bits],
+) -> MemberState {
+    let n = order.len();
     let mut state = MemberState::default();
     let mut key_op: Option<usize> = None;
     for i in 0..n {
@@ -991,6 +1049,83 @@ mod tests {
         la.merge(counters).unwrap();
         assert!(!la.state().is_member("b"));
         assert_eq!(la.len(), before + 1);
+    }
+
+    fn counter(base: &MemberLog, by: &Dev, target: &str, at: f64) -> MemberOp {
+        MemberOp::new(
+            "ident",
+            &by.id,
+            base.heads(),
+            at,
+            OpBody::Remove {
+                device_id: target.into(),
+                key_id: format!("k-{}-{at}", by.id),
+            },
+            &by.secret,
+        )
+    }
+
+    /// A removes stolen B, then stolen D. D signs a removal of A from
+    /// before both: it takes A out with it, but B's removal stands.
+    #[test]
+    fn a_contested_removal_never_undoes_its_targets_earlier_removals() {
+        let (a, b, c, d) = (Dev::new("a"), Dev::new("b"), Dev::new("c"), Dev::new("d"));
+        let mut base = genesis(&a);
+        add(&mut base, &a, &b);
+        add(&mut base, &a, &c);
+        add(&mut base, &a, &d);
+        let mut la = base.clone();
+        remove(&mut la, &a, "b", "kab");
+        remove(&mut la, &a, "d", "kad");
+        let mut other = base.clone();
+        let rda = counter(&base, &d, "a", 9.0);
+        la.merge(vec![rda.clone()]).unwrap();
+        other.merge(vec![rda]).unwrap();
+        other.merge(la.ops()).unwrap();
+        for log in [&mut la, &mut other] {
+            let s = log.state().clone();
+            assert!(!s.is_member("b"), "b stays out");
+            assert!(!s.is_member("d") && !s.is_member("a"));
+            assert!(s.is_member("c"));
+            assert!(s.rekey, "c moves to a key neither a nor d holds");
+        }
+        assert_eq!(la.state(), other.state());
+    }
+
+    /// One removed device can't undo what its remover did before removing
+    /// it: an add and a rotation stand.
+    #[test]
+    fn a_contested_removal_never_undoes_its_targets_earlier_ops() {
+        let (a, c, d, e) = (Dev::new("a"), Dev::new("c"), Dev::new("d"), Dev::new("e"));
+        let mut base = genesis(&a);
+        add(&mut base, &a, &c);
+        add(&mut base, &a, &d);
+        let mut la = base.clone();
+        add(&mut la, &a, &e);
+        remove(&mut la, &a, "d", "kad");
+        la.merge(vec![counter(&base, &d, "a", 3.0)]).unwrap();
+        assert_eq!(members(&mut la), ["c", "e"]);
+    }
+
+    /// Two devices removing each other would leave nobody: the senior one
+    /// (the founder here) stays, whichever of them is the thief.
+    #[test]
+    fn a_contested_pair_never_leaves_an_identity_empty() {
+        let (a, d) = (Dev::new("a"), Dev::new("d"));
+        let mut base = genesis(&a);
+        add(&mut base, &a, &d);
+        // a removes d; d backdates a removal of a.
+        let mut la = base.clone();
+        remove(&mut la, &a, "d", "kad");
+        la.merge(vec![counter(&base, &d, "a", 3.0)]).unwrap();
+        assert_eq!(members(&mut la), ["a"]);
+        assert_eq!(la.state().key_id.as_deref(), Some("kad"));
+        assert!(!la.state().rekey);
+        // d removes a; a backdates a removal of d: a (senior) still stays.
+        let mut ld = base.clone();
+        remove(&mut ld, &d, "a", "kda");
+        ld.merge(vec![counter(&base, &a, "d", 3.0)]).unwrap();
+        assert_eq!(members(&mut ld), ["a"]);
     }
 
     #[test]
