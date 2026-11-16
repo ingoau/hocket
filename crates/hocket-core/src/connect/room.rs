@@ -726,6 +726,15 @@ impl Room {
 
     // -- helpers ------------------------------------------------------------
 
+    /// `msg` as it must go to `peer`: sealed when the peer has a LAN
+    /// channel (for frames the host sends a room peer itself, a goodbye).
+    pub fn seal_for(&mut self, peer: &str, msg: WireMessage) -> WireMessage {
+        match self.channels.get_mut(peer) {
+            Some(ch) => ch.seal(&msg),
+            None => msg,
+        }
+    }
+
     fn send(&mut self, peer: &str, msg: Msg) {
         let mut wire = WireMessage::new(msg);
         if let Some(ch) = self.channels.get_mut(peer) {

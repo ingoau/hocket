@@ -20,7 +20,10 @@
 //! passes them through never learns the shared secret. Each direction has
 //! its own key (HKDF over the shared secret, salted with the full
 //! transcript) and a frame counter in the AEAD's associated data, so a
-//! frame can't be replayed, reordered, dropped unnoticed or reflected.
+//! frame can't be replayed or reflected. Frames may arrive out of counter
+//! order (a host sends what a nested reaction produced before the rest of
+//! a batch), so the receiver keeps a window of counters seen
+//! ([`REPLAY_WINDOW`]), as IPsec and DTLS do.
 //!
 //! The coordinator is reached over TLS and pinned by key, so its rooms
 //! don't require this ([`RoomConfig::require_channel`](crate::connect::room::RoomConfig)).
@@ -127,13 +130,17 @@ pub enum End {
     Leader,
 }
 
+/// How far behind the highest counter received a frame may still arrive.
+pub const REPLAY_WINDOW: u64 = 1024;
+
 /// One established channel: a key and a counter per direction.
 #[derive(Clone)]
 pub struct Channel {
     send_key: [u8; 32],
     recv_key: [u8; 32],
     send_seq: u64,
-    recv_seq: u64,
+    /// Counters received within the window behind the highest one.
+    seen: std::collections::BTreeSet<u64>,
 }
 
 impl std::fmt::Debug for Channel {
@@ -141,7 +148,8 @@ impl std::fmt::Debug for Channel {
         write!(
             f,
             "Channel(sent {}, received {})",
-            self.send_seq, self.recv_seq
+            self.send_seq,
+            self.seen.len()
         )
     }
 }
@@ -166,7 +174,7 @@ impl Channel {
             send_key,
             recv_key,
             send_seq: 0,
-            recv_seq: 0,
+            seen: std::collections::BTreeSet::new(),
         })
     }
 
@@ -211,7 +219,9 @@ impl Channel {
         let Msg::Sealed { seq, nonce, ct } = &msg.msg else {
             return None;
         };
-        if *seq != self.recv_seq {
+        let top = self.seen.last().copied();
+        let floor = top.map_or(0, |t| t.saturating_sub(REPLAY_WINDOW));
+        if self.seen.contains(seq) || (top.is_some() && *seq < floor) {
             return None;
         }
         let sealed = Sealed {
@@ -223,7 +233,12 @@ impl Channel {
         if matches!(inner.msg, Msg::Sealed { .. }) {
             return None;
         }
-        self.recv_seq += 1;
+        self.seen.insert(*seq);
+        let floor = self
+            .seen
+            .last()
+            .map_or(0, |t| t.saturating_sub(REPLAY_WINDOW));
+        self.seen = self.seen.split_off(&floor);
         Some(inner)
     }
 }
@@ -246,17 +261,24 @@ mod tests {
     }
 
     #[test]
-    fn frames_round_trip_in_order_only() {
+    fn frames_open_once_each() {
         let (mut j, mut l) = pair();
         let a = j.seal(&msg());
         let b = j.seal(&msg());
         assert!(!a.encode().unwrap().contains("syncRequest"));
-        // Out of order: refused.
-        assert!(l.clone().open(&b).is_none());
+        // Out of order is fine; each opens once.
+        assert_eq!(l.open(&b).unwrap().msg, Msg::SyncRequest);
         assert_eq!(l.open(&a).unwrap().msg, Msg::SyncRequest);
         // Replayed: refused.
         assert!(l.open(&a).is_none());
-        assert_eq!(l.open(&b).unwrap().msg, Msg::SyncRequest);
+        assert!(l.open(&b).is_none());
+        // Older than the window: refused.
+        let old = j.seal(&msg());
+        for _ in 0..REPLAY_WINDOW + 1 {
+            let f = j.seal(&msg());
+            assert!(l.open(&f).is_some());
+        }
+        assert!(l.open(&old).is_none());
         // The other direction has its own key: a reflected frame fails.
         let c = l.seal(&msg());
         assert!(l.clone().open(&c).is_none());

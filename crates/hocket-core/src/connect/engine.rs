@@ -2694,11 +2694,15 @@ impl Engine {
             self.room.set_auth(RoomAuth::Closed);
             let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
             for p in inbound {
-                self.out.push(Output::WireOut {
-                    peer: p.clone(),
-                    msg: WireMessage::new(Msg::Bye {
+                let bye = self.room.seal_for(
+                    &p,
+                    WireMessage::new(Msg::Bye {
                         reason: "this device was removed from the identity".into(),
                     }),
+                );
+                self.out.push(Output::WireOut {
+                    peer: p.clone(),
+                    msg: bye,
                 });
                 self.out.push(Output::Disconnect { peer: p.clone() });
                 let outs = self.room.handle(RoomInput::Disconnected(p));
@@ -3674,11 +3678,15 @@ impl Engine {
             // Say goodbye to anyone we were serving: they'll re-elect.
             let inbound: Vec<PeerId> = std::mem::take(&mut self.inbound);
             for p in inbound {
-                self.out.push(Output::WireOut {
-                    peer: p.clone(),
-                    msg: WireMessage::new(Msg::Bye {
+                let bye = self.room.seal_for(
+                    &p,
+                    WireMessage::new(Msg::Bye {
                         reason: "joined a coordinator".into(),
                     }),
+                );
+                self.out.push(Output::WireOut {
+                    peer: p.clone(),
+                    msg: bye,
                 });
                 self.out.push(Output::Disconnect { peer: p.clone() });
                 let outs = self.room.handle(RoomInput::Disconnected(p));
