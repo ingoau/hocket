@@ -130,6 +130,7 @@ class DeveloperDiagnosticsTest {
     fun theRoomCardShowsEveryDeviceAndTheCoordinator() {
         val core = TestCore(startPlaying = false)
         core.fake.dispatch(Commands.setSetting(SettingKeys.DEVELOPER_MODE, "true"))
+        core.fake.dispatch(Commands.setCoordinatorUrl("wss://coordinator.example/ws"))
         core.fake.dispatch(Command.ConnectCoordinator)
         compose.setThemedContent(core) { DeveloperDiagnosticsScreen(rememberNavController(), collect = { _, _ -> sampleReport() }) }
         core.start()
@@ -159,6 +160,7 @@ class DeveloperDiagnosticsTest {
     fun saveToCoordinatorSendsTheNoteAndTheBundleAndHidesWhileUploading() {
         val core = TestCore(startPlaying = false)
         core.fake.dispatch(Commands.setSetting(SettingKeys.DEVELOPER_MODE, "true"))
+        core.fake.dispatch(Commands.setCoordinatorUrl("wss://coordinator.example/ws"))
         core.fake.dispatch(Command.ConnectCoordinator)
         var sent: Triple<String, String, List<ReportAttachment>>? = null
         compose.setThemedContent(core) {
@@ -223,6 +225,7 @@ class DeveloperDiagnosticsTest {
         dir.mkdirs()
         val core = TestCore(startPlaying = false)
         core.fake.dispatch(Commands.setSetting(SettingKeys.DEVELOPER_MODE, "true"))
+        core.fake.dispatch(Commands.setCoordinatorUrl("wss://coordinator.example/ws"))
         core.fake.dispatch(Command.ConnectCoordinator)
         // First while the room is still being asked (the actions wait), then with every answer in.
         val answer = CompletableDeferred<Unit>()

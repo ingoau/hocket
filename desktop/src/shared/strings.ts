@@ -846,6 +846,8 @@ const STRINGS = {
   "identity.coordinatorDisconnected": "Not connected",
   "identity.coordinatorDisconnect": "Disconnect",
   "identity.coordinatorReconnect": "Reconnect",
+  "identity.coordinatorLeftover": "{url} (not claimed)",
+  "identity.coordinatorForget": "Forget address",
   "identity.coordinatorOwner": "{url} (yours)",
   "identity.coordinatorGuest": "{url} (invited)",
   "identity.coordinatorUrl": "Coordinator address",

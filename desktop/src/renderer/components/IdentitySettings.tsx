@@ -55,6 +55,7 @@ export function IdentitySettings() {
 function Coordinator() {
   const pin = useApp((s) => s.identity.coordinator);
   const state = useApp((s) => s.coordinator);
+  const leftover = useApp((s) => s.connection.coordinatorUrl);
   const [url, setUrl] = useState("");
   const [code, setCode] = useState("");
   useEffect(() => {
@@ -70,8 +71,11 @@ function Coordinator() {
       {/* The settings search's "coordinator" entry lands here (`setting-coordinator`). */}
       <div id="setting-coordinator" data-testid="identity-coordinator-section">
         <h2 className="section-title">{t("identity.coordinator")}</h2>
-        {pin ? <PinnedCoordinator url={pin.url} owner={pin.owner} /> : (
+        {pin ? <CoordinatorConnection title={pin.owner ? t("identity.coordinatorOwner", { url: pin.url }) : t("identity.coordinatorGuest", { url: pin.url })} /> : (
           <>
+            {/* An address without a pin (set before claiming worked, or left when the pin
+                went): shown with its connection, so it can always be forgotten. */}
+            {leftover ? <CoordinatorConnection title={t("identity.coordinatorLeftover", { url: leftover })} leftover /> : null}
             <div className="setting-row">
               <div className="label"><div className="desc" data-testid="identity-coordinator">{t("identity.coordinatorNone")}</div></div>
             </div>
@@ -134,24 +138,34 @@ function Coordinator() {
   );
 }
 
-/** The pinned coordinator: where it is, whose it is, the connection to it, and Disconnect / Reconnect. */
-function PinnedCoordinator({ url, owner }: { url: string; owner: boolean }) {
+/**
+ * A coordinator address ([title] says which, and whose) with the connection to it: Disconnect or
+ * Reconnect for the pinned one; for a [leftover] address with no pin behind it, Forget address,
+ * which clears it.
+ */
+function CoordinatorConnection({ title, leftover = false }: { title: string; leftover?: boolean }) {
   const connection = useApp((s) => s.connection);
   const connected = connection.tier === "coordinator" && connection.connected;
   const status = connected
     ? t("identity.coordinatorConnected", { peers: t("connect.peers", { count: connection.peerCount }), ms: connection.roundTripMs ?? "?" })
     : t("identity.coordinatorDisconnected");
+  const forget = () => {
+    bridge().dispatch({ type: "setCoordinatorUrl", data: { url: undefined } });
+    bridge().dispatch({ type: "disconnectCoordinator" });
+  };
   return (
-    <div className="setting-row" data-testid="identity-coordinator-pinned">
+    <div className="setting-row" data-testid={leftover ? "identity-coordinator-leftover" : "identity-coordinator-pinned"}>
       <div className="label">
-        <div className="title" data-testid="identity-coordinator">{owner ? t("identity.coordinatorOwner", { url }) : t("identity.coordinatorGuest", { url })}</div>
+        <div className="title" data-testid={leftover ? "identity-coordinator-leftover-url" : "identity-coordinator"}>{title}</div>
         <div className="desc" data-testid="identity-coordinator-status">{status}</div>
         {connection.error ? <div className="desc error" role="alert">{connection.error}</div> : null}
       </div>
       <div className="control">
-        {connected
-          ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "disconnectCoordinator" })} data-testid="identity-coordinator-disconnect">{t("identity.coordinatorDisconnect")}</button>
-          : <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "connectCoordinator" })} data-testid="identity-coordinator-reconnect">{t("identity.coordinatorReconnect")}</button>}
+        {leftover
+          ? <button type="button" className="btn sm" onClick={forget} data-testid="identity-coordinator-forget">{t("identity.coordinatorForget")}</button>
+          : connected
+            ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "disconnectCoordinator" })} data-testid="identity-coordinator-disconnect">{t("identity.coordinatorDisconnect")}</button>
+            : <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "connectCoordinator" })} data-testid="identity-coordinator-reconnect">{t("identity.coordinatorReconnect")}</button>}
       </div>
     </div>
   );

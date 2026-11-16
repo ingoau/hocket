@@ -723,7 +723,9 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "connectionChanged", data: { state: this.connection } });
         return;
       case "connectCoordinator":
-        this.connection = { ...this.connection, tier: "coordinator", connected: true, roundTripMs: 48, peerCount: this.devices.length - 1, error: undefined };
+        // As the core: nothing to connect to without an address.
+        if (!this.connection.coordinatorUrl) return;
+        this.connection ={ ...this.connection, tier: "coordinator", connected: true, roundTripMs: 48, peerCount: this.devices.length - 1, error: undefined };
         this.emit({ type: "connectionChanged", data: { state: this.connection } });
         return;
       case "disconnectCoordinator":

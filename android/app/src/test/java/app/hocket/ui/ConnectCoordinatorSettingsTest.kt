@@ -13,6 +13,9 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.R
+import app.hocket.core.Commands
+import app.hocket.core.api.Command
+import app.hocket.core.api.ConnectionTier
 import app.hocket.ui.nav.AppRoot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -68,6 +71,30 @@ class ConnectCoordinatorSettingsTest {
             assertTrue("$tag shown", exists(tag))
         }
         assertFalse(exists("identity.coordinatorDisconnect"))
+        assertFalse(exists("identity.coordinatorStatus"))
+        assertFalse(exists("identity.coordinatorLeftover"))
+    }
+
+    @Test
+    fun anAddressWithoutAPinIsShownWithItsConnectionAndCanBeForgotten() {
+        val core = TestCore(startPlaying = false)
+        // Like the core, the fake doesn't connect with no address to connect to.
+        core.client.dispatch(Command.ConnectCoordinator)
+        assertFalse(core.client.connection.value.connected && core.client.connection.value.tier == ConnectionTier.Coordinator)
+        core.client.dispatch(Commands.setCoordinatorUrl("wss://old.example/ws"))
+        core.client.dispatch(Command.ConnectCoordinator)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.openSettingsFromAccount()
+        click("settings.category.connect")
+        await("identity.coordinatorLeftover")
+        assertTrue(exists("identity.coordinatorStatus"))
+        // Claiming and joining are still offered beside it.
+        assertTrue(exists("identity.claim"))
+        click("identity.coordinatorForget")
+        compose.waitUntil(5_000) { !exists("identity.coordinatorLeftover") }
+        assertEquals(null, core.client.connection.value.coordinatorUrl)
+        assertFalse(core.client.connection.value.connected)
         assertFalse(exists("identity.coordinatorStatus"))
     }
 

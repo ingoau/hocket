@@ -56,6 +56,7 @@ test("developer mode gates the shortcut; the page previews, saves and passes axe
   await expect(page.getByTestId("developer-source-dev-pixel8")).toHaveAttribute("data-state", "received");
   await expect(page.getByTestId("developer-source-coordinator")).toContainText("a device on your network hosts this room");
   await expect(page.getByTestId("developer-save")).toBeEnabled();
+  await page.evaluate(() => window.hocket.dispatch({ type: "setCoordinatorUrl", data: { url: "wss://coordinator.example/ws" } }));
   await page.evaluate(() => window.hocket.dispatch({ type: "connectCoordinator" }));
   await page.getByTestId("developer-refresh").click();
   await expect(page.getByTestId("developer-collecting")).toBeVisible();

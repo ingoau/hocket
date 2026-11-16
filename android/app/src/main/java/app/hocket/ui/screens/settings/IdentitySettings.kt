@@ -39,6 +39,8 @@ import app.hocket.core.api.CommandRedeemCoordinatorInviteInner
 import app.hocket.core.api.CommandRemoveDeviceInner
 import app.hocket.core.api.CommandRevokeCoordinatorInviteInner
 import app.hocket.core.api.CommandSetCredentialSyncInner
+import app.hocket.core.Commands
+import app.hocket.core.api.ConnectionState
 import app.hocket.core.api.ConnectionTier
 import app.hocket.core.api.IdentityDevice
 import app.hocket.ui.LocalCoreClient
@@ -113,6 +115,12 @@ private fun ColumnScope.Coordinator() {
     // The search's "coordinator" entry lands here.
     SettingsSection(stringResource(R.string.identity_coordinator), tag = "connect.coordinator")
     if (pin == null) {
+        // An address without a pin (set before claiming worked, or left when the pin went): shown,
+        // with its connection, so it can always be forgotten.
+        connection.coordinatorUrl?.let { leftover ->
+            Box(Modifier.testTag("identity.coordinatorLeftover")) { SettingRow(stringResource(R.string.identity_coordinator_leftover, leftover)) }
+            CoordinatorStatus(connection, leftover = true)
+        }
         Box(Modifier.testTag("identity.coordinatorNone")) { SettingRow(stringResource(R.string.identity_coordinator_none)) }
         OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.identity_coordinator_url)) }, placeholder = { Text(stringResource(R.string.identity_coordinator_url_hint)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("identity.coordinatorUrl"))
         OutlinedTextField(value = code, onValueChange = { code = it }, label = { Text(stringResource(R.string.identity_coordinator_code)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("identity.coordinatorCode"))
@@ -128,19 +136,7 @@ private fun ColumnScope.Coordinator() {
     } else {
         // Pinned: where it is, whose it is, and how this device is connected to it.
         Box(Modifier.testTag("identity.coordinatorPin")) { SettingRow(stringResource(if (pin.owner) R.string.identity_coordinator_owner else R.string.identity_coordinator_guest, pin.url)) }
-        val status = when (connection.tier) {
-            ConnectionTier.Local -> stringResource(R.string.connection_local)
-            ConnectionTier.Lan -> pluralStringResource(R.plurals.connection_lan, connection.peerCount.toInt(), connection.peerCount.toInt())
-            ConnectionTier.Coordinator -> pluralStringResource(R.plurals.connection_coordinator, connection.peerCount.toInt(), connection.peerCount.toInt())
-        }
-        val connected = connection.connected && connection.tier == ConnectionTier.Coordinator
-        Box(Modifier.testTag("identity.coordinatorStatus")) { SettingRow(status, connection.error ?: connection.roundTripMs?.let { "${it.toInt()} ms" }, trailing = {
-            if (connected) {
-                TextButton(onClick = { client.dispatch(Command.DisconnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorDisconnect")) { Text(stringResource(R.string.identity_coordinator_disconnect)) }
-            } else {
-                TextButton(onClick = { client.dispatch(Command.ConnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorReconnect")) { Text(stringResource(R.string.identity_coordinator_reconnect)) }
-            }
-        }) }
+        CoordinatorStatus(connection, leftover = false)
     }
     if (pin?.owner == true) {
         SettingsSection(stringResource(R.string.identity_invites))
@@ -157,6 +153,31 @@ private fun ColumnScope.Coordinator() {
         OutlinedButton(onClick = { client.dispatch(Command.CreateCoordinatorInvite) }, shapes = ButtonDefaults.shapes(), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("identity.inviteCreate")) { Text(stringResource(R.string.identity_invite_create)) }
     }
     CoordinatorYouTubeMusic(owner = pin?.owner == true)
+}
+
+/**
+ * How this device is connected to the coordinator (tier, peers, error or round trip), with
+ * Disconnect or Reconnect; for a [leftover] address with no pin behind it, Forget address instead,
+ * which clears it.
+ */
+@Composable
+private fun CoordinatorStatus(connection: ConnectionState, leftover: Boolean) {
+    val client = LocalCoreClient.current
+    val status = when (connection.tier) {
+        ConnectionTier.Local -> stringResource(R.string.connection_local)
+        ConnectionTier.Lan -> pluralStringResource(R.plurals.connection_lan, connection.peerCount.toInt(), connection.peerCount.toInt())
+        ConnectionTier.Coordinator -> pluralStringResource(R.plurals.connection_coordinator, connection.peerCount.toInt(), connection.peerCount.toInt())
+    }
+    val connected = connection.connected && connection.tier == ConnectionTier.Coordinator
+    Box(Modifier.testTag("identity.coordinatorStatus")) {
+        SettingRow(status, connection.error ?: connection.roundTripMs?.let { "${it.toInt()} ms" }, trailing = {
+            when {
+                leftover -> TextButton(onClick = { client.dispatch(Commands.setCoordinatorUrl(null)); client.dispatch(Command.DisconnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorForget")) { Text(stringResource(R.string.identity_coordinator_forget)) }
+                connected -> TextButton(onClick = { client.dispatch(Command.DisconnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorDisconnect")) { Text(stringResource(R.string.identity_coordinator_disconnect)) }
+                else -> TextButton(onClick = { client.dispatch(Command.ConnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorReconnect")) { Text(stringResource(R.string.identity_coordinator_reconnect)) }
+            }
+        })
+    }
 }
 
 /**

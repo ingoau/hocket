@@ -1143,6 +1143,8 @@
     <string name="identity_coordinator_url_hint">wss://hocket.example.com</string>
     <string name="identity_coordinator_disconnect">Disconnect</string>
     <string name="identity_coordinator_reconnect">Reconnect</string>
+    <string name="identity_coordinator_leftover">%1$s (not claimed)</string>
+    <string name="identity_coordinator_forget">Forget address</string>
     <string name="identity_coordinator_code">Code</string>
     <string name="identity_claim">Claim</string>
     <string name="identity_redeem">Join with invite</string>
