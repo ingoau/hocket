@@ -42,17 +42,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
 import app.hocket.core.api.NetworkKind
-import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.AccountInfo
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 
 /** The user's (or else the server's) initial, for the avatar. */
-private fun initialOf(server: ServerInfo?): String =
+private fun initialOf(server: AccountInfo?): String =
     (server?.username?.firstOrNull { it.isLetterOrDigit() } ?: server?.name?.firstOrNull { it.isLetterOrDigit() } ?: '?').uppercaseChar().toString()
 
 /** A round avatar with the initial; decorative (its button or row says who). The letter is sized to the circle, not the font scale. */
 @Composable
-private fun Avatar(server: ServerInfo?, size: Dp) {
+private fun Avatar(server: AccountInfo?, size: Dp) {
     val letterSize = with(LocalDensity.current) { (size * 0.5f).toSp() }
     Box(Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer).clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
         Text(initialOf(server), fontSize = letterSize, lineHeight = letterSize, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onPrimaryContainer, maxLines = 1)
@@ -94,8 +94,8 @@ fun OfflineIndicator(modifier: Modifier = Modifier) {
 }
 
 /**
- * Who is signed in where, then Settings, Listening stats and Devices (the Connect picker), the
- * places not in the bottom bar (so every place stays reachable) and the bar editor.
+ * Who is signed in where, then Settings, Listening stats, Devices (the Connect picker) and Set up
+ * another device ([PairDeviceSheet]), the places not in the bottom bar (so every place stays reachable) and the bar editor.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -104,12 +104,13 @@ fun AccountSheet(
     onSettings: () -> Unit,
     onStats: () -> Unit,
     onDevices: () -> Unit,
+    onSetUpDevice: () -> Unit,
     onPlace: (NavItem) -> Unit,
     onEditBar: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("account.sheet")) {
-        AccountSheetContent(barItems, onSettings, onStats, onDevices, onPlace, onEditBar)
+        AccountSheetContent(barItems, onSettings, onStats, onDevices, onSetUpDevice, onPlace, onEditBar)
     }
 }
 
@@ -120,6 +121,7 @@ fun AccountSheetContent(
     onSettings: () -> Unit,
     onStats: () -> Unit,
     onDevices: () -> Unit,
+    onSetUpDevice: () -> Unit,
     onPlace: (NavItem) -> Unit,
     onEditBar: () -> Unit,
 ) {
@@ -142,6 +144,7 @@ fun AccountSheetContent(
         SheetRow(HocketIcons.Filled.Settings, stringResource(R.string.account_settings), "account.settings", onSettings)
         SheetRow(HocketIcons.Filled.BarChart, stringResource(R.string.account_stats), "account.stats", onStats)
         SheetRow(HocketIcons.Filled.Devices, stringResource(R.string.account_devices), "account.devices", onDevices)
+        SheetRow(HocketIcons.Filled.QrCode2, stringResource(R.string.account_set_up_device), "account.setUpDevice", onSetUpDevice)
         val others = NavItem.entries.filter { it !in barItems && it != NavItem.Stats }
         if (others.isNotEmpty()) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))

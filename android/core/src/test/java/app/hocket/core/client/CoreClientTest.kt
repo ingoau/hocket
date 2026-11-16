@@ -1,10 +1,15 @@
 package app.hocket.core.client
 
 import app.hocket.core.Commands
+import app.hocket.core.Saver
+import app.hocket.core.SettingKeys
+import app.hocket.core.engaged
+import app.hocket.core.has
 import app.hocket.core.api.*
 import app.hocket.core.fake.FakeCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -17,6 +22,74 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class CoreClientTest {
     private var clock = 5_000_000.0
+
+    @Test
+    fun roomDiagnosticsAreCollectedOnceAndReusedBriefly() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.requestSnapshot()
+        client.dispatch(Commands.setSetting(app.hocket.core.SettingKeys.DEVELOPER_MODE, "true"))
+        runCurrent()
+        val first = client.collectRoomDiagnostics()
+        assertTrue(first!!.contains("Laptop"))
+        val id = client.roomDiagnostics.value!!.requestId
+        assertTrue(client.roomDiagnostics.value!!.done)
+        // Within the room's limit: reused, nothing asked.
+        clock += 5_000
+        assertEquals(first, client.collectRoomDiagnostics())
+        assertEquals(id, client.roomDiagnostics.value!!.requestId)
+        // Forced (Refresh), or later: asked again.
+        assertNotNull(client.collectRoomDiagnostics(force = true))
+        val forced = client.roomDiagnostics.value!!.requestId
+        assertTrue(forced != id)
+        clock += REUSE_ROOM_COLLECTION_MS
+        client.collectRoomDiagnostics()
+        assertTrue(client.roomDiagnostics.value!!.requestId != forced)
+    }
+
+    @Test
+    fun aNewPairingInviteNeverShowsThePreviousOne() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.onEvent(Event.PairingInvite(EventPairingInviteInner("hocket://pair?old", 1.0)))
+        client.createPairingInvite()
+        assertTrue(client.pairingInvite.value?.link != "hocket://pair?old")
+        client.onEvent(Event.PairingInvite(EventPairingInviteInner("hocket://pair?new", 2.0)))
+        client.onEvent(Event.PairingFailed(EventPairingFailedInner("no network")))
+        assertEquals(null, client.pairingInvite.value)
+    }
+
+    @Test
+    fun reportUploadFollowsTheCoresEvents() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.requestSnapshot()
+        runCurrent()
+        assertEquals(null, client.reportUpload.value)
+        val seen = mutableListOf<ReportUploadState>()
+        backgroundScope.launch { core.events.collect { e -> if (e is Event.ReportUploadChanged) e.data.status?.state?.let { if (seen.lastOrNull() != it) seen += it } } }
+        runCurrent()
+        client.startReportUpload("Queue jumped", "bundle text", listOf(ReportAttachment("/tmp/x.jpg", ReportAttachmentKind.Screenshot, deleteAfter = true)))
+        runCurrent()
+        val done = client.reportUpload.value!!
+        assertEquals(ReportUploadState.Done, done.state)
+        assertEquals(FakeCore.FAKE_REPORT_ID, done.reportId)
+        assertEquals(done.totalBytes, done.sentBytes, 0.0)
+        assertEquals(listOf(ReportUploadState.Uploading, ReportUploadState.Done), seen)
+        // A snapshot asks the core where it stands, and agrees.
+        client.requestSnapshot()
+        runCurrent()
+        assertEquals(ReportUploadState.Done, client.reportUpload.value?.state)
+        client.dismissReportUpload()
+        runCurrent()
+        assertEquals(null, client.reportUpload.value)
+        // An event wins over a startup answer that was already on its way.
+        client.onEvent(Event.ReportUploadChanged(EventReportUploadChangedInner(ReportUploadStatus(ReportUploadState.Failed, 10.0, 20.0, null, ReportUploadError.Network, "reset", 1.0))))
+        assertEquals(ReportUploadError.Network, client.reportUpload.value?.error)
+    }
 
     @Test
     fun snapshotPopulatesStateFlows() = runTest {
@@ -46,10 +119,37 @@ class CoreClientTest {
         client.dispatch(Command.Next)
         runCurrent()
         assertTrue(client.nowPlaying.value!!.track.id != before)
-        assertTrue(client.undo.value.canUndo || client.queue.value.history.isNotEmpty())
+        assertTrue(client.undo.value.canUndo || client.queue.value.historyCount > 0u)
         client.dispatch(Command.Pause)
         runCurrent()
         assertFalse(client.isPlaying.value)
+    }
+
+    @Test
+    fun theCoordinatorsYouTubeMusicStatusFollowsItsSignInAndOut() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        assertEquals(null, client.coordinatorYtm.value)
+        // Not the owner: nothing to show, nothing answered.
+        client.dispatch(Command.CoordinatorYtmStatus)
+        runCurrent()
+        assertEquals(null, client.coordinatorYtm.value)
+        client.dispatch(Command.ClaimCoordinator(CommandClaimCoordinatorInner("wss://c.example/ws", "CODE")))
+        client.dispatch(Command.CoordinatorYtmStatus)
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = false), client.coordinatorYtm.value)
+        // A fresh session signs it in; a jar without one is refused and changes nothing.
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner("PREF=x")))
+        runCurrent()
+        assertEquals(false, client.coordinatorYtm.value?.signed_in)
+        assertNotNull(client.coordinatorYtm.value?.error)
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner("SID=a; SAPISID=b")))
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = true, account = FakeCore.FAKE_COORDINATOR_YTM_ACCOUNT), client.coordinatorYtm.value)
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner(null)))
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = false), client.coordinatorYtm.value)
     }
 
     @Test
@@ -80,18 +180,25 @@ class CoreClientTest {
         runCurrent()
         client.requestSnapshot()
         runCurrent()
-        assertFalse(client.batterySaver.value)
-        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(true)))
-        assertTrue(client.batterySaver.value)
-        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(false)))
-        assertFalse(client.batterySaver.value)
-        // Through the core: each change is announced on its own.
-        client.dispatch(Commands.setBatterySaver(true))
+        assertFalse(client.batterySaver.value.engaged)
+        val max = Saver.resolve(SaverLevel.Max, SaverLevel.Medium, true, false, emptyList())
+        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(max)))
+        assertTrue(client.batterySaver.value.has(SaverFeature.SimpleLyrics))
+        client.onEvent(Event.BatterySaverChanged(EventBatterySaverChangedInner(Saver.OFF)))
+        assertFalse(client.batterySaver.value.engaged)
+        // Through the core: the system's power saver engages the automatic level (medium).
+        client.dispatch(Commands.setPowerSave(true))
         runCurrent()
-        assertTrue(client.batterySaver.value)
-        client.dispatch(Commands.setBatterySaver(false))
+        assertEquals(SaverLevel.Medium, client.batterySaver.value.level)
+        assertTrue(client.batterySaver.value.automatic)
+        // A stronger level chosen here holds over it.
+        client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(SaverLevel.Max)))
         runCurrent()
-        assertFalse(client.batterySaver.value)
+        assertEquals(SaverLevel.Max, client.batterySaver.value.level)
+        client.dispatch(Commands.setPowerSave(false))
+        client.dispatch(Commands.setSetting(SettingKeys.BATTERY_LEVEL, Saver.levelValue(SaverLevel.Off)))
+        runCurrent()
+        assertFalse(client.batterySaver.value.engaged)
     }
 
     @Test

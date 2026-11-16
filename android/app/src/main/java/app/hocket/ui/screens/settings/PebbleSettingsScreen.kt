@@ -127,6 +127,7 @@ private fun itemLabel(id: String): String = stringResource(
         "queue" -> R.string.pebble_item_queue
         "library" -> R.string.pebble_item_library
         "love" -> R.string.pebble_item_love
+        "stash" -> R.string.pebble_item_stash
         "rating" -> R.string.pebble_item_rating
         "shuffle" -> R.string.pebble_item_shuffle
         "repeat" -> R.string.pebble_item_repeat

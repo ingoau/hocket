@@ -6,12 +6,19 @@ export const SK = {
   homeSections: "home.sections",
   /** What's pinned to the Library (the sidebar), [{kind, id, tap}] in order. Synced. */
   libraryPins: "library.pins",
-  queueMode: "queue.mode",
+  /** Show the "Next in queue" group and Add to queue. Synced; default true. */
+  queueSection: "queue.section",
   queueSavedCap: "queue.savedCap",
+  /** Continue an album left unfinished. Synced. Off, Play always starts at the beginning. */
+  resumeAlbums: "playback.resumeAlbums",
   lyricsExternalEnabled: "lyrics.external.enabled",
   ratingsLoveBridgeEnabled: "ratings.loveBridge.enabled",
   ratingsLoveBridgeThreshold: "ratings.loveBridge.threshold",
+  /** "off" | "light" | "medium" | "max" | "custom": the battery saver level chosen. Device-local. */
+  batteryLevel: "battery.level",
   batteryAutoEngage: "battery.autoEngage",
+  /** "light" | "medium" | "max" | "custom": the level running on battery engages (with battery.autoEngage). Device-local. */
+  batteryAutoLevel: "battery.autoLevel",
   batteryLyricsFps: "battery.lyricsFps",
   displayAnimatedBackground: "display.animatedBackground",
   displayLyricsFps: "display.lyricsFps",
@@ -22,8 +29,10 @@ export const SK = {
   displayImmersiveArtwork: "display.immersiveArtwork",
   /** Whether the player shows the star rating (bar, sidebar, fullscreen). Synced. */
   displayPlayerRating: "display.playerRating",
+  displayAlbumTrackArtists: "display.albumTrackArtists",
   /** Developer mode: detailed logging, and the shortcut that opens developer diagnostics. Device-local. */
   developerMode: "developer.mode",
+  headphoneHandoff: "connect.headphone_handoff",
   syncEnabled: "sync.enabled",
   connectCoordinatorUrl: "connect.coordinatorUrl",
   connectLanDiscovery: "connect.lanDiscovery",
@@ -34,6 +43,8 @@ export const SK = {
   sleepDefaultMinutes: "sleep.defaultMinutes",
   scrobbleEnabled: "scrobble.enabled",
   searchIncludeServer: "search.includeServer",
+  /** Off / Crossfade / AutoMix and the crossfade length, a TransitionSettings. Synced; read with Query transitions, set with SetTransitionSettings. */
+  playbackTransitions: "playback.transitions",
 } as const;
 
-export const DEFAULT_ACCENT = "#6f5cff";
+export const DEFAULT_ACCENT = "#8f80f5";

@@ -37,7 +37,8 @@ sealed class CredentialLookup {
  * the platform keystore); the app replays `AddServer` from here on every core start.
  *
  * Passwords are AES/GCM-encrypted with a non-exportable key in the Android Keystore and kept in
- * private SharedPreferences, keyed by `url|username` (the pair the core derives its server id from).
+ * private SharedPreferences, keyed by the account they sign in (the core's `AccountId`, see
+ * [AccountIds]).
  */
 interface ServerCredentialStore {
     /** Every stored `(url, username)`, readable or not. Urls are normalised (no trailing slash). */
@@ -50,6 +51,9 @@ interface ServerCredentialStore {
 
     /** Keys whose login is stored but cannot be read right now (see [CredentialLookup.Unavailable]). */
     fun unavailable(): List<Pair<String, String>> = keys().filter { (url, user) -> lookup(url, user) is CredentialLookup.Unavailable }
+
+    /** Every stored key looked up once: what [all] and [unavailable] give, for one pass over the keystore. */
+    fun lookupAll(): Map<Pair<String, String>, CredentialLookup> = keys().associateWith { (url, user) -> lookup(url, user) }
     fun save(credential: ServerCredential)
     fun remove(url: String, username: String)
 
@@ -60,7 +64,8 @@ interface ServerCredentialStore {
     }
 
     companion object {
-        fun key(url: String, username: String) = url.trimEnd('/') + "|" + username
+        /** The account a login signs in: what stores and login sets are keyed by. */
+        fun key(url: String, username: String) = AccountIds.navidrome(url, username)
     }
 }
 
@@ -96,9 +101,19 @@ class AndroidKeystoreCrypto : CredentialCrypto {
         const val GCM_TAG_BITS = 128
     }
 
-    private fun keystore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    // The opened keystore and the key, kept between calls (each open and key fetch is a keystore2
+    // round trip, and a cold start decrypts every stored login). Dropped on any failure, so a key
+    // that went away is looked up afresh.
+    @Volatile private var store: KeyStore? = null
+    @Volatile private var cachedKey: SecretKey? = null
 
-    private fun key(): SecretKey {
+    private fun keystore(): KeyStore = store ?: KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.also { store = it }
+
+    private fun <T> keystoreCall(block: () -> T): T = try { block() } catch (e: Exception) { store = null; cachedKey = null; throw e }
+
+    private fun key(): SecretKey = cachedKey ?: freshKey().also { cachedKey = it }
+
+    private fun freshKey(): SecretKey {
         (keystore().getKey(ALIAS, null) as? SecretKey)?.let { return it }
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         gen.init(
@@ -113,18 +128,19 @@ class AndroidKeystoreCrypto : CredentialCrypto {
 
     // When the keystore itself cannot be opened nothing is known about the key: report it present so
     // the failure is treated as transient rather than as a reason to delete data.
-    override fun keyPresent(): Boolean = try { keystore().containsAlias(ALIAS) } catch (e: Exception) { true }
+    override fun keyPresent(): Boolean = try { keystoreCall { keystore().containsAlias(ALIAS) } } catch (e: Exception) { true }
 
-    override fun encrypt(plain: ByteArray): Pair<ByteArray, ByteArray> {
+    override fun encrypt(plain: ByteArray): Pair<ByteArray, ByteArray> = keystoreCall {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        return cipher.iv to cipher.doFinal(plain)
+        // A fresh key for saves (rare): one that went away since it was cached is regenerated here.
+        cipher.init(Cipher.ENCRYPT_MODE, freshKey().also { cachedKey = it })
+        cipher.iv to cipher.doFinal(plain)
     }
 
-    override fun decrypt(iv: ByteArray, data: ByteArray): ByteArray {
+    override fun decrypt(iv: ByteArray, data: ByteArray): ByteArray = keystoreCall {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(GCM_TAG_BITS, iv))
-        return cipher.doFinal(data)
+        cipher.doFinal(data)
     }
 }
 
@@ -143,24 +159,16 @@ class KeystoreCredentialStore(context: Context, private val crypto: CredentialCr
         private const val TAG = "CredentialStore"
         const val PREFS = "hocket-credentials"
         const val NAMES_PREFS = "hocket-credential-names"
-        private const val LEGACY_NAME_SUFFIX = "#name"
+        /** Account id → `url|username`: the login each stored password belongs to. */
+        const val LOGINS_PREFS = "hocket-credential-logins"
     }
 
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val names = context.applicationContext.getSharedPreferences(NAMES_PREFS, Context.MODE_PRIVATE)
+    private val logins = context.applicationContext.getSharedPreferences(LOGINS_PREFS, Context.MODE_PRIVATE)
 
-    init {
-        // Names used to share the credentials file under `<key>#name`; move them over once.
-        prefs.all.keys.filter { it.endsWith(LEGACY_NAME_SUFFIX) }.forEach { legacy ->
-            val k = legacy.removeSuffix(LEGACY_NAME_SUFFIX)
-            (prefs.all[legacy] as? String)?.let { names.edit().putString(k, it).apply() }
-            prefs.edit().remove(legacy).apply()
-        }
-    }
-
-    override fun keys(): List<Pair<String, String>> = prefs.all.keys
-        .filter { !it.contains('#') }
-        .mapNotNull { k -> k.split("|", limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }
+    override fun keys(): List<Pair<String, String>> = logins.all.values
+        .mapNotNull { v -> (v as? String)?.split("|", limit = 2)?.takeIf { it.size == 2 }?.let { it[0] to it[1] } }
 
     override fun lookup(url: String, username: String): CredentialLookup {
         val k = ServerCredentialStore.key(url, username)
@@ -195,6 +203,7 @@ class KeystoreCredentialStore(context: Context, private val crypto: CredentialCr
         try {
             val (iv, data) = crypto.encrypt(credential.password.toByteArray(Charsets.UTF_8))
             prefs.edit().putString(k, Base64.encodeToString(iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(data, Base64.NO_WRAP)).apply()
+            logins.edit().putString(k, credential.url.trimEnd('/') + "|" + credential.username).apply()
             names.edit().apply { if (credential.name != null) putString(k, credential.name) else remove(k) }.apply()
         } catch (e: Exception) {
             Log.e(TAG, "could not store credential", e)
@@ -204,7 +213,8 @@ class KeystoreCredentialStore(context: Context, private val crypto: CredentialCr
     override fun remove(url: String, username: String) = removeKey(ServerCredentialStore.key(url, username))
 
     private fun removeKey(k: String) {
-        prefs.edit().remove(k).remove(k + LEGACY_NAME_SUFFIX).apply()
+        prefs.edit().remove(k).apply()
         names.edit().remove(k).apply()
+        logins.edit().remove(k).apply()
     }
 }

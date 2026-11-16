@@ -185,7 +185,10 @@ async fn aborted_reads_and_dropped_connections_keep_their_bytes_and_resume_with_
     assert_eq!(row_of(&t, "t1").spans, "0-50000");
     assert_eq!(offline(&t, "t1").await, OfflineState::None);
 
-    // Closed after one read on a healthy server: the chunk that arrived stays.
+    // Closed after one read (the server stalls before the end, so the pump
+    // fetching ahead cannot finish it): what arrived stays.
+    t.upstream
+        .set_behaviour("t2", UpstreamBehaviour::StallAfter(30_000));
     let s = source(&t, "t2").await;
     let info = t.core.stream_open(&s.url, 0, None).await.unwrap();
     let first = t.core.stream_read(info.handle, 1024).await.unwrap();
@@ -539,11 +542,11 @@ async fn clear_stream_cache_defers_files_in_use() {
     let held = t.core.stream_open(&s1.url, 0, None).await.unwrap();
     let first = t.core.stream_read(held.handle, 1000).await.unwrap();
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -586,11 +589,11 @@ async fn clear_stream_cache_defers_files_in_use() {
     assert_eq!(stream_files(&t).len(), 1);
     // The player moves on: t0 goes too.
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t3".into()],
+        tracks: TrackRef::list(&t.server_id, ["t3"]),
         start_index: 0,
         label: "Other".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -607,11 +610,11 @@ async fn clear_stream_cache_defers_files_in_use() {
 async fn backend_sources_carry_no_credentials_and_gapless_preload_reads_through_the_core() {
     let t = started("gapless", 3).await;
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Three".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -690,7 +693,7 @@ async fn a_library_sync_that_sees_a_track_change_drops_its_cached_audio() {
     }
     t.events.clear();
     t.run(Command::SyncLibrary {
-        server_id: t.server_id.clone(),
+        account_id: t.server_id.clone(),
         full: true,
     })
     .await;

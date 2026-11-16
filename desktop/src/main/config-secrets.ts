@@ -3,7 +3,7 @@
 // `ConfigDocument.secrets`; the platform resolves them from its credential
 // store on export and turns plain-text entries back into AddServer on import.
 // Pure functions: the IPC layer owns the dialogs and the dispatching.
-import type { ConfigDocument, ServerInfo } from "@core/api";
+import type { ConfigDocument, AccountInfo } from "@core/api";
 
 const KEYSTORE_REF_RE = /^keystore:\/\/hocket\/server\/([^/]+)\/password$/;
 const SECRET_KEY_RE = /^server:(.+):password$/;
@@ -29,7 +29,7 @@ export function parseConfigDocument(text: string): ConfigDocument {
   return d;
 }
 
-function serverById(doc: ConfigDocument, id: string): ServerInfo | undefined {
+function serverById(doc: ConfigDocument, id: string): AccountInfo | undefined {
   return (doc.servers ?? []).find((s) => s && typeof s === "object" && s.id === id);
 }
 

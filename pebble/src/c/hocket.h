@@ -59,6 +59,7 @@ typedef enum {
   CmdPlayNext = 14,   // Path, Item
   CmdPlayLater = 15,  // Path, Item
   CmdSeek = 16,       // Arg = position in ms
+  CmdStash = 17,      // stash the playing track
 } Cmd;
 
 // List row flags (first byte of each packed row)
@@ -103,10 +104,11 @@ typedef enum {
   ItemDownloads = 13,
   ItemSearch = 14,
   ItemLyrics = 15,
+  ItemStash = 16,
   ItemCount,
 } MenuItemId;
 
-#define MAX_MENU_ITEMS 16
+#define MAX_MENU_ITEMS 17
 
 typedef struct {
   bool touch_navigation;

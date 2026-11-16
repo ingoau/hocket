@@ -1,15 +1,20 @@
-// Top bar: back/forward, window controls (Windows/Linux), search (local-first
+// Top bar: the sidebar toggle, back/forward, search, the stash, jobs and (Linux) window controls; search (local-first
 // with server results appended below a divider, container never shrinking),
 // and the job/problems indicator with its popover.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Job, SearchResults, ServerInfo, SyncProgress } from "@core/api";
+import type { Job, SearchResults, AccountInfo, SyncProgress, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
+import { clearSearches, forgetSearch, recentSearches, rememberSearch } from "../lib/recent-searches";
 import { Artwork } from "./Artwork";
+import { LyricSnippet } from "./LyricSnippet";
 import { Icon } from "./Icon";
+import { StashChip } from "./Stash";
 import { fmtRelative } from "../lib/format";
 import { usePresence } from "../lib/presence";
+import { NARROW, useMediaQuery } from "../lib/media";
+import { refOf } from "../lib/track-ref";
 
 export function TopBar() {
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -17,17 +22,28 @@ export function TopBar() {
   const forward = useApp((s) => s.forward);
   const canBack = useApp((s) => s.history.length > 0);
   const canForward = useApp((s) => s.future.length > 0);
+  const collapsed = useApp((s) => s.panels.sidebarCollapsed);
+  const setPanels = useApp((s) => s.setPanels);
+  const narrow = useMediaQuery(NARROW);
   const win = useApp((s) => s.windowState);
+  // macOS draws its traffic lights, Windows its caption buttons (titleBarOverlay): only Linux's
+  // frameless window needs ours.
+  const ownControls = platform !== "macOs" && platform !== "windows";
+  const toggleLabel = collapsed ? t("a11y.expandSidebar") : t("a11y.collapseSidebar");
   return (
-    <div className={`topbar ${platform === "macOs" ? "mac" : ""}`} data-testid="topbar">
+    // The bar is the window's drag region (its empty stretch included); the system maximises on a double-click.
+    <div className={`topbar ${platform === "macOs" ? "mac" : ""} ${platform === "windows" ? "win" : ""}`} data-testid="topbar">
       <div className="nav-buttons">
+        {/* A narrow window is always a rail: nothing to toggle. */}
+        {narrow ? null : <button type="button" className="btn icon" aria-label={toggleLabel} title={toggleLabel} aria-expanded={!collapsed} onClick={() => setPanels({ sidebarCollapsed: !collapsed })} data-testid="sidebar-toggle"><Icon name={collapsed ? "sidebarOpen" : "sidebarClose"} /></button>}
         <button type="button" className="btn icon" aria-label={t("action.back")} disabled={!canBack} onClick={back}><Icon name="chevronLeft" /></button>
         <button type="button" className="btn icon" aria-label={t("action.forward")} disabled={!canForward} onClick={forward}><Icon name="chevronRight" /></button>
       </div>
-      <div className="grow" />
       <SearchBox />
+      <div className="grow" />
+      <StashChip />
       <JobsIndicator />
-      {platform !== "macOs" ? (
+      {ownControls ? (
         <div className="window-controls">
           <button type="button" className="btn icon" aria-label={t("misc.minimize")} onClick={() => bridge().window.minimize()}><Icon name="minimize" size={14} /></button>
           <button type="button" className="btn icon" aria-label={win.maximized ? t("misc.restore") : t("misc.maximize")} onClick={() => (win.maximized ? bridge().window.unmaximize() : bridge().window.maximize())}><Icon name={win.maximized ? "restoreWin" : "maximize"} size={13} /></button>
@@ -39,7 +55,7 @@ export function TopBar() {
 }
 
 function SearchBox() {
-  const serverId = useApp((s) => s.servers[0]?.id);
+  const serverId = useApp((s) => s.accounts[0]?.id);
   const focusNonce = useApp((s) => s.searchFocusNonce);
   const navigate = useApp((s) => s.navigate);
   const serverBatch = useApp((s) => s.lastServerSearch);
@@ -52,6 +68,7 @@ function SearchBox() {
   const input = useRef<HTMLInputElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const reqId = useRef("");
+  const [recent, setRecent] = useState<string[]>(() => recentSearches());
 
   useEffect(() => {
     if (focusNonce) {
@@ -70,7 +87,7 @@ function SearchBox() {
     const id = `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     reqId.current = id;
     const h = setTimeout(() => {
-      void bridge().query({ type: "search", data: { server_id: serverId, query: q, limit: 6, include_server: true, request_id: id } }).then((r) => {
+      void bridge().query({ type: "search", data: { server_id: "", query: q, limit: 6, include_server: true, request_id: id } }).then((r) => {
         if (reqId.current !== id || r.type !== "search") return;
         setLocal(r.data);
         setServer(undefined);
@@ -100,12 +117,15 @@ function SearchBox() {
     return () => window.removeEventListener("mousedown", onDown);
   }, [open]);
 
-  type Row = { key: string; kind: string; label: string; sub?: string; cover?: string; go: () => void };
+  type Row = { key: string; kind: string; label: string; sub?: string; lyric?: { line: string; start: number; end: number }; cover?: string; go: () => void };
   const rows = (r: SearchResults | undefined): Row[] => {
     if (!r) return [];
-    const sid = serverId ?? "";
+    const playLyric = (track: TrackRef, startMs: number | undefined) => {
+      bridge().dispatch({ type: "playTracks", data: { tracks: [track], start_index: 0, label: r.query, shuffle: false, start_position_ms: startMs ?? 0 } });
+    };
     return [
-      ...r.tracks.map((x) => ({ key: `t${x.id}`, kind: t("search.tracks"), label: x.title, sub: x.artist, cover: x.coverArt, go: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [x.id], start_index: 0, label: x.title, shuffle: false } }) })),
+      ...r.tracks.map((x) => ({ key: `t${x.id}`, kind: t("search.tracks"), label: x.title, sub: x.artist, cover: x.coverArt, go: () => bridge().dispatch({ type: "playTracks", data: { tracks: [refOf(x)], start_index: 0, label: x.title, shuffle: false } }) })),
+      ...(r.lyrics ?? []).map((x) => ({ key: `ly${x.track.id}`, kind: t("search.lyrics"), label: x.track.title, sub: x.track.artist, lyric: { line: x.line, start: x.matchStart, end: x.matchEnd }, cover: x.track.coverArt, go: () => playLyric(refOf(x.track), x.startMs) })),
       ...r.albums.map((x) => ({ key: `a${x.id}`, kind: t("search.albums"), label: x.name, sub: x.artist, cover: x.coverArt, go: () => navigate({ view: "album", id: x.id }) })),
       ...r.artists.map((x) => ({ key: `r${x.id}`, kind: t("search.artists"), label: x.name, cover: x.coverArt, go: () => navigate({ view: "artist", id: x.id }) })),
       ...r.playlists.map((x) => ({ key: `p${x.id}`, kind: t("search.playlists"), label: x.name, cover: x.coverArt, go: () => navigate({ view: "playlist", id: x.id }) })),
@@ -114,43 +134,82 @@ function SearchBox() {
   const localRows = rows(local);
   const serverRows = rows(server);
   const all = [...localRows, ...serverRows];
+  const searchFor = (query: string) => {
+    setActive(-1);
+    setRecent(rememberSearch(query));
+    setQ(query);
+    navigate({ view: "search", param: query });
+    setOpen(false);
+  };
   const pick = (r: Row) => {
+    if (q.trim()) setRecent(rememberSearch(q));
     r.go();
     setOpen(false);
     input.current?.blur();
   };
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { setOpen(false); input.current?.blur(); return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(all.length - 1, a + 1)); }
+    const count = showRecent ? recent.length : all.length;
+    // Delete forgets the highlighted recent search (the rows' × does the same for the pointer).
+    if (showRecent && e.key === "Delete" && recent[active]) { e.preventDefault(); forget(recent[active]); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((a) => Math.min(count - 1, a + 1)); }
     if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(-1, a - 1)); }
     if (e.key === "Enter") {
       e.preventDefault();
+      if (showRecent) { const r = recent[active]; if (r) searchFor(r); return; }
       const r = all[active];
       if (r) pick(r);
-      else if (q.trim()) { navigate({ view: "search", param: q }); setOpen(false); }
+      else if (q.trim()) searchFor(q);
     }
   };
   const renderRow = (r: Row, i: number) => (
     <div key={r.key} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onMouseDown={(e) => { e.preventDefault(); pick(r); }} data-testid="search-result">
       <Artwork id={r.cover} size={64} className="art" />
-      <div className="grow truncate">{r.label}{r.sub ? <span className="muted"> · {r.sub}</span> : null}</div>
+      <div className="grow truncate">{r.label}{r.sub ? <span className="muted"> · {r.sub}</span> : null}{r.lyric ? <div className="small"><LyricSnippet line={r.lyric.line} start={r.lyric.start} end={r.lyric.end} /></div> : null}</div>
       <span className="kind">{r.kind}</span>
     </div>
   );
-  const expanded = open && !!q.trim();
+  // Focused with nothing typed: the recent searches (this device's own).
+  const showRecent = open && !q.trim() && recent.length > 0;
+  const forget = (query: string) => {
+    const next = forgetSearch(query);
+    setRecent(next);
+    setActive((a) => Math.min(a, next.length - 1));
+  };
+  const expanded = (open && !!q.trim()) || showRecent;
   // The sheet lifts away on Escape, an outside click or a pick; when the query
   // is cleared there is nothing left to show, so it goes at once.
-  const sheet = usePresence(expanded || undefined, pop, { instant: !q.trim() });
+  const sheet = usePresence(expanded || undefined, pop, { instant: !q.trim() && !showRecent });
   return (
     <div className="search" role="search">
       <Icon name="search" size={14} />
-      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => q && setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
+      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => { setRecent(recentSearches()); setOpen(true); }} onBlur={(e) => { if (!pop.current?.contains(e.relatedTarget as Node | null)) { setOpen(false); setActive(-1); } }} onClick={() => setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
       {sheet.value ? (
-        <div {...sheet.exitProps} id="search-results" className={`search-popover ${sheet.motion}`} role="listbox" aria-label={t("a11y.searchResults")} style={{ minHeight }} data-testid="search-popover">
-          {local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
-          {localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
-          {local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
-          {serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
+        <div {...sheet.exitProps} id={showRecent ? undefined : "search-results"} className={`search-popover ${sheet.motion}`} role={showRecent ? undefined : "listbox"} aria-label={showRecent ? undefined : t("a11y.searchResults")} style={{ minHeight: showRecent ? undefined : minHeight }} data-testid="search-popover">
+          {showRecent ? (
+            <>
+              <div className="search-recent-head">
+                <span className="grow" id="search-recent-title"><span className="search-recent-title">{t("search.recent")}</span> <span className="muted">· {t("search.recentLocal")}</span></span>
+                <button type="button" className="btn text sm" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); setActive(-1); setRecent(clearSearches()); }} data-testid="search-recent-clear">{t("search.recentClear")}</button>
+              </div>
+              {/* The rows alone are the listbox; the header and its Clear sit outside it. */}
+              <div id="search-results" role="listbox" aria-labelledby="search-recent-title">
+                {recent.map((r, i) => (
+                  <div key={r} id={`search-opt-${i}`} className={`result-row ${i === active ? "active" : ""}`} role="option" aria-selected={i === active} aria-description={t("search.recentForgetHint")} onMouseMove={(e) => { if (e.movementX || e.movementY) setActive(i); }} onMouseDown={(e) => { e.preventDefault(); searchFor(r); }} data-testid="search-recent">
+                    <Icon name="restore" size={18} className="search-recent-icon" />
+                    <div className="grow truncate">{r}</div>
+                    {/* For the pointer only (Delete does it from the keyboard), so not a control inside the option. */}
+                    <span className="search-recent-forget" aria-hidden="true" title={t("search.recentForget", { query: r })} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); forget(r); }} data-testid="search-recent-forget"><Icon name="close" size={16} /></span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+          {!showRecent && local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
+          {!showRecent && localRows.some((r) => r.lyric) ? <div className="search-divider" role="presentation">{t("search.lyricsScope")}</div> : null}
+          {!showRecent && localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
+          {!showRecent && local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
+          {!showRecent && serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
         </div>
       ) : null}
     </div>
@@ -161,7 +220,7 @@ function JobsIndicator() {
   const jobs = useApp((s) => s.jobs);
   const problems = useApp((s) => s.problems);
   const sync = useApp((s) => s.syncProgress);
-  const servers = useApp((s) => s.servers);
+  const servers = useApp((s) => s.accounts);
   // Library syncs are summarised per server (last result only), not listed one row per run.
   const others = jobs.filter((j) => j.kind !== "librarySync");
   const [open, setOpen] = useState(false);
@@ -228,7 +287,7 @@ function JobsIndicator() {
 }
 
 /** The server's sync as one row: what it is doing or when it last finished, the library size or live count, one action. */
-function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
+function SyncRow({ server, job, sync }: { server: AccountInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
   const active = job && (job.state === "running" || job.state === "queued" || job.state === "paused") ? job : undefined;
   // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
   const unsuccessful = job && (job.state === "failed" || job.state === "cancelled") && job.updatedAt > (server.lastSync ?? 0) ? job : undefined;
@@ -260,7 +319,7 @@ function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefin
           <div className="small muted truncate">{supporting}</div>
         </div>
         {!active && failed ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "retryJob", data: { id: unsuccessful.id } })}>{t("jobs.retry")}</button>
-          : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { server_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
+          : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { account_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
           : active.state === "paused" ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "resumeJob", data: { id: active.id } })}>{t("jobs.resume")}</button>
           : active.cancellable ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "cancelJob", data: { id: active.id } })}>{t("jobs.cancel")}</button>
           : null}

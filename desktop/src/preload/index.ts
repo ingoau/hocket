@@ -2,7 +2,8 @@
 // sandbox is on, nothing from Node reaches the page.
 import { contextBridge, ipcRenderer } from "electron";
 import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
-import type { AppMeta, AppPrefs, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl, WindowState } from "@shared/bridge-types";
+import type { RoomDiagnosticsStatus } from "@core/api";
+import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, StagedScreenshot, UndecodedImage, ThemeChoice, WindowControl, WindowState, YtmSignInResult } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -28,6 +29,9 @@ const bridge: HocketBridge = {
   meta(): Promise<AppMeta> {
     return ipcRenderer.invoke(IPC.meta) as Promise<AppMeta>;
   },
+  credentialStorage(): Promise<CredentialStorage> {
+    return ipcRenderer.invoke(IPC.credentialStorage) as Promise<CredentialStorage>;
+  },
   window: {
     minimize: () => ipcRenderer.send(IPC.windowControl, "minimize" satisfies WindowControl),
     maximize: () => ipcRenderer.send(IPC.windowControl, "maximize" satisfies WindowControl),
@@ -38,6 +42,8 @@ const bridge: HocketBridge = {
     openMiniPlayer: () => ipcRenderer.send(IPC.windowControl, "openMiniPlayer" satisfies WindowControl),
     closeMiniPlayer: () => ipcRenderer.send(IPC.windowControl, "closeMiniPlayer" satisfies WindowControl),
     showMain: () => ipcRenderer.send(IPC.windowControl, "showMain" satisfies WindowControl),
+    setTheme: (theme: ThemeChoice) => ipcRenderer.send(IPC.windowControl, { theme } satisfies WindowControl),
+    setPlayerOpen: (open: boolean) => ipcRenderer.send(IPC.windowControl, { playerOpen: open } satisfies WindowControl),
     getState: () => ipcRenderer.invoke(IPC.windowState) as Promise<WindowState>,
     onState: (listener) => subscribe<WindowState>(IPC.windowStateChanged, listener),
     reportVisibility: (visible: boolean) => ipcRenderer.send(IPC.visibility, visible),
@@ -52,6 +58,10 @@ const bridge: HocketBridge = {
     saveText: (req: SaveDialogRequest & { text: string }) => ipcRenderer.invoke(IPC.dialogSaveText, req) as Promise<string | undefined>,
     openText: (req: OpenDialogRequest) => ipcRenderer.invoke(IPC.dialogOpenText, req) as Promise<OpenedTextFile | undefined>,
   },
+  ytm: {
+    signIn: () => ipcRenderer.invoke(IPC.ytmSignIn) as Promise<YtmSignInResult>,
+    signInCoordinator: () => ipcRenderer.invoke(IPC.ytmSignInCoordinator) as Promise<YtmSignInResult>,
+  },
   config: {
     export: (document: string) => ipcRenderer.invoke(IPC.configExport, document) as Promise<string | undefined>,
     import: () => ipcRenderer.invoke(IPC.configImport) as Promise<boolean>,
@@ -59,12 +69,22 @@ const bridge: HocketBridge = {
   clipboard: {
     writeText: (text: string) => ipcRenderer.send(IPC.clipboardWrite, text),
   },
+  shareAudio: (trackId: string) => ipcRenderer.invoke(IPC.shareAudio, trackId) as Promise<"shared" | "saved" | "cancelled" | "failed">,
   diagnostics: {
     summary: () => ipcRenderer.invoke(IPC.diagnosticsSummary) as Promise<DiagnosticsSummary>,
-    save: () => ipcRenderer.invoke(IPC.diagnosticsSave) as Promise<string | undefined>,
-    copy: () => ipcRenderer.invoke(IPC.diagnosticsCopy) as Promise<void>,
-    reveal: () => ipcRenderer.invoke(IPC.diagnosticsReveal) as Promise<string | undefined>,
-    share: () => ipcRenderer.invoke(IPC.diagnosticsShare) as Promise<boolean>,
+    collect: (options?: { force?: boolean }) => ipcRenderer.invoke(IPC.diagnosticsCollect, options) as Promise<RoomDiagnosticsStatus | undefined>,
+    save: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsSave, options) as Promise<string | undefined>,
+    copy: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsCopy, options) as Promise<void>,
+    reveal: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsReveal, options) as Promise<string | undefined>,
+    share: (options?: DiagnosticsOptions) => ipcRenderer.invoke(IPC.diagnosticsShare, options) as Promise<boolean>,
+  },
+  report: {
+    pickScreenshots: (room: number) => ipcRenderer.invoke(IPC.reportPickScreenshots, room) as Promise<(StagedScreenshot | UndecodedImage)[]>,
+    pasteScreenshot: () => ipcRenderer.invoke(IPC.reportPasteScreenshot) as Promise<StagedScreenshot | undefined>,
+    stageImage: (bytes: Uint8Array, name: string) => ipcRenderer.invoke(IPC.reportStageImage, bytes, name) as Promise<StagedScreenshot | undefined>,
+    pickRecording: () => ipcRenderer.invoke(IPC.reportPickRecording) as Promise<PickedRecording | undefined>,
+    discard: (ids: string[]) => ipcRenderer.invoke(IPC.reportDiscard, ids) as Promise<void>,
+    send: (request: ReportSendRequest) => ipcRenderer.invoke(IPC.reportSend, request) as Promise<boolean>,
   },
   onDeepLink: (listener) => subscribe<string>(IPC.deepLink, listener),
   onUiAction: (listener) => subscribe<string>(IPC.uiAction, listener),

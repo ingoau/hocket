@@ -61,7 +61,7 @@ fun AvailableOfflineScreen(nav: NavHostController) {
                     onShuffle = { client.dispatch(Commands.playContext(Commands.filterContext(serverId, filter), shuffle = true)) },
                 )
             }
-            SongsTab(serverId, SortOrder.Artist, false, nav, offlineOnly = true)
+            SongsTab("", SortOrder.Artist, false, nav, offlineOnly = true)
         }
     }
 }

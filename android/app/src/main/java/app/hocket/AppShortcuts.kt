@@ -115,4 +115,20 @@ object AppLinks {
     fun openSearch(query: String?) { _search.value = SearchLink(query?.takeIf { it.isNotBlank() }) }
 
     fun consume(link: SearchLink) { _search.compareAndSet(link, null) }
+
+    private val _pair = MutableStateFlow<String?>(null)
+    /** Another device's pairing link (hocket://pair), until setup pairs with it or the shell asks first. */
+    val pair: StateFlow<String?> = _pair.asStateFlow()
+
+    fun openPair(link: String) { _pair.value = link }
+
+    fun consumePair(link: String) { _pair.compareAndSet(link, null) }
+
+    private val _claim = MutableStateFlow<Pair<String, String>?>(null)
+    /** A coordinator claim link (hocket://claim), until the shell asks to claim it. */
+    val claim: StateFlow<Pair<String, String>?> = _claim.asStateFlow()
+
+    fun openClaim(link: Pair<String, String>) { _claim.value = link }
+
+    fun consumeClaim(link: Pair<String, String>) { _claim.compareAndSet(link, null) }
 }

@@ -219,6 +219,19 @@ impl DspChain {
         self.track_gain.snap(self.current_gain_linear());
     }
 
+    /// Clear filter memory only, keeping the normaliser's gain (no level
+    /// jump): for audio that carries on at the same level from elsewhere, an
+    /// AutoMix tail or a follow-up mixed in.
+    pub fn reset_filters(&mut self) {
+        self.eq.reset();
+        self.normaliser.reset_filter();
+    }
+
+    /// The normaliser's current correction in dB.
+    pub fn normaliser_gain_db(&self) -> f64 {
+        self.normaliser.gain_db()
+    }
+
     /// Whether processing would change anything (lets the engine skip the
     /// pass entirely for the common "everything off" case).
     pub fn is_bypassed(&self) -> bool {

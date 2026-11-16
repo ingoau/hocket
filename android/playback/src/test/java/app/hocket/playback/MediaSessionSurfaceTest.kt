@@ -11,7 +11,7 @@ import org.junit.Test
 
 class MediaSessionSurfaceTest {
     private fun state(playing: Boolean = true, positionMs: UInt = 1000u, takenAt: Double = 0.0) = MediaSessionState(
-        MediaSessionMetadata("Song", "Artist", "Album", 200_000u, null, "t1", false, 0u),
+        MediaSessionMetadata("Song", "Artist", "Album", 200_000u, null, "t1", null, false, 0u),
         playing,
         PositionStamp(positionMs, takenAt, 1.0, playing),
         false,

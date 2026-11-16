@@ -65,8 +65,8 @@ test.describe("now playing", () => {
     await expect(panel).toHaveAttribute("data-view", "overview");
     await expect(page.getByTestId("sidebar-empty")).toBeVisible();
     await page.evaluate(async () => {
-      const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
-      window.hocket.dispatch({ type: "playTracks", data: { server_id: s.data[0]!.id, track_ids: ["tr-1", "tr-2", "tr-3", "tr-4", "tr-5"], start_index: 0, label: "e2e", shuffle: false } });
+      const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+      window.hocket.dispatch({ type: "playTracks", data: { tracks: ["tr-1", "tr-2", "tr-3", "tr-4", "tr-5"].map((id) => ({ source: s.data[0]!.id, id })), start_index: 0, label: "e2e", shuffle: false } });
     });
     // The overview: artwork, the title, then the lyrics peek, the next three songs and the song's facts.
     await expect(page.getByTestId("sidebar-overview")).toContainText("Word by Word");
@@ -162,8 +162,8 @@ test.describe("now playing", () => {
     await expect(page.getByTestId("toggle-side-panel")).toHaveAttribute("aria-expanded", "true");
     await page.getByTestId("toggle-side-panel").click();
     await expect(panel).toHaveCount(0);
-    // L and Q do what the buttons do.
-    await page.getByTestId("content").click();
+    // L and Q do what the buttons do (with focus off the track table, whose letters type ahead).
+    await page.getByTestId("album-head").click();
     await page.keyboard.press("l");
     await expect(panel).toHaveAttribute("data-view", "lyrics");
     await page.keyboard.press("q");
@@ -172,7 +172,7 @@ test.describe("now playing", () => {
     await expect(panel).toHaveCount(0);
   });
 
-  test("the queue selector restores a saved queue", async ({ hocket }) => {
+  test("the queue's name opens the Queues page: rename, pin, delete and restore", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     const first = await playAlbum(page, 0);
@@ -181,30 +181,42 @@ test.describe("now playing", () => {
     const panel = page.getByTestId("right-panel");
     await expect(panel.getByTestId("queue-selector-label")).toHaveText(second);
     await panel.getByTestId("queue-selector").click();
-    const menu = page.getByTestId("queue-selector-menu");
-    await expect(menu).toBeVisible();
-    // Focus moves into it; Escape closes it and gives focus back.
-    await expect(menu.getByTestId("queue-selector-item").first()).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(menu).toHaveCount(0);
-    await expect(panel.getByTestId("queue-selector")).toBeFocused();
-    await panel.getByTestId("queue-selector").click();
-    const item = menu.getByTestId("queue-selector-item").filter({ hasText: first });
-    await expect(item).toBeVisible();
-    // Each saved queue keeps its menu (restore, pin, save as playlist, delete).
-    await menu.getByTestId("queue-selector-more").first().click();
-    await expect(page.getByTestId("context-menu").locator('[data-action="pinSavedQueue"]')).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("context-menu")).toHaveCount(0);
-    await item.click();
-    await expect(menu).toHaveCount(0);
-    await expect(panel.getByTestId("queue-selector-label")).toHaveText(first);
-    await expect(page.getByTestId("player-bar").locator(".title")).not.toHaveText("");
-    // "All recent queues" opens the full list, whose back arrow returns to the queue.
-    await panel.getByTestId("queue-selector").click();
-    await page.getByTestId("queue-selector-all").click();
     await expect(panel).toHaveAttribute("data-view", "recent");
-    await expect(panel.getByTestId("saved-queues")).toBeVisible();
+    const pageEl = panel.getByTestId("saved-queues");
+    await expect(pageEl.getByTestId("saved-queues-current")).toContainText(second);
+    // Renaming the playing queue: Enter saves, and the queue's name follows.
+    await pageEl.getByTestId("saved-queues-current-rename").click();
+    await page.getByTestId("saved-queue-rename-input").fill("Late night");
+    await page.keyboard.press("Enter");
+    await expect(pageEl.getByTestId("saved-queues-current")).toContainText("Late night");
+    // A saved queue: Escape cancels a rename, Enter saves one.
+    const row = pageEl.getByTestId("saved-queue-row").filter({ hasText: first });
+    await row.getByTestId("saved-queue-rename").click();
+    await page.getByTestId("saved-queue-rename-input").fill("Nope");
+    await page.keyboard.press("Escape");
+    await expect(row).toContainText(first);
+    await row.getByTestId("saved-queue-rename").click();
+    await page.getByTestId("saved-queue-rename-input").fill("Morning");
+    await page.keyboard.press("Enter");
+    const morning = pageEl.getByTestId("saved-queue-row").filter({ hasText: "Morning" });
+    await expect(morning).toBeVisible();
+    // Pinning moves it under Pinned; its context menu offers Unpin.
+    await morning.getByTestId("saved-queue-pin").click();
+    await expect(morning.getByTestId("saved-queue-pin")).toHaveAttribute("aria-pressed", "true");
+    await morning.click({ button: "right" });
+    await expect(page.getByTestId("context-menu").locator('[data-action="unpinSavedQueue"]')).toBeVisible();
+    await page.keyboard.press("Escape");
+    // Restoring returns to the queue, now playing that one.
+    await morning.getByTestId("saved-queue-restore").click();
+    await expect(panel).toHaveAttribute("data-view", "queue");
+    await expect(panel.getByTestId("queue-selector-label")).toHaveText("Morning");
+    await expect(page.getByTestId("player-bar").locator(".title")).not.toHaveText("");
+    // Delete is immediate.
+    await panel.getByTestId("queue-selector").click();
+    const late = pageEl.getByTestId("saved-queue-row").filter({ hasText: "Late night" });
+    await expect(late).toBeVisible();
+    await late.getByTestId("saved-queue-delete").click();
+    await expect(late).toHaveCount(0);
     await page.getByTestId("sidebar-back").click();
     await expect(panel).toHaveAttribute("data-view", "queue");
   });
@@ -213,8 +225,8 @@ test.describe("now playing", () => {
     const { page } = hocket;
     await completeSetup(page);
     await page.evaluate(async () => {
-      const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
-      window.hocket.dispatch({ type: "playTracks", data: { server_id: s.data[0]!.id, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } });
+      const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+      window.hocket.dispatch({ type: "playTracks", data: { tracks: ["tr-1"].map((id) => ({ source: s.data[0]!.id, id })), start_index: 0, label: "e2e", shuffle: false } });
     });
     await page.getByTestId("toggle-lyrics").click();
     const panel = page.getByTestId("right-panel");
@@ -334,6 +346,42 @@ test.describe("now playing", () => {
     await expect(pill).not.toHaveAttribute("data-remote", "");
   });
 
+  // Report R-20261104-6ykh: a window a little over the 900px minimum kept every control on one row,
+  // so the bar ran past the window's edge and the title shrank to its first letter.
+  test("the player bar fits the window at every width, with room for the song's title", async ({ hocket }) => {
+    const { app, page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    const title = page.getByTestId("player-bar").locator(".now .title");
+    await title.locator("a").evaluate((el) => { el.textContent = "A Rather Long Song Title (Extended Version)"; });
+    // Both badges on: they take room on the right too.
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSleepTimer", data: { timer: { endsAt: Date.now() + 3_600_000, stopAtEndOfTrack: false } } }));
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "battery.level", value: JSON.stringify("light") } }));
+    await expect(page.getByTestId("player-bar").locator(".right .badge")).toHaveCount(2);
+    for (const where of ["local", "remote"] as const) {
+      if (where === "remote") {
+        await handoff(page, "remote");
+        await expect(page.getByTestId("connect-button-name")).toBeVisible();
+        await page.getByTestId("connect-button-name").evaluate((el) => { el.textContent = "Someone's Pixel 7 Pro"; });
+      }
+      for (const w of [900, 910, 920, 940, 960, 980, 1000, 1030, 1060, 1100, 1180, 1220, 1280, 1320, 1400, 1500]) {
+        await resizeWindow(app, page, w, 800);
+        await page.waitForTimeout(150);
+        const geo = await page.getByTestId("player-bar").evaluate((bar) => {
+          const r = bar.getBoundingClientRect();
+          const right = Math.max(...Array.from(bar.querySelectorAll("button, [role=slider], .now .title")).map((el) => el.getBoundingClientRect().right));
+          return { barRight: r.right, winRight: window.innerWidth, right, overflow: bar.scrollWidth - bar.clientWidth, title: bar.querySelector(".now .title")!.getBoundingClientRect().width };
+        });
+        const at = `${where} at ${w}px`;
+        expect(geo.overflow, at).toBeLessThanOrEqual(0);
+        expect(geo.barRight, at).toBeLessThanOrEqual(geo.winRight + 0.5);
+        expect(geo.right, at).toBeLessThanOrEqual(geo.barRight + 0.5);
+        expect(geo.title, at).toBeGreaterThanOrEqual(110);
+      }
+      if (where === "remote") await handoff(page, "self");
+    }
+  });
+
   test("turning the player's rating off hides the stars in the bar and the fullscreen player, not in About", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
@@ -392,8 +440,8 @@ test.describe("the artist in the now playing subtitle", () => {
     const { page } = hocket;
     await completeSetup(page);
     await page.evaluate(async () => {
-      const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
-      window.hocket.dispatch({ type: "playTracks", data: { server_id: s.data[0]!.id, track_ids: ["tr-1"], start_index: 0, label: "e2e", shuffle: false } });
+      const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+      window.hocket.dispatch({ type: "playTracks", data: { tracks: ["tr-1"].map((id) => ({ source: s.data[0]!.id, id })), start_index: 0, label: "e2e", shuffle: false } });
     });
     await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { id: string } } } } }).data.queue.current?.track.id).toBe("tr-1");
     const track = ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { artist: string; artists?: { id?: string; name: string }[] } } } } }).data.queue.current!.track;
@@ -406,6 +454,11 @@ test.describe("the artist in the now playing subtitle", () => {
     // The guest opens the guest's page.
     await menu.getByTestId("artist-menu-artist").nth(1).click();
     await expect(page.getByTestId("view-artist").locator("h1").first()).toHaveText(track.artists![1]!.name);
+    // Their page features the album the guest spot is on, naming whose album it is.
+    const featured = page.getByTestId("artist-shelf-featured");
+    await expect(featured.locator("h2")).toHaveText("Featured on");
+    const album = ((await page.evaluate((id) => window.hocket.query({ type: "track", data: { track: { source: "", id } } }), "tr-1")) as { data: { album: string; albumArtist: string } }).data;
+    await expect(featured.getByTestId("artist-album").filter({ hasText: album.album })).toContainText(album.albumArtist);
   });
 
   test("shows the artist alone and opens a menu of the track's artists and its album, from the bar, the side panel and the fullscreen player", async ({ hocket }) => {
@@ -483,20 +536,6 @@ test.describe("the side panel overview from the keyboard", () => {
   });
 });
 
-test.describe("the player bar's wave", () => {
-  test("moves while the window has focus, and holds still under the battery saver", async ({ hocket }) => {
-    const { page } = hocket;
-    await completeSetup(page);
-    await playFirstAlbum(page);
-    const wave = page.getByTestId("seek-slider");
-    await expect(wave).toHaveAttribute("data-wave", "moving");
-    await page.evaluate(() => window.hocket.dispatch({ type: "setBatterySaver", data: { enabled: true } }));
-    await expect(wave).toHaveAttribute("data-wave", "still");
-    await page.evaluate(() => window.hocket.dispatch({ type: "setBatterySaver", data: { enabled: false } }));
-    await expect(wave).toHaveAttribute("data-wave", "moving");
-  });
-});
-
 test.describe("the player bar at middling widths", () => {
   test("the song, the transport and the buttons never overlap, with another device's name showing too", async ({ hocket }) => {
     const { app, page } = hocket;
@@ -557,8 +596,8 @@ test.describe("fullscreen idle fade over the immersive artwork", () => {
       await resizeWindow(app, page, 1456, 912);
       await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "display.immersiveArtwork", value: JSON.stringify("always") } }));
       await page.evaluate(async () => {
-        const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
-        window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId: s.data[0]!.id, kind: { type: "album", data: { id: "al-1" } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
+        const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+        window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: s.data[0]!.id, kind: { type: "album", data: { id: "al-1" } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
       });
       await expect(page.getByTestId("play-pause")).toHaveAttribute("aria-label", "Pause");
       await page.getByTestId("toggle-fullscreen").click();
@@ -643,8 +682,8 @@ function busy(x: number, y: number): [number, number, number] {
 /** Plays album `al-<n>` (which wears cover n - 1) from the fake library. */
 async function playCover(page: Page, n: number): Promise<void> {
   await page.evaluate(async (id) => {
-    const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
-    window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId: s.data[0]!.id, kind: { type: "album", data: { id } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
+    const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+    window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: s.data[0]!.id, kind: { type: "album", data: { id } }, label: "e2e", sort: "default" }, shuffle: false, saveOutgoing: false } } });
   }, `al-${n}`);
   await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { albumId?: string } } } } }).data.queue.current?.track.albumId).toBe(`al-${n}`);
 }
@@ -690,8 +729,10 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     const sx = canvas.width / box.width;
     let min = Infinity;
     let worst = "";
-    const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line:not(.far), .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)");
+    const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line, .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)");
     for (const el of Array.from(texts)) {
+      // The lyrics card holds the current line at its middle; the lines either side fade out by design.
+      if (el.matches(".peek-line:not(.current)") && el.closest(".lyrics-peek-view")) continue;
       const r = el.getBoundingClientRect();
       if (!r.width || !r.height) continue;
       const fg = parse(getComputedStyle(el).color);

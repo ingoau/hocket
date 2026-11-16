@@ -124,7 +124,7 @@ export class MediaSessionHost {
     if (!meta || meta.artworkPath || !meta.trackId) return state;
     if (!this.artworkCache.has(meta.trackId)) {
       try {
-        const track = expectResult(await this.opts.core.query({ type: "track", data: { id: meta.trackId } }), "trackDetail");
+        const track = expectResult(await this.opts.core.query({ type: "track", data: { track: { source: meta.source ?? "", id: meta.trackId } } }), "trackDetail");
         const path = track?.coverArt ? expectResult(await this.opts.core.query({ type: "artwork", data: { id: track.coverArt, size: 300 } }), "path") : undefined;
         this.artworkCache.set(meta.trackId, path);
         if (this.artworkCache.size > 50) this.artworkCache.delete(this.artworkCache.keys().next().value as string);

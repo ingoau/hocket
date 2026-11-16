@@ -11,7 +11,7 @@
 // The player bar's lyrics and queue buttons open those views directly.
 // Resizable by its left edge; below 900px it is a drawer over the content.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { ArtworkEdge, ImmersiveArtwork, QueueEntry, Track } from "@core/api";
+import type { ArtworkEdge, ImmersiveArtwork, QueueEntry, Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { SK } from "@shared/settings-keys";
 import { showSideView, useApp, useSetting, type Route, type SideView } from "../store/app";
@@ -20,6 +20,7 @@ import { usePositionValue } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
+import { upcomingEntries } from "../lib/queue-view";
 import { mapLyrics } from "../lib/lyrics-map";
 import { NARROW, useMediaQuery, usePrefersReducedMotion } from "../lib/media";
 import { usePresence } from "../lib/presence";
@@ -33,7 +34,8 @@ import { AboutSong, formatLine } from "./AboutSong";
 import { ArtistChooser } from "./ArtistChooser";
 import { Icon } from "./Icon";
 import { LyricsOptionsButton } from "./LyricsOptions";
-import { drawContinuation, endColour, isFlat, prepareScene, scrimOver, toneForText, useScene, withTone, type Scene } from "../lib/immersive";
+import { drawContinuation, endColour, isFlat, prepareScene, sceneKey, scrimOver, toneForText, useScene, withTone, type Scene } from "../lib/immersive";
+import { refOf } from "../lib/track-ref";
 
 const MIN_W = 300;
 const MAX_W = 560;
@@ -118,7 +120,7 @@ function DrillIn({ view }: { view: Exclude<SideView, "overview"> }) {
         {view === "lyrics" ? <LyricsPane /> : null}
         {view === "queue" ? <QueuePanel /> : null}
         {view === "recent" ? <SavedQueues /> : null}
-        {view === "about" ? <div className="side-scroll"><AboutSong variant="side" trackId={now?.track.id} onNavigate={(r: Route) => navigate(r)} /></div> : null}
+        {view === "about" ? <div className="side-scroll"><AboutSong variant="side" track={now ? refOf(now.track) : undefined} onNavigate={(r: Route) => navigate(r)} /></div> : null}
       </div>
     </section>
   );
@@ -171,11 +173,11 @@ function Overview() {
       <div ref={overview} className={`side-overview ${edge ? "immersive" : ""}`} data-style={edge?.style} data-tone={edge ? (edge.light ? "light" : "dark") : undefined} data-flat={edge && isFlat(edge) ? "" : undefined} data-fill={fill ? "" : undefined} data-testid="side-overview">
       {edge ? (
         <div className="side-backdrop" aria-hidden="true">
-          {layers.map((l, i) => (l.edge ? <SideContinuation key={l.scene.coverArt} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
+          {layers.map((l, i) => (l.edge ? <SideContinuation key={sceneKey(l.scene)} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
         </div>
       ) : null}
       <div className="side-art" data-testid="sidebar-art" data-immersive={edge ? edge.style : undefined}>
-        {layers.length ? layers.map((l, i) => (l.scene.url ? <img key={l.scene.coverArt} src={l.scene.url} alt="" draggable={false} className={fading && i === layers.length - 1 ? "fade-in-art" : ""} onAnimationEnd={settle} /> : <div key={l.scene.coverArt} className="placeholder"><Icon name="music" size={48} /></div>)) : <div className="placeholder"><Icon name="music" size={48} /></div>}
+        {layers.length ? layers.map((l, i) => (l.scene.url ? <img key={sceneKey(l.scene)} src={l.scene.url} alt="" draggable={false} className={fading && i === layers.length - 1 ? "fade-in-art" : ""} onAnimationEnd={settle} /> : <div key={sceneKey(l.scene)} className="placeholder"><Icon name="music" size={48} /></div>)) : <div className="placeholder"><Icon name="music" size={48} /></div>}
       </div>
       <div className="side-title-row">
         <div className="side-titles">
@@ -187,7 +189,7 @@ function Overview() {
       </div>
       <LyricsCard trackId={track.id} durationMs={track.durationMs} />
       <UpNextCard />
-      <AboutCard trackId={track.id} />
+      <AboutCard track={refOf(track)} />
       </div>
     </div>
   );
@@ -221,7 +223,7 @@ function useOverviewScene(coverArt: string | undefined) {
   const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
   const dark = themeSetting === "dark" || (themeSetting === "system" && systemDark);
   const scene = useScene(coverArt, preference, dark);
-  const next = useApp((s) => (s.queue.playingNext[0] ?? s.queue.upcoming[0])?.track.coverArt);
+  const next = useApp((s) => upcomingEntries(s.queue)[0]?.track.coverArt);
   useEffect(() => {
     if (next) void prepareScene(next, preference, dark);
   }, [next, preference, dark]);
@@ -320,27 +322,16 @@ function Card({ id, title, link, linkLabel, onLink, children, testId, drill }: {
   );
 }
 
-const peekKeys = new WeakMap<object, number>();
-let peekSeq = 0;
-/** A key per object, for remounting what shows it when it is replaced. */
-function keyOf(o: object): number {
-  let k = peekKeys.get(o);
-  if (k === undefined) peekKeys.set(o, (k = ++peekSeq));
-  return k;
-}
-
 /** The previous, current and next lines, following playback (static for unsynced lyrics). Hidden when the song has none. */
 function LyricsCard({ trackId, durationMs }: { trackId: string; durationMs: number | undefined }) {
   const lyrics = useApp((s) => (s.lyrics && s.lyrics.trackId === trackId ? s.lyrics.lyrics : undefined));
   const mapped = useMemo(() => (lyrics ? mapLyrics(lyrics) : undefined), [lyrics]);
   const lines = useMemo(() => mapped?.lines.filter((l) => !l.isBG && l.words.some((w) => w.word.trim())) ?? [], [mapped]);
   const peekLines = useMemo(() => lines.map((l) => ({ text: l.words.map((w) => w.word).join(""), start: l.startTime })), [lines]);
-  // A new lyrics document remounts the peek, so the last one's line never glides to the new one's.
-  const peekKey = keyOf(peekLines);
   if (!mapped || !lines.length) return null;
   return (
     <Card id="lyrics" title={t("lyrics.title")} link={t("nowPlaying.showLyrics")} onLink={() => showSideView("lyrics")} drill="lyrics" testId="sidebar-lyrics-card">
-      {mapped.synced ? <SyncedPeek key={peekKey} lines={peekLines} durationMs={durationMs} /> : (
+      {mapped.synced ? <SyncedPeek lines={peekLines} durationMs={durationMs} /> : (
         <ol className="lyrics-peek" aria-label={t("lyrics.title")}>
           {lines.slice(0, 3).map((l, i) => <li key={i} className="peek-line">{l.words.map((w) => w.word).join("")}</li>)}
         </ol>
@@ -365,53 +356,43 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
   // Re-renders only when the current line changes, and follows playback only while it plays.
   const active = usePositionValue(stamp, durationMs, offset, lineAt, !covered);
   const reduced = usePrefersReducedMotion();
-  // The line held in the current line's place: before the first line, the first, still to come.
-  const anchor = Math.max(active, 0);
+  // The whole song in a fixed window: the current line (before the first, the first) held at its
+  // middle, the lines above and below fading out (lyrics-peek's mask), gliding as it moves on.
+  const centre = Math.max(0, active);
+  const view = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLOListElement>(null);
-  // Every line sits in one column at one size whichever is current (the current one is only
-  // scaled up and brightened, both composited), and the column slides under a fixed window, the
-  // anchor one line down under the line before it. Nothing changes size, so the card keeps its
-  // height and the cards below stay put. A new line glides (CSS, unless motion is reduced); a new
-  // song or a new width jumps.
-  const placed = useRef<{ lines: typeof lines; width: number } | undefined>(undefined);
+  const [shift, setShift] = useState(0);
+  // The first placement for a song (a mount, a new track, lyrics arriving mid-song) jumps straight
+  // there; only the moves after it glide.
+  const [glide, setGlide] = useState(false);
+  const placedFor = useRef<unknown>(null);
   useLayoutEffect(() => {
+    const v = view.current;
     const ol = list.current;
-    if (!ol) return;
-    const place = (instant: boolean) => {
-      const li = ol.children[anchor] as HTMLElement | undefined;
-      const first = ol.firstElementChild as HTMLElement | null;
-      if (!li || !first) return false;
-      // One line (a line's own height, not the list's) and the gap, less where the anchor starts.
-      const y = parseFloat(getComputedStyle(li).lineHeight) + (parseFloat(getComputedStyle(ol).rowGap) || 0) - (li.offsetTop - first.offsetTop);
-      const transform = `translate3d(0, ${y}px, 0)`;
-      if (!instant) {
-        ol.style.transform = transform;
-        return true;
-      }
-      ol.style.transition = "none";
-      ol.style.transform = transform;
-      void ol.offsetWidth;
-      ol.style.transition = "";
-      return true;
+    if (!v || !ol) return;
+    const place = () => {
+      const li = ol.children[centre] as HTMLElement | undefined;
+      if (li) setShift(Math.round(v.clientHeight / 2 - (li.offsetTop + li.offsetHeight / 2)));
     };
-    const width = ol.clientWidth;
-    if (place(placed.current?.lines !== lines || placed.current.width !== width)) placed.current = { lines, width };
-    const ro = new ResizeObserver(() => {
-      const w = ol.clientWidth;
-      if (w === placed.current?.width) return;
-      if (place(true)) placed.current = { lines, width: w };
-    });
+    place();
+    if (placedFor.current !== lines) {
+      placedFor.current = lines;
+      setGlide(false);
+      requestAnimationFrame(() => requestAnimationFrame(() => setGlide(true)));
+    }
+    // The card resizing, the lines rewrapping (the current one grows) and the font arriving all move the middle.
+    const ro = new ResizeObserver(place);
+    ro.observe(v);
     ro.observe(ol);
+    void document.fonts.ready.then(place);
     return () => ro.disconnect();
-  }, [anchor, lines]);
+  }, [centre, active, lines]);
   return (
-    <div className="lyrics-peek-window">
-      <ol ref={list} className={`lyrics-peek synced ${reduced ? "" : "moving"}`} aria-label={t("lyrics.title")} data-active={active}>
+    <div ref={view} className={`lyrics-peek-view ${glide && !reduced ? "moving" : ""}`}>
+      <ol ref={list} className="lyrics-peek synced" aria-label={t("lyrics.title")} data-active={active} style={{ transform: `translateY(${shift}px)` }}>
         {lines.map((line, i) => {
           const current = i === active;
-          // The peek is the lines around the current one; the rest are out of the window.
-          const near = active < 0 ? i <= 1 : Math.abs(i - active) <= 1;
-          return <li key={i} className={`peek-line ${current ? "current" : ""} ${near ? "" : "far"}`} aria-current={current ? "true" : undefined} aria-hidden={near ? undefined : true}>{line.text}</li>;
+          return <li key={i} className={`peek-line ${current ? "current" : ""}`} aria-current={current ? "true" : undefined}>{line.text}</li>;
         })}
       </ol>
     </div>
@@ -420,7 +401,7 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
 
 function UpNextCard() {
   const queue = useApp((s) => s.queue);
-  const next: QueueEntry[] = [...queue.playingNext, ...queue.upcoming].slice(0, 3);
+  const next: QueueEntry[] = upcomingEntries(queue).slice(0, 3);
   const d = bridge().dispatch;
   return (
     <Card id="upnext" title={t("nowPlaying.upNext")} link={t("nowPlaying.openQueue")} onLink={() => showSideView("queue")} drill="queue" testId="sidebar-upnext-card">
@@ -446,8 +427,8 @@ function UpNextCard() {
   );
 }
 
-function AboutCard({ trackId }: { trackId: string }) {
-  const { data } = useQuery(() => ({ type: "track", data: { id: trackId } }), "trackDetail", [trackId]);
+function AboutCard({ track }: { track: TrackRef }) {
+  const { data } = useQuery(() => ({ type: "track", data: { track } }), "trackDetail", [track.source, track.id]);
   const tr = data as Track | undefined;
   const facts: [string, string | number | undefined][] = tr ? [
     [t("about.album"), tr.album],

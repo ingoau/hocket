@@ -15,6 +15,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -184,7 +185,7 @@ class CacheUiTest {
         compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetBytes != null }
         compose.waitForIdle()
         // 640 MB cache of which 96 MB partial; the automatic budget is 2 GiB.
-        rowHas("storage.cacheUsage", "544.0 MB complete · 96.0 MB partial · of 2.15 GB")
+        rowHas("storage.cacheUsage", "544.0 MB complete · 96.0 MB partial · 2.15 GB limit")
         rowHas("storage.cacheMaxBytes", "Automatic (currently 2.15 GB)")
         rowHas("storage.dataSaved", "2.70 GB")
         rowHas("storage.dataSaved", "3.10 GB played from this device · 5.20 GB fetched from the server")
@@ -243,7 +244,9 @@ class CacheUiTest {
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
         compose.openSettingsFromAccount()
-        compose.onNodeWithTag("settings.category.downloads").performScrollTo().performClick()
+        // By its action: scrolled just into view, the row sits under the mini player, which would take a tap.
+        compose.onNodeWithTag("settings.category.downloads").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("setting.open.downloads").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("setting.open.downloads").performClick()
         awaitTag("downloads.availableOffline")
         compose.onNodeWithTag("downloads.availableOffline").performClick()

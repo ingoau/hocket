@@ -29,11 +29,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,8 +60,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ripple
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -88,6 +96,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -114,9 +123,14 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
+import app.hocket.playback.AudioOutputs
+import app.hocket.playback.CastDevices
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.ref
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
+import app.hocket.core.has
+import app.hocket.core.SwipeOptions
 import app.hocket.core.api.ArtworkEdge
 import app.hocket.core.api.ArtworkLayout
 import app.hocket.core.api.Command
@@ -183,6 +197,12 @@ internal fun FullPlayer(
     coverArt: String?,
     neighbourLayouts: Pair<ArtworkLayout?, ArtworkLayout?> = null to null,
     headerAlpha: () -> Float = { 1f },
+    swipeUp: SwipeUpPull? = null,
+    swipeUpAction: String? = null,
+    actionsMode: PlayerMode = mode,
+    fullScreenToggle: Boolean? = null,
+    onToggleFullScreen: () -> Unit = {},
+    asPanel: Boolean = false,
 ) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
@@ -191,8 +211,9 @@ internal fun FullPlayer(
     val track = entry?.track
     val density = LocalDensity.current
     var handoff by remember { mutableStateOf(false) }
+    /** The device picker brought up by a swipe, following the finger (null when opened otherwise). */
+    var handoffPull by remember { mutableStateOf<app.hocket.ui.components.SheetPull?>(null) }
     var queues by remember { mutableStateOf(false) }
-    var sleepSheet by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
     var artists by remember { mutableStateOf(false) }
     var lyricsTiming by remember { mutableStateOf(false) }
@@ -206,7 +227,13 @@ internal fun FullPlayer(
     hero.artInset = with(density) { PAGE_PADDING.toPx() }
     hero.artMax = with(density) { MAX_ART.toPx() }
     hero.artPad = with(density) { ART_PAD.toPx() }
-    val openMenu = {
+    // Scrolling the queue folds the controls below it away (the upright layout only).
+    val scope = rememberCoroutineScope()
+    val collapse = remember(scope) { ControlsCollapse(scope) }
+    collapse.range = with(density) { COLLAPSE_SCROLL.toPx() }
+    val reducedMotion = LocalReducedMotion.current
+    /** Opens the song menu ([pull] when a swipe brings it up); false when there is no song. */
+    val openMenu = { pull: app.hocket.ui.components.SheetPull? ->
         // The song menu is hosted at the app level, not in this (moving) sheet; the player adds
         // the sleep timer as its extra (it has no other place in the player).
         val sleep = client.sleepTimer.value
@@ -217,55 +244,107 @@ internal fun FullPlayer(
                     supporting = resources.getString(R.string.lyrics_offset_value, doc.offsetMs), testTag = "player.lyricsTiming")
             }
             songMenu.open(it, extras = listOfNotNull(timing, app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
-                onClick = { sleepSheet = true }, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")))
-        }
-        Unit
+                page = app.hocket.ui.components.MenuPage.Sleep, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")), pull = pull)
+        } ?: false
     }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // `swipe.playerUp` set to the device picker or the song menu: the swipe brings it up as a sheet
+    // that follows the finger (the queue and the lyrics are the sheet's own [SwipeUpPull.onOpen]).
+    if (swipeUp != null) SideEffect {
+        swipeUp.openSheet = when (swipeUpAction) {
+            SwipeOptions.PLAYER_UP_CONNECT -> { pull ->
+                // Dropping back closes this picker only, never one opened after it.
+                pull.onClosed = { if (handoffPull === pull) { handoff = false; handoffPull = null } }
+                handoffPull?.dismiss()
+                handoffPull = pull
+                handoff = true
+                true
+            }
+            SwipeOptions.PLAYER_UP_MENU -> { pull -> openMenu(pull) }
+            else -> null
+        }
+    }
+    // As the side panel, the player sits clear of the system bars already (under the status bar,
+    // above the mini player's line): its handle and action row add no room for them.
+    BoxWithConstraints(Modifier.fillMaxSize().then(if (asPanel) Modifier.consumeWindowInsets(WindowInsets.systemBars) else Modifier)) {
         val viewport = maxHeight
         val pageWidth = maxWidth
         val scroll = rememberScrollState()
-        val header = @Composable { PlayerHandle(onCollapse) }
+        // The panel layout's full-screen toggle sits at the handle's end ([fullScreenToggle]: whether it is full screen now).
+        val fullScreenLabel = stringResource(if (fullScreenToggle == true) R.string.player_exit_full_screen else R.string.player_full_screen)
+        val header = @Composable {
+            Box(Modifier.fillMaxWidth()) {
+                PlayerHandle(onCollapse)
+                if (fullScreenToggle != null) {
+                    IconButton(onClick = onToggleFullScreen, modifier = Modifier.align(Alignment.BottomEnd).padding(end = PAGE_PADDING - 12.dp).testTag("player.fullScreen")) {
+                        Icon(if (fullScreenToggle) HocketIcons.Filled.CloseFullscreen else HocketIcons.Filled.OpenInFull, fullScreenLabel)
+                    }
+                }
+            }
+        }
+        // Landscape (a phone on its side, a tablet's full screen): artwork beside the controls, so
+        // nothing has to scroll.
+        val wide = !asPanel && pageWidth > viewport && pageWidth >= WIDE_MIN_WIDTH
+        // On a tall enough side-by-side page (a tablet's full screen) the artwork leaves the lyrics or
+        // the queue for a slot above the title, not the thumbnail beside it.
+        val artAbove = wide && viewport >= ART_ABOVE_MIN_HEIGHT
+        hero.artAbove = artAbove
+        val folding = !wide && mode == PlayerMode.Queue
+        val fold = { if (wide) 0f else collapse.fraction }
+        // Out of the queue (or the upright layout, or with nothing queued: nothing left to scroll
+        // back) the controls unfold; straight away where the page changes shape.
+        LaunchedEffect(folding, track == null) { if (!folding || track == null) collapse.animateTo(0f, instant = reducedMotion || wide) }
+        // Narrow screens (display size "largest" leaves ~320 dp): a lower transport.
+        // (And beside the artwork on a short page: a phone on its side.)
+        val transportHeight = if (pageWidth < 360.dp || (wide && viewport < 480.dp)) 68.dp else TRANSPORT_HEIGHT
+        // What the action row leaves when it has folded away: the navigation bar's room.
+        val navBottom = if (asPanel) 0.dp else WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         Box(Modifier.fillMaxSize().verticalScroll(scroll, overscrollEffect = null).testTag("player.page")) {
             PlayerLayout(
+                wide = wide,
+                artAbove = artAbove,
                 minHeight = viewport,
                 hero = hero,
+                fold = fold,
+                foldedBottom = navBottom + 12.dp,
+                transportHeight = transportHeight,
                 // The artwork is drawn over the page: under an immersive one (or one sliding in
                 // during a skip swipe) the page keeps the handle's room (invisible) and the real one
                 // goes on top.
                 header = {
                     Box(
                         Modifier
-                            .graphicsLayer { alpha = if (immersive != null || carousel.offset.value != 0f) 0f else headerAlpha() }
+                            .graphicsLayer { alpha = if (immersive != null || carousel.offset != 0f) 0f else headerAlpha() }
                             .then(if (immersive != null) Modifier.clearAndSetSemantics { } else Modifier),
                     ) { header() }
                 },
-                area = { ModeArea(mode, hero, lyricsVisible) },
-                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
-                seek = { PlayerSeek(position) },
+                area = { ModeArea(mode, hero, lyricsVisible, queueModifier = if (folding) Modifier.nestedScroll(collapse.connection) else Modifier) },
+                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
+                seek = { PlayerSeek(position, fold) },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
                     val buffering by client.buffering.collectAsStateWithLifecycle()
-                    // Narrow screens (display size "largest" leaves ~320 dp): a lower transport.
                     TransportRow(
                         playing = playing,
                         buffering = buffering,
                         onPrevious = { client.dispatch(Command.Previous) },
                         onToggle = { client.dispatch(Command.TogglePlay) },
                         onNext = { client.dispatch(Command.Next) },
-                        height = if (pageWidth < 360.dp) 68.dp else TRANSPORT_HEIGHT,
+                        height = foldedTransport(transportHeight, fold()),
                         modifier = Modifier.padding(horizontal = PAGE_PADDING),
                     )
                 },
                 actions = {
                     PlayerActions(
-                        mode = mode,
+                        mode = actionsMode,
                         onMode = onMode,
                         switcherOpen = queues,
                         onSwitchQueue = { queues = true },
                         onConnect = { handoff = true },
-                        onMore = openMenu,
-                        modifier = Modifier.navigationBarsPadding().padding(start = PAGE_PADDING, end = PAGE_PADDING, bottom = 16.dp),
+                        onMore = { openMenu(null); Unit },
+                        // Folding away: fading as it slides off the bottom of the page.
+                        modifier = Modifier
+                            .graphicsLayer { alpha = (1f - 1.6f * fold()).coerceIn(0f, 1f) }
+                            .navigationBarsPadding().padding(start = PAGE_PADDING, end = PAGE_PADDING, bottom = 16.dp),
                     )
                 },
             )
@@ -296,20 +375,32 @@ internal fun FullPlayer(
                 Box(
                     Modifier
                         .offset { IntOffset(0, -scroll.value) }
-                        .graphicsLayer { alpha = if (immersive != null || carousel.offset.value != 0f) headerAlpha() else 0f }
+                        .graphicsLayer { alpha = if (immersive != null || carousel.offset != 0f) headerAlpha() else 0f }
                         .then(if (immersive == null) Modifier.clearAndSetSemantics { } else Modifier),
                 ) { header() }
             }
         }
     }
-    if (handoff) HandoffSheet(onDismiss = { handoff = false })
-    if (queues) QueueSwitcherSheet(onDismiss = { queues = false })
-    if (sleepSheet) SleepTimerSheet(onDismiss = { sleepSheet = false })
+    if (handoff) HandoffSheet(onDismiss = { handoff = false; handoffPull?.dismiss(); handoffPull = null }, pull = handoffPull)
+    if (queues) QueuesSheet(onDismiss = { queues = false })
     if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })
     if (info) SongInfoSheet(onDismiss = { info = false }, onOpenAlbum = { info = false; onOpenAlbum(it) }, onOpenArtist = { info = false; onOpenArtist(it) })
     if (artists && track != null) ArtistsSheet(track, onDismiss = { artists = false }, onOpenAlbum = { artists = false; onOpenAlbum(it) }, onOpenArtist = { artists = false; onOpenArtist(it) })
-    if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
+    if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.ref)), onDismiss = { addTo = false })
 }
+
+/** The upright layout's column on a wide page (a tablet held upright): the artwork's largest size plus its margins and a little. */
+private val TALL_MAX_WIDTH = 600.dp
+
+/** The least width for the side-by-side layout (a landscape phone is about 700 dp and up). */
+private val WIDE_MIN_WIDTH = 560.dp
+/** In the side-by-side layout, the controls' column is at most this wide (centred in what the artwork leaves). */
+private val WIDE_CONTROLS_MAX = 560.dp
+/** The least page height for the artwork above the title in the side-by-side layout, and its largest size. */
+private val ART_ABOVE_MIN_HEIGHT = 600.dp
+private val ART_ABOVE_MAX = 280.dp
+/** The gaps between the title, the seek bar, the transport and the actions in the side-by-side layout. */
+private val WIDE_GAP = 20.dp
 
 /** The page's side margins (everything aligns to them), the artwork's largest size and its vertical margin. */
 internal val PAGE_PADDING = 20.dp
@@ -319,6 +410,15 @@ private val ART_PAD = 8.dp
 private val MIN_AREA = 220.dp
 /** The transport's height (the skip buttons are this square). */
 private val TRANSPORT_HEIGHT = 84.dp
+/** The transport's height folded under a scrolled queue, as a share of its own. */
+private const val FOLDED_TRANSPORT = 0.66f
+/** What the seek bar gives up as the controls fold (the room its times took). */
+private val SEEK_FOLD = 20.dp
+/** The transport's height [fold]ed (never below a touch target). */
+private fun foldedTransport(height: Dp, fold: Float): Dp =
+    androidx.compose.ui.unit.lerp(height, (height * FOLDED_TRANSPORT).coerceAtLeast(48.dp).coerceAtMost(height), fold.coerceIn(0f, 1f))
+/** How far the queue scrolls to fold the controls away ([ControlsCollapse]). */
+private val COLLAPSE_SCROLL = 160.dp
 
 /** The least gaps above the transport and the action row (the seek bar's follows the title's: see [PlayerLayout]). */
 private val TRANSPORT_GAP = 12.dp
@@ -350,8 +450,31 @@ private val MAX_GAP = 40.dp
  */
 @Composable
 private fun PlayerLayout(
+    wide: Boolean,
+    artAbove: Boolean,
     minHeight: Dp,
     hero: HeroGeometry,
+    fold: () -> Float,
+    foldedBottom: Dp,
+    transportHeight: Dp,
+    header: @Composable () -> Unit,
+    area: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    seek: @Composable () -> Unit,
+    transport: @Composable () -> Unit,
+    actions: @Composable () -> Unit,
+) {
+    if (wide) PlayerLayoutWide(minHeight, hero, artAbove, header, area, title, seek, transport, actions)
+    else PlayerLayoutTall(minHeight, hero, fold, foldedBottom, transportHeight, header, area, title, seek, transport, actions)
+}
+
+@Composable
+private fun PlayerLayoutTall(
+    minHeight: Dp,
+    hero: HeroGeometry,
+    fold: () -> Float,
+    foldedBottom: Dp,
+    transportHeight: Dp,
     header: @Composable () -> Unit,
     area: @Composable () -> Unit,
     title: @Composable () -> Unit,
@@ -360,10 +483,18 @@ private fun PlayerLayout(
     actions: @Composable () -> Unit,
 ) {
     Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
-        val w = constraints.maxWidth
+        val k = fold().coerceIn(0f, 1f)
+        val full = constraints.maxWidth
+        // On a wide page (a tablet held upright) the controls (and a card's area) keep to a centred
+        // column, so the seek bar and the buttons don't stretch edge to edge; an immersive artwork
+        // still takes the page's full width.
+        val w = minOf(full, TALL_MAX_WIDTH.roundToPx())
+        val x0 = (full - w) / 2
+        val areaW = if (hero.immersive) full else w
+        val areaX = if (hero.immersive) 0 else x0
         val loose = Constraints(maxWidth = w)
         fun measure(i: Int) = slots[i].map { it.measure(loose) }
-        val hp = measure(0)
+        val hp = slots[0].map { it.measure(Constraints(maxWidth = full)) }
         val tp = measure(2)
         val sp = measure(3)
         val xp = measure(4)
@@ -371,15 +502,22 @@ private fun PlayerLayout(
         fun height(p: List<Placeable>) = p.maxOfOrNull { it.height } ?: 0
         val hh = height(hp)
         // The title row less what its folding stars have taken off: the area gets that back.
-        val fold = hero.titleFold.roundToInt()
-        val th = height(tp) + fold
-        val sh = height(sp)
-        val xh = height(xp)
-        val ah = height(ap)
+        val titleFold = hero.titleFold.roundToInt()
+        val th = height(tp) + titleFold
+        val shNow = height(sp)
+        val xhNow = height(xp)
+        val ahNow = height(ap)
         // How far the title block's visual bottom and the wave are from their rows' edges.
         val below = tp.firstOrNull()?.get(TitleBottom)?.takeIf { it != AlignmentLine.Unspecified }?.let { height(tp) - it } ?: 0
         val wave = sp.firstOrNull()?.get(SeekWaveTop)?.takeIf { it != AlignmentLine.Unspecified } ?: 0
-        val times = sp.firstOrNull()?.get(SeekTimesBaseline)?.takeIf { it != AlignmentLine.Unspecified } ?: sh
+        val timesNow = sp.firstOrNull()?.get(SeekTimesBaseline)?.takeIf { it != AlignmentLine.Unspecified } ?: shNow
+        // The page is laid out for the seek bar's and the transport's unfolded heights (the
+        // artwork's size, the gaps), the fold only moving the room they give up. (The action row
+        // and the times' baseline don't change with it.)
+        val sh = if (shNow > 0) shNow + (SEEK_FOLD * k).roundToPx() else 0
+        val xh = if (xhNow > 0) transportHeight.roundToPx() else 0
+        val ah = ahNow
+        val times = timesNow
         val gapX = if (xh > 0) TRANSPORT_GAP.roundToPx() else 0
         val gapA = if (ah > 0) ACTIONS_GAP.roundToPx() else 0
         // With a share s on each of the transport's and the actions' gaps and under the actions,
@@ -407,19 +545,106 @@ private fun PlayerLayout(
         hero.artTop = (pad + extra / 2).toFloat()
         // An immersive artwork from the top of the area (under the status bar and the handle: the
         // room there is its top strip), raised only as far as it must be to end above the title.
-        hero.immersiveTop = minOf(0, areaH - w).toFloat()
-        val mp = slots[1].map { it.measure(Constraints.fixed(w, areaH + fold)) }
-        val titleTop = hh + areaH + fold
-        val seekTop = hh + areaH + th + seekGap
-        val transportTop = seekTop + sh + gapX + share
-        val actionsTop = transportTop + xh + gapA + share
-        layout(w, maxOf(actionsTop + ah + share, view)) {
+        hero.immersiveTop = minOf(0, areaH - areaW).toFloat()
+        // Folding ([fold]): the gaps close, the seek bar and the transport take their folded heights
+        // and the action row leaves [foldedBottom]; the mode area grows by what they give up.
+        val shareK = (share * (1f - k)).roundToInt()
+        val seekGapK = (seekGap * (1f - k)).roundToInt()
+        val gapAK = (gapA * (1f - k)).roundToInt()
+        val ahK = androidx.compose.ui.util.lerp(ah, minOf(ah, foldedBottom.roundToPx()), k)
+        val controls = seekGap + sh + gapX + share + xh + gapA + share + ah + share
+        val controlsK = seekGapK + shNow + gapX + shareK + xhNow + gapAK + shareK + ahK + shareK
+        val areaK = areaH + (controls - controlsK).coerceAtLeast(0)
+        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaK + titleFold)) }
+        val titleTop = hh + areaK + titleFold
+        val seekTop = hh + areaK + th + seekGapK
+        val transportTop = seekTop + shNow + gapX + shareK
+        val actionsTop = transportTop + xhNow + gapAK + shareK
+        layout(full, maxOf(actionsTop + ahK + shareK, view)) {
+            hp.forEach { it.place(0, 0) }
+            mp.forEach { it.place(areaX, hh) }
+            tp.forEach { it.place(x0, titleTop) }
+            sp.forEach { it.place(x0, seekTop) }
+            xp.forEach { it.place(x0, transportTop) }
+            // Folded all the way, the action row is gone (off the page, out of reach).
+            if (k < 1f) ap.forEach { it.place(x0, actionsTop) }
+        }
+    }
+}
+
+/**
+ * The landscape layout: the header across the top, the mode area on the start side as a square as
+ * tall as the page allows (lyrics and the queue take its place, as in [PlayerLayout], the artwork then
+ * small beside the title), and the controls stacked in a column beside it, centred on the page's
+ * height. [HeroGeometry.artSide] is the square's side; nothing is immersive here (the sheet keeps an
+ * immersive artwork to portrait shapes).
+ */
+@Composable
+private fun PlayerLayoutWide(
+    minHeight: Dp,
+    hero: HeroGeometry,
+    artAbove: Boolean,
+    header: @Composable () -> Unit,
+    area: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    seek: @Composable () -> Unit,
+    transport: @Composable () -> Unit,
+    actions: @Composable () -> Unit,
+) {
+    // Where the artwork lands above the title in a non-artwork mode ([artAbove]); empty itself.
+    val artSlot = @Composable { if (artAbove) Box(Modifier.onGloballyPositioned { hero.small = hero.measure(it) }) }
+    Layout(contents = listOf(header, area, title, seek, transport, actions, artSlot)) { slots, constraints ->
+        val w = constraints.maxWidth
+        val view = minHeight.roundToPx()
+        val margin = PAGE_PADDING.roundToPx()
+        val pad = ART_PAD.roundToPx()
+        val hp = slots[0].map { it.measure(Constraints(maxWidth = w)) }
+        val hh = hp.maxOfOrNull { it.height } ?: 0
+        val avail = (view - hh).coerceAtLeast(0)
+        // The square: as tall as the page below the header allows, at most half the width.
+        val side = minOf(avail - 2 * pad - margin, w / 2 - 2 * margin).coerceAtLeast(0)
+        val areaW = side + 2 * margin
+        hero.artSide = side.toFloat()
+        hero.headerHeight = hh.toFloat()
+        val restW = w - areaW
+        val colW = minOf(restW, WIDE_CONTROLS_MAX.roundToPx())
+        val colX = areaW + (restW - colW) / 2
+        val col = Constraints(maxWidth = colW)
+        val tp = slots[2].map { it.measure(col) }
+        val sp = slots[3].map { it.measure(col) }
+        val xp = slots[4].map { it.measure(col) }
+        val ap = slots[5].map { it.measure(col) }
+        fun height(p: List<Placeable>) = p.maxOfOrNull { it.height } ?: 0
+        val th = height(tp)
+        val sh = height(sp)
+        val xh = height(xp)
+        val ah = height(ap)
+        // The gaps share what the column leaves on a short page (a phone on its side), down to 8 dp.
+        val gap = ((avail - th - sh - xh - ah) / 3).coerceIn(8.dp.roundToPx(), WIDE_GAP.roundToPx())
+        val rest = th + gap + sh + gap + xh + gap + ah
+        // The artwork above the title (a non-artwork mode): as large as the column and the page
+        // leave, up to [ART_ABOVE_MAX]; its room opens with the mode, the column staying centred.
+        val artSide = if (artAbove) minOf(ART_ABOVE_MAX.roundToPx(), colW - 2 * margin, avail - rest - gap - 2 * margin).coerceAtLeast(0) else 0
+        val artRoom = if (artSide > 0) ((artSide + gap) * hero.modeFraction().coerceIn(0f, 1f)).roundToInt() else 0
+        val artP = slots[6].map { it.measure(Constraints.fixed(artSide, artSide)) }
+        val block = artRoom + rest
+        val top = hh + ((avail - block) / 2).coerceAtLeast(0)
+        val areaH = maxOf(avail, block)
+        hero.artTop = ((areaH - side) / 2).toFloat()
+        hero.immersiveTop = 0f
+        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaH)) }
+        layout(w, maxOf(hh + areaH, view)) {
             hp.forEach { it.place(0, 0) }
             mp.forEach { it.place(0, hh) }
-            tp.forEach { it.place(0, titleTop) }
-            sp.forEach { it.place(0, seekTop) }
-            xp.forEach { it.place(0, transportTop) }
-            ap.forEach { it.place(0, actionsTop) }
+            var y = top + artRoom
+            artP.forEach { it.place(colX + margin, y - artSide - gap) }
+            tp.forEach { it.place(colX, y) }
+            y += th + gap
+            sp.forEach { it.place(colX, y) }
+            y += sh + gap
+            xp.forEach { it.place(colX, y) }
+            y += xh + gap
+            ap.forEach { it.place(colX, y) }
         }
     }
 }
@@ -455,7 +680,7 @@ private val HANDLE_AREA = 48.dp
  * bottom edges.
  */
 @Composable
-private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolean) {
+private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolean, queueModifier: Modifier = Modifier) {
     val reduced = LocalReducedMotion.current
     Box(Modifier.fillMaxSize().onGloballyPositioned { hero.area = hero.measure(it) }) {
         AnimatedContent(
@@ -471,7 +696,7 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
                 PlayerMode.Artwork, PlayerMode.About -> Spacer(Modifier.fillMaxSize())
                 // The rows' own 16 dp start padding plus 4 dp: aligned with the page's 20 dp margins.
                 PlayerMode.Queue -> ModeSlot {
-                    QueueList(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp))
+                    QueueList(Modifier.fillMaxSize().then(queueModifier), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp))
                 }
                 PlayerMode.Lyrics -> ModeSlot { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE_BOTTOM)) }
             }
@@ -528,7 +753,7 @@ private fun Modifier.fadingEdges(top: Dp = 20.dp, bottom: Dp = 28.dp): Modifier 
 
 /** The title row ([TitleRow]), or what to do when nothing is queued. */
 @Composable
-private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
+private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val track = entry?.track
@@ -539,7 +764,7 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
                 Text(stringResource(R.string.empty_queue_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         } else {
-            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, onInfo, onArtists, onAddTo)
+            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, thumbInRow, onInfo, onArtists, onAddTo)
         }
     }
 }
@@ -561,17 +786,51 @@ private fun remoteDevice(): DeviceInfo? {
     return devices.firstOrNull { it.id == owner && !it.isSelf }
 }
 
+/**
+ * Where playback is heard, when that isn't this phone: another device ("Pixel"), another device's
+ * Cast receiver ("Pixel → Living Room TV"), or this phone's Cast receiver.
+ */
+@Composable
+private fun playingOn(remote: DeviceInfo?): String? {
+    val client = LocalCoreClient.current
+    val transport by client.transport.collectAsStateWithLifecycle()
+    val cast by CastDevices.state.collectAsStateWithLifecycle()
+    val owns by client.ownsTransport.collectAsStateWithLifecycle()
+    val renderer = transport.renderer
+    return when {
+        remote != null && renderer != null -> stringResource(R.string.handoff_device_to_renderer, remote.name, renderer)
+        remote != null -> remote.name
+        // This phone's receiver, while this phone plays (a session can outlast a handoff away).
+        owns -> cast.active?.name
+        else -> null
+    }
+}
+
 /** The wavy seek bar with elapsed and remaining time, and the status line between them ([SeekStatus]). */
 @Composable
-private fun PlayerSeek(position: () -> Long) {
+private fun PlayerSeek(position: () -> Long, fold: () -> Float = { 0f }) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
     val reducedMotion = LocalReducedMotion.current
     val track = entry?.track ?: return
     val syncing = rememberConnectSyncing()
-    Column(Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING).graphicsLayer { alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f }) {
-        WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) }, centre = { SeekStatus() })
+    val saver by client.batterySaver.collectAsStateWithLifecycle()
+    Column(
+        Modifier
+            .fillMaxWidth()
+            // Folding: the times fade out and the bar gives up the room they sat in (clipped there,
+            // so its touch area doesn't reach the gaps between the transport's buttons).
+            .clipToBounds()
+            .layout { m, c ->
+                val p = m.measure(c)
+                layout(p.width, p.height - (SEEK_FOLD * fold().coerceIn(0f, 1f)).roundToPx()) { p.place(0, 0) }
+            }
+            .padding(horizontal = PAGE_PADDING)
+            .graphicsLayer { alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f },
+    ) {
+        WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) },
+            stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), advancing = playing, centre = { SeekStatus() }, timesFold = fold)
     }
 }
 
@@ -588,12 +847,13 @@ private fun SeekStatus() {
     val sleep by client.sleepTimer.collectAsStateWithLifecycle()
     val notice = playerNoticeText(playerNotice)
     val remote = remoteDevice()
+    val target = playingOn(remote)
     val style = MaterialTheme.typography.labelLarge
     @Composable fun line(text: String, color: Color, tag: String, weight: FontWeight? = null) =
         Text(text, style = style, color = color, fontWeight = weight, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.testTag(tag))
     when {
         notice != null -> line(notice, MaterialTheme.colorScheme.error, "player.notice")
-        remote != null -> line(stringResource(R.string.player_playing_on, remote.name), MaterialTheme.colorScheme.primary, "player.playingOn", FontWeight.Bold)
+        target != null -> line(stringResource(R.string.player_playing_on, target), MaterialTheme.colorScheme.primary, "player.playingOn", FontWeight.Bold)
         sleep != null -> {
             val t = sleep!!
             line(t.endsAt?.let { stringResource(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: stringResource(R.string.sleep_active_end_of_track), MaterialTheme.colorScheme.onSurfaceVariant, "player.sleepLine")
@@ -616,12 +876,12 @@ private fun SeekStatus() {
  * with the swipe.
  */
 @Composable
-private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
+private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
     val client = LocalCoreClient.current
     val infoLabel = stringResource(R.string.player_about_title)
     val artistsLabel = stringResource(R.string.player_artists_action)
     val trackDesc = stringResource(R.string.player_track_a11y, track.title, track.artist ?: stringResource(R.string.unknown_artist))
-    val previous = if (carousel.restartPeek) track else neighbours.previous?.track
+    val previous = neighbours.previous?.track
     val capHeight = rememberCapHeightPx(MaterialTheme.typography.headlineSmallEmphasized.fontSize)
     // The thumbnail's side as the last layout worked it out (it follows the title and artist lines'
     // metrics, which change only with the font scale).
@@ -634,8 +894,9 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
     Layout(
         contents = listOf(
             {
-                // The thumbnail slot (the one artwork lands in it); empty itself.
-                Box(Modifier.onGloballyPositioned { hero.small = hero.measure(it) })
+                // The thumbnail slot (the one artwork lands in it); empty itself. (Not where the
+                // artwork goes above the title instead: [PlayerLayoutWide].)
+                Box(if (thumbInRow) Modifier.onGloballyPositioned { hero.small = hero.measure(it) } else Modifier)
             },
             {
                 Box(Modifier.fillMaxWidth()) {
@@ -675,7 +936,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                 if (showRating && (!compact || starsLeft)) {
                     RatingStars(
                         track.rating.toInt(),
-                        onRate = { client.dispatch(Commands.rateTrack(track.id, it)) },
+                        onRate = { client.dispatch(Commands.rateTrack(track.ref, it)) },
                         starSize = STAR_SIZE,
                         spacing = 8.dp,
                         tint = MaterialTheme.colorScheme.primary,
@@ -703,7 +964,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
         val a = add.first().measure(Constraints())
         // The thumbnail's width opens with the mode (it lands as the mode animates).
         val side0 = thumbSide.takeIf { it > 0 } ?: HeroGeometry.SMALL_SIZE.roundToPx()
-        val reserve = ((side0 + gap) * f).roundToInt()
+        val reserve = if (thumbInRow) ((side0 + gap) * f).roundToInt() else 0
         val textW = (w - reserve - addGap - a.width).coerceAtLeast(0)
         val t = text.first().measure(Constraints(minWidth = textW, maxWidth = textW))
         val sp = stars.firstOrNull()?.measure(Constraints(maxWidth = textW))
@@ -951,7 +1212,7 @@ private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switch
 }
 
 /**
- * The device switcher: the playing device's icon (this phone, or the laptop / speaker another
+ * The device switcher: the playing device's icon (this phone, or the headphones it plays out of; the laptop / speaker another
  * device is), tonal while this device plays and filled with the accent while it controls another
  * one. A tap opens the device picker; a long press pulls playback straight to this device. Its
  * corners tighten while pressed (the expressive icon button's press shape).
@@ -962,7 +1223,11 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val client = LocalCoreClient.current
     val devices by client.devices.collectAsStateWithLifecycle()
     val remote = remoteDevice()
-    val elsewhere = remote != null
+    val target = playingOn(remote)
+    val transport by client.transport.collectAsStateWithLifecycle()
+    // Casting from here, or the device playing casts: the Cast icon.
+    val casting = target != null && (remote == null || transport.renderer != null)
+    val elsewhere = target != null
     val syncing = rememberConnectSyncing()
     val haptics = LocalHapticFeedback.current
     val takeOverLabel = stringResource(R.string.player_take_over)
@@ -971,8 +1236,13 @@ private fun DeviceButton(onConnect: () -> Unit) {
     val corner by animateFloatAsState(if (pressed) 0.25f else 0.5f, Motion.morph, label = "deviceCorner")
     val container by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, label = "deviceContainer")
     val content by animateColorAsState(if (elsewhere) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer, label = "deviceContent")
-    val playingOn = remote?.let { stringResource(R.string.player_playing_on, it.name) }
-    val icon = remote?.let { deviceIcon(it.platform) } ?: HocketIcons.Filled.PhoneAndroid
+    val playingOn = target?.let { stringResource(R.string.player_playing_on, it) }
+    val context = LocalContext.current
+    DisposableEffect(context) { AudioOutputs.start(context); onDispose { } }
+    val output by AudioOutputs.outputs.collectAsStateWithLifecycle()
+    val cast by CastDevices.state.collectAsStateWithLifecycle()
+    // Casting from here: what the receiver is; the device playing casts: we can't tell, so Cast.
+    val icon = if (casting) castIcon(cast.active?.kind.takeIf { remote == null }, filled = true) else remote?.let { deviceIcon(it.platform) } ?: outputButtonIcon(output.current)
     Box(
         Modifier
             .size(48.dp)
@@ -986,7 +1256,11 @@ private fun DeviceButton(onConnect: () -> Unit) {
                 onLongClickLabel = takeOverLabel,
                 onLongClick = {
                     val self = devices.firstOrNull { it.isSelf }
-                    if (elsewhere && self != null) {
+                    if (remote == null && casting) {
+                        // Casting from here: back to this phone (paused, where it was).
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        CastDevices.stop()
+                    } else if (elsewhere && self != null) {
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         client.dispatch(Commands.handoffTo(self.id))
                     } else onConnect()
@@ -998,6 +1272,18 @@ private fun DeviceButton(onConnect: () -> Unit) {
     ) {
         Icon(icon, stringResource(R.string.player_connect), tint = content)
     }
+}
+
+/** This phone's button while it plays: what it plays out of (earbuds, the car, a speaker), else the phone. */
+private fun outputButtonIcon(output: AudioOutputs.Output?): ImageVector = when (output?.form) {
+    AudioOutputs.Form.Headphones -> HocketIcons.Filled.Headphones
+    AudioOutputs.Form.Earbuds -> HocketIcons.Filled.Earbuds
+    AudioOutputs.Form.Speaker -> HocketIcons.Filled.Speaker
+    AudioOutputs.Form.Car -> HocketIcons.Filled.DirectionsCar
+    AudioOutputs.Form.HearingAid -> HocketIcons.Filled.Hearing
+    AudioOutputs.Form.Tv -> HocketIcons.Filled.Tv
+    AudioOutputs.Form.Unknown -> if (output?.kind == AudioOutputs.Kind.Usb) HocketIcons.Filled.Usb else HocketIcons.Filled.Speaker
+    AudioOutputs.Form.Phone, null -> HocketIcons.Filled.PhoneAndroid
 }
 
 /** A device's icon by platform: a phone, a computer, or a speaker (the coordinator). */
@@ -1014,7 +1300,7 @@ internal fun deviceIcon(platform: Platform): ImageVector = when (platform) {
 @Composable
 private fun SongInfoSheet(onDismiss: () -> Unit, onOpenAlbum: (String) -> Unit, onOpenArtist: (String) -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("player.info")) {
-        PlayerAbout(Modifier.fillMaxWidth().navigationBarsPadding(), onOpenAlbum = onOpenAlbum, onOpenArtist = onOpenArtist)
+        PlayerAbout(Modifier.fillMaxWidth().navigationBarsPadding(), onOpenAlbum = onOpenAlbum, onOpenArtist = onOpenArtist, onClose = onDismiss)
     }
 }
 
@@ -1059,12 +1345,11 @@ internal fun PlayerArtwork(
     val showLabel = stringResource(R.string.player_show_artwork)
     val togglePreview = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onPreviewToggle(seed ?: ArtworkColors.seedFor(coverArt)) }
     val currentThumbMode = androidx.compose.runtime.rememberUpdatedState(thumbMode)
-    val currentNeighbours = androidx.compose.runtime.rememberUpdatedState(neighbours)
     // Pages one span apart: a card's width and margin between cards, the full width where an
     // immersive artwork is one of them (it fills the page edge to edge).
     val anyImmersive = immersive != null || neighbourLayouts.first != null || neighbourLayouts.second != null
     val span = { pageSpan(hero, anyImmersive) }
-    hero.swipe = { carousel.offset.value * (1f - modeFraction()) }
+    hero.swipe = { carousel.offset * (1f - modeFraction()) }
     Box(
         Modifier
             // Laid out at its current size and place (so its bounds are what shows; it relays out
@@ -1079,9 +1364,11 @@ internal fun PlayerArtwork(
             .graphicsLayer {
                 if (hidden() || hero.bigSlot().width <= 0f) { alpha = 0f; return@graphicsLayer }
                 translationX = hero.swipe()
+                // Swiping up to the queue lifts the artwork (and its neighbours, off screen).
+                translationY = -hero.lift()
             }
             .then(with(carousel) {
-                Modifier.gesture(client, scope, haptics, enabled = !thumbMode, reduced = reduced, hasNext = { currentNeighbours.value.next != null }, rubberThreshold = threshold)
+                Modifier.gesture(client, scope, haptics, enabled = !thumbMode, reduced = reduced, rubberThreshold = threshold)
             })
             // Long-press everywhere; a tap only as the thumbnail (back to the artwork). Pointer
             // gestures, mirrored by the actions below.
@@ -1100,6 +1387,9 @@ internal fun PlayerArtwork(
         Box(
             Modifier.fillMaxSize().graphicsLayer {
                 val f = modeFraction()
+                // A card shrinks a little as it lifts towards the queue (the cover only: the
+                // neighbours stay a page away, off screen).
+                if (!hero.immersive) (1f - SwipeUpPull.SHRINK * hero.liftFraction()).let { scaleX = it; scaleY = it }
                 shape = RoundedCornerShape(hero.cornerFor(f, size.width))
                 clip = true
                 shadowElevation = hero.elevationFor(f, this)
@@ -1109,7 +1399,7 @@ internal fun PlayerArtwork(
         }
         // The neighbours, off screen at rest (so their covers are loaded before a swipe shows them).
         if (!thumbMode && !reduced) {
-            val previous = if (carousel.restartPeek) PeekCover(coverArt, immersive) else neighbours.previous?.let { PeekCover(it.track.coverArt, neighbourLayouts.first) }
+            val previous = neighbours.previous?.let { PeekCover(it.track.coverArt, neighbourLayouts.first) }
             val next = neighbours.next?.let { PeekCover(it.track.coverArt, neighbourLayouts.second) }
             previous?.let { NeighbourCover(it, hero, scale, side = 1f, span, tag = "player.artwork.previous") }
             next?.let { NeighbourCover(it, hero, scale, side = -1f, span, tag = "player.artwork.next") }
@@ -1126,7 +1416,10 @@ internal fun pageSpan(hero: HeroGeometry, anyImmersive: Boolean): Float {
     val a = hero.area
     if (anyImmersive) return a.width.coerceAtLeast(1f)
     val card = hero.cardSlot()
-    return maxOf(card.width + hero.artInset, a.width - card.left, card.right).coerceAtLeast(1f)
+    // Past the page's own edge too: beside the controls (the landscape layout) the area ends long
+    // before the page does, and a neighbour a page away must still be off screen.
+    val page = hero.root?.takeIf { it.isAttached }?.size?.width?.toFloat() ?: 0f
+    return maxOf(card.width + hero.artInset, a.width - card.left, card.right, page - card.left).coerceAtLeast(1f)
 }
 
 /** A neighbour's cover and, when it is shown immersive, its layout. */

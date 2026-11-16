@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -84,7 +86,7 @@ class LyricsPageTest {
         compose.setThemedContent(core) { LyricsPage(visible = true) }
         core.start()
         advanceUntil("the core to start") { core.client.started.value }
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(trackId), 0, "Lyrics test"))
+        core.client.dispatch(Commands.playTracks((listOf(trackId)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Lyrics test"))
         advanceUntil("$trackId to play") { core.client.nowPlaying.value?.track?.id == trackId }
         advanceUntil("the lyrics to show") { exists("lyrics.line.0") }
     }

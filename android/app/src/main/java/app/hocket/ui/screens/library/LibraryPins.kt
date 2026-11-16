@@ -16,6 +16,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
 import app.hocket.core.Commands
+import app.hocket.core.ref
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.ActionTarget
@@ -71,6 +72,10 @@ data class PinEntry(val kind: String, val id: String, val tap: String = "open", 
     val pinTap: PinTap get() = PinTap.of(tap)
 
     fun same(other: PinEntry) = kind == other.kind && id == other.id
+
+    /** A song pin as a reference: its `source` (the account), else [fallback] (a pin made before songs named theirs). */
+    fun trackRef(fallback: String): app.hocket.core.api.TrackRef =
+        app.hocket.core.api.TrackRef((extra["source"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: fallback, id)
 }
 
 object LibraryPins {
@@ -211,7 +216,7 @@ fun rememberResolvedPins(): List<ResolvedPin>? {
                 PinKind.Album -> (client.query(Queries.album(p.id)) as? QueryResult.AlbumDetail)?.data?.let { ResolvedPin(p, PinKind.Album, it.name, it.coverArt, Commands.albums(listOf(it.id))) }
                 PinKind.Artist -> (client.query(Queries.artist(p.id)) as? QueryResult.ArtistDetail)?.data?.let { ResolvedPin(p, PinKind.Artist, it.name, it.coverArt, Commands.artists(listOf(it.id))) }
                 PinKind.Playlist -> (client.query(Queries.playlist(p.id)) as? QueryResult.PlaylistDetail)?.data?.let { ResolvedPin(p, PinKind.Playlist, it.name, it.coverArt, Commands.playlists(listOf(it.id))) }
-                PinKind.Track -> (client.query(Queries.track(p.id)) as? QueryResult.TrackDetail)?.data?.let { ResolvedPin(p, PinKind.Track, it.title, it.coverArt, Commands.tracks(listOf(it.id))) }
+                PinKind.Track -> (client.query(Queries.track(p.trackRef(client.server.value?.id.orEmpty()))) as? QueryResult.TrackDetail)?.data?.let { ResolvedPin(p, PinKind.Track, it.title, it.coverArt, Commands.tracks(listOf(it.ref))) }
                 PinKind.Genre -> ResolvedPin(p, PinKind.Genre, p.id, null, null)
                 PinKind.Filter -> filters.firstOrNull { it.id == p.id }?.let { ResolvedPin(p, PinKind.Filter, it.name, null, null) }
                 null -> null
@@ -238,7 +243,7 @@ fun performPin(client: CoreClient, nav: NavHostController, serverId: String, pin
     val id = pin.entry.id
     val shuffle = tap == PinTap.Shuffle
     when (pin.kind) {
-        PinKind.Track -> client.dispatch(Commands.playTracks(serverId, listOf(id), 0, pin.title))
+        PinKind.Track -> client.dispatch(Commands.playTracks(listOf(pin.entry.trackRef(serverId)), 0, pin.title))
         PinKind.Album -> if (tap == PinTap.Open) nav.navigate(Route.Album(id)) else client.dispatch(Commands.playContext(Commands.albumContext(serverId, id, pin.title), shuffle = shuffle))
         PinKind.Artist -> if (tap == PinTap.Open) nav.navigate(Route.Artist(id)) else client.dispatch(Commands.playContext(Commands.artistContext(serverId, id, pin.title), shuffle = shuffle))
         PinKind.Playlist -> if (tap == PinTap.Open) nav.navigate(Route.Playlist(id)) else client.dispatch(Commands.playContext(Commands.playlistContext(serverId, id, pin.title), shuffle = shuffle))

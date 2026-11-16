@@ -2,7 +2,7 @@
 // keyed by id; Ctrl+A selects the predicate ("all matching") using `total`.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
-import type { ActionTarget, SortOrder, Track } from "@core/api";
+import type { ActionTarget, SortOrder, Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { EMPTY_SELECTION, clearSelection, isSelected, navigate, selectAll, selectOnly, selectRange, selectionCount, toggle, typeAhead, type Selection } from "../store/selection";
@@ -11,14 +11,16 @@ import { openContextMenu } from "./ContextMenu";
 import { executeAction, type ActionContext } from "../store/actions";
 import { fmtDate, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
+import { TRACK_HEAD_H, TRACK_ROW_H } from "../lib/track-row";
 import { Heart, Stars } from "./Stars";
 import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import type { Primer } from "../lib/use-prime";
 import { evictPages, materializePages } from "../lib/paged-window";
 import { dragFromControl, endLibraryDrag, startLibraryDrag } from "../lib/queue-drag";
+import { primeKey, ratingTarget, refOf } from "../lib/track-ref";
 
-export type ColumnId = "index" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
+export type ColumnId = "index" | "position" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
 
 interface Column {
   id: ColumnId;
@@ -32,6 +34,8 @@ interface Column {
 
 const COLUMNS: Record<ColumnId, Column> = {
   index: { id: "index", label: t("col.track"), width: "40px", num: true },
+  /** A list's own order (a playlist's position), where "index" is the album track number. */
+  position: { id: "position", label: t("col.track"), width: "40px", num: true },
   art: { id: "art", label: "", sr: t("col.art"), width: "34px" },
   title: { id: "title", label: t("col.title"), width: "minmax(140px, 3fr)", sort: "title" },
   artist: { id: "artist", label: t("col.artist"), width: "minmax(100px, 2fr)", sort: "artist" },
@@ -48,7 +52,7 @@ const COLUMNS: Record<ColumnId, Column> = {
 };
 
 /** Columns in the order they give way when the table is narrow (last goes first); the title never does. */
-const COLUMN_PRIORITY: ColumnId[] = ["title", "duration", "artist", "index", "art", "album", "rating", "love", "offline", "year", "plays", "genre", "added", "bpm"];
+const COLUMN_PRIORITY: ColumnId[] = ["title", "duration", "artist", "index", "position", "art", "album", "rating", "love", "offline", "year", "plays", "genre", "added", "bpm"];
 
 function minWidth(c: ColumnId): number {
   return Number(/(\d+)px/.exec(COLUMNS[c].width)?.[1] ?? 40);
@@ -70,6 +74,11 @@ export function fitColumns(columns: readonly ColumnId[], width: number): ColumnI
     if (c !== "title") kept.delete(c);
   }
   return columns.filter((c) => kept.has(c));
+}
+
+/** Whether a track's artist is its album's: the same name, ignoring case and spacing (a track with none counts as the album's). */
+export function sameArtist(track: string | null | undefined, album: string | null | undefined): boolean {
+  return !track?.trim() || track.trim().toLowerCase() === (album ?? "").trim().toLowerCase();
 }
 
 export interface TrackTableProps {
@@ -94,11 +103,16 @@ export interface TrackTableProps {
   onDelete?: (indices: number[], ids: string[]) => void;
   emptyMessage?: string;
   playingTrackId?: string;
+  /** The track a resume ring replaces the number of, and how far through it playback got. */
+  resumeTrackId?: string;
+  resumeFraction?: number;
   testId?: string;
   /** Accessible name of the grid (defaults to "Tracks"). */
   label?: string;
   /** Play intent (hover on a row's play button, or keyboard focus resting on a row) primes the track. */
   primer?: Primer;
+  /** An album's artist: the artist column leaves it out, naming only the tracks by someone else. */
+  omitArtist?: string;
 }
 
 export function TrackTable(props: TrackTableProps) {
@@ -119,7 +133,9 @@ export function TrackTable(props: TrackTableProps) {
   const pendingFocus = useRef<number | undefined>(undefined);
   const selection = useApp((s) => (s.selectionScope === scope ? s.selection : EMPTY_SELECTION));
   const setSelection = useApp((s) => s.setSelection);
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
+  const snoozedIds = useApp((s) => s.snoozes.map((x) => x.trackRef.id).join("\n"));
+  const snoozed = useMemo(() => new Set(snoozedIds ? snoozedIds.split("\n") : []), [snoozedIds]);
   const [focusIdx, setFocusIdx] = useState(0);
   const typeBuf = useRef({ text: "", at: 0 });
   const dragFrom = useRef<number | undefined>(undefined);
@@ -132,7 +148,7 @@ export function TrackTable(props: TrackTableProps) {
     const f = focusRef.current;
     return f < range.count && !base.includes(f) ? [...base, f].sort((a, b) => a - b) : base;
   }, []);
-  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => 30, overscan: 6, rangeExtractor });
+  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => TRACK_ROW_H, overscan: 6, rangeExtractor });
   const items = rowVirtualizer.getVirtualItems();
   useEffect(() => {
     if (!onNeedRange || !items.length) return;
@@ -144,14 +160,31 @@ export function TrackTable(props: TrackTableProps) {
   const template = useMemo(() => columns.map((c) => COLUMNS[c].width).join(" "), [columns]);
   const idAt = useCallback((i: number) => tracks[i]?.id, [tracks]);
   const loadedIds = useMemo(() => tracks.map((x) => x?.id ?? ""), [tracks]);
+  // The selection is by row id; commands name songs by reference (their account too).
+  const refsFor = useCallback((ids: Iterable<string>): TrackRef[] => {
+    const byId = new Map<string, Track>();
+    for (const x of tracks) if (x && !byId.has(x.id)) byId.set(x.id, x);
+    return [...ids].map((id) => byId.get(id)).filter((x): x is Track => !!x).map(refOf);
+  }, [tracks]);
 
   const publish = useCallback((sel: Selection) => {
-    setSelection(sel, scope);
+    setSelection(sel, scope, "tracks", sel.all ? undefined : refsFor(sel.ids));
     // Tell the core what the selection is so commands can snapshot it (undo restores it).
-    const target: ActionTarget = sel.all ? { type: "none" } : { type: "tracks", data: { ids: [...sel.ids] } };
+    const target: ActionTarget = sel.all ? { type: "none" } : { type: "tracks", data: { tracks: refsFor(sel.ids) } };
     bridge().dispatch({ type: "setSelection", data: { target } });
-  }, [setSelection, scope]);
+  }, [setSelection, scope, refsFor]);
 
+  // A table shown in full on its page (album, playlist) doesn't scroll itself: the page does. Keeping
+  // the focused row in view and sizing Page Up/Down then go by the page's scroller instead.
+  const ownScroll = () => { const el = parentRef.current; return !!el && el.scrollHeight > el.clientHeight + 1; };
+  const visibleHeight = () => {
+    const el = parentRef.current;
+    if (!el) return 300;
+    if (ownScroll()) return el.clientHeight;
+    let up = el.parentElement;
+    while (up && !(up.scrollHeight > up.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(up).overflowY))) up = up.parentElement;
+    return Math.min(el.clientHeight, (up ?? document.documentElement).clientHeight - TRACK_HEAD_H);
+  };
   const moveFocus = (i: number) => {
     setFocusIdx(i);
     pendingFocus.current = i;
@@ -163,6 +196,7 @@ export function TrackTable(props: TrackTableProps) {
     if (!el) return;
     pendingFocus.current = undefined;
     el.focus({ preventScroll: true });
+    if (!ownScroll()) el.scrollIntoView({ block: "nearest" });
   });
 
   const click = (e: React.MouseEvent, i: number) => {
@@ -176,9 +210,10 @@ export function TrackTable(props: TrackTableProps) {
 
   const targetFor = (i: number): ActionTarget => {
     const id = idAt(i);
-    if (id && isSelected(selection, id) && selectionCount(selection) > 1 && !selection.all) return { type: "tracks", data: { ids: [...selection.ids] } };
-    if (selection.all) return { type: "tracks", data: { ids: tracks.filter((x): x is Track => !!x && !selection.ids.has(x.id)).map((x) => x.id) } };
-    return { type: "tracks", data: { ids: id ? [id] : [] } };
+    if (id && isSelected(selection, id) && selectionCount(selection) > 1 && !selection.all) return { type: "tracks", data: { tracks: refsFor(selection.ids) } };
+    if (selection.all) return { type: "tracks", data: { tracks: tracks.filter((x): x is Track => !!x && !selection.ids.has(x.id)).map(refOf) } };
+    const tr = tracks[i];
+    return { type: "tracks", data: { tracks: tr ? [refOf(tr)] : [] } };
   };
   const selectedIndices = (): number[] => tracks.map((x, i) => (x && isSelected(selection, x.id) ? i : -1)).filter((i) => i >= 0);
 
@@ -187,7 +222,8 @@ export function TrackTable(props: TrackTableProps) {
     if (id && !isSelected(selection, id)) {
       setFocusIdx(i);
       publish(selectOnly(id));
-      void openContextMenu(e, { type: "tracks", data: { ids: [id] } }, { ...context, indices: [i] });
+      const tr = tracks[i];
+      void openContextMenu(e, { type: "tracks", data: { tracks: tr ? [refOf(tr)] : [] } }, { ...context, indices: [i] });
       return;
     }
     void openContextMenu(e, targetFor(i), { ...context, indices: selectedIndices() });
@@ -207,7 +243,7 @@ export function TrackTable(props: TrackTableProps) {
       publish(clearSelection());
       return;
     }
-    const next = navigate(e.key, focusIdx, total, Math.max(1, Math.floor((parentRef.current?.clientHeight ?? 300) / 30) - 1));
+    const next = navigate(e.key, focusIdx, total, Math.max(1, Math.floor(visibleHeight() / TRACK_ROW_H) - 1));
     if (next !== undefined) {
       e.preventDefault();
       e.stopPropagation();
@@ -289,10 +325,11 @@ export function TrackTable(props: TrackTableProps) {
             const selected = tr ? isSelected(selection, tr.id) : false;
             const focused = vi.index === focusIdx;
             const playing = !!tr && tr.id === playingTrackId;
+            const faded = !!tr && snoozed.has(tr.id);
             return (
               <div
                 key={vi.key}
-                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""}`}
+                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}`}
                 role="row"
                 aria-selected={selected}
                 aria-rowindex={vi.index + 2}
@@ -300,8 +337,8 @@ export function TrackTable(props: TrackTableProps) {
                 tabIndex={focused ? 0 : -1}
                 data-index={vi.index}
                 style={{ gridTemplateColumns: template, transform: `translateY(${vi.start}px)`, height: vi.size }}
-                onFocus={(e) => { if (e.target !== e.currentTarget) return; if (vi.index !== focusIdx) setFocusIdx(vi.index); primer?.enter(tr?.id); }}
-                onBlur={(e) => { if (e.target === e.currentTarget) primer?.leave(tr?.id); }}
+                onFocus={(e) => { if (e.target !== e.currentTarget) return; if (vi.index !== focusIdx) setFocusIdx(vi.index); primer?.enter(primeKey(tr)); }}
+                onBlur={(e) => { if (e.target === e.currentTarget) primer?.leave(primeKey(tr)); }}
                 onClick={(e) => click(e, vi.index)}
                 onDoubleClick={() => tr && onPlay(vi.index, tr)}
                 onContextMenu={(e) => onContext(e, vi.index)}
@@ -318,7 +355,7 @@ export function TrackTable(props: TrackTableProps) {
                 data-track-id={tr?.id}
               >
                 {columns.map((c) => (
-                  <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} onPlay={onPlay} primer={primer} />
+                  <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} onPlay={onPlay} primer={primer} omitArtist={props.omitArtist} resume={props.resumeTrackId && tr?.id === props.resumeTrackId ? (props.resumeFraction ?? 0) : undefined} />
                 ))}
               </div>
             );
@@ -329,7 +366,19 @@ export function TrackTable(props: TrackTableProps) {
   );
 }
 
-function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string; onPlay: (index: number, track: Track) => void; primer?: Primer }) {
+function ResumeRing({ fraction }: { fraction: number }) {
+  const r = 6;
+  const c = 2 * Math.PI * r;
+  const dash = Math.max(0, Math.min(1, fraction)) * c;
+  return (
+    <svg className="track-resume-ring" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r={r} fill="none" stroke="var(--border)" strokeWidth="2" />
+      <circle cx="8" cy="8" r={r} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeDasharray={`${dash} ${c}`} transform="rotate(-90 8 8)" />
+    </svg>
+  );
+}
+
+function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist, resume }: { col: ColumnId; track: Track | undefined; index: number; playing: boolean; serverId: string; onPlay: (index: number, track: Track) => void; primer?: Primer; omitArtist?: string; resume?: number }) {
   const navigate = useApp((s) => s.navigate);
   const cls = COLUMNS[col].num ? "td num" : "td";
   // Controls inside rows are not Tab stops: the row is (roving), and its
@@ -337,11 +386,12 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: C
   if (!track) return <div className={cls} role="gridcell">{col === "title" ? <span className="faint">…</span> : ""}</div>;
   switch (col) {
     case "index":
+    case "position":
       return (
         <div className={`${cls} index`} role="gridcell">
-          {playing ? <><Icon name="play" size={12} filled style={{ color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : <span className="n">{track.trackNumber ?? index + 1}</span>}
+          {playing ? <><Icon name="play" size={12} filled style={{ color: "var(--accent-text)" }} /><span className="sr-only">{t("a11y.playingTrack")}</span></> : resume !== undefined ? <><ResumeRing fraction={resume} /><span className="sr-only">{col === "position" ? index + 1 : (track.trackNumber ?? index + 1)}</span></> : <span className="n">{col === "position" ? index + 1 : (track.trackNumber ?? index + 1)}</span>}
           {/* Pointer shortcut (Enter plays the focused row); resting on it primes the track. */}
-          {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(track.id)} data-testid="row-play"><Icon name="play" size={11} filled /></button> : null}
+          {!playing ? <button type="button" className="row-play" tabIndex={-1} aria-label={t("a11y.playItem", { title: track.title })} onClick={(e) => { e.stopPropagation(); onPlay(index, track); }} onDoubleClick={(e) => e.stopPropagation()} {...primer?.bind(primeKey(track))} data-testid="row-play"><Icon name="play" size={11} filled /></button> : null}
         </div>
       );
     case "art":
@@ -349,6 +399,7 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: C
     case "title":
       return <div className={`${cls} title`} role="gridcell" title={track.title}>{track.title}{track.explicit ? <span className="badge" style={{ marginLeft: 6 }}><span aria-hidden="true">E</span><span className="sr-only">{t("a11y.explicit")}</span></span> : null}</div>;
     case "artist":
+      if (omitArtist !== undefined && sameArtist(track.artist, omitArtist)) return <div className={`${cls} sub`} role="gridcell" />;
       return <div className={`${cls} sub`} role="gridcell"><a href="#" tabIndex={-1} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (track.artistId) navigate({ view: "artist", id: track.artistId }); }} style={{ color: "inherit", textDecoration: "none" }}>{track.artist ?? t("misc.unknownArtist")}</a></div>;
     case "album":
       return <div className={`${cls} sub`} role="gridcell"><a href="#" tabIndex={-1} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (track.albumId) navigate({ view: "album", id: track.albumId }); }} style={{ color: "inherit", textDecoration: "none" }}>{track.album ?? t("misc.unknownAlbum")}</a></div>;
@@ -359,9 +410,9 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer }: { col: C
     case "genre":
       return <div className={`${cls} sub`} role="gridcell">{track.genre ?? ""}</div>;
     case "rating":
-      return <div className="td" role="gridcell"><Stars value={track.rating} tabbable={false} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /></div>;
+      return <div className="td" role="gridcell"><Stars value={track.rating} tabbable={false} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [ratingTarget(track)], rating: r } })} /></div>;
     case "love":
-      return <div className="td" role="gridcell"><Heart on={track.loved} size={13} tabbable={false} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} /></div>;
+      return <div className="td" role="gridcell"><Heart on={track.loved} size={13} tabbable={false} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [ratingTarget(track)], loved: !track.loved } })} /></div>;
     case "plays":
       return <div className={cls} role="gridcell">{track.playCount || ""}</div>;
     case "added":

@@ -1,8 +1,9 @@
 // The add to playlist submenu's model: which playlists it lists, in which groups (Pinned, Recent,
 // All playlists; one Matches group while searching), and what each row shows and does for the
 // songs being added, from the core's playlist membership (the indices where a playlist holds them).
-import type { Playlist, PlaylistMembership } from "@core/api";
+import type { Playlist, PlaylistMembership, TrackRef } from "@core/api";
 import type { Check } from "./menu-model";
+import { refKey } from "./track-ref";
 import type { LibraryPin } from "./library-pins";
 
 export type PickerGroupId = "pinned" | "recent" | "all" | "matches";
@@ -90,6 +91,21 @@ export interface RowState {
   lastCopies: number[];
   /** The songs it doesn't hold yet. */
   missing: string[];
+}
+
+/**
+ * The songs among [tracks] whose id is in [ids] (membership names songs by id alone), once each
+ * and in [tracks]' order. Two songs that share an id on different accounts are both kept.
+ */
+export function refsWithIds(tracks: readonly TrackRef[], ids: readonly string[]): TrackRef[] {
+  const wanted = new Set(ids);
+  const seen = new Set<string>();
+  return tracks.filter((r) => {
+    const key = refKey(r);
+    if (!wanted.has(r.id) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function rowState(trackIds: readonly string[], m: PlaylistMembership | undefined): RowState {

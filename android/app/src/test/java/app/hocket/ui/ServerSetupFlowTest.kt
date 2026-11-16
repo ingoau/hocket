@@ -28,6 +28,8 @@ class ServerSetupFlowTest {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").assertIsDisplayed()
         compose.onNodeWithTag("setup.connect").performScrollTo().assertIsDisplayed()
@@ -35,9 +37,40 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.username").performTextInput("ada")
         compose.onNodeWithTag("setup.password").performTextInput("secret")
         compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
-        // A server that meets the floor takes us into the shell: Home appears.
+        // A server that meets the floor shows its summary, then Continue takes us into the shell: Home appears.
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 0 }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.continue") == 1 }
+        compose.onNodeWithTag("setup.continue").performScrollTo().performClick()
+        // "Add another source?": not now.
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.done") == 1 }
+        compose.onNodeWithTag("setup.done").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
         compose.onNodeWithTag("home.screen").assertIsDisplayed()
+    }
+
+    @Test
+    fun anOutsidePairingLinkAsksBeforePairing() {
+        val core = TestCore(startWithServer = false, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        try {
+            app.hocket.AppLinks.openPair("hocket://pair?v=1&invite=abc")
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("pair.prompt") == 1 }
+            // Nothing is dispatched yet: setup is still on its welcome.
+            compose.onNodeWithTag("setup.start").assertIsDisplayed()
+            compose.onNodeWithTag("pair.prompt.cancel").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("pair.prompt") == 0 }
+            assertEquals(null, app.hocket.AppLinks.pair.value)
+            compose.onNodeWithTag("setup.start").assertIsDisplayed()
+            // Pair goes on to the device form.
+            app.hocket.AppLinks.openPair("hocket://pair?v=1&invite=abc")
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("pair.prompt") == 1 }
+            compose.onNodeWithTag("pair.prompt.confirm").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 0 }
+        } finally {
+            app.hocket.AppLinks.pair.value?.let(app.hocket.AppLinks::consumePair)
+        }
     }
 
     @Test
@@ -45,6 +78,8 @@ class ServerSetupFlowTest {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").performTextInput("https://old.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
@@ -52,6 +87,9 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.tooOld") == 1 }
         compose.onNodeWithTag("setup.tooOld").performScrollTo().assertIsDisplayed()
+        // The only way on from a server that is too old: another server, back on the form.
+        compose.onNodeWithTag("setup.differentServer").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         // Still on setup: the URL field is there, not the shell.
         compose.onNodeWithTag("setup.url").performScrollTo().assertIsDisplayed()
     }
@@ -61,6 +99,8 @@ class ServerSetupFlowTest {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
@@ -68,6 +108,67 @@ class ServerSetupFlowTest {
         compose.onNodeWithTag("setup.connect").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.error") == 1 }
         compose.onNodeWithTag("setup.url").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun addAccountFromSettingsOffersEverySourceAndYouTubeMusicReachesItsStep() {
+        val core = TestCore(startWithServer = true, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+        try {
+            app.hocket.ui.screens.setup.SetupRequests.addAccount()
+            // The kinds of source first, not straight into Navidrome's form; pairing is first-run only.
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.add.ytm") == 1 }
+            compose.onNodeWithTag("setup.add.navidrome").assertIsDisplayed()
+            compose.onNodeWithTag("setup.add.ytm").assertIsDisplayed()
+            assertEquals(0, compose.onAllNodesWithTagCount("setup.url"))
+            assertEquals(0, compose.onAllNodesWithTagCount("setup.device"))
+            // YouTube Music: its sign-in step; its Cancel comes back to the choice.
+            compose.onNodeWithTag("setup.add.ytm").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.ytm.signIn") == 1 }
+            compose.onNodeWithTag("setup.ytm.anonymous").assertIsDisplayed()
+            compose.onNodeWithTag("setup.ytm.back").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.add.navidrome") == 1 }
+            // Navidrome: the existing form, whose Cancel goes back to the app.
+            compose.onNodeWithTag("setup.add.navidrome").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
+            compose.onNodeWithTag("setup.cancel").performScrollTo().performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+            // Cancel on the choice itself goes back to the app too.
+            app.hocket.ui.screens.setup.SetupRequests.addAccount()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.add.cancel") == 1 }
+            compose.onNodeWithTag("setup.add.cancel").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+            assertEquals(false, app.hocket.ui.screens.setup.SetupRequests.adding.value)
+        } finally {
+            app.hocket.ui.screens.setup.SetupRequests.done()
+        }
+    }
+
+    @Test
+    fun youTubeMusicAddedFromSettingsEndsOnItsOwnSummaryNotTheOldAccounts() {
+        val core = TestCore(startWithServer = true, startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+        try {
+            app.hocket.ui.screens.setup.SetupRequests.addAccount()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.add.ytm") == 1 }
+            compose.onNodeWithTag("setup.add.ytm").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.ytm.anonymous") == 1 }
+            compose.onNodeWithTag("setup.ytm.anonymous").performClick()
+            // The new YouTube Music account's summary (who is signed in: nobody), never the Navidrome
+            // one that was already there, whose "Use a different server" would remove it.
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.ytm.who") == 1 }
+            compose.onNodeWithTag("setup.continue").performScrollTo().performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.done") == 1 }
+            compose.onNodeWithTag("setup.done").performClick()
+            compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("home.screen") == 1 }
+            assertEquals(false, app.hocket.ui.screens.setup.SetupRequests.adding.value)
+        } finally {
+            app.hocket.ui.screens.setup.SetupRequests.done()
+        }
     }
 
     private fun textOf(tag: String): String =
@@ -84,6 +185,7 @@ class ServerSetupFlowTest {
                 }
             }
         }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
         compose.onNodeWithTag("setup.username").performTextInput("ada")
         compose.onNodeWithTag("setup.password").performTextInput("secret")
@@ -100,6 +202,8 @@ class ServerSetupFlowTest {
         val core = TestCore(startWithServer = false, startPlaying = false)
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.start") == 1 }
+        compose.onNodeWithTag("setup.start").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTagCount("setup.url") == 1 }
         compose.onNodeWithTag("setup.url").performTextInput("https://music.example.net")
         assertEquals(0, compose.onAllNodesWithTagCount("setup.cleartextWarning"))

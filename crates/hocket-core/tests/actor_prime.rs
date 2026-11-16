@@ -94,13 +94,14 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
     })
     .await;
     t.run(Command::PrimeTrack {
-        track_id: "t0".into(),
+        track: TrackRef::new(t.server_id.clone(), "t0"),
     })
     .await;
     run_real(&t, 2000.0).await;
     assert_eq!(t.upstream.calls().len(), 1);
 
-    // Pressing play: the first span comes from disk, no request...
+    // Pressing play: the first span comes from disk, while the rest is
+    // fetched from where it ends, ahead of the player...
     let s = source(&t, "t0").await;
     let info = t.core.stream_open(&s.url, 0, None).await.unwrap();
     assert_eq!(info.total_length, Some(3_000_000));
@@ -109,12 +110,15 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
         let want = (PRIMED as usize - out.len()).min(64 * 1024);
         out.extend_from_slice(&t.core.stream_read(info.handle, want).await.unwrap());
     }
-    assert_eq!(
-        t.upstream.calls().len(),
-        1,
-        "the primed span came from disk"
+    let calls = t.upstream.calls();
+    assert!(
+        calls.len() <= 2
+            && calls
+                .get(1)
+                .is_none_or(|c| c.range.as_deref() == Some("bytes=262144-")),
+        "the primed span came from disk: {calls:?}"
     );
-    // ...and the rest is fetched from where it ends.
+    // ...and read from there.
     loop {
         let b = t.core.stream_read(info.handle, 64 * 1024).await.unwrap();
         if b.is_empty() {
@@ -125,15 +129,16 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
     t.core.stream_close(info.handle);
     assert_eq!(out, media);
     let calls = t.upstream.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
     assert_eq!(calls[1].range.as_deref(), Some("bytes=262144-"));
     wait_offline(&t, "t0", OfflineState::Cached).await;
     // Playing it clears the primed mark.
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     assert_eq!(primed(&t, "t0"), 0);
@@ -141,7 +146,7 @@ async fn a_local_prime_fetches_the_first_seconds_and_play_starts_from_disk() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn priming_needs_an_unmetered_network_and_no_battery_saver() {
+async fn priming_needs_an_unmetered_network() {
     let t = started("prime-gating", 8).await;
     for (cmd, why) in [
         (network(NetworkKind::Wifi, true), "metered wifi"),
@@ -156,7 +161,7 @@ async fn priming_needs_an_unmetered_network_and_no_battery_saver() {
         })
         .await;
         t.run(Command::PrimeTrack {
-            track_id: "t0".into(),
+            track: TrackRef::new(t.server_id.clone(), "t0"),
         })
         .await;
         run_real(&t, 1000.0).await;
@@ -166,22 +171,11 @@ async fn priming_needs_an_unmetered_network_and_no_battery_saver() {
             t.upstream.calls()
         );
     }
+    // Battery saver does not stop it.
     t.run(network(NetworkKind::Wifi, false)).await;
-    t.run(Command::SetBatterySaver { enabled: true }).await;
-    t.run(Command::SetSetting {
-        key: "battery.pausePrefetch".into(),
-        value: "false".into(),
-    })
-    .await;
+    t.run(Command::SetPowerSave { enabled: true }).await;
     t.run(Command::PrimeTrack {
-        track_id: "t0".into(),
-    })
-    .await;
-    run_real(&t, 1000.0).await;
-    assert!(t.upstream.calls().is_empty(), "battery saver");
-    t.run(Command::SetBatterySaver { enabled: false }).await;
-    t.run(Command::PrimeTrack {
-        track_id: "t0".into(),
+        track: TrackRef::new(t.server_id.clone(), "t0"),
     })
     .await;
     wait_requests(&t, "t0", 1).await;
@@ -194,7 +188,7 @@ async fn one_prime_at_a_time_newest_waiting_wins_and_the_rate_is_limited() {
     // t1's body is held: it stays in flight.
     t.upstream.hold("t1");
     t.run(Command::PrimeTrack {
-        track_id: "t1".into(),
+        track: TrackRef::new(t.server_id.clone(), "t1"),
     })
     .await;
     for _ in 0..100 {
@@ -207,7 +201,7 @@ async fn one_prime_at_a_time_newest_waiting_wins_and_the_rate_is_limited() {
     // Two more while it runs: the newer replaces the older unstarted one.
     for id in ["t2", "t3"] {
         t.run(Command::PrimeTrack {
-            track_id: id.into(),
+            track: TrackRef::new(t.server_id.clone(), id),
         })
         .await;
     }
@@ -225,13 +219,13 @@ async fn one_prime_at_a_time_newest_waiting_wins_and_the_rate_is_limited() {
     for i in 4..22 {
         let id = format!("t{i}");
         t.run(Command::PrimeTrack {
-            track_id: id.clone(),
+            track: TrackRef::new(t.server_id.clone(), id.clone()),
         })
         .await;
         wait_requests(&t, &id, 1).await;
     }
     t.run(Command::PrimeTrack {
-        track_id: "t22".into(),
+        track: TrackRef::new(t.server_id.clone(), "t22"),
     })
     .await;
     run_real(&t, 2000.0).await;
@@ -239,7 +233,7 @@ async fn one_prime_at_a_time_newest_waiting_wins_and_the_rate_is_limited() {
     // Ten minutes on, it may prime again.
     t.clock.advance(10.0 * 60_000.0);
     t.run(Command::PrimeTrack {
-        track_id: "t22".into(),
+        track: TrackRef::new(t.server_id.clone(), "t22"),
     })
     .await;
     wait_requests(&t, "t22", 1).await;
@@ -261,11 +255,11 @@ async fn the_device_that_owns_playback_primes_with_its_own_state() {
     }
     // b plays: it owns transport.
     b.run(Command::PlayTracks {
-        server_id: b.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&b.server_id, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -304,7 +298,7 @@ async fn the_device_that_owns_playback_primes_with_its_own_state() {
     // b is on a metered network now: it declines, and a does not step in.
     b.run(network(NetworkKind::Wifi, true)).await;
     a.run(Command::PrimeTrack {
-        track_id: "t5".into(),
+        track: TrackRef::new(a.server_id.clone(), "t5"),
     })
     .await;
     for _ in 0..20 {

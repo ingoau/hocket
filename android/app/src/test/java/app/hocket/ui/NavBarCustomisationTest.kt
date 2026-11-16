@@ -214,14 +214,22 @@ class NavBarCustomisationTest {
     }
 
     @Test
+    fun queuesOpensAsADrawerOverThePlaceShowing() {
+        start()
+        compose.waitUntil(5_000) { bar().size == 3 }
+        // From the Library's link: a drawer over the Library, which stays selected.
+        click("navBar.library")
+        click("library.link.recentQueues")
+        await("queueSwitcher.sheet")
+        await("queues.playing")
+        assertEquals(listOf("library"), selected())
+    }
+
+    @Test
     fun placesAndSettingsOpenedInsideAStackKeepItsTab() {
         start()
         compose.waitUntil(5_000) { bar().size == 3 }
-        // Recent queues is not in the bar: opened from the Library, it is inside Library's stack.
         click("navBar.library")
-        click("library.link.recentQueues")
-        compose.waitForIdle()
-        assertEquals(listOf("library"), selected())
         // Settings and its sub-screens, pushed from the account button, keep the place they were opened over.
         compose.openSettingsFromAccount()
         assertEquals(listOf("library"), selected())

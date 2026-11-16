@@ -14,7 +14,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::api::{BackendReport, MediaSource, OutputDevice};
+use crate::api::{AudioSettings, BackendReport, MediaSource, OutputDevice};
 
 /// Where a backend posts its reports. Must be cheap and non-blocking; the
 /// actor's implementation pushes onto an unbounded channel.
@@ -65,6 +65,14 @@ pub trait PlaybackBackend: Send + Sync {
     /// is audible.
     fn seek(&self, position_ms: u32) -> Result<(), BackendError>;
 
+    /// AutoMix: end a running transition now (Next pressed before the
+    /// handover). Drops the rendered tail and, if the handover has not
+    /// happened, reports it at once (`Ended`, `TransitionedToNext`, then
+    /// `Position` of the incoming item). No-op without a transition.
+    fn complete_transition(&self) -> Result<(), BackendError> {
+        Ok(())
+    }
+
     /// Amplitude gain 0.0–1.0, applied post-DSP with a short ramp. The core
     /// sends the slider position through [`volume_to_gain`] first.
     fn set_volume(&self, volume: f64) -> Result<(), BackendError>;
@@ -100,8 +108,49 @@ pub trait PlaybackBackend: Send + Sync {
         Ok(())
     }
 
+    /// Apply a full audio-settings change to a running backend: the DSP
+    /// chain (ReplayGain, EQ, normalisation) plus gapless and exclusive, so
+    /// the playing track follows the settings within a block or two. The
+    /// default takes the pieces a backend updates one by one; a backend
+    /// that can't retune its DSP chain mid-stream applies those settings
+    /// with the next load instead.
+    fn set_audio_settings(&self, settings: &AudioSettings) -> Result<(), BackendError> {
+        // Both pieces are attempted even when one fails: the caller logs
+        // the error, and a backend that rejects one piece should still
+        // take the other.
+        let gapless = self.set_gapless(settings.gapless);
+        let exclusive = self.set_exclusive(settings.exclusive);
+        gapless.and(exclusive)
+    }
+
     /// Human-readable backend name for diagnostics.
     fn name(&self) -> &'static str;
+
+    /// Load `source` into the preview player at `position_ms` and play it.
+    /// The main item stays loaded. Backends without a second output return
+    /// [`BackendError::Unsupported`].
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        let _ = (source, position_ms);
+        Err(BackendError::Unsupported("preview"))
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("preview"))
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("preview"))
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        let _ = position_ms;
+        Err(BackendError::Unsupported("preview"))
+    }
+
+    /// Unload the preview player. The main item is untouched.
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        Ok(())
+    }
 }
 
 impl fmt::Debug for dyn PlaybackBackend {
