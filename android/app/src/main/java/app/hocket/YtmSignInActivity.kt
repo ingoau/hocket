@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -22,8 +23,13 @@ import app.hocket.playback.YtmLogin
  *
  * [forCoordinator] opens it for the coordinator's own YouTube Music analysis session (Settings →
  * Connect's devices, owner only): the same cleared jar, so the coordinator never gets this
- * device's session, and the jar is cleared again once the session is captured, so the
- * coordinator's cookies don't stay in this device's WebView.
+ * device's session.
+ *
+ * The jar (cookies and web storage, process-wide) is cleared again whenever the sign-in closes,
+ * signed in, cancelled or failed, for either kind: the captured session lives in the keystore and
+ * the core only, and the hidden JS host page ([app.hocket.playback.WebViewJsPage], on
+ * www.youtube.com and sharing the jar) must never carry anyone's Google session. It doesn't need
+ * one: its PO tokens are bound to the video id and its fetches (player, BotGuard) are anonymous.
  */
 class YtmSignInActivity : ComponentActivity() {
     private lateinit var web: WebView
@@ -54,8 +60,7 @@ class YtmSignInActivity : ComponentActivity() {
         if (url == null || Uri.parse(url).host != "music.youtube.com") return
         val header = CookieManager.getInstance().getCookie(YtmLogin.URL)
         if (!YtmLogin.hasSession(header)) return
-        if (forCoordinator) CookieManager.getInstance().removeAllCookies(null)
-        CookieManager.getInstance().flush()
+        clearJar()
         setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_COOKIES, header))
         finish()
     }
@@ -67,7 +72,16 @@ class YtmSignInActivity : ComponentActivity() {
 
     override fun onDestroy() {
         web.destroy()
+        // Not on a configuration change: the sign-in goes on in the next instance.
+        if (isFinishing) clearJar()
         super.onDestroy()
+    }
+
+    /** Forgets every cookie and all web storage the sign-in left (see the class comment). */
+    private fun clearJar() {
+        val cookies = CookieManager.getInstance()
+        cookies.removeAllCookies { cookies.flush() }
+        WebStorage.getInstance().deleteAllData()
     }
 
     companion object {
