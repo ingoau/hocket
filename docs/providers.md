@@ -426,18 +426,26 @@ Spoken content becomes a second kind of media, on the same accounts, identity an
 
 ### Upgrade restore
 
-Released devices run schema 10. Opening such a database backs it up and recreates it, then
-`db/restore_v10.rs` copies back, from that backup and before anything else reads the new
-database, what the server can't give back: the `servers` rows as accounts (same ids, which is
-what `AddAccount` finds when the platform replays its login), the settings document (minus keys
-the registry dropped and `connect.coordinatorUrl`), device-local saved state, pins and their
-files (same layout, so the startup sweeps keep them), the stream cache, play history, filters,
-the unsent outbox (a track rating gains its `source`), unfinished download jobs and AutoMix
-records. The queue document, resume position, stash, snoozes and album resume points were keyed
-by the old session scope; they are converted to track references and parked until the actor has
-the identity, then written under its scope once. Mirror tables, sync cursors and the room's sync
-base are left to resync. `OpenReport::restore` and the diagnostics say what came back. The
-module can go once no device is on version 10.
+Released devices run schema 10. Opening such a database backs it up, then drops it, applies the
+current schema and runs `db/restore_v10.rs`, all in one transaction (a crash leaves the old file
+whole). The restore copies back, from the first version-10 backup, what the server can't give
+back: the `servers` rows as accounts (same ids, which is what `AddAccount` finds when the
+platform replays its login), the settings document (minus keys the registry dropped and
+`connect.coordinatorUrl`), device-local saved state, pins and their files (same layout, so the
+startup sweeps keep them), the stream cache, play history, filters, the unsent outbox (a track
+rating gains its `source`) and AutoMix records. Download jobs aren't restored (they'd run before
+the account is signed in and synced); after each sync, `Downloads::replan_wanted` plans pins'
+wanted tracks that no job is fetching. A new mirror row takes its `offline` state from the pins
+and the stream cache. The queue document, resume position, stash, snoozes and album resume points
+were keyed by the old session scope; they are converted to track references and parked until the
+actor has the identity, then written under its scope once.
+
+Each part runs in a savepoint and a failing one is skipped. If SQLite rolls the whole
+transaction back (a full disk, an I/O error), the restore is abandoned without recording itself.
+Any open that finds a `<file>.v10.*.bak` but no `restore:v10:done` record restores from the
+oldest such backup, which also catches an upgrade interrupted under an earlier build. Mirror
+tables, sync cursors, jobs and the room's sync base are left to resync. `OpenReport::restore` and
+the diagnostics say what came back. The module can go once no device is on version 10.
 
 ## Phase 2 notes
 

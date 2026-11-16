@@ -715,6 +715,18 @@ impl Actor {
             // stars and the Mixed playlists' rows are redone over the mirror.
             self.apply_library_records();
             self.reconcile_playlist_pins();
+            // Wanted tracks no job is fetching (pins restored from a
+            // version-10 backup come without their jobs) can be planned now.
+            match self.downloads.replan_wanted(&p.server_id) {
+                Ok(specs) => {
+                    for spec in specs {
+                        if let Err(e) = self.jobs.submit(spec) {
+                            self.error(ErrorKind::Storage, "download job", Some(e.to_string()));
+                        }
+                    }
+                }
+                Err(e) => self.log("warn", format!("re-planning downloads: {e}")),
+            }
             // Cached audio of tracks whose file changed on the server is stale.
             match self.downloads.invalidate_changed_sources() {
                 Ok(changed) if !changed.is_empty() => self.on_stream_cache_changed(changed),

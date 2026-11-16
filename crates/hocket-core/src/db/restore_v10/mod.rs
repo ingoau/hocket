@@ -4,9 +4,11 @@
 //!
 //! Devices released before the schema squash are on version 10. `migrate`
 //! backs such a database up (`<backups>/<file>.v10.<ms>.bak`) and recreates
-//! it; [`restore`] then copies back what the server can't give back, from
-//! that backup, in the same open and before anything else reads the new
-//! database (the download and stream-cache sweeps in particular):
+//! it. [`restore_in`] copies back what the server can't give back, from that
+//! backup, in the same transaction as the drop and the new schema (so an
+//! interrupted upgrade leaves the version-10 file as it was) and before
+//! anything else reads the new database (the download and stream-cache
+//! sweeps in particular):
 //!
 //! - **accounts**: each old `servers` row, under the id `AddAccount` derives
 //!   for its URL and username (the same md5 of `scope_key` as before, so the
@@ -26,8 +28,10 @@
 //!   paths in the rows match the files and the startup sweeps keep them.
 //! - **play_history** (ids kept: a pending scrobble names its row),
 //!   **filters**, the **outbox** (pending, in-flight and failed rows; a track
-//!   rating gains the `source` the new mutation carries) and unfinished
-//!   **download jobs** with their items (so wanted tracks still download).
+//!   rating gains the `source` the new mutation carries). Download jobs are
+//!   not: run before the platform signs the account in and its mirror is
+//!   synced, every item would fail. Wanted tracks are planned again once the
+//!   account's first sync finishes (`Downloads::replan_wanted`).
 //! - **device-local saved state**: volume, mute, renderer formats, traffic
 //!   totals, autoplay exclusions, lyric offsets.
 //! - **scope-keyed saved state** (the queue document, resume position,
@@ -40,13 +44,17 @@
 //!
 //! Not restored: the mirror and metadata caches (they resync), sync cursors
 //! (the mirror is empty, so the next sync is a full one), the room's sync
-//! base (`connect:`; a new identity has a new room), other job kinds and
-//! problems.
+//! base (`connect:`; a new identity has a new room), jobs and problems.
 //!
 //! Every part is best effort: a part that fails is rolled back to its
-//! savepoint, logged and reported, and the rest carries on. Nothing here can
-//! fail opening the database. The restore runs only on the open that
-//! recreates a version-10 database, and records [`DONE_KEY`].
+//! savepoint, logged and reported, and the rest carries on. When SQLite rolls
+//! the whole transaction back instead (a full disk, an I/O error), the
+//! restore is [`Aborted`]: nothing of it is kept. Nothing here can fail
+//! opening the database. A finished restore records [`DONE_KEY`]; on any
+//! open without it, a version-10 backup in the backup directory (the first
+//! one taken) is restored ([`retry_pending`]), so an upgrade interrupted
+//! after its schema committed, or by an older build, or an aborted restore,
+//! is caught up. A database that never was version 10 has no such backup.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -160,32 +168,39 @@ impl Ctx<'_> {
     }
 }
 
-/// Restore from `backup`, the copy `migrate` just wrote of a version-`from`
-/// database, into the freshly created schema on `conn`. Runs for version 10
-/// only; `None` when it didn't run.
-pub(super) fn restore(conn: &Connection, from: u32, backup: &Path) -> Option<RestoreReport> {
-    if from != FROM_VERSION {
-        tracing::info!(
-            from,
-            "no restore from a version-{from} backup (only {FROM_VERSION} is restored)"
-        );
-        return None;
-    }
+/// The restore stopped because SQLite rolled the whole transaction back
+/// under it (a full disk, an I/O error): nothing of it is kept and
+/// [`DONE_KEY`] isn't written, so the next open tries again. Carries what
+/// was reported up to then.
+pub(super) struct Aborted(pub RestoreReport);
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the part during which SQLite "rolls the transaction back".
+    pub(super) static ABORT_AT: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Restore from `backup` (a version-10 copy) into the current schema on
+/// `conn`, inside the caller's open transaction, and record [`DONE_KEY`] in
+/// it. A backup that can't be read is reported (and recorded as done: there
+/// is nothing to retry); a transaction SQLite rolled back is [`Aborted`].
+pub(super) fn restore_in(conn: &Connection, backup: &Path) -> Result<RestoreReport, Aborted> {
     let mut report = RestoreReport::default();
-    let old = match open_backup(backup) {
-        Ok(c) => c,
+    let opened = open_backup(backup)
+        .map_err(|e| format!("open backup: {e}"))
+        .and_then(|old| {
+            old_servers(&old)
+                .map(|servers| (old, servers))
+                .map_err(|e| format!("servers: {e}"))
+        });
+    let (old, servers) = match opened {
+        Ok(x) => x,
         Err(e) => {
             tracing::warn!(error = %e, ?backup, "backup unreadable; nothing restored");
-            report.errors.push(format!("open backup: {e}"));
-            return Some(report);
-        }
-    };
-    let servers = match old_servers(&old) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(error = %e, "backup has no readable servers; nothing restored");
-            report.errors.push(format!("servers: {e}"));
-            return Some(report);
+            report.errors.push(e);
+            mark_done(conn, &report)?;
+            return Ok(report);
         }
     };
     let mut ctx = Ctx {
@@ -211,11 +226,6 @@ pub(super) fn restore(conn: &Connection, from: u32, backup: &Path) -> Option<Res
         None
     });
 
-    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
-        tracing::warn!(error = %e, "restore could not start a transaction");
-        report.errors.push(format!("begin: {e}"));
-        return Some(report);
-    }
     type Part = fn(&Ctx, &[OldServer]) -> DbResult<(usize, usize)>;
     let parts: &[(&str, Part)] = &[
         ("accounts", |c, s| restore_accounts(c, s)),
@@ -238,48 +248,167 @@ pub(super) fn restore(conn: &Connection, from: u32, backup: &Path) -> Option<Res
         ("playHistory", |c, _| restore_play_history(c)),
         ("filters", |c, _| restore_filters(c)),
         ("outbox", |c, _| restore_outbox(c)),
-        ("downloadJobs", |c, _| restore_download_jobs(c)),
         ("deferred", |c, _| restore_deferred(c)),
     ];
     for (name, part) in parts {
+        // Outside a transaction a savepoint would open (and its release
+        // commit) one of its own: the rest would land piecemeal.
+        if conn.is_autocommit() {
+            return Err(abort(report, name, "the transaction is gone"));
+        }
         let result = conn
             .execute_batch("SAVEPOINT restore_part")
             .map_err(super::DbError::from)
-            .and_then(|()| part(&ctx, &servers));
+            .and_then(|()| {
+                #[cfg(test)]
+                if ABORT_AT.with(|a| a.get()) == Some(*name) {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    return Err(super::DbError::Other(
+                        "simulated: database or disk is full".into(),
+                    ));
+                }
+                part(&ctx, &servers)
+            });
         match result {
             Ok((restored, skipped)) => {
-                let _ = conn.execute_batch("RELEASE restore_part");
+                if let Err(e) = conn.execute_batch("RELEASE restore_part") {
+                    return Err(abort(report, name, &e.to_string()));
+                }
                 report.count(name, restored, skipped);
             }
+            Err(e) if conn.is_autocommit() => {
+                // SQLite rolled the whole transaction back (SQLITE_FULL,
+                // an I/O error...): there is no savepoint to return to.
+                return Err(abort(report, name, &e.to_string()));
+            }
             Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK TO restore_part; RELEASE restore_part");
+                if let Err(e2) =
+                    conn.execute_batch("ROLLBACK TO restore_part; RELEASE restore_part")
+                {
+                    return Err(abort(report, name, &format!("{e}; {e2}")));
+                }
                 tracing::warn!(part = name, error = %e, "restore: part failed; carrying on");
                 report.errors.push(format!("{name}: {e}"));
             }
         }
     }
-    let done = serde_json::to_string(&report).unwrap_or_default();
-    let committed = conn
-        .execute(
-            "INSERT OR REPLACE INTO saved_state(key, json, updated_at) VALUES (?1, ?2, ?3)",
-            params![DONE_KEY, done, crate::util::now_ms()],
-        )
-        .and_then(|_| conn.execute_batch("COMMIT"));
-    if let Err(e) = committed {
-        let _ = conn.execute_batch("ROLLBACK");
-        tracing::warn!(error = %e, "restore could not commit; nothing restored");
-        return Some(RestoreReport {
-            errors: vec![format!("commit: {e}")],
-            ..Default::default()
-        });
-    }
+    mark_done(conn, &report)?;
     tracing::info!(
         restored = ?report.restored,
         skipped = ?report.skipped,
         errors = ?report.errors,
         "restored user data from the version-10 backup"
     );
-    Some(report)
+    Ok(report)
+}
+
+fn abort(mut report: RestoreReport, part: &str, error: &str) -> Aborted {
+    tracing::warn!(
+        part,
+        error,
+        "restore aborted: the transaction was rolled back; next open retries"
+    );
+    report.errors.push(format!(
+        "{part}: {error} (transaction rolled back; restore aborted)"
+    ));
+    Aborted(report)
+}
+
+fn mark_done(conn: &Connection, report: &RestoreReport) -> Result<(), Aborted> {
+    if conn.is_autocommit() {
+        return Err(abort(report.clone(), "done", "the transaction is gone"));
+    }
+    conn.execute(
+        "INSERT OR REPLACE INTO saved_state(key, json, updated_at) VALUES (?1, ?2, ?3)",
+        params![
+            DONE_KEY,
+            serde_json::to_string(report).unwrap_or_default(),
+            crate::util::now_ms()
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| abort(report.clone(), "done", &e.to_string()))
+}
+
+/// [`restore_in`] in a transaction of its own.
+pub(super) fn restore(conn: &Connection, backup: &Path) -> RestoreReport {
+    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
+        tracing::warn!(error = %e, "restore could not start a transaction");
+        return RestoreReport {
+            errors: vec![format!("begin: {e}")],
+            ..Default::default()
+        };
+    }
+    match restore_in(conn, backup) {
+        Ok(report) => match conn.execute_batch("COMMIT") {
+            Ok(()) => report,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                tracing::warn!(error = %e, "restore could not commit; next open retries");
+                RestoreReport {
+                    errors: vec![format!("commit: {e}")],
+                    ..Default::default()
+                }
+            }
+        },
+        Err(Aborted(report)) => {
+            if !conn.is_autocommit() {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+            report
+        }
+    }
+}
+
+/// The first version-10 backup of `db_path` in `dir`: the copy taken before
+/// the upgrade. A later one (an upgrade interrupted by an older build, which
+/// dropped tables one by one, and retried) may be of a half-emptied file.
+pub(super) fn first_backup(dir: &Path, db_path: &Path) -> Option<std::path::PathBuf> {
+    let prefix = format!(
+        "{}.v{FROM_VERSION}.",
+        db_path.file_name()?.to_string_lossy()
+    );
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let ms: i64 = name
+                .strip_prefix(&prefix)?
+                .strip_suffix(".bak")?
+                .parse()
+                .ok()?;
+            Some((ms, e.path()))
+        })
+        .min_by_key(|(ms, _)| *ms)
+        .map(|(_, p)| p)
+}
+
+/// Any open: a version-10 backup with no record of its restore (the
+/// recreating open was interrupted, or SQLite rolled the restore back)
+/// is restored now. Nothing for a database that never was version 10.
+pub(super) fn retry_pending(
+    conn: &Connection,
+    db_path: &Path,
+    dir: &Path,
+) -> Option<RestoreReport> {
+    let backup = first_backup(dir, db_path)?;
+    let done: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM saved_state WHERE key = ?1",
+            [DONE_KEY],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()?;
+    if done.is_some() {
+        return None;
+    }
+    tracing::warn!(
+        ?backup,
+        "a version-10 backup was never restored; restoring it now"
+    );
+    Some(restore(conn, &backup))
 }
 
 /// Write the parked scope-keyed state under `scope` (this device's identity)
@@ -456,7 +585,8 @@ fn restore_settings(ctx: &Ctx) -> DbResult<(usize, usize)> {
     crate::settings::Settings::from_json(&doc.to_string())
         .map_err(|e| super::DbError::Other(e.to_string()))?;
     ctx.new.execute(
-        "INSERT OR REPLACE INTO saved_state(key, json, updated_at) VALUES ('settings', ?1, ?2)",
+        "INSERT INTO saved_state(key, json, updated_at) VALUES ('settings', ?1, ?2)
+         ON CONFLICT(key) DO NOTHING",
         params![doc.to_string(), crate::util::now_ms()],
     )?;
     Ok((kept, before - kept))
@@ -728,67 +858,6 @@ fn map_mutation(json: &str, source: &str) -> Option<String> {
     }
     serde_json::from_value::<crate::outbox::Mutation>(v.clone()).ok()?;
     Some(v.to_string())
-}
-
-/// Download jobs still to finish, and their items: wanted tracks are only
-/// fetched by a job.
-fn restore_download_jobs(ctx: &Ctx) -> DbResult<(usize, usize)> {
-    let cols = [
-        "payload",
-        "id",
-        "kind",
-        "label",
-        "state",
-        "done",
-        "total",
-        "failed",
-        "created_at",
-        "updated_at",
-        "cancellable",
-        "cursor",
-    ];
-    let mut job_ids: Vec<String> = vec![];
-    let (jobs, skipped) = copy_rows(
-        ctx,
-        "jobs",
-        &cols,
-        "kind = 'download' AND state IN ('queued', 'running', 'paused')",
-        |row| {
-            let SqlValue::Text(payload) = &row[0] else {
-                return false;
-            };
-            let Ok(mut p) = serde_json::from_str::<Value>(payload) else {
-                return false;
-            };
-            let Some(account) = p
-                .get("serverId")
-                .and_then(Value::as_str)
-                .and_then(|s| ctx.account(s))
-                .cloned()
-            else {
-                return false;
-            };
-            p["serverId"] = json!(account);
-            row[0] = SqlValue::Text(p.to_string());
-            if let SqlValue::Text(id) = &row[1] {
-                job_ids.push(id.clone());
-            }
-            true
-        },
-    )?;
-    let mut items = 0;
-    for id in &job_ids {
-        let (n, _) = copy_rows(
-            ctx,
-            "job_items",
-            &["job_id", "seq", "item", "state", "attempts", "error"],
-            &format!("job_id = '{}'", id.replace('\'', "''")),
-            |_| true,
-        )?;
-        items += n;
-    }
-    tracing::debug!(jobs, items, "restore: download jobs");
-    Ok((jobs, skipped))
 }
 
 fn old_state(ctx: &Ctx, key: &str) -> rusqlite::Result<Option<String>> {

@@ -821,6 +821,36 @@ impl Downloads {
         ))
     }
 
+    /// Fetch jobs for this account's pins with wanted tracks no unfinished
+    /// job is fetching: a job lost between pinning and submitting it, or
+    /// pins restored from a version-10 backup without their jobs. Run once
+    /// the account's library has synced (planning and fetching need its
+    /// tracks, and an account that synced is signed in).
+    pub fn replan_wanted(&self, server_id: &str) -> Result<Vec<JobSpec>, DownloadError> {
+        let mut out = vec![];
+        for pin in self.pins(server_id)? {
+            let unplanned: i64 = self.inner.db.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state = 'wanted'
+                     AND track_id NOT IN (
+                         SELECT ji.item FROM job_items ji JOIN jobs j ON j.id = ji.job_id
+                         WHERE j.kind = 'download' AND j.state IN ('queued','running','paused') AND ji.state = 'pending'
+                           AND json_extract(j.payload, '$.serverId') = ?1
+                           AND json_extract(j.payload, '$.target.type') = ?2
+                           AND json_extract(j.payload, '$.target.data.id') = ?3)",
+                    params![server_id, kind_name(&pin.target), target_id(&pin.target)],
+                    |r| r.get(0),
+                )?)
+            })?;
+            if unplanned > 0 {
+                if let Some(spec) = self.plan(server_id, &pin.target, pin.transcoded)? {
+                    out.push(spec);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Unfinished download jobs fetching for this pin.
     pub fn unfinished_jobs(&self, server_id: &str, target: &PinTarget) -> DbResult<Vec<String>> {
         self.inner.db.with_conn(|c| {
