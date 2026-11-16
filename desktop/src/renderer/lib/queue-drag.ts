@@ -1,6 +1,8 @@
-// HTML5 drag of library items onto the queue: a song, album, artist or playlist
-// from a table, grid or tile. The payload is an ActionTarget so Play next can
-// resolve it the same way the item's menu does. While that drag is over the
+// HTML5 drag onto the queue, with the shared payload of drag.ts: a song, album,
+// artist or playlist from a table, grid, tile or the sidebar, the song playing, or a
+// queue row that can't move (history, the current song: its song is added again).
+// The payload's target is an ActionTarget so Play next can resolve it the same way
+// the item's menu does. While that drag is over the
 // player bar, the now-playing panel or the fullscreen player, those surfaces
 // show the queue (without writing the remembered view) so the drop can pick a
 // place; the player comes back when the drag ends.
@@ -11,11 +13,13 @@ import { useApp } from "../store/app";
 import { settingValue } from "../store/reducer";
 import { resolveTrackRefs } from "../store/actions";
 import { pointerIndex, queueSections, upcomingEntries, windowEnd } from "./queue-view";
+import { beginDrag, currentDrag, dragFromControl, dragSource, finishDrag, isAppDrag, onDragEnded, parsePayload, toDragTarget } from "./drag";
+
+onDragEnded(() => useApp.getState().setQueueDropReveal(false));
 
 export const LIBRARY_MIME = "application/x-hocket-library";
 
 const KINDS = ["tracks", "albums", "artists", "playlists"] as const;
-type LibraryKind = (typeof KINDS)[number];
 
 /** The player surfaces that reveal the queue while a library drag is over them. */
 const PLAYER_ZONE = "[data-testid='player-bar'], [data-testid='right-panel'], [data-testid='fullscreen-player']";
@@ -24,53 +28,36 @@ const QUEUE_ZONE = "[data-testid='queue-wrap'], [data-testid='queue-timeline'], 
 /** Leaving the player for this long hides the queue again (the gutter between bar and panel). */
 const HIDE_MS = 120;
 
-let dragging: ActionTarget | undefined;
-
+/** A library target (not queue rows) from its wire form: a bare ActionTarget or a drag payload. */
 export function parseLibraryTarget(raw: string): ActionTarget | undefined {
-  try {
-    const v = JSON.parse(raw) as { type?: string; data?: { ids?: unknown; tracks?: unknown } };
-    if (!(KINDS as readonly string[]).includes(v.type ?? "")) return undefined;
-    if (v.type === "tracks") {
-      if (!Array.isArray(v.data?.tracks)) return undefined;
-      const tracks = v.data.tracks.filter((r): r is TrackRef => !!r && typeof r === "object" && typeof (r as TrackRef).id === "string" && (r as TrackRef).id.length > 0 && typeof (r as TrackRef).source === "string");
-      return tracks.length ? { type: "tracks", data: { tracks } } : undefined;
-    }
-    if (!Array.isArray(v.data?.ids)) return undefined;
-    const ids = v.data.ids.filter((id): id is string => typeof id === "string" && id.length > 0);
-    if (!ids.length) return undefined;
-    return { type: v.type as Exclude<LibraryKind, "tracks">, data: { ids } };
-  } catch {
-    return undefined;
-  }
+  const target = parsePayload(raw)?.target;
+  return target && isLibraryTarget(target) ? target : undefined;
 }
 
-export function startLibraryDrag(e: { dataTransfer: DataTransfer | null; preventDefault: () => void }, target: ActionTarget): void {
-  if (!isLibraryTarget(target) || !e.dataTransfer) {
+export function startLibraryDrag(e: { dataTransfer: DataTransfer | null; preventDefault: () => void; currentTarget?: EventTarget | null }, target: ActionTarget, label?: string, origin?: string): void {
+  const dt = isLibraryTarget(target) ? toDragTarget(target) : undefined;
+  if (!dt) {
     e.preventDefault();
     return;
   }
-  dragging = target;
-  e.dataTransfer.setData(LIBRARY_MIME, JSON.stringify(target));
-  e.dataTransfer.effectAllowed = "copyMove";
+  beginDrag(e, { target: dt, label, origin });
 }
 
 export function endLibraryDrag(): void {
-  dragging = undefined;
-  useApp.getState().setQueueDropReveal(false);
+  finishDrag();
 }
 
 export function isLibraryDrag(dt: DataTransfer | null | undefined): boolean {
-  if (dragging) return true;
-  if (!dt) return false;
-  return Array.from(dt.types).includes(LIBRARY_MIME);
+  return isAppDrag(dt);
 }
 
+/** What is dragged, as a queue drop takes it: queue rows (history, the current song) as their songs. */
 export function libraryDragTarget(dt: DataTransfer | null | undefined): ActionTarget | undefined {
-  if (dt) {
-    const raw = dt.getData(LIBRARY_MIME);
-    if (raw) return parseLibraryTarget(raw);
-  }
-  return dragging;
+  const target = currentDrag(dt)?.target;
+  if (target?.type !== "queueItems") return target;
+  const q = useApp.getState().queue;
+  const tracks = target.data.keys.map((k) => q.entries.find((e) => e.item.key === k)?.item.track ?? (q.current?.item.key === k ? q.current.item.track : undefined)).filter((r): r is TrackRef => !!r);
+  return tracks.length ? { type: "tracks", data: { tracks } } : undefined;
 }
 
 export function isLibraryTarget(target: ActionTarget): boolean {
@@ -78,29 +65,16 @@ export function isLibraryTarget(target: ActionTarget): boolean {
   return (KINDS as readonly string[]).includes(target.type) && Array.isArray((target as { data?: { ids?: unknown } }).data?.ids);
 }
 
-/** True when the drag started on a control inside the row (rating, play, a link): those keep their own pointer. */
-export function dragFromControl(e: { target: EventTarget | null }): boolean {
-  const el = e.target as HTMLElement | null;
-  return !!el?.closest("button, a, input, textarea, select, [role='slider'], [role='radiogroup']");
-}
+export { dragFromControl };
 
-export function libraryDragProps(target: ActionTarget | undefined): {
+/** A library item as a drag source (tables, tiles, home, search and sidebar rows). `allowControls`: the source is a link. */
+export function libraryDragProps(target: ActionTarget | undefined, label?: string, opts: { allowControls?: boolean } = {}): {
   draggable?: boolean;
   onDragStart?: (e: ReactDragEvent) => void;
   onDragEnd?: () => void;
 } {
-  if (!target || !isLibraryTarget(target)) return {};
-  return {
-    draggable: true,
-    onDragStart: (e) => {
-      if (dragFromControl(e)) {
-        e.preventDefault();
-        return;
-      }
-      startLibraryDrag(e, target);
-    },
-    onDragEnd: endLibraryDrag,
-  };
+  const dt = target && isLibraryTarget(target) ? toDragTarget(target) : undefined;
+  return dt ? dragSource({ target: dt, label }, opts) : {};
 }
 
 /** The sortable id of the "Next from" heading: rows above it are in the "Next in queue" group. */
@@ -333,11 +307,16 @@ export function useQueueDropReveal(): void {
       const target = libraryDragTarget(e.dataTransfer);
       const onQueue = overSelector(e.clientX, e.clientY, QUEUE_ZONE);
       useApp.getState().setQueueDropReveal(false);
-      if (!target || onQueue) return;
+      // A drop zone (the queue, a playlist) already took it.
+      if (!target || onQueue || e.defaultPrevented) {
+        finishDrag();
+        return;
+      }
       if (overSelector(e.clientX, e.clientY, PLAYER_ZONE)) {
         e.preventDefault();
         addToQueue(target);
       }
+      finishDrag();
     };
     const end = () => {
       window.clearTimeout(hide);

@@ -16,6 +16,7 @@ import { extrapolate, ticker } from "../store/position";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { fmtTime } from "../lib/format";
+import { dragSource } from "../lib/drag";
 import { seekKeyTarget, seekValueText } from "../lib/a11y";
 import { useVolumeControl } from "../lib/volume";
 import { useConnectSyncing } from "../lib/connect-sync";
@@ -62,7 +63,9 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
     <div className="player" role="region" aria-label={t("misc.nowPlaying")} inert={inert} data-testid="player-bar">
       {notice ? <div className="notice"><Icon name="warn" size={12} /> {notice}</div> : null}
 
-      <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }) : undefined}>
+      <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }) : undefined}
+        // The song playing drags (art or title) to a playlist, or onto the queue to hear it again.
+        {...dragSource(track ? { target: { type: "tracks", data: { tracks: [now.item.track] } }, label: track.title } : undefined, { allowControls: true })} data-testid="bar-now">
         {track ? <Artwork id={track.coverArt} size={128} className="art" /> : <div className="art placeholder"><Icon name="music" /></div>}
         <div className="text">
           {track ? (
