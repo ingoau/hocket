@@ -161,6 +161,8 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
         fromDevice = true
         started = true
         choosing = false
+        ytm = false
+        ytmBusy = false
         error = null
         client.dispatch(Command.PairWithInvite(app.hocket.core.api.CommandPairWithInviteInner(link)))
     }
