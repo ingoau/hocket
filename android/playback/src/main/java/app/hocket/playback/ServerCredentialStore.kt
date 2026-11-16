@@ -37,7 +37,8 @@ sealed class CredentialLookup {
  * the platform keystore); the app replays `AddServer` from here on every core start.
  *
  * Passwords are AES/GCM-encrypted with a non-exportable key in the Android Keystore and kept in
- * private SharedPreferences, keyed by `url|username` (the pair the core derives its server id from).
+ * private SharedPreferences, keyed by the account they sign in (the core's `AccountId`, see
+ * [AccountIds]).
  */
 interface ServerCredentialStore {
     /** Every stored `(url, username)`, readable or not. Urls are normalised (no trailing slash). */
@@ -63,7 +64,8 @@ interface ServerCredentialStore {
     }
 
     companion object {
-        fun key(url: String, username: String) = url.trimEnd('/') + "|" + username
+        /** The account a login signs in: what stores and login sets are keyed by. */
+        fun key(url: String, username: String) = AccountIds.navidrome(url, username)
     }
 }
 
@@ -157,24 +159,16 @@ class KeystoreCredentialStore(context: Context, private val crypto: CredentialCr
         private const val TAG = "CredentialStore"
         const val PREFS = "hocket-credentials"
         const val NAMES_PREFS = "hocket-credential-names"
-        private const val LEGACY_NAME_SUFFIX = "#name"
+        /** Account id → `url|username`: the login each stored password belongs to. */
+        const val LOGINS_PREFS = "hocket-credential-logins"
     }
 
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val names = context.applicationContext.getSharedPreferences(NAMES_PREFS, Context.MODE_PRIVATE)
+    private val logins = context.applicationContext.getSharedPreferences(LOGINS_PREFS, Context.MODE_PRIVATE)
 
-    init {
-        // Names used to share the credentials file under `<key>#name`; move them over once.
-        prefs.all.keys.filter { it.endsWith(LEGACY_NAME_SUFFIX) }.forEach { legacy ->
-            val k = legacy.removeSuffix(LEGACY_NAME_SUFFIX)
-            (prefs.all[legacy] as? String)?.let { names.edit().putString(k, it).apply() }
-            prefs.edit().remove(legacy).apply()
-        }
-    }
-
-    override fun keys(): List<Pair<String, String>> = prefs.all.keys
-        .filter { !it.contains('#') }
-        .mapNotNull { k -> k.split("|", limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }
+    override fun keys(): List<Pair<String, String>> = logins.all.values
+        .mapNotNull { v -> (v as? String)?.split("|", limit = 2)?.takeIf { it.size == 2 }?.let { it[0] to it[1] } }
 
     override fun lookup(url: String, username: String): CredentialLookup {
         val k = ServerCredentialStore.key(url, username)
@@ -209,6 +203,7 @@ class KeystoreCredentialStore(context: Context, private val crypto: CredentialCr
         try {
             val (iv, data) = crypto.encrypt(credential.password.toByteArray(Charsets.UTF_8))
             prefs.edit().putString(k, Base64.encodeToString(iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(data, Base64.NO_WRAP)).apply()
+            logins.edit().putString(k, credential.url.trimEnd('/') + "|" + credential.username).apply()
             names.edit().apply { if (credential.name != null) putString(k, credential.name) else remove(k) }.apply()
         } catch (e: Exception) {
             Log.e(TAG, "could not store credential", e)
@@ -218,7 +213,8 @@ class KeystoreCredentialStore(context: Context, private val crypto: CredentialCr
     override fun remove(url: String, username: String) = removeKey(ServerCredentialStore.key(url, username))
 
     private fun removeKey(k: String) {
-        prefs.edit().remove(k).remove(k + LEGACY_NAME_SUFFIX).apply()
+        prefs.edit().remove(k).apply()
         names.edit().remove(k).apply()
+        logins.edit().remove(k).apply()
     }
 }

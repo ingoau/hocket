@@ -37,8 +37,7 @@ async fn set_mode(t: &TestCore, mode: TransitionMode) {
 /// Plays `ids` (as a selection, in order) from the start.
 async fn play(t: &TestCore, ids: &[&str]) {
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: ids.iter().map(|s| s.to_string()).collect(),
+        tracks: TrackRef::list(&t.server_id, ids.iter().map(|s| s.to_string())),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -186,8 +185,7 @@ async fn a_late_edit_keeps_the_tail_start() {
     // Within 30 s of the tail start.
     t.run_for(f64::from(committed) - 20_000.0).await;
     t.run(Command::PlayNext {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t5".into()],
+        tracks: TrackRef::list(&t.server_id, ["t5"]),
         keys: vec![],
     })
     .await;
@@ -210,8 +208,7 @@ async fn an_early_edit_plans_afresh() {
     set_mode(&t, TransitionMode::Crossfade).await;
     play(&t, &["t0", "t4", "t1"]).await;
     t.run(Command::PlayNext {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t5".into()],
+        tracks: TrackRef::list(&t.server_id, ["t5"]),
         keys: vec![],
     })
     .await;
@@ -422,8 +419,7 @@ async fn a_late_edit_the_pair_rules_refuse_still_fades() {
     let committed = t.backend.current_source().unwrap().mix_out_ms.unwrap();
     t.run_for(f64::from(committed) - 20_000.0).await;
     t.run(Command::PlayNext {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t1".into()],
+        tracks: TrackRef::list(&t.server_id, ["t1"]),
         keys: vec![],
     })
     .await;
@@ -488,8 +484,7 @@ async fn a_follow_up_failing_mid_mix_ends_the_transition() {
     t.run_for(100.0).await;
     t.backend.clear_log();
     t.run(Command::PlayNext {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t5".into()],
+        tracks: TrackRef::list(&t.server_id, ["t5"]),
         keys: vec![],
     })
     .await;

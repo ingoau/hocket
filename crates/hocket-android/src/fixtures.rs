@@ -39,12 +39,13 @@ mod tests {
         QueueEntry {
             item: QueueItem {
                 key: key.into(),
-                track_id: format!("t-{key}"),
+                track: TrackRef::new("srv", format!("t-{key}")),
                 source,
                 unavailable: false,
                 added: false,
                 queued: false,
                 ordinal: 0,
+                alts: vec![],
             },
             track: summary(&format!("t-{key}")),
             in_group: false,
@@ -82,16 +83,14 @@ mod tests {
         push(
             "command.playNext",
             json!(Command::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["a".into(), "b".into()],
+                tracks: TrackRef::list("srv", ["a", "b"]),
                 keys: vec![]
             }),
         );
         push(
             "command.playTracks",
             json!(Command::PlayTracks {
-                server_id: "srv".into(),
-                track_ids: vec!["a".into()],
+                tracks: TrackRef::list("srv", ["a"]),
                 start_index: 0,
                 label: "Search: hello".into(),
                 shuffle: false,
@@ -103,7 +102,7 @@ mod tests {
             json!(Command::PlayContext {
                 args: PlayContextArgs {
                     context: QueueContext {
-                        server_id: "srv".into(),
+                        source: "srv".into(),
                         kind: ContextKind::Album { id: "al1".into() },
                         label: "Album".into(),
                         sort: SortOrder::Default,
@@ -120,7 +119,10 @@ mod tests {
             "command.setRating",
             json!(Command::SetRating {
                 targets: vec![
-                    RatingTarget::Track { id: "t1".into() },
+                    RatingTarget::Track {
+                        id: "t1".into(),
+                        source: "srv".into(),
+                    },
                     RatingTarget::Album { id: "al1".into() }
                 ],
                 rating: 4
@@ -195,7 +197,7 @@ mod tests {
             json!(Command::RunAction {
                 action_id: "track.love".into(),
                 target: ActionTarget::Tracks {
-                    ids: vec!["t1".into()]
+                    tracks: TrackRef::list("srv", ["t1"])
                 }
             }),
         );
@@ -506,6 +508,7 @@ mod tests {
                         duration_ms: 213_000,
                         artwork_path: Some("/cache/al1-640.jpg".into()),
                         track_id: Some("t1".into()),
+                        source: Some("srv".into()),
                         loved: false,
                         rating: 0,
                         stashed: false,
@@ -626,7 +629,8 @@ mod tests {
             json!(Event::Error {
                 kind: ErrorKind::Auth,
                 message: "bad password".into(),
-                detail: None
+                detail: None,
+                account_id: Some("srv".into()),
             }),
         );
         push(
@@ -714,11 +718,10 @@ mod tests {
         assert_eq!(json!(Command::Play), json!({"type": "play"}));
         assert_eq!(
             json!(Command::PlayNext {
-                server_id: "s".into(),
-                track_ids: vec![],
+                tracks: vec![],
                 keys: vec![]
             }),
-            json!({"type": "playNext", "data": {"server_id": "s", "track_ids": [], "keys": []}})
+            json!({"type": "playNext", "data": {"tracks": [], "keys": []}})
         );
         assert_eq!(
             json!(QueryResult::Count(1)),

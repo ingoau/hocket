@@ -32,8 +32,7 @@ async fn preview_pauses_here_and_resumes_at_the_same_position() {
     let t = synced_core("preview").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -48,7 +47,7 @@ async fn preview_pauses_here_and_resumes_at_the_same_position() {
 
     t.events.clear();
     t.run(Command::PreviewStart {
-        track_id: "t3".into(),
+        track: TrackRef::new(t.server_id.clone(), "t3"),
     })
     .await;
     let transport = t.transport().await;
@@ -123,8 +122,7 @@ async fn preview_on_a_peer_leaves_the_player_alone() {
     let b = TestCore::start_on("b", server, Some(net), 2, clock).await;
     TestCore::run_all_for(&[&a, &b], 8_000.0).await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -139,7 +137,7 @@ async fn preview_on_a_peer_leaves_the_player_alone() {
 
     b.events.clear();
     b.run(Command::PreviewStart {
-        track_id: "t2".into(),
+        track: TrackRef::new(b.server_id.clone(), "t2"),
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
@@ -176,8 +174,7 @@ async fn transport_commands_during_a_preview_follow_what_the_user_hears() {
     let t = synced_core("preview-transport").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -186,7 +183,7 @@ async fn transport_commands_during_a_preview_follow_what_the_user_hears() {
     .await;
     t.run_for(1_000.0).await;
     t.run(Command::PreviewStart {
-        track_id: "t3".into(),
+        track: TrackRef::new(t.server_id.clone(), "t3"),
     })
     .await;
     assert!(!t.transport().await.position.is_playing);
@@ -206,7 +203,7 @@ async fn transport_commands_during_a_preview_follow_what_the_user_hears() {
     t.run(Command::Play).await;
     t.run_for(500.0).await;
     t.run(Command::PreviewStart {
-        track_id: "t4".into(),
+        track: TrackRef::new(t.server_id.clone(), "t4"),
     })
     .await;
     t.run(Command::TogglePlay).await;
@@ -223,8 +220,7 @@ async fn preview_end_resumes_and_an_interruption_does_not() {
     let t = synced_core("preview-end").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -233,7 +229,7 @@ async fn preview_end_resumes_and_an_interruption_does_not() {
     .await;
     t.run_for(500.0).await;
     t.run(Command::PreviewStart {
-        track_id: "t1".into(),
+        track: TrackRef::new(t.server_id.clone(), "t1"),
     })
     .await;
     // 200 s song. Land just before the end and let the preview finish.
@@ -252,7 +248,7 @@ async fn preview_end_resumes_and_an_interruption_does_not() {
     );
 
     t.run(Command::PreviewStart {
-        track_id: "t2".into(),
+        track: TrackRef::new(t.server_id.clone(), "t2"),
     })
     .await;
     t.backend.finish_preview(true);
@@ -269,8 +265,7 @@ async fn a_preview_that_cannot_load_gives_playback_back() {
     let t = synced_core("preview-fail").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -280,7 +275,7 @@ async fn a_preview_that_cannot_load_gives_playback_back() {
     t.run_for(500.0).await;
     t.backend.fail_key("preview:t5");
     t.run(Command::PreviewStart {
-        track_id: "t5".into(),
+        track: TrackRef::new(t.server_id.clone(), "t5"),
     })
     .await;
     assert!(preview_of(&t.events.all()).is_none());
@@ -293,8 +288,7 @@ async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
     let t = synced_core("preview-hold").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -303,11 +297,11 @@ async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
     .await;
     t.run_for(500.0).await;
     t.run(Command::PreviewStart {
-        track_id: "t1".into(),
+        track: TrackRef::new(t.server_id.clone(), "t1"),
     })
     .await;
     t.run(Command::PreviewStart {
-        track_id: "t2".into(),
+        track: TrackRef::new(t.server_id.clone(), "t2"),
     })
     .await;
     let preview = preview_of(&t.events.all()).expect("switched preview");
@@ -323,7 +317,7 @@ async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
     t.run(Command::Pause).await;
     assert!(!t.transport().await.position.is_playing);
     t.run(Command::PreviewStart {
-        track_id: "t3".into(),
+        track: TrackRef::new(t.server_id.clone(), "t3"),
     })
     .await;
     t.run(Command::PreviewStop).await;
@@ -340,8 +334,7 @@ async fn preview_after_pausing_a_buffering_track_stays_paused() {
     // Ready has not arrived, so the track is still marked buffering after pause.
     t.backend.set_load_latency_ms(5_000.0);
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -356,7 +349,7 @@ async fn preview_after_pausing_a_buffering_track_stays_paused() {
         "the pause landed while the track was still buffering"
     );
     t.run(Command::PreviewStart {
-        track_id: "t2".into(),
+        track: TrackRef::new(t.server_id.clone(), "t2"),
     })
     .await;
     assert!(preview_of(&t.events.all()).is_some());
@@ -378,8 +371,7 @@ async fn preview_while_the_track_is_still_loading_resumes_it() {
     let sid = t.server_id.clone();
     t.backend.set_load_latency_ms(5_000.0);
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -387,7 +379,7 @@ async fn preview_while_the_track_is_still_loading_resumes_it() {
     })
     .await;
     t.run(Command::PreviewStart {
-        track_id: "t1".into(),
+        track: TrackRef::new(t.server_id.clone(), "t1"),
     })
     .await;
     assert!(preview_of(&t.events.all()).is_some());
@@ -416,8 +408,7 @@ async fn a_peers_transport_commands_during_a_preview_are_kept() {
     let b = TestCore::start_on("b", server, Some(net), 2, clock).await;
     TestCore::run_all_for(&[&a, &b], 8_000.0).await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -429,7 +420,7 @@ async fn a_peers_transport_commands_during_a_preview_are_kept() {
 
     // Pause from the peer, then close the preview: main stays paused.
     a.run(Command::PreviewStart {
-        track_id: "t2".into(),
+        track: TrackRef::new(a.server_id.clone(), "t2"),
     })
     .await;
     assert!(!a.backend.is_playing());
@@ -450,7 +441,7 @@ async fn a_peers_transport_commands_during_a_preview_are_kept() {
     // Play from the peer stops the preview and plays main, without the
     // preview pausing it again.
     a.run(Command::PreviewStart {
-        track_id: "t3".into(),
+        track: TrackRef::new(a.server_id.clone(), "t3"),
     })
     .await;
     a.events.clear();
@@ -466,8 +457,7 @@ async fn the_sleep_timer_stopping_during_a_preview_stays_stopped() {
     let t = synced_core("preview-sleep").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -483,7 +473,7 @@ async fn the_sleep_timer_stopping_during_a_preview_stays_stopped() {
     })
     .await;
     t.run(Command::PreviewStart {
-        track_id: "t1".into(),
+        track: TrackRef::new(t.server_id.clone(), "t1"),
     })
     .await;
     t.run_for(3_000.0).await;
@@ -502,8 +492,7 @@ async fn a_preview_that_fails_while_playing_says_so_and_gives_playback_back() {
     let t = synced_core("preview-fail-late").await;
     let sid = t.server_id.clone();
     t.run(Command::PlayTracks {
-        server_id: sid,
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&sid, ["t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -512,7 +501,7 @@ async fn a_preview_that_fails_while_playing_says_so_and_gives_playback_back() {
     .await;
     t.run_for(500.0).await;
     t.run(Command::PreviewStart {
-        track_id: "t1".into(),
+        track: TrackRef::new(t.server_id.clone(), "t1"),
     })
     .await;
     t.events.clear();

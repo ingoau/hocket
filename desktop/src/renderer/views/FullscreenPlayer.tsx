@@ -63,6 +63,7 @@ import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
 import { useVolumeControl } from "../lib/volume";
 import { useConnectSyncing } from "../lib/connect-sync";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
+import { ratingTarget, refOf } from "../lib/track-ref";
 
 type Pane = Exclude<NowPlayingMode, "art">;
 const PANES: { key: Pane; icon: string }[] = [
@@ -388,13 +389,13 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
               </div>
               {track ? (
                 <div className="np-actions">
-                  <button type="button" className={`np-icon-btn np-round heart ${track.loved ? "on" : ""}`} aria-pressed={track.loved} aria-label={t("player.love")} title={track.loved ? t("player.unlove") : t("player.love")} onClick={() => d({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} data-testid="np-love"><Icon name="heart" size={20} filled={track.loved} /></button>
+                  <button type="button" className={`np-icon-btn np-round heart ${track.loved ? "on" : ""}`} aria-pressed={track.loved} aria-label={t("player.love")} title={track.loved ? t("player.unlove") : t("player.love")} onClick={() => d({ type: "setLoved", data: { targets: [ratingTarget(track)], loved: !track.loved } })} data-testid="np-love"><Icon name="heart" size={20} filled={track.loved} /></button>
                   <button type="button" className="np-icon-btn np-round" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={(e) => void executeAction("addToPlaylist", undefined, { anchor: e.currentTarget })} aria-haspopup="menu" data-testid="np-add"><Icon name="playlistAdd" size={20} /></button>
                   <button type="button" className="np-icon-btn np-round" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => now && openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } })} data-testid="np-more"><Icon name="more" size={20} /></button>
                 </div>
               ) : null}
             </div>
-            {track && showRating ? <div className="np-stars" data-testid="np-stars"><Stars value={track.rating} size={20} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /></div> : null}
+            {track && showRating ? <div className="np-stars" data-testid="np-stars"><Stars value={track.rating} size={20} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [ratingTarget(track)], rating: r } })} /></div> : null}
 
             <Seek durationMs={track?.durationMs} />
 
@@ -417,7 +418,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
             {mode === "about" ? (
               // Scrolls when long: focusable so the keyboard can scroll it.
               <div className="np-about-scroll" tabIndex={0} role="group" aria-label={t("nowPlaying.details")}>
-                <AboutSong variant="fullscreen" trackId={track?.id} onNavigate={go} />
+                <AboutSong variant="fullscreen" track={track ? refOf(track) : undefined} onNavigate={go} />
               </div>
             ) : null}
           </section>

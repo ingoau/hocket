@@ -2,7 +2,7 @@
 // with server results appended below a divider, container never shrinking),
 // and the job/problems indicator with its popover.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Job, SearchResults, ServerInfo, SyncProgress } from "@core/api";
+import type { Job, SearchResults, AccountInfo, SyncProgress, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
@@ -14,6 +14,7 @@ import { StashChip } from "./Stash";
 import { fmtRelative } from "../lib/format";
 import { usePresence } from "../lib/presence";
 import { NARROW, useMediaQuery } from "../lib/media";
+import { refOf } from "../lib/track-ref";
 
 export function TopBar() {
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -54,7 +55,7 @@ export function TopBar() {
 }
 
 function SearchBox() {
-  const serverId = useApp((s) => s.servers[0]?.id);
+  const serverId = useApp((s) => s.accounts[0]?.id);
   const focusNonce = useApp((s) => s.searchFocusNonce);
   const navigate = useApp((s) => s.navigate);
   const serverBatch = useApp((s) => s.lastServerSearch);
@@ -86,7 +87,7 @@ function SearchBox() {
     const id = `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     reqId.current = id;
     const h = setTimeout(() => {
-      void bridge().query({ type: "search", data: { server_id: serverId, query: q, limit: 6, include_server: true, request_id: id } }).then((r) => {
+      void bridge().query({ type: "search", data: { server_id: "", query: q, limit: 6, include_server: true, request_id: id } }).then((r) => {
         if (reqId.current !== id || r.type !== "search") return;
         setLocal(r.data);
         setServer(undefined);
@@ -119,13 +120,12 @@ function SearchBox() {
   type Row = { key: string; kind: string; label: string; sub?: string; lyric?: { line: string; start: number; end: number }; cover?: string; go: () => void };
   const rows = (r: SearchResults | undefined): Row[] => {
     if (!r) return [];
-    const sid = serverId ?? "";
-    const playLyric = (id: string, startMs: number | undefined) => {
-      bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [id], start_index: 0, label: r.query, shuffle: false, start_position_ms: startMs ?? 0 } });
+    const playLyric = (track: TrackRef, startMs: number | undefined) => {
+      bridge().dispatch({ type: "playTracks", data: { tracks: [track], start_index: 0, label: r.query, shuffle: false, start_position_ms: startMs ?? 0 } });
     };
     return [
-      ...r.tracks.map((x) => ({ key: `t${x.id}`, kind: t("search.tracks"), label: x.title, sub: x.artist, cover: x.coverArt, go: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [x.id], start_index: 0, label: x.title, shuffle: false } }) })),
-      ...(r.lyrics ?? []).map((x) => ({ key: `ly${x.track.id}`, kind: t("search.lyrics"), label: x.track.title, sub: x.track.artist, lyric: { line: x.line, start: x.matchStart, end: x.matchEnd }, cover: x.track.coverArt, go: () => playLyric(x.track.id, x.startMs) })),
+      ...r.tracks.map((x) => ({ key: `t${x.id}`, kind: t("search.tracks"), label: x.title, sub: x.artist, cover: x.coverArt, go: () => bridge().dispatch({ type: "playTracks", data: { tracks: [refOf(x)], start_index: 0, label: x.title, shuffle: false } }) })),
+      ...(r.lyrics ?? []).map((x) => ({ key: `ly${x.track.id}`, kind: t("search.lyrics"), label: x.track.title, sub: x.track.artist, lyric: { line: x.line, start: x.matchStart, end: x.matchEnd }, cover: x.track.coverArt, go: () => playLyric(refOf(x.track), x.startMs) })),
       ...r.albums.map((x) => ({ key: `a${x.id}`, kind: t("search.albums"), label: x.name, sub: x.artist, cover: x.coverArt, go: () => navigate({ view: "album", id: x.id }) })),
       ...r.artists.map((x) => ({ key: `r${x.id}`, kind: t("search.artists"), label: x.name, cover: x.coverArt, go: () => navigate({ view: "artist", id: x.id }) })),
       ...r.playlists.map((x) => ({ key: `p${x.id}`, kind: t("search.playlists"), label: x.name, cover: x.coverArt, go: () => navigate({ view: "playlist", id: x.id }) })),
@@ -220,7 +220,7 @@ function JobsIndicator() {
   const jobs = useApp((s) => s.jobs);
   const problems = useApp((s) => s.problems);
   const sync = useApp((s) => s.syncProgress);
-  const servers = useApp((s) => s.servers);
+  const servers = useApp((s) => s.accounts);
   // Library syncs are summarised per server (last result only), not listed one row per run.
   const others = jobs.filter((j) => j.kind !== "librarySync");
   const [open, setOpen] = useState(false);
@@ -287,7 +287,7 @@ function JobsIndicator() {
 }
 
 /** The server's sync as one row: what it is doing or when it last finished, the library size or live count, one action. */
-function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
+function SyncRow({ server, job, sync }: { server: AccountInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
   const active = job && (job.state === "running" || job.state === "queued" || job.state === "paused") ? job : undefined;
   // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
   const unsuccessful = job && (job.state === "failed" || job.state === "cancelled") && job.updatedAt > (server.lastSync ?? 0) ? job : undefined;
@@ -319,7 +319,7 @@ function SyncRow({ server, job, sync }: { server: ServerInfo; job: Job | undefin
           <div className="small muted truncate">{supporting}</div>
         </div>
         {!active && failed ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "retryJob", data: { id: unsuccessful.id } })}>{t("jobs.retry")}</button>
-          : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { server_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
+          : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { account_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
           : active.state === "paused" ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "resumeJob", data: { id: active.id } })}>{t("jobs.resume")}</button>
           : active.cancellable ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "cancelJob", data: { id: active.id } })}>{t("jobs.cancel")}</button>
           : null}

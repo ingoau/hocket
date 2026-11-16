@@ -5,11 +5,11 @@
 // show the queue (without writing the remembered view) so the drop can pick a
 // place; the player comes back when the drag ends.
 import { useEffect, type DragEvent as ReactDragEvent } from "react";
-import type { ActionTarget, Command, QueueEntry, QueueView } from "@core/api";
+import type { ActionTarget, Command, QueueEntry, QueueView, TrackRef } from "@core/api";
 import { SK } from "@shared/settings-keys";
 import { useApp } from "../store/app";
 import { settingValue } from "../store/reducer";
-import { resolveTrackIds } from "../store/actions";
+import { resolveTrackRefs } from "../store/actions";
 import { pointerIndex, queueSections, upcomingEntries, windowEnd } from "./queue-view";
 
 export const LIBRARY_MIME = "application/x-hocket-library";
@@ -28,11 +28,17 @@ let dragging: ActionTarget | undefined;
 
 export function parseLibraryTarget(raw: string): ActionTarget | undefined {
   try {
-    const v = JSON.parse(raw) as { type?: string; data?: { ids?: unknown } };
-    if (!(KINDS as readonly string[]).includes(v.type ?? "") || !Array.isArray(v.data?.ids)) return undefined;
+    const v = JSON.parse(raw) as { type?: string; data?: { ids?: unknown; tracks?: unknown } };
+    if (!(KINDS as readonly string[]).includes(v.type ?? "")) return undefined;
+    if (v.type === "tracks") {
+      if (!Array.isArray(v.data?.tracks)) return undefined;
+      const tracks = v.data.tracks.filter((r): r is TrackRef => !!r && typeof r === "object" && typeof (r as TrackRef).id === "string" && (r as TrackRef).id.length > 0 && typeof (r as TrackRef).source === "string");
+      return tracks.length ? { type: "tracks", data: { tracks } } : undefined;
+    }
+    if (!Array.isArray(v.data?.ids)) return undefined;
     const ids = v.data.ids.filter((id): id is string => typeof id === "string" && id.length > 0);
     if (!ids.length) return undefined;
-    return { type: v.type as LibraryKind, data: { ids } };
+    return { type: v.type as Exclude<LibraryKind, "tracks">, data: { ids } };
   } catch {
     return undefined;
   }
@@ -68,6 +74,7 @@ export function libraryDragTarget(dt: DataTransfer | null | undefined): ActionTa
 }
 
 export function isLibraryTarget(target: ActionTarget): boolean {
+  if (target.type === "tracks") return Array.isArray(target.data.tracks);
   return (KINDS as readonly string[]).includes(target.type) && Array.isArray((target as { data?: { ids?: unknown } }).data?.ids);
 }
 
@@ -275,10 +282,10 @@ export function insertAnchor(queue: QueueView, after: string): string {
   return after;
 }
 
-/** The InsertTracks command for `trackIds`, or nothing when there is nothing to insert or nowhere to put it. */
-export function insertTracksCommand(queue: QueueView, serverId: string, trackIds: readonly string[], at: { after: string; in_group: boolean }): Command | undefined {
-  if (!trackIds.length || !queue.current) return undefined;
-  return { type: "insertTracks", data: { server_id: serverId, track_ids: [...trackIds], after: insertAnchor(queue, at.after), in_group: at.in_group } };
+/** The InsertTracks command for `tracks`, or nothing when there is nothing to insert or nowhere to put it. */
+export function insertTracksCommand(queue: QueueView, tracks: readonly TrackRef[], at: { after: string; in_group: boolean }): Command | undefined {
+  if (!tracks.length || !queue.current) return undefined;
+  return { type: "insertTracks", data: { tracks: [...tracks], after: insertAnchor(queue, at.after), in_group: at.in_group } };
 }
 
 /** A library item dropped on the player or the queue, at `slot` when it was dropped on a place. */
@@ -290,9 +297,9 @@ export function addToQueue(target: ActionTarget, slot?: DropSlot): void {
     app.runAction(plan.action, target);
     return;
   }
-  void resolveTrackIds(target).then((ids) => {
+  void resolveTrackRefs(target).then((refs) => {
     const s = useApp.getState();
-    const cmd = insertTracksCommand(s.queue, s.servers[0]?.id ?? "", ids, plan.insert);
+    const cmd = insertTracksCommand(s.queue, refs, plan.insert);
     if (cmd) s.dispatch(cmd);
   });
 }

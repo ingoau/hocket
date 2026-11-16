@@ -30,9 +30,10 @@ use typeshare::typeshare;
 use crate::api::{
     AlbumResumeEntry, AnalysisRecord, AutoplayProvider, Command, DeviceId, DeviceInfo,
     DeviceVolume, EpochMs, LibraryItemState, Ms, PlayContextArgs, Playlist, PlaylistId,
-    PositionStamp, QueueKey, RepeatMode, SavedQueue, ServerId, SessionDocument, SessionId, Setting,
-    Snooze, StashEntry, TrackId, TransportLease, UndoEntry,
+    PositionStamp, QueueKey, RepeatMode, SavedQueue, SessionDocument, SessionId, Setting, Snooze,
+    StashEntry, TrackId, TrackRef, TransportLease, UndoEntry,
 };
+use crate::library::LibraryRecord;
 
 /// Highest protocol version this build speaks.
 ///
@@ -44,9 +45,18 @@ use crate::api::{
 /// reduce ops differently and can't share a session with this one.
 /// (AutoMix's analysis messages and `Welcome.analysis_store` were added
 /// without a bump: they are optional, and peers ignore what they don't know.)
-pub const PROTOCOL: u32 = 3;
+/// 4 = track references: every track id names its source (`TrackRef`), so a
+/// queue can mix accounts. 5 = identities: rooms are keyed by a Hocket
+/// identity, every handshake (LAN and coordinator) is a mutual device
+/// signature over nonces with the member list's head, `Hello` carries no
+/// credential, and pairing, identity sync and coordinator claims ride the
+/// protocol. AutoMix records are keyed by a provider-aware fingerprint.
+/// 6 = the LAN channel: the handshake exchanges ephemeral X25519 keys bound
+/// into both proofs, and every LAN frame after it is [`Msg::Sealed`]
+/// ([`crate::connect::channel`]). Version 5 peers would talk in the clear.
+pub const PROTOCOL: u32 = 6;
 /// Hard floor. The handshake refuses anything older.
-pub const PROTOCOL_MIN: u32 = 3;
+pub const PROTOCOL_MIN: u32 = 6;
 
 /// Extra fields preserved verbatim. Typeshare never sees it.
 pub type Extra = HashMap<String, Value>;
@@ -134,70 +144,19 @@ pub fn negotiate(their_min: u32, their_max: u32) -> Result<u32, WireError> {
 // Handshake payloads
 // ---------------------------------------------------------------------------
 
-/// What the coordinator proxies to Navidrome to verify a client. Subsonic
-/// token+salt (or an API key when the server supports it), never a password.
-/// The coordinator forwards it once in a `ping` and forgets it.
-#[typeshare]
-#[derive(Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Credential {
-    pub server_url: String,
-    pub username: String,
-    /// `md5(password + salt)` as hex.
-    pub token: Option<String>,
-    pub salt: Option<String>,
-    /// OpenSubsonic `apiKey` when the server advertises `apiKeyAuthentication`.
-    pub api_key: Option<String>,
-    /// Subsonic `c` (client name) parameter.
-    pub client: String,
-    /// Subsonic `v` parameter.
-    pub api_version: String,
-}
-
-/// Never prints the token, salt or API key: this type travels inside `Msg`,
-/// engine inputs/outputs and room outputs, all of which get logged.
-impl std::fmt::Debug for Credential {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact = |v: &Option<String>| v.as_ref().map(|_| "<redacted>");
-        f.debug_struct("Credential")
-            .field("server_url", &self.server_url)
-            .field("username", &self.username)
-            .field("token", &redact(&self.token))
-            .field("salt", &redact(&self.salt))
-            .field("api_key", &redact(&self.api_key))
-            .field("client", &self.client)
-            .field("api_version", &self.api_version)
-            .finish()
-    }
-}
-
-impl Credential {
-    /// Query parameters for a Subsonic `ping` (`f=json` included).
-    pub fn ping_params(&self) -> Vec<(String, String)> {
-        let mut p = vec![
-            ("u".to_string(), self.username.clone()),
-            ("c".to_string(), self.client.clone()),
-            ("v".to_string(), self.api_version.clone()),
-            ("f".to_string(), "json".to_string()),
-        ];
-        if let Some(key) = &self.api_key {
-            p.push(("apiKey".to_string(), key.clone()));
-        } else {
-            if let Some(t) = &self.token {
-                p.push(("t".to_string(), t.clone()));
-            }
-            if let Some(s) = &self.salt {
-                p.push(("s".to_string(), s.clone()));
-            }
-        }
-        p
-    }
-}
-
-/// Session scope key: the Navidrome identity a session belongs to. Every
-/// device derives it the same way so rooms key on it.
+/// A Navidrome login's key (`url|user`, normalised): what its account id
+/// ([`account_id_for_scope`]) is derived from on every device.
 pub fn scope_key(server_url: &str, username: &str) -> String {
     format!("{}|{username}", server_key(server_url))
+}
+
+/// The account id (`api::AccountId`) of a session scope: deterministic on
+/// every device, so a coordinator can tell which source a scope's track
+/// references belong to.
+pub fn account_id_for_scope(scope: &str) -> String {
+    use md5::{Digest, Md5};
+    let d = Md5::digest(scope.as_bytes());
+    hex::encode(&d[..8])
 }
 
 /// A Navidrome server's URL normalised the way [`scope_key`] does it: what
@@ -222,12 +181,73 @@ pub const ANALYSIS_FETCH_MAX: usize = 64;
 /// carries; the coordinator drops the rest of an upload.
 pub const ANALYSIS_BATCH_MAX: usize = 16;
 
+/// Where an analysis record is valid, independent of accounts and
+/// identities: the provider instance (`navidrome:<server>`, later `ytm`) and
+/// a fingerprint of the audio within it (for Navidrome the track id, file
+/// size and suffix). The coordinator's store is keyed by it, so every
+/// identity using the same server shares records.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisKey {
+    pub provider: String,
+    pub fingerprint: String,
+}
+
+/// The envelope context a coordinator's YouTube Music session is sealed under.
+pub const COORD_YTM_CONTEXT: &[u8] = b"hocket-coordinator-ytm-v1";
+
+/// The longest provider or fingerprint the coordinator keeps.
+pub const ANALYSIS_KEY_MAX: usize = 512;
+
+impl AnalysisKey {
+    /// A Navidrome track's key: the server (normalised URL) and the file.
+    pub fn navidrome(
+        server_url: &str,
+        track_id: &str,
+        size_bytes: Option<f64>,
+        suffix: Option<&str>,
+    ) -> AnalysisKey {
+        AnalysisKey {
+            provider: format!("navidrome:{}", server_key(server_url)),
+            fingerprint: format!(
+                "{track_id}|{}|{}",
+                size_bytes.map(|s| format!("{s:.0}")).unwrap_or_default(),
+                suffix.unwrap_or_default().to_ascii_lowercase()
+            ),
+        }
+    }
+
+    /// A YouTube Music video's key: one provider for every account (video
+    /// ids are global) and the format (itag) the audio was analysed from.
+    pub fn ytm(video_id: &str, itag: u32) -> AnalysisKey {
+        AnalysisKey {
+            provider: "ytm".into(),
+            fingerprint: format!("{video_id}|{itag}"),
+        }
+    }
+
+    pub fn valid(&self) -> bool {
+        !self.provider.is_empty()
+            && !self.fingerprint.is_empty()
+            && self.provider.len() <= ANALYSIS_KEY_MAX
+            && self.fingerprint.len() <= ANALYSIS_KEY_MAX
+    }
+}
+
+/// A track the client wants a record for.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisWant {
+    pub track_id: TrackRef,
+    pub key: AnalysisKey,
+}
+
 /// One track's analysis record on the wire.
-#[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisEntry {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
+    pub key: AnalysisKey,
     pub record: AnalysisRecord,
 }
 
@@ -255,6 +275,12 @@ pub struct ReplicaState {
     /// (`crate::album_resume`).
     #[serde(default)]
     pub album_resumes: Vec<AlbumResumeEntry>,
+    /// The identity's library: manual dedup links, Mixed playlists and the
+    /// Hocket library. LWW set keyed on record key, tombstones included
+    /// (`crate::library`).
+    #[serde(default)]
+    #[typeshare(skip)]
+    pub library_records: Vec<LibraryRecord>,
     /// Per-device last seen.
     #[serde(default)]
     pub devices: Vec<DeviceLease>,
@@ -296,7 +322,7 @@ pub struct LastStamp {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ScrobbleRecord {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub started_at: EpochMs,
     pub device_id: DeviceId,
     pub recorded_at: EpochMs,
@@ -360,7 +386,7 @@ pub enum TransportCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoplayOpItem {
-    pub track_id: TrackId,
+    pub track_id: TrackRef,
     pub provider: AutoplayProvider,
     pub reason: String,
     pub score: Option<f64>,
@@ -381,8 +407,7 @@ pub enum SessionOp {
         args: PlayContextArgs,
     },
     PlayTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         start_index: u32,
         label: String,
         shuffle: bool,
@@ -394,25 +419,21 @@ pub enum SessionOp {
     /// `queued`: into the "Next in queue" group (the sender's Queue section
     /// setting), decided by the sender so every replica agrees.
     PlayNext {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
         queued: bool,
     },
     AddToQueue {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
     },
     PlayLater {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
     },
     /// After `after`, in or out of the group (see `Command::InsertTracks`).
     InsertTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
         after: QueueKey,
         in_group: bool,
@@ -452,10 +473,10 @@ pub enum SessionOp {
     TrackEnded,
     RestoreSavedQueue {
         id: String,
-        tracks: Option<Vec<TrackId>>,
+        tracks: Option<Vec<TrackRef>>,
     },
     SetContextTracks {
-        tracks: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     SaveCurrentQueue {
         pinned: bool,
@@ -493,58 +514,39 @@ impl SessionOp {
         Some(match cmd {
             Command::PlayContext { args } => SessionOp::PlayContext { args: args.clone() },
             Command::PlayTracks {
-                server_id,
-                track_ids,
+                tracks,
                 start_index,
                 label,
                 shuffle,
                 start_position_ms,
             } => SessionOp::PlayTracks {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: tracks.clone(),
                 start_index: *start_index,
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
                 start_position_ms: *start_position_ms,
             },
-            Command::PlayNext {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::PlayNext {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+            Command::PlayNext { tracks, keys } => SessionOp::PlayNext {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
                 queued: true,
             },
-            Command::AddToQueue {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::AddToQueue {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+            Command::AddToQueue { tracks, keys } => SessionOp::AddToQueue {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
             },
-            Command::PlayLater {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::PlayLater {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+            Command::PlayLater { tracks, keys } => SessionOp::PlayLater {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
             },
             Command::InsertTracks {
-                server_id,
-                track_ids,
+                tracks,
                 keys,
                 after,
                 in_group,
             } => SessionOp::InsertTracks {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
                 after: after.clone(),
                 in_group: *in_group,
@@ -597,10 +599,10 @@ impl SessionOp {
     /// their first `MAX_QUEUE_LEN`. `doc` is the document the op applies to.
     pub fn within_caps(self, doc: &SessionDocument) -> SessionOp {
         use crate::session::{window_around, window_tracks, MAX_QUEUE_LEN};
-        let cut = |mut v: Vec<String>| {
+        fn cut<T>(mut v: Vec<T>) -> Vec<T> {
             v.truncate(MAX_QUEUE_LEN);
             v
-        };
+        }
         match self {
             SessionOp::PlayContext { mut args } => {
                 let len = args.context.tracks.len();
@@ -615,7 +617,6 @@ impl SessionOp {
                 SessionOp::PlayContext { args }
             }
             SessionOp::PlayTracks {
-                server_id,
                 mut track_ids,
                 start_index,
                 label,
@@ -632,7 +633,6 @@ impl SessionOp {
                     start_index = (start_index as usize).saturating_sub(window.start) as u32;
                 }
                 SessionOp::PlayTracks {
-                    server_id,
                     track_ids,
                     start_index,
                     label,
@@ -642,42 +642,28 @@ impl SessionOp {
                 }
             }
             SessionOp::PlayNext {
-                server_id,
                 track_ids,
                 keys,
                 queued,
             } => SessionOp::PlayNext {
-                server_id,
                 track_ids: cut(track_ids),
                 keys: cut(keys),
                 queued,
             },
-            SessionOp::AddToQueue {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::AddToQueue {
-                server_id,
+            SessionOp::AddToQueue { track_ids, keys } => SessionOp::AddToQueue {
                 track_ids: cut(track_ids),
                 keys: cut(keys),
             },
-            SessionOp::PlayLater {
-                server_id,
-                track_ids,
-                keys,
-            } => SessionOp::PlayLater {
-                server_id,
+            SessionOp::PlayLater { track_ids, keys } => SessionOp::PlayLater {
                 track_ids: cut(track_ids),
                 keys: cut(keys),
             },
             SessionOp::InsertTracks {
-                server_id,
                 track_ids,
                 keys,
                 after,
                 in_group,
             } => SessionOp::InsertTracks {
-                server_id,
                 track_ids: cut(track_ids),
                 keys: cut(keys),
                 after,
@@ -843,31 +829,58 @@ pub struct ReportGrant {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum Msg {
     // -- handshake ------------------------------------------------------
-    /// Either direction, LAN rooms only. "Prove you know this scope's LAN
-    /// key": answer with [`Msg::Proof`] over this nonce. The joiner sends
-    /// one first (before anything else); the room answers with its own
-    /// proof and its own challenge. See [`crate::connect::auth`].
+    /// Either direction. "Prove you are a member of this identity": answer
+    /// with [`Msg::Proof`] over this nonce. The joiner sends one first (before
+    /// anything else, naming the identity and its member-list heads); the
+    /// room answers with its own proof and its own challenge. See
+    /// [`crate::connect::auth`].
     Challenge {
         /// 32 random bytes, hex.
         nonce: String,
+        /// The identity the joiner wants (the first challenge only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<String>,
+        /// The sender's member-list heads, so the other side can send the
+        /// ops it lacks.
+        #[serde(default)]
+        heads: Vec<String>,
+        /// A LAN joiner's ephemeral X25519 key (hex): the room answers with
+        /// its own in its proof, and frames after the handshake are sealed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eph: Option<String>,
     },
-    /// Either direction, LAN rooms only. `mac` is
-    /// `HMAC-SHA256(lan_key, role || nonce || deviceId)` over the nonce the
-    /// other side issued, hex.
+    /// Either direction. `sig` is the device's ed25519 signature over
+    /// [`crate::identity::proof_bytes`] (role, identity, the other side's
+    /// nonce, its own device id and the digest of `heads`). `sync` carries
+    /// what the other side's heads showed it lacks; the receiver merges it
+    /// before checking the proof.
     Proof {
         device_id: DeviceId,
-        mac: String,
+        sig: String,
+        #[serde(default)]
+        heads: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sync: Option<Box<crate::identity::IdentitySync>>,
+        /// A LAN room's ephemeral X25519 key (hex), answering the joiner's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eph: Option<String>,
     },
-    /// → room. First message on a connection (on the LAN: first after the
-    /// mutual proof).
+    /// Either direction on the LAN, after the handshake: the next frame,
+    /// sealed with the channel key ([`crate::connect::channel`]).
+    Sealed {
+        seq: u64,
+        /// 12 bytes, hex.
+        nonce: String,
+        /// Ciphertext and tag, base64.
+        ct: String,
+    },
+    /// → room. First message after the mutual proof.
     Hello {
         device: DeviceInfo,
         protocol_min: u32,
         protocol_max: u32,
+        /// The identity id.
         scope: String,
-        /// Present only towards a hosted coordinator over TLS (the room
-        /// verifies it with one proxied ping). Never on the LAN, never stored.
-        credential: Option<Credential>,
         session_id: Option<SessionId>,
         session_revision: u32,
         /// The transport epoch this device last held, to reclaim inside the window.
@@ -977,7 +990,7 @@ pub enum Msg {
     /// decides with its own network and battery state). Peers that do not
     /// know it ignore it.
     PrimeRequest {
-        track_id: TrackId,
+        track_id: TrackRef,
         from: DeviceId,
     },
     /// → room. Every keepalive period (5 s unless a slower [`Msg::Cadence`]
@@ -1058,7 +1071,7 @@ pub enum Msg {
         from: DeviceId,
         target: DeviceId,
         key: QueueKey,
-        track_id: TrackId,
+        track_id: TrackRef,
         position_ms: Ms,
     },
     /// → room, routed to `from`. Target reports readiness.
@@ -1074,7 +1087,7 @@ pub enum Msg {
         from: DeviceId,
         target: DeviceId,
         key: QueueKey,
-        track_id: TrackId,
+        track_id: TrackRef,
         position_ms: Ms,
         played_ms: Ms,
         started_at: EpochMs,
@@ -1098,14 +1111,14 @@ pub enum Msg {
     // -- scrobbling -----------------------------------------------------
     /// → room. Record a submitted scrobble in the dedupe log.
     ScrobbleSubmitted {
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         device_id: DeviceId,
     },
     /// → room. Claim a pair before submitting; the room records it if new.
     ScrobbleDedupeQuery {
         query_id: String,
-        track_id: TrackId,
+        track_id: TrackRef,
         started_at: EpochMs,
         device_id: DeviceId,
     },
@@ -1138,6 +1151,11 @@ pub enum Msg {
     /// (`crate::album_resume::merge`). Older builds drop it.
     AlbumResumeSync {
         entries: Vec<AlbumResumeEntry>,
+    },
+    /// Either direction. The identity's library records, merged LWW per key
+    /// (`crate::library::merge`).
+    LibraryRecordsSync {
+        records: Vec<LibraryRecord>,
     },
 
     // -- undo -----------------------------------------------------------
@@ -1216,7 +1234,7 @@ pub enum Msg {
     /// [`Msg::AnalysisRecords`] (the answer is split to keep frames small;
     /// one empty one when nothing was found).
     AnalysisFetch {
-        track_ids: Vec<TrackId>,
+        wants: Vec<AnalysisWant>,
     },
     /// → client. The usable records the coordinator has among those asked
     /// for; tracks it has nothing for are left out.
@@ -1230,9 +1248,111 @@ pub enum Msg {
         records: Vec<AnalysisEntry>,
     },
 
+    // -- identity -------------------------------------------------------
+    /// Either direction, members only. The identity's shared state (member
+    /// list, key grants, credential blob, records); the receiver merges it
+    /// and a room passes on what changed.
+    IdentitySync {
+        sync: Box<crate::identity::IdentitySync>,
+    },
+    /// → room (a new device's first frame), relayed to the member that
+    /// offered the invite with `relay` set to the new device's socket. See
+    /// [`crate::identity::pairing`].
+    PairJoin {
+        identity: String,
+        join: crate::identity::pairing::PairJoin,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<String>,
+    },
+    /// The inviter's answer: → room with `relay`, which hands it to that
+    /// socket and closes it; or straight to the new device on the LAN.
+    PairAccept {
+        accept: Box<crate::identity::pairing::PairAccept>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<String>,
+    },
+    /// → room, a member's refusal of a relayed join: the room passes it to
+    /// the new device as a `Refuse` and closes it.
+    PairRefuse {
+        relay: String,
+        message: String,
+    },
+    /// → room, members only: joins for this invite go to me until it
+    /// expires.
+    PairOffer {
+        invite_id: String,
+        expires_at: EpochMs,
+    },
+
+    // -- coordinator ownership -----------------------------------------
+    /// → hosted coordinator, a socket's first frame: claim it with the code
+    /// `hocket-coordinator pair` printed. The identity becomes its owner.
+    CoordClaim {
+        code: String,
+        sync: Box<crate::identity::IdentitySync>,
+    },
+    /// → hosted coordinator, a socket's first frame: join it with an invite
+    /// its owner made.
+    CoordRedeem {
+        code: String,
+        sync: Box<crate::identity::IdentitySync>,
+    },
+    /// → client. The claim or redemption worked: pin these keys.
+    CoordAdmitted {
+        keys: crate::identity::crypto::PublicKeys,
+        owner: bool,
+    },
+    /// → hosted coordinator, the owner identity's members only.
+    CoordInviteCreate,
+    CoordInviteRevoke {
+        code: String,
+    },
+    CoordInviteList,
+    /// → client. The owner's invites (after any of the three above).
+    CoordInvites {
+        invites: Vec<CoordInvite>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        created: Option<String>,
+    },
+    /// → hosted coordinator, the owner identity's members only: sign the
+    /// coordinator's own YouTube Music analysis in with a session of its
+    /// own (`envelope`: the `Cookie:` header, sealed to the coordinator's
+    /// key under [`COORD_YTM_CONTEXT`]), or out (`None`). Answered with
+    /// [`Msg::CoordYtmStatus`].
+    CoordYtmSignIn {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        envelope: Option<crate::identity::crypto::Envelope>,
+    },
+    /// → hosted coordinator, the owner identity's members only: answer with
+    /// [`Msg::CoordYtmStatus`].
+    CoordYtmQuery,
+    /// → client. The coordinator's YouTube Music analysis: `enabled` with
+    /// `--analysis-ytm`; signed in as `account`, or anonymous; `error` when
+    /// the last sign-in was refused.
+    CoordYtmStatus {
+        enabled: bool,
+        signed_in: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+
     /// Anything this build does not know. Ignored.
     #[serde(other)]
     Unknown,
+}
+
+/// An invite to a hosted coordinator, as its owner sees it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordInvite {
+    pub code: String,
+    pub created_at: EpochMs,
+    pub expires_at: EpochMs,
+    /// The identity that used it, once used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redeemed_by: Option<String>,
 }
 
 impl Msg {
@@ -1278,6 +1398,7 @@ impl Msg {
         "stashSync",
         "snoozeSync",
         "albumResumeSync",
+        "libraryRecordsSync",
         "undoEntryShared",
         "libraryEdited",
         "diagnosticsRequest",
@@ -1285,6 +1406,21 @@ impl Msg {
         "analysisFetch",
         "analysisRecords",
         "analysisUpload",
+        "identitySync",
+        "pairJoin",
+        "pairAccept",
+        "pairOffer",
+        "pairRefuse",
+        "coordClaim",
+        "coordRedeem",
+        "coordAdmitted",
+        "coordInviteCreate",
+        "coordInviteRevoke",
+        "coordInviteList",
+        "coordInvites",
+        "coordYtmSignIn",
+        "coordYtmQuery",
+        "coordYtmStatus",
         "unknown",
     ];
 
@@ -1297,6 +1433,7 @@ impl Msg {
         match self {
             Msg::Challenge { .. } => "challenge",
             Msg::Proof { .. } => "proof",
+            Msg::Sealed { .. } => "sealed",
             Msg::Hello { .. } => "hello",
             Msg::Welcome { .. } => "welcome",
             Msg::Refuse { .. } => "refuse",
@@ -1335,6 +1472,7 @@ impl Msg {
             Msg::StashSync { .. } => "stashSync",
             Msg::SnoozeSync { .. } => "snoozeSync",
             Msg::AlbumResumeSync { .. } => "albumResumeSync",
+            Msg::LibraryRecordsSync { .. } => "libraryRecordsSync",
             Msg::UndoEntryShared { .. } => "undoEntryShared",
             Msg::LibraryEdited { .. } => "libraryEdited",
             Msg::DiagnosticsRequest { .. } => "diagnosticsRequest",
@@ -1342,6 +1480,21 @@ impl Msg {
             Msg::AnalysisFetch { .. } => "analysisFetch",
             Msg::AnalysisRecords { .. } => "analysisRecords",
             Msg::AnalysisUpload { .. } => "analysisUpload",
+            Msg::IdentitySync { .. } => "identitySync",
+            Msg::PairJoin { .. } => "pairJoin",
+            Msg::PairAccept { .. } => "pairAccept",
+            Msg::PairOffer { .. } => "pairOffer",
+            Msg::PairRefuse { .. } => "pairRefuse",
+            Msg::CoordClaim { .. } => "coordClaim",
+            Msg::CoordRedeem { .. } => "coordRedeem",
+            Msg::CoordAdmitted { .. } => "coordAdmitted",
+            Msg::CoordInviteCreate => "coordInviteCreate",
+            Msg::CoordInviteRevoke { .. } => "coordInviteRevoke",
+            Msg::CoordInviteList => "coordInviteList",
+            Msg::CoordInvites { .. } => "coordInvites",
+            Msg::CoordYtmSignIn { .. } => "coordYtmSignIn",
+            Msg::CoordYtmQuery => "coordYtmQuery",
+            Msg::CoordYtmStatus { .. } => "coordYtmStatus",
             Msg::Unknown => "unknown",
         }
     }
@@ -1490,13 +1643,20 @@ mod tests {
             "bpm": null, "beatsMs": [], "downbeatsMs": [], "beatConfidence": 0.0, "createdAt": 5.0
         }))
         .unwrap();
+        let key = AnalysisKey::navidrome("https://nd", "t1", Some(10.0), Some("FLAC"));
+        assert_eq!(key.provider, "navidrome:https://nd");
+        assert_eq!(key.fingerprint, "t1|10|flac");
         let entry = AnalysisEntry {
             track_id: "t1".into(),
+            key: key.clone(),
             record,
         };
         for msg in [
             Msg::AnalysisFetch {
-                track_ids: vec!["t1".into(), "t2".into()],
+                wants: vec![AnalysisWant {
+                    track_id: "t1".into(),
+                    key,
+                }],
             },
             Msg::AnalysisRecords {
                 records: vec![entry.clone()],
@@ -1606,6 +1766,7 @@ mod tests {
             Msg::SettingsSync { settings: vec![] },
             Msg::StashSync { entries: vec![] },
             Msg::AlbumResumeSync { entries: vec![] },
+            Msg::LibraryRecordsSync { records: vec![] },
             Msg::LibraryEdited {
                 device_id: "a".into(),
                 items: vec![],
@@ -1645,7 +1806,6 @@ mod tests {
             protocol_min: 1,
             protocol_max: 1,
             scope: "s".into(),
-            credential: None,
             session_id: None,
             session_revision: 0,
             held_epoch: None,
@@ -1672,6 +1832,7 @@ mod tests {
             stash: vec![],
             snoozes: vec![],
             album_resumes: vec![],
+            library_records: vec![],
             devices: vec![],
             transport_lease: TransportLease::default(),
             last_stamp: None,
@@ -1697,61 +1858,16 @@ mod tests {
     }
 
     #[test]
-    fn credential_debug_redacts_secrets() {
-        let c = Credential {
-            server_url: "https://x".into(),
-            username: "u".into(),
-            token: Some("secret-token".into()),
-            salt: Some("secret-salt".into()),
-            api_key: Some("secret-key".into()),
-            client: "hocket".into(),
-            api_version: "1.16.1".into(),
-        };
-        let s = format!("{c:?}");
-        assert!(!s.contains("secret"), "{s}");
-        assert!(s.contains("<redacted>"));
-        let m = format!(
-            "{:?}",
-            Msg::Hello {
-                device: device("a"),
-                protocol_min: PROTOCOL_MIN,
-                protocol_max: PROTOCOL,
-                scope: "s".into(),
-                credential: Some(c),
-                session_id: None,
-                session_revision: 0,
-                held_epoch: None,
-                extra: HashMap::new(),
-            }
-        );
-        assert!(!m.contains("secret"), "{m}");
-    }
-
-    #[test]
-    fn credential_ping_params_prefer_api_key() {
-        let mut c = Credential {
-            server_url: "https://x".into(),
-            username: "u".into(),
-            token: Some("t".into()),
-            salt: Some("s".into()),
-            api_key: None,
-            client: "hocket".into(),
-            api_version: "1.16.1".into(),
-        };
-        let p = c.ping_params();
-        assert!(p.iter().any(|(k, v)| k == "t" && v == "t"));
-        assert!(p.iter().any(|(k, v)| k == "s" && v == "s"));
-        c.api_key = Some("key".into());
-        let p = c.ping_params();
-        assert!(p.iter().any(|(k, _)| k == "apiKey"));
-        assert!(!p.iter().any(|(k, _)| k == "t"));
-    }
-
-    #[test]
     fn scope_key_normalises() {
         assert_eq!(
             scope_key("HTTPS://Music.Example/", "bob"),
             "https://music.example|bob"
+        );
+        // The account id platforms key credentials by derives the same way
+        // (desktop `accountIdFor`, Android `AccountIds.forNavidrome`).
+        assert_eq!(
+            account_id_for_scope(&scope_key("HTTPS://Music.Example/", "bob")),
+            "cb1d7475e3b86104"
         );
         assert_eq!(
             scope_key(" https://music.example ", "bob"),
@@ -1769,7 +1885,7 @@ mod tests {
         SavedQueue {
             id: id.into(),
             context: crate::api::QueueContext {
-                server_id: "srv".into(),
+                source: "srv".into(),
                 kind: crate::api::ContextKind::Album { id: id.into() },
                 label: id.into(),
                 sort: Default::default(),
@@ -1860,14 +1976,13 @@ mod tests {
     #[test]
     fn insert_tracks_round_trips_from_the_command() {
         let cmd = Command::InsertTracks {
-            server_id: "s".into(),
-            track_ids: vec!["t1".into(), "t2".into()],
+            tracks: TrackRef::list("s", ["t1", "t2"]),
             keys: vec!["k".into()],
             after: "a".into(),
             in_group: true,
         };
         // The UI's JSON (variant camelCase, fields as declared), `keys` optional.
-        let ui = r#"{"type":"insertTracks","data":{"server_id":"s","track_ids":["t1","t2"],"after":"a","in_group":true}}"#;
+        let ui = r#"{"type":"insertTracks","data":{"tracks":[{"source":"s","id":"t1"},{"source":"s","id":"t2"}],"after":"a","in_group":true}}"#;
         let parsed: Command = serde_json::from_str(ui).unwrap();
         assert!(matches!(
             &parsed,
@@ -1877,8 +1992,7 @@ mod tests {
         assert_eq!(
             op,
             SessionOp::InsertTracks {
-                server_id: "s".into(),
-                track_ids: vec!["t1".into(), "t2".into()],
+                track_ids: vec![TrackRef::new("s", "t1"), TrackRef::new("s", "t2")],
                 keys: vec!["k".into()],
                 after: "a".into(),
                 in_group: true,
@@ -1907,8 +2021,10 @@ mod tests {
         let tracks: Vec<String> = (0..n).map(|i| format!("t{i}")).collect();
         let d = doc();
         let op = SessionOp::PlayTracks {
-            server_id: "s".into(),
-            track_ids: tracks.clone(),
+            track_ids: (tracks.clone())
+                .into_iter()
+                .map(crate::api::TrackRef::from)
+                .collect::<Vec<_>>(),
             start_index: 9000,
             label: "All".into(),
             shuffle: false,
@@ -1928,8 +2044,10 @@ mod tests {
         assert_eq!(start_index as usize, HISTORY_CAP);
         assert_eq!(track_ids[start_index as usize], "t9000");
         let op = SessionOp::PlayLater {
-            server_id: "s".into(),
-            track_ids: tracks,
+            track_ids: (tracks)
+                .into_iter()
+                .map(crate::api::TrackRef::from)
+                .collect::<Vec<_>>(),
             keys: vec![],
         }
         .within_caps(&d);
@@ -1938,7 +2056,6 @@ mod tests {
         );
         // Short lists are untouched.
         let small = SessionOp::PlayTracks {
-            server_id: "s".into(),
             track_ids: vec!["a".into(), "b".into()],
             start_index: 1,
             label: "x".into(),

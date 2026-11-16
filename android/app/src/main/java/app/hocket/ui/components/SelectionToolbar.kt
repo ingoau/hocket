@@ -166,7 +166,7 @@ internal suspend fun selectionSubject(client: CoreClient, selection: Selection, 
             val all = q.entries + listOfNotNull(q.current)
             selection.ids.mapNotNull { k -> all.firstOrNull { it.item.key == k }?.track }
         }
-        else -> (client.query(Queries.tracksByIds(selection.ids.toList())) as? QueryResult.TrackList)?.data?.map { it.toSummary() }.orEmpty()
+        else -> (client.query(Queries.tracksByIds((client.selectionTarget() as? app.hocket.core.api.ActionTarget.Tracks)?.data?.tracks.orEmpty())) as? QueryResult.TrackList)?.data?.map { it.toSummary() }.orEmpty()
     }
     return songsSubject(count, tracks, context, resources, dot, removeFromQueue = kind == SelectionKind.QueueItems)
 }

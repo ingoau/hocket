@@ -171,7 +171,7 @@ class PlaybackService : MediaLibraryService() {
                 bridge.applyQueue(event.data.queue)
                 backend.onQueueChanged(event.data.queue)
             }
-            is Event.ServersChanged -> serverId = event.data.servers.firstOrNull()?.id
+            is Event.AccountsChanged -> serverId = event.data.accounts.firstOrNull()?.id
             is Event.LibraryChanged -> scheduleLibraryNotify()
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.Started -> applySnapshot(event.data.snapshot)
@@ -254,7 +254,7 @@ class PlaybackService : MediaLibraryService() {
     /** `Started` (once per core) and `Snapshot` (every RequestSnapshot) carry the same state. */
     private fun applySnapshot(snapshot: app.hocket.core.api.Snapshot) {
         clockOffsetMs = snapshot.connection.clockOffsetMs
-        serverId = snapshot.servers.firstOrNull()?.id
+        serverId = snapshot.accounts.firstOrNull()?.id
         bridge.applyQueue(snapshot.queue)
         backend.onQueueChanged(snapshot.queue)
         backend.onAudioSettings(snapshot.audio)

@@ -256,13 +256,14 @@ export function ContextMenu() {
   if (!menu) return null;
   const facts = menu.facts;
   const subMotion = motion === "closing" || subPresence.closing ? "closing" : "fade-in";
-  const trackId = menu.target.type === "tracks" && menu.target.data.ids.length === 1
-    ? menu.target.data.ids[0]
-    : facts?.trackIds?.length === 1 ? facts.trackIds[0] : undefined;
+  const previewRef = menu.target.type === "tracks" && menu.target.data.tracks.length === 1
+    ? menu.target.data.tracks[0]
+    : facts?.trackRefs?.length === 1 ? facts.trackRefs[0] : undefined;
+  const trackId = previewRef?.id;
   const mine = preview && trackId && preview.trackId === trackId ? preview : undefined;
   const previewCommand = () => {
     if (!trackId) return;
-    if (!mine) bridge().dispatch({ type: "previewStart", data: { track_id: trackId } });
+    if (!mine && previewRef) bridge().dispatch({ type: "previewStart", data: { track: previewRef } });
     else bridge().dispatch({ type: "previewToggle" });
   };
 
@@ -606,11 +607,11 @@ export function ContextMenu() {
       </div>
       {/* Reaching the submenu keeps it: a switch the pointer's path asked for on the way is called off. */}
       <div style={{ display: "contents" }} onMouseMove={cancelPendingSub}>
-        {shownSub?.id === "addToPlaylist" && facts?.trackIds?.length ? (
-          <PlaylistSubmenu key={`addToPlaylist-${shownSub.n}`} trackIds={facts.trackIds} anchor={shownSub} closing={subMotion === "closing"} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        {shownSub?.id === "addToPlaylist" && facts?.trackRefs?.length ? (
+          <PlaylistSubmenu key={`addToPlaylist-${shownSub.n}`} tracks={facts.trackRefs} anchor={shownSub} closing={subMotion === "closing"} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
         ) : null}
-        {shownSub?.id === "snooze" && facts?.trackIds?.length ? (
-          <SnoozeSubmenu key={`snooze-${shownSub.n}`} trackIds={facts.trackIds} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        {shownSub?.id === "snooze" && facts?.trackRefs?.length ? (
+          <SnoozeSubmenu key={`snooze-${shownSub.n}`} tracks={facts.trackRefs} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
         ) : null}
         {shownSub?.id === "share" && facts ? (
           <ShareSubmenu key={`share-${shownSub.n}`} facts={facts} target={menu.target} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />

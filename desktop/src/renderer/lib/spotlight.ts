@@ -125,14 +125,14 @@ export interface SpotlightInput {
 
 /** The slides: Resume (the album left most recently) first, then the other reasons in a weighted shuffle. */
 export async function loadSpotlight(input: SpotlightInput): Promise<SpotlightSlide[]> {
-  const { serverId, resumes, playing, stats, seed, query } = input;
+  const { resumes, playing, stats, seed, query } = input;
   const now = input.now ?? Date.now();
   const picker = new SpotlightPicker(playing?.albumId, playing?.artistId);
   const rest = weightedShuffle(Object.keys(WEIGHTS) as Exclude<SlideKind, "resume">[], rng(seed), (k) => WEIGHTS[k]);
   const ask = (q: Query) => query(q).catch(() => undefined);
   const album = async (id: string) => { const r = await ask({ type: "album", data: { id } }); return r?.type === "albumDetail" ? r.data : undefined; };
   const albums = async (sort: string, limit: number, extra: { genre?: string; artist_id?: string } = {}) => {
-    const r = await ask({ type: "albums", data: { server_id: serverId, artist_id: extra.artist_id, genre: extra.genre, sort, descending: true, page: { offset: 0, limit } } } as never);
+    const r = await ask({ type: "albums", data: { server_id: "", artist_id: extra.artist_id, genre: extra.genre, sort, descending: true, page: { offset: 0, limit } } } as never);
     return r?.type === "albums" ? r.data.items : [];
   };
   for (const kind of ["resume" as SlideKind, ...rest]) {
@@ -156,7 +156,7 @@ export async function loadSpotlight(input: SpotlightInput): Promise<SpotlightSli
         break;
       }
       case "rediscover": {
-        const loved = await ask({ type: "tracks", data: { server_id: serverId, page: { offset: 0, limit: 40 }, sort: "random", descending: false, filter: LOVED_NOT_LATELY as never } } as never);
+        const loved = await ask({ type: "tracks", data: { server_id: "", page: { offset: 0, limit: 40 }, sort: "random", descending: false, filter: LOVED_NOT_LATELY as never } } as never);
         const lovedIds = shuffled([...new Set((loved?.type === "tracks" ? loved.data.items : []).map((t) => t.albumId).filter((x): x is string => !!x))], rnd).slice(0, 4);
         const year = await ask({ type: "stats", data: { period_days: 365 } });
         const yearAlbums = shuffled((year?.type === "stats" ? year.data.topAlbums : []).filter((a) => a.lastPlayed != null && now - a.lastPlayed > REDISCOVER_AFTER_MS), rnd).slice(0, 4);
@@ -183,7 +183,7 @@ export async function loadSpotlight(input: SpotlightInput): Promise<SpotlightSli
         }
         break;
       case "playlist": {
-        const r = await ask({ type: "playlists", data: { server_id: serverId } });
+        const r = await ask({ type: "playlists", data: { server_id: "" } });
         const lists = (r?.type === "playlists" ? r.data : []).filter((p) => p.songCount > 0).sort((a, b) => (b.changed ?? b.created ?? 0) - (a.changed ?? a.created ?? 0)).slice(0, 4);
         const p = shuffled(lists, rnd)[0];
         if (p) picker.offer({ kind, playlist: p });

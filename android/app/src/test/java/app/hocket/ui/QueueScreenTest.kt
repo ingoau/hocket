@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import app.hocket.core.groupEntries
 import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
@@ -187,10 +189,10 @@ class QueueScreenTest {
         compose.waitUntil(5_000) { core.client.started.value }
         // One song, so autoplay tops the list up, then a song added later and one added to the queue.
         val lib = core.fake.library
-        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[5].id), 0, "One"))
+        core.client.dispatch(Commands.playTracks((listOf(lib.tracks[5].id)).map { TrackRef(lib.serverId, it) }, 0, "One"))
         compose.waitUntil(5_000) { core.client.queue.value.restEntries.any { it.autoplay == true } }
-        core.client.dispatch(Commands.playLater(lib.serverId, listOf(lib.tracks[6].id)))
-        core.client.dispatch(Commands.addToQueue(lib.serverId, listOf(lib.tracks[7].id)))
+        core.client.dispatch(Commands.playLater((listOf(lib.tracks[6].id)).map { TrackRef(lib.serverId, it) }))
+        core.client.dispatch(Commands.addToQueue((listOf(lib.tracks[7].id)).map { TrackRef(lib.serverId, it) }))
         compose.waitUntil(5_000) { core.client.queue.value.groupCount == 1u && core.client.queue.value.restEntries.any { it.item.added == true } }
         compose.waitForIdle()
         val q = core.client.queue.value
@@ -218,7 +220,7 @@ class QueueScreenTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         core.client.dispatch(Command.ClearQueue)
-        core.client.dispatch(Commands.playLater(core.fake.library.serverId, listOf(core.fake.library.tracks[40].id)))
+        core.client.dispatch(Commands.playLater((listOf(core.fake.library.tracks[40].id)).map { TrackRef(core.fake.library.serverId, it) }))
         compose.waitUntil(5_000) { core.client.queue.value.restEntries.none { it.item.source is app.hocket.core.api.QueueSource.Context } }
         compose.waitForIdle()
         compose.onNodeWithTag("queue.list").performScrollToNode(hasText("Later"))
@@ -232,7 +234,7 @@ class QueueScreenTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         val ids = core.fake.library.tracks.take(400).map { it.id }
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, ids, 250, "Long"))
+        core.client.dispatch(Commands.playTracks((ids).map { TrackRef(core.fake.library.serverId, it) }, 250, "Long"))
         compose.waitUntil(5_000) { core.client.queue.value.historyCount == 250u }
         compose.waitForIdle()
         // The core sends 100 rows each side of the pointer; the rest comes in on scroll.
@@ -401,7 +403,7 @@ class QueueScreenTest {
         compose.waitUntil(5_000) { core.client.started.value }
         // A queue longer than the screen.
         val ids = core.fake.library.tracks.take(30).map { it.id }
-        core.client.dispatch(Commands.addToQueue(core.fake.library.serverId, ids))
+        core.client.dispatch(Commands.addToQueue((ids).map { TrackRef(core.fake.library.serverId, it) }))
         compose.waitUntil(5_000) { core.client.queue.value.groupEntries.size >= 30 }
         compose.waitForIdle()
         val before = core.client.queue.value.let { q -> (q.groupEntries + q.restEntries).map { it.item.key } }

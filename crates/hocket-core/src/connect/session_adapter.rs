@@ -67,7 +67,6 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
     Some(match op {
         SessionOp::PlayContext { args } => QueueOp::PlayContext { args: args.clone() },
         SessionOp::PlayTracks {
-            server_id,
             track_ids,
             start_index,
             label,
@@ -75,7 +74,6 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             save_outgoing,
             start_position_ms,
         } => QueueOp::PlayTracks {
-            server_id: server_id.clone(),
             track_ids: track_ids.clone(),
             start_index: *start_index,
             label: label.clone(),
@@ -84,43 +82,29 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             start_position_ms: *start_position_ms,
         },
         SessionOp::PlayNext {
-            server_id,
             track_ids,
             keys,
             queued,
         } => QueueOp::PlayNext {
-            server_id: server_id.clone(),
             track_ids: track_ids.clone(),
             keys: keys.clone(),
             queued: *queued,
         },
-        SessionOp::AddToQueue {
-            server_id,
-            track_ids,
-            keys,
-        } => QueueOp::AddToQueue {
-            server_id: server_id.clone(),
+        SessionOp::AddToQueue { track_ids, keys } => QueueOp::AddToQueue {
             track_ids: track_ids.clone(),
             keys: keys.clone(),
         },
-        SessionOp::PlayLater {
-            server_id,
-            track_ids,
-            keys,
-        } => QueueOp::PlayLater {
-            server_id: server_id.clone(),
+        SessionOp::PlayLater { track_ids, keys } => QueueOp::PlayLater {
             track_ids: track_ids.clone(),
             keys: keys.clone(),
         },
         SessionOp::JumpToQueueItem { key } => QueueOp::JumpToQueueItem { key: key.clone() },
         SessionOp::InsertTracks {
-            server_id,
             track_ids,
             keys,
             after,
             in_group,
         } => QueueOp::InsertTracks {
-            server_id: server_id.clone(),
             track_ids: track_ids.clone(),
             keys: keys.clone(),
             after: after.clone(),
@@ -149,7 +133,7 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             items: items
                 .iter()
                 .map(|i: &AutoplayOpItem| AutoplayItem {
-                    track_id: i.track_id.clone(),
+                    track: i.track_id.clone(),
                     provider: i.provider,
                     reason: i.reason.clone(),
                     score: i.score,
@@ -213,11 +197,14 @@ mod tests {
         SessionOp::PlayContext {
             args: PlayContextArgs {
                 context: QueueContext {
-                    server_id: "srv".into(),
+                    source: "srv".into(),
                     kind: ContextKind::Album { id: "alb".into() },
                     label: "Album".into(),
                     sort: SortOrder::Default,
-                    tracks: (0..n).map(|i| format!("t{i}")).collect(),
+                    tracks: (0..n)
+                        .map(|i| format!("t{i}"))
+                        .map(crate::api::TrackRef::from)
+                        .collect(),
                 },
                 start_index: Some(0),
                 shuffle: true,
@@ -339,23 +326,19 @@ mod tests {
         use crate::api::RepeatMode;
         let ops = vec![
             SessionOp::PlayNext {
-                server_id: "s".into(),
                 track_ids: vec![],
                 keys: vec![],
                 queued: true,
             },
             SessionOp::AddToQueue {
-                server_id: "s".into(),
                 track_ids: vec![],
                 keys: vec![],
             },
             SessionOp::PlayLater {
-                server_id: "s".into(),
                 track_ids: vec![],
                 keys: vec![],
             },
             SessionOp::InsertTracks {
-                server_id: "s".into(),
                 track_ids: vec!["t".into()],
                 keys: vec![],
                 after: "c".into(),

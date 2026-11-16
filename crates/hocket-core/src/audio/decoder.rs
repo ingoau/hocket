@@ -28,7 +28,9 @@ use symphonia::core::meta::{MetadataOptions, Value};
 use symphonia::core::probe::{Hint, ProbedMetadata};
 use symphonia::core::units::{Time, TimeBase};
 
-use crate::audio::padding::{find_lame_header, parse_itunsmpb, LameInfo, Trim};
+use crate::audio::padding::{
+    find_lame_header, parse_itunsmpb, parse_mp4_edit_list, LameInfo, Trim,
+};
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum DecodeError {
@@ -113,7 +115,9 @@ pub fn open_media_source(
     mime_type: Option<&str>,
     gapless: bool,
 ) -> Result<Opened, DecodeError> {
-    // Peek the head for an MP3 LAME tag before Symphonia consumes it.
+    // Peek the head for an MP3 LAME tag (or an MP4 edit list) before
+    // Symphonia consumes it.
+    let mut edit_list = None;
     let lame = if source.is_seekable() {
         let mut head = vec![0u8; 16 * 1024];
         let mut read = 0;
@@ -126,6 +130,7 @@ pub fn open_media_source(
             }
         }
         std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(0))?;
+        edit_list = parse_mp4_edit_list(&head[..read]);
         find_lame_header(&head[..read])
     } else {
         None
@@ -170,6 +175,7 @@ pub fn open_media_source(
     let decoder = symphonia::default::get_codecs().make(&params, &DecoderOptions::default())?;
     // AAC priming/padding from iTunSMPB.
     let mut trim = Trim::default();
+    let mut elst_frames: Option<u64> = None;
     if gapless && params.codec == CODEC_TYPE_AAC {
         let mut meta = format.metadata();
         meta.skip_to_latest();
@@ -184,7 +190,16 @@ pub fn open_media_source(
                 }
             }
         }
-        // Without the tag, trim at least the codec's known priming.
+        // Without the tag, an MP4 edit list (YouTube's AAC) says where the
+        // presentation starts and how long it lasts.
+        if trim == Trim::default() {
+            if let Some(e) = edit_list {
+                let (skip, frames) = e.frames(sample_rate);
+                trim.skip_start = skip;
+                elst_frames = frames;
+            }
+        }
+        // Without either, trim at least the codec's known priming.
         if trim == Trim::default() {
             if let Some(d) = params.delay {
                 trim.skip_start = d;
@@ -192,9 +207,11 @@ pub fn open_media_source(
         }
     }
     let raw_frames = params.n_frames;
-    let duration_frames = raw_frames.map(|n| {
-        n.saturating_sub(u64::from(trim.skip_start))
-            .saturating_sub(u64::from(trim.skip_end))
+    let duration_frames = elst_frames.or_else(|| {
+        raw_frames.map(|n| {
+            n.saturating_sub(u64::from(trim.skip_start))
+                .saturating_sub(u64::from(trim.skip_end))
+        })
     });
     let _ = CODEC_TYPE_MP3; // MP3 trims are Symphonia's job (see module docs).
     Ok(Opened {

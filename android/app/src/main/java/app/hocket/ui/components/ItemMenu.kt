@@ -156,13 +156,18 @@ data class MenuSubject(
     val downloaded: Boolean = false,
     val downloadNote: String? = null,
     val trackId: String? = null,
+    /** The account [trackId] is valid in (its reference's source). */
+    val trackSource: String? = null,
     val albumId: String? = null,
     val album: String? = null,
     val artistId: String? = null,
     val artist: String? = null,
     val count: Int = 1,
     val context: String? = null,
-)
+) {
+    /** The song the menu is for, as a reference. */
+    val trackRef: app.hocket.core.api.TrackRef? get() = trackId?.let { app.hocket.core.api.TrackRef(trackSource.orEmpty(), it) }
+}
 
 /** One row of a menu's lists. [key] names it for tests (the action id for registry rows). */
 sealed interface MenuEntry {
@@ -345,8 +350,8 @@ fun MenuSheet(
         onDispose { client.dispatch(Command.PreviewStop) }
     }
     val snoozeItems by client.snoozes.collectAsStateWithLifecycle()
-    val snoozed = subject.trackId?.let { id -> snoozeItems.any { it.trackId == id } }
-    val snoozeUntil = subject.trackId?.let { id -> snoozeItems.firstOrNull { it.trackId == id }?.until }
+    val snoozed = subject.trackId?.let { id -> snoozeItems.any { it.trackRef.id == id } }
+    val snoozeUntil = subject.trackId?.let { id -> snoozeItems.firstOrNull { it.trackRef.id == id }?.until }
     // The sleep timer (the player's extra row and its sub-page; nothing else on the menu sees it).
     val sleepTimer by client.sleepTimer.collectAsStateWithLifecycle()
     val sheetState = rememberPulledSheetState(pull)
@@ -394,7 +399,7 @@ fun MenuSheet(
     var rateDialog by remember { mutableStateOf(false) }
     var snoozeCustom by remember { mutableStateOf(false) }
     val size by produceState<Double?>(initialValue = null, subject.trackId) {
-        value = subject.trackId?.let { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data?.sizeBytes }
+        value = subject.trackRef?.let { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data?.sizeBytes }
     }
     fun run(a: ActionDescriptor) = client.dispatch(Commands.runAction(a.id, target))
     fun runAndClose(a: ActionDescriptor) { if (a.id !in ActionIds.UI_HANDLED) run(a); hideThen(onRan) }
@@ -468,7 +473,7 @@ fun MenuSheet(
     @Composable
     fun EntryRow(entry: MenuEntry, shape: Shape) {
         when (entry) {
-            is MenuEntry.Preview -> PreviewMenuRow(entry.action, subject.trackId, target, shape, "$tag.action.${entry.action.id}")
+            is MenuEntry.Preview -> PreviewMenuRow(entry.action, subject.trackRef, target, shape, "$tag.action.${entry.action.id}")
             is MenuEntry.Action -> {
                 val a = entry.action
                 val label = when (a.id) {
@@ -603,7 +608,7 @@ fun MenuSheet(
             MenuPage.Snooze -> SnoozePage(tag, onCustom = { snoozeCustom = true }) { duration ->
                 if (duration == null) goTo(MenuPage.Main)
                 else hideThen {
-                    val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
+                    val ids = snoozeTrackRefs(target, subject.trackRef, client.queue.value)
                     if (ids.isNotEmpty()) client.dispatch(Commands.snooze(ids, duration))
                 }
             }
@@ -664,7 +669,7 @@ fun MenuSheet(
         SnoozeUntilPicker(tag, onDismiss = { snoozeCustom = false }) { until ->
             snoozeCustom = false
             hideThen {
-                val ids = snoozeTrackIds(target, subject.trackId, client.queue.value)
+                val ids = snoozeTrackRefs(target, subject.trackRef, client.queue.value)
                 if (ids.isNotEmpty()) client.dispatch(Commands.snoozeUntil(ids, until.toDouble()))
             }
         }
@@ -887,14 +892,14 @@ private fun RatingRow(rating: Int?, onRate: (Int) -> Unit) {
  * The songs Snooze's page snoozes: a selection's tracks, a queue selection's rows looked up in
  * [queue] (the rows on screen are in it), else the one song the menu is for.
  */
-internal fun snoozeTrackIds(target: app.hocket.core.api.ActionTarget, trackId: String?, queue: app.hocket.core.api.QueueView): List<String> = when (target) {
-    is app.hocket.core.api.ActionTarget.Tracks -> target.data.ids
+internal fun snoozeTrackRefs(target: app.hocket.core.api.ActionTarget, track: app.hocket.core.api.TrackRef?, queue: app.hocket.core.api.QueueView): List<app.hocket.core.api.TrackRef> = when (target) {
+    is app.hocket.core.api.ActionTarget.Tracks -> target.data.tracks
     is app.hocket.core.api.ActionTarget.QueueItems -> {
         val entries = queue.entries + listOfNotNull(queue.current)
-        val byKey = entries.associate { it.item.key to it.item.trackId }
-        target.data.keys.mapNotNull { byKey[it] }.distinct().ifEmpty { listOfNotNull(trackId) }
+        val byKey = entries.associate { it.item.key to it.item.track }
+        target.data.keys.mapNotNull { byKey[it] }.distinct().ifEmpty { listOfNotNull(track) }
     }
-    else -> listOfNotNull(trackId)
+    else -> listOfNotNull(track)
 }
 
 /** When a snooze ends, for the Unsnooze row. */

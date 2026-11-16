@@ -9,7 +9,7 @@
 // Enter (or Space while the field is empty) toggles, Shift+Enter adds another copy, ← at the start
 // of the field, Escape or the mouse's back button go back to the menu, Tab closes both.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ActionTarget, Playlist } from "@core/api";
+import type { ActionTarget, Playlist, TrackRef } from "@core/api";
 import type { ExitProps } from "../lib/presence";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -17,7 +17,7 @@ import { useQuery } from "../store/queries";
 import { executeAction } from "../store/actions";
 import { usePins } from "../lib/use-pins";
 import { showToast, toastUndoable } from "../lib/ui-toast";
-import { clickIntent, keepLayout, layoutPlaylists, pickerGroups, rowState, type PickerGroupId, type PickerLayout, type RowState } from "../lib/playlist-picker";
+import { clickIntent, keepLayout, layoutPlaylists, pickerGroups, refsWithIds, rowState, type PickerGroupId, type PickerLayout, type RowState } from "../lib/playlist-picker";
 import { placeFlyout, type FlyoutSide } from "../lib/flyout";
 import { Icon } from "./Icon";
 import { MOUSE_BACK } from "./MenuFlyout";
@@ -25,7 +25,7 @@ import { MOUSE_BACK } from "./MenuFlyout";
 const GROUP_LABEL: Record<PickerGroupId, Parameters<typeof t>[0]> = { pinned: "picker.pinned", recent: "picker.recent", all: "picker.all", matches: "picker.matches" };
 
 interface Props {
-  trackIds: string[];
+  tracks: TrackRef[];
   /**
    * Beside a menu: its left/right edges and the Add to playlist row's top. Opened on its own (with
    * [bottom]): the button it opens from, in window coordinates.
@@ -44,13 +44,16 @@ interface Props {
 
 type Row = { kind: "new" } | { kind: "playlist"; playlist: Playlist; state: RowState };
 
-export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onClose, exitProps }: Props) {
-  const serverId = useApp((s) => s.servers[0]?.id);
+export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClose, exitProps }: Props) {
+  const serverId = useApp((s) => s.accounts[0]?.id);
+  const several = useApp((s) => s.accounts.length > 1);
+  const openDialog = useApp((s) => s.openDialog);
+  const trackIds = useMemo(() => tracks.map((r) => r.id), [tracks]);
   const dispatch = useApp((s) => s.dispatch);
   const pins = usePins();
-  const ids = JSON.stringify(trackIds);
-  const { data: playlists } = useQuery(() => (serverId ? { type: "playlists", data: { server_id: serverId } } : null), "playlists", [serverId], { keep: true });
-  const { data: membership } = useQuery(() => (serverId ? { type: "playlistMembership", data: { server_id: serverId, track_ids: trackIds } } : null), "membership", [serverId, ids], { keep: true });
+  const ids = JSON.stringify(tracks);
+  const { data: playlists } = useQuery(() => (serverId ? { type: "playlists", data: { server_id: "" } } : null), "playlists", [serverId], { keep: true });
+  const { data: membership } = useQuery(() => (serverId ? { type: "playlistMembership", data: { server_id: "", tracks } } : null), "membership", [serverId, ids], { keep: true });
   const [layout, setLayout] = useState<PickerLayout | undefined>(undefined);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(-1);
@@ -109,25 +112,26 @@ export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onC
 
   if (!ready) return null;
 
-  const add = (p: Playlist, track_ids: string[], again: boolean) =>
-    toastUndoable(t(again ? "toast.addedAgain" : "toast.addedToPlaylist", { playlist: p.name }), () => dispatch({ type: "playlistAdd", data: { playlist_id: p.id, track_ids, at_index: undefined } }));
+  const add = (p: Playlist, refs: TrackRef[], again: boolean) =>
+    toastUndoable(t(again ? "toast.addedAgain" : "toast.addedToPlaylist", { playlist: p.name }), () => dispatch({ type: "playlistAdd", data: { playlist_id: p.id, tracks: refs, at_index: undefined } }));
   const remove = (p: Playlist, indices: number[], one: boolean) => {
     setAsking(null);
     if (indices.length) toastUndoable(t(one ? "toast.removedOneFrom" : "toast.removedFrom", { playlist: p.name }), () => dispatch({ type: "playlistRemove", data: { playlist_id: p.id, indices } }));
   };
   const addCopy = (p: Playlist, s: RowState) => {
     setAsking(null);
-    add(p, trackIds, s.checked !== false);
+    add(p, tracks, s.checked !== false);
   };
   const toggle = (p: Playlist, s: RowState, i: number) => {
     switch (clickIntent(s)) {
       case "add":
         setAsking(null);
-        add(p, trackIds, false);
+        add(p, tracks, false);
         return;
       case "addMissing":
         setAsking(null);
-        add(p, s.missing, false);
+        // Membership names songs by id; back to the references (every account's) to add them.
+        add(p, refsWithIds(tracks, s.missing), false);
         return;
       case "remove":
         remove(p, s.indices, false);
@@ -140,12 +144,17 @@ export function PlaylistSubmenu({ trackIds, anchor, closing, motion, onBack, onC
   const createNew = () => {
     if (!typed) {
       // No name yet: the app's own New playlist dialog, with the songs.
-      const target: ActionTarget = { type: "tracks", data: { ids: trackIds } };
+      const target: ActionTarget = { type: "tracks", data: { tracks } };
       onClose(() => void executeAction("ui.newPlaylist", target));
       return;
     }
     if (!serverId) return;
-    dispatch({ type: "createPlaylist", data: { server_id: serverId, name: typed, track_ids: trackIds } });
+    if (several) {
+      // Which account keeps it (or Mixed): the New playlist dialog asks.
+      onClose(() => openDialog({ kind: "newPlaylist", tracks, initial: typed }));
+      return;
+    }
+    dispatch({ type: "createPlaylist", data: { account_id: serverId, name: typed, tracks } });
     showToast(t("toast.addedToPlaylist", { playlist: typed }));
     setQuery("");
     setActive(-1);

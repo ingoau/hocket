@@ -254,7 +254,7 @@ test.describe("available offline", () => {
     });
     await expect(page.getByTestId("offline-banner")).toBeVisible();
     // Nothing on this album plays offline: skipped, then nothing left.
-    await page.evaluate(({ sid, id }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId: sid, kind: { type: "album", data: { id } }, label: "e2e", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { sid, id: noneAlbum });
+    await page.evaluate(({ sid, id }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: sid, kind: { type: "album", data: { id } }, label: "e2e", sort: "default", tracks: [] }, startIndex: 0, shuffle: false, saveOutgoing: false } } }), { sid, id: noneAlbum });
     await expect(page.getByTestId("offline-banner-text")).toHaveText(/Offline: skipping tracks that aren't downloaded or cached|Nothing in the queue is available offline/);
     await expect(page.getByTestId("offline-banner-text")).toHaveText("Nothing in the queue is available offline", { timeout: 10_000 });
     await expect(page.getByTestId("offline-live")).toHaveAttribute("role", "status");

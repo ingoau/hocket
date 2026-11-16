@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import app.hocket.R
 import app.hocket.core.Commands
+import app.hocket.core.ref
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.OfflineState
@@ -69,7 +70,7 @@ class SongMenuController {
     internal var shown by mutableStateOf<Pair<SongMenuRequest, List<ActionDescriptor>>?>(null)
 
     /** Opens the menu for [track]; with [pull], brought up by a drag that it follows (see [SheetPull]). */
-    fun open(track: TrackSummary, target: ActionTarget = Commands.tracks(listOf(track.id)), extras: List<SongMenuExtra> = emptyList(), context: String? = null, pull: SheetPull? = null): Boolean {
+    fun open(track: TrackSummary, target: ActionTarget = Commands.tracks(listOf(track.ref)), extras: List<SongMenuExtra> = emptyList(), context: String? = null, pull: SheetPull? = null): Boolean {
         if (shown != null) return false
         pending?.pull?.dismiss()
         // A pull that drops back closes its own menu, never one opened after it.
@@ -136,6 +137,7 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
                 rating = track.rating.toInt(),
                 downloaded = track.offline == OfflineState.Downloaded || pins.any { it.target == Commands.trackPin(track.id) },
                 trackId = track.id,
+                trackSource = track.serverId,
                 albumId = track.albumId, album = track.album,
                 artistId = track.artistId, artist = track.artist,
                 context = request.context,

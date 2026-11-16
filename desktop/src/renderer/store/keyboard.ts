@@ -8,6 +8,7 @@ import { useApp } from "./app";
 import { Keymap, chordFromEvent, isTextInput } from "./shortcuts";
 import { executeAction } from "./actions";
 import { openContextMenuFromKeyboard } from "../components/ContextMenu";
+import { refOf } from "../lib/track-ref";
 
 export function useKeymap(): Keymap {
   const shortcuts = useApp((s) => s.shortcuts);
@@ -113,9 +114,13 @@ export function useGlobalKeyboard(enabled = true): void {
         const ids = [...app.selection.ids];
         if (app.selectionScope && (app.selection.all || ids.length)) {
           if (app.selection.all || !kind) return;
+          if (kind === "tracks") {
+            if (app.selectionRefs?.length) app.runAction(id, { type: "tracks", data: { tracks: app.selectionRefs } });
+            return;
+          }
           app.runAction(id, kind === "queueItems" ? { type: "queueItems", data: { keys: ids } } : ({ type: kind, data: { ids } } as ActionTarget));
         } else if (app.nowPlaying) {
-          app.runAction(id, { type: "tracks", data: { ids: [app.nowPlaying.track.id] } });
+          app.runAction(id, { type: "tracks", data: { tracks: [refOf(app.nowPlaying.track)] } });
         }
         return;
       }

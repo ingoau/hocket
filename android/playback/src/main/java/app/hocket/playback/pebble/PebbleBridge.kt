@@ -9,6 +9,7 @@ import app.hocket.core.CoreHandle
 import app.hocket.core.HocketJson
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Command
 import app.hocket.core.api.CommandStashAddInner
 import app.hocket.core.api.DeviceInfo
@@ -348,6 +349,7 @@ class PebbleBridge(
     private suspend fun onCommand(cmd: Int, arg: Int, path: String, item: String) {
         val s = session
         val trackId = s?.metadata?.trackId
+        val playingRef = trackId?.let { TrackRef(s.metadata?.source.orEmpty(), it) }
         when (cmd) {
             Cmd.PLAY_PAUSE -> dispatch(Commands.mediaSessionCommand(if (s?.isPlaying == true) MediaSessionAction.Pause else MediaSessionAction.Play))
             Cmd.PLAY -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Play))
@@ -356,21 +358,22 @@ class PebbleBridge(
             Cmd.PREVIOUS -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Previous))
             Cmd.VOLUME_UP -> changeVolume(up = true, PebbleProtocol.volumeSteps(arg))
             Cmd.VOLUME_DOWN -> changeVolume(up = false, PebbleProtocol.volumeSteps(arg))
-            Cmd.TOGGLE_LOVE -> trackId?.let { dispatch(Commands.loveTrack(it, !(s.metadata?.loved ?: false))) }
-            Cmd.SET_RATING -> trackId?.let { dispatch(Commands.rateTrack(it, arg.coerceIn(0, 5))) }
+            Cmd.TOGGLE_LOVE -> playingRef?.let { dispatch(Commands.loveTrack(it, !(s.metadata?.loved ?: false))) }
+            Cmd.SET_RATING -> playingRef?.let { dispatch(Commands.rateTrack(it, arg.coerceIn(0, 5))) }
             Cmd.TOGGLE_SHUFFLE -> dispatch(Commands.setShuffle(!(s?.shuffle ?: false)))
             Cmd.CYCLE_REPEAT -> dispatch(Commands.setRepeat(when (s?.repeat) { RepeatMode.Off, null -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off }))
             Cmd.RESUME -> dispatch(if (resumeOffer != null) Command.ResumeHere else Commands.mediaSessionCommand(MediaSessionAction.Play))
             Cmd.SEEK -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Seek, arg.coerceAtLeast(0).toDouble()))
             // Add only: the watch says "Stashed", so it never takes a song out (the notification toggles).
-            Cmd.STASH -> trackId?.let { dispatch(Command.StashAdd(CommandStashAddInner(listOf(it)))) }
+            Cmd.STASH -> playingRef?.let { dispatch(Command.StashAdd(CommandStashAddInner(listOf(it)))) }
             Cmd.ACTIVATE -> activate(path, item)
             Cmd.PLAY_NEXT, Cmd.PLAY_LATER -> {
                 val server = serverId() ?: return
                 // A whole playlist can take a few queries: off the watch's message.
                 scope.launch {
                     val ids = trackIds(path, item)
-                    if (ids.isNotEmpty()) dispatch(if (cmd == Cmd.PLAY_NEXT) Commands.playNext(server, ids) else Commands.playLater(server, ids))
+                    val refs = ids.map { TrackRef(server, it) }
+                    if (refs.isNotEmpty()) dispatch(if (cmd == Cmd.PLAY_NEXT) Commands.playNext(refs) else Commands.playLater(refs))
                 }
             }
         }
@@ -426,13 +429,13 @@ class PebbleBridge(
     private suspend fun playRow(server: String, item: String) {
         if (item.startsWith("track:")) {
             val id = item.removePrefix("track:")
-            dispatch(Commands.playTracks(server, listOf(id), 0, trackTitle(id) ?: ""))
+            dispatch(Commands.playTracks(listOf(TrackRef(server, id)), 0, trackTitle(TrackRef(server, id)) ?: ""))
         }
     }
 
     private suspend fun playTopResult(server: String, text: String) {
         val r = search(server, text) ?: return
-        r.tracks.firstOrNull()?.let { dispatch(Commands.playTracks(server, listOf(it.id), 0, it.title)); return }
+        r.tracks.firstOrNull()?.let { dispatch(Commands.playTracks(listOf(TrackRef(it.serverId, it.id)), 0, it.title)); return }
         r.albums.firstOrNull()?.let { dispatch(Commands.playContext(Commands.albumContext(server, it.id, it.name))); return }
         r.artists.firstOrNull()?.let { dispatch(Commands.playContext(Commands.artistContext(server, it.id, it.name))); return }
         r.playlists.firstOrNull()?.let { dispatch(Commands.playContext(Commands.playlistContext(server, it.id, it.name))) }
@@ -504,14 +507,14 @@ class PebbleBridge(
             else -> {
                 if (server == null) return Triple(0, emptyList(), title)
                 when (kind) {
-                    "playlists" -> whole((query(Queries.playlists(server)) as? QueryResult.Playlists)?.data.orEmpty()
+                    "playlists" -> whole((query(Queries.playlists("")) as? QueryResult.Playlists)?.data.orEmpty()
                         .map { Row("playlist:${it.id}", it.name, "${it.songCount} songs", RowFlag.BROWSABLE) })
                     "albums" -> {
-                        val page = (query(Queries.albums(server, Page(offset.toUInt(), PAGE.toUInt()))) as? QueryResult.Albums)?.data
+                        val page = (query(Queries.albums("", Page(offset.toUInt(), PAGE.toUInt()))) as? QueryResult.Albums)?.data
                         Triple(page?.total?.toInt() ?: 0, page?.items.orEmpty().map { Row("album:${it.id}", it.name, it.artist ?: "", RowFlag.BROWSABLE) }, title)
                     }
                     "artists" -> {
-                        val page = (query(Queries.artists(server, Page(offset.toUInt(), PAGE.toUInt()))) as? QueryResult.Artists)?.data
+                        val page = (query(Queries.artists("", Page(offset.toUInt(), PAGE.toUInt()))) as? QueryResult.Artists)?.data
                         Triple(page?.total?.toInt() ?: 0, page?.items.orEmpty().map { Row("artist:${it.id}", it.name, "${it.albumCount} albums", RowFlag.BROWSABLE) }, title)
                     }
                     "recent" -> whole((query(Queries.recentlyPlayed(RECENT_LIMIT)) as? QueryResult.History)?.data.orEmpty()
@@ -536,7 +539,7 @@ class PebbleBridge(
                     }
                     "artist" -> {
                         val from = (offset - 2).coerceAtLeast(0)
-                        val page = (query(Queries.albums(server, Page(from.toUInt(), PAGE.toUInt()), artistId = id)) as? QueryResult.Albums)?.data
+                        val page = (query(Queries.albums("", Page(from.toUInt(), PAGE.toUInt()), artistId = id)) as? QueryResult.Albums)?.data
                         val albums = page?.items.orEmpty().map { Row("album:${it.id}", it.name, it.year?.toString() ?: "", RowFlag.BROWSABLE) }
                         val rows = (if (offset < 2) playShuffle().drop(offset) else emptyList()) + albums
                         Triple(2 + (page?.total?.toInt() ?: 0), rows, title)
@@ -605,8 +608,8 @@ class PebbleBridge(
     /** `goAlbum` / `goArtist` become the playing track's album / artist; null when there is none. */
     private suspend fun resolve(path: String): String? = when (path) {
         "goAlbum", "goArtist" -> {
-            val trackId = session?.metadata?.trackId
-            val track = trackId?.let { (query(Queries.track(it)) as? QueryResult.TrackDetail)?.data }
+            val meta = session?.metadata
+            val track = meta?.trackId?.let { (query(Queries.track(TrackRef(meta.source.orEmpty(), it))) as? QueryResult.TrackDetail)?.data }
             if (path == "goAlbum") track?.albumId?.let { "album:$it" } else track?.artistId?.let { "artist:$it" }
         }
         else -> path
@@ -617,7 +620,7 @@ class PebbleBridge(
 
     private suspend fun search(server: String, text: String): SearchResults? {
         lastSearch?.takeIf { it.first == text }?.let { return it.second }
-        val r = (query(Queries.search(server, text.trim(), SEARCH_LIMIT, includeServer = false, requestId = "pebble-" + UUID.randomUUID())) as? QueryResult.Search)?.data
+        val r = (query(Queries.search("", text.trim(), SEARCH_LIMIT, includeServer = false, requestId = "pebble-" + UUID.randomUUID())) as? QueryResult.Search)?.data
         if (r != null) lastSearch = text to r
         return r
     }
@@ -707,7 +710,7 @@ class PebbleBridge(
     private suspend fun albumName(id: String) = (query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data?.name
     private suspend fun playlistName(id: String) = (query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data?.name
     private suspend fun artistName(id: String) = (query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data?.name
-    private suspend fun trackTitle(id: String) = (query(Queries.track(id)) as? QueryResult.TrackDetail)?.data?.title
+    private suspend fun trackTitle(track: TrackRef) = (query(Queries.track(track)) as? QueryResult.TrackDetail)?.data?.title
 
     private fun num(data: PebbleDictionary, key: UInt): Int = when (val v = data[key]) {
         is PebbleDictionaryItem.UInt32 -> v.value.toInt()

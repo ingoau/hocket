@@ -46,10 +46,100 @@ pub const PROTOCOL_VERSION: u32 = crate::connect::wire::PROTOCOL;
 // Identity
 // ---------------------------------------------------------------------------
 
+/// A Navidrome account's id (the `server_id` on library rows). The same as its [`AccountId`].
 #[typeshare]
 pub type ServerId = String;
+/// A music account: a Navidrome login today. Deterministic on every device: for Navidrome it
+/// is `server_id_for(url, user)`.
+#[typeshare]
+pub type AccountId = String;
+/// Where a track id is valid. For Navidrome the account id; for YouTube Music the global
+/// [`YTM_SOURCE`], because video ids are the same for every account.
+#[typeshare]
+pub type SourceId = String;
 #[typeshare]
 pub type TrackId = String;
+/// The source YouTube Music tracks will use (reserved; no provider yet).
+pub const YTM_SOURCE: &str = "ytm";
+
+/// A track, named by where its id is valid. Every track crossing a subsystem or session boundary
+/// (queue items, history, saved queues, stash, snoozes, AutoMix records, the outbox) is one.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackRef {
+    pub source: SourceId,
+    pub id: TrackId,
+}
+
+impl TrackRef {
+    pub fn new(source: impl Into<SourceId>, id: impl Into<TrackId>) -> TrackRef {
+        TrackRef {
+            source: source.into(),
+            id: id.into(),
+        }
+    }
+}
+
+impl TrackRef {
+    /// `ids`, all valid in `source`.
+    pub fn list<S: Into<TrackId>>(source: &str, ids: impl IntoIterator<Item = S>) -> Vec<TrackRef> {
+        ids.into_iter()
+            .map(|id| TrackRef::new(source, id))
+            .collect()
+    }
+}
+
+/// Tests name tracks by bare id, with no source.
+#[cfg(any(test, feature = "sim"))]
+impl From<&str> for TrackRef {
+    fn from(id: &str) -> TrackRef {
+        TrackRef::new("", id)
+    }
+}
+
+#[cfg(any(test, feature = "sim"))]
+impl From<String> for TrackRef {
+    fn from(id: String) -> TrackRef {
+        TrackRef::new("", id)
+    }
+}
+
+/// Tests compare a reference with a bare id.
+#[cfg(any(test, feature = "sim"))]
+impl PartialEq<&str> for TrackRef {
+    fn eq(&self, other: &&str) -> bool {
+        self.id == *other
+    }
+}
+
+#[cfg(any(test, feature = "sim"))]
+impl PartialEq<String> for TrackRef {
+    fn eq(&self, other: &String) -> bool {
+        &self.id == other
+    }
+}
+
+#[cfg(any(test, feature = "sim"))]
+impl PartialEq<TrackRef> for String {
+    fn eq(&self, other: &TrackRef) -> bool {
+        self == &other.id
+    }
+}
+
+#[cfg(any(test, feature = "sim"))]
+impl PartialEq<str> for TrackRef {
+    fn eq(&self, other: &str) -> bool {
+        self.id == other
+    }
+}
+
+impl std::fmt::Display for TrackRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.source, self.id)
+    }
+}
+
 #[typeshare]
 pub type AlbumId = String;
 #[typeshare]
@@ -205,6 +295,9 @@ pub struct Track {
     /// the display string as tagged (e.g. "A feat. B").
     #[serde(default)]
     pub artists: Vec<ArtistRef>,
+    /// The recording's ISRC, when the provider reports one (dedup matches on it).
+    #[serde(default)]
+    pub isrc: Option<String>,
 }
 
 /// One of a song's artists: its library id (when the server gives one) and its name.
@@ -414,14 +507,126 @@ pub struct ServerCapabilities {
     pub meets_floor: bool,
 }
 
+/// What kind of service an account is.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountKind {
+    #[default]
+    Navidrome,
+    YoutubeMusic,
+}
+
+impl AccountKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AccountKind::Navidrome => "navidrome",
+            AccountKind::YoutubeMusic => "youtubeMusic",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<AccountKind> {
+        match s {
+            "navidrome" => Some(AccountKind::Navidrome),
+            "youtubeMusic" => Some(AccountKind::YoutubeMusic),
+            _ => None,
+        }
+    }
+}
+
+/// What a provider can do. Platforms hide controls for what it can't; the core answers
+/// requests for the rest with a capability error.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCapabilities {
+    pub library_sync: bool,
+    pub search: bool,
+    pub browse: bool,
+    pub stream: bool,
+    /// Original files can be downloaded (otherwise pins keep the stream).
+    pub download: bool,
+    pub transcode: bool,
+    pub cover_art: bool,
+    pub star: bool,
+    pub rate: bool,
+    pub playlists: bool,
+    pub smart_playlists: bool,
+    pub report_play: bool,
+    pub lyrics: bool,
+    pub radio: bool,
+    pub home_shelves: bool,
+    pub share: bool,
+    /// The account keeps a library you add to and remove from (otherwise adds go to the
+    /// Hocket library). Navidrome's library is the server's files: nothing to add.
+    #[serde(default)]
+    pub library_edit: bool,
+}
+
+/// One copy of a song, as the track details list its sources.
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ServerInfo {
-    pub id: ServerId,
+pub struct TrackSource {
+    pub track: Track,
+    pub account_id: AccountId,
+    /// The account's display name ("" when this device has no such account).
+    pub account_name: String,
+    /// This device has the account (else the copy is only known from a link).
+    pub available: bool,
+    /// Joined by a manual "Link to…" rather than the matcher.
+    pub manual: bool,
+    /// The copy play would pick here.
+    pub preferred: bool,
+}
+
+/// What a home shelf lists.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum HomeShelfKind {
+    #[default]
+    Albums,
+    Tracks,
+    Playlists,
+}
+
+/// One shelf of Home: a provider's (`HomeShelf::account_id` set) or Hocket's own.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeShelf {
+    /// Stable across devices: `<accountId>/<shelf>` for a provider's, `hocket/<shelf>` for
+    /// Hocket's. Home's section list (`home.sections`) names it as `shelf:<id>`.
+    pub id: String,
+    /// The provider's account; `None` for Hocket's own.
+    pub account_id: Option<AccountId>,
+    pub title: String,
+    pub kind: HomeShelfKind,
+    pub albums: Vec<Album>,
+    pub tracks: Vec<Track>,
+    pub playlists: Vec<Playlist>,
+    /// Shown unless the user switched it off (new shelves start this way).
+    pub default_on: bool,
+}
+
+/// One music account as the platforms list it (Settings → Accounts).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInfo {
+    pub id: AccountId,
+    pub kind: AccountKind,
+    /// Lower plays first; the user's drag order.
+    pub priority: u32,
+    /// The source its track ids are valid in.
+    pub source: SourceId,
     pub url: String,
     pub username: String,
     pub name: String,
+    /// What its provider can do.
+    pub features: ProviderCapabilities,
+    /// Navidrome's probed server capabilities.
     pub capabilities: ServerCapabilities,
     pub last_sync: Option<EpochMs>,
     /// Tracks in the library after the last completed sync.
@@ -594,7 +799,9 @@ pub enum SortOrder {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueContext {
-    pub server_id: ServerId,
+    /// Where the context's own id (its album, artist or playlist) is valid. Its `tracks` name
+    /// their own source: a queue can mix accounts.
+    pub source: SourceId,
     pub kind: ContextKind,
     pub label: String,
     pub sort: SortOrder,
@@ -602,7 +809,7 @@ pub struct QueueContext {
     /// snapshot too large to store whole omits it (and its entries) for ID-referenced contexts
     /// and re-resolves on restore.
     #[serde(default)]
-    pub tracks: Vec<TrackId>,
+    pub tracks: Vec<TrackRef>,
 }
 
 /// Where a queue entry came from: the context, a user action, or autoplay.
@@ -627,7 +834,7 @@ pub enum QueueSource {
 pub struct QueueItem {
     /// Stable for the entry's life: every op names entries by key, never by index.
     pub key: QueueKey,
-    pub track_id: TrackId,
+    pub track: TrackRef,
     pub source: QueueSource,
     /// Marked when a device could not play it; skipped, never scrobbled.
     #[serde(default)]
@@ -643,6 +850,11 @@ pub struct QueueItem {
     /// it. Equal to the list index while shuffle is off.
     #[serde(default)]
     pub ordinal: u32,
+    /// Other copies of the song (its dedup group on a device that has them), so a device
+    /// without `track`'s account can play one of them instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[typeshare(skip)]
+    pub alts: Vec<TrackRef>,
 }
 
 #[typeshare]
@@ -750,6 +962,9 @@ pub struct SavedQueue {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumResumeEntry {
+    /// Where `album_id` and `track_id` are valid.
+    #[serde(default)]
+    pub source: SourceId,
     pub album_id: AlbumId,
     pub track_id: TrackId,
     /// Index into the album's track list when this was saved.
@@ -770,6 +985,8 @@ pub struct AlbumResumeEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumResumePoint {
+    #[serde(default)]
+    pub source: SourceId,
     pub album_id: AlbumId,
     pub track_id: TrackId,
     pub track_index: u32,
@@ -788,8 +1005,7 @@ pub struct StashEntry {
     /// Unique per stash action (device + time + track), not per track: two devices stashing the
     /// same song at once both keep their entry, and the list shows the first.
     pub entry_id: String,
-    pub track_id: TrackId,
-    pub server_id: ServerId,
+    pub track: TrackRef,
     /// Position: entries sort by this, then by `entryId`. Moving one gives it a key between its
     /// new neighbours, so a move never rewrites the others.
     pub sort_key: f64,
@@ -846,7 +1062,7 @@ pub enum SnoozeFor {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Snooze {
-    pub track_id: TrackId,
+    pub track: TrackRef,
     /// When the snooze ends. Absent when it lasts until unsnoozed.
     pub until: Option<EpochMs>,
     /// LWW clock.
@@ -860,7 +1076,7 @@ pub struct Snooze {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SnoozeItem {
-    pub track_id: TrackId,
+    pub track_ref: TrackRef,
     /// When it ends. Absent when the snooze doesn't end.
     pub until: Option<EpochMs>,
     pub track: Track,
@@ -2016,6 +2232,9 @@ pub struct MediaSessionMetadata {
     /// Local `file://` path resolved through the image cache, or `None`.
     pub artwork_path: Option<String>,
     pub track_id: Option<TrackId>,
+    /// Where `track_id` is valid.
+    #[serde(default)]
+    pub source: Option<SourceId>,
     pub loved: bool,
     pub rating: u32,
     /// The playing track is already in the stash. The notification shows a
@@ -2101,7 +2320,7 @@ pub struct ActionDescriptor {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum ActionTarget {
     None,
-    Tracks { ids: Vec<TrackId> },
+    Tracks { tracks: Vec<TrackRef> },
     Albums { ids: Vec<AlbumId> },
     Artists { ids: Vec<ArtistId> },
     Playlists { ids: Vec<PlaylistId> },
@@ -2278,8 +2497,14 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum RatingTarget {
-    Track { id: TrackId },
-    Album { id: AlbumId },
+    /// `source` is where `id` is valid (the copy's account).
+    Track {
+        id: TrackId,
+        source: SourceId,
+    },
+    Album {
+        id: AlbumId,
+    },
 }
 
 /// What a [`LibraryItemState`] describes.
@@ -2350,6 +2575,60 @@ pub struct Renderer {
     pub name: String,
 }
 
+/// What `AddAccount` needs for each kind of account.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "type", content = "data")]
+pub enum AccountSetup {
+    /// `url` must be `http(s)://` with a host and no embedded credentials.
+    Navidrome {
+        url: String,
+        username: String,
+        password: Secret,
+        name: Option<String>,
+    },
+    /// YouTube Music on this device: signed in with the cookies the
+    /// platform's Google sign-in captured (a `Cookie:` header for
+    /// music.youtube.com), or anonymous (`ytm:anon`) without them. The
+    /// account id is the channel id once the sign-in is checked. `js_host`:
+    /// the platform answers [`Event::YtmJsRequest`] (signature, `n`, PO token
+    /// for the web client), which Premium's 256k AAC needs.
+    YoutubeMusic {
+        cookies: Option<Secret>,
+        #[serde(default)]
+        js_host: bool,
+    },
+}
+
+/// What the core asks the platform's JS host (a hidden WebView or window on
+/// music.youtube.com) for the web player client.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "type", content = "data")]
+pub enum YtmJsRequest {
+    /// The player's signature timestamp and a PO token for this video.
+    Prepare {
+        video_id: String,
+        visitor_data: String,
+    },
+    /// Sign and `n`-transform these stream URLs (a plain URL or a
+    /// `signatureCipher` query string each); answer one URL per entry.
+    Decipher {
+        video_id: String,
+        formats: Vec<String>,
+    },
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct YtmJsAnswer {
+    pub signature_timestamp: Option<u32>,
+    pub po_token: Option<String>,
+    #[serde(default)]
+    pub urls: Vec<String>,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
@@ -2381,27 +2660,87 @@ pub enum Command {
         enabled: bool,
     },
 
-    // -- servers ----------------------------------------------------------
-    /// `url` must be `http(s)://` with a host and no embedded credentials.
-    /// Naming a server that is already persisted (same url + username)
-    /// installs it immediately from the stored capabilities (so downloads
-    /// play offline) and probes in the background; a new server is only
-    /// installed once the probe accepts the credentials.
-    AddServer {
+    // -- accounts ---------------------------------------------------------
+    /// Add (or re-authenticate) an account. Naming an account that is
+    /// already persisted installs it immediately from the stored
+    /// capabilities (so downloads play offline) and probes in the background;
+    /// a new account is only installed once the probe accepts the credentials.
+    /// A new account goes last in the priority order.
+    AddAccount {
+        setup: AccountSetup,
+    },
+    /// The platform's answer to [`Event::YtmJsRequest`]: `answer`, or `error`.
+    YtmJsAnswer {
+        request_id: String,
+        answer: Option<YtmJsAnswer>,
+        error: Option<String>,
+    },
+    /// Forget an account: its mirror, pins, outbox and history go with it.
+    RemoveAccount {
+        account_id: AccountId,
+    },
+    /// The user's drag order, highest priority first. Accounts not named keep
+    /// their relative order after the named ones.
+    ReorderAccounts {
+        account_ids: Vec<AccountId>,
+    },
+    ProbeAccount {
+        account_id: AccountId,
+    },
+
+    // -- identity -----------------------------------------------------------
+    /// Make a pairing invite (QR / `hocket://pair` link, good for 10 minutes):
+    /// [`Event::PairingInvite`].
+    CreatePairingInvite,
+    /// Join the identity of the device that showed this invite link. This
+    /// device leaves its own identity (and session) behind:
+    /// [`Event::PairingFinished`] or [`Event::PairingFailed`].
+    PairWithInvite {
+        link: String,
+    },
+    /// Remove a device (or this one) from the identity. The others move to a
+    /// new group key and stop accepting it.
+    RemoveDevice {
+        device_id: DeviceId,
+    },
+    /// "Sync credentials": Navidrome passwords travel to every device,
+    /// sealed with the group key (the coordinator holds the key while on).
+    SetCredentialSync {
+        on: bool,
+    },
+    /// Start over with a new identity of this device alone.
+    ResetIdentity,
+    /// Claim a coordinator with the code `hocket-coordinator pair` printed
+    /// (`code` may be the whole `hocket://claim` link, then `url` may be
+    /// empty): [`Event::CoordinatorJoined`] or [`Event::CoordinatorFailed`].
+    ClaimCoordinator {
         url: String,
-        username: String,
-        password: Secret,
-        name: Option<String>,
+        code: String,
     },
-    RemoveServer {
-        server_id: ServerId,
+    /// Join a coordinator with an invite its owner made.
+    RedeemCoordinatorInvite {
+        url: String,
+        code: String,
     },
-    ProbeServer {
-        server_id: ServerId,
+    /// Owner only: [`Event::CoordinatorInvites`] with the new code.
+    CreateCoordinatorInvite,
+    RevokeCoordinatorInvite {
+        code: String,
     },
+    ListCoordinatorInvites,
+    /// Owner only: sign the coordinator's YouTube Music analysis in with a
+    /// session of its own (`cookies`: a `Cookie:` header from a fresh
+    /// sign-in on this device, never this device's own session), or back to
+    /// anonymous (`None`). Sealed to the coordinator's key; answered with
+    /// [`Event::CoordinatorYtmStatus`].
+    SignCoordinatorInToYoutubeMusic {
+        cookies: Option<Secret>,
+    },
+    /// Owner only: ask for [`Event::CoordinatorYtmStatus`].
+    CoordinatorYtmStatus,
     /// `full` forces a reconcile that catches deletions.
     SyncLibrary {
-        server_id: ServerId,
+        account_id: AccountId,
         full: bool,
     },
     SetTranscodingProfile {
@@ -2443,7 +2782,7 @@ pub enum Command {
     /// playing. Never written to the queue, play history, scrobbles or the
     /// resume position.
     PreviewStart {
-        track_id: TrackId,
+        track: TrackRef,
     },
     /// Pause or resume the preview that is already open.
     PreviewToggle,
@@ -2460,8 +2799,7 @@ pub enum Command {
     },
     /// Play an ad-hoc list (search results, a selection).
     PlayTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         start_index: u32,
         label: String,
         shuffle: bool,
@@ -2474,22 +2812,19 @@ pub enum Command {
     /// section setting is on. `keys` names queue entries to put there instead of new copies:
     /// one ahead of the pointer moves, one behind it (or the current one) is copied.
     PlayNext {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         #[serde(default)]
         keys: Vec<QueueKey>,
     },
     /// At the end of the "Next in queue" group. `keys` as for `PlayNext`.
     AddToQueue {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         #[serde(default)]
         keys: Vec<QueueKey>,
     },
     /// At the end of the whole list, outside the group. `keys` as for `PlayNext`.
     PlayLater {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         #[serde(default)]
         keys: Vec<QueueKey>,
     },
@@ -2499,8 +2834,7 @@ pub enum Command {
     /// past the group's end lands at its end, an out-of-group one inside it just after it).
     /// `keys` as for `PlayNext`: one ahead of the pointer moves, one behind it is copied.
     InsertTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         #[serde(default)]
         keys: Vec<QueueKey>,
         after: QueueKey,
@@ -2571,7 +2905,7 @@ pub enum Command {
     // -- stash ------------------------------------------------------------
     /// Stash songs (added at the end). Songs already in the stash are skipped.
     StashAdd {
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     /// Take entries out of the stash. Toasts with an Undo.
     StashRemove {
@@ -2602,17 +2936,17 @@ pub enum Command {
     /// Leave songs out of shuffle, playlists, artist play and autoplay for `duration`.
     /// Goes through global undo.
     Snooze {
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         duration: SnoozeFor,
     },
     /// Snooze songs until a chosen moment (the menu's Custom row). Goes through global undo.
     SnoozeUntil {
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         until: EpochMs,
     },
     /// Bring snoozed songs back. Goes through global undo.
     Unsnooze {
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
 
     // -- undo -------------------------------------------------------------
@@ -2633,14 +2967,39 @@ pub enum Command {
         targets: Vec<RatingTarget>,
         loved: bool,
     },
+    /// "Link to…": `track` and `to` are the same song. Syncs through the identity and wins over
+    /// the matcher.
+    LinkTracks {
+        track: TrackRef,
+        to: TrackRef,
+    },
+    /// "Not the same song": take `track` out of its group, for good (syncs through the identity).
+    UnlinkTrack {
+        track: TrackRef,
+    },
+    /// Add songs to, or take them out of, the Hocket library: for accounts that can't keep a
+    /// library of their own (`ProviderCapabilities::library_edit` false).
+    SetInLibrary {
+        tracks: Vec<TrackRef>,
+        added: bool,
+    },
+    /// Turn a provider playlist into a Mixed one (same name and songs, plus `add`); the
+    /// provider's copy is deleted. What the "Convert to Mixed" toast runs.
+    ConvertPlaylistToMixed {
+        playlist_id: PlaylistId,
+        add: Vec<TrackRef>,
+    },
     SetArtistLoved {
         artist_id: ArtistId,
         loved: bool,
     },
+    /// A playlist on `account_id`, or a Mixed playlist Hocket keeps when it is
+    /// [`crate::library::HOCKET_SOURCE`]. Songs of another account go in as that account's
+    /// copy when there is one; with none, a provider playlist becomes Mixed.
     CreatePlaylist {
-        server_id: ServerId,
+        account_id: AccountId,
         name: String,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     DeletePlaylist {
         playlist_id: PlaylistId,
@@ -2651,9 +3010,11 @@ pub enum Command {
         comment: Option<String>,
         public: Option<bool>,
     },
+    /// Songs of another account go in as the playlist account's copy; with no copy the core
+    /// toasts an offer to convert the playlist to Mixed (`ConvertPlaylistToMixed`).
     PlaylistAdd {
         playlist_id: PlaylistId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
         at_index: Option<u32>,
     },
     /// Indices into the playlist's current order.
@@ -2671,7 +3032,7 @@ pub enum Command {
     /// only acted on with the `sim` feature (it bypasses the threshold, session dedupe
     /// and the scrobble setting); a release core ignores it.
     Scrobble {
-        track_id: TrackId,
+        track: TrackRef,
         played_at: EpochMs,
         submission: bool,
     },
@@ -2697,7 +3058,7 @@ pub enum Command {
     },
     /// [`Command::PrimeAlbum`] for one track (a hovered track row).
     PrimeTrack {
-        track_id: TrackId,
+        track: TrackRef,
     },
     /// What the platform's playback backend can do. `core_stream`: it reads
     /// `hocket-stream://<token>` media sources through the core's stream
@@ -2938,7 +3299,7 @@ pub enum Command {
 }
 
 impl Command {
-    /// The variant name as it appears on the wire (`"addServer"`), for logs
+    /// The variant name as it appears on the wire (`"addAccount"`), for logs
     /// that must never carry the payload.
     pub fn kind(&self) -> String {
         serde_json::to_value(self)
@@ -2966,7 +3327,15 @@ pub struct Page {
 pub enum Query {
     /// Everything a freshly attached UI needs, in one round trip.
     Snapshot,
-    Servers,
+    Accounts,
+    Identity,
+    /// The script a platform's YouTube Music JS host runs in its hidden
+    /// page on https://www.youtube.com before answering
+    /// [`Event::YtmJsRequest`]s (`QueryResult::Text`): it defines
+    /// `hocketYtm.prepare(videoId, visitorData)` and
+    /// `hocketYtm.decipher(videoId, formats)`, each resolving to the
+    /// [`YtmJsAnswer`] fields.
+    YtmJsHostScript,
     Tracks {
         server_id: ServerId,
         filter: Option<FilterNode>,
@@ -2979,10 +3348,10 @@ pub enum Query {
         filter: Option<FilterNode>,
     },
     Track {
-        id: TrackId,
+        track: TrackRef,
     },
     TracksByIds {
-        ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     Albums {
         server_id: ServerId,
@@ -3049,11 +3418,13 @@ pub enum Query {
         id: PlaylistId,
         page: Page,
     },
-    /// Which of the server's playlists hold any of `track_ids`, and at which indices: the add to
-    /// playlist picker's ticks, ×2 badges and "Remove one". Every playlist is listed, in name order.
+    /// Which of the server's playlists (every account's and the Mixed ones for the unified
+    /// library) hold any of `tracks` or a copy of one, and at which indices: the add to playlist
+    /// picker's ticks, ×2 badges and "Remove one". Every playlist is listed, in name order. An
+    /// entry's `trackId` is the asked-for song's.
     PlaylistMembership {
         server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     /// Local-first; server results, when requested, arrive in a second [`Event::SearchResults`].
     Search {
@@ -3075,6 +3446,17 @@ pub enum Query {
     Stash,
     /// Songs snoozed right now, soonest ending first.
     Snoozes,
+    /// Every copy of a song (its dedup group): the track details' Sources.
+    TrackSources {
+        track: TrackRef,
+    },
+    /// Songs "Link to…" can offer for `track`: other accounts' songs matching `query`.
+    LinkCandidates {
+        track: TrackRef,
+        query: String,
+    },
+    /// Home's provider shelves plus Hocket's own Continue listening.
+    HomeShelves,
     /// Where this album would resume, if it has a point and the feature is on.
     AlbumResume {
         id: AlbumId,
@@ -3283,7 +3665,7 @@ pub struct ExportedAudio {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
-    pub servers: Vec<ServerInfo>,
+    pub accounts: Vec<AccountInfo>,
     pub session: Option<SessionDocument>,
     pub queue: QueueView,
     pub transport: TransportState,
@@ -3300,6 +3682,83 @@ pub struct Snapshot {
     pub network: Option<NetworkState>,
     pub battery_saver: BatterySaver,
     pub sync_progress: Option<SyncProgress>,
+    pub identity: IdentityInfo,
+}
+
+/// This device's Hocket identity: what sync is scoped to.
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityInfo {
+    pub id: String,
+    pub device_id: DeviceId,
+    /// Current members, this device first.
+    pub devices: Vec<IdentityDevice>,
+    /// This device was removed from the identity: it syncs with nobody until
+    /// it is reset (`ResetIdentity`) or paired again.
+    pub removed: bool,
+    /// "Sync credentials" (off by default).
+    pub credential_sync: bool,
+    pub coordinator: Option<CoordinatorInfo>,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityDevice {
+    pub id: DeviceId,
+    pub name: String,
+    pub is_self: bool,
+    /// When this device last synced with the identity, as far as any member
+    /// knows (coarse, about a minute).
+    pub last_synced: Option<EpochMs>,
+}
+
+/// The coordinator the identity claimed or was invited to.
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordinatorInfo {
+    pub url: String,
+    /// This identity claimed it: it can invite other identities.
+    pub owner: bool,
+    /// It holds the group key (credential sync is on).
+    pub holds_key: bool,
+}
+
+/// An invite to the coordinator this identity owns.
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordinatorInviteInfo {
+    pub code: String,
+    pub created_at: EpochMs,
+    pub expires_at: EpochMs,
+    /// Used by another identity already.
+    pub redeemed: bool,
+}
+
+/// An account a pairing invite named (no password).
+#[typeshare]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingAccount {
+    pub kind: AccountKind,
+    pub url: String,
+    pub username: String,
+    pub name: Option<String>,
+}
+
+/// A credential that arrived through credential sync: the platform keeps it
+/// in its credential store (the core already added the account).
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncedAccountCredential {
+    pub account_id: AccountId,
+    pub url: String,
+    pub username: String,
+    pub password: Secret,
 }
 
 #[typeshare]
@@ -3307,7 +3766,10 @@ pub struct Snapshot {
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum QueryResult {
     SnapshotResult(Snapshot),
-    Servers(Vec<ServerInfo>),
+    TrackSources(Vec<TrackSource>),
+    HomeShelves(Vec<HomeShelf>),
+    Accounts(Vec<AccountInfo>),
+    Identity(IdentityInfo),
     Tracks(TrackPage),
     Count(u32),
     TrackDetail(Option<Track>),
@@ -3580,8 +4042,68 @@ pub enum Event {
     Snapshot {
         snapshot: Snapshot,
     },
-    ServersChanged {
-        servers: Vec<ServerInfo>,
+    AccountsChanged {
+        accounts: Vec<AccountInfo>,
+    },
+    IdentityChanged {
+        identity: IdentityInfo,
+    },
+    /// A pairing invite to show as a QR code (or share as a link).
+    PairingInvite {
+        link: String,
+        expires_at: EpochMs,
+    },
+    /// A device joined through an invite of this device.
+    DevicePaired {
+        device_id: DeviceId,
+        name: String,
+    },
+    /// This device joined another device's identity (`PairWithInvite`).
+    /// `accounts` are the invite's account configs this device doesn't have
+    /// yet: with credential sync off they need a password.
+    PairingFinished {
+        accounts: Vec<PairingAccount>,
+    },
+    PairingFailed {
+        message: String,
+    },
+    /// Credentials that arrived through credential sync, for the platform's
+    /// credential store.
+    CredentialsSynced {
+        credentials: Vec<SyncedAccountCredential>,
+    },
+    /// The core needs the platform's JS host (see `AccountSetup::YoutubeMusic`);
+    /// answer with `Command::YtmJsAnswer` within 20 s.
+    YtmJsRequest {
+        request_id: String,
+        request: YtmJsRequest,
+    },
+    /// A YouTube Music sign-in stopped working (cookies expired or were
+    /// revoked): sign in again on this device. The account stays, anonymous
+    /// reads keep working.
+    YtmSignInExpired {
+        account_id: AccountId,
+    },
+    /// `ClaimCoordinator` / `RedeemCoordinatorInvite` worked.
+    CoordinatorJoined {
+        url: String,
+        owner: bool,
+    },
+    CoordinatorFailed {
+        message: String,
+    },
+    /// The coordinator's YouTube Music analysis: on (`--analysis-ytm`),
+    /// signed in as `account` or anonymous; `error` when a sign-in was refused.
+    CoordinatorYtmStatus {
+        enabled: bool,
+        signed_in: bool,
+        account: Option<String>,
+        error: Option<String>,
+    },
+    CoordinatorInvites {
+        invites: Vec<CoordinatorInviteInfo>,
+        /// The code `CreateCoordinatorInvite` just made.
+        created: Option<String>,
     },
     SyncProgress {
         progress: SyncProgress,
@@ -3787,6 +4309,9 @@ pub enum Event {
         kind: ErrorKind,
         message: String,
         detail: Option<String>,
+        /// The account it is about, when it is one's (an `auth` error: the
+        /// platform drops that account's stored login, no other).
+        account_id: Option<AccountId>,
     },
     Log {
         level: String,
@@ -3808,7 +4333,7 @@ pub struct ConfigDocument {
     pub settings: Vec<Setting>,
     pub filters: Vec<Filter>,
     pub shortcuts: Vec<Shortcut>,
-    pub servers: Vec<ServerInfo>,
+    pub servers: Vec<AccountInfo>,
     /// Only present when exported with secrets; encrypted at rest by the platform keystore otherwise.
     pub secrets: Option<HashMap<String, String>>,
     pub audio: AudioSettings,
@@ -3823,16 +4348,18 @@ mod redaction_tests {
 
     #[test]
     fn command_debug_never_shows_the_password_and_kind_is_the_wire_tag() {
-        let cmd = Command::AddServer {
-            url: "https://music.example/".into(),
-            username: "alice".into(),
-            password: "hunter2".into(),
-            name: None,
+        let cmd = Command::AddAccount {
+            setup: AccountSetup::Navidrome {
+                url: "https://music.example/".into(),
+                username: "alice".into(),
+                password: "hunter2".into(),
+                name: None,
+            },
         };
         let dbg = format!("{cmd:?}");
         assert!(!dbg.contains("hunter2"), "{dbg}");
         assert!(dbg.contains("<redacted>"), "{dbg}");
-        assert_eq!(cmd.kind(), "addServer");
+        assert_eq!(cmd.kind(), "addAccount");
         assert_eq!(Command::Start.kind(), "start");
         // The wire shape is unchanged: a plain string.
         let json = serde_json::to_string(&cmd).unwrap();

@@ -90,7 +90,7 @@ suspend fun loadSpotlight(
     val order = listOf(SlideKind.Resume) + weightedShuffle(SlideKind.entries.filter { it.weight > 0 }, Random(seed)) { it.weight }
     suspend fun album(id: String): Album? = (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data
     suspend fun albums(sort: SortOrder, limit: Int, genre: String? = null): List<Album> =
-        (client.query(Queries.albums(serverId, Page(0u, limit.toUInt()), sort, descending = true, genre = genre)) as? QueryResult.Albums)?.data?.items.orEmpty()
+        (client.query(Queries.albums("", Page(0u, limit.toUInt()), sort, descending = true, genre = genre)) as? QueryResult.Albums)?.data?.items.orEmpty()
     for (kind in order) {
         if (picker.slides.size >= SPOTLIGHT_MAX) break
         val rnd = Random(seed + kind.ordinal * 7919)
@@ -107,7 +107,7 @@ suspend fun loadSpotlight(
                 picker.offerAlbums(kind, if (rnd.nextBoolean()) newest else newest.shuffled(rnd))
             }
             SlideKind.Rediscover -> {
-                val fromLoved = (client.query(Queries.tracks(serverId, Page(0u, 40u), SortOrder.Random, descending = false, filter = LOVED_NOT_LATELY)) as? QueryResult.Tracks)
+                val fromLoved = (client.query(Queries.tracks("", Page(0u, 40u), SortOrder.Random, descending = false, filter = LOVED_NOT_LATELY)) as? QueryResult.Tracks)
                     ?.data?.items.orEmpty().mapNotNull { it.albumId }.distinct().shuffled(rnd).take(4)
                 val year = (client.query(Queries.stats(365)) as? QueryResult.Stats)?.data?.topAlbums.orEmpty()
                     .filter { a -> a.lastPlayed?.let { now - it > REDISCOVER_AFTER_MS } == true }.shuffled(rnd).take(4)
@@ -125,11 +125,11 @@ suspend fun loadSpotlight(
             SlideKind.TopArtist -> for (a in stats?.topArtists.orEmpty().take(4).shuffled(rnd)) {
                 if (!picker.canUse(null, a.id)) continue
                 val cover = if (a.coverArt != null) null else (stats?.topAlbums.orEmpty().firstOrNull { it.artistId == a.id }
-                    ?: (client.query(Queries.albums(serverId, Page(0u, 1u), SortOrder.PlayCount, descending = true, artistId = a.id)) as? QueryResult.Albums)?.data?.items?.firstOrNull())?.coverArt
+                    ?: (client.query(Queries.albums("", Page(0u, 1u), SortOrder.PlayCount, descending = true, artistId = a.id)) as? QueryResult.Albums)?.data?.items?.firstOrNull())?.coverArt
                 if (picker.offer(SpotlightSlide(kind, artist = a, fallbackCover = cover))) break
             }
             SlideKind.Playlist -> {
-                val lists = (client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data.orEmpty()
+                val lists = (client.query(Queries.playlists("")) as? QueryResult.Playlists)?.data.orEmpty()
                     .filter { it.songCount > 0u }.sortedByDescending { it.changed ?: it.created ?: 0.0 }.take(4)
                 lists.shuffled(rnd).firstOrNull()?.let { picker.offer(SpotlightSlide(kind, playlist = it)) }
             }

@@ -3,9 +3,8 @@
 // `dispatch`/`query` which go straight to the bridge.
 import { useMemo } from "react";
 import { create } from "zustand";
-import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
+import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting, TrackRef } from "@core/api";
 import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/bridge-types";
-import type { SetupLink } from "@shared/deep-link";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
@@ -77,17 +76,21 @@ export type DialogState =
   | { kind: "confirm"; title: string; message: string; confirmLabel?: string; destructive?: boolean; onConfirm: () => void }
   | { kind: "sleepTimer" }
   /** Snooze songs until a chosen date and time (the Snooze submenu's Custom row). */
-  | { kind: "snoozeUntil"; trackIds: string[] }
+  | { kind: "snoozeUntil"; tracks: TrackRef[] }
   | { kind: "connect" }
-  | { kind: "trackInfo"; trackId: string }
+  | { kind: "trackInfo"; track: TrackRef }
+  /** Name a new playlist, and with several accounts pick where it lives (or Mixed). */
+  | { kind: "newPlaylist"; tracks: TrackRef[]; initial?: string }
   | { kind: "albumInfo"; albumId: string }
   /** Save to Coordinator; `allDevices` as the diagnostics page's bundle options. */
   | { kind: "report"; allDevices: boolean }
-  | { kind: "setupDevice" };
+  | { kind: "pairDevice" }
+  /** Remove a device from this identity (with the password-change prompt). */
+  | { kind: "removeDevice"; deviceId: string; name: string; self: boolean };
 
 /** The Add to playlist picker opened on its own (a "+" button, the shortcut), beside what opened it. */
 export interface PlaylistPickerState {
-  trackIds: string[];
+  tracks: TrackRef[];
   /** The button (or focused item) it opens from, in window coordinates. */
   anchor: { left: number; right: number; top: number; bottom: number };
 }
@@ -107,13 +110,15 @@ export interface UiState {
   contextMenu: ContextMenuState | undefined;
   playlistPicker: PlaylistPickerState | undefined;
   dialog: DialogState | undefined;
-  /** Another device's setup link (hocket://setup) waiting for the setup form to apply it. */
-  pendingSetup: SetupLink | undefined;
+  /** A pairing link (hocket://pair) opened from outside, for the setup screen to join with. */
+  pendingPair: string | undefined;
   selection: Selection;
   /** View id the selection belongs to; a route change clears it. */
   selectionScope: string;
   /** What the selected ids are (track ids, album ids, queue keys…), for shortcuts that act on it. */
   selectionKind: SelectionKind | undefined;
+  /** A song selection's references (the list knows each row's account), when it is one. */
+  selectionRefs: TrackRef[] | undefined;
   searchQuery: string;
   searchFocusNonce: number;
   accent: string | undefined;
@@ -135,6 +140,9 @@ export interface UiState {
    * when the drag ends.
    */
   queueDropReveal: boolean;
+  /** The source filter chip: the account the library, search and playlists show ("" = all, `hocket` = Mixed playlists). */
+  librarySource: string;
+  setLibrarySource(source: string): void;
 }
 
 export interface AppStore extends CoreState, UiState {
@@ -155,8 +163,8 @@ export interface AppStore extends CoreState, UiState {
   closePlaylistPicker(): void;
   openDialog(dialog: DialogState): void;
   closeDialog(): void;
-  setPendingSetup(link: SetupLink | undefined): void;
-  setSelection(selection: Selection, scope: string, kind?: SelectionKind): void;
+  setPendingPair(link: string | undefined): void;
+  setSelection(selection: Selection, scope: string, kind?: SelectionKind, refs?: TrackRef[]): void;
   clearSelection(): void;
   setSearchQuery(q: string): void;
   focusSearch(): void;
@@ -209,10 +217,11 @@ export const useApp = create<AppStore>((set, get) => ({
   contextMenu: undefined,
   playlistPicker: undefined,
   dialog: undefined,
-  pendingSetup: undefined,
+  pendingPair: undefined,
   selection: EMPTY_SELECTION,
   selectionScope: "",
   selectionKind: undefined,
+  selectionRefs: undefined,
   searchQuery: "",
   searchFocusNonce: 0,
   accent: undefined,
@@ -224,6 +233,7 @@ export const useApp = create<AppStore>((set, get) => ({
   editingPins: false,
   editPinsFrom: undefined,
   queueDropReveal: false,
+  librarySource: "",
 
   dispatch(command) {
     bridge().dispatch(command);
@@ -243,7 +253,7 @@ export const useApp = create<AppStore>((set, get) => ({
       if (get().paletteOpen) set({ paletteOpen: false, contextMenu: undefined, playlistPicker: undefined });
       return;
     }
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false }));
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, selectionRefs: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false }));
   },
   back() {
     const { history, route } = get();
@@ -289,11 +299,11 @@ export const useApp = create<AppStore>((set, get) => ({
   closeDialog() {
     set({ dialog: undefined });
   },
-  setPendingSetup(pendingSetup) {
-    set({ pendingSetup });
+  setPendingPair(pendingPair) {
+    set({ pendingPair });
   },
-  setSelection(selection, scope, kind) {
-    set({ selection, selectionScope: scope, selectionKind: kind });
+  setSelection(selection, scope, kind, refs) {
+    set({ selection, selectionScope: scope, selectionKind: kind, selectionRefs: refs });
   },
   clearSelection() {
     set({ selection: EMPTY_SELECTION });
@@ -330,6 +340,9 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   setEditingPins(editingPins, from) {
     set({ editingPins, editPinsFrom: editingPins ? from : undefined });
+  },
+  setLibrarySource(librarySource) {
+    set({ librarySource });
   },
   setQueueDropReveal(queueDropReveal) {
     if (get().queueDropReveal === queueDropReveal) return;

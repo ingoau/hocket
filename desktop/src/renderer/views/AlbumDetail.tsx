@@ -17,6 +17,7 @@ import { releaseKind } from "../lib/release-kind";
 import { offlineLabel } from "../components/OfflineBadge";
 import { useAlbumDwellPrime, usePlayIntent } from "../lib/use-prime";
 import type { AlbumResumePoint, Track } from "@core/api";
+import { primeKey } from "../lib/track-ref";
 
 function resumeFraction(list: Track[], resume: AlbumResumePoint): number {
   const duration = list.find((t) => t.id === resume.trackId)?.durationMs || resume.durationMs;
@@ -24,7 +25,7 @@ function resumeFraction(list: Track[], resume: AlbumResumePoint): number {
 }
 
 export function AlbumDetail({ id }: { id: string }) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const isPlaying = useApp((s) => s.transport.position.isPlaying);
@@ -40,8 +41,8 @@ export function AlbumDetail({ id }: { id: string }) {
   // play button primes that track. Once per visit (a remount is a new visit).
   useAlbumDwellPrime(a?.id);
   const primer = usePlayIntent(`album:${id}`);
-  const play = (start?: number, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
-  const more = useQuery(() => (a?.artistId ? { type: "albums", data: { server_id: serverId, artist_id: a.artistId, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 13 } } } : null), "albums", [a?.artistId, serverId]);
+  const play = (start?: number, shuffle = false) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, startIndex: start, shuffle, saveOutgoing: true } } });
+  const more = useQuery(() => (a?.artistId ? { type: "albums", data: { server_id: "", artist_id: a.artistId, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 13 } } } : null), "albums", [a?.artistId, serverId]);
   const others = (more.data?.items ?? []).filter((x) => x.id !== id).slice(0, 12);
   const footnote = [a?.year ? t("album.released", { year: a.year }) : "", a?.created ? t("album.added", { date: fmtDate(a.created) }) : "", a?.playCount ? t("album.plays", { count: a.playCount }) : ""].filter(Boolean).join(" · ");
   // Downloaded or on its way; fully in the stream cache is not kept, so the button offers to download it.
@@ -63,7 +64,7 @@ export function AlbumDetail({ id }: { id: string }) {
     <div className="view detail-page" data-testid="view-album">
       <DetailHead coverArt={a?.coverArt} icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="album-head" actions={
         <>
-          <button type="button" className="btn primary fab album-play" aria-label={resume ? t("album.resumeMenu") : t("album.play")} onClick={() => (resume ? bridge().dispatch({ type: "resumeAlbum", data: { album_id: id } }) : play())} onContextMenu={resume ? (e) => { e.preventDefault(); e.stopPropagation(); openItemsMenu(e, [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }]); } : undefined} {...primer.bind(resume ? undefined : list[0]?.id)} data-testid="album-play"><Icon name={resume ? "resume" : "play"} size={24} filled /> {resume ? t("album.resume") : t("album.play")}</button>
+          <button type="button" className="btn primary fab album-play" aria-label={resume ? t("album.resumeMenu") : t("album.play")} onClick={() => (resume ? bridge().dispatch({ type: "resumeAlbum", data: { album_id: id } }) : play())} onContextMenu={resume ? (e) => { e.preventDefault(); e.stopPropagation(); openItemsMenu(e, [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }]); } : undefined} {...primer.bind(resume ? undefined : primeKey(list[0]))} data-testid="album-play"><Icon name={resume ? "resume" : "play"} size={24} filled /> {resume ? t("album.resume") : t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(undefined, true)} data-testid="album-shuffle"><Icon name="shuffle" size={24} /></button>
           {a ? <Heart size={24} on={a.loved} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "album", data: { id: a.id } }], loved: !a.loved } })} /> : null}
           {a ? <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(kept ? "unpin" : "download", { type: "albums", data: { ids: [a.id] } })} data-testid="album-download"><Icon name="download" size={24} filled={kept} /></button> : null}

@@ -12,6 +12,7 @@
 pub mod api;
 pub mod core;
 pub mod util;
+pub mod ytm;
 
 pub mod actions;
 pub mod album_resume;
@@ -25,10 +26,13 @@ pub mod db;
 pub mod devlog;
 pub mod downloads;
 pub mod filters;
+pub mod identity;
 pub mod jobs;
+pub mod library;
 pub mod lyrics;
 pub mod media_session;
 pub mod outbox;
+pub mod provider;
 pub mod reports;
 pub mod saver;
 pub mod session;

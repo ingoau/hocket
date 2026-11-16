@@ -86,6 +86,9 @@ import androidx.compose.ui.unit.dp
 import app.hocket.R
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
+import app.hocket.core.MIXED_SOURCE
+import app.hocket.core.ref
+import app.hocket.core.api.TrackRef
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.ActionTarget
@@ -120,7 +123,10 @@ private data class PickerSubject(val title: String, val detail: String?, val cov
 
 /** Everything the sheet needs, loaded once when it opens. */
 @Immutable
-private data class PickerData(val trackIds: List<String>, val subject: PickerSubject, val playlists: List<Playlist>, val edits: PickerEdits)
+private data class PickerData(val tracks: List<TrackRef>, val subject: PickerSubject, val playlists: List<Playlist>, val edits: PickerEdits) {
+    /** The picker's model counts songs by id; commands name them by reference. */
+    fun refOf(id: String): TrackRef = tracks.firstOrNull { it.id == id } ?: TrackRef("", id)
+}
 
 /**
  * Add to playlist: the playlists the songs can go in (pinned, recent, then all; one "Matches" group
@@ -164,6 +170,7 @@ fun PlaylistPickerBody(
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycleCompat()
     val serverId = server?.id ?: return
+    val accountCount = client.accounts.collectAsStateWithLifecycleCompat().value.size
     val settings by client.settings.collectAsStateWithLifecycleCompat()
     val pinnedIds = remember(settings[SettingKeys.LIBRARY_PINS]?.value) {
         LibraryPins.parse(settings[SettingKeys.LIBRARY_PINS]?.value).filter { it.kind == PinKind.Playlist.id }.map { it.id }
@@ -180,7 +187,7 @@ fun PlaylistPickerBody(
 
     fun apply() {
         val e = edits ?: return
-        val commands = e.commands()
+        val commands = e.commands(data!!::refOf)
         if (commands.isEmpty()) return
         val text = e.outcome(data!!.playlists.associate { it.id to it.name })?.let { outcomeText(resources, it) }
         val before = client.undo.value.history.map { it.id }.toSet()
@@ -194,10 +201,10 @@ fun PlaylistPickerBody(
         }
     }
 
-    fun create(name: String) {
-        val ids = data?.trackIds ?: return
+    fun create(name: String, accountId: String) {
+        val tracks = data?.tracks ?: return
         apply()
-        client.dispatch(Commands.createPlaylist(serverId, name.trim(), ids))
+        client.dispatch(Commands.createPlaylist(accountId, name.trim(), tracks))
         onClose()
     }
 
@@ -239,7 +246,10 @@ fun PlaylistPickerBody(
                 val sections = pickerSections(d.playlists, pinnedIds, query)
                 LazyColumn(Modifier.fillMaxWidth().testTag("picker.list"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
                     item(key = "new") {
-                        NewPlaylistButton(query.trim()) { if (query.isNotBlank()) create(query) else naming = true }
+                        NewPlaylistButton(query.trim()) {
+                            // With several accounts the dialog asks where it lives.
+                            if (query.isNotBlank() && accountCount < 2) create(query, serverId) else naming = true
+                        }
                     }
                     if (query.isNotBlank() && sections.isEmpty()) item(key = "empty") {
                         Surface(shape = RoundedCornerShape(20.dp), color = menuRowColor(), modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
@@ -295,7 +305,7 @@ fun PlaylistPickerBody(
         val e = edits
         if (e != null) RemoveCopiesDialog(p.name, e.copies(p.id), onRemoveAll = { edits = e.removeAll(p.id); asking = null }, onRemoveOne = { edits = e.removeOne(p.id); asking = null }, onDismiss = { asking = null })
     }
-    if (naming) NewPlaylistDialog(onCreate = { naming = false; create(it) }, onDismiss = { naming = false })
+    if (naming) NewPlaylistDialog(onCreate = { name, account -> naming = false; create(name, account) }, onDismiss = { naming = false }, songs = data?.tracks.orEmpty())
 }
 
 /** The snackbar's words for what Done did. */
@@ -311,17 +321,20 @@ internal fun outcomeText(resources: android.content.res.Resources, outcome: Pick
 
 /** The songs, the line describing them, the playlists they can go in and where they already are. */
 private suspend fun loadPicker(client: CoreClient, serverId: String, target: ActionTarget, resources: android.content.res.Resources): PickerData {
-    val ids = resolveTrackIds(client, target)
+    val refs = resolveTrackRefs(client, target)
+    val ids = refs.map { it.id }
     val album = (target as? ActionTarget.Albums)?.data?.ids?.singleOrNull()?.let { (client.query(Queries.album(it)) as? QueryResult.AlbumDetail)?.data }
-    val first = ids.firstOrNull()?.let { (client.query(Queries.tracksByIds(listOf(it))) as? QueryResult.TrackList)?.data?.firstOrNull() }
+    val first = refs.firstOrNull()?.let { (client.query(Queries.tracksByIds(listOf(it))) as? QueryResult.TrackList)?.data?.firstOrNull() }
     val subject = when {
         album != null -> PickerSubject(album.name, album.artist, album.coverArt)
         ids.size == 1 && first != null -> PickerSubject(first.title, first.artist, first.coverArt)
         else -> PickerSubject(resources.getQuantityString(R.plurals.menu_songs, ids.size, ids.size), null, first?.coverArt)
     }
-    val playlists = addablePlaylists((client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data.orEmpty())
-    val membership = (client.query(Queries.playlistMembership(serverId, ids)) as? QueryResult.Membership)?.data.orEmpty()
-    return PickerData(ids, subject, playlists, PickerEdits.of(ids, membership))
+    // Every account's playlists and the Mixed ones: another account's song goes in as the
+    // playlist account's copy (or the core offers to make the playlist Mixed).
+    val playlists = addablePlaylists((client.query(Queries.playlists("")) as? QueryResult.Playlists)?.data.orEmpty())
+    val membership = (client.query(Queries.playlistMembership("", refs)) as? QueryResult.Membership)?.data.orEmpty()
+    return PickerData(refs, subject, playlists, PickerEdits.of(ids, membership))
 }
 
 @Composable
@@ -470,30 +483,50 @@ private fun RemoveCopiesDialog(name: String, copies: Int, onRemoveAll: () -> Uni
 
 /** "New playlist" with nothing typed in the search: ask for its name. */
 @Composable
-internal fun NewPlaylistDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun NewPlaylistDialog(onCreate: (name: String, accountId: String) -> Unit, onDismiss: () -> Unit, songs: List<TrackRef> = emptyList()) {
+    val client = LocalCoreClient.current
+    val accounts by client.accounts.collectAsStateWithLifecycleCompat()
     var name by remember { mutableStateOf("") }
+    // With several accounts the playlist lives on one of them, or Hocket keeps it (Mixed).
+    var account by remember(accounts, songs) { mutableStateOf(NewPlaylistChoice.initial(accounts, songs)) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.playlist_new)) },
         text = {
-            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(stringResource(R.string.playlist_name)) }, singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("picker.newName"))
+            Column {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(stringResource(R.string.playlist_name)) }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("picker.newName"))
+                if (accounts.size > 1) {
+                    Text(stringResource(R.string.playlist_keep_on), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                        accounts.forEach { a ->
+                            androidx.compose.material3.FilterChip(selected = account == a.id, onClick = { account = a.id }, label = { Text(a.name.ifBlank { a.url }) },
+                                modifier = Modifier.testTag("picker.account.${a.id}"))
+                        }
+                        androidx.compose.material3.FilterChip(selected = account == MIXED_SOURCE, onClick = { account = MIXED_SOURCE }, label = { Text(stringResource(R.string.source_mixed)) },
+                            modifier = Modifier.testTag("picker.account.mixed"))
+                    }
+                }
+            }
         },
-        confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { onCreate(name) }, modifier = Modifier.testTag("picker.create")) { Text(stringResource(R.string.picker_create)) } },
+        confirmButton = { TextButton(enabled = name.isNotBlank() && account.isNotEmpty(), onClick = { onCreate(name, account) }, modifier = Modifier.testTag("picker.create")) { Text(stringResource(R.string.picker_create)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }
 
 /** Expands a target to track ids for playlist adds (albums/artists/playlists via their track queries). */
-suspend fun resolveTrackIds(client: CoreClient, target: ActionTarget): List<String> = when (target) {
-    is ActionTarget.Tracks -> target.data.ids
-    is ActionTarget.Albums -> target.data.ids.flatMap { id -> (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data?.map { it.id } ?: emptyList() }
-    is ActionTarget.Artists -> target.data.ids.flatMap { id -> (client.query(Queries.artistTopSongs(id, 500)) as? QueryResult.TrackList)?.data?.map { it.id } ?: emptyList() }
-    is ActionTarget.Playlists -> target.data.ids.flatMap { id -> (client.query(Queries.playlistTracks(id, app.hocket.core.api.Page(0u, 5000u))) as? QueryResult.Tracks)?.data?.items?.map { it.id } ?: emptyList() }
+suspend fun resolveTrackIds(client: CoreClient, target: ActionTarget): List<String> = resolveTrackRefs(client, target).map { it.id }
+
+/** Expands a target to its songs (albums/artists/playlists via their track queries). */
+suspend fun resolveTrackRefs(client: CoreClient, target: ActionTarget): List<TrackRef> = when (target) {
+    is ActionTarget.Tracks -> target.data.tracks
+    is ActionTarget.Albums -> target.data.ids.flatMap { id -> (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data?.map { it.ref } ?: emptyList() }
+    is ActionTarget.Artists -> target.data.ids.flatMap { id -> (client.query(Queries.artistTopSongs(id, 500)) as? QueryResult.TrackList)?.data?.map { it.ref } ?: emptyList() }
+    is ActionTarget.Playlists -> target.data.ids.flatMap { id -> (client.query(Queries.playlistTracks(id, app.hocket.core.api.Page(0u, 5000u))) as? QueryResult.Tracks)?.data?.items?.map { it.ref } ?: emptyList() }
     is ActionTarget.QueueItems -> {
         val q = client.queue.value
         val all = q.entries + listOfNotNull(q.current)
-        target.data.keys.mapNotNull { k -> all.firstOrNull { it.item.key == k }?.track?.id }
+        target.data.keys.mapNotNull { k -> all.firstOrNull { it.item.key == k }?.item?.track }
     }
     else -> emptyList()
 }

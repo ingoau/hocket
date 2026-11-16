@@ -55,6 +55,8 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("setup-password").fill("secret");
       await page.getByTestId("setup-connect").click();
       await page.getByTestId("setup-continue").click({ timeout: 30_000 });
+      // "Add another source?": not now.
+      await page.getByTestId("setup-done").click({ timeout: 30_000 });
       await expect(page.getByTestId("app")).toBeVisible({ timeout: 30_000 });
       await expect(page.getByTestId("dev-banner")).toHaveCount(0);
       expect(server.callsTo("ping").length).toBeGreaterThan(0);

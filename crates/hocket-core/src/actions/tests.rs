@@ -1,23 +1,27 @@
 use std::collections::HashSet;
 
 use super::*;
-use crate::api::{ContextKind, PinTarget, RatingTarget};
+use crate::api::{ContextKind, PinTarget, RatingTarget, TrackRef};
 
 struct FakeResolver;
 
 impl Resolver for FakeResolver {
-    fn track_for_key(&self, key: &QueueKey) -> Option<TrackId> {
-        key.strip_prefix("key-").map(|t| format!("track-{t}"))
+    fn track_for_key(&self, key: &QueueKey) -> Option<TrackRef> {
+        key.strip_prefix("key-")
+            .map(|t| TrackRef::new("srv", format!("track-{t}")))
     }
     fn is_upcoming(&self, key: &QueueKey) -> bool {
         key.starts_with("key-up")
     }
-    fn context_tracks(&self, _server_id: &str, kind: &ContextKind) -> Vec<TrackId> {
-        match kind {
+    fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackRef> {
+        let ids = match kind {
             ContextKind::Album { id } => vec![format!("{id}-1"), format!("{id}-2")],
             ContextKind::Playlist { id } => vec![format!("{id}-a")],
             _ => vec![],
-        }
+        };
+        ids.into_iter()
+            .map(|id| TrackRef::new(server_id, id))
+            .collect()
     }
     fn context_label(&self, _server_id: &str, kind: &ContextKind) -> String {
         NoResolver.context_label("", kind)
@@ -37,7 +41,7 @@ fn state() -> StateView {
 
 fn tracks(ids: &[&str]) -> ActionTarget {
     ActionTarget::Tracks {
-        ids: ids.iter().map(|s| s.to_string()).collect(),
+        tracks: TrackRef::list("srv", ids.iter().copied()),
     }
 }
 
@@ -434,8 +438,7 @@ fn handlers_map_to_commands() {
     assert_eq!(
         c,
         vec![Command::PlayTracks {
-            server_id: "srv".into(),
-            track_ids: vec!["a".into(), "b".into()],
+            tracks: TrackRef::list("srv", ["a", "b"]),
             start_index: 0,
             label: "Selection".into(),
             shuffle: false,
@@ -471,7 +474,7 @@ fn handlers_map_to_commands() {
             &res,
         )
         .unwrap();
-    assert!(matches!(&c[0], Command::PlayTracks { track_ids, .. } if track_ids.len() == 4));
+    assert!(matches!(&c[0], Command::PlayTracks { tracks, .. } if tracks.len() == 4));
     for (action, shuffle) in [("play", false), ("playShuffled", true)] {
         let c = r
             .commands(
@@ -534,8 +537,7 @@ fn handlers_map_to_commands() {
         )
         .unwrap(),
         vec![Command::PlayNext {
-            server_id: "srv".into(),
-            track_ids: vec![],
+            tracks: vec![],
             keys: vec!["key-1".into(), "key-2".into()]
         }]
     );
@@ -552,8 +554,7 @@ fn handlers_map_to_commands() {
         )
         .unwrap(),
         vec![Command::AddToQueue {
-            server_id: "srv".into(),
-            track_ids: vec![],
+            tracks: vec![],
             keys: vec!["key-up1".into(), "key-1".into()]
         }]
     );
@@ -561,15 +562,14 @@ fn handlers_map_to_commands() {
         r.commands(
             "addToQueue",
             &ActionTarget::Tracks {
-                ids: vec!["t9".into()]
+                tracks: TrackRef::list("srv", ["t9"])
             },
             &s,
             &res
         )
         .unwrap(),
         vec![Command::AddToQueue {
-            server_id: "srv".into(),
-            track_ids: vec!["t9".into()],
+            tracks: TrackRef::list("srv", ["t9"]),
             keys: vec![]
         }]
     );
@@ -582,7 +582,7 @@ fn handlers_map_to_commands() {
         .commands(
             "addToQueue",
             &ActionTarget::Tracks {
-                ids: vec!["t9".into()]
+                tracks: TrackRef::list("srv", ["t9"])
             },
             &off,
             &res
@@ -617,15 +617,17 @@ fn handlers_map_to_commands() {
         )
         .unwrap(),
         vec![Command::PlayLater {
-            server_id: "srv".into(),
-            track_ids: vec!["pl-a".into()],
+            tracks: TrackRef::list("srv", ["pl-a"]),
             keys: vec![]
         }]
     );
     assert_eq!(
         r.commands("rate4", &ActionTarget::None, &s, &res).unwrap(),
         vec![Command::SetRating {
-            targets: vec![RatingTarget::Track { id: "cur".into() }],
+            targets: vec![RatingTarget::Track {
+                id: "cur".into(),
+                source: "srv".into()
+            }],
             rating: 4
         }]
     );
@@ -662,7 +664,10 @@ fn handlers_map_to_commands() {
     assert_eq!(
         r.commands("unlove", &tracks(&["t"]), &s, &res).unwrap(),
         vec![Command::SetLoved {
-            targets: vec![RatingTarget::Track { id: "t".into() }],
+            targets: vec![RatingTarget::Track {
+                id: "t".into(),
+                source: "srv".into()
+            }],
             loved: false
         }]
     );

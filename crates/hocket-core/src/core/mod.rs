@@ -103,8 +103,30 @@ pub enum Internal {
     SyncProgress(SyncProgress),
     /// A server capability probe finished. `Err` carries the error kind
     /// (auth / network / server) and a message.
+    /// A YouTube Music sign-in was checked: `(channel id, name, premium)`.
+    YtmProbed {
+        cookies: Option<crate::api::Secret>,
+        js_host: bool,
+        result: Result<(String, String, bool), (ErrorKind, String)>,
+    },
+    /// A provider's live home shelves arrived.
+    LiveHomeFetched {
+        account_id: AccountId,
+    },
+    /// A stream URL for the remote renderer was fetched (`error`: or not).
+    RemoteStreamResolved {
+        source: String,
+        track_id: String,
+        error: Option<String>,
+    },
+    /// The YouTube Music JS host is asked something; the reply goes back to
+    /// the provider's resolve.
+    YtmJs {
+        request: crate::api::YtmJsRequest,
+        reply: tokio::sync::oneshot::Sender<Result<crate::api::YtmJsAnswer, String>>,
+    },
     Probed {
-        server_id: ServerId,
+        account_id: AccountId,
         result: Result<ServerCapabilities, (ErrorKind, String)>,
     },
     /// Connect I/O reports.
@@ -134,10 +156,8 @@ pub enum Internal {
         tx: mpsc::UnboundedSender<WireMessage>,
     },
     Discovery(DiscoveryEvent),
-    CredentialVerified {
-        peer: PeerId,
-        ok: bool,
-    },
+    /// A pairing or coordinator exchange finished.
+    Exchange(crate::core::handlers::identity::ExchangeResult),
     /// The autoplay engine comes back from a fetch with its picks.
     Autoplay {
         engine: Box<AutoplayEngine>,
@@ -207,6 +227,9 @@ pub enum Internal {
     /// Clear offline skip marks if online (posted when this device takes
     /// transport, so it never runs inside the lease reaction).
     ClearOfflineSkips,
+    /// Record other copies of queue items' songs on the document (posted
+    /// after a document change, so it never runs inside that reaction).
+    OfferAlternates,
     /// Run a refused offline-skip clear once more (see `CacheState::offline_clear_sent`).
     RetryOfflineClear,
     /// An album-primer fetch ended.
@@ -308,13 +331,12 @@ impl LateSink {
 
 /// A server the core is attached to from construction (tests): the fake
 /// server plus the metadata the platform would otherwise supply through
-/// `Command::AddServer`.
+/// `Command::AddAccount`.
 /// A server whose credentials are being verified before it is added.
-pub(crate) struct PendingServer {
-    pub info: ServerInfo,
+pub(crate) struct PendingAccount {
+    pub info: AccountInfo,
     pub client: Arc<crate::subsonic::Client>,
-    pub credential: crate::connect::wire::Credential,
-    pub lan_key: crate::connect::auth::LanKey,
+    pub password: crate::api::Secret,
 }
 
 pub(crate) struct PresetServer {
@@ -331,15 +353,20 @@ pub(crate) struct Deps {
     pub io: Arc<dyn ConnectIo>,
     pub storage: Arc<dyn StorageProbe>,
     pub lyrics_http: Option<Arc<dyn LyricsHttp>>,
-    pub server: Option<PresetServer>,
+    pub servers: Vec<PresetServer>,
     /// Session entropy seed for deterministic tests (`None` = OS random).
     pub seed: Option<u64>,
     /// Drive time from the tick only (no wall-clock ticker task).
     pub manual_tick: bool,
     /// How the in-process stream reader reaches the server (`None` = reqwest).
     pub stream_upstream: Option<Arc<dyn stream_reader::StreamUpstream>>,
+    /// How YouTube Music's InnerTube client reaches YouTube (`None` = reqwest).
+    pub ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
     /// The session reducer Connect applies ops with (`None` = this build's).
     pub reducer: Option<crate::connect::ReducerHandle>,
+    /// The identity a device without one starts with (tests: cores on one
+    /// network share one; `None` = a new one).
+    pub identity: Option<crate::identity::Identity>,
 }
 
 impl Deps {
@@ -350,11 +377,13 @@ impl Deps {
             io: Arc::new(RealIo::new(config)),
             storage: Arc::new(crate::downloads::UnknownStorage),
             lyrics_http: None,
-            server: None,
+            servers: vec![],
             seed: None,
             manual_tick: false,
             stream_upstream: None,
+            ytm_http: None,
             reducer: None,
+            identity: None,
         }
     }
 }

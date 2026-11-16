@@ -112,6 +112,9 @@ export interface ReportSendRequest {
 /** At most this many screenshots go with one report. */
 export const REPORT_MAX_SCREENSHOTS = 5;
 
+/** How a YouTube Music sign-in ended; "busy" when another sign-in window was already open (it is focused). */
+export type YtmSignInResult = "signedIn" | "cancelled" | "busy";
+
 export interface HocketBridge {
   prefs: {
     get(): Promise<AppPrefs>;
@@ -173,14 +176,17 @@ export interface HocketBridge {
      */
     import(): Promise<boolean>;
   };
-  /**
-   * Another device's setup code (Set up another device): main builds the
-   * `hocket://setup` link for this server and user, and puts the password in
-   * from the credential store only when [SetupLinkRequest.includePassword].
-   */
-  setupLink(req: SetupLinkRequest): Promise<SetupLinkResult>;
   clipboard: {
     writeText(text: string): void;
+  };
+  ytm: {
+    /**
+     * Sign in to YouTube Music in a window of its own; once signed in, main
+     * adds the account (the cookies never reach the renderer).
+     */
+    signIn(): Promise<YtmSignInResult>;
+    /** A fresh sign-in for the coordinator's own YouTube Music analysis (owner only). */
+    signInCoordinator(): Promise<YtmSignInResult>;
   };
   /**
    * Share one track's original audio file. Main resolves the file (a finished download, or a fresh
@@ -259,7 +265,8 @@ export const IPC = {
   dialogOpenText: "hocket:dialog:open-text",
   configExport: "hocket:config:export",
   configImport: "hocket:config:import",
-  setupLink: "hocket:setup-link",
+  ytmSignIn: "hocket:ytm:sign-in",
+  ytmSignInCoordinator: "hocket:ytm:sign-in-coordinator",
   clipboardWrite: "hocket:clipboard:write",
   deepLink: "hocket:deep-link",
   prefsGet: "hocket:prefs:get",
@@ -304,19 +311,3 @@ export type WindowTheme = "light" | "dark";
 /** The theme setting: a theme, or the system's. */
 export type ThemeChoice = WindowTheme | "system";
 
-export interface SetupLinkRequest {
-  server: string;
-  user: string;
-  coordinator?: string;
-  /** Packed settings (shared/setup-settings), for a device without a coordinator. */
-  settings?: string;
-  includePassword: boolean;
-}
-
-export interface SetupLinkResult {
-  link: string;
-  /** What the QR code shows: [link], or without its settings when they'd make the code too dense to scan. */
-  codeLink: string;
-  /** Whether the credential store has this login's password (so it can be included). */
-  passwordAvailable: boolean;
-}

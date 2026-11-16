@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
@@ -70,8 +72,8 @@ class MenuScreenshotTest {
         compose.waitUntil(5_000) { core.client.started.value }
         // Late night's first song: loved, rated 4, in Late night once and Sunday morning twice.
         val trackId = lib.playlistTracks.getValue("pl0").first()
-        core.client.dispatch(Commands.loveTrack(trackId, true))
-        core.client.dispatch(Commands.rateTrack(trackId, 4))
+        core.client.dispatch(Commands.loveTrack(TrackRef("fake-server", trackId), true))
+        core.client.dispatch(Commands.rateTrack(TrackRef("fake-server", trackId), 4))
         core.client.dispatch(Commands.setSetting(SettingKeys.LIBRARY_PINS, """[{"kind":"playlist","id":"pl0","tap":"open"},{"kind":"playlist","id":"pl6","tap":"open"}]"""))
         val title = lib.track(trackId)!!.title
         compose.setThemedContent(core) {

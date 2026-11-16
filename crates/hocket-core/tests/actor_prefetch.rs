@@ -21,8 +21,7 @@ async fn started(name: &str, server: FakeServer) -> TestCore {
 
 async fn play_album(t: &TestCore, n: usize, start: u32) {
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: (0..n).map(|i| format!("t{i}")).collect(),
+        tracks: TrackRef::list(&t.server_id, (0..n).map(|i| format!("t{i}"))),
         start_index: start,
         label: "Album".into(),
         shuffle: false,
@@ -118,8 +117,7 @@ async fn a_queue_change_cancels_a_stale_prefetch() {
     );
     // Another context: t1 is no longer among the next two.
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t3".into(), "t4".into(), "t5".into()],
+        tracks: TrackRef::list(&t.server_id, ["t3", "t4", "t5"]),
         start_index: 0,
         label: "Other".into(),
         shuffle: false,
@@ -246,8 +244,7 @@ async fn only_the_transport_owner_prefetches_and_a_handoff_moves_it() {
     b.upstream
         .set_behaviour("t2", UpstreamBehaviour::StallAfter(20_000));
     b.run(Command::PlayTracks {
-        server_id: b.server_id.clone(),
-        track_ids: (0..6).map(|i| format!("t{i}")).collect(),
+        tracks: TrackRef::list(&b.server_id, (0..6).map(|i| format!("t{i}"))),
         start_index: 0,
         label: "Album".into(),
         shuffle: false,

@@ -164,7 +164,7 @@ fun AppRoot(
     if (client == null) { LoadingScreen(); return }
     CompositionLocalProvider(LocalCoreClient provides client, LocalNavBarPrefs provides rememberShellNavBarPrefs(client), LocalPageChrome provides remember { PageChrome() }) {
         val started by client.started.collectAsStateWithLifecycle()
-        val servers by client.servers.collectAsStateWithLifecycle()
+        val servers by client.accounts.collectAsStateWithLifecycle()
         // The fake core has nothing to replay; the native core waits for the keystore replay first.
         val replayed by credentialsReady.collectAsStateWithLifecycle()
         val ready = replayed || client.kind == CoreKind.Fake
@@ -176,13 +176,18 @@ fun AppRoot(
         val snackbarScope = rememberCoroutineScope()
         val appSnackbar = remember(snackbar, snackbarScope) { app.hocket.ui.components.AppSnackbar(snackbar, snackbarScope) }
         ToastCollector(snackbar)
-        val server = servers.firstOrNull()
-        val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
-        val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
+        // Adding an account from Settings: setup over the app, about the newest account.
+        val addingAccount by app.hocket.ui.screens.setup.SetupRequests.adding.collectAsStateWithLifecycle()
+        val first = servers.firstOrNull()
+        val firstHasLogin = first != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(first, loginKeys))
         val fakeBanner = BuildConfig.DEBUG && client.kind == CoreKind.Fake && LocalFakeCoreBanner.current
         // Set when the setup form signs in: setup stays up for the server's summary until Continue.
         var holdSetup by rememberSaveable { mutableStateOf(false) }
-        val inShell = started && ready && server != null && hasLogin && server.capabilities.meetsFloor && !holdSetup
+        val inShell = started && ready && first != null && firstHasLogin && CoreHost.meetsFloor(first) && !holdSetup && !addingAccount
+        // Setup is about the account being set up: the newest while one is being added.
+        val server = if (holdSetup || addingAccount) servers.lastOrNull() else first
+        val hasLogin = server != null && (client.kind == CoreKind.Fake || CoreHost.hasLogin(server, loginKeys))
+        val needsRelogin = server != null && CoreHost.needsRelogin(server, unreadable)
         CompositionLocalProvider(app.hocket.ui.components.LocalAppSnackbar provides appSnackbar) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The debug banner is laid out in flow above the app (never over its top bars): it takes
@@ -197,7 +202,7 @@ fun AppRoot(
                     if (started && ready) SideEffect(onFirstScreen)
                     when {
                         !started || !ready -> LoadingScreen()
-                        !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !server.capabilities.meetsFloor), needsRelogin = needsRelogin, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false })
+                        !inShell -> ServerSetupScreen(existing = server, summary = server != null && !needsRelogin && (hasLogin || !CoreHost.meetsFloor(server)), needsRelogin = needsRelogin, adding = addingAccount, onConnecting = { holdSetup = true }, onContinue = { holdSetup = false; app.hocket.ui.screens.setup.SetupRequests.done() })
                         else -> MainShell(snackbar)
                     }
                 }
@@ -416,11 +421,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
     val client = LocalCoreClient.current
     val nowPlaying = client.nowPlaying.collectAsStateWithLifecycle()
     val playerVisible by remember { derivedStateOf { nowPlaying.value != null } }
-    // Another device's setup code opened while this one is signed in: setup is where it applies.
-    val alreadySetUp = stringResource(R.string.setup_device_already_set_up)
-    LaunchedEffect(Unit) {
-        app.hocket.AppLinks.setup.collect { link -> if (link != null) { app.hocket.AppLinks.consume(link); snackbar.showSnackbar(alreadySetUp) } }
-    }
+    // Another device's pairing link or a coordinator claim, opened while this one is set up: asked first.
+    IdentityLinkPrompts(snackbar)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // The phone's bar: the compact floating pill, or the standard full-width bar.
         val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR).bool ?: true
@@ -837,7 +839,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             }
             if (editorOpen) BottomBarEditorSheet(onDismiss = { editorOpen = false })
             if (devicesOpen) app.hocket.ui.player.HandoffSheet(onDismiss = { devicesOpen = false })
-            if (setUpDeviceOpen) SetupDeviceSheet(onDismiss = { setUpDeviceOpen = false })
+            if (setUpDeviceOpen) PairDeviceSheet(onDismiss = { setUpDeviceOpen = false })
             }
         }
     }

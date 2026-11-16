@@ -47,6 +47,8 @@ fun actionIcon(name: String): ImageVector = when (name) {
     "queue_music" -> HocketIcons.Filled.QueueMusic
     "favorite" -> HocketIcons.Filled.Favorite
     "heart_minus", "heart_broken" -> HocketIcons.Filled.FavoriteBorder
+    "library_add" -> HocketIcons.Filled.Add
+    "library_remove" -> HocketIcons.Filled.PlaylistRemove
     "star", "star_rate" -> HocketIcons.Filled.Star
     "star_outline" -> HocketIcons.Filled.StarOutline
     "download" -> HocketIcons.Filled.Download

@@ -321,7 +321,7 @@ pub fn select_for_node(
     let mut params = vec![Value::Text(server_id.to_string())];
     params.extend(clause.params);
     let mut sql = format!(
-        "SELECT {columns} FROM tracks WHERE tracks.server_id = ? AND ({}) {}",
+        "SELECT {columns} FROM tracks WHERE (?1 = '' OR tracks.server_id = ?1) AND ({}) {}",
         clause.sql,
         order_by(sort, descending)
     );
@@ -347,7 +347,7 @@ pub fn count_for_node(
     params.extend(clause.params);
     Ok(SelectQuery {
         sql: format!(
-            "SELECT COUNT(*) FROM tracks WHERE tracks.server_id = ? AND ({})",
+            "SELECT COUNT(*) FROM tracks WHERE (?1 = '' OR tracks.server_id = ?1) AND ({})",
             clause.sql
         ),
         params,

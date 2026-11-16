@@ -143,19 +143,20 @@ impl Actor {
             return;
         }
         let point = self.album_resume_point(&album_id);
-        let server_id = self
-            .server
+        let kind = ContextKind::Album {
+            id: album_id.clone(),
+        };
+        let source = point
             .as_ref()
-            .map(|s| s.info.id.clone())
-            .or_else(|| {
-                self.doc()
-                    .and_then(|d| d.context.as_ref().map(|c| c.server_id.clone()))
-            })
+            .map(|p| p.source.clone())
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.source_of_context(&kind))
+            .or_else(|| self.scope_account())
             .unwrap_or_default();
         let mut args = PlayContextArgs {
             context: QueueContext {
-                server_id,
-                kind: ContextKind::Album { id: album_id },
+                source,
+                kind,
                 label: String::new(),
                 sort: SortOrder::Default,
                 tracks: vec![],
@@ -168,21 +169,24 @@ impl Actor {
         if let Some(p) = point {
             if args.context.tracks.is_empty() {
                 args.context.tracks =
-                    self.resolve_context_tracks(&args.context.server_id, &args.context.kind);
+                    self.resolve_context_tracks(&args.context.source, &args.context.kind);
             }
             let n = args.context.tracks.len() as u32;
             let index = args
                 .context
                 .tracks
                 .iter()
-                .position(|id| id == &p.track_id)
+                .position(|t| t.id == p.track_id && t.source == args.context.source)
                 .map(|i| i as u32)
                 .filter(|i| *i < n)
                 .or((p.track_index < n).then_some(p.track_index));
             if let Some(index) = index {
                 args.start_index = Some(index);
                 args.start_position_ms = Some(p.position_ms);
-                self.pending_resume_at = Some((p.track_id, p.position_ms));
+                self.pending_resume_at = Some((
+                    TrackRef::new(args.context.source.clone(), p.track_id),
+                    p.position_ms,
+                ));
             }
         }
         self.play_context(args);
@@ -227,7 +231,7 @@ impl Actor {
     /// The playing album, without cloning the session document.
     fn album_snapshot(&self, finished: bool) -> Option<Snapshot> {
         let doc = self.doc()?;
-        let same = doc.current.as_ref().map(|c| c.track_id.as_str()) == self.playback.track_id();
+        let same = doc.current.as_ref().map(|c| c.track.clone()) == self.playback.track_ref();
         let position = self.playback.position_now(self.now());
         let duration = if same { self.playback.duration_ms() } else { 0 };
         Some(snapshot_of(doc, position, duration, finished))
@@ -250,15 +254,14 @@ impl Actor {
         if key_changed {
             if let Some(old) = old {
                 let same =
-                    old.current.as_ref().map(|c| c.track_id.as_str()) == self.playback.track_id();
+                    old.current.as_ref().map(|c| c.track.clone()) == self.playback.track_ref();
                 let duration = if same { self.playback.duration_ms() } else { 0 };
                 let position = self.playback.position_now(self.now());
                 self.consider_album(old, position, duration, false, true);
             }
             self.consider_album(new, resume_at.unwrap_or(0), 0, false, true);
         } else {
-            let same =
-                new.current.as_ref().map(|c| c.track_id.as_str()) == self.playback.track_id();
+            let same = new.current.as_ref().map(|c| c.track.clone()) == self.playback.track_ref();
             let duration = if same { self.playback.duration_ms() } else { 0 };
             let position = self.playback.position_now(self.now());
             self.consider_album(new, position, duration, ended, true);
@@ -266,9 +269,9 @@ impl Actor {
     }
 
     /// Take a pending resume position when `track_id` is the track it was for.
-    pub(crate) fn take_pending_resume(&mut self, track_id: Option<&str>) -> Option<Ms> {
+    pub(crate) fn take_pending_resume(&mut self, track: Option<&TrackRef>) -> Option<Ms> {
         let (id, pos) = self.pending_resume_at.take()?;
-        if Some(id.as_str()) == track_id {
+        if Some(&id) == track {
             Some(pos)
         } else {
             None
@@ -339,11 +342,11 @@ fn snapshot_of(
     };
     let (from_context, index, autoplay, track_id) = match &doc.current {
         Some(cur) => match &cur.source {
-            QueueSource::Context { index } => (true, Some(*index), false, cur.track_id.clone()),
-            QueueSource::Autoplay { .. } => (false, None, true, cur.track_id.clone()),
-            _ => (false, None, false, cur.track_id.clone()),
+            QueueSource::Context { index } => (true, Some(*index), false, cur.track.clone()),
+            QueueSource::Autoplay { .. } => (false, None, true, cur.track.clone()),
+            _ => (false, None, false, cur.track.clone()),
         },
-        None => (false, None, false, String::new()),
+        None => (false, None, false, TrackRef::default()),
     };
     Snapshot {
         album_id,
@@ -352,7 +355,8 @@ fn snapshot_of(
         from_context,
         index,
         autoplay,
-        track_id,
+        track_id: track_id.id,
+        source: track_id.source,
         position_ms,
         duration_ms,
         finished,

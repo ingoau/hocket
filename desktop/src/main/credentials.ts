@@ -13,11 +13,22 @@ import { dirname, join } from "node:path";
 import { safeStorage } from "electron";
 import type { Command } from "@core/api";
 import type { CredentialStorage } from "@shared/bridge-types";
+import { accountIdFor } from "./account-id";
+
+/**
+ * YouTube Music on this device is one entry under a fixed key: its account id
+ * (a channel id) is only known once the core checked the sign-in. The
+ * "password" is the sign-in's cookie header, empty for anonymous use.
+ */
+export const YTM_KEY = "ytm";
+export const YTM_URL = "https://music.youtube.com";
 
 interface StoredCredential {
   url: string;
   username: string;
   name?: string;
+  /** `ytm` for YouTube Music. */
+  kind?: "ytm";
   /** base64 of safeStorage.encryptStringAsync(password). */
   blob: string;
 }
@@ -27,6 +38,7 @@ interface KnownCredential {
   url: string;
   username: string;
   name?: string;
+  kind?: "ytm";
   password: string;
   blob?: string;
 }
@@ -75,8 +87,14 @@ export class ServerCredentialStore {
   private undecryptable = new Map<string, StoredCredential>();
   /** Passwords entered this session when OS encryption isn't available. */
   private volatile = new Map<string, string>();
-  /** Set by a RemoveServer on its way to the core; the next ServersChanged may then prune. */
+  /** Set by a RemoveAccount on its way to the core; the next AccountsChanged may then prune. */
   private removalPending = false;
+  /**
+   * Credentials the core hasn't listed yet: loaded from disk (replayed at
+   * startup) or just remembered. An AccountsChanged that predates their
+   * AddAccount must not prune them; only one after a RemoveAccount may.
+   */
+  private unconfirmed = new Set<string>();
 
   private constructor(
     private readonly path: string,
@@ -101,14 +119,22 @@ export class ServerCredentialStore {
     return this.usable ? "os" : "volatile";
   }
 
-  static key(url: string, username: string): string {
-    return `${url.replace(/\/+$/, "").toLowerCase()}|${username}`;
+  /** Credentials are keyed by the account they sign in (the core's `AccountId`). */
+  static key(url: string, username: string, kind?: "ytm"): string {
+    return kind === "ytm" ? YTM_KEY : accountIdFor(url, username);
   }
 
   /** Observe commands on their way to the core. */
   intercept(command: Command): void {
-    if (command.type === "addServer") void this.remember(command.data.url, command.data.username, command.data.password, command.data.name);
-    if (command.type === "removeServer") {
+    if (command.type === "addAccount" && command.data.setup.type === "navidrome") {
+      const s = command.data.setup.data;
+      void this.remember(s.url, s.username, s.password, s.name);
+    }
+    if (command.type === "addAccount" && command.data.setup.type === "youtubeMusic") {
+      // This device's YouTube Music: signed in (its cookies) or anonymous ("").
+      void this.remember(YTM_URL, "", command.data.setup.data.cookies ?? "", undefined, "ytm");
+    }
+    if (command.type === "removeAccount") {
       // Server ids are core-assigned; we don't know the mapping, so the
       // removal is applied by retainOnly() once ServersChanged arrives.
       this.removalPending = true;
@@ -116,8 +142,8 @@ export class ServerCredentialStore {
   }
 
   /** Resolves once the password is on disk, or known not to be going there. Never rejects. */
-  async remember(url: string, username: string, password: string, name?: string): Promise<void> {
-    const key = ServerCredentialStore.key(url, username);
+  async remember(url: string, username: string, password: string, name?: string, kind?: "ytm"): Promise<void> {
+    const key = ServerCredentialStore.key(url, username, kind);
     // Whatever was persisted for this server is stale now: never replay an
     // old password on the next start because the new one couldn't be stored.
     const hadBlob = this.known.get(key)?.blob !== undefined || this.undecryptable.has(key);
@@ -126,11 +152,13 @@ export class ServerCredentialStore {
     if (!this.usable) {
       console.warn("[credentials] OS encryption unavailable; password kept in memory for this session only");
       this.volatile.set(key, password);
+      this.unconfirmed.add(key);
       if (hadBlob) this.flush();
       return;
     }
     this.volatile.delete(key);
-    const entry: KnownCredential = { url, username, name, password };
+    this.unconfirmed.add(key);
+    const entry: KnownCredential = { url, username, name, password, kind };
     this.known.set(key, entry);
     // Off disk now, not once the new blob lands: a quit in between must not replay the old password.
     if (hadBlob) this.flush();
@@ -152,15 +180,20 @@ export class ServerCredentialStore {
   }
 
   /**
-   * Keep only servers the core still knows about. An empty list is honoured
-   * only after a RemoveServer: the core also emits an empty ServersChanged
-   * with Started when its server table couldn't be read, and that must not
+   * Keep only accounts the core still knows about. An empty list is honoured
+   * only after a RemoveAccount: the core also emits an empty AccountsChanged
+   * with Started when its account table couldn't be read, and that must not
    * log the user out.
    */
-  retainOnly(servers: { url: string; username: string }[]): void {
-    if (!servers.length && !this.removalPending) return;
+  retainOnly(accounts: { id: string; kind?: string }[]): void {
+    if (!accounts.length && !this.removalPending) return;
+    const removalPending = this.removalPending;
     this.removalPending = false;
-    const keep = new Set(servers.map((s) => ServerCredentialStore.key(s.url, s.username)));
+    const keep = new Set(accounts.map((s) => s.id));
+    if (accounts.some((a) => a.kind === "youtubeMusic")) keep.add(YTM_KEY);
+    for (const key of [...this.unconfirmed]) if (keep.has(key)) this.unconfirmed.delete(key);
+    if (removalPending) this.unconfirmed.clear();
+    else for (const key of this.unconfirmed) keep.add(key);
     let dropped = false;
     for (const map of [this.known, this.undecryptable])
       for (const key of [...map.keys()])
@@ -178,9 +211,13 @@ export class ServerCredentialStore {
     return this.volatile.get(key) ?? this.known.get(key)?.password;
   }
 
-  /** AddServer commands to replay at startup. */
+  /** AddAccount commands to replay at startup. */
   replayCommands(): Command[] {
-    return [...this.known.values()].map((e) => ({ type: "addServer", data: { url: e.url, username: e.username, password: e.password, name: e.name } }));
+    return [...this.known.values()].map((e): Command =>
+      e.kind === "ytm"
+        ? { type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: e.password || undefined, js_host: true } } } }
+        : { type: "addAccount", data: { setup: { type: "navidrome", data: { url: e.url, username: e.username, password: e.password, name: e.name } } } },
+    );
   }
 
   hasAny(): boolean {
@@ -204,7 +241,7 @@ export class ServerCredentialStore {
           console.error(`[credentials] couldn't decrypt credential for ${e.url}; it will need to be re-entered`, err);
           return e;
         }
-        const known: KnownCredential = { url: e.url, username: e.username, name: e.name, password: decryption.result, blob: e.blob };
+        const known: KnownCredential = { url: e.url, username: e.username, name: e.name, kind: e.kind, password: decryption.result, blob: e.blob };
         // The OS rotated the key, or offers a better one: store the blob it would write now.
         if (decryption.shouldReEncrypt && this.usable) {
           try {
@@ -218,9 +255,11 @@ export class ServerCredentialStore {
       }),
     );
     for (const e of decrypted) {
-      const key = ServerCredentialStore.key(e.url, e.username);
-      if ("password" in e) this.known.set(key, e);
-      else this.undecryptable.set(key, e);
+      const key = ServerCredentialStore.key(e.url, e.username, e.kind);
+      if ("password" in e) {
+        this.known.set(key, e);
+        this.unconfirmed.add(key);
+      } else this.undecryptable.set(key, e);
     }
     if (reEncrypted) this.flush();
   }
@@ -228,7 +267,7 @@ export class ServerCredentialStore {
   /** Writes the credentials whose encryption has landed, and those that wouldn't decrypt. */
   private flush(): void {
     const entries: StoredCredential[] = [...this.undecryptable.values()];
-    for (const e of this.known.values()) if (e.blob !== undefined) entries.push({ url: e.url, username: e.username, name: e.name, blob: e.blob });
+    for (const e of this.known.values()) if (e.blob !== undefined) entries.push({ url: e.url, username: e.username, name: e.name, kind: e.kind, blob: e.blob });
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       const tmp = `${this.path}.tmp`;

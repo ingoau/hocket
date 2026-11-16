@@ -3,7 +3,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
 import type { RoomDiagnosticsStatus } from "@core/api";
-import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, SetupLinkRequest, SetupLinkResult, StagedScreenshot, UndecodedImage, ThemeChoice, WindowControl, WindowState } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, StagedScreenshot, UndecodedImage, ThemeChoice, WindowControl, WindowState, YtmSignInResult } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -58,11 +58,14 @@ const bridge: HocketBridge = {
     saveText: (req: SaveDialogRequest & { text: string }) => ipcRenderer.invoke(IPC.dialogSaveText, req) as Promise<string | undefined>,
     openText: (req: OpenDialogRequest) => ipcRenderer.invoke(IPC.dialogOpenText, req) as Promise<OpenedTextFile | undefined>,
   },
+  ytm: {
+    signIn: () => ipcRenderer.invoke(IPC.ytmSignIn) as Promise<YtmSignInResult>,
+    signInCoordinator: () => ipcRenderer.invoke(IPC.ytmSignInCoordinator) as Promise<YtmSignInResult>,
+  },
   config: {
     export: (document: string) => ipcRenderer.invoke(IPC.configExport, document) as Promise<string | undefined>,
     import: () => ipcRenderer.invoke(IPC.configImport) as Promise<boolean>,
   },
-  setupLink: (req: SetupLinkRequest) => ipcRenderer.invoke(IPC.setupLink, req) as Promise<SetupLinkResult>,
   clipboard: {
     writeText: (text: string) => ipcRenderer.send(IPC.clipboardWrite, text),
   },

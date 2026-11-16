@@ -5,7 +5,7 @@ import { GROUP_END, applyMove, dropSlot, insertAnchor, insertTracksCommand, libr
 
 describe("parseLibraryTarget", () => {
   it("reads a tracks, albums, artists or playlists target", () => {
-    expect(parseLibraryTarget(JSON.stringify({ type: "tracks", data: { ids: ["a", "b"] } }))).toEqual({ type: "tracks", data: { ids: ["a", "b"] } });
+    expect(parseLibraryTarget(JSON.stringify({ type: "tracks", data: { tracks: [{ source: "s", id: "a" }] } }))).toEqual({ type: "tracks", data: { tracks: [{ source: "s", id: "a" }] } });
     expect(parseLibraryTarget(JSON.stringify({ type: "albums", data: { ids: ["al"] } }))).toEqual({ type: "albums", data: { ids: ["al"] } });
     expect(parseLibraryTarget(JSON.stringify({ type: "artists", data: { ids: ["ar"] } }))).toEqual({ type: "artists", data: { ids: ["ar"] } });
     expect(parseLibraryTarget(JSON.stringify({ type: "playlists", data: { ids: ["pl"] } }))).toEqual({ type: "playlists", data: { ids: ["pl"] } });
@@ -13,8 +13,8 @@ describe("parseLibraryTarget", () => {
 
   it("drops queue items, empty lists, and junk", () => {
     expect(parseLibraryTarget(JSON.stringify({ type: "queueItems", data: { keys: ["k"] } }))).toBeUndefined();
-    expect(parseLibraryTarget(JSON.stringify({ type: "tracks", data: { ids: [] } }))).toBeUndefined();
-    expect(parseLibraryTarget(JSON.stringify({ type: "tracks", data: { ids: [1] } }))).toBeUndefined();
+    expect(parseLibraryTarget(JSON.stringify({ type: "tracks", data: { tracks: [] } }))).toBeUndefined();
+    expect(parseLibraryTarget(JSON.stringify({ type: "tracks", data: { tracks: [1] } }))).toBeUndefined();
     expect(parseLibraryTarget("not json")).toBeUndefined();
   });
 });
@@ -125,7 +125,7 @@ describe("stepMove", () => {
 });
 
 const entry = (key: string, queued = false): QueueEntry => ({
-  item: { key, trackId: `t-${key}`, source: { type: "context", data: { index: 0 } }, queued },
+  item: { key, track: { source: "s", id: `t-${key}` }, source: { type: "context", data: { index: 0 } }, queued },
   track: { id: `t-${key}`, serverId: "s", title: key, durationMs: 1, rating: 0, loved: false, offline: "none" },
 });
 
@@ -187,9 +187,9 @@ describe("libraryDropPlan", () => {
 
 describe("insertTracksCommand", () => {
   it("inserts every resolved song at once at a mid-list slot", () => {
-    const ids = Array.from({ length: 150 }, (_, i) => `lib${i}`);
-    const cmd = insertTracksCommand(view(2, 148, 100), "s1", ids, { after: "r40", in_group: false });
-    expect(cmd).toEqual({ type: "insertTracks", data: { server_id: "s1", track_ids: ids, after: "r40", in_group: false } });
+    const refs = Array.from({ length: 150 }, (_, i) => ({ source: "s1", id: `lib${i}` }));
+    const cmd = insertTracksCommand(view(2, 148, 100), refs, { after: "r40", in_group: false });
+    expect(cmd).toEqual({ type: "insertTracks", data: { tracks: refs, after: "r40", in_group: false } });
   });
 
   it("falls back to the top when the slot's entry has gone into history, and does nothing without songs", () => {
@@ -198,14 +198,14 @@ describe("insertTracksCommand", () => {
     expect(insertAnchor(moved, "c")).toBe("g0");
     expect(insertAnchor(moved, "r1")).toBe("r1");
     expect(insertAnchor(moved, "unloaded")).toBe("unloaded");
-    expect(insertTracksCommand(moved, "s1", ["x"], { after: "h0", in_group: true })).toEqual({ type: "insertTracks", data: { server_id: "s1", track_ids: ["x"], after: "g0", in_group: true } });
-    expect(insertTracksCommand(moved, "s1", [], { after: "r1", in_group: false })).toBeUndefined();
+    expect(insertTracksCommand(moved, [{ source: "s1", id: "x" }], { after: "h0", in_group: true })).toEqual({ type: "insertTracks", data: { tracks: [{ source: "s1", id: "x" }], after: "g0", in_group: true } });
+    expect(insertTracksCommand(moved, [], { after: "r1", in_group: false })).toBeUndefined();
   });
 });
 
 describe("previewMoves", () => {
   const entry = (key: string, inGroup = false): QueueEntry => ({
-    item: { key, trackId: `t-${key}`, source: { type: "context", data: { index: 0 } } },
+    item: { key, track: { source: "s", id: `t-${key}` }, source: { type: "context", data: { index: 0 } } },
     track: { id: `t-${key}`, serverId: "s", title: key, durationMs: 1, rating: 0, loved: false, offline: "none" },
     ...(inGroup ? { inGroup: true } : {}),
   });

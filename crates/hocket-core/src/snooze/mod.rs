@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use crate::api::{ContextKind, EpochMs, Snooze, SnoozeFor, SnoozeItem, Track, TrackId};
+use crate::api::{ContextKind, EpochMs, Snooze, SnoozeFor, SnoozeItem, Track, TrackRef};
 
 /// How long a removed entry is remembered. Matches the stash: the coordinator's replica lives as long.
 pub const TOMBSTONE_TTL_MS: EpochMs = 30.0 * 24.0 * 3600.0 * 1000.0;
@@ -57,7 +57,7 @@ pub fn merge(ours: &[Snooze], theirs: &[Snooze]) -> (Vec<Snooze>, bool) {
     let mut merged = ours.to_vec();
     let mut changed = false;
     for t in theirs {
-        match merged.iter_mut().find(|m| m.track_id == t.track_id) {
+        match merged.iter_mut().find(|m| m.track == t.track) {
             Some(m) => {
                 if wins(t, m) {
                     *m = t.clone();
@@ -99,11 +99,11 @@ fn tombstone_from(entry: &Snooze) -> EpochMs {
 }
 
 /// Track ids snoozed at `now`, in a stable order.
-pub fn active_ids(entries: &[Snooze], now: EpochMs) -> Vec<TrackId> {
-    let mut ids: Vec<TrackId> = entries
+pub fn active_ids(entries: &[Snooze], now: EpochMs) -> Vec<TrackRef> {
+    let mut ids: Vec<TrackRef> = entries
         .iter()
         .filter(|e| is_live(e, now))
-        .map(|e| e.track_id.clone())
+        .map(|e| e.track.clone())
         .collect();
     ids.sort();
     ids
@@ -111,36 +111,36 @@ pub fn active_ids(entries: &[Snooze], now: EpochMs) -> Vec<TrackId> {
 
 /// What a track's snooze is at `now`: absent when it isn't snoozed, otherwise its end
 /// (`None` inside means it doesn't end).
-pub fn state_of(entries: &[Snooze], track_id: &str, now: EpochMs) -> Option<Option<EpochMs>> {
+pub fn state_of(entries: &[Snooze], track: &TrackRef, now: EpochMs) -> Option<Option<EpochMs>> {
     entries
         .iter()
-        .find(|e| e.track_id == track_id && is_live(e, now))
+        .find(|e| &e.track == track && is_live(e, now))
         .map(|e| e.until)
 }
 
 /// Snooze `track_id` until `until` (`None` means it doesn't end). Returns whether the live state changed.
 pub fn set(
     entries: &mut Vec<Snooze>,
-    track_id: &str,
+    track: &TrackRef,
     until: Option<EpochMs>,
     now: EpochMs,
 ) -> bool {
-    let live = state_of(entries, track_id, now);
+    let live = state_of(entries, track, now);
     if live == Some(until) {
         return false;
     }
     let at = entries
         .iter()
-        .find(|e| e.track_id == track_id)
+        .find(|e| &e.track == track)
         .map(|e| bump(e.updated_at, now))
         .unwrap_or(now);
-    if let Some(e) = entries.iter_mut().find(|e| e.track_id == track_id) {
+    if let Some(e) = entries.iter_mut().find(|e| &e.track == track) {
         e.until = until;
         e.removed = false;
         e.updated_at = at;
     } else {
         entries.push(Snooze {
-            track_id: track_id.to_string(),
+            track: track.clone(),
             until,
             updated_at: at,
             removed: false,
@@ -150,16 +150,16 @@ pub fn set(
 }
 
 /// Unsnooze `track_id`. Returns whether it was snoozed.
-pub fn clear(entries: &mut [Snooze], track_id: &str, now: EpochMs) -> bool {
-    if state_of(entries, track_id, now).is_none() {
+pub fn clear(entries: &mut [Snooze], track: &TrackRef, now: EpochMs) -> bool {
+    if state_of(entries, track, now).is_none() {
         return false;
     }
     let at = entries
         .iter()
-        .find(|e| e.track_id == track_id)
+        .find(|e| &e.track == track)
         .map(|e| bump(e.updated_at, now))
         .unwrap_or(now);
-    if let Some(e) = entries.iter_mut().find(|e| e.track_id == track_id) {
+    if let Some(e) = entries.iter_mut().find(|e| &e.track == track) {
         e.removed = true;
         e.updated_at = at;
     }
@@ -185,18 +185,18 @@ pub fn leaves_out(kind: &ContextKind) -> bool {
 /// listener picked: it stays, and the index is moved to wherever it lands. When that would leave
 /// nothing (every song snoozed, and they didn't pick one), the list plays as it is.
 pub fn filter_context(
-    tracks: &[TrackId],
+    tracks: &[TrackRef],
     kind: &ContextKind,
     start: Option<u32>,
-    snoozed: &HashSet<TrackId>,
-) -> (Vec<TrackId>, Option<u32>) {
+    snoozed: &HashSet<TrackRef>,
+) -> (Vec<TrackRef>, Option<u32>) {
     if !leaves_out(kind) || tracks.is_empty() || snoozed.is_empty() {
         return (tracks.to_vec(), start);
     }
     let keep_at = start
         .filter(|i| (*i as usize) < tracks.len())
         .map(|i| i as usize);
-    let filtered: Vec<TrackId> = tracks
+    let filtered: Vec<TrackRef> = tracks
         .iter()
         .enumerate()
         .filter(|(i, id)| Some(*i) == keep_at || !snoozed.contains(*id))
@@ -220,7 +220,7 @@ pub fn filter_context(
 pub fn items(
     entries: &[Snooze],
     now: EpochMs,
-    lookup: impl Fn(&[TrackId]) -> Vec<Track>,
+    lookup: impl Fn(&[TrackRef]) -> Vec<Track>,
 ) -> Vec<SnoozeItem> {
     let mut live: Vec<&Snooze> = entries.iter().filter(|e| is_live(e, now)).collect();
     live.sort_by(|a, b| {
@@ -230,23 +230,24 @@ pub fn items(
             (None, Some(_)) => std::cmp::Ordering::Greater,
             (None, None) => std::cmp::Ordering::Equal,
         }
-        .then_with(|| a.track_id.cmp(&b.track_id))
+        .then_with(|| a.track.cmp(&b.track))
     });
-    let ids: Vec<TrackId> = live.iter().map(|e| e.track_id.clone()).collect();
+    let ids: Vec<TrackRef> = live.iter().map(|e| e.track.clone()).collect();
     let found = lookup(&ids);
     live.into_iter()
         .map(|e| {
             let track = found
                 .iter()
-                .find(|t| t.id == e.track_id)
+                .find(|t| t.id == e.track.id && t.server_id == e.track.source)
                 .cloned()
                 .unwrap_or_else(|| Track {
-                    id: e.track_id.clone(),
-                    title: e.track_id.clone(),
+                    id: e.track.id.clone(),
+                    server_id: e.track.source.clone(),
+                    title: e.track.id.clone(),
                     ..Track::default()
                 });
             SnoozeItem {
-                track_id: e.track_id.clone(),
+                track_ref: e.track.clone(),
                 until: e.until,
                 track,
             }
@@ -258,12 +259,12 @@ pub fn items(
 mod tests {
     use super::*;
 
-    fn ids(v: &[&str]) -> Vec<TrackId> {
-        v.iter().map(|s| s.to_string()).collect()
+    fn ids(v: &[&str]) -> Vec<TrackRef> {
+        v.iter().map(|s| TrackRef::from(*s)).collect()
     }
 
-    fn set_of(v: &[&str]) -> HashSet<TrackId> {
-        v.iter().map(|s| s.to_string()).collect()
+    fn set_of(v: &[&str]) -> HashSet<TrackRef> {
+        v.iter().map(|s| TrackRef::from(*s)).collect()
     }
 
     fn kind_playlist() -> ContextKind {
@@ -282,14 +283,14 @@ mod tests {
     #[test]
     fn an_expired_snooze_is_ignored_and_then_dropped() {
         let mut entries = vec![Snooze {
-            track_id: "t".into(),
+            track: "t".into(),
             until: Some(50.0),
             updated_at: 1.0,
             removed: false,
         }];
         assert!(is_live(&entries[0], 49.0));
         assert!(!is_live(&entries[0], 50.0));
-        assert!(active_ids(&entries, 49.0).contains(&"t".to_string()));
+        assert!(active_ids(&entries, 49.0).contains(&"t".into()));
         assert!(active_ids(&entries, 50.0).is_empty());
         prune(&mut entries, 50.0);
         assert!(entries[0].removed, "ended snooze stays as a tombstone");
@@ -299,14 +300,14 @@ mod tests {
     #[test]
     fn an_ended_snooze_is_not_brought_back_by_an_older_copy() {
         let mut local = vec![Snooze {
-            track_id: "t".into(),
+            track: "t".into(),
             until: Some(100.0),
             updated_at: 20.0,
             removed: false,
         }];
         prune(&mut local, 100.0);
         let stale = Snooze {
-            track_id: "t".into(),
+            track: "t".into(),
             until: None,
             updated_at: 10.0,
             removed: false,
@@ -314,7 +315,7 @@ mod tests {
         let (mut merged, _) = merge(&local, &[stale]);
         prune(&mut merged, 100.0);
         assert!(active_ids(&merged, 100.0).is_empty());
-        assert!(merged.iter().any(|e| e.track_id == "t" && e.removed));
+        assert!(merged.iter().any(|e| e.track == "t" && e.removed));
     }
 
     #[test]
@@ -322,7 +323,7 @@ mod tests {
         let set_at = 0.0;
         let until = set_at + 30.0 * DAY_MS;
         let mut local = vec![Snooze {
-            track_id: "t".into(),
+            track: "t".into(),
             until: Some(until),
             updated_at: set_at,
             removed: false,
@@ -332,7 +333,7 @@ mod tests {
         let prune_at = set_at + 31.0 * DAY_MS;
         prune(&mut local, prune_at);
         assert!(
-            local.iter().any(|e| e.track_id == "t" && e.removed),
+            local.iter().any(|e| e.track == "t" && e.removed),
             "the ended month stays as a tombstone"
         );
         assert_eq!(
@@ -340,7 +341,7 @@ mod tests {
             "the clock is not moved forward"
         );
         let stale = Snooze {
-            track_id: "t".into(),
+            track: "t".into(),
             until: None,
             updated_at: set_at - 1.0,
             removed: false,
@@ -349,13 +350,16 @@ mod tests {
         assert!(active_ids(&merged, prune_at).is_empty());
         // A newer snooze from another device still wins.
         let again = Snooze {
-            track_id: "t".into(),
+            track: "t".into(),
             until: None,
             updated_at: prune_at,
             removed: false,
         };
         let (merged, _) = merge(&local, &[again]);
-        assert_eq!(state_of(&merged, "t", prune_at), Some(None));
+        assert_eq!(
+            state_of(&merged, &crate::api::TrackRef::from("t"), prune_at),
+            Some(None)
+        );
     }
 
     #[test]
@@ -369,11 +373,22 @@ mod tests {
     #[test]
     fn an_indefinite_snooze_stays_until_it_is_cleared() {
         let mut entries = vec![];
-        assert!(set(&mut entries, "t", None, 10.0));
-        assert_eq!(state_of(&entries, "t", 1.0e15), Some(None));
-        assert!(clear(&mut entries, "t", 20.0));
-        assert_eq!(state_of(&entries, "t", 20.0), None);
-        assert!(!clear(&mut entries, "t", 21.0));
+        assert!(set(
+            &mut entries,
+            &crate::api::TrackRef::from("t"),
+            None,
+            10.0
+        ));
+        assert_eq!(
+            state_of(&entries, &crate::api::TrackRef::from("t"), 1.0e15),
+            Some(None)
+        );
+        assert!(clear(&mut entries, &crate::api::TrackRef::from("t"), 20.0));
+        assert_eq!(
+            state_of(&entries, &crate::api::TrackRef::from("t"), 20.0),
+            None
+        );
+        assert!(!clear(&mut entries, &crate::api::TrackRef::from("t"), 21.0));
         // The tombstone remains, so a stale copy can't bring it back.
         assert_eq!(entries.len(), 1);
         assert!(entries[0].removed);
@@ -382,13 +397,13 @@ mod tests {
     #[test]
     fn the_later_write_wins_and_a_tie_prefers_the_removal() {
         let snoozed = Snooze {
-            track_id: "t".into(),
+            track: "t".into(),
             until: Some(100.0),
             updated_at: 5.0,
             removed: false,
         };
         let cleared = Snooze {
-            track_id: "t".into(),
+            track: "t".into(),
             until: Some(100.0),
             updated_at: 5.0,
             removed: true,
@@ -408,13 +423,13 @@ mod tests {
     #[test]
     fn concurrent_snoozes_of_different_songs_both_survive() {
         let a = Snooze {
-            track_id: "a".into(),
+            track: "a".into(),
             until: None,
             updated_at: 1.0,
             removed: false,
         };
         let b = Snooze {
-            track_id: "b".into(),
+            track: "b".into(),
             until: Some(9.0),
             updated_at: 2.0,
             removed: false,

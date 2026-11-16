@@ -71,8 +71,9 @@ class CoreClient(
     val kind: CoreKind get() = core.kind
 
     // -- snapshot pieces ---------------------------------------------------------------------------
-    private val _servers = MutableStateFlow<List<ServerInfo>>(emptyList())
-    val servers: StateFlow<List<ServerInfo>> = _servers.asStateFlow()
+    private val _servers = MutableStateFlow<List<AccountInfo>>(emptyList())
+    /** Every account, highest priority first. */
+    val accounts: StateFlow<List<AccountInfo>> = _servers.asStateFlow()
     private val _session = MutableStateFlow<SessionDocument?>(null)
     val session: StateFlow<SessionDocument?> = _session.asStateFlow()
     private val _queue = MutableStateFlow(emptyQueue())
@@ -107,6 +108,24 @@ class CoreClient(
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
     private val _devices = MutableStateFlow<List<DeviceInfo>>(emptyList())
     val devices: StateFlow<List<DeviceInfo>> = _devices.asStateFlow()
+    private val _identity = MutableStateFlow(IdentityInfo(id = "", deviceId = "", devices = emptyList(), removed = false, credentialSync = false))
+    /** This device's Hocket identity: its devices, credential sync, the coordinator. */
+    val identity: StateFlow<IdentityInfo> = _identity.asStateFlow()
+    private val _pairingInvite = MutableStateFlow<EventPairingInviteInner?>(null)
+    /** The pairing invite this device shows (Add a device), until it is used or replaced. */
+    val pairingInvite: StateFlow<EventPairingInviteInner?> = _pairingInvite.asStateFlow()
+    private val _coordinatorInvites = MutableStateFlow<EventCoordinatorInvitesInner?>(null)
+    /** The coordinator's invites (owner only), with the code just made. */
+    val coordinatorInvites: StateFlow<EventCoordinatorInvitesInner?> = _coordinatorInvites.asStateFlow()
+    private val _coordinatorYtm = MutableStateFlow<EventCoordinatorYtmStatusInner?>(null)
+    /** The coordinator's YouTube Music analysis (owner only), once asked: on, signed in as, a refusal. */
+    val coordinatorYtm: StateFlow<EventCoordinatorYtmStatusInner?> = _coordinatorYtm.asStateFlow()
+    private val _identityEvents = MutableSharedFlow<Event>(extraBufferCapacity = 8)
+    /**
+     * Pairing and coordinator answers as they arrive: `DevicePaired`, `PairingFinished`,
+     * `PairingFailed`, `CredentialsSynced`, `CoordinatorJoined`, `CoordinatorFailed`.
+     */
+    val identityEvents: SharedFlow<Event> = _identityEvents.asSharedFlow()
     private val _handoff = MutableStateFlow(HandoffPicker())
     val handoffPicker: StateFlow<HandoffPicker> = _handoff.asStateFlow()
     private val _jobs = MutableStateFlow<List<Job>>(emptyList())
@@ -222,8 +241,8 @@ class CoreClient(
     val actionsChanged: SharedFlow<String> = _actionsChanged.asSharedFlow()
 
     // -- derived -----------------------------------------------------------------------------------
-    /** The single configured server (multi-server has no UI yet). */
-    val server: StateFlow<ServerInfo?> = _servers.mapState(scope) { it.firstOrNull() }
+    /** The first account: the session's, and the one list queries name for the unified library. */
+    val server: StateFlow<AccountInfo?> = _servers.mapState(scope) { it.firstOrNull() }
     val isPlaying: StateFlow<Boolean> = _transport.mapState(scope) { it.position.isPlaying }
     /** Buffering only: the mini player should not recompose on every transport stamp. */
     val buffering: StateFlow<Boolean> = _transport.mapState(scope) { it.buffering }
@@ -339,11 +358,31 @@ class CoreClient(
 
     private fun unavailable(): Nothing = throw IllegalStateException("the core did not answer")
 
+    /**
+     * The source filter chip: the account the library lists, search and playlists show ("" for
+     * every account, [app.hocket.core.MIXED_SOURCE] for the Mixed playlists). This device's own.
+     */
+    val librarySource = MutableStateFlow("")
+
     // -- selection ---------------------------------------------------------------------------------
     private val _selection = MutableStateFlow(Selection())
     val selection: StateFlow<Selection> = _selection.asStateFlow()
     private val _selectionKind = MutableStateFlow(SelectionKind.Tracks)
     val selectionKind: StateFlow<SelectionKind> = _selectionKind.asStateFlow()
+
+    /** Selected songs' references by id: the selection lists ids, commands name references. */
+    private val selectedRefs = mutableMapOf<String, TrackRef>()
+
+    /** Toggle a song in the selection (it remembers the song's account). */
+    fun toggleSelected(track: TrackRef) {
+        selectedRefs[track.id] = track
+        toggleSelected(SelectionKind.Tracks, track.id)
+    }
+
+    private fun trackRefs(ids: List<String>): List<TrackRef> {
+        val fallback = accounts.value.firstOrNull()?.id.orEmpty()
+        return ids.map { selectedRefs[it] ?: TrackRef(fallback, it) }
+    }
 
     fun toggleSelected(kind: SelectionKind, id: String) {
         if (_selectionKind.value != kind && _selection.value.active) clearSelection()
@@ -372,7 +411,7 @@ class CoreClient(
         val sel = _selection.value
         val ids = sel.ids.toList()
         val target = if (!sel.active) ActionTarget.None else when (_selectionKind.value) {
-            SelectionKind.Tracks -> Commands.tracks(ids)
+            SelectionKind.Tracks -> Commands.tracks(trackRefs(ids))
             SelectionKind.Albums -> Commands.albums(ids)
             SelectionKind.Artists -> Commands.artists(ids)
             SelectionKind.Playlists -> Commands.playlists(ids)
@@ -385,7 +424,7 @@ class CoreClient(
     fun selectionTarget(): ActionTarget {
         val ids = _selection.value.ids.toList()
         return when (_selectionKind.value) {
-            SelectionKind.Tracks -> Commands.tracks(ids)
+            SelectionKind.Tracks -> Commands.tracks(trackRefs(ids))
             SelectionKind.Albums -> Commands.albums(ids)
             SelectionKind.Artists -> Commands.artists(ids)
             SelectionKind.Playlists -> Commands.playlists(ids)
@@ -425,6 +464,12 @@ class CoreClient(
     }
 
     fun dispatch(command: Command) = core.dispatch(command)
+
+    /** Asks for a new pairing invite; the previous one is gone until it arrives (never shown again). */
+    fun createPairingInvite() {
+        _pairingInvite.value = null
+        core.dispatch(Command.CreatePairingInvite)
+    }
 
     /** Saves a report on the coordinator (`docs/reports.md`); progress arrives on [reportUpload]. */
     fun startReportUpload(note: String, bundle: String, attachments: List<ReportAttachment>) =
@@ -523,7 +568,8 @@ class CoreClient(
         (query(Queries.actions(surface, target)) as? QueryResult.Actions)?.data ?: emptyList()
 
     fun applySnapshot(s: Snapshot) {
-        _servers.value = s.servers
+        _servers.value = s.accounts
+        _identity.value = s.identity
         _session.value = s.session
         setQueue(s.queue)
         clockTransport = s.transport
@@ -551,7 +597,16 @@ class CoreClient(
             // `Started` once per core; `Snapshot` on every RequestSnapshot (UI attach, service reconnect).
             is Event.Started -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
             is Event.Snapshot -> { applySnapshot(event.data.snapshot); refreshReportUpload(); refreshStash(); refreshSnoozes() }
-            is Event.ServersChanged -> _servers.value = event.data.servers
+            is Event.AccountsChanged -> _servers.value = event.data.accounts
+            is Event.IdentityChanged -> _identity.value = event.data.identity
+            is Event.PairingInvite -> _pairingInvite.value = event.data
+            is Event.CoordinatorInvites -> _coordinatorInvites.value = event.data
+            is Event.CoordinatorYtmStatus -> _coordinatorYtm.value = event.data
+            is Event.DevicePaired -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
+            // A failed invite leaves no stale one up (a failed join has none to show either).
+            is Event.PairingFailed -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
+            is Event.PairingFinished, is Event.CredentialsSynced,
+            is Event.CoordinatorJoined, is Event.CoordinatorFailed -> _identityEvents.tryEmit(event)
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {
                 val sid = event.data.server_id
@@ -641,6 +696,8 @@ class CoreClient(
             is Event.Backend -> Unit // consumed by the playback service
             is Event.Error -> _errors.tryEmit(event.data)
             is Event.Log -> Unit
+            // CoreHost answers the JS host (a hidden WebView); the core toasts an expired sign-in itself.
+            is Event.YtmJsRequest, is Event.YtmSignInExpired -> Unit
         }
     }
 

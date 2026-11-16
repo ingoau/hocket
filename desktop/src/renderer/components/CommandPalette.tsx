@@ -13,6 +13,7 @@ import { Icon, hasIcon } from "./Icon";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
 import { openContextMenu, openContextMenuFromKeyboard } from "./ContextMenu";
+import { refOf } from "../lib/track-ref";
 
 interface Item extends Rankable {
   icon?: string;
@@ -29,7 +30,7 @@ interface Item extends Rankable {
 export function CommandPalette() {
   const open = useApp((s) => s.paletteOpen);
   const setOpen = useApp((s) => s.setPaletteOpen);
-  const serverId = useApp((s) => s.servers[0]?.id);
+  const serverId = useApp((s) => s.accounts[0]?.id);
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
   const navigate = useApp((s) => s.navigate);
@@ -66,17 +67,16 @@ export function CommandPalette() {
     const mine = ++seq.current;
     const id = `pal-${mine}`;
     const h = setTimeout(() => {
-      void bridge().query({ type: "search", data: { server_id: serverId, query, limit: 8, include_server: false, request_id: id } }).then((r) => mine === seq.current && r.type === "search" && setResults(r.data));
+      void bridge().query({ type: "search", data: { server_id: "", query, limit: 8, include_server: false, request_id: id } }).then((r) => mine === seq.current && r.type === "search" && setResults(r.data));
     }, 60);
     return () => clearTimeout(h);
   }, [open, query, serverId, dialogOpen]);
 
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
-    const sid = serverId ?? "";
     // A slower answer for the previous letters must not stay on top of Enter.
     const found = results?.query.trim().toLowerCase() === query.trim().toLowerCase() ? results : undefined;
-    for (const tr of found?.tracks ?? []) out.push({ id: `t:${tr.id}`, trackId: tr.id, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, target: { type: "tracks", data: { ids: [tr.id] } }, run: () => bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [tr.id], start_index: 0, label: tr.title, shuffle: false } }) });
+    for (const tr of found?.tracks ?? []) out.push({ id: `t:${tr.id}`, trackId: tr.id, label: tr.title, sub: [tr.artist, tr.album].filter(Boolean).join(" · "), kind: "track", coverArt: tr.coverArt, target: { type: "tracks", data: { tracks: [refOf(tr)] } }, run: () => bridge().dispatch({ type: "playTracks", data: { tracks: [refOf(tr)], start_index: 0, label: tr.title, shuffle: false } }) });
     for (const hit of found?.lyrics ?? []) out.push({
       id: `ly:${hit.track.id}`,
       trackId: hit.track.id,
@@ -84,10 +84,10 @@ export function CommandPalette() {
       sub: hit.line.split("\n").join(" "),
       kind: "track",
       coverArt: hit.track.coverArt,
-      target: { type: "tracks", data: { ids: [hit.track.id] } },
+      target: { type: "tracks", data: { tracks: [refOf(hit.track)] } },
       lyric: { line: hit.line, start: hit.matchStart, end: hit.matchEnd },
       run: () => {
-        bridge().dispatch({ type: "playTracks", data: { server_id: sid, track_ids: [hit.track.id], start_index: 0, label: hit.track.title, shuffle: false, start_position_ms: hit.startMs ?? 0 } });
+        bridge().dispatch({ type: "playTracks", data: { tracks: [refOf(hit.track)], start_index: 0, label: hit.track.title, shuffle: false, start_position_ms: hit.startMs ?? 0 } });
       },
     });
     for (const al of found?.albums ?? []) out.push({ id: `al:${al.id}`, label: al.name, sub: al.artist, kind: "album", coverArt: al.coverArt, target: { type: "albums", data: { ids: [al.id] } }, run: () => navigate({ view: "album", id: al.id }) });

@@ -149,7 +149,7 @@ impl Actor {
     fn prefetch_allowed(&self) -> bool {
         if self.cfg.platform == Platform::Coordinator
             || self.stream_reader.is_none()
-            || self.api().is_none()
+            || !self.any_provider()
             || !self.owns_transport()
             || self.shutting_down
             // A remote renderer fetches its own audio: nothing here would read the cache.
@@ -179,12 +179,12 @@ impl Actor {
         if doc.repeat == RepeatMode::One {
             return vec![];
         }
-        let current = doc.current.as_ref().map(|i| i.track_id.clone());
-        let items: Vec<TrackId> = doc
+        let current = doc.current.as_ref().map(|i| i.track.clone());
+        let items: Vec<TrackRef> = doc
             .upcoming
             .iter()
-            .filter(|i| !i.unavailable && Some(&i.track_id) != current.as_ref())
-            .map(|i| i.track_id.clone())
+            .filter(|i| !i.unavailable && Some(&i.track) != current.as_ref())
+            .map(|i| i.track.clone())
             .take(PREFETCH_AHEAD)
             .collect();
         let share = self.downloads.cache_budget() * PREFETCH_BUDGET_SHARE;
@@ -221,7 +221,7 @@ impl Actor {
         ) {
             return Some(0.0);
         }
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         match self
             .downloads
             .cache_lookup(&track.server_id, &track.id, profile.as_ref(), false)
@@ -239,7 +239,7 @@ impl Actor {
         ) {
             return false;
         }
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         !matches!(
             self.downloads
                 .cache_lookup(&track.server_id, &track.id, profile.as_ref(), false),
@@ -250,7 +250,7 @@ impl Actor {
     /// Rough bytes a fetch of the track will write.
     fn prefetch_estimate(&self, track: &Track) -> f64 {
         let seconds = f64::from(track.duration_ms) / 1000.0;
-        let profile = self.downloads.effective_profile(track.suffix.as_deref());
+        let profile = self.downloads.track_profile(track);
         if let Some(kbps) = profile.as_ref().and_then(|p| p.max_bit_rate) {
             return f64::from(kbps) * 1000.0 / 8.0 * seconds;
         }
@@ -283,7 +283,7 @@ impl Actor {
         if self.prefetch.running.is_some() {
             return;
         }
-        for (_, id) in targets {
+        for (sid, id) in targets {
             if self
                 .prefetch
                 .failed
@@ -292,7 +292,7 @@ impl Actor {
             {
                 continue;
             }
-            let Some(track) = self.track_or_bare(&id) else {
+            let Some(track) = self.track_or_bare(&TrackRef::new(sid, id.clone())) else {
                 continue;
             };
             if !self.prefetch_needed(&track) {
@@ -317,7 +317,10 @@ impl Actor {
     /// running prime step aside. `false` when there is nothing to fetch
     /// (downloaded, no server, no reader).
     pub(crate) fn start_prefetch(&mut self, track: &Track, byte_limit: Option<u64>) -> bool {
-        let (Some(reader), Some(api)) = (self.stream_reader.clone(), self.api()) else {
+        let (Some(reader), Some(api)) = (
+            self.stream_reader.clone(),
+            self.provider_for(&track.server_id),
+        ) else {
             return false;
         };
         let source = match self.downloads.resolve_with(
@@ -382,7 +385,7 @@ impl Actor {
         // start over at once, for as long as the track stays wanted.
         let uncached = outcome == PrefetchOutcome::Done
             && self
-                .track_or_bare(&track_id)
+                .track_or_bare(&self.track_ref_of(&track_id))
                 .is_some_and(|t| self.prefetch_needed(&t));
         match outcome {
             PrefetchOutcome::Failed => self.note_prefetch_failure(&track_id, "failed"),

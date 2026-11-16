@@ -46,7 +46,7 @@ class AlbumResumeScreenshotTest {
         val core = TestCore(startPlaying = false)
         val album = core.fake.library.albums.first()
         val track = core.fake.library.albumTracks(album.id)[1]
-        core.fake.albumResumes[album.id] = AlbumResumePoint(album.id, track.id, 1u, track.durationMs / 3u, track.durationMs, 1.0)
+        core.fake.albumResumes[album.id] = AlbumResumePoint(source = "fake-server", albumId = album.id, track.id, 1u, track.durationMs / 3u, track.durationMs, 1.0)
         core.start()
         compose.setThemedContent(core) { AlbumDetailScreen(rememberNavController(), album.id) }
         compose.waitUntil(8_000) { compose.onAllNodesWithText("Resume", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }

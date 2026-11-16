@@ -63,8 +63,8 @@ use std::collections::{BTreeSet, HashSet};
 
 use crate::api::{
     AutoplayProvider, Command, ContextKind, EpochMs, Ms, PlayContextArgs, QueueContext, QueueItem,
-    QueueKey, QueueSource, QueueView, RepeatMode, SavedQueue, ServerId, SessionDocument, SortOrder,
-    TrackId, TrackSummary,
+    QueueKey, QueueSource, QueueView, RepeatMode, SavedQueue, SessionDocument, SortOrder, TrackId,
+    TrackRef, TrackSummary,
 };
 
 use super::document::{bump_revision, same_state};
@@ -100,7 +100,7 @@ pub fn previous_should_restart(position_ms: Ms) -> bool {
 /// One item handed to [`QueueOp::AppendAutoplay`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutoplayItem {
-    pub track_id: TrackId,
+    pub track: TrackRef,
     pub provider: AutoplayProvider,
     pub reason: String,
     pub score: Option<f64>,
@@ -126,8 +126,7 @@ pub enum QueueOp {
         args: PlayContextArgs,
     },
     PlayTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         start_index: u32,
         label: String,
         shuffle: bool,
@@ -139,21 +138,18 @@ pub enum QueueOp {
     /// section setting); with a group already there the entries join it
     /// regardless, so the group stays attached to the current entry.
     PlayNext {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
         queued: bool,
     },
     /// At the end of the "Next in queue" group, queued.
     AddToQueue {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
     },
     /// At the end of the list, not queued.
     PlayLater {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
     },
     /// Directly after `after` (the current entry or one ahead of the
@@ -161,8 +157,7 @@ pub enum QueueOp {
     /// [`QueueOp::MoveQueueItem`] drop. `keys` move or copy as for
     /// [`QueueOp::PlayNext`].
     InsertTracks {
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
         after: QueueKey,
         in_group: bool,
@@ -211,6 +206,11 @@ pub enum QueueOp {
     /// failures ([`QueueOp::SkipUnavailable`]) stay marked. Local only, like
     /// [`QueueOp::SkipOffline`].
     ClearOfflineSkips,
+    /// Other copies of entries' songs (`QueueItem::alts`), from a device that
+    /// knows their dedup groups. Local only, like [`QueueOp::SkipOffline`].
+    SetAlternates {
+        alts: Vec<(QueueKey, Vec<TrackRef>)>,
+    },
     AppendAutoplay {
         items: Vec<AutoplayItem>,
     },
@@ -219,11 +219,11 @@ pub enum QueueOp {
     /// without its entries; `None` restores as stored and asks for resolution.
     RestoreSavedQueue {
         id: String,
-        tracks: Option<Vec<TrackId>>,
+        tracks: Option<Vec<TrackRef>>,
     },
     /// The actor resolved the context's tracks (after `Effect::ResolveContext`).
     SetContextTracks {
-        tracks: Vec<TrackId>,
+        tracks: Vec<TrackRef>,
     },
     /// Explicit "save this queue". With the auto-save cap at 0 an unpinned
     /// explicit save is evicted immediately, so callers normally pin.
@@ -259,58 +259,39 @@ impl QueueOp {
         Some(match cmd {
             Command::PlayContext { args } => QueueOp::PlayContext { args: args.clone() },
             Command::PlayTracks {
-                server_id,
-                track_ids,
+                tracks,
                 start_index,
                 label,
                 shuffle,
                 start_position_ms,
             } => QueueOp::PlayTracks {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: tracks.clone(),
                 start_index: *start_index,
                 label: label.clone(),
                 shuffle: *shuffle,
                 save_outgoing: true,
                 start_position_ms: *start_position_ms,
             },
-            Command::PlayNext {
-                server_id,
-                track_ids,
-                keys,
-            } => QueueOp::PlayNext {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+            Command::PlayNext { tracks, keys } => QueueOp::PlayNext {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
                 queued: true,
             },
-            Command::AddToQueue {
-                server_id,
-                track_ids,
-                keys,
-            } => QueueOp::AddToQueue {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+            Command::AddToQueue { tracks, keys } => QueueOp::AddToQueue {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
             },
-            Command::PlayLater {
-                server_id,
-                track_ids,
-                keys,
-            } => QueueOp::PlayLater {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+            Command::PlayLater { tracks, keys } => QueueOp::PlayLater {
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
             },
             Command::InsertTracks {
-                server_id,
-                track_ids,
+                tracks,
                 keys,
                 after,
                 in_group,
             } => QueueOp::InsertTracks {
-                server_id: server_id.clone(),
-                track_ids: track_ids.clone(),
+                track_ids: tracks.clone(),
                 keys: keys.clone(),
                 after: after.clone(),
                 in_group: *in_group,
@@ -655,9 +636,9 @@ pub struct DerivedQueue {
 impl DerivedQueue {
     /// Resolve into the wire shape. `resolve` maps a track id to its summary
     /// (the actor answers from the mirror; unknown ids get a bare summary).
-    pub fn into_view(self, mut resolve: impl FnMut(&TrackId) -> TrackSummary) -> QueueView {
+    pub fn into_view(self, mut resolve: impl FnMut(&TrackRef) -> TrackSummary) -> QueueView {
         let mut entry = |item: QueueItem, in_group: bool| crate::api::QueueEntry {
-            track: resolve(&item.track_id),
+            track: resolve(&item.track),
             autoplay: matches!(item.source, QueueSource::Autoplay { .. }),
             in_group,
             item,
@@ -919,7 +900,6 @@ impl Reducer<'_, '_> {
                 Ok(())
             }
             QueueOp::PlayTracks {
-                server_id,
                 track_ids,
                 start_index,
                 label,
@@ -927,7 +907,7 @@ impl Reducer<'_, '_> {
                 save_outgoing,
                 start_position_ms,
             } => {
-                let context = adhoc_context(server_id, label, track_ids);
+                let context = adhoc_context(label, track_ids);
                 self.play_context(
                     context,
                     Some(start_index),
@@ -938,23 +918,17 @@ impl Reducer<'_, '_> {
                 Ok(())
             }
             QueueOp::PlayNext {
-                server_id,
                 track_ids,
                 keys,
                 queued,
-            } => self.queue(server_id, track_ids, keys, QueuePlacement::Next, queued),
-            QueueOp::AddToQueue {
-                server_id,
-                track_ids,
-                keys,
-            } => self.queue(server_id, track_ids, keys, QueuePlacement::Group, true),
-            QueueOp::PlayLater {
-                server_id,
-                track_ids,
-                keys,
-            } => self.queue(server_id, track_ids, keys, QueuePlacement::Later, false),
+            } => self.queue(track_ids, keys, QueuePlacement::Next, queued),
+            QueueOp::AddToQueue { track_ids, keys } => {
+                self.queue(track_ids, keys, QueuePlacement::Group, true)
+            }
+            QueueOp::PlayLater { track_ids, keys } => {
+                self.queue(track_ids, keys, QueuePlacement::Later, false)
+            }
             QueueOp::InsertTracks {
-                server_id: _,
                 track_ids,
                 keys,
                 after,
@@ -1036,6 +1010,14 @@ impl Reducer<'_, '_> {
                 set_offline_skipped(self.doc, &BTreeSet::new());
                 Ok(())
             }
+            QueueOp::SetAlternates { alts } => {
+                for (key, refs) in alts {
+                    if let Some(item) = self.q.list.iter_mut().find(|i| i.key == key) {
+                        item.alts = refs;
+                    }
+                }
+                Ok(())
+            }
             QueueOp::AppendAutoplay { items } => {
                 let at = self.q.len();
                 let count = items.len();
@@ -1043,7 +1025,7 @@ impl Reducer<'_, '_> {
                     let key = self.ctx.entropy.next_key();
                     self.q.list.push(QueueItem {
                         key,
-                        track_id: it.track_id,
+                        track: it.track,
                         source: QueueSource::Autoplay {
                             provider: it.provider,
                             reason: it.reason,
@@ -1053,6 +1035,7 @@ impl Reducer<'_, '_> {
                         added: false,
                         queued: false,
                         ordinal: 0,
+                        alts: vec![],
                     });
                 }
                 self.q.ordinals_at_end(at, count);
@@ -1141,20 +1124,21 @@ impl Reducer<'_, '_> {
 
     // -- helpers -----------------------------------------------------------
 
-    fn fresh(&self, track_id: TrackId, source: QueueSource, added: bool) -> QueueItem {
+    fn fresh(&self, track_id: TrackRef, source: QueueSource, added: bool) -> QueueItem {
         QueueItem {
             key: self.ctx.entropy.next_key(),
-            track_id,
+            track: track_id,
             source,
             unavailable: false,
             added,
             queued: false,
             ordinal: 0,
+            alts: vec![],
         }
     }
 
     /// Entries for a context's tracks, ordinals by index.
-    fn context_entries(&self, tracks: &[TrackId]) -> Vec<QueueItem> {
+    fn context_entries(&self, tracks: &[TrackRef]) -> Vec<QueueItem> {
         tracks
             .iter()
             .enumerate()
@@ -1256,12 +1240,6 @@ impl Reducer<'_, '_> {
 
     fn clear_queue(&mut self) {
         self.snapshot_outgoing();
-        let server_id = self
-            .doc
-            .context
-            .as_ref()
-            .map(|c| c.server_id.clone())
-            .unwrap_or_default();
         self.doc.shuffle = false;
         match self.q.current().cloned() {
             Some(mut cur) => {
@@ -1269,9 +1247,8 @@ impl Reducer<'_, '_> {
                 cur.queued = false;
                 cur.ordinal = 0;
                 self.doc.context = Some(adhoc_context(
-                    server_id,
                     ADHOC_QUEUE_LABEL.into(),
-                    vec![cur.track_id.clone()],
+                    vec![cur.track.clone()],
                 ));
                 self.q = Flat {
                     list: vec![cur],
@@ -1286,7 +1263,7 @@ impl Reducer<'_, '_> {
         self.effects.push(Effect::ContextReplaced);
     }
 
-    fn restore(&mut self, id: &str, tracks: Option<Vec<TrackId>>) -> Result<(), ReduceError> {
+    fn restore(&mut self, id: &str, tracks: Option<Vec<TrackRef>>) -> Result<(), ReduceError> {
         let entry = self
             .doc
             .saved_queues
@@ -1338,7 +1315,7 @@ impl Reducer<'_, '_> {
 
     /// Build the list from a resolved track list around the current entry
     /// (kept, with its key), or from the top with nothing current.
-    fn expand_from_tracks(&mut self, tracks: &[TrackId]) {
+    fn expand_from_tracks(&mut self, tracks: &[TrackRef]) {
         if tracks.is_empty() {
             return;
         }
@@ -1348,11 +1325,11 @@ impl Reducer<'_, '_> {
             Some(cur) => {
                 let at = match cur.source {
                     QueueSource::Context { index }
-                        if tracks.get(index as usize) == Some(&cur.track_id) =>
+                        if tracks.get(index as usize) == Some(&cur.track) =>
                     {
                         Some(index as usize)
                     }
-                    _ => tracks.iter().position(|t| *t == cur.track_id),
+                    _ => tracks.iter().position(|t| *t == cur.track),
                 };
                 match at {
                     Some(i) => {
@@ -1417,8 +1394,7 @@ impl Reducer<'_, '_> {
 
     fn queue(
         &mut self,
-        server_id: ServerId,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
         placement: QueuePlacement,
         queued: bool,
@@ -1428,7 +1404,7 @@ impl Reducer<'_, '_> {
         }
         if self.doc.context.is_none() && self.q.is_empty() && keys.is_empty() {
             // Nothing to queue behind: this becomes the queue and starts playing.
-            let context = adhoc_context(server_id, ADHOC_QUEUE_LABEL.into(), track_ids);
+            let context = adhoc_context(ADHOC_QUEUE_LABEL.into(), track_ids);
             self.play_context(context, Some(0), false, false, 0);
             return Ok(());
         }
@@ -1472,7 +1448,7 @@ impl Reducer<'_, '_> {
     /// so history is never rewritten), then new ones for `track_ids`.
     fn take_for_queueing(
         &mut self,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: &[QueueKey],
     ) -> Result<Vec<QueueItem>, ReduceError> {
         let mut items: Vec<QueueItem> = vec![];
@@ -1485,7 +1461,7 @@ impl Reducer<'_, '_> {
             if i > self.q.ptr && self.q.has_current() {
                 items.push(self.q.list.remove(i));
             } else {
-                let track = self.q.list[i].track_id.clone();
+                let track = self.q.list[i].track.clone();
                 items.push(self.fresh(track, QueueSource::Inserted, true));
             }
         }
@@ -1503,7 +1479,7 @@ impl Reducer<'_, '_> {
     /// end lands at its end, an out-of-group one inside it just after it).
     fn insert_after(
         &mut self,
-        track_ids: Vec<TrackId>,
+        track_ids: Vec<TrackRef>,
         keys: Vec<QueueKey>,
         after: &str,
         in_group: bool,
@@ -1733,16 +1709,16 @@ impl Reducer<'_, '_> {
 /// Cut a track list longer than [`MAX_QUEUE_LEN`] to the window around
 /// `current`'s track (its context index when that still matches, else its
 /// first occurrence).
-pub fn window_around(tracks: &mut Vec<TrackId>, current: Option<&QueueItem>) {
+pub fn window_around(tracks: &mut Vec<TrackRef>, current: Option<&QueueItem>) {
     if tracks.len() <= MAX_QUEUE_LEN {
         return;
     }
     let anchor = current
         .and_then(|cur| match cur.source {
-            QueueSource::Context { index } if tracks.get(index as usize) == Some(&cur.track_id) => {
+            QueueSource::Context { index } if tracks.get(index as usize) == Some(&cur.track) => {
                 Some(index as usize)
             }
-            _ => tracks.iter().position(|t| *t == cur.track_id),
+            _ => tracks.iter().position(|t| *t == cur.track),
         })
         .unwrap_or(0);
     let window = window_tracks(tracks.len(), anchor);
@@ -1750,10 +1726,18 @@ pub fn window_around(tracks: &mut Vec<TrackId>, current: Option<&QueueItem>) {
     tracks.drain(..window.start);
 }
 
-/// An ad-hoc context over a track list.
-fn adhoc_context(server_id: ServerId, label: String, tracks: Vec<TrackId>) -> QueueContext {
+/// The `api` refs for a command's track ids, all valid in `source`.
+pub fn refs(source: &str, ids: &[TrackId]) -> Vec<TrackRef> {
+    ids.iter()
+        .map(|id| TrackRef::new(source, id.clone()))
+        .collect()
+}
+
+/// An ad-hoc context over a track list. Its source is the first track's (an
+/// ad-hoc context has no id of its own to resolve).
+fn adhoc_context(label: String, tracks: Vec<TrackRef>) -> QueueContext {
     QueueContext {
-        server_id,
+        source: tracks.first().map(|t| t.source.clone()).unwrap_or_default(),
         kind: ContextKind::AdHoc {
             label: label.clone(),
         },

@@ -19,6 +19,14 @@
 //! 7. **Returning diverged state becomes a saved queue, not a merge.** After
 //!    a device files its state, it carries no unsynced ops and its document
 //!    is the room's; the filed queue reaches the other devices.
+//! 8. **Only members get in.** A hostile device (or one removed from the
+//!    identity) is never admitted anywhere and never gets anything but the
+//!    handshake.
+//!
+//! Every device has its own [`crate::identity::Identity`]. The honest ones
+//! (`WorldConfig::devices`) start paired into one identity, whose id is the
+//! world's scope and which the coordinator was claimed by; newcomers
+//! (`WorldConfig::newcomers`) start alone and join with [`World::pair`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -30,10 +38,13 @@ use rand_chacha::ChaCha8Rng;
 use crate::api::{DeviceId, EpochMs, TrackId};
 use crate::connect::engine::Input;
 use crate::connect::replica::{MemoryReplicaStore, ReplicaStore};
-use crate::connect::room::{Room, RoomConfig, RoomInput, RoomOutput};
+use crate::connect::room::{Room, RoomAuth, RoomConfig, RoomInput, RoomOutput};
 use crate::connect::session_adapter::RealReducer;
-use crate::connect::wire::{scope_key, Msg, TransportCommand, WireMessage};
+use crate::connect::wire::{Msg, RefuseReason, TransportCommand, WireMessage};
 use crate::connect::{same_session_state, SessionOp};
+use crate::identity::crypto::DeviceSecret;
+use crate::identity::pairing::{Joiner, Rendezvous};
+use crate::identity::{CoordinatorPin, Identity, SharedIdentity, COORDINATOR_ID};
 use crate::sim::clock::{quantize, to_micros, DeviceClock, SimTime};
 use crate::sim::device::{DeviceEffect, Library, Persisted, SimDevice};
 use crate::sim::network::{Conditions, NetEvent, Network};
@@ -49,6 +60,21 @@ pub const COORDINATOR_NODE: &str = "coordinator";
 /// sent it (`World::granted`), not as the owner believes it.
 pub const STALE_OWNER_GRACE_MS: f64 = 20_000.0;
 pub const COORDINATOR_URL: &str = "wss://coordinator.example/";
+/// The world identity's id: the session scope.
+pub const SIM_IDENTITY: &str = "5151515151515151515151515151510a";
+
+fn coordinator_secret() -> DeviceSecret {
+    DeviceSecret::from_seed(b"sim-coordinator")
+}
+
+/// How a newcomer reaches the inviter in [`World::pair`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairVia {
+    /// The inviter's LAN listener.
+    Lan,
+    /// The hosted coordinator, relaying to the inviter.
+    Coordinator,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Topology {
@@ -80,6 +106,10 @@ pub struct WorldConfig {
     pub hostile: bool,
     /// `LanThenCoordinator`: when the coordinator becomes reachable.
     pub coordinator_returns_ms: f64,
+    /// Devices after the honest ones (and the hostile one) that start with
+    /// an identity of their own, outside the world's, and join it with
+    /// [`World::pair`]. They get no random actions.
+    pub newcomers: usize,
     /// Message types the hosted coordinator does not know (an older build
     /// than the devices): it decodes them as unknown and drops them.
     pub coordinator_unknown: Vec<&'static str>,
@@ -98,6 +128,7 @@ impl WorldConfig {
             hostile: false,
             coordinator_returns_ms: 90_000.0,
             coordinator_unknown: vec![],
+            newcomers: 0,
         }
     }
 
@@ -248,20 +279,33 @@ pub struct World {
     /// `Hello` frames sent to LAN peers (all checked to carry no credential).
     pub lan_hellos: u64,
     lan_adverts: BTreeMap<usize, crate::connect::discovery::PeerAdvert>,
+    /// Each device's identity (its "disk": kept across restarts).
+    pub identities: Vec<SharedIdentity>,
+    /// Devices in the world identity right now (the honest ones).
+    members: BTreeSet<usize>,
+    /// Pairing exchanges in flight: the exchange's network node → (device,
+    /// its joiner).
+    pairings: BTreeMap<String, (usize, Joiner)>,
+    /// How each pairing ended, by device.
+    pub pair_results: BTreeMap<usize, Result<(), String>>,
 }
 
 impl World {
     pub fn new(cfg: WorldConfig) -> World {
         let time = SimTime::new(1_000_000.0);
         let mut rng = ChaCha8Rng::seed_from_u64(cfg.seed);
-        let scope = scope_key("https://music.example", "user");
+        let scope = SIM_IDENTITY.to_string();
         let library = Arc::new(Library::synthetic(cfg.library_size));
         let mut net = Network::new(cfg.conditions);
         let coordinator = match cfg.topology {
             Topology::Coordinator | Topology::LanThenCoordinator => {
                 net.bind(COORDINATOR_URL, COORDINATOR_NODE);
-                let mut rc = RoomConfig::new(scope.clone()).verified();
+                let mut rc = RoomConfig::new(scope.clone());
                 rc.session_id = Some("coordinator-session".into());
+                rc.auth = RoomAuth::Identity {
+                    device_id: COORDINATOR_ID.into(),
+                    secret: coordinator_secret(),
+                };
                 Some(SimCoordinator {
                     room: Room::new(rc, time.clone(), RealReducer::shared(), None),
                     store: MemoryReplicaStore::new(),
@@ -293,15 +337,78 @@ impl World {
             events: 0,
             lan_hellos: 0,
             lan_adverts: BTreeMap::new(),
+            identities: vec![],
+            members: (0..cfg.devices).collect(),
+            pairings: BTreeMap::new(),
+            pair_results: BTreeMap::new(),
             cfg: cfg.clone(),
         };
-        for i in 0..cfg.devices + usize::from(cfg.hostile) {
+        // The world identity: device 0 created it and paired the others; it
+        // claimed the coordinator.
+        let total = cfg.devices + usize::from(cfg.hostile) + cfg.newcomers;
+        let mut root = Identity::create_with(
+            SIM_IDENTITY,
+            &device_name(0),
+            &device_name(0),
+            DeviceSecret::from_seed(device_name(0).as_bytes()),
+            0.0,
+        );
+        root.set_coordinator(
+            Some(CoordinatorPin {
+                url: COORDINATOR_URL.into(),
+                keys: coordinator_secret().public(),
+                owner: true,
+            }),
+            0.0,
+        );
+        let mut honest = vec![];
+        for i in 1..cfg.devices {
+            honest.push(crate::identity::testing::pair(
+                &mut root,
+                &device_name(i),
+                0.0,
+            ));
+        }
+        for i in 0..total {
+            let id = if i == 0 {
+                root.clone()
+            } else if i < cfg.devices {
+                let mut me = honest[i - 1].clone();
+                me.merge(root.sync(), f64::INFINITY).expect("same identity");
+                me
+            } else if i == cfg.devices && cfg.hostile {
+                // The hostile device: the right identity id, but a list of
+                // its own making (it was never paired).
+                Identity::create_with(
+                    SIM_IDENTITY,
+                    &device_name(i),
+                    &device_name(i),
+                    DeviceSecret::from_seed(device_name(i).as_bytes()),
+                    0.0,
+                )
+            } else {
+                Identity::create_with(
+                    &format!("{:032x}", 0xabc0_0000u64 + i as u64),
+                    &device_name(i),
+                    &device_name(i),
+                    DeviceSecret::from_seed(device_name(i).as_bytes()),
+                    0.0,
+                )
+            };
+            w.identities.push(Arc::new(parking_lot::Mutex::new(id)));
+        }
+        if let Some(c) = &mut w.coordinator {
+            let _ = c.room.set_identity(root.shared.clone());
+        }
+        w.device_rev_watermark = vec![None; total];
+        w.stale_owner_since = vec![None; total];
+        for i in 0..total {
             let skew = rng.random_range(-cfg.max_skew_ms..=cfg.max_skew_ms);
             let clock = Arc::new(DeviceClock::new(time.clone(), skew));
             let url = cfg.has_coordinator().then(|| COORDINATOR_URL.to_string());
             let mut d = SimDevice::new(
                 &device_name(i),
-                &scope,
+                w.identities[i].clone(),
                 clock,
                 library.clone(),
                 url,
@@ -309,23 +416,6 @@ impl World {
                 None,
             );
             d.keep_log = cfg.keep_logs;
-            if i >= cfg.devices {
-                // The hostile device: right scope, wrong secrets.
-                d.handle(Input::SetLanKey(Some(crate::connect::auth::test_key(
-                    b"hostile",
-                ))));
-                d.handle(Input::SetCredential(Some(
-                    crate::connect::wire::Credential {
-                        server_url: "https://music.example".into(),
-                        username: "user".into(),
-                        token: Some("stolen-nothing".into()),
-                        salt: Some("salt".into()),
-                        api_key: None,
-                        client: "hocket-rogue".into(),
-                        api_version: "1.16.1".into(),
-                    },
-                )));
-            }
             w.devices.push(d);
         }
         if w.coordinator_down {
@@ -351,9 +441,168 @@ impl World {
         self.hostile_index() == Some(i)
     }
 
-    /// The honest devices' indices.
-    fn honest(&self) -> std::ops::Range<usize> {
-        0..self.cfg.devices
+    /// The honest devices' indices: the world identity's members.
+    fn honest(&self) -> std::vec::IntoIter<usize> {
+        self.members.iter().copied().collect::<Vec<_>>().into_iter()
+    }
+
+    /// Whether device `i` is in the world identity now.
+    pub fn is_member(&self, i: usize) -> bool {
+        self.members.contains(&i)
+    }
+
+    /// Newcomer `device` joins the world identity through an invite of
+    /// `inviter`, reaching it `via` its LAN listener or the coordinator. The
+    /// outcome lands in [`World::pair_results`] as the world runs.
+    pub fn pair(&mut self, device: usize, inviter: usize, via: PairVia) {
+        let now = self.now();
+        let rendezvous = match via {
+            PairVia::Lan => Rendezvous {
+                lan: self.devices[inviter]
+                    .listener_port
+                    .map(|port| format!("ws://10.0.0.{}:{port}/", inviter + 1))
+                    .into_iter()
+                    .collect(),
+                coordinator: None,
+            },
+            PairVia::Coordinator => Rendezvous {
+                lan: vec![],
+                coordinator: Some(COORDINATOR_URL.into()),
+            },
+        };
+        let invite_now = crate::util::Clock::now_ms(self.devices[inviter].clock.as_ref());
+        let invite =
+            self.identities[inviter]
+                .lock()
+                .invite(rendezvous.clone(), vec![], None, invite_now);
+        // The app tells the engine, which offers the invite upstream.
+        self.devices[inviter].handle(Input::IdentityChanged);
+        self.pump_effects();
+        let joiner_now = crate::util::Clock::now_ms(self.devices[device].clock.as_ref());
+        let joiner = match Joiner::new(
+            invite,
+            &device_name(device),
+            &device_name(device),
+            joiner_now,
+        ) {
+            Ok(j) => j,
+            Err(e) => {
+                self.pair_results.insert(device, Err(e));
+                return;
+            }
+        };
+        let node = format!("{}-pair", device_name(device));
+        self.pairings.insert(node.clone(), (device, joiner));
+        let candidates: Vec<String> = rendezvous
+            .lan
+            .into_iter()
+            .chain(rendezvous.coordinator)
+            .collect();
+        self.net.connect(now, &mut self.rng, &node, &candidates);
+    }
+
+    /// One step of a pairing exchange (the new device's side).
+    fn deliver_pairing(&mut self, node: &str, ev: NetEvent) {
+        let now = self.now();
+        let Some((device, _)) = self.pairings.get(node) else {
+            return;
+        };
+        let device = *device;
+        match ev {
+            NetEvent::Connected { peer, .. } => {
+                let (_, joiner) = &self.pairings[node];
+                let msg = WireMessage::new(Msg::PairJoin {
+                    identity: joiner.invite.identity.clone(),
+                    join: joiner.join.clone(),
+                    relay: None,
+                });
+                self.net.send(now, &mut self.rng, node, &peer, msg);
+            }
+            NetEvent::Message { msg, .. } => match msg.msg {
+                Msg::PairAccept { accept, .. } => {
+                    let (_, joiner) = self.pairings.remove(node).expect("checked");
+                    match joiner.finish(*accept) {
+                        Ok(identity) => {
+                            self.pair_results.insert(device, Ok(()));
+                            self.adopt_identity(device, identity);
+                        }
+                        Err(e) => {
+                            self.pair_results.insert(device, Err(e));
+                        }
+                    }
+                }
+                Msg::Refuse { message, .. } => {
+                    self.pairings.remove(node);
+                    self.pair_results.insert(device, Err(message));
+                }
+                _ => {}
+            },
+            NetEvent::ConnectFailed { error } => {
+                self.pairings.remove(node);
+                self.pair_results.insert(device, Err(error));
+            }
+            NetEvent::Closed { .. } => {
+                if self.pairings.remove(node).is_some() {
+                    self.pair_results
+                        .insert(device, Err("closed before an answer".into()));
+                }
+            }
+            NetEvent::Accepted { .. } => {}
+        }
+    }
+
+    /// A device joined the world identity: it starts over in the new scope
+    /// (the app reopens its session the same way).
+    fn adopt_identity(&mut self, i: usize, identity: Identity) {
+        let now = self.now();
+        let id = self.devices[i].id.clone();
+        *self.identities[i].lock() = identity;
+        self.net.node_down(now, &id);
+        self.net.node_up(&id);
+        let clock = self.devices[i].clock.clone();
+        let url = self
+            .coordinator
+            .is_some()
+            .then(|| COORDINATOR_URL.to_string());
+        let mut fresh = SimDevice::new(
+            &id,
+            self.identities[i].clone(),
+            clock,
+            self.library.clone(),
+            url,
+            self.cfg.lan_on(),
+            None,
+        );
+        fresh.keep_log = self.devices[i].keep_log;
+        fresh.log = std::mem::take(&mut self.devices[i].log);
+        self.devices[i] = fresh;
+        self.device_rev_watermark[i] = None;
+        self.stale_owner_since[i] = None;
+        self.lan_adverts.remove(&i);
+        self.members.insert(i);
+        self.pump_effects();
+        self.broadcast_adverts();
+    }
+
+    /// Device `by` removes device `target` from the world identity.
+    pub fn remove(&mut self, by: usize, target: usize) -> Result<(), String> {
+        let now = crate::util::Clock::now_ms(self.devices[by].clock.as_ref());
+        let target_id = self.devices[target].id.clone();
+        self.identities[by].lock().remove_device(&target_id, now)?;
+        self.members.remove(&target);
+        self.devices[by].handle(Input::IdentityChanged);
+        self.pump_effects();
+        Ok(())
+    }
+
+    /// Mark device `i` as in or out of the world identity (after a mutual
+    /// removal settled) for the invariants.
+    pub fn set_member(&mut self, i: usize, member: bool) {
+        if member {
+            self.members.insert(i);
+        } else {
+            self.members.remove(&i);
+        }
     }
 
     pub fn now(&self) -> EpochMs {
@@ -493,6 +742,10 @@ impl World {
     }
 
     fn deliver(&mut self, node: &str, ev: NetEvent) {
+        if self.pairings.contains_key(node) {
+            self.deliver_pairing(node, ev);
+            return;
+        }
         if node == COORDINATOR_NODE {
             let input = match ev {
                 NetEvent::Accepted { peer } => RoomInput::Connected(peer),
@@ -538,15 +791,19 @@ impl World {
                         .send(now, &mut self.rng, COORDINATOR_NODE, &peer, msg)
                 }
                 RoomOutput::Close(peer) => self.net.close(now, COORDINATOR_NODE, &peer),
-                RoomOutput::Verify { peer, credential } => {
-                    // The fake Navidrome accepts the one credential the devices carry.
-                    let ok =
-                        credential.username == "user" && credential.token.as_deref() == Some("tok");
-                    let outs = match &mut self.coordinator {
-                        Some(c) => c.room.handle(RoomInput::Verified { peer, ok }),
-                        None => vec![],
-                    };
-                    self.coordinator_outputs(outs);
+                // The room keeps the identity's state itself (the real
+                // coordinator persists it).
+                RoomOutput::IdentityChanged => {}
+                // No member offered that invite: the coordinator can't
+                // answer it itself.
+                RoomOutput::PairJoin { peer, .. } => {
+                    let refuse = WireMessage::new(Msg::Refuse {
+                        reason: RefuseReason::Unauthorised,
+                        message: "the inviting device isn't connected".into(),
+                    });
+                    self.net
+                        .send(now, &mut self.rng, COORDINATOR_NODE, &peer, refuse);
+                    self.net.close(now, COORDINATOR_NODE, &peer);
                 }
                 RoomOutput::ReplicaTouched => {}
                 RoomOutput::ReplicaChanged => {
@@ -640,9 +897,6 @@ impl World {
                             }
                             self.broadcast_adverts();
                         }
-                        DeviceEffect::Verify { peer, .. } => {
-                            self.devices[i].handle(Input::CredentialVerified { peer, ok: true });
-                        }
                         DeviceEffect::Scrobble {
                             track_id,
                             started_at,
@@ -661,11 +915,9 @@ impl World {
         }
     }
 
-    /// Invariant 8: nothing secret leaves a device towards a LAN peer. A
-    /// `Hello` to anything but the coordinator never carries a credential,
-    /// and a hostile peer only ever sees the handshake (a challenge, a proof
-    /// as the answering leader, a refusal or a goodbye): never a `Hello`,
-    /// `Welcome`, op or document.
+    /// Invariant 8: a hostile peer only ever sees the handshake (a
+    /// challenge, a proof as the answering leader, a refusal or a goodbye):
+    /// never a `Hello`, `Welcome`, op or document.
     fn check_outbound_frame(&mut self, from: usize, peer: &str, msg: &WireMessage) {
         let id = self.devices[from].id.clone();
         let Some(target) = self.net.peer_target(&id, peer) else {
@@ -673,13 +925,9 @@ impl World {
         };
         let now = self.now();
         if target != COORDINATOR_NODE {
-            if let Msg::Hello { credential, .. } = &msg.msg {
+            // A LAN Hello is a joiner's first sealed frame.
+            if let Msg::Hello { .. } | Msg::Sealed { seq: 0, .. } = &msg.msg {
                 self.lan_hellos += 1;
-                if credential.is_some() {
-                    self.violations.push(format!(
-                        "[{now:.0}] {id} sent a credential in a Hello to LAN peer {target}"
-                    ));
-                }
             }
         }
         let to_hostile = self
@@ -793,8 +1041,10 @@ impl World {
         match action {
             Action::PlayTracks { tracks, .. } => {
                 let op = SessionOp::PlayTracks {
-                    server_id: "srv".into(),
-                    track_ids: tracks,
+                    track_ids: (tracks)
+                        .into_iter()
+                        .map(crate::api::TrackRef::from)
+                        .collect::<Vec<_>>(),
                     start_index: 0,
                     label: "selection".into(),
                     shuffle: false,
@@ -811,8 +1061,10 @@ impl World {
             }),
             Action::PlayNext { tracks, .. } => self.devices[i].handle(Input::LocalOp {
                 op: SessionOp::PlayNext {
-                    server_id: "srv".into(),
-                    track_ids: tracks,
+                    track_ids: (tracks)
+                        .into_iter()
+                        .map(crate::api::TrackRef::from)
+                        .collect::<Vec<_>>(),
                     keys: vec![],
                     queued: true,
                 },
@@ -862,7 +1114,7 @@ impl World {
                 if let Some(p) = self.crashed.remove(&i) {
                     self.net.node_up(&id);
                     let library = self.library.clone();
-                    let scope = self.scope.clone();
+                    let identity = self.identities[i].clone();
                     let clock = self.devices[i].clock.clone();
                     let url = self
                         .coordinator
@@ -870,7 +1122,8 @@ impl World {
                         .then(|| COORDINATOR_URL.to_string());
                     let lan = self.cfg.lan_on();
                     let keep_log = self.devices[i].keep_log;
-                    let mut fresh = SimDevice::new(&id, &scope, clock, library, url, lan, Some(p));
+                    let mut fresh =
+                        SimDevice::new(&id, identity, clock, library, url, lan, Some(p));
                     if self.coordinator_down {
                         self.net.partition(&id, COORDINATOR_NODE);
                     }

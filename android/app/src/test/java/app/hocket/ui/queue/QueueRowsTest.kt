@@ -1,5 +1,6 @@
 package app.hocket.ui.queue
 
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Command
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.QueueEntry
@@ -17,7 +18,7 @@ import org.junit.Test
 /** The queue screen's sections, row markers and drag membership, as plain data. */
 class QueueRowsTest {
     private fun entry(key: String, source: QueueSource = QueueSource.Context(QueueSourceContextInner(0u)), added: Boolean = false, autoplay: Boolean = false) = QueueEntry(
-        QueueItem(key, "t-$key", source, added = added),
+        QueueItem(key, TrackRef("fake-server", "t-$key"), source, added = added),
         TrackSummary(id = "t-$key", serverId = "s", title = key, durationMs = 1u, rating = 0u, loved = false, offline = OfflineState.None),
         autoplay = autoplay,
     )

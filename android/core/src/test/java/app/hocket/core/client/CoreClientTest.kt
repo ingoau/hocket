@@ -49,6 +49,19 @@ class CoreClientTest {
     }
 
     @Test
+    fun aNewPairingInviteNeverShowsThePreviousOne() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.onEvent(Event.PairingInvite(EventPairingInviteInner("hocket://pair?old", 1.0)))
+        client.createPairingInvite()
+        assertTrue(client.pairingInvite.value?.link != "hocket://pair?old")
+        client.onEvent(Event.PairingInvite(EventPairingInviteInner("hocket://pair?new", 2.0)))
+        client.onEvent(Event.PairingFailed(EventPairingFailedInner("no network")))
+        assertEquals(null, client.pairingInvite.value)
+    }
+
+    @Test
     fun reportUploadFollowsTheCoresEvents() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })
@@ -110,6 +123,33 @@ class CoreClientTest {
         client.dispatch(Command.Pause)
         runCurrent()
         assertFalse(client.isPlaying.value)
+    }
+
+    @Test
+    fun theCoordinatorsYouTubeMusicStatusFollowsItsSignInAndOut() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        assertEquals(null, client.coordinatorYtm.value)
+        // Not the owner: nothing to show, nothing answered.
+        client.dispatch(Command.CoordinatorYtmStatus)
+        runCurrent()
+        assertEquals(null, client.coordinatorYtm.value)
+        client.dispatch(Command.ClaimCoordinator(CommandClaimCoordinatorInner("wss://c.example/ws", "CODE")))
+        client.dispatch(Command.CoordinatorYtmStatus)
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = false), client.coordinatorYtm.value)
+        // A fresh session signs it in; a jar without one is refused and changes nothing.
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner("PREF=x")))
+        runCurrent()
+        assertEquals(false, client.coordinatorYtm.value?.signed_in)
+        assertNotNull(client.coordinatorYtm.value?.error)
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner("SID=a; SAPISID=b")))
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = true, account = FakeCore.FAKE_COORDINATOR_YTM_ACCOUNT), client.coordinatorYtm.value)
+        client.dispatch(Command.SignCoordinatorInToYoutubeMusic(CommandSignCoordinatorInToYoutubeMusicInner(null)))
+        runCurrent()
+        assertEquals(EventCoordinatorYtmStatusInner(enabled = true, signed_in = false), client.coordinatorYtm.value)
     }
 
     @Test

@@ -126,6 +126,7 @@ import app.hocket.R
 import app.hocket.playback.AudioOutputs
 import app.hocket.playback.CastDevices
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.ref
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
 import app.hocket.core.has
@@ -385,7 +386,7 @@ internal fun FullPlayer(
     if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })
     if (info) SongInfoSheet(onDismiss = { info = false }, onOpenAlbum = { info = false; onOpenAlbum(it) }, onOpenArtist = { info = false; onOpenArtist(it) })
     if (artists && track != null) ArtistsSheet(track, onDismiss = { artists = false }, onOpenAlbum = { artists = false; onOpenAlbum(it) }, onOpenArtist = { artists = false; onOpenArtist(it) })
-    if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.id)), onDismiss = { addTo = false })
+    if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.ref)), onDismiss = { addTo = false })
 }
 
 /** The upright layout's column on a wide page (a tablet held upright): the artwork's largest size plus its margins and a little. */
@@ -935,7 +936,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                 if (showRating && (!compact || starsLeft)) {
                     RatingStars(
                         track.rating.toInt(),
-                        onRate = { client.dispatch(Commands.rateTrack(track.id, it)) },
+                        onRate = { client.dispatch(Commands.rateTrack(track.ref, it)) },
                         starSize = STAR_SIZE,
                         spacing = 8.dp,
                         tint = MaterialTheme.colorScheme.primary,

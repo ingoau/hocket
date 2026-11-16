@@ -30,6 +30,8 @@ pub struct ScrobbleRecord {
 
 #[derive(Default)]
 pub struct FakeState {
+    /// See [`SubsonicApi::feature_overrides`].
+    pub feature_overrides: Option<crate::api::ProviderCapabilities>,
     pub songs: BTreeMap<String, Child>,
     pub albums: BTreeMap<String, AlbumId3>,
     pub artists: BTreeMap<String, ArtistId3>,
@@ -62,6 +64,11 @@ pub struct FakeServer {
 }
 
 impl FakeServer {
+    /// This server behind the provider seam, as the core uses it.
+    pub fn provider(&self) -> crate::provider::NavidromeProvider {
+        crate::provider::NavidromeProvider::new(std::sync::Arc::new(self.clone()))
+    }
+
     pub fn new(server_id: &str, username: &str) -> Self {
         let caps = ServerCapabilities {
             server_version: Some("0.63.1 (fake)".into()),
@@ -326,6 +333,10 @@ impl SubsonicApi for FakeServer {
     fn username(&self) -> Option<String> {
         Some(self.username.clone())
     }
+    fn feature_overrides(&self) -> Option<crate::api::ProviderCapabilities> {
+        self.state.lock().feature_overrides.clone()
+    }
+
     fn capabilities(&self) -> ServerCapabilities {
         self.caps.lock().clone()
     }

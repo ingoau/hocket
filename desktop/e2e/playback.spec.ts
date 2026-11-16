@@ -142,7 +142,7 @@ test.describe("playback and queue", () => {
     await showSideView(page, "queue");
     const sid = await serverId(page);
     const ids = Array.from({ length: 600 }, (_, i) => `tr-${i + 1}`);
-    await page.evaluate(([s, t]) => window.hocket.dispatch({ type: "playTracks", data: { server_id: s as string, track_ids: t as string[], start_index: 300, label: "Long", shuffle: false } }), [sid, ids] as const);
+    await page.evaluate(([s, t]) => window.hocket.dispatch({ type: "playTracks", data: { tracks: (t as string[]).map((id) => ({ source: s as string, id })), start_index: 300, label: "Long", shuffle: false } }), [sid, ids] as const);
     await expect(page.getByTestId("queue-row-current")).toBeVisible();
     // The event carries 100 rows each side of the pointer.
     await expect(page.getByTestId("queue-row-history")).toHaveCount(100);

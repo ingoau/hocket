@@ -16,7 +16,7 @@ import org.junit.Test
  */
 class CoreSessionPlayerTest {
     private fun state(playing: Boolean, repeat: RepeatMode = RepeatMode.Off, shuffle: Boolean = false) = MediaSessionState(
-        MediaSessionMetadata("Song", "Artist", "Album", 200_000u, null, "t1", false, 0u), playing,
+        MediaSessionMetadata("Song", "Artist", "Album", 200_000u, null, "t1", null, false, 0u), playing,
         PositionStamp(1000u, 0.0, 1.0, playing), shuffle, repeat, 1.0, false,
         listOf(MediaSessionAction.Play, MediaSessionAction.Pause, MediaSessionAction.Next, MediaSessionAction.Love), true,
     )

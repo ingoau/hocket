@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.semantics.SemanticsActions
@@ -41,7 +43,7 @@ class PlaylistPickerSheetTest {
         var closed = false
         compose.setThemedContent(core) {
             CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides DetailNavigator({}, {})) {
-                app.hocket.ui.components.PlaylistPicker(Commands.tracks(listOf(track)), onDismiss = { closed = true })
+                app.hocket.ui.components.PlaylistPicker(Commands.tracks((listOf(track)).map { TrackRef("fake-server", it) }), onDismiss = { closed = true })
             }
         }
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("picker.row.pl1", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }

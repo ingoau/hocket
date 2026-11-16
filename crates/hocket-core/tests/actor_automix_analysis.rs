@@ -94,8 +94,7 @@ async fn a_cached_follow_up_is_analysed_in_automix_mode_only() {
     wait_offline(&t, "t1", OfflineState::Cached).await;
 
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into(), "t2".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1", "t2"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,

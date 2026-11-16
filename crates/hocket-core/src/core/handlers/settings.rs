@@ -300,7 +300,7 @@ impl Actor {
                 .filter(|f| !crate::filters::is_builtin(&f.id))
                 .collect(),
             shortcuts: self.registry.shortcuts(),
-            servers: self.server_infos(),
+            servers: self.account_infos(),
             audio: Some(self.audio.clone()),
             autoplay: self.settings.get_typed(keys::AUTOPLAY_SETTINGS),
         };

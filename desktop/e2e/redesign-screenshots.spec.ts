@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type Page } from "@playwright/test";
-import type { ServerInfo } from "../src/core/api";
+import type { AccountInfo } from "../src/core/api";
 import { completeSetup, expect, launchFake, openPlace, resizeWindow } from "./fixtures";
 
 const out = process.env.HOCKET_SCREENSHOT_DIR;
@@ -33,10 +33,10 @@ async function setSetting(page: Page, key: string, value: unknown): Promise<void
 }
 
 async function playAlbum(page: Page, index: number, label: string): Promise<void> {
-  const servers = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: ServerInfo[] };
+  const servers = (await page.evaluate(() => window.hocket.query({ type: "accounts" }))) as { data: AccountInfo[] };
   const serverId = servers.data[0]!.id;
   const id = `al-${index + 1}`;
-  await page.evaluate(({ serverId, id, label }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label, sort: "default" }, shuffle: false, saveOutgoing: true } } }), { serverId, id, label });
+  await page.evaluate(({ serverId, id, label }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label, sort: "default" }, shuffle: false, saveOutgoing: true } } }), { serverId, id, label });
   await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { albumId?: string } } } } }).data.queue.current?.track.albumId).toBe(id);
 }
 
@@ -70,6 +70,8 @@ test("redesigned screens", async () => {
         await expect(page.getByTestId("setup-summary")).toBeVisible({ timeout: 15_000 });
         await shot("setup-summary");
         await page.getByTestId("setup-continue").click();
+        // "Add another source?": not now.
+        await page.getByTestId("setup-done").click();
         await expect(page.getByTestId("app")).toBeVisible();
       } else await completeSetup(page);
       await page.addStyleTag({ content: '[data-testid="toasts"], [data-testid="dev-banner"] { display: none !important; }' });

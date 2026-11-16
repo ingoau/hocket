@@ -68,7 +68,7 @@ class SettingsCategoriesTest {
 
     /** Registry settings the old page did not show, now in their category. */
     private val added = setOf("queue.section", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.showTranslations",
-        "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists", "battery.customise", "battery.autoLevel") + pebbleRows + advancedRows
+        "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists", "battery.customise", "battery.autoLevel", "server.section", "account.add") + pebbleRows + advancedRows
 
     /** Categories that open one of the older sub-screens: the old page's row for it. */
     private val screenCategories = mapOf(
@@ -77,7 +77,7 @@ class SettingsCategoriesTest {
     )
 
     private val expected = mapOf(
-        SettingsCategory.Account to setOf("sync.master", "server.info", "server.syncNow", "server.fullSync", "server.remove"),
+        SettingsCategory.Account to setOf("sync.master", "server.section", "server.info", "server.syncNow", "server.fullSync", "server.remove", "account.add"),
         SettingsCategory.Appearance to setOf("display.theme", "display.accent", "display.artworkColour", "display.animatedBackground", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists"),
         SettingsCategory.Playback to setOf("queue.section", "queue.savedCap", "queue.autoplay", "playback.resumeAlbums", "sleep.defaultMinutes", "sleep.stopAtEndOfTrack", "media.externalControl"),
         SettingsCategory.Downloads to setOf("open.downloads", "downloads.wifiOnly", "storage.clearCache", "storage.warnThreshold", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved"),
@@ -139,7 +139,7 @@ class SettingsCategoriesTest {
         compose.waitForIdle()
         // The confirmation dialog is up and the server is still there.
         compose.onNodeWithTag("confirm.ok").assertIsDisplayed()
-        assertEquals(1, core.client.servers.value.size)
+        assertEquals(1, core.client.accounts.value.size)
     }
 
     private fun openSettings(core: TestCore) {
@@ -223,7 +223,8 @@ class SettingsCategoriesTest {
         val core = TestCore(startPlaying = false)
         openSettings(core)
         open(SettingsCategory.Account)
-        assertEquals("server.remove", rowsOnScreen().last())
+        // Each account's rows end with its removal; Add account and the sync switch follow the list.
+        assertEquals(listOf("server.remove", "account.add", "sync.master"), rowsOnScreen().takeLast(3))
         for (tag in listOf("sync.master", "server.info")) {
             compose.onNode(hasAnyAncestor(hasTestTag("setting.$tag")).or(hasTestTag("setting.$tag")).and(hasText("This device", substring = true))).assertExists()
         }

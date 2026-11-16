@@ -183,7 +183,7 @@ mod tests {
         );
         assert_eq!(s.doc().updated_at, 1000.0);
         let context = QueueContext {
-            server_id: "srv".into(),
+            source: "srv".into(),
             kind: ContextKind::AdHoc {
                 label: "sel".into(),
             },

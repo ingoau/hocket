@@ -51,7 +51,7 @@ function useSlideAccents(slides: SpotlightSlide[]): Record<string, string | unde
  * in view: pressing Play on a slide keeps it there rather than pulling it out from under the pointer.
  */
 export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }: { stats?: ListeningStats; statsReady: boolean; dynamic: boolean; onAccent: (accent: string | undefined) => void; onEmpty: (empty: boolean) => void }) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const resumes = useApp((s) => s.albumResumes);
   const playingAlbum = useApp((s) => s.nowPlaying?.track.albumId);
@@ -197,5 +197,5 @@ function playSlide(serverId: string, s: SpotlightSlide, shuffle: boolean): void 
   }
   const kind = s.album ? { type: "album", data: { id: s.album.id } } : s.artist ? { type: "artist", data: { id: s.artist.id } } : s.playlist ? { type: "playlist", data: { id: s.playlist.id } } : undefined;
   if (!kind) return;
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: kind as never, label: slideTitle(s), sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: kind as never, label: slideTitle(s), sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }

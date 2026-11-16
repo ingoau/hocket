@@ -147,8 +147,8 @@ type Path = number[];
 export function FilterBuilder({ id, embedded = false }: { id: string; embedded?: boolean }) {
   const filters = useApp((s) => s.filters);
   const navigate = useApp((s) => s.navigate);
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
-  const nativeApi = useApp((s) => s.servers[0]?.capabilities.nativeApi ?? false);
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
+  const nativeApi = useApp((s) => s.accounts[0]?.capabilities.nativeApi ?? false);
   const existing = filters.find((f) => f.id === id);
   const [filter, setFilter] = useState<Filter>(() => existing ?? { id: `flt-${Date.now().toString(36)}`, name: "", root: { type: "all", data: [{ type: "rule", data: defaultRule() }] }, sort: "title", descending: false, limit: undefined });
   const [preview, setPreview] = useState<FilterPreview | undefined>(undefined);
@@ -180,7 +180,7 @@ export function FilterBuilder({ id, embedded = false }: { id: string; embedded?:
     bridge().dispatch({ type: "saveFilter", data: { filter: { ...filter, name: filter.name.trim() } } });
     if (!existing) setSaving(true);
   };
-  const play = () => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "filter", data: { filter } }, label: filter.name || t("filters.builder"), sort: filter.sort, tracks: [] }, shuffle: false, saveOutgoing: true } } });
+  const play = () => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "filter", data: { filter } }, label: filter.name || t("filters.builder"), sort: filter.sort, tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const exportNsp = async () => {
     const path = await bridge().dialog.save({ title: t("dialog.exportNsp"), defaultPath: `${filter.name || "filter"}.nsp`, filters: [{ name: "Navidrome smart playlist", extensions: ["nsp"] }] });
     if (path) bridge().dispatch({ type: "exportNsp", data: { filter, path } });

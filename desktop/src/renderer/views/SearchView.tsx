@@ -10,6 +10,8 @@ import { TrackTable } from "../components/TrackTable";
 import { LyricSnippet } from "../components/LyricSnippet";
 import { useQuery } from "../store/queries";
 import { Tile, TileList } from "../components/Tile";
+import { refOf, refKey } from "../lib/track-ref";
+import { SourceChips, useLibrarySource } from "../components/SourceChips";
 
 type Kind = "all" | "songs" | "lyrics" | "albums" | "artists" | "playlists";
 const KINDS: Kind[] = ["all", "songs", "lyrics", "albums", "artists", "playlists"];
@@ -17,19 +19,19 @@ const KINDS: Kind[] = ["all", "songs", "lyrics", "albums", "artists", "playlists
 const PREVIEW = 5;
 
 export function SearchView({ query }: { query: string }) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const serverBatch = useApp((s) => s.lastServerSearch);
   // One request id per query, so a late server batch for the previous query is ignored.
   const reqId = useMemo(() => `sv-${Date.now()}-${query}`, [query]);
   const [kind, setKind] = useState<Kind>("all");
-  const local = useQuery(() => ({ type: "search", data: { server_id: serverId, query, limit: 100, include_server: true, request_id: reqId } }), "search", [query, serverId], { static: true });
+  const source = useLibrarySource();
+  const local = useQuery(() => ({ type: "search", data: { server_id: source, query, limit: 100, include_server: true, request_id: reqId } }), "search", [query, source], { static: true });
   const [server, setServer] = useState<SearchResults | undefined>(undefined);
   useEffect(() => { setKind("all"); setServer(undefined); }, [query]);
   useEffect(() => { if (serverBatch?.requestId === reqId) setServer(serverBatch); }, [serverBatch, reqId]);
   const found = local.data;
-  const ids = [...(found?.tracks ?? []), ...(server?.tracks ?? [])].map((x) => x.id);
-  const tracks = useQuery(() => (ids.length ? { type: "tracksByIds", data: { ids } } : null), "trackList", [ids.join(",")], { static: true });
+  const refs = [...(found?.tracks ?? []), ...(server?.tracks ?? [])].map(refOf);
+  const tracks = useQuery(() => (refs.length ? { type: "tracksByIds", data: { tracks: refs } } : null), "trackList", [refs.map(refKey).join(",")], { static: true });
   const songs = tracks.data ?? [];
   const albums = [...(found?.albums ?? []), ...(server?.albums ?? [])];
   const artists = [...(found?.artists ?? []), ...(server?.artists ?? [])];
@@ -39,15 +41,16 @@ export function SearchView({ query }: { query: string }) {
   const show = (k: Kind) => (kind === "all" || kind === k) && counts[k] > 0;
   const shownSongs = kind === "songs" ? songs : songs.slice(0, PREVIEW);
   const shownLyrics = kind === "lyrics" ? lyricHits : lyricHits.slice(0, PREVIEW);
-  const play = (i: number) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: songs.map((x) => x.id), start_index: i, label: query, shuffle: false } });
+  const play = (i: number) => bridge().dispatch({ type: "playTracks", data: { tracks: songs.map(refOf), start_index: i, label: query, shuffle: false } });
   const playLyric = (hit: LyricHit) => {
     const i = Math.max(0, lyricHits.findIndex((h) => h.track.id === hit.track.id));
-    bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: lyricHits.map((h) => h.track.id), start_index: i, label: query, shuffle: false, start_position_ms: hit.startMs ?? 0 } });
+    bridge().dispatch({ type: "playTracks", data: { tracks: lyricHits.map((h) => refOf(h.track)), start_index: i, label: query, shuffle: false, start_position_ms: hit.startMs ?? 0 } });
   };
   const nothing = !!found && counts.all === 0 && !!server;
   return (
     <div className="view page-search" data-testid="view-search">
       <div className="view-header search-header"><h1>{query}</h1>{found ? <span className="muted" data-testid="search-count">{t(counts.all === 1 ? "search.resultsOne" : "search.results", { count: counts.all })}</span> : null}</div>
+      <SourceChips />
       <div className="search-kinds" role="group" aria-label={t("search.kinds")} data-testid="search-kinds">
         {KINDS.map((k) => (
           <button key={k} type="button" className={`search-kind ${kind === k ? "on" : ""}`} aria-pressed={kind === k} disabled={k !== "all" && k !== "lyrics" && counts[k] === 0} onClick={() => setKind(k)} data-testid={`search-kind-${k}`}>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Playlist, PlaylistMembership } from "@core/api";
-import { canAddTo, clickIntent, keepLayout, layoutPlaylists, pickerGroups, rowState } from "./playlist-picker";
+import { canAddTo, clickIntent, keepLayout, layoutPlaylists, pickerGroups, refsWithIds, rowState } from "./playlist-picker";
 
 const DAY = 86_400_000;
 const pl = (id: string, name: string, changedDaysAgo?: number, extra: Partial<Playlist> = {}): Playlist => ({
@@ -70,5 +70,13 @@ describe("add to playlist rows", () => {
     expect(clickIntent(rowState(["a"], m([])))).toBe("add");
     expect(clickIntent(rowState(["a"], m([["a", 1]])))).toBe("remove");
     expect(clickIntent(rowState(["a"], m([["a", 1], ["a", 2]])))).toBe("ask");
+  });
+
+  it("maps missing ids back to every account's song with that id", () => {
+    const a1 = { source: "nav", id: "x" };
+    const a2 = { source: "ytm", id: "x" };
+    const b = { source: "nav", id: "y" };
+    expect(refsWithIds([a1, b, a2, a1], ["x"])).toEqual([a1, a2]);
+    expect(refsWithIds([a1, b, a2], ["y", "z"])).toEqual([b]);
   });
 });

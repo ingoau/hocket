@@ -1,7 +1,7 @@
 // Pure event reducer: mirrors the pieces of the snapshot the UI renders.
 // No business logic — the core owns the truth; this is view state.
 import type {
-  AudioSettings, BatterySaver, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, ServerInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem, SaverFeature,
+  AudioSettings, BatterySaver, ConnectionState, DeviceInfo, Event, Filter, Job, Lyrics, MediaSessionState, OutputDevice, Pin, PreviewState, Problem, QueueEntry, QueueView, ReportUploadStatus, ResumeOffer, RoomDiagnosticsStatus, SavedQueue, AccountInfo, StashItem, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, StorageSummary, SyncProgress, Toast, TransportState, UndoState, NetworkState, SearchResults, LibraryItemState, AlbumResumePoint, SnoozeItem, SaverFeature, IdentityInfo, PairingAccount, CoordinatorInviteInfo,
 } from "@core/api";
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
@@ -17,7 +17,7 @@ export const saverEngaged = (saver: BatterySaver): boolean => saver.features.len
 
 export interface CoreState {
   ready: boolean;
-  servers: ServerInfo[];
+  accounts: AccountInfo[];
   session: SessionDocument | undefined;
   queue: QueueView;
   transport: TransportState;
@@ -72,7 +72,34 @@ export interface CoreState {
   roomDiagnostics: RoomDiagnosticsStatus | undefined;
   /** The Save to Coordinator upload, for the bar across the top of the window. */
   reportUpload: ReportUploadStatus | undefined;
+  /** This device's Hocket identity: its devices, credential sync, the coordinator. */
+  identity: IdentityInfo;
+  /** Pairing: the invite this device shows, and how the last exchange ended. */
+  pairing: PairingState;
+  /** The coordinator's invites (owner only), and how the last claim or request ended. */
+  coordinator: {
+    invites: CoordinatorInviteInfo[];
+    created: string | undefined;
+    joined: { url: string; owner: boolean } | undefined;
+    error: string | undefined;
+    /** Its YouTube Music analysis (`coordinatorYtmStatus`), once asked. */
+    ytm: { enabled: boolean; signedIn: boolean; account: string | undefined; error: string | undefined } | undefined;
+  };
 }
+
+export interface PairingState {
+  invite: { link: string; expiresAt: number } | undefined;
+  /** A device that just joined through this device's invite. */
+  paired: { deviceId: string; name: string } | undefined;
+  /** This device joined another's identity: the accounts it still needs passwords for. */
+  finished: PairingAccount[] | undefined;
+  error: string | undefined;
+  /** How many pairings have failed so far (never reset): the same error twice is still news. */
+  failures: number;
+}
+
+export const EMPTY_IDENTITY: IdentityInfo = { id: "", deviceId: "", devices: [], removed: false, credentialSync: false, coordinator: undefined };
+export const EMPTY_PAIRING: PairingState = { invite: undefined, paired: undefined, finished: undefined, error: undefined, failures: 0 };
 
 export const EMPTY_QUEUE: QueueView = { contextLabel: undefined, entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: false, repeat: "off", autoplay: false };
 
@@ -80,7 +107,7 @@ export const EMPTY_TRANSPORT: TransportState = { lease: { owner: undefined, epoc
 
 export const initialCoreState: CoreState = {
   ready: false,
-  servers: [],
+  accounts: [],
   session: undefined,
   queue: EMPTY_QUEUE,
   transport: EMPTY_TRANSPORT,
@@ -120,6 +147,9 @@ export const initialCoreState: CoreState = {
   exported: undefined,
   roomDiagnostics: undefined,
   reportUpload: undefined,
+  identity: EMPTY_IDENTITY,
+  pairing: EMPTY_PAIRING,
+  coordinator: { invites: [], created: undefined, joined: undefined, error: undefined, ytm: undefined },
   announcedUndo: [],
   queueReplacingUndo: [],
 };
@@ -129,7 +159,8 @@ export function applySnapshot(state: CoreState, s: Snapshot): CoreState {
   return {
     ...state,
     ready: true,
-    servers: s.servers,
+    accounts: s.accounts,
+    identity: s.identity ?? state.identity,
     session: s.session,
     queue: s.queue,
     transport: s.transport,
@@ -162,8 +193,31 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "snapshot":
       // Handled above (snapshotOf); kept so the exhaustiveness check below stays.
       return applySnapshot(state, e.data.snapshot);
-    case "serversChanged":
-      return { ...state, servers: e.data.servers };
+    case "accountsChanged":
+      return { ...state, accounts: e.data.accounts };
+    case "identityChanged":
+      return { ...state, identity: e.data.identity };
+    case "pairingInvite":
+      return { ...state, pairing: { ...EMPTY_PAIRING, failures: state.pairing.failures, invite: { link: e.data.link, expiresAt: e.data.expires_at } } };
+    case "devicePaired":
+      return { ...state, pairing: { ...state.pairing, invite: undefined, paired: { deviceId: e.data.device_id, name: e.data.name } } };
+    case "pairingFinished":
+      return { ...state, pairing: { ...EMPTY_PAIRING, failures: state.pairing.failures, finished: e.data.accounts } };
+    case "pairingFailed":
+      return { ...state, pairing: { ...state.pairing, error: e.data.message, failures: state.pairing.failures + 1 } };
+    case "credentialsSynced": // main stores them
+      return state;
+    case "coordinatorJoined":
+      return { ...state, coordinator: { ...state.coordinator, joined: { url: e.data.url, owner: e.data.owner }, error: undefined } };
+    case "coordinatorFailed":
+      return { ...state, coordinator: { ...state.coordinator, error: e.data.message } };
+    case "coordinatorYtmStatus":
+      return {
+        ...state,
+        coordinator: { ...state.coordinator, ytm: { enabled: e.data.enabled, signedIn: e.data.signed_in, account: e.data.account ?? undefined, error: e.data.error ?? undefined } },
+      };
+    case "coordinatorInvites":
+      return { ...state, coordinator: { ...state.coordinator, invites: e.data.invites, created: e.data.created ?? undefined, error: undefined } };
     case "syncProgress":
       return { ...state, syncProgress: e.data.progress, libraryVersion: e.data.progress.finished ? state.libraryVersion + 1 : state.libraryVersion };
     case "libraryChanged":
@@ -268,8 +322,12 @@ export function reduce(state: CoreState, e: Event): CoreState {
       return { ...state, roomDiagnostics: e.data.status };
     case "reportUploadChanged":
       return { ...state, reportUpload: e.data.status };
+    // ytmJsRequest: main answers it (a hidden window: ytm-js-host.ts). ytmSignInExpired: the
+    // core toasts it itself.
     case "backend":
     case "diagnosticsRequested": // main answers it
+    case "ytmJsRequest":
+    case "ytmSignInExpired":
       return state;
     case "mediaSession":
       // OS media session is owned by the main process; the renderer uses transport / nowPlaying.

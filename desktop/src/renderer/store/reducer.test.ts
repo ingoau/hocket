@@ -3,7 +3,8 @@ import type { Event, Snapshot } from "@core/api";
 import { SAVER_OFF, applySnapshot, dismissToast, initialCoreState, reduce, saverEngaged, saverHas, settingValue } from "./reducer";
 
 const snapshot: Snapshot = {
-  servers: [],
+  identity: { id: "i", deviceId: "me", devices: [], removed: false, credentialSync: false, coordinator: undefined },
+  accounts: [],
   session: undefined,
   queue: { contextLabel: "Album", entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: true, repeat: "all", autoplay: true },
   transport: { lease: { owner: "me", epoch: 3, expiresAt: 1 }, position: { positionMs: 5000, takenAt: 0, rate: 1, isPlaying: true }, buffering: false, playedMs: 0, volume: 0.5 },
@@ -33,6 +34,17 @@ describe("reducer", () => {
     expect(saverHas(s.batterySaver, "simpleLyrics")).toBe(false);
     expect(settingValue(s, "appearance.theme", "system")).toBe("dark");
     expect(settingValue(s, "missing", 42)).toBe(42);
+  });
+
+  it("counts every pairing failure, the same message twice included, across new invites", () => {
+    const fail = (s: typeof initialCoreState) => reduce(s, { type: "pairingFailed", data: { message: "invite expired" } });
+    const s1 = fail(initialCoreState);
+    const s2 = fail(s1);
+    expect(s2.pairing.error).toBe("invite expired");
+    expect([s1.pairing.failures, s2.pairing.failures]).toEqual([1, 2]);
+    const s3 = reduce(s2, { type: "pairingInvite", data: { link: "hocket://pair?d=x", expires_at: 1 } });
+    expect(s3.pairing.error).toBeUndefined();
+    expect(fail(s3).pairing.failures).toBe(3);
   });
 
   it("does not mirror mediaSession into view state (OS session is main-process only)", () => {
@@ -82,7 +94,7 @@ describe("reducer", () => {
 
   it("patches ratings and loves from libraryItemsChanged into now playing, the queue and server search results", () => {
     const track = (id: string) => ({ id, serverId: "s", title: id, durationMs: 1, rating: 0, loved: false, offline: "none" as const });
-    const entry = (id: string) => ({ item: { key: `k-${id}`, trackId: id, source: { type: "context" as const, data: { index: 0 } } }, track: track(id) });
+    const entry = (id: string) => ({ item: { key: `k-${id}`, track: { source: "s", id }, source: { type: "context" as const, data: { index: 0 } } }, track: track(id) });
     let s = applySnapshot(initialCoreState, { ...snapshot, queue: { ...snapshot.queue, current: entry("t1"), entries: [entry("t1"), entry("t2"), entry("t1")], total: 3, currentIndex: 0, totalUpcoming: 2 } });
     s = reduce(s, { type: "searchResults", data: { results: { requestId: "r", query: "q", tracks: [track("t1"), track("t3")], albums: [], artists: [], playlists: [], fromServer: true, lyrics: [] } } });
     const version = s.libraryVersion;
@@ -188,7 +200,7 @@ describe("reducer", () => {
   });
 
   it("nowPlaying follows QueueChanged and NowPlayingChanged", () => {
-    const entry = { item: { key: "k", trackId: "t", source: { type: "inserted" as const }, unavailable: false }, track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" as const } };
+    const entry = { item: { key: "k", track: { source: "s", id: "t" }, source: { type: "inserted" as const }, unavailable: false }, track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" as const } };
     let s = reduce(initialCoreState, { type: "queueChanged", data: { queue: { ...snapshot.queue, current: entry } } });
     expect(s.nowPlaying?.track.id).toBe("t");
     s = reduce(s, { type: "nowPlayingChanged", data: { entry: undefined } });

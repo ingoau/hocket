@@ -5,6 +5,7 @@ import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.PowerManager
 import android.os.SystemClock
+import android.widget.Toast
 import app.hocket.core.Commands
 import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.BackendReport
@@ -62,6 +63,9 @@ import org.json.JSONObject
  * - A receiver that can't play the first thing it is given (it can't reach the server, or doesn't
  *   trust its certificate) ends the session through [onUnreachable], which says why; later failures
  *   are reported to the core, which skips the item.
+ * - YouTube Music items carry the direct googlevideo URL (`audio/mp4`) the core fetched for this
+ *   receiver just in time; those URLs only work from this phone's public address, and
+ *   [CastFailures] explains a receiver that can't use them (mobile data, VPN, IPv4/IPv6).
  * - Some receivers claim a format and then crash on it (the Pixel Tablet's, on FLAC): the session
  *   just ends. [crashSuspect] names what it had just started, for the controller to act on.
  */
@@ -88,8 +92,8 @@ internal class CastRenderer(
     private var loadGen = 0
     private var failedGen = -1
     private val status = CastStatus()
-    /** Something has played on the receiver this session: a failure now is the item's, not the server's reach. */
-    private var played = false
+    /** What a failure means this session: the server's reach, a YouTube Music address mismatch, or the item. */
+    private val failures = CastFailures()
     /** When [current] was loaded, or (later) first played (elapsed realtime); 0 once it ended. */
     private var startedAt = 0L
     /** The item [startedAt] last marked playing. */
@@ -122,7 +126,7 @@ internal class CastRenderer(
         this.session = session
         session.remoteMediaClient?.registerCallback(callback)
         session.addCastListener(castListener)
-        played = false
+        failures.reset()
         reportVolume()
     }
 
@@ -324,7 +328,7 @@ internal class CastRenderer(
                         startedAt = SystemClock.elapsedRealtime()
                         startedKey = key
                     }
-                    played = true
+                    failures.playing(CastFailures.isYtm(current?.url.orEmpty()))
                     report(BackendReport.Playing(BackendReportPlayingInner(key, position())))
                     startPositionLoop()
                 }
@@ -360,18 +364,33 @@ internal class CastRenderer(
         current?.key?.let { report(BackendReport.Buffering(BackendReportBufferingInner(it, true))) }
     }
 
-    /** The receiver couldn't play [current]: before anything has played, the server is out of its reach. */
+    /**
+     * The receiver couldn't play [current]: before anything has played, the server is out of its
+     * reach. A YouTube Music item goes to the core (which fetches a fresh URL once, then skips)
+     * until [CastFailures] takes it as the address mismatch and says so.
+     */
     private fun fail(message: String) {
-        val key = current?.key ?: return
+        val c = current ?: return
+        val key = c.key
         // One load, one error (a media error, the load's result and an error status can all say it).
         if (failedGen == loadGen) return
         failedGen = loadGen
         stopPositionLoop()
-        if (!played) {
-            val name = session?.castDevice?.friendlyName ?: context.getString(R.string.cast_receiver)
-            reset()
-            onUnreachable(context.getString(R.string.cast_unreachable, name))
-            return
+        val name = session?.castDevice?.friendlyName ?: context.getString(R.string.cast_receiver)
+        when (failures.failed(CastFailures.isYtm(c.url))) {
+            CastFailures.Action.Unreachable -> {
+                reset()
+                onUnreachable(context.getString(R.string.cast_unreachable, name))
+                return
+            }
+            CastFailures.Action.YtmUnreachable -> {
+                reset()
+                onUnreachable(CastFailures.hint(context, name))
+                return
+            }
+            CastFailures.Action.ReportWithYtmHint ->
+                Toast.makeText(context, CastFailures.hint(context, name), Toast.LENGTH_LONG).show()
+            CastFailures.Action.Report -> Unit
         }
         status.failed()
         report(BackendReport.Error(BackendReportErrorInner(key, "Cast: $message", true)))

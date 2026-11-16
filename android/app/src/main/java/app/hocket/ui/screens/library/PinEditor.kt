@@ -382,16 +382,16 @@ private suspend fun pinDetails(client: CoreClient, resources: Resources, pins: L
     val serverId = client.server.value?.id
     fun songs(n: Int) = resources.getQuantityString(R.plurals.menu_songs, n, n)
     // Every genre's count comes in one query, made only when a genre is pinned.
-    val genres = if (pins.any { it.kind == PinKind.Genre } && serverId != null) (client.query(Queries.genres(serverId)) as? QueryResult.Genres)?.data.orEmpty() else emptyList()
+    val genres = if (pins.any { it.kind == PinKind.Genre } && serverId != null) (client.query(Queries.genres("")) as? QueryResult.Genres)?.data.orEmpty() else emptyList()
     return pins.mapNotNull { pin ->
         val id = pin.entry.id
         val detail = when (pin.kind) {
             PinKind.Album -> (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data?.artist
-            PinKind.Track -> (client.query(Queries.track(id)) as? QueryResult.TrackDetail)?.data?.let { it.artist ?: it.albumArtist }
+            PinKind.Track -> (client.query(Queries.track(pin.entry.trackRef(client.server.value?.id.orEmpty()))) as? QueryResult.TrackDetail)?.data?.let { it.artist ?: it.albumArtist }
             PinKind.Playlist -> (client.query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data?.let { songs(it.songCount.toInt()) }
             PinKind.Genre -> genres.firstOrNull { it.name == id }?.let { songs(it.songCount.toInt()) }
             PinKind.Filter -> client.filters.value.firstOrNull { it.id == id }?.let { filter ->
-                val count = (serverId?.let { client.query(Queries.trackCount(it, filter.root)) } as? QueryResult.Count)?.data?.toInt()
+                val count = (serverId?.let { client.query(Queries.trackCount("", filter.root)) } as? QueryResult.Count)?.data?.toInt()
                 count?.let { songs(filter.limit?.toInt()?.coerceAtMost(it) ?: it) }
             }
             PinKind.Artist -> null

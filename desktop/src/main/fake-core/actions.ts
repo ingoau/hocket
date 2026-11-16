@@ -157,7 +157,7 @@ export function describeActions(surface: string, target: ActionTarget, order: st
   return filtered
     .filter((e) => {
       if (e.id === "preview") {
-        const n = target.type === "tracks" ? target.data.ids.length : target.type === "queueItems" ? target.data.keys.length : 0;
+        const n = target.type === "tracks" ? target.data.tracks.length : target.type === "queueItems" ? target.data.keys.length : 0;
         if (n !== 1) return false;
       }
       if (e.id === "love" && (ctx.allLoved || (kind === "none" && ctx.currentLoved))) return false;
@@ -173,7 +173,7 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       // Like the core's `visible` hook: hidden, not just disabled, with the Queue section off.
       if (e.id === "addToQueue" && ctx.queueSection === false) return false;
       // Like the core: shuffling one song is just playing it.
-      if (e.id === "playShuffled" && target.type === "tracks" && target.data.ids.length === 1) return false;
+      if (e.id === "playShuffled" && target.type === "tracks" && target.data.tracks.length === 1) return false;
       return true;
     })
     .map((e) => ({

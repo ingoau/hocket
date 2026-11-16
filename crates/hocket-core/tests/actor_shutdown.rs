@@ -11,7 +11,7 @@ use hocket_core::core::test_support::{seeded_server, TestCore};
 fn album_args(server_id: &str, album: &str) -> PlayContextArgs {
     PlayContextArgs {
         context: QueueContext {
-            server_id: server_id.into(),
+            source: server_id.into(),
             kind: ContextKind::Album { id: album.into() },
             label: String::new(),
             sort: SortOrder::Default,

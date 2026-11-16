@@ -57,15 +57,13 @@ impl Actor {
     /// around the current one. Returns whether it was stored.
     pub(crate) fn store_analysis_record(
         &mut self,
-        track_id: TrackId,
+        track: TrackRef,
         record: AnalysisRecord,
     ) -> bool {
-        let Some(server_id) = self.server_id() else {
-            return false;
-        };
+        let (server_id, track_id) = (track.source.clone(), track.id.clone());
         // A record for another file (or analysis version) is no use here and
         // must not replace a usable one.
-        if let Ok(Some(track)) = self.db.track(&track_id) {
+        if let Ok(Some(track)) = self.db.track_ref(&track) {
             if !is_usable(&record, &store::fingerprint_of(&track)) {
                 tracing::debug!(target: "hocket::automix", track = %track_id, "analysis record not for this file: dropped");
                 return false;
@@ -75,11 +73,8 @@ impl Actor {
         match store::put(&self.db, &server_id, &track_id, record, now) {
             Ok(true) => {
                 tracing::debug!(target: "hocket::automix", track = %track_id, "analysis record stored");
-                let near = self.playback.track_id() == Some(track_id.as_str())
-                    || self
-                        .upcoming_playable(2)
-                        .iter()
-                        .any(|i| i.track_id == track_id);
+                let near = self.playback.track_ref().as_ref() == Some(&track)
+                    || self.upcoming_playable(2).iter().any(|i| i.track == track);
                 if near {
                     self.replan_next();
                 }
@@ -93,9 +88,10 @@ impl Actor {
         }
     }
 
-    pub(crate) fn stored_analysis_record(&self, track_id: &str) -> Option<AnalysisRecord> {
-        let server_id = self.server_id()?;
-        store::get(&self.db, &server_id, track_id).ok().flatten()
+    pub(crate) fn stored_analysis_record(&self, track: &TrackRef) -> Option<AnalysisRecord> {
+        store::get(&self.db, &track.source, &track.id)
+            .ok()
+            .flatten()
     }
 
     // -- planning ----------------------------------------------------------------

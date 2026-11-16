@@ -4,7 +4,7 @@
 // for sidebar / context menu / media session), keyboard shortcuts editor,
 // config backup, diagnostics, about.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
+import type { AccountKind, ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
 import { TransitionModeValues } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
@@ -25,6 +25,8 @@ import { Select, Slider, Switch } from "../components/controls";
 import { warnChoices } from "../lib/storage-warn";
 import { SettingsSearch, useSettingsJump } from "../components/SettingsSearch";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../lib/settings-index";
+import { startAddAccount } from "./Setup";
+import { IdentitySettings } from "../components/IdentitySettings";
 import { CROSSFADE_MAX, CROSSFADE_MIN, DEFAULT_TRANSITIONS, isTransitionMode, withCrossfade, withMode } from "../lib/transitions";
 
 const SECTIONS = SETTINGS_SECTIONS;
@@ -36,6 +38,7 @@ const SECTION_GROUPS: { title: Parameters<typeof t>[0]; sections: Section[] }[] 
   { title: "settings.group.devicesAndControls", sections: ["connect", "customisation", "shortcuts"] },
   { title: "settings.group.app", sections: ["backup", "diagnostics", "advanced", "about"] },
 ];
+const ACCOUNT_KIND_LABEL: Record<AccountKind, Parameters<typeof t>[0]> = { navidrome: "settings.accounts.kind.navidrome", youtubeMusic: "settings.accounts.kind.youtubeMusic" };
 const SECTION_ICONS: Record<Section, string> = { general: "tune", audio: "equalizer", transcoding: "transcode", connect: "connectCast", storage: "cached", lyrics: "lyrics", appearance: "palette", customisation: "customise", shortcuts: "keyboard", backup: "backup", diagnostics: "bug", advanced: "code", about: "info" };
 
 export function Settings({ section }: { section?: string }) {
@@ -83,7 +86,8 @@ export function Settings({ section }: { section?: string }) {
 
 /** The signed-in account and its server at the top of the nav: who and where, a sync button saying when the library last synced, and the two pages people look for here. */
 function AccountCard() {
-  const server = useApp((s) => s.servers[0]);
+  const accounts = useApp((s) => s.accounts);
+  const server = accounts[0];
   const navigate = useApp((s) => s.navigate);
   const openDialog = useApp((s) => s.openDialog);
   const syncing = useApp((s) => s.jobs.some((j) => j.kind === "librarySync" && (j.state === "running" || j.state === "queued")));
@@ -99,14 +103,14 @@ function AccountCard() {
           <span className="truncate settings-account-sub">{server.name && server.name !== host ? t("settings.account.on", { server: server.name, host }) : host}</span>
         </span>
       </div>
-      <button type="button" className="btn primary settings-account-sync" disabled={syncing} onClick={() => bridge().dispatch({ type: "syncLibrary", data: { server_id: server.id, full: false } })} data-testid="settings-account-sync">
+      <button type="button" className="btn primary settings-account-sync" disabled={syncing} onClick={() => { for (const a of accounts) bridge().dispatch({ type: "syncLibrary", data: { account_id: a.id, full: false } }); }} data-testid="settings-account-sync">
         <Icon name="sync" size={18} className={syncing ? "spin" : undefined} />
         <span className="truncate">{syncing ? t("settings.account.syncing") : t("settings.account.syncNow", { last })}</span>
       </button>
       <div className="settings-account-links">
         <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "stats" })} data-testid="settings-account-stats"><Icon name="stats" size={18} />{t("settings.account.stats")}</button>
         <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "settings", param: "connect" }, true)} data-testid="settings-account-devices"><Icon name="devices" size={18} />{t("settings.account.devices")}</button>
-        <button type="button" className="btn settings-account-link" onClick={() => openDialog({ kind: "setupDevice" })} data-testid="settings-account-setup-device"><Icon name="qr" size={18} />{t("settings.account.setUpDevice")}</button>
+        <button type="button" className="btn settings-account-link" onClick={() => openDialog({ kind: "pairDevice" })} data-testid="settings-account-setup-device"><Icon name="qr" size={18} />{t("settings.account.setUpDevice")}</button>
       </div>
     </div>
   );
@@ -143,8 +147,17 @@ function Toggle({ settingKey, title, desc, anchor, fallback = false }: { setting
 }
 
 function General() {
-  const servers = useApp((s) => s.servers);
+  const servers = useApp((s) => s.accounts);
   const cap = useSetting(SK.queueSavedCap, 10);
+  // Move an account up or down the priority order (the first plays first and holds the session).
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= servers.length) return;
+    const ids = servers.map((a) => a.id);
+    const [id] = ids.splice(from, 1);
+    if (id === undefined) return;
+    ids.splice(to, 0, id);
+    bridge().dispatch({ type: "reorderAccounts", data: { account_ids: ids } });
+  };
   const set = useApp((s) => s.setSetting);
   const openDialog = useApp((s) => s.openDialog);
   const bridgeOn = useSetting(SK.ratingsLoveBridgeEnabled, false);
@@ -155,19 +168,32 @@ function General() {
     <>
       <h2 className="section-title" id="setting-servers" tabIndex={-1}>{t("settings.servers")}</h2>
       <CredentialWarning />
-      {servers.map((s) => (
+      {servers.length > 1 ? <p className="muted small">{t("settings.accounts.orderHint")}</p> : null}
+      {servers.map((s, i) => (
         <div key={s.id} className="setting-row" data-testid="server-row">
           <div className="label">
-            <div className="title">{s.name} <span className="muted small">{s.url} · {s.username}</span></div>
+            <div className="title">{s.name} <span className="muted small" data-testid="server-row-kind">{[t(ACCOUNT_KIND_LABEL[s.kind]), s.url, s.username].filter(Boolean).join(" · ")}</span></div>
             <div className="desc">{s.capabilities.serverVersion ? t("settings.serverVersion", { version: s.capabilities.serverVersion }) : ""}{!s.capabilities.meetsFloor ? ` · ${t("settings.serverBelowFloor")}` : ""}{!s.reachable ? ` · ${t("settings.serverUnreachable")}` : ""}{s.lastSync ? ` · ${t("sync.done")} ${fmtRelative(s.lastSync)}` : ""}</div>
           </div>
           <div className="control">
-            <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "syncLibrary", data: { server_id: s.id, full: false } })}>{t("settings.serverResync")}</button>
-            <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "syncLibrary", data: { server_id: s.id, full: true } })}>{t("settings.serverFullResync")}</button>
-            <button type="button" className="btn sm danger" onClick={() => openDialog({ kind: "confirm", title: t("settings.serverRemove"), message: t("dialog.removeServer", { name: s.name }), destructive: true, confirmLabel: t("dialog.delete"), onConfirm: () => bridge().dispatch({ type: "removeServer", data: { server_id: s.id } }) })}>{t("settings.serverRemove")}</button>
+            {servers.length > 1 ? (
+              <>
+                <button type="button" className="btn icon sm" disabled={i === 0} aria-label={t("settings.accounts.up", { name: s.name })} title={t("settings.accounts.up", { name: s.name })} onClick={() => move(i, i - 1)} data-testid="account-up"><Icon name="arrowUp" size={16} /></button>
+                <button type="button" className="btn icon sm" disabled={i === servers.length - 1} aria-label={t("settings.accounts.down", { name: s.name })} title={t("settings.accounts.down", { name: s.name })} onClick={() => move(i, i + 1)} data-testid="account-down"><Icon name="arrowDown" size={16} /></button>
+              </>
+            ) : null}
+            <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "syncLibrary", data: { account_id: s.id, full: false } })}>{t("settings.serverResync")}</button>
+            <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "syncLibrary", data: { account_id: s.id, full: true } })}>{t("settings.serverFullResync")}</button>
+            <button type="button" className="btn sm danger" onClick={() => openDialog({ kind: "confirm", title: t("settings.serverRemove"), message: t("dialog.removeServer", { name: s.name }), destructive: true, confirmLabel: t("dialog.delete"), onConfirm: () => bridge().dispatch({ type: "removeAccount", data: { account_id: s.id } }) })}>{t("settings.serverRemove")}</button>
           </div>
         </div>
       ))}
+      <div className="setting-row">
+        <div className="label"><div className="desc">{t("settings.accounts.addHint")}</div></div>
+        <div className="control">
+          <button type="button" className="btn tonal sm" onClick={startAddAccount} data-testid="account-add"><Icon name="plus" size={16} />{t("settings.accounts.add")}</button>
+        </div>
+      </div>
       <Row anchor="closeToTray" title={t("settings.closeToTray")} desc={t("settings.scope.local")}>
         <Switch checked={prefs.closeToTray} onChange={(checked) => setPrefs({ closeToTray: checked })} aria-label={t("settings.closeToTray")} data-testid="pref-closeToTray" />
       </Row>
@@ -431,6 +457,7 @@ function Connect() {
         {connection.tier === "coordinator" && connection.connected ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "disconnectCoordinator" })}>{t("settings.coordinatorDisconnect")}</button> : <button type="button" className="btn sm" onClick={() => { bridge().dispatch({ type: "setCoordinatorUrl", data: { url: url.trim() || undefined } }); bridge().dispatch({ type: "connectCoordinator" }); }} disabled={!url.trim()}>{t("settings.coordinatorConnect")}</button>}
       </Row>
       <Toggle anchor="lanDiscovery" settingKey={SK.connectLanDiscovery} title={t("settings.lanDiscovery")} />
+      <IdentitySettings />
       <h2 className="section-title">{t("connect.title")}</h2>
       {devices.map((d) => <div key={d.id} className="setting-row"><div className="label"><div className="title">{d.name}{d.isSelf ? <span className="badge">{t("connect.thisDevice")}</span> : null}{d.playing ? <span className="badge ok">{t("connect.playing")}</span> : null}</div><div className="desc">{d.platform} · {d.appVersion} · {fmtRelative(d.lastSeen)}</div></div><div className="control" /></div>)}
     </>

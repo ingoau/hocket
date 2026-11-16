@@ -47,11 +47,11 @@ class StashTest {
 
     private fun stashSome(core: TestCore, n: Int): List<String> {
         val q = core.client.queue.value
-        val ids = (listOfNotNull(q.current) + q.groupEntries + q.restEntries).map { it.track.id }.distinct().take(n)
+        val ids = (listOfNotNull(q.current) + q.groupEntries + q.restEntries).map { it.item.track }.distinct().take(n)
         core.client.dispatch(Command.StashAdd(CommandStashAddInner(ids)))
         compose.waitUntil(5_000) { core.client.stash.value.size == ids.size }
         compose.waitForIdle()
-        return ids
+        return ids.map { it.id }
     }
 
     @Test

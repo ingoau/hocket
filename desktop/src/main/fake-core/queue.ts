@@ -178,7 +178,7 @@ function takeForQueueing(q: FlatQueue, trackIds: string[], keys: string[], fresh
     const i = indexOfKey(q, key);
     if (i < 0) continue;
     if (i > q.ptr && hasCurrent(q)) items.push(q.list.splice(i, 1)[0]!);
-    else items.push(fresh(q.list[i]!.trackId));
+    else items.push(fresh(q.list[i]!.track.id));
   }
   for (const t of trackIds) items.push(fresh(t));
   return items;

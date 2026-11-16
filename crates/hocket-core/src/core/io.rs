@@ -16,7 +16,6 @@ use crate::connect::discovery::{Discovery, NoDiscovery};
 use crate::connect::transport::{
     connect_first, Connection, LanListener, PeerIds, TransportError, WsTransport,
 };
-use crate::connect::wire::Credential;
 use crate::connect::PeerId;
 
 /// A running LAN listener.
@@ -42,8 +41,36 @@ pub trait ConnectIo: Send + Sync {
     ) -> BoxFuture<'static, Result<Box<dyn Listener>, TransportError>>;
     /// A fresh discovery instance (started by the actor).
     fn discovery(&self) -> Box<dyn Discovery>;
-    /// Proxy a Subsonic `ping` with the credential; `true` when the server accepts it.
-    fn verify(&self, credential: Credential) -> BoxFuture<'static, bool>;
+    /// Where a device on the LAN reaches our listener on `port` (a pairing
+    /// invite's rendezvous).
+    fn lan_urls(&self, port: u16) -> Vec<String> {
+        local_ips()
+            .into_iter()
+            .map(|ip| match ip {
+                std::net::IpAddr::V4(a) => format!("ws://{a}:{port}"),
+                std::net::IpAddr::V6(a) => format!("ws://[{a}]:{port}"),
+            })
+            .collect()
+    }
+}
+
+/// This host's addresses another device on the LAN could reach: the source
+/// address of the default route, IPv4 and IPv6 (nothing is sent).
+pub fn local_ips() -> Vec<std::net::IpAddr> {
+    let mut out = vec![];
+    for (bind, target) in [("0.0.0.0:0", "192.0.2.1:9"), ("[::]:0", "[2001:db8::1]:9")] {
+        if let Ok(s) = std::net::UdpSocket::bind(bind) {
+            if s.connect(target).is_ok() {
+                if let Ok(a) = s.local_addr() {
+                    let ip = a.ip();
+                    if !ip.is_unspecified() && !ip.is_loopback() && !out.contains(&ip) {
+                        out.push(ip);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Production I/O.
@@ -51,9 +78,6 @@ pub struct RealIo {
     transport: WsTransport,
     device_id: String,
     lan: bool,
-    /// `None` only if the client could not be built; verification then fails
-    /// closed rather than falling back to a client that follows redirects.
-    http: Option<reqwest::Client>,
 }
 
 impl RealIo {
@@ -62,90 +86,8 @@ impl RealIo {
             transport: WsTransport,
             device_id: config.device_id.clone(),
             lan: config.coordinator_listen.is_none(),
-            http: verify_client().ok(),
         }
     }
-}
-
-/// Largest ping response body read (a Subsonic ping is a few hundred bytes).
-pub const VERIFY_BODY_CAP: usize = 64 * 1024;
-
-/// The client for credential pings: 10 s budget, never follows a redirect
-/// (that would carry the token and salt to wherever the server points).
-pub fn verify_client() -> Result<reqwest::Client, reqwest::Error> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-}
-
-/// The `ping` endpoint for a Subsonic base URL a peer presented: plain
-/// `http(s)` with a host and no userinfo. The path is set structurally, so
-/// a `#` or `?` in the base cannot swallow it.
-pub fn ping_url(base: &str) -> Result<url::Url, String> {
-    let mut url = url::Url::parse(base.trim()).map_err(|e| e.to_string())?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err("server URL must be http or https".into());
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err("server URL must not carry credentials".into());
-    }
-    if url.host_str().map(str::is_empty).unwrap_or(true) {
-        return Err("server URL needs a host".into());
-    }
-    url.set_fragment(None);
-    url.set_query(None);
-    let path = format!("{}/rest/ping.view", url.path().trim_end_matches('/'));
-    url.set_path(&path);
-    Ok(url)
-}
-
-/// Proxy one Subsonic `ping` with `credential`; `true` when the server says
-/// `ok`. Nothing here ever logs the request URL (its query is the credential).
-pub async fn verify_ping(http: &reqwest::Client, credential: &Credential) -> bool {
-    let url = match ping_url(&credential.server_url) {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::debug!(error = %e, "peer named an unusable server");
-            return false;
-        }
-    };
-    let host = url.host_str().unwrap_or("?").to_string();
-    let params = credential.ping_params();
-    let mut resp = match http.get(url).query(&params).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!(%host, error = %e.without_url(), "credential ping failed");
-            return false;
-        }
-    };
-    if !resp.status().is_success() {
-        tracing::debug!(%host, status = %resp.status(), "credential ping refused");
-        return false;
-    }
-    if resp.content_length().unwrap_or(0) > VERIFY_BODY_CAP as u64 {
-        return false;
-    }
-    let mut body = Vec::new();
-    loop {
-        match resp.chunk().await {
-            Ok(Some(c)) => {
-                if body.len() + c.len() > VERIFY_BODY_CAP {
-                    tracing::debug!(%host, "credential ping response too large");
-                    return false;
-                }
-                body.extend_from_slice(&c);
-            }
-            Ok(None) => break,
-            Err(e) => {
-                tracing::debug!(%host, error = %e.without_url(), "credential ping failed");
-                return false;
-            }
-        }
-    }
-    serde_json::from_slice::<serde_json::Value>(&body)
-        .map(|v| v["subsonic-response"]["status"].as_str() == Some("ok"))
-        .unwrap_or(false)
 }
 
 impl Listener for LanListener {
@@ -192,16 +134,6 @@ impl ConnectIo for RealIo {
         let _ = (&self.device_id, self.lan);
         Box::new(NoDiscovery)
     }
-
-    fn verify(&self, credential: Credential) -> BoxFuture<'static, bool> {
-        let http = self.http.clone();
-        Box::pin(async move {
-            match http {
-                Some(http) => verify_ping(&http, &credential).await,
-                None => false,
-            }
-        })
-    }
 }
 
 /// In-process network for tests: listeners are ports on a shared hub,
@@ -242,6 +174,8 @@ pub mod memory {
     #[derive(Default)]
     pub struct MemoryNet {
         hub: Mutex<Hub>,
+        identity: Mutex<Option<crate::identity::Identity>>,
+        isolated: Mutex<std::collections::HashSet<String>>,
     }
 
     impl MemoryNet {
@@ -286,12 +220,48 @@ pub mod memory {
             }
         }
 
+        /// `device`'s copy of the identity every core on this network
+        /// shares (paired in as it first asks; earlier devices learn of it
+        /// in their handshakes, as real ones do).
+        pub fn identity_for(&self, device: &str) -> crate::identity::Identity {
+            if self.isolated.lock().contains(device) {
+                let (_, secret) = crate::identity::testing::device(device);
+                return crate::identity::Identity::create_with(
+                    &crate::identity::new_identity_id(),
+                    device,
+                    device,
+                    secret,
+                    0.0,
+                );
+            }
+            let mut root = self.identity.lock();
+            let root = root.get_or_insert_with(|| {
+                crate::identity::Identity::create_with(
+                    "0000000000000000000000000000beef",
+                    "net-root",
+                    "net-root",
+                    crate::identity::crypto::DeviceSecret::from_seed(b"net-root"),
+                    0.0,
+                )
+            });
+            if root.member_state().is_member(device) {
+                let (_, secret) = crate::identity::testing::device(device);
+                return crate::identity::Identity::joined(device, secret, root.sync())
+                    .expect("a member");
+            }
+            crate::identity::testing::pair(root, device, 0.0)
+        }
+
+        /// `device` starts with an identity of its own, not the network's.
+        pub fn isolate(&self, device: &str) {
+            self.isolated.lock().insert(device.to_string());
+        }
+
         /// I/O for one device on this network.
-        pub fn io(self: &Arc<Self>, device_id: &str, verify_ok: bool) -> Arc<MemoryIo> {
+        pub fn io(self: &Arc<Self>, device_id: &str) -> Arc<MemoryIo> {
             Arc::new(MemoryIo {
                 net: self.clone(),
                 device_id: device_id.to_string(),
-                verify_ok,
             })
         }
 
@@ -326,7 +296,6 @@ pub mod memory {
     pub struct MemoryIo {
         net: Arc<MemoryNet>,
         device_id: DeviceId,
-        verify_ok: bool,
     }
 
     struct MemoryListener {
@@ -576,6 +545,10 @@ pub mod memory {
             })
         }
 
+        fn lan_urls(&self, port: u16) -> Vec<String> {
+            vec![MemoryNet::url_for(port)]
+        }
+
         fn discovery(&self) -> Box<dyn Discovery> {
             Box::new(MemoryDiscovery {
                 net: self.net.clone(),
@@ -583,119 +556,5 @@ pub mod memory {
                 started: false,
             })
         }
-
-        fn verify(&self, _credential: Credential) -> BoxFuture<'static, bool> {
-            let ok = self.verify_ok;
-            Box::pin(async move { ok })
-        }
-    }
-}
-
-#[cfg(test)]
-mod verify_tests {
-    use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    fn credential(server_url: &str) -> Credential {
-        Credential {
-            server_url: server_url.into(),
-            username: "u".into(),
-            token: Some("tok".into()),
-            salt: Some("salt".into()),
-            api_key: None,
-            client: "hocket".into(),
-            api_version: "1.16.1".into(),
-        }
-    }
-
-    /// A one-route HTTP server: every request whose path starts with
-    /// `/rest/ping.view` gets `ping`, anything else gets `other`.
-    async fn serve(ping: String, other: String) -> std::net::SocketAddr {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = l.local_addr().unwrap();
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut s, _)) = l.accept().await else {
-                    break;
-                };
-                let (ping, other) = (ping.clone(), other.clone());
-                tokio::spawn(async move {
-                    let mut buf = vec![0u8; 4096];
-                    let n = s.read(&mut buf).await.unwrap_or(0);
-                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let resp = if req.starts_with("GET /rest/ping.view") {
-                        ping
-                    } else {
-                        other
-                    };
-                    let _ = s.write_all(resp.as_bytes()).await;
-                    let _ = s.shutdown().await;
-                });
-            }
-        });
-        addr
-    }
-
-    fn ok_response(body: &str) -> String {
-        format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-            body.len()
-        )
-    }
-
-    const OK: &str = r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
-
-    #[test]
-    fn ping_url_accepts_only_plain_http_without_userinfo() {
-        for bad in [
-            "ftp://music.example/",
-            "file:///etc/passwd",
-            "http://user:pw@music.example/",
-            "https://user@music.example/",
-            "not a url",
-        ] {
-            assert!(ping_url(bad).is_err(), "{bad}");
-        }
-        assert_eq!(
-            ping_url("http://10.0.0.2:4533/nav/#x?y=1")
-                .unwrap()
-                .as_str(),
-            "http://10.0.0.2:4533/nav/rest/ping.view"
-        );
-        assert_eq!(
-            ping_url("https://music.example#").unwrap().path(),
-            "/rest/ping.view"
-        );
-    }
-
-    #[tokio::test]
-    async fn verify_accepts_ok_and_follows_no_redirect() {
-        let http = verify_client().unwrap();
-        let good = serve(ok_response(OK), ok_response(OK)).await;
-        assert!(verify_ping(&http, &credential(&format!("http://{good}/"))).await);
-        // a redirect that would lead to an "ok" is not followed
-        let target = format!("http://{good}/rest/ping.view");
-        let redirect = format!(
-            "HTTP/1.1 302 Found\r\nlocation: {target}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
-        );
-        let bouncer = serve(redirect.clone(), redirect).await;
-        assert!(!verify_ping(&http, &credential(&format!("http://{bouncer}/"))).await);
-    }
-
-    #[tokio::test]
-    async fn verify_caps_the_response_body() {
-        let http = verify_client().unwrap();
-        let padded = format!(
-            r#"{{"subsonic-response":{{"status":"ok","pad":"{}"}}}}"#,
-            "x".repeat(VERIFY_BODY_CAP)
-        );
-        let big = serve(ok_response(&padded), ok_response(&padded)).await;
-        assert!(!verify_ping(&http, &credential(&format!("http://{big}/"))).await);
-        // the same without a content-length (read until close)
-        let chunked = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{padded}"
-        );
-        let big = serve(chunked.clone(), chunked).await;
-        assert!(!verify_ping(&http, &credential(&format!("http://{big}/"))).await);
     }
 }

@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import app.hocket.core.ArtworkSizes
+import app.hocket.core.ref
 import app.hocket.core.api.RelatedTrack
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.Segment
@@ -115,9 +116,9 @@ internal fun PlayerAbout(
     // [track] when given (a song menu's "Song info"), otherwise the song playing.
     val summary = track ?: entry?.track
     val id = summary?.id
-    val detail by produceState<Track?>(initialValue = null, id) {
+    val detail by produceState<Track?>(initialValue = null, id, summary?.serverId) {
         value = null
-        value = id?.let { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data }
+        value = summary?.let { (client.query(Queries.track(it.ref)) as? QueryResult.TrackDetail)?.data }
     }
     val d = detail?.takeIf { it.id == id }
     val albumId = summary?.albumId
@@ -146,6 +147,7 @@ internal fun PlayerAbout(
     ) {
         if (summary == null) return@LazyColumn
         item(key = "head") { AboutHeader(summary, title, onClose, onOpenAlbum, onOpenArtist) }
+        item(key = "sources") { SongSources(summary.ref) }
         item(key = "tabs") {
             val tabs = listOf(R.string.about_tab_song, R.string.about_tab_about, R.string.about_tab_file)
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 10.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
@@ -238,7 +240,7 @@ private fun SongTab(summary: TrackSummary, d: Track?, album: Album?, dot: String
         Surface(shape = corners(), color = segmentColor()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 14.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.player_about_rating), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                RatingStars(summary.rating.toInt(), onRate = { client.dispatch(Commands.rateTrack(summary.id, it)) }, starSize = 26.dp, spacing = 16.dp, tint = MaterialTheme.colorScheme.primary)
+                RatingStars(summary.rating.toInt(), onRate = { client.dispatch(Commands.rateTrack(summary.ref, it)) }, starSize = 26.dp, spacing = 16.dp, tint = MaterialTheme.colorScheme.primary)
             }
         }
         Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(gap)) {
@@ -301,15 +303,15 @@ private fun AboutTab(albumInfo: ExternalInfo?, artistInfo: ExternalInfo?, simila
                         Column { similar.chunked(columns).forEach { row ->
                             Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 row.forEach { r ->
-                                    val playNext = { client.dispatch(Commands.playNext(r.track.serverId, listOf(r.track.id))) }
+                                    val playNext = { client.dispatch(Commands.playNext(listOf(r.track.ref))) }
                                     val playNextLabel = stringResource(R.string.action_play_next)
                                     // Tap plays next; Add to queue (when offered) and Play later are the card's other actions.
                                     val addToQueueLabel = stringResource(R.string.action_label_add_to_queue)
                                     val playLaterLabel = stringResource(R.string.queue_play_later)
                                     val section = app.hocket.ui.components.queueSectionOn()
                                     val more = buildList {
-                                        if (section) add(androidx.compose.ui.semantics.CustomAccessibilityAction(addToQueueLabel) { client.dispatch(Commands.addToQueue(r.track.serverId, listOf(r.track.id))); true })
-                                        add(androidx.compose.ui.semantics.CustomAccessibilityAction(playLaterLabel) { client.dispatch(Commands.playLater(r.track.serverId, listOf(r.track.id))); true })
+                                        if (section) add(androidx.compose.ui.semantics.CustomAccessibilityAction(addToQueueLabel) { client.dispatch(Commands.addToQueue(listOf(r.track.ref))); true })
+                                        add(androidx.compose.ui.semantics.CustomAccessibilityAction(playLaterLabel) { client.dispatch(Commands.playLater(listOf(r.track.ref))); true })
                                     }
                                     Surface(onClick = playNext, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.weight(1f)
                                         .semantics { contentDescription = "${r.track.title}, ${r.track.artist.orEmpty()}"; onClick(label = playNextLabel) { playNext(); true }; customActions = more }) {

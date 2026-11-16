@@ -15,11 +15,12 @@ use crate::api::{
 };
 use crate::lyrics::search::{self, IndexedLyrics};
 
+use super::links::{hidden_copy, LinkKind};
 use super::{Db, DbResult};
 
 /// A raw SQL fragment over `tracks` with positional parameters. Built by the
 /// filters module; the query layer only ever wraps it in parentheses and
-/// ANDs it with `server_id = ?`.
+/// ANDs it with `server_id = ?` (an empty server id: every account).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WhereClause {
     pub sql: String,
@@ -78,55 +79,71 @@ pub fn offline_to_i64(s: OfflineState) -> i64 {
 }
 
 /// Column list for `SELECT ... FROM tracks`, in the order [`track_from_row`] reads.
-pub const TRACK_COLUMNS: &str = "id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, key, energy, mood, danceability, valence, offline, music_brainz_id, explicit, comment, artists";
+/// Orders rows of several accounts by the user's account order (an
+/// unknown account last).
+pub const PRIORITY: &str =
+    "COALESCE((SELECT priority FROM accounts WHERE accounts.id = server_id), 1000000)";
+
+/// The account an album id (`?1`) belongs to: the highest-priority one with
+/// such an album; any account when none has the album row.
+const ALBUM_OWNER: &str = "COALESCE((SELECT a.server_id FROM albums a WHERE a.id = ?1 ORDER BY COALESCE((SELECT priority FROM accounts WHERE accounts.id = a.server_id), 1000000) LIMIT 1), server_id)";
+/// As [`ALBUM_OWNER`], for an artist id.
+const ARTIST_OWNER: &str = "COALESCE((SELECT a.server_id FROM artists a WHERE a.id = ?1 ORDER BY COALESCE((SELECT priority FROM accounts WHERE accounts.id = a.server_id), 1000000) LIMIT 1), server_id)";
+
+pub const TRACK_COLUMNS: &str = "id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, key, energy, mood, danceability, valence, offline, music_brainz_id, explicit, comment, artists, isrc";
 
 fn opt_u32(row: &Row, idx: usize) -> rusqlite::Result<Option<u32>> {
     Ok(row.get::<_, Option<i64>>(idx)?.map(|v| v.max(0) as u32))
 }
 
 pub fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
+    track_from_offset_row(row, 0)
+}
+
+/// [`track_from_row`] for track columns starting at column `o`.
+pub fn track_from_offset_row(row: &Row, o: usize) -> rusqlite::Result<Track> {
     let rg = api::ReplayGain {
-        track_gain_db: row.get(27)?,
-        track_peak: row.get(28)?,
-        album_gain_db: row.get(29)?,
-        album_peak: row.get(30)?,
+        track_gain_db: row.get(o + 27)?,
+        track_peak: row.get(o + 28)?,
+        album_gain_db: row.get(o + 29)?,
+        album_peak: row.get(o + 30)?,
     };
     let sonic = api::SonicAttributes {
-        bpm: row.get(31)?,
-        key: row.get(32)?,
-        energy: row.get(33)?,
-        mood: row.get(34)?,
-        danceability: row.get(35)?,
-        valence: row.get(36)?,
+        bpm: row.get(o + 31)?,
+        key: row.get(o + 32)?,
+        energy: row.get(o + 33)?,
+        mood: row.get(o + 34)?,
+        danceability: row.get(o + 35)?,
+        valence: row.get(o + 36)?,
     };
     let mut t = Track {
-        id: row.get(0)?,
-        server_id: row.get(1)?,
-        title: row.get(2)?,
-        album_id: row.get(3)?,
-        album: row.get(4)?,
-        artist_id: row.get(5)?,
-        artist: row.get(6)?,
-        album_artist: row.get(7)?,
-        track_number: opt_u32(row, 8)?,
-        disc_number: opt_u32(row, 9)?,
-        year: opt_u32(row, 10)?,
-        genre: row.get(11)?,
-        duration_ms: row.get::<_, i64>(12)?.max(0) as u32,
-        bit_rate: opt_u32(row, 13)?,
-        sample_rate: opt_u32(row, 14)?,
-        bit_depth: opt_u32(row, 15)?,
-        channels: opt_u32(row, 16)?,
-        suffix: row.get(17)?,
-        content_type: row.get(18)?,
-        size_bytes: row.get(19)?,
-        path: row.get(20)?,
-        cover_art: row.get(21)?,
-        rating: row.get::<_, i64>(22)?.clamp(0, 5) as u32,
-        loved: row.get::<_, i64>(23)? != 0,
-        play_count: row.get::<_, i64>(24)?.max(0) as u32,
-        last_played: row.get(25)?,
-        created: row.get(26)?,
+        id: row.get(o)?,
+        server_id: row.get(o + 1)?,
+        title: row.get(o + 2)?,
+        album_id: row.get(o + 3)?,
+        album: row.get(o + 4)?,
+        artist_id: row.get(o + 5)?,
+        artist: row.get(o + 6)?,
+        album_artist: row.get(o + 7)?,
+        track_number: opt_u32(row, o + 8)?,
+        disc_number: opt_u32(row, o + 9)?,
+        year: opt_u32(row, o + 10)?,
+        genre: row.get(o + 11)?,
+        duration_ms: row.get::<_, i64>(o + 12)?.max(0) as u32,
+        bit_rate: opt_u32(row, o + 13)?,
+        sample_rate: opt_u32(row, o + 14)?,
+        bit_depth: opt_u32(row, o + 15)?,
+        channels: opt_u32(row, o + 16)?,
+        suffix: row.get(o + 17)?,
+        content_type: row.get(o + 18)?,
+        size_bytes: row.get(o + 19)?,
+        path: row.get(o + 20)?,
+        cover_art: row.get(o + 21)?,
+        rating: row.get::<_, i64>(o + 22)?.clamp(0, 5) as u32,
+        loved: row.get::<_, i64>(o + 23)? != 0,
+        play_count: row.get::<_, i64>(o + 24)?.max(0) as u32,
+        last_played: row.get(o + 25)?,
+        created: row.get(o + 26)?,
         replay_gain: if rg == api::ReplayGain::default() {
             None
         } else {
@@ -137,15 +154,16 @@ pub fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
         } else {
             Some(sonic)
         },
-        offline: offline_from_i64(row.get(37)?),
-        music_brainz_id: row.get(38)?,
-        explicit: row.get::<_, i64>(39)? != 0,
-        comment: row.get(40)?,
+        offline: offline_from_i64(row.get(o + 37)?),
+        music_brainz_id: row.get(o + 38)?,
+        explicit: row.get::<_, i64>(o + 39)? != 0,
+        comment: row.get(o + 40)?,
         artists: Vec::new(),
+        isrc: row.get(o + 42)?,
     };
     // As stored (JSON), or for a row from before the column existed the one artist it names.
     t.artists = row
-        .get::<_, Option<String>>(41)?
+        .get::<_, Option<String>>(o + 41)?
         .and_then(|j| serde_json::from_str(&j).ok())
         .filter(|a: &Vec<api::ArtistRef>| !a.is_empty())
         .unwrap_or_else(|| crate::subsonic::convert::fallback_artists(&t.artist_id, &t.artist));
@@ -487,15 +505,128 @@ impl Db {
         })
     }
 
+    /// A track by bare id: the highest-priority account's copy when several
+    /// accounts have one. Prefer [`Db::track_ref`] wherever the source is known.
     pub fn track(&self, id: &str) -> DbResult<Option<Track>> {
         self.with_conn(|c| {
             Ok(c.query_row(
-                &format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?1"),
+                &format!(
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?1 ORDER BY {PRIORITY} LIMIT 1"
+                ),
                 [id],
                 track_from_row,
             )
             .optional()?)
         })
+    }
+
+    /// The track a reference names.
+    pub fn track_ref(&self, r: &api::TrackRef) -> DbResult<Option<Track>> {
+        let found = self.with_conn(|c| {
+            Ok(c.query_row(
+                &format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE server_id = ?1 AND id = ?2"),
+                [&r.source, &r.id],
+                track_from_row,
+            )
+            .optional()?)
+        })?;
+        match found {
+            Some(t) => Ok(Some(t)),
+            // A song outside the library (YouTube Music's catalogue).
+            None => self.catalogue_track_ref(&r.source, &r.id),
+        }
+    }
+
+    /// The reference for a bare id from a UI target: the highest-priority
+    /// account whose mirror has it.
+    pub fn ref_for_id(&self, id: &str) -> DbResult<Option<api::TrackRef>> {
+        Ok(self
+            .track(id)?
+            .map(|t| api::TrackRef::new(t.server_id, t.id)))
+    }
+
+    /// Whether `server_id`'s mirror has this album, artist or playlist.
+    pub fn has_entity(&self, table: &str, server_id: &str, id: &str) -> DbResult<bool> {
+        debug_assert!(matches!(table, "albums" | "artists" | "playlists"));
+        self.with_conn(|c| {
+            Ok(c.query_row(
+                &format!("SELECT 1 FROM {table} WHERE server_id = ?1 AND id = ?2"),
+                [server_id, id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+        })
+    }
+
+    /// The account a cover art id belongs to (the highest-priority one
+    /// whose albums, playlists, artists or tracks use it).
+    pub fn cover_source(&self, cover_id: &str) -> DbResult<Option<String>> {
+        self.with_conn(|c| {
+            for table in ["albums", "playlists", "artists", "tracks"] {
+                let found: Option<String> = c
+                    .query_row(
+                        &format!(
+                            "SELECT server_id FROM {table} WHERE cover_art = ?1 ORDER BY {PRIORITY} LIMIT 1"
+                        ),
+                        [cover_id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if found.is_some() {
+                    return Ok(found);
+                }
+            }
+            Ok(None)
+        })
+    }
+
+    /// Tracks by reference, in the order requested; missing ones are skipped.
+    pub fn tracks_by_refs(&self, refs: &[api::TrackRef]) -> DbResult<Vec<Track>> {
+        if refs.is_empty() {
+            return Ok(vec![]);
+        }
+        const CHUNK: usize = 256;
+        self.with_conn(|c| {
+            let mut found: std::collections::HashMap<(String, String), Track> =
+                std::collections::HashMap::with_capacity(refs.len());
+            for chunk in refs.chunks(CHUNK) {
+                let marks = vec!["?"; chunk.len()].join(",");
+                let mut st = c.prepare(&format!(
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({marks})"
+                ))?;
+                let rows = st.query_map(
+                    params_from_iter(chunk.iter().map(|r| &r.id)),
+                    track_from_row,
+                )?;
+                for t in rows {
+                    let t = t?;
+                    found.insert((t.server_id.clone(), t.id.clone()), t);
+                }
+            }
+            Ok(found)
+        })
+        .map(|found| {
+            refs.iter()
+                .filter_map(|r| {
+                    found
+                        .get(&(r.source.clone(), r.id.clone()))
+                        .cloned()
+                        .or_else(|| {
+                            // Outside the lock: a song outside the library.
+                            self.catalogue_track_ref(&r.source, &r.id).ok().flatten()
+                        })
+                })
+                .collect()
+        })
+    }
+
+    pub fn summaries_by_refs(&self, refs: &[api::TrackRef]) -> DbResult<Vec<TrackSummary>> {
+        Ok(self
+            .tracks_by_refs(refs)?
+            .iter()
+            .map(crate::subsonic::convert::summary_of)
+            .collect())
     }
 
     /// Tracks by id, in the order requested; missing ids are skipped.
@@ -513,7 +644,7 @@ impl Db {
                 let marks = vec!["?"; chunk.len()].join(",");
                 // Not cached: chunk sizes vary and would churn the cache.
                 let mut st = c.prepare(&format!(
-                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({marks})"
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({marks}) ORDER BY {PRIORITY}"
                 ))?;
                 let rows = st.query_map(params_from_iter(chunk), track_from_row)?;
                 for t in rows {
@@ -533,30 +664,102 @@ impl Db {
             .collect())
     }
 
+    /// An album's songs: the representative copy's, then any song only a
+    /// linked copy of the album (another account's) has, each song once.
     pub fn album_tracks(&self, album_id: &str) -> DbResult<Vec<Track>> {
-        self.with_conn(|c| {
+        let mut rows = self.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
-                "SELECT {TRACK_COLUMNS} FROM tracks WHERE album_id = ?1 ORDER BY disc_number ASC, track_number ASC, title COLLATE NOCASE ASC"
+                "SELECT {TRACK_COLUMNS} FROM tracks WHERE album_id = ?1 AND server_id = {ALBUM_OWNER} ORDER BY disc_number ASC, track_number ASC, title COLLATE NOCASE ASC"
             ))?;
             let rows = st.query_map([album_id], track_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })
+        })?;
+        for (src, id) in self.linked_ids(LinkKind::Album, album_id)? {
+            if rows.first().is_some_and(|t| t.server_id == src) {
+                continue;
+            }
+            rows.extend(self.with_conn(|c| {
+                let mut st = c.prepare_cached(&format!(
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE album_id = ?2 AND server_id = ?1 ORDER BY disc_number ASC, track_number ASC, title COLLATE NOCASE ASC"
+                ))?;
+                let rows = st.query_map([&src, &id], track_from_row)?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })?);
+        }
+        self.one_per_song(rows)
     }
 
+    /// An artist's songs, with those of linked copies of the artist (other
+    /// accounts'), each song once.
     pub fn artist_tracks(&self, artist_id: &str) -> DbResult<Vec<Track>> {
-        self.with_conn(|c| {
+        let mut rows = self.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
-                "SELECT {TRACK_COLUMNS} FROM tracks WHERE artist_id = ?1 ORDER BY year ASC, album COLLATE NOCASE ASC, disc_number ASC, track_number ASC"
+                "SELECT {TRACK_COLUMNS} FROM tracks WHERE artist_id = ?1 AND server_id = {ARTIST_OWNER} ORDER BY year ASC, album COLLATE NOCASE ASC, disc_number ASC, track_number ASC"
             ))?;
             let rows = st.query_map([artist_id], track_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })
+        })?;
+        for (src, id) in self.linked_ids(LinkKind::Artist, artist_id)? {
+            if rows.first().is_some_and(|t| t.server_id == src) {
+                continue;
+            }
+            rows.extend(self.with_conn(|c| {
+                let mut st = c.prepare_cached(&format!(
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE artist_id = ?2 AND server_id = ?1 ORDER BY year ASC, album COLLATE NOCASE ASC, disc_number ASC, track_number ASC"
+                ))?;
+                let rows = st.query_map([&src, &id], track_from_row)?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })?);
+        }
+        self.one_per_song(rows)
+    }
+
+    /// Every copy (source, id) linked with an album or artist of this id,
+    /// on any account, representative first; empty when it is in no group.
+    pub fn linked_ids(&self, kind: LinkKind, id: &str) -> DbResult<Vec<(String, String)>> {
+        let owner: Option<String> = self.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT source FROM links WHERE kind = ?1 AND id = ?2 ORDER BY rep DESC LIMIT 1",
+                [kind.as_str(), id],
+                |r| r.get(0),
+            )
+            .optional()?)
+        })?;
+        match owner {
+            Some(src) => self.entity_members(kind, &src, id),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// `tracks` with later copies of a song already listed (linked) left
+    /// out.
+    fn one_per_song(&self, tracks: Vec<Track>) -> DbResult<Vec<Track>> {
+        if tracks.iter().all(|t| t.server_id == tracks[0].server_id) {
+            return Ok(tracks);
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(tracks.len());
+        for t in tracks {
+            let group: Option<String> = self.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT group_id FROM links WHERE kind = 'track' AND source = ?1 AND id = ?2",
+                    [&t.server_id, &t.id],
+                    |r| r.get(0),
+                )
+                .optional()?)
+            })?;
+            let key = group.unwrap_or_else(|| format!("{}\u{1}{}", t.server_id, t.id));
+            if seen.insert(key) {
+                out.push(t);
+            }
+        }
+        Ok(out)
     }
 
     pub fn genre_tracks(&self, server_id: &str, genre: &str) -> DbResult<Vec<Track>> {
         self.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
-                "SELECT {TRACK_COLUMNS} FROM tracks WHERE server_id = ?1 AND genre = ?2 ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number"
+                "SELECT {TRACK_COLUMNS} FROM tracks WHERE (?1 = '' OR server_id = ?1) AND genre = ?2 ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number"
             ))?;
             let rows = st.query_map([server_id, genre], track_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -665,8 +868,9 @@ impl Db {
 
     pub fn albums(&self, q: &AlbumQuery) -> DbResult<Vec<Album>> {
         let seed = self.random_seed();
+        let artists = self.artist_copies(q)?;
         self.with_conn(|c| {
-            let (where_sql, params) = album_where(q);
+            let (where_sql, params) = album_where(q, &artists);
             let sql = format!(
                 "SELECT {ALBUM_COLUMNS} FROM albums WHERE {where_sql} ORDER BY {}{}",
                 album_order(q.sort, q.descending, seed),
@@ -676,6 +880,13 @@ impl Db {
             let rows = st.query_map(params_from_iter(params.iter()), album_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
+    }
+
+    fn artist_copies(&self, q: &AlbumQuery) -> DbResult<Vec<(String, String)>> {
+        match &q.artist_id {
+            Some(a) => self.linked_ids(LinkKind::Artist, a),
+            None => Ok(vec![]),
+        }
     }
 
     pub fn album_page(&self, q: &AlbumQuery) -> DbResult<api::AlbumPage> {
@@ -689,8 +900,9 @@ impl Db {
     }
 
     pub fn album_count(&self, q: &AlbumQuery) -> DbResult<u32> {
+        let artists = self.artist_copies(q)?;
         self.with_conn(|c| {
-            let (where_sql, params) = album_where(q);
+            let (where_sql, params) = album_where(q, &artists);
             let n: i64 = c.query_row(
                 &format!("SELECT count(*) FROM albums WHERE {where_sql}"),
                 params_from_iter(params.iter()),
@@ -703,7 +915,9 @@ impl Db {
     pub fn album(&self, id: &str) -> DbResult<Option<Album>> {
         self.with_conn(|c| {
             Ok(c.query_row(
-                &format!("SELECT {ALBUM_COLUMNS} FROM albums WHERE id = ?1"),
+                &format!(
+                    "SELECT {ALBUM_COLUMNS} FROM albums WHERE id = ?1 ORDER BY {PRIORITY} LIMIT 1"
+                ),
                 [id],
                 album_from_row,
             )
@@ -750,7 +964,8 @@ impl Db {
         let seed = self.random_seed();
         self.with_conn(|c| {
             let sql = format!(
-                "SELECT {ARTIST_COLUMNS} FROM artists WHERE server_id = ?1 ORDER BY {}{}",
+                "SELECT {ARTIST_COLUMNS} FROM artists WHERE (server_id = ?1 OR (?1 = '' AND NOT {})) ORDER BY {}{}",
+                hidden_copy(LinkKind::Artist, "artists"),
                 artist_order(sort, descending, seed),
                 page_sql(&page)
             );
@@ -783,7 +998,10 @@ impl Db {
     pub fn artist_count(&self, server_id: &str) -> DbResult<u32> {
         self.with_conn(|c| {
             let n: i64 = c.query_row(
-                "SELECT count(*) FROM artists WHERE server_id = ?1",
+                &format!(
+                    "SELECT count(*) FROM artists WHERE (server_id = ?1 OR (?1 = '' AND NOT {}))",
+                    hidden_copy(LinkKind::Artist, "artists")
+                ),
                 [server_id],
                 |r| r.get(0),
             )?;
@@ -794,7 +1012,7 @@ impl Db {
     pub fn artist(&self, id: &str) -> DbResult<Option<Artist>> {
         self.with_conn(|c| {
             Ok(c.query_row(
-                &format!("SELECT {ARTIST_COLUMNS} FROM artists WHERE id = ?1"),
+                &format!("SELECT {ARTIST_COLUMNS} FROM artists WHERE id = ?1 ORDER BY {PRIORITY} LIMIT 1"),
                 [id],
                 artist_from_row,
             )
@@ -895,7 +1113,7 @@ impl Db {
     pub fn genres(&self, server_id: &str) -> DbResult<Vec<Genre>> {
         self.with_conn(|c| {
             let mut st = c.prepare_cached(
-                "SELECT name, song_count, album_count FROM genres WHERE server_id = ?1 ORDER BY name COLLATE NOCASE ASC",
+                "SELECT name, song_count, album_count FROM genres WHERE (?1 = '' OR server_id = ?1) ORDER BY name COLLATE NOCASE ASC",
             )?;
             let rows = st.query_map([server_id], |r| {
                 Ok(Genre {
@@ -927,7 +1145,7 @@ impl Db {
     pub fn playlists(&self, server_id: &str) -> DbResult<Vec<Playlist>> {
         self.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
-                "SELECT {PLAYLIST_COLUMNS} FROM playlists WHERE server_id = ?1 ORDER BY name COLLATE NOCASE ASC, id ASC"
+                "SELECT {PLAYLIST_COLUMNS} FROM playlists WHERE (?1 = '' OR server_id = ?1) ORDER BY name COLLATE NOCASE ASC, id ASC"
             ))?;
             let rows = st.query_map([server_id], playlist_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -937,7 +1155,7 @@ impl Db {
     pub fn playlist(&self, id: &str) -> DbResult<Option<Playlist>> {
         self.with_conn(|c| {
             Ok(c.query_row(
-                &format!("SELECT {PLAYLIST_COLUMNS} FROM playlists WHERE id = ?1"),
+                &format!("SELECT {PLAYLIST_COLUMNS} FROM playlists WHERE id = ?1 ORDER BY {PRIORITY} LIMIT 1"),
                 [id],
                 playlist_from_row,
             )
@@ -956,17 +1174,58 @@ impl Db {
         })
     }
 
-    pub fn playlist_tracks(&self, playlist_id: &str, page: Option<Page>) -> DbResult<Vec<Track>> {
+    /// A playlist's songs in order: every entry, so an index here is an
+    /// index into the playlist (what remove and move name). A song the
+    /// mirror doesn't have (another account's, one swept, one from the
+    /// catalogue) comes from the catalogue, or as a bare entry with its id.
+    /// Track ids of a playlist's songs from `source`, in position order.
+    pub fn playlist_track_ids_on(&self, playlist_id: &str, source: &str) -> DbResult<Vec<String>> {
         self.with_conn(|c| {
-            let sql = format!(
-                "SELECT {} FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id AND t.server_id = pt.server_id WHERE pt.playlist_id = ?1 ORDER BY pt.position ASC{}",
-                TRACK_COLUMNS.split(", ").map(|col| format!("t.{col}")).collect::<Vec<_>>().join(", "),
-                page_sql(&page)
-            );
-            let mut st = c.prepare_cached(&sql)?;
-            let rows = st.query_map([playlist_id], track_from_row)?;
+            let mut st = c.prepare_cached(
+                "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 AND COALESCE(track_source, server_id) = ?2 ORDER BY position ASC",
+            )?;
+            let rows = st.query_map([playlist_id, source], |r| r.get::<_, String>(0))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
+    }
+
+    pub fn playlist_tracks(&self, playlist_id: &str, page: Option<Page>) -> DbResult<Vec<Track>> {
+        let sql = format!(
+            "SELECT pt.track_id, COALESCE(pt.track_source, pt.server_id), {} FROM playlist_tracks pt LEFT JOIN tracks t ON t.id = pt.track_id AND t.server_id = COALESCE(pt.track_source, pt.server_id) WHERE pt.playlist_id = ?1 ORDER BY pt.position ASC{}",
+            TRACK_COLUMNS
+                .split(", ")
+                .map(|col| format!("t.{col}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            page_sql(&page)
+        );
+        let rows: Vec<(String, String, Option<Track>)> = self.with_conn(|c| {
+            let mut st = c.prepare_cached(&sql)?;
+            let rows = st.query_map([playlist_id], |r| {
+                let id: String = r.get(0)?;
+                let source: String = r.get(1)?;
+                let found: Option<String> = r.get(2)?;
+                let track = match found {
+                    Some(_) => Some(track_from_offset_row(r, 2)?),
+                    None => None,
+                };
+                Ok((id, source, track))
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })?;
+        rows.into_iter()
+            .map(|(id, source, track)| match track {
+                Some(t) => Ok(t),
+                None => Ok(self
+                    .catalogue_track_ref(&source, &id)?
+                    .unwrap_or_else(|| Track {
+                        title: id.clone(),
+                        id,
+                        server_id: source,
+                        ..Default::default()
+                    })),
+            })
+            .collect()
     }
 
     pub fn playlist_track_page(&self, playlist_id: &str, page: Page) -> DbResult<api::TrackPage> {
@@ -991,27 +1250,35 @@ impl Db {
     pub fn playlist_membership(
         &self,
         server_id: &str,
-        track_ids: &[String],
+        tracks: &[(api::TrackRef, String)],
     ) -> DbResult<Vec<api::PlaylistMembership>> {
         let playlists = self.playlists(server_id)?;
-        let wanted: std::collections::HashSet<&str> =
-            track_ids.iter().map(String::as_str).collect();
+        // A song (or a copy of it) as the entry names it: the asked-for id.
+        let wanted: HashMap<(&str, &str), &str> = tracks
+            .iter()
+            .map(|(r, asked)| ((r.source.as_str(), r.id.as_str()), asked.as_str()))
+            .collect();
         let mut entries: std::collections::HashMap<String, Vec<api::PlaylistEntryRef>> =
             std::collections::HashMap::new();
         if !wanted.is_empty() {
             self.with_conn(|c| {
                 let mut st = c.prepare_cached(
-                    "SELECT playlist_id, track_id, ROW_NUMBER() OVER (PARTITION BY playlist_id ORDER BY position) - 1 \
-                     FROM playlist_tracks WHERE server_id = ?1",
+                    "SELECT playlist_id, track_id, ROW_NUMBER() OVER (PARTITION BY playlist_id ORDER BY position) - 1, COALESCE(track_source, server_id) \
+                     FROM playlist_tracks WHERE (?1 = '' OR server_id = ?1)",
                 )?;
                 let rows = st.query_map([server_id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
                 })?;
                 for row in rows {
-                    let (playlist, track, index) = row?;
-                    if wanted.contains(track.as_str()) {
+                    let (playlist, track, index, source) = row?;
+                    if let Some(asked) = wanted.get(&(source.as_str(), track.as_str())) {
                         entries.entry(playlist).or_default().push(api::PlaylistEntryRef {
-                            track_id: track,
+                            track_id: asked.to_string(),
                             index: index.max(0) as u32,
                         });
                     }
@@ -1120,29 +1387,32 @@ impl Db {
         };
         let lim = limit.max(1) as i64;
         self.with_conn(|c| {
+            let hidden_t = hidden_copy(LinkKind::Track, "t");
+            let hidden_al = hidden_copy(LinkKind::Album, "a");
+            let hidden_ar = hidden_copy(LinkKind::Artist, "a");
             let track_cols = TRACK_COLUMNS.split(", ").map(|col| format!("t.{col}")).collect::<Vec<_>>().join(", ");
             let mut st = c.prepare_cached(&format!(
-                "SELECT {track_cols} FROM tracks_fts f JOIN tracks t ON t.rowid = f.rowid WHERE tracks_fts MATCH ?1 AND t.server_id = ?2 ORDER BY bm25(tracks_fts, 3.0, 1.0, 2.0), t.title COLLATE NOCASE LIMIT ?3"
+                "SELECT {track_cols} FROM tracks_fts f JOIN tracks t ON t.rowid = f.rowid WHERE tracks_fts MATCH ?1 AND (t.server_id = ?2 OR (?2 = '' AND NOT {hidden_t})) ORDER BY bm25(tracks_fts, 3.0, 1.0, 2.0), t.title COLLATE NOCASE LIMIT ?3"
             ))?;
             let rows = st.query_map(params![match_expr, server_id, lim], track_from_row)?;
             results.tracks = rows.collect::<Result<Vec<_>, _>>()?.iter().map(crate::subsonic::convert::summary_of).collect();
 
             let album_cols = ALBUM_COLUMNS.split(", ").map(|col| format!("a.{col}")).collect::<Vec<_>>().join(", ");
             let mut st = c.prepare_cached(&format!(
-                "SELECT {album_cols} FROM albums_fts f JOIN albums a ON a.rowid = f.rowid WHERE albums_fts MATCH ?1 AND a.server_id = ?2 ORDER BY bm25(albums_fts, 3.0, 1.0), a.name COLLATE NOCASE LIMIT ?3"
+                "SELECT {album_cols} FROM albums_fts f JOIN albums a ON a.rowid = f.rowid WHERE albums_fts MATCH ?1 AND (a.server_id = ?2 OR (?2 = '' AND NOT {hidden_al})) ORDER BY bm25(albums_fts, 3.0, 1.0), a.name COLLATE NOCASE LIMIT ?3"
             ))?;
             let rows = st.query_map(params![match_expr, server_id, lim], album_from_row)?;
             results.albums = rows.collect::<Result<Vec<_>, _>>()?;
 
             let artist_cols = ARTIST_COLUMNS.split(", ").map(|col| format!("a.{col}")).collect::<Vec<_>>().join(", ");
             let mut st = c.prepare_cached(&format!(
-                "SELECT {artist_cols} FROM artists_fts f JOIN artists a ON a.rowid = f.rowid WHERE artists_fts MATCH ?1 AND a.server_id = ?2 ORDER BY bm25(artists_fts), a.name COLLATE NOCASE LIMIT ?3"
+                "SELECT {artist_cols} FROM artists_fts f JOIN artists a ON a.rowid = f.rowid WHERE artists_fts MATCH ?1 AND (a.server_id = ?2 OR (?2 = '' AND NOT {hidden_ar})) ORDER BY bm25(artists_fts), a.name COLLATE NOCASE LIMIT ?3"
             ))?;
             let rows = st.query_map(params![match_expr, server_id, lim], artist_from_row)?;
             results.artists = rows.collect::<Result<Vec<_>, _>>()?;
 
             let mut st = c.prepare_cached(&format!(
-                "SELECT {PLAYLIST_COLUMNS} FROM playlists WHERE server_id = ?1 AND name LIKE '%' || ?2 || '%' ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT ?3"
+                "SELECT {PLAYLIST_COLUMNS} FROM playlists WHERE (?1 = '' OR server_id = ?1) AND name LIKE '%' || ?2 || '%' ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT ?3"
             ))?;
             let like = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
             let rows = st.query_map(params![server_id, like, lim], playlist_from_row)?;
@@ -1176,7 +1446,7 @@ impl Db {
                  FROM lyrics_search_fts f
                  JOIN lyrics_search s ON s.rowid = f.rowid
                  JOIN tracks t ON t.server_id = s.server_id AND t.id = s.track_id
-                 WHERE lyrics_search_fts MATCH ?1 AND s.server_id = ?2
+                 WHERE lyrics_search_fts MATCH ?1 AND (?2 = '' OR s.server_id = ?2)
                  ORDER BY bm25(lyrics_search_fts)
                  LIMIT ?3"
             ))?;
@@ -1251,13 +1521,13 @@ impl Db {
 
     /// Recent plays, newest first, with resolved track summaries.
     pub fn recently_played(&self, limit: u32) -> DbResult<Vec<api::PlayHistoryEntry>> {
-        let rows: Vec<(String, f64, u32, bool, String)> = self.with_conn(|c| {
+        let rows: Vec<(api::TrackRef, f64, u32, bool, String)> = self.with_conn(|c| {
             let mut st = c.prepare_cached(
-                "SELECT track_id, played_at, played_ms, scrobbled, device_id FROM play_history ORDER BY played_at DESC, id DESC LIMIT ?1",
+                "SELECT track_id, played_at, played_ms, scrobbled, device_id, server_id FROM play_history ORDER BY played_at DESC, id DESC LIMIT ?1",
             )?;
             let rows = st.query_map([limit as i64], |r| {
                 Ok((
-                    r.get::<_, String>(0)?,
+                    api::TrackRef::new(r.get::<_, String>(5)?, r.get::<_, String>(0)?),
                     r.get::<_, f64>(1)?,
                     r.get::<_, i64>(2)?.max(0) as u32,
                     r.get::<_, i64>(3)? != 0,
@@ -1266,15 +1536,19 @@ impl Db {
             })?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })?;
-        let ids: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
-        let tracks = self.tracks_by_ids(&ids)?;
+        let refs: Vec<api::TrackRef> = rows.iter().map(|r| r.0.clone()).collect();
+        let tracks = self.tracks_by_refs(&refs)?;
         let mut out = Vec::with_capacity(rows.len());
-        for (track_id, played_at, played_ms, scrobbled, device_id) in rows {
-            let track = match tracks.iter().find(|t| t.id == track_id) {
+        for (track, played_at, played_ms, scrobbled, device_id) in rows {
+            let track = match tracks
+                .iter()
+                .find(|t| t.id == track.id && t.server_id == track.source)
+            {
                 Some(t) => crate::subsonic::convert::summary_of(t),
                 None => TrackSummary {
-                    id: track_id.clone(),
-                    title: track_id.clone(),
+                    id: track.id.clone(),
+                    server_id: track.source.clone(),
+                    title: track.id.clone(),
                     ..Default::default()
                 },
             };
@@ -1289,15 +1563,20 @@ impl Db {
         Ok(out)
     }
 
-    // -- servers ------------------------------------------------------------
+    // -- accounts -----------------------------------------------------------
 
-    pub fn upsert_server(&self, info: &api::ServerInfo, created_at: f64) -> DbResult<()> {
+    pub fn upsert_account(&self, info: &api::AccountInfo, created_at: f64) -> DbResult<()> {
         let caps = serde_json::to_string(&info.capabilities)?;
+        let features = serde_json::to_string(&info.features)?;
         self.with_tx(|tx| {
             tx.execute(
-                "INSERT INTO servers(id, url, username, name, last_sync, capabilities, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(id) DO UPDATE SET url = excluded.url, username = excluded.username, name = excluded.name, last_sync = COALESCE(excluded.last_sync, servers.last_sync), capabilities = excluded.capabilities",
-                params![info.id, info.url, info.username, info.name, info.last_sync, caps, created_at],
+                "INSERT INTO accounts(id, kind, url, username, name, last_sync, priority, server_capabilities, capabilities, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, url = excluded.url, username = excluded.username,
+                   name = excluded.name, last_sync = COALESCE(excluded.last_sync, accounts.last_sync),
+                   priority = excluded.priority, server_capabilities = excluded.server_capabilities,
+                   capabilities = excluded.capabilities",
+                params![info.id, info.kind.as_str(), info.url, info.username, info.name, info.last_sync, info.priority, caps, features, created_at],
             )?;
             tx.execute("DELETE FROM capabilities WHERE server_id = ?1", [&info.id])?;
             let mut st = tx.prepare_cached("INSERT INTO capabilities(server_id, name, enabled) VALUES (?1, ?2, ?3)")?;
@@ -1319,18 +1598,30 @@ impl Db {
         })
     }
 
-    pub fn servers(&self) -> DbResult<Vec<api::ServerInfo>> {
+    /// Every account, highest priority first.
+    pub fn accounts(&self) -> DbResult<Vec<api::AccountInfo>> {
         self.with_conn(|c| {
-            let mut st = c.prepare_cached("SELECT id, url, username, name, last_sync, capabilities FROM servers ORDER BY created_at ASC")?;
+            let mut st = c.prepare_cached(
+                "SELECT id, kind, url, username, name, last_sync, priority, server_capabilities, capabilities
+                 FROM accounts ORDER BY priority ASC, created_at ASC",
+            )?;
             let rows = st.query_map([], |r| {
-                let caps: String = r.get(5)?;
-                Ok(api::ServerInfo {
-                    id: r.get(0)?,
-                    url: r.get(1)?,
-                    username: r.get(2)?,
-                    name: r.get(3)?,
+                let kind: String = r.get(1)?;
+                let caps: String = r.get(7)?;
+                let features: String = r.get(8)?;
+                let id: String = r.get(0)?;
+                let kind = api::AccountKind::parse(&kind).unwrap_or_default();
+                Ok(api::AccountInfo {
+                    source: crate::provider::source_of(kind, &id),
+                    id,
+                    kind,
+                    url: r.get(2)?,
+                    username: r.get(3)?,
+                    name: r.get(4)?,
+                    last_sync: r.get(5)?,
+                    priority: r.get(6)?,
                     capabilities: serde_json::from_str(&caps).unwrap_or_default(),
-                    last_sync: r.get(4)?,
+                    features: serde_json::from_str(&features).unwrap_or_default(),
                     last_sync_tracks: None,
                     reachable: false,
                 })
@@ -1339,26 +1630,37 @@ impl Db {
         })
     }
 
-    pub fn set_server_last_sync(&self, server_id: &str, at: f64) -> DbResult<()> {
+    /// Priorities 0..n in the given order.
+    pub fn set_account_priorities(&self, ids: &[String]) -> DbResult<()> {
+        self.with_tx(|tx| {
+            let mut st = tx.prepare_cached("UPDATE accounts SET priority = ?2 WHERE id = ?1")?;
+            for (i, id) in ids.iter().enumerate() {
+                st.execute(params![id, i as i64])?;
+            }
+            Ok(())
+        })
+    }
+
+    pub fn set_account_last_sync(&self, account_id: &str, at: f64) -> DbResult<()> {
         self.with_conn(|c| {
             c.execute(
-                "UPDATE servers SET last_sync = ?2 WHERE id = ?1",
-                params![server_id, at],
+                "UPDATE accounts SET last_sync = ?2 WHERE id = ?1",
+                params![account_id, at],
             )?;
             Ok(())
         })
     }
 
-    pub fn delete_server(&self, server_id: &str) -> DbResult<()> {
-        self.clear_mirror(server_id)?;
+    pub fn delete_account(&self, account_id: &str) -> DbResult<()> {
+        self.clear_mirror(account_id)?;
         self.with_tx(|tx| {
             for t in ["pins", "pin_tracks", "outbox", "play_history"] {
                 tx.execute(
                     &format!("DELETE FROM {t} WHERE server_id = ?1"),
-                    [server_id],
+                    [account_id],
                 )?;
             }
-            tx.execute("DELETE FROM servers WHERE id = ?1", [server_id])?;
+            tx.execute("DELETE FROM accounts WHERE id = ?1", [account_id])?;
             Ok(())
         })
     }
@@ -1366,7 +1668,11 @@ impl Db {
 
 fn track_where(server_id: &str, filter: &Option<WhereClause>) -> (String, Vec<Value>) {
     let mut params = vec![Value::Text(server_id.to_string())];
-    let mut sql = "server_id = ?1".to_string();
+    // The unified library lists one copy of a song on several accounts.
+    let mut sql = format!(
+        "(server_id = ?1 OR (?1 = '' AND NOT {}))",
+        hidden_copy(LinkKind::Track, "tracks")
+    );
     if let Some(f) = filter {
         if !f.is_empty() {
             // Renumber: filter params are appended after server_id, so its `?` must be positional-unnumbered.
@@ -1379,12 +1685,28 @@ fn track_where(server_id: &str, filter: &Option<WhereClause>) -> (String, Vec<Va
     (sql, params)
 }
 
-fn album_where(q: &AlbumQuery) -> (String, Vec<Value>) {
+/// `artists`: the copies of `q.artist_id` on other accounts
+/// ([`Db::linked_ids`]).
+fn album_where(q: &AlbumQuery, artists: &[(String, String)]) -> (String, Vec<Value>) {
     let mut params = vec![Value::Text(q.server_id.clone())];
-    let mut sql = "server_id = ?1".to_string();
+    let mut sql = format!(
+        "(server_id = ?1 OR (?1 = '' AND NOT {}))",
+        hidden_copy(LinkKind::Album, "albums")
+    );
     if let Some(a) = &q.artist_id {
         params.push(Value::Text(a.clone()));
-        sql.push_str(&format!(" AND artist_id = ?{}", params.len()));
+        sql.push_str(&format!(" AND (artist_id = ?{}", params.len()));
+        // The artist's albums on every account it is linked across.
+        for (src, id) in artists {
+            params.push(Value::Text(src.clone()));
+            params.push(Value::Text(id.clone()));
+            sql.push_str(&format!(
+                " OR (server_id = ?{} AND artist_id = ?{})",
+                params.len() - 1,
+                params.len()
+            ));
+        }
+        sql.push(')');
     }
     if let Some(g) = &q.genre {
         params.push(Value::Text(g.clone()));
@@ -1400,8 +1722,8 @@ pub(crate) fn upsert_tracks_in(
     sync_gen: i64,
 ) -> DbResult<usize> {
     let mut st = tx.prepare_cached(
-        "INSERT INTO tracks(id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, changed, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, mood, music_brainz_id, explicit, comment, is_compilation, sync_gen, artists)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, COALESCE((SELECT is_compilation FROM albums WHERE albums.server_id = ?2 AND albums.id = ?4), 0), ?38, ?39)
+        "INSERT INTO tracks(id, server_id, title, album_id, album, artist_id, artist, album_artist, track_number, disc_number, year, genre, duration_ms, bit_rate, sample_rate, bit_depth, channels, suffix, content_type, size_bytes, path, cover_art, rating, loved, play_count, last_played, created, changed, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, bpm, mood, music_brainz_id, explicit, comment, is_compilation, sync_gen, artists, isrc)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, COALESCE((SELECT is_compilation FROM albums WHERE albums.server_id = ?2 AND albums.id = ?4), 0), ?38, ?39, ?40)
          ON CONFLICT(server_id, id) DO UPDATE SET
            title = excluded.title, album_id = excluded.album_id, album = excluded.album, artist_id = excluded.artist_id, artist = excluded.artist, album_artist = excluded.album_artist,
            track_number = excluded.track_number, disc_number = excluded.disc_number, year = excluded.year, genre = excluded.genre, duration_ms = excluded.duration_ms,
@@ -1411,7 +1733,7 @@ pub(crate) fn upsert_tracks_in(
            rg_track_gain = excluded.rg_track_gain, rg_track_peak = excluded.rg_track_peak, rg_album_gain = excluded.rg_album_gain, rg_album_peak = excluded.rg_album_peak,
            bpm = COALESCE(excluded.bpm, tracks.bpm), mood = COALESCE(excluded.mood, tracks.mood),
            music_brainz_id = excluded.music_brainz_id, explicit = excluded.explicit, comment = excluded.comment,
-           is_compilation = excluded.is_compilation, sync_gen = excluded.sync_gen, artists = excluded.artists",
+           is_compilation = excluded.is_compilation, sync_gen = excluded.sync_gen, artists = excluded.artists, isrc = excluded.isrc",
     )?;
     let mut n = 0;
     for (i, t) in tracks.iter().enumerate() {
@@ -1463,6 +1785,7 @@ pub(crate) fn upsert_tracks_in(
             t.comment,
             sync_gen,
             artists,
+            t.isrc,
         ])?;
     }
     Ok(n)
@@ -2054,6 +2377,7 @@ mod tests {
             music_brainz_id: Some("mb".into()),
             explicit: true,
             comment: Some("c".into()),
+            isrc: Some("USRC17607839".into()),
             artists: vec![
                 api::ArtistRef {
                     id: Some("ar".into()),
@@ -2306,15 +2630,59 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let m = db.playlist_membership("s", &["1".into()]).unwrap();
+        let m = db
+            .playlist_membership("s", &[(api::TrackRef::new("s", "1"), "1".into())])
+            .unwrap();
         let by = |id: &str| m.iter().find(|p| p.playlist_id == id).unwrap();
         assert_eq!(m.len(), 2, "every playlist, holding the track or not");
         let idx = |id: &str| by(id).entries.iter().map(|e| e.index).collect::<Vec<_>>();
         assert_eq!(idx("pl"), vec![1]);
         assert_eq!(idx("pl2"), vec![0, 2], "twice: both copies, by index");
         assert!(by("pl2").synced);
-        let none = db.playlist_membership("s", &["9".into()]).unwrap();
+        let none = db
+            .playlist_membership("s", &[(api::TrackRef::new("s", "9"), "9".into())])
+            .unwrap();
         assert!(none.iter().all(|p| p.entries.is_empty()));
+    }
+
+    /// Every entry lists, in place, even one the mirror lacks (another
+    /// account's song, one swept): what remove and move index.
+    #[test]
+    fn playlist_tracks_list_every_entry_in_place() {
+        let db = seeded();
+        db.upsert_playlists(
+            &[Playlist {
+                id: "pl3".into(),
+                server_id: "s".into(),
+                name: "Gaps".into(),
+                is_mine: true,
+                ..Default::default()
+            }],
+            1,
+        )
+        .unwrap();
+        db.set_playlist_tracks("s", "pl3", &["1".into(), "gone".into(), "2".into()])
+            .unwrap();
+        let ids: Vec<String> = db
+            .playlist_tracks("pl3", None)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["1", "gone", "2"]);
+        let page = db
+            .playlist_track_page(
+                "pl3",
+                Page {
+                    offset: 1,
+                    limit: 2,
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 3);
+        assert_eq!(page.items[0].id, "gone");
+        assert_eq!(page.items[0].server_id, "s");
+        assert_eq!(page.items[1].id, "2");
     }
 
     #[test]
@@ -2833,9 +3201,9 @@ mod tests {
     }
 
     #[test]
-    fn servers_roundtrip() {
+    fn accounts_roundtrip() {
         let db = seeded();
-        let info = api::ServerInfo {
+        let info = api::AccountInfo {
             id: "s".into(),
             url: "https://x".into(),
             username: "alice".into(),
@@ -2849,9 +3217,9 @@ mod tests {
             reachable: true,
             ..Default::default()
         };
-        db.upsert_server(&info, 1.0).unwrap();
-        db.set_server_last_sync("s", 42.0).unwrap();
-        let s = db.servers().unwrap();
+        db.upsert_account(&info, 1.0).unwrap();
+        db.set_account_last_sync("s", 42.0).unwrap();
+        let s = db.accounts().unwrap();
         assert_eq!(s.len(), 1);
         assert!(s[0].capabilities.sonic_similarity && s[0].capabilities.native_api);
         assert_eq!(s[0].last_sync, Some(42.0));
@@ -2866,8 +3234,8 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 2);
-        db.delete_server("s").unwrap();
-        assert!(db.servers().unwrap().is_empty());
+        db.delete_account("s").unwrap();
+        assert!(db.accounts().unwrap().is_empty());
         assert_eq!(db.track_count("s", &None).unwrap(), 0);
     }
 

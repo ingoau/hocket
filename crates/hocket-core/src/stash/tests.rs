@@ -15,7 +15,7 @@ fn tracks(ids: &[&str]) -> Vec<Track> {
 }
 
 fn listed(e: &[StashEntry]) -> Vec<String> {
-    track_ids(e)
+    track_ids(e).into_iter().map(|t| t.id).collect()
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn tombstones_are_capped_and_slim() {
     assert_eq!(s.len(), MAX_TOMBSTONES);
     assert!(s
         .iter()
-        .all(|e| e.removed && e.title.is_empty() && e.track_id.starts_with('2')));
+        .all(|e| e.removed && e.title.is_empty() && e.track.id.starts_with('2')));
 }
 
 #[derive(Debug, Clone)]

@@ -86,7 +86,7 @@ class SnoozeScreenshotTest {
         shot(dir, "android-snooze-custom-time")
         compose.onNodeWithTag("songMenu.snoozeUntil.ok").performSemanticsAction(SemanticsActions.OnClick)
         settle()
-        compose.waitUntil(5_000) { core.client.snoozes.value.any { it.trackId == trackId } }
+        compose.waitUntil(5_000) { core.client.snoozes.value.any { it.trackRef.id == trackId } }
         settle()
         shot(dir, "android-snoozed-row")
         compose.onAllNodesWithContentDescription("More options for $title")[0].performSemanticsAction(SemanticsActions.OnClick)

@@ -21,7 +21,7 @@ use super::io::ConnectIo;
 use super::stream_reader::{StreamUpstream, UpstreamRequest, UpstreamResponse};
 use super::{BackendChoice, Core, CoreError, Deps, EventSink, LateSink, PollFn, PresetServer};
 
-pub use super::handlers::servers::server_id_for;
+pub use super::handlers::accounts::server_id_for;
 
 /// A backend built by the test, with its sink wired into the core later.
 pub struct TestBackend {
@@ -60,9 +60,11 @@ impl TestBackend {
 /// Everything a test can inject.
 pub struct TestOptions {
     pub backend: TestBackend,
-    /// `None` starts with no server (the platform adds one with `AddServer`).
+    /// `None` starts with no server (the platform adds one with `AddAccount`).
     pub api: Option<Arc<dyn SubsonicApi>>,
-    /// Server metadata (the platform would pass these with `AddServer`).
+    /// More accounts after `api`, in priority order (each gets its own URL).
+    pub more_apis: Vec<Arc<dyn SubsonicApi>>,
+    /// Server metadata (the platform would pass these with `AddAccount`).
     pub server_url: String,
     pub password: String,
     /// In-memory Connect network shared between cores; `None` = no network.
@@ -72,6 +74,8 @@ pub struct TestOptions {
     pub seed: u64,
     /// The session reducer Connect applies ops with (`None` = this build's).
     pub reducer: Option<crate::connect::ReducerHandle>,
+    /// YouTube Music's InnerTube transport (`None`: reqwest; tests pass a fake).
+    pub ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
 }
 
 impl Core {
@@ -91,12 +95,14 @@ impl Core {
             TestOptions {
                 backend,
                 api: Some(api),
+                more_apis: vec![],
                 server_url: "https://music.example/".into(),
                 password: "secret".into(),
                 net: None,
                 lyrics_http: None,
                 seed: 1,
                 reducer: None,
+                ytm_http: None,
             },
         )
     }
@@ -118,18 +124,31 @@ impl Core {
         upstream: Arc<dyn StreamUpstream>,
     ) -> Result<Core, CoreError> {
         let io: Arc<dyn ConnectIo> = match &opts.net {
-            Some(net) => net.io(&config.device_id, true),
+            Some(net) => net.io(&config.device_id),
             None => Arc::new(NoNet),
         };
-        let server = opts.api.map(|api| {
+        let mut servers: Vec<PresetServer> = opts
+            .api
+            .into_iter()
+            .map(|api| {
+                let username = api.username().unwrap_or_else(|| "user".into());
+                PresetServer {
+                    api,
+                    url: opts.server_url.clone(),
+                    username,
+                    password: opts.password.clone(),
+                }
+            })
+            .collect();
+        for api in opts.more_apis {
             let username = api.username().unwrap_or_else(|| "user".into());
-            PresetServer {
+            servers.push(PresetServer {
+                url: format!("https://{}.music.example/", api.server_id()),
                 api,
-                url: opts.server_url,
                 username,
-                password: opts.password,
-            }
-        });
+                password: opts.password.clone(),
+            });
+        }
         let deps = Deps {
             clock,
             backend: BackendChoice::Provided {
@@ -140,11 +159,16 @@ impl Core {
             io,
             storage: Arc::new(crate::downloads::UnknownStorage),
             lyrics_http: opts.lyrics_http,
-            server,
+            servers,
             seed: Some(opts.seed),
             manual_tick: true,
             stream_upstream: Some(upstream),
+            ytm_http: opts.ytm_http,
             reducer: opts.reducer,
+            identity: opts
+                .net
+                .as_ref()
+                .map(|net| net.identity_for(&config.device_id)),
         };
         let handle = tokio::runtime::Handle::current();
         Core::with_runtime(config, handle, None, deps)
@@ -181,12 +205,6 @@ impl ConnectIo for NoNet {
     }
     fn discovery(&self) -> Box<dyn crate::connect::discovery::Discovery> {
         Box::new(crate::connect::discovery::NoDiscovery)
-    }
-    fn verify(
-        &self,
-        _credential: crate::connect::wire::Credential,
-    ) -> futures::future::BoxFuture<'static, bool> {
-        Box::pin(async { true })
     }
 }
 
@@ -232,6 +250,79 @@ pub struct TestCore {
 }
 
 impl TestCore {
+    /// One core with several accounts: `server` first (highest priority,
+    /// the session's account), then `more` in order, each at its own URL.
+    pub async fn start_accounts(name: &str, server: FakeServer, more: Vec<FakeServer>) -> TestCore {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Self::start_full(
+            name,
+            server,
+            None,
+            1,
+            SimTime::new(1_700_000_000_000.0),
+            dir,
+            true,
+            "https://music.example/",
+            "secret",
+            None,
+            more,
+            None,
+        )
+        .await
+    }
+
+    /// One core with a Navidrome account and YouTube Music's InnerTube
+    /// answered by `ytm_http` (add the YouTube Music account with `AddAccount`).
+    pub async fn start_with_ytm(
+        name: &str,
+        server: FakeServer,
+        ytm_http: Arc<dyn crate::ytm::http::YtmHttp>,
+    ) -> TestCore {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Self::start_full(
+            name,
+            server,
+            None,
+            1,
+            SimTime::new(1_700_000_000_000.0),
+            dir,
+            true,
+            "https://music.example/",
+            "secret",
+            None,
+            vec![],
+            Some(ytm_http),
+        )
+        .await
+    }
+
+    /// [`TestCore::start_accounts`] on a shared network and clock.
+    pub async fn start_accounts_on(
+        name: &str,
+        server: FakeServer,
+        more: Vec<FakeServer>,
+        net: Option<Arc<MemoryNet>>,
+        seed: u64,
+        clock: Arc<SimTime>,
+    ) -> TestCore {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Self::start_full(
+            name,
+            server,
+            net,
+            seed,
+            clock,
+            dir,
+            true,
+            "https://music.example/",
+            "secret",
+            None,
+            more,
+            None,
+        )
+        .await
+    }
+
     /// One core on its own (no Connect network), started.
     pub async fn start(name: &str, server: FakeServer) -> TestCore {
         Self::start_with(name, server, None, 1).await
@@ -285,8 +376,8 @@ impl TestCore {
 
     /// Like [`TestCore::start_in`]; `attach_api == false` starts the core the
     /// way a platform does, with the persisted server row but no API until
-    /// `Command::AddServer` supplies credentials. `server_url` is what the
-    /// preset server (and `AddServer`) are keyed on; `password` is the
+    /// `Command::AddAccount` supplies credentials. `server_url` is what the
+    /// preset server (and `AddAccount`) are keyed on; `password` is the
     /// account password the LAN key is derived from.
     #[allow(clippy::too_many_arguments)]
     pub async fn start_in_with(
@@ -301,7 +392,18 @@ impl TestCore {
         password: &str,
     ) -> TestCore {
         Self::start_full(
-            name, server, net, seed, clock, dir, attach_api, server_url, password, None,
+            name,
+            server,
+            net,
+            seed,
+            clock,
+            dir,
+            attach_api,
+            server_url,
+            password,
+            None,
+            vec![],
+            None,
         )
         .await
     }
@@ -328,6 +430,8 @@ impl TestCore {
             "https://music.example/",
             "secret",
             Some(reducer),
+            vec![],
+            None,
         )
         .await
     }
@@ -344,6 +448,8 @@ impl TestCore {
         server_url: &str,
         password: &str,
         reducer: Option<crate::connect::ReducerHandle>,
+        more: Vec<FakeServer>,
+        ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
     ) -> TestCore {
         let config = CoreConfig {
             data_dir: dir.path().join("data").to_string_lossy().into_owned(),
@@ -369,12 +475,17 @@ impl TestCore {
             TestOptions {
                 backend,
                 api: attach_api.then(|| Arc::new(server.clone()) as Arc<dyn SubsonicApi>),
+                more_apis: more
+                    .into_iter()
+                    .map(|s| Arc::new(s) as Arc<dyn SubsonicApi>)
+                    .collect(),
                 server_url: server_url.into(),
                 password: password.into(),
                 net,
                 lyrics_http: None,
                 seed,
                 reducer,
+                ytm_http,
             },
             upstream.clone(),
         )
@@ -502,7 +613,7 @@ pub fn seeded_server(n: usize, duration_s: f64) -> FakeServer {
     seeded_server_with_id("srv", n, duration_s)
 }
 
-/// [`seeded_server`] under a chosen server id (e.g. the id `AddServer`
+/// [`seeded_server`] under a chosen server id (e.g. the id `AddAccount`
 /// derives for a URL and username).
 pub fn seeded_server_with_id(server_id: &str, n: usize, duration_s: f64) -> FakeServer {
     let s = FakeServer::new(server_id, "alice");

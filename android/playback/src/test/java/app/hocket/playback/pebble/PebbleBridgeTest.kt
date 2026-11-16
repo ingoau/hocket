@@ -1,5 +1,7 @@
 package app.hocket.playback.pebble
 
+import app.hocket.core.api.TrackRef
+
 import android.os.SystemClock
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
@@ -71,7 +73,7 @@ class PebbleBridgeTest {
     private fun count(type: Int) = types().count { it == type }
 
     private fun state(atMs: Long, playing: Boolean = true, title: String = "Song", positionMs: Long = atMs) = MediaSessionState(
-        MediaSessionMetadata(title, "Artist", "Album", 600_000u, null, "t1", false, 0u),
+        MediaSessionMetadata(title, "Artist", "Album", 600_000u, null, "t1", null, false, 0u),
         playing,
         PositionStamp(positionMs.toUInt(), atMs.toDouble(), 1.0, playing),
         false,
@@ -246,6 +248,6 @@ class PebbleBridgeTest {
             Key.CMD to PebbleDictionaryItem.UInt8(PebbleProtocol.Cmd.STASH.toUByte()),
         ))
         runCurrent()
-        assertEquals(listOf<Command>(Command.StashAdd(CommandStashAddInner(listOf("t1")))), dispatched)
+        assertEquals(listOf<Command>(Command.StashAdd(CommandStashAddInner(listOf(TrackRef("", "t1"))))), dispatched)
     }
 }

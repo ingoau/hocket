@@ -9,6 +9,7 @@ use tokio::sync::oneshot;
 use crate::actions::Surface;
 use crate::api::*;
 use crate::core::actor::Actor;
+use crate::core::handlers::catalogue::CatalogueWant;
 use crate::core::handlers::library::DbAutoplaySource;
 use crate::core::{ActorMsg, Internal};
 use crate::db::queries::{AlbumQuery, TrackQuery, WhereClause};
@@ -18,7 +19,9 @@ impl Actor {
     pub(crate) fn answer_query(&mut self, query: Query, reply: oneshot::Sender<QueryResult>) {
         let answer = match query {
             Query::Snapshot => QueryResult::SnapshotResult(self.snapshot()),
-            Query::Servers => QueryResult::Servers(self.server_infos()),
+            Query::Accounts => QueryResult::Accounts(self.account_infos()),
+            Query::YtmJsHostScript => QueryResult::Text(crate::ytm::js_host_script()),
+            Query::Identity => QueryResult::Identity(self.identity_info()),
             Query::Tracks {
                 server_id,
                 filter,
@@ -28,7 +31,7 @@ impl Actor {
             } => {
                 let filter = self.where_for(filter.as_ref());
                 let q = TrackQuery {
-                    server_id,
+                    server_id: self.library_scope(server_id),
                     filter,
                     sort,
                     descending,
@@ -42,12 +45,31 @@ impl Actor {
             }
             Query::TrackCount { server_id, filter } => {
                 let filter = self.where_for(filter.as_ref());
+                let server_id = self.library_scope(server_id);
                 QueryResult::Count(self.db.track_count(&server_id, &filter).unwrap_or(0))
             }
-            Query::Track { id } => QueryResult::TrackDetail(self.db.track(&id).ok().flatten()),
-            Query::TracksByIds { ids } => {
-                QueryResult::TrackList(self.db.tracks_by_ids(&ids).unwrap_or_default())
+            Query::Track { track } => {
+                QueryResult::TrackDetail(self.db.track_ref(&track).ok().flatten())
             }
+            Query::TracksByIds { tracks } => {
+                let found = self.db.tracks_by_refs(&tracks).unwrap_or_default();
+                // In the order asked for.
+                let list = tracks
+                    .iter()
+                    .filter_map(|r| {
+                        found
+                            .iter()
+                            .find(|t| t.server_id == r.source && t.id == r.id)
+                            .cloned()
+                    })
+                    .collect();
+                QueryResult::TrackList(list)
+            }
+            Query::TrackSources { track } => QueryResult::TrackSources(self.track_sources(&track)),
+            Query::LinkCandidates { track, query } => {
+                QueryResult::TrackList(self.link_candidates(&track, &query))
+            }
+            Query::HomeShelves => QueryResult::HomeShelves(self.home_shelves()),
             Query::Albums {
                 server_id,
                 artist_id,
@@ -56,19 +78,28 @@ impl Actor {
                 descending,
                 page,
             } => {
+                let artist = artist_id.clone();
                 let q = AlbumQuery {
-                    server_id,
+                    server_id: self.library_scope(server_id),
                     artist_id,
                     genre,
                     sort,
                     descending,
                     page: Some(page.clone()),
                 };
-                QueryResult::Albums(self.db.album_page(&q).unwrap_or(AlbumPage {
+                let found = self.db.album_page(&q).unwrap_or(AlbumPage {
                     items: vec![],
                     offset: page.offset,
                     total: 0,
-                }))
+                });
+                // A catalogue artist's albums (none of them in the library).
+                if let Some(a) = artist
+                    .filter(|a| found.total == 0 && page.offset == 0 && self.is_catalogue_id(a))
+                {
+                    self.catalogue_query(a, CatalogueWant::ArtistAlbums, 0, reply);
+                    return;
+                }
+                QueryResult::Albums(found)
             }
             Query::AlbumCount {
                 server_id,
@@ -76,16 +107,28 @@ impl Actor {
                 genre,
             } => {
                 let q = AlbumQuery {
-                    server_id,
+                    server_id: self.library_scope(server_id),
                     artist_id,
                     genre,
                     ..Default::default()
                 };
                 QueryResult::Count(self.db.album_count(&q).unwrap_or(0))
             }
-            Query::Album { id } => QueryResult::AlbumDetail(self.db.album(&id).ok().flatten()),
+            Query::Album { id } => match self.db.album(&id).ok().flatten() {
+                Some(a) => QueryResult::AlbumDetail(Some(a)),
+                None if self.is_catalogue_id(&id) => {
+                    self.catalogue_query(id, CatalogueWant::AlbumDetail, 0, reply);
+                    return;
+                }
+                None => QueryResult::AlbumDetail(None),
+            },
             Query::AlbumTracks { id } => {
-                QueryResult::TrackList(self.db.album_tracks(&id).unwrap_or_default())
+                let tracks = self.db.album_tracks(&id).unwrap_or_default();
+                if tracks.is_empty() && self.is_catalogue_id(&id) {
+                    self.catalogue_query(id, CatalogueWant::AlbumTracks, 0, reply);
+                    return;
+                }
+                QueryResult::TrackList(tracks)
             }
             Query::Artists {
                 server_id,
@@ -94,24 +137,28 @@ impl Actor {
                 descending,
             } => QueryResult::Artists(
                 self.db
-                    .artist_page_sorted(&server_id, page.clone(), sort, descending)
+                    .artist_page_sorted(
+                        &self.library_scope(server_id),
+                        page.clone(),
+                        sort,
+                        descending,
+                    )
                     .unwrap_or(ArtistPage {
                         items: vec![],
                         offset: page.offset,
                         total: 0,
                     }),
             ),
-            Query::Artist { id } => QueryResult::ArtistDetail(
-                self.db
-                    .artist_or_credited(&id, self.server_id().as_deref())
-                    .ok()
-                    .flatten(),
-            ),
+            Query::Artist { id } => match self.db.artist_or_credited(&id, None).ok().flatten() {
+                Some(a) => QueryResult::ArtistDetail(Some(a)),
+                None if self.is_catalogue_id(&id) => {
+                    self.catalogue_query(id, CatalogueWant::ArtistDetail, 0, reply);
+                    return;
+                }
+                None => QueryResult::ArtistDetail(None),
+            },
             Query::ArtistAppearsOn { id } => {
-                let items = self
-                    .db
-                    .artist_appears_on(&id, self.server_id().as_deref())
-                    .unwrap_or_default();
+                let items = self.db.artist_appears_on(&id, None).unwrap_or_default();
                 QueryResult::Albums(AlbumPage {
                     total: items.len() as u32,
                     items,
@@ -119,6 +166,17 @@ impl Actor {
                 })
             }
             Query::ArtistTopSongs { id, count } => {
+                if self
+                    .db
+                    .artist_or_credited(&id, None)
+                    .ok()
+                    .flatten()
+                    .is_none()
+                    && self.is_catalogue_id(&id)
+                {
+                    self.catalogue_query(id, CatalogueWant::ArtistTopSongs, count, reply);
+                    return;
+                }
                 self.artist_top_songs(id, count, reply);
                 return;
             }
@@ -131,9 +189,11 @@ impl Actor {
                 return;
             }
             Query::Genres { server_id } => {
+                let server_id = self.library_scope(server_id);
                 QueryResult::Genres(self.db.genres(&server_id).unwrap_or_default())
             }
             Query::Playlists { server_id } => {
+                let server_id = self.library_scope(server_id);
                 QueryResult::Playlists(self.db.playlists(&server_id).unwrap_or_default())
             }
             Query::Playlist { id } => {
@@ -148,14 +208,21 @@ impl Actor {
                     },
                 ))
             }
-            Query::PlaylistMembership {
-                server_id,
-                track_ids,
-            } => QueryResult::Membership(
-                self.db
-                    .playlist_membership(&server_id, &track_ids)
-                    .unwrap_or_default(),
-            ),
+            Query::PlaylistMembership { server_id, tracks } => {
+                let wanted: Vec<(TrackRef, String)> = tracks
+                    .iter()
+                    .flat_map(|t| {
+                        self.copies_of(t)
+                            .into_iter()
+                            .map(move |c| (c, t.id.clone()))
+                    })
+                    .collect();
+                QueryResult::Membership(
+                    self.db
+                        .playlist_membership(&self.library_scope(server_id), &wanted)
+                        .unwrap_or_default(),
+                )
+            }
             Query::Search {
                 server_id,
                 query,
@@ -163,7 +230,7 @@ impl Actor {
                 include_server,
                 request_id,
             } => QueryResult::Search(self.search(
-                server_id,
+                self.library_scope(server_id),
                 query,
                 limit,
                 include_server,
@@ -214,7 +281,7 @@ impl Actor {
             Query::AudioSettings => QueryResult::Audio(self.audio.clone()),
             Query::Transitions => QueryResult::Transitions(self.transition_settings()),
             Query::TrackAnalysis { track_id } => {
-                QueryResult::Analysis(self.stored_analysis_record(&track_id))
+                QueryResult::Analysis(self.stored_analysis_record(&self.track_ref_of(&track_id)))
             }
             Query::OutputDevices => QueryResult::OutputDevices(self.output_devices.clone()),
             Query::Connection => QueryResult::Connection(self.connection_state()),
@@ -240,7 +307,7 @@ impl Actor {
             }
             Query::MediaSource { track_id } => {
                 let source = self
-                    .track_or_bare(&track_id)
+                    .track_or_bare(&self.track_ref_of(&track_id))
                     .and_then(|t| self.media_source_for("query", &t));
                 QueryResult::Source(source)
             }
@@ -285,7 +352,12 @@ impl Actor {
 
     fn create_share_query(&mut self, ids: Vec<String>, reply: oneshot::Sender<QueryResult>) {
         let ids: Vec<String> = ids.into_iter().filter(|id| !id.is_empty()).collect();
-        let Some(api) = self.api().filter(|_| !ids.is_empty()) else {
+        // A share names one account's ids: the first id's.
+        let api = ids
+            .first()
+            .and_then(|id| self.source_of_any_id(id))
+            .and_then(|sid| self.subsonic_for(&sid));
+        let Some(api) = api else {
             let _ = reply.send(QueryResult::Share(None));
             return;
         };
@@ -309,7 +381,7 @@ impl Actor {
         reply: oneshot::Sender<QueryResult>,
     ) {
         enum Want {
-            Song(crate::songlink::SongFacts, Option<String>),
+            Song(crate::songlink::SongFacts, Option<(String, String)>),
             Album(String, Option<String>),
         }
         let want = if let Some(t) = track_id
@@ -322,7 +394,7 @@ impl Actor {
                 duration_ms: Some(t.duration_ms as u64).filter(|d| *d > 0),
                 isrc: vec![],
             };
-            Some(Want::Song(facts, Some(t.id)))
+            Some(Want::Song(facts, Some((t.server_id, t.id))))
         } else if let Some(a) = album_id
             .filter(|id| !id.is_empty())
             .and_then(|id| self.db.album(&id).ok().flatten())
@@ -335,7 +407,10 @@ impl Actor {
             let _ = reply.send(QueryResult::SongLink(None));
             return;
         };
-        let api = self.api();
+        let api = match &want {
+            Want::Song(_, Some((sid, _))) => self.subsonic_for(sid),
+            _ => None,
+        };
         let http = self.lyrics_http.clone();
         let app_version = self.cfg.app_version.clone();
         self.spawn(async move {
@@ -353,7 +428,7 @@ impl Actor {
             let url = match want {
                 Want::Song(mut facts, id) => {
                     // The mirror keeps no ISRC: ask the server for this one song.
-                    if let (Some(api), Some(id)) = (api, id) {
+                    if let (Some(api), Some((_, id))) = (api, id) {
                         match api.song(&id).await {
                             Ok(child) => facts.isrc = child.isrc,
                             Err(e) => tracing::debug!(target: "hocket_core", error = %e, "squigly: getSong failed"),
@@ -368,7 +443,8 @@ impl Actor {
     }
 
     fn export_audio_query(&mut self, track_id: String, reply: oneshot::Sender<QueryResult>) {
-        let Some(track) = self.db.track(&track_id).ok().flatten() else {
+        let track_ref = self.track_ref_of(&track_id);
+        let Some(track) = self.db.track_ref(&track_ref).ok().flatten() else {
             let _ = reply.send(QueryResult::AudioFile(None));
             return;
         };
@@ -389,7 +465,7 @@ impl Actor {
                 return;
             }
         }
-        let Some(api) = self.api() else {
+        let Some(api) = self.provider_for(&track.server_id) else {
             let _ = reply.send(QueryResult::AudioFile(None));
             return;
         };
@@ -415,9 +491,21 @@ impl Actor {
                 if let Some(parent) = dest.parent() {
                     tokio::fs::create_dir_all(parent).await.ok()?;
                 }
-                api.download_to_file(api.download_url(&id), &dest)
-                    .await
-                    .ok()?;
+                let url = api.download_url(&id)?;
+                let stream = crate::provider::ResolvedStream {
+                    url,
+                    headers: Default::default(),
+                    expires_at: None,
+                    container: None,
+                    codec: None,
+                    gain_db: None,
+                    range_capable: true,
+                    transcoded: false,
+                    max_range: None,
+                    content_length: None,
+                    variant: String::new(),
+                };
+                api.download_to_file(&stream, &dest).await.ok()?;
                 Some(dest.to_string_lossy().into_owned())
             }
             .await;
@@ -430,7 +518,14 @@ impl Actor {
     }
 
     fn artwork_query(&mut self, id: String, size: u32, reply: oneshot::Sender<QueryResult>) {
-        let Some(sid) = self.server_id() else {
+        // Cover ids are an account's: the one whose library uses it.
+        let sid = self
+            .db
+            .cover_source(&id)
+            .ok()
+            .flatten()
+            .or_else(|| self.scope_account());
+        let Some(sid) = sid else {
             let _ = reply.send(QueryResult::Path(None));
             return;
         };
@@ -438,7 +533,7 @@ impl Actor {
             let _ = reply.send(QueryResult::Path(Some(p.to_string_lossy().into_owned())));
             return;
         }
-        let Some(api) = self.api() else {
+        let Some(api) = self.provider_for(&sid) else {
             let _ = reply.send(QueryResult::Path(None));
             return;
         };
@@ -458,15 +553,19 @@ impl Actor {
     }
 
     fn related(&mut self, track_id: String, count: u32, reply: oneshot::Sender<QueryResult>) {
-        let Some(api) = self.api() else {
+        // Autoplay stays within the seed's account.
+        let seed = self.track_ref_of(&track_id);
+        let api = self.subsonic_for(&seed.source);
+        let Some(provider) = self.provider_for(&seed.source) else {
             let _ = reply.send(QueryResult::Related(vec![]));
             return;
         };
-        let track = self.summary_or_bare(&track_id);
+        let track = self.summary_or_bare(&seed);
         let source = DbAutoplaySource {
             api,
+            provider,
             db: self.db.clone(),
-            server_id: self.server_id().unwrap_or_default(),
+            server_id: seed.source.clone(),
             now: self.now(),
             filters: self.filters(),
         };
@@ -483,17 +582,12 @@ impl Actor {
     /// server. Offline with nothing cached: the artist's most played tracks
     /// from the mirror.
     fn artist_top_songs(&mut self, id: String, count: u32, reply: oneshot::Sender<QueryResult>) {
-        let Some(artist) = self
-            .db
-            .artist_or_credited(&id, self.server_id().as_deref())
-            .ok()
-            .flatten()
-        else {
+        let Some(artist) = self.db.artist_or_credited(&id, None).ok().flatten() else {
             let _ = reply.send(QueryResult::TrackList(vec![]));
             return;
         };
-        let sid = self.server_id().unwrap_or_else(|| artist.server_id.clone());
-        let api = self.api();
+        let sid = artist.server_id.clone();
+        let api = self.subsonic_for(&sid);
         let cached = match self.caches.top_songs_get(&sid, &id, count) {
             Ok(c) => c,
             Err(e) => {
@@ -567,7 +661,7 @@ impl Actor {
                 .map(|a| a.server_id),
             InfoOf::Album => self.db.album(&id).ok().flatten().map(|a| a.server_id),
         };
-        let Some(sid) = self.server_id().or(owner) else {
+        let Some(sid) = owner.or_else(|| self.scope_account()) else {
             let _ = reply.send(QueryResult::ExternalInfo(None));
             return;
         };
@@ -589,7 +683,7 @@ impl Actor {
             }
         }
         let stale = cached.and_then(|(entry, _)| entry.info);
-        let Some(api) = self.api() else {
+        let Some(api) = self.subsonic_for(&sid) else {
             let _ = reply.send(QueryResult::ExternalInfo(stale));
             return;
         };
@@ -686,7 +780,7 @@ impl Actor {
             self.open_report.backup_path,
             self.open_report.mirror_rebuilt
         ));
-        for s in self.server_infos() {
+        for s in self.account_infos() {
             out.push_str(&format!(
                 "server: {} {} user={} reachable={} version={:?} extensions={:?} floor={}\n",
                 s.name,

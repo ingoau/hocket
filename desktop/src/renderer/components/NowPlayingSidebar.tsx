@@ -11,7 +11,7 @@
 // The player bar's lyrics and queue buttons open those views directly.
 // Resizable by its left edge; below 900px it is a drawer over the content.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { ArtworkEdge, ImmersiveArtwork, QueueEntry, Track } from "@core/api";
+import type { ArtworkEdge, ImmersiveArtwork, QueueEntry, Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { SK } from "@shared/settings-keys";
 import { showSideView, useApp, useSetting, type Route, type SideView } from "../store/app";
@@ -35,6 +35,7 @@ import { ArtistChooser } from "./ArtistChooser";
 import { Icon } from "./Icon";
 import { LyricsOptionsButton } from "./LyricsOptions";
 import { drawContinuation, endColour, isFlat, prepareScene, sceneKey, scrimOver, toneForText, useScene, withTone, type Scene } from "../lib/immersive";
+import { refOf } from "../lib/track-ref";
 
 const MIN_W = 300;
 const MAX_W = 560;
@@ -119,7 +120,7 @@ function DrillIn({ view }: { view: Exclude<SideView, "overview"> }) {
         {view === "lyrics" ? <LyricsPane /> : null}
         {view === "queue" ? <QueuePanel /> : null}
         {view === "recent" ? <SavedQueues /> : null}
-        {view === "about" ? <div className="side-scroll"><AboutSong variant="side" trackId={now?.track.id} onNavigate={(r: Route) => navigate(r)} /></div> : null}
+        {view === "about" ? <div className="side-scroll"><AboutSong variant="side" track={now ? refOf(now.track) : undefined} onNavigate={(r: Route) => navigate(r)} /></div> : null}
       </div>
     </section>
   );
@@ -188,7 +189,7 @@ function Overview() {
       </div>
       <LyricsCard trackId={track.id} durationMs={track.durationMs} />
       <UpNextCard />
-      <AboutCard trackId={track.id} />
+      <AboutCard track={refOf(track)} />
       </div>
     </div>
   );
@@ -426,8 +427,8 @@ function UpNextCard() {
   );
 }
 
-function AboutCard({ trackId }: { trackId: string }) {
-  const { data } = useQuery(() => ({ type: "track", data: { id: trackId } }), "trackDetail", [trackId]);
+function AboutCard({ track }: { track: TrackRef }) {
+  const { data } = useQuery(() => ({ type: "track", data: { track } }), "trackDetail", [track.source, track.id]);
   const tr = data as Track | undefined;
   const facts: [string, string | number | undefined][] = tr ? [
     [t("about.album"), tr.album],

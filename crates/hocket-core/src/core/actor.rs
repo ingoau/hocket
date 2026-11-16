@@ -30,7 +30,7 @@ use crate::undo::UndoStack;
 use crate::util::Clock;
 
 use super::io::ConnectIo;
-use super::state::{PendingCas, Playback, SavedPosition, ServerState};
+use super::state::{AccountRegistry, AccountState, PendingCas, Playback, SavedPosition};
 use super::{ActorMsg, BackendChoice, CoreError, Deps, EventSink, Internal, PollFn};
 
 /// Session document persistence debounce.
@@ -107,6 +107,9 @@ impl SettingsStore for DbSettingsStore {
     }
 }
 
+/// Live home shelves by account, with when they were fetched.
+pub(crate) type LiveHome = Arc<Mutex<HashMap<String, (f64, Vec<crate::api::HomeShelf>)>>>;
+
 pub(crate) struct Actor {
     pub cfg: CoreConfig,
     pub clock: Arc<dyn Clock>,
@@ -142,6 +145,8 @@ pub(crate) struct Actor {
     /// Formats particular receivers turned out not to play
     /// (`Command::RendererFailed`), as saved.
     pub renderer_formats: crate::downloads::receivers::Learned,
+    /// Stream URLs the renderer waits for (live providers on a Cast device).
+    pub remote: super::handlers::remote_streams::RemoteStreams,
     /// Background prefetch of the next queue items (transport owner only).
     pub prefetch: super::handlers::prefetch::PrefetchState,
     /// AutoMix analysis on a miss (desktop).
@@ -182,13 +187,27 @@ pub(crate) struct Actor {
     pub listener_port: Option<u16>,
     pub listener_stop: Option<tokio::sync::oneshot::Sender<()>>,
     pub discovery: Option<Box<dyn Discovery>>,
+    /// The LAN adverts seen and not lost, for a session opened later (a
+    /// pairing moved this device to another identity).
+    pub lan_adverts: HashMap<DeviceId, crate::connect::discovery::PeerAdvert>,
     pub lyrics_http: Option<Arc<dyn crate::lyrics::LyricsHttp>>,
 
-    pub server: Option<ServerState>,
-    /// Servers added but not yet verified by a probe.
-    pub pending_servers: HashMap<ServerId, super::PendingServer>,
+    pub accounts: AccountRegistry,
+    /// Accounts added but not yet verified by a probe.
+    pub pending_accounts: HashMap<AccountId, super::PendingAccount>,
+    /// Live home shelves by account, with when they were fetched.
+    pub live_home: LiveHome,
+    pub live_home_fetching: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// The InnerTube transport tests inject (`None`: reqwest).
+    pub ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
+    /// YouTube Music JS host requests waiting for the platform's answer.
+    pub ytm_js_pending:
+        HashMap<String, tokio::sync::oneshot::Sender<Result<crate::api::YtmJsAnswer, String>>>,
     pub engine: Option<Engine>,
+    /// The session's scope: the identity id while a session is open.
     pub scope: Option<String>,
+    /// This device's identity (shared with the engine; persisted on change).
+    pub identity: crate::identity::SharedIdentity,
     pub queued_inputs: VecDeque<Input>,
     /// Effects the reducer reported for the local op being submitted.
     pub pending_effects: Option<Vec<crate::session::Effect>>,
@@ -200,8 +219,11 @@ pub(crate) struct Actor {
     pub snoozes: Vec<crate::api::Snooze>,
     /// Where albums were left off, tombstones included (`crate::album_resume`).
     pub album_resumes: Vec<crate::api::AlbumResumeEntry>,
+    /// The identity's library: manual links, Mixed playlists, the Hocket
+    /// library (`crate::library`), tombstones included.
+    pub library_records: Vec<crate::library::LibraryRecord>,
     /// Track and position the next local load should land on (album resume).
-    pub pending_resume_at: Option<(TrackId, Ms)>,
+    pub pending_resume_at: Option<(TrackRef, Ms)>,
     /// When the oldest offered album resume point expires (re-announced from the tick).
     pub album_resume_expires_at: Option<crate::api::EpochMs>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
@@ -212,7 +234,7 @@ pub(crate) struct Actor {
     pub emitted_devices: Option<Vec<DeviceInfo>>,
     /// Plays waiting for the session's scrobble verdict (mirrors the durable
     /// [`super::state::PendingScrobble`] records of the open scope).
-    pub pending_submits: HashMap<(TrackId, u64), super::state::PendingScrobble>,
+    pub pending_submits: HashMap<(TrackRef, u64), super::state::PendingScrobble>,
     pub pending_cas: HashMap<String, PendingCas>,
     pub outbox_entries: HashMap<String, String>,
 
@@ -296,6 +318,13 @@ impl Actor {
             .map_err(|e| CoreError::Other(format!("open database: {e}")))?;
         let open_report = db.open_report().clone();
         let clock = deps.clock.clone();
+        let identity = Arc::new(Mutex::new(crate::core::handlers::identity::load_identity(
+            &db,
+            &cfg.device_id,
+            &cfg.device_name,
+            clock.now_ms(),
+            deps.identity.clone(),
+        )));
         let settings_store = DbSettingsStore {
             db: db.clone(),
             clock: clock.clone(),
@@ -468,6 +497,7 @@ impl Actor {
             core_stream,
             renderer: None,
             renderer_formats,
+            remote: Default::default(),
             prefetch: Default::default(),
             analysis: Default::default(),
             share: Default::default(),
@@ -494,11 +524,17 @@ impl Actor {
             listener_port: None,
             listener_stop: None,
             discovery: None,
+            lan_adverts: HashMap::new(),
             lyrics_http: deps.lyrics_http,
-            server: None,
-            pending_servers: HashMap::new(),
+            accounts: AccountRegistry::default(),
+            pending_accounts: HashMap::new(),
+            ytm_js_pending: HashMap::new(),
+            ytm_http: deps.ytm_http.clone(),
+            live_home: Arc::default(),
+            live_home_fetching: Arc::default(),
             engine: None,
             scope: None,
+            identity,
             queued_inputs: VecDeque::new(),
             pending_effects: None,
             last_doc: None,
@@ -506,6 +542,7 @@ impl Actor {
             stash: vec![],
             snoozes: vec![],
             album_resumes: vec![],
+            library_records: vec![],
             pending_resume_at: None,
             album_resume_expires_at: None,
             emitted_transport: None,
@@ -568,7 +605,7 @@ impl Actor {
             &crate::saver::parse_custom(&actor.settings.get(crate::settings::keys::BATTERY_CUSTOM)),
         );
         crate::devlog::set_detailed(actor.settings.get_bool(keys::DEVELOPER_MODE));
-        if let Some(preset) = deps.server {
+        for preset in deps.servers {
             actor.attach_preset_server(preset);
         }
         Ok(actor)
@@ -638,7 +675,19 @@ impl Actor {
                 }
             },
             Internal::SyncProgress(p) => self.on_sync_progress(p),
-            Internal::Probed { server_id, result } => self.on_probed(server_id, result),
+            Internal::Probed { account_id, result } => self.on_probed(account_id, result),
+            Internal::YtmProbed {
+                cookies,
+                js_host,
+                result,
+            } => self.on_ytm_probed(cookies, js_host, result),
+            Internal::YtmJs { request, reply } => self.on_ytm_js(request, reply),
+            Internal::RemoteStreamResolved {
+                source,
+                track_id,
+                error,
+            } => self.on_remote_stream_resolved(source, track_id, error),
+            Internal::LiveHomeFetched { account_id } => self.on_live_home_fetched(account_id),
             Internal::Connected { peer, url, tx } => {
                 self.conns.insert(peer.clone(), tx);
                 self.engine_input(Input::Connected { peer, url });
@@ -667,16 +716,16 @@ impl Actor {
             Internal::Discovery(ev) => match ev {
                 crate::connect::discovery::DiscoveryEvent::Found(a) => {
                     if a.device_id != self.cfg.device_id {
+                        self.lan_adverts.insert(a.device_id.clone(), a.clone());
                         self.engine_input(Input::PeerDiscovered(a));
                     }
                 }
                 crate::connect::discovery::DiscoveryEvent::Lost { device_id } => {
+                    self.lan_adverts.remove(&device_id);
                     self.engine_input(Input::PeerLost { device_id });
                 }
             },
-            Internal::CredentialVerified { peer, ok } => {
-                self.engine_input(Input::CredentialVerified { peer, ok });
-            }
+            Internal::Exchange(r) => self.on_exchange(r),
             Internal::Autoplay {
                 engine,
                 picks,
@@ -734,6 +783,7 @@ impl Actor {
             } => self.on_analysis_done(server_id, track_id, result),
             Internal::SkipOffline { key } => self.on_skip_offline(key),
             Internal::ClearOfflineSkips => self.clear_offline_skips(),
+            Internal::OfferAlternates => self.offer_alternates(),
             Internal::RetryOfflineClear => self.run_offline_clear(false),
             Internal::PrimeDone { generation } => self.on_prime_done(generation),
             Internal::ReportUpload(msg) => self.on_report_upload(msg),
@@ -802,18 +852,18 @@ impl Actor {
                 "coordinator mode: no audio, no credentials, room served by hocket-coordinator",
             );
         }
-        // Servers (metadata only; credentials arrive with AddServer).
-        if self.server.is_none() {
-            match self.db.servers() {
-                Ok(list) => {
-                    if let Some(info) = list.into_iter().next() {
-                        self.server = Some(ServerState::new(info));
+        // Servers (metadata only; credentials arrive with AddAccount).
+        match self.db.accounts() {
+            Ok(list) => {
+                for info in list {
+                    if !self.accounts.contains(&info.id) {
+                        self.accounts.insert(AccountState::new(info));
                     }
                 }
-                Err(e) => self.error(ErrorKind::Storage, "load servers", Some(e.to_string())),
             }
+            Err(e) => self.error(ErrorKind::Storage, "load accounts", Some(e.to_string())),
         }
-        if self.server.is_some() && self.engine.is_none() {
+        if self.engine.is_none() {
             self.open_session();
         }
         // Jobs and outbox.
@@ -887,8 +937,8 @@ impl Actor {
                 snapshot: snapshot.clone(),
             });
         }
-        self.emit(Event::ServersChanged {
-            servers: snapshot.servers.clone(),
+        self.emit(Event::AccountsChanged {
+            accounts: snapshot.accounts.clone(),
         });
         if let Some(doc) = &snapshot.session {
             self.emit(Event::SessionChanged {
@@ -1219,6 +1269,7 @@ impl Actor {
             kind,
             message: message.into(),
             detail,
+            account_id: None,
         });
     }
 
@@ -1278,12 +1329,37 @@ impl Actor {
         });
     }
 
-    pub(crate) fn server_id(&self) -> Option<String> {
-        self.server.as_ref().map(|s| s.info.id.clone())
+    /// The account the session is scoped to (Phase 1: the highest-priority
+    /// Navidrome account). Session-wide state (the document, the stash,
+    /// snoozes, album resume points, shared analysis) lives under it.
+    pub(crate) fn scope_account(&self) -> Option<String> {
+        self.accounts.primary().map(|s| s.info.id.clone())
     }
 
-    pub(crate) fn api(&self) -> Option<Arc<dyn crate::subsonic::SubsonicApi>> {
-        self.server.as_ref().and_then(|s| s.api.clone())
+    /// The provider whose ids are valid in `source`, once it has credentials.
+    pub(crate) fn provider_for(&self, source: &str) -> Option<Arc<dyn crate::provider::Provider>> {
+        self.accounts
+            .for_source(source)
+            .and_then(|a| a.provider.clone())
+    }
+
+    /// The Subsonic client for `source`, when it is a Navidrome account
+    /// with credentials: for work that is Subsonic through and through.
+    pub(crate) fn subsonic_for(
+        &self,
+        source: &str,
+    ) -> Option<Arc<dyn crate::subsonic::SubsonicApi>> {
+        self.accounts.for_source(source).and_then(|a| a.subsonic())
+    }
+
+    /// Every provider with credentials, highest priority first.
+    pub(crate) fn providers(&self) -> crate::provider::ProviderSet {
+        self.accounts.providers()
+    }
+
+    /// Whether any account can reach its server right now.
+    pub(crate) fn any_provider(&self) -> bool {
+        self.accounts.iter().any(|a| a.provider.is_some())
     }
 
     /// The gain the backend applies: the volume slider, scaled by the sleep
@@ -1303,7 +1379,7 @@ impl Actor {
     }
 
     pub(crate) fn snapshot(&mut self) -> Snapshot {
-        let servers = self.server_infos();
+        let accounts = self.account_infos();
         let session = self.engine.as_ref().map(|e| e.document().clone());
         let queue = self.queue_view();
         let transport = self.transport_state();
@@ -1313,7 +1389,7 @@ impl Actor {
         };
         let media_session = self.media_session_state(&queue, &transport);
         Snapshot {
-            servers,
+            accounts,
             session,
             queue,
             transport,
@@ -1329,6 +1405,7 @@ impl Actor {
             sleep_timer: self.sleep.state(),
             network: self.network.clone(),
             battery_saver: self.battery_saver.clone(),
+            identity: self.identity_info(),
             sync_progress: self.sync_progress.clone(),
         }
     }

@@ -35,7 +35,7 @@ import app.hocket.core.Commands
 import app.hocket.core.api.Job
 import app.hocket.core.api.JobKind
 import app.hocket.core.api.JobState
-import app.hocket.core.api.ServerInfo
+import app.hocket.core.api.AccountInfo
 import app.hocket.core.api.SyncProgress
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
@@ -155,7 +155,7 @@ private fun JobRow(job: Job) {
  * size or live count beneath, one action at the end, and a thin progress line while it runs.
  */
 @Composable
-private fun SyncRow(server: ServerInfo, job: Job?, progress: SyncProgress?) {
+private fun SyncRow(server: AccountInfo, job: Job?, progress: SyncProgress?) {
     val client = LocalCoreClient.current
     val active = job?.takeIf { it.state == JobState.Running || it.state == JobState.Queued || it.state == JobState.Paused }
     // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.

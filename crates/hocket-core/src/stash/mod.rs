@@ -15,7 +15,7 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use crate::api::{DeviceId, EpochMs, StashEntry, StashItem, Track, TrackId};
+use crate::api::{DeviceId, EpochMs, StashEntry, StashItem, Track, TrackRef};
 
 /// How many songs the stash holds. Adds past it are dropped (and toasted).
 pub const MAX_ENTRIES: usize = 500;
@@ -85,13 +85,13 @@ pub fn live(entries: &[StashEntry]) -> Vec<&StashEntry> {
     let mut out: Vec<&StashEntry> = entries.iter().filter(|e| !e.removed).collect();
     out.sort_by(|a, b| by_position(a, b));
     let mut seen = HashSet::new();
-    out.retain(|e| seen.insert(e.track_id.as_str()));
+    out.retain(|e| seen.insert(&e.track));
     out
 }
 
 /// The listed tracks' ids, in order.
-pub fn track_ids(entries: &[StashEntry]) -> Vec<TrackId> {
-    live(entries).iter().map(|e| e.track_id.clone()).collect()
+pub fn track_ids(entries: &[StashEntry]) -> Vec<TrackRef> {
+    live(entries).iter().map(|e| e.track.clone()).collect()
 }
 
 /// Stash `tracks` at the end, skipping ones already listed. Returns how many were added and how
@@ -103,7 +103,7 @@ pub fn add(
     now: EpochMs,
 ) -> (usize, usize) {
     let listed = live(entries);
-    let mut present: HashSet<String> = listed.iter().map(|e| e.track_id.clone()).collect();
+    let mut present: HashSet<TrackRef> = listed.iter().map(|e| e.track.clone()).collect();
     let mut room = MAX_ENTRIES.saturating_sub(listed.len());
     let mut key = entries
         .iter()
@@ -112,7 +112,7 @@ pub fn add(
         .fold(0.0, f64::max);
     let (mut added, mut dropped) = (0, 0);
     for (i, t) in tracks.iter().enumerate() {
-        if !present.insert(t.id.clone()) {
+        if !present.insert(TrackRef::new(t.server_id.clone(), t.id.clone())) {
             continue;
         }
         if room == 0 {
@@ -124,8 +124,7 @@ pub fn add(
         added += 1;
         entries.push(StashEntry {
             entry_id: format!("{device}:{}:{i}:{}", now as i64, t.id),
-            track_id: t.id.clone(),
-            server_id: t.server_id.clone(),
+            track: TrackRef::new(t.server_id.clone(), t.id.clone()),
             sort_key: key,
             added_at: now,
             updated_at: now,
@@ -151,19 +150,18 @@ pub fn set_removed(
     removed: bool,
     now: EpochMs,
 ) -> Vec<String> {
-    let tracks: HashSet<String> = if removed {
+    let tracks: HashSet<TrackRef> = if removed {
         entries
             .iter()
             .filter(|e| ids.contains(&e.entry_id))
-            .map(|e| e.track_id.clone())
+            .map(|e| e.track.clone())
             .collect()
     } else {
         HashSet::new()
     };
     let mut changed = vec![];
     for e in entries.iter_mut() {
-        let hit =
-            ids.contains(&e.entry_id) || (removed && !e.removed && tracks.contains(&e.track_id));
+        let hit = ids.contains(&e.entry_id) || (removed && !e.removed && tracks.contains(&e.track));
         if e.removed != removed && hit {
             e.removed = removed;
             e.removed_at = bump(e.removed_at, now);
@@ -201,9 +199,9 @@ pub fn move_to(entries: &mut [StashEntry], entry_id: &str, to: usize, now: Epoch
     let track = entries
         .iter()
         .find(|e| e.entry_id == entry_id)
-        .map(|e| e.track_id.clone());
+        .map(|e| e.track.clone());
     for e in entries.iter_mut() {
-        if !e.removed && e.entry_id != entry_id && Some(&e.track_id) == track.as_ref() {
+        if !e.removed && e.entry_id != entry_id && Some(&e.track) == track.as_ref() {
             e.removed = true;
             e.removed_at = bump(e.removed_at, now);
         }
@@ -289,9 +287,12 @@ fn bump(prev: EpochMs, now: EpochMs) -> EpochMs {
 
 /// The listed entries as items, each with its track from `resolve` or, failing that, the snapshot
 /// taken when it was stashed.
-pub fn items(entries: &[StashEntry], resolve: impl Fn(&[TrackId]) -> Vec<Track>) -> Vec<StashItem> {
+pub fn items(
+    entries: &[StashEntry],
+    resolve: impl Fn(&[TrackRef]) -> Vec<Track>,
+) -> Vec<StashItem> {
     let listed = live(entries);
-    let ids: Vec<TrackId> = listed.iter().map(|e| e.track_id.clone()).collect();
+    let ids: Vec<TrackRef> = listed.iter().map(|e| e.track.clone()).collect();
     let tracks = resolve(&ids);
     listed
         .into_iter()
@@ -300,7 +301,7 @@ pub fn items(entries: &[StashEntry], resolve: impl Fn(&[TrackId]) -> Vec<Track>)
             added_at: e.added_at,
             track: tracks
                 .iter()
-                .find(|t| t.id == e.track_id)
+                .find(|t| t.id == e.track.id && t.server_id == e.track.source)
                 .cloned()
                 .unwrap_or_else(|| snapshot(e)),
         })
@@ -309,8 +310,8 @@ pub fn items(entries: &[StashEntry], resolve: impl Fn(&[TrackId]) -> Vec<Track>)
 
 fn snapshot(e: &StashEntry) -> Track {
     Track {
-        id: e.track_id.clone(),
-        server_id: e.server_id.clone(),
+        id: e.track.id.clone(),
+        server_id: e.track.source.clone(),
         title: e.title.clone(),
         artist: e.artist.clone(),
         album: e.album.clone(),

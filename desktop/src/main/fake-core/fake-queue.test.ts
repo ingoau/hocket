@@ -16,7 +16,7 @@ beforeEach(() => {
     { dataDir: join(dir, "data"), cacheDir: join(dir, "cache"), deviceId: "dev-test", deviceName: "Test", platform: "linux", appVersion: "0.0.0", audio: "native" } as never,
     { trackCount: 300 },
   );
-  core.dispatch({ type: "addServer", data: { url: "https://music.test", username: "me", password: "x" } } as unknown as Command);
+  core.dispatch({ type: "addAccount", data: { setup: { type: "navidrome", data: { url: "https://music.test", username: "me", password: "x" } } } } as unknown as Command);
 });
 
 afterEach(async () => {
@@ -26,22 +26,23 @@ afterEach(async () => {
 
 const view = async (): Promise<QueueView> => expectResult(await core.query({ type: "queue" }), "queue");
 const sid = () => "srv";
+const refs = (ids: string[]) => ids.map((id) => ({ source: sid(), id }));
 
 describe("FakeCore queue", () => {
   it("plays, queues into the group, steps and windows the view", async () => {
     expect((await view()).total).toBe(0);
     const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
     const t = lib.tracks.slice(0, 250).map((x) => x.id);
-    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: t, start_index: 120, label: "Mix", shuffle: false } });
+    core.dispatch({ type: "playTracks", data: { tracks: refs(t), start_index: 120, label: "Mix", shuffle: false } });
     let v = await view();
     expect(v.total).toBe(250);
     expect(v.currentIndex).toBe(120);
     expect(v.windowStart).toBe(20);
     expect(v.entries.length).toBe(201);
-    expect(v.current?.item.trackId).toBe(t[120]);
+    expect(v.current?.item.track.id).toBe(t[120]);
 
-    core.dispatch({ type: "addToQueue", data: { server_id: sid(), track_ids: [lib.tracks[260]!.id] } });
-    core.dispatch({ type: "playNext", data: { server_id: sid(), track_ids: [lib.tracks[261]!.id] } });
+    core.dispatch({ type: "addToQueue", data: { tracks: refs([lib.tracks[260]!.id]) } });
+    core.dispatch({ type: "playNext", data: { tracks: refs([lib.tracks[261]!.id]) } });
     v = await view();
     expect(v.groupCount).toBe(2);
     const after = v.entries.slice(v.currentIndex! - v.windowStart + 1, v.currentIndex! - v.windowStart + 3);
@@ -52,7 +53,7 @@ describe("FakeCore queue", () => {
     core.dispatch({ type: "previousTrack" });
     core.dispatch({ type: "previousTrack" });
     v = await view();
-    expect(v.current?.item.trackId).toBe(t[120]);
+    expect(v.current?.item.track.id).toBe(t[120]);
     expect(v.groupCount).toBe(2);
     expect(v.total).toBe(252);
 
@@ -83,7 +84,7 @@ describe("FakeCore queue", () => {
   });
 
   it("hides Add to queue with the Queue section off", async () => {
-    const ids = async () => expectResult(await core.query({ type: "actions", data: { surface: "contextMenu", target: { type: "tracks", data: { ids: ["x"] } } } }), "actions").map((a) => a.id);
+    const ids = async () => expectResult(await core.query({ type: "actions", data: { surface: "contextMenu", target: { type: "tracks", data: { tracks: [{ source: sid(), id: "x" }] } } } }), "actions").map((a) => a.id);
     expect(await ids()).toContain("addToQueue");
     core.dispatch({ type: "setSetting", data: { key: "queue.section", value: "false" } });
     expect(await ids()).not.toContain("addToQueue");
@@ -92,38 +93,38 @@ describe("FakeCore queue", () => {
 
   it("insertTracks drops library songs after a queue entry, any number at once", async () => {
     const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
-    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(0, 5).map((x) => x.id), start_index: 0, label: "A", shuffle: false } });
+    core.dispatch({ type: "playTracks", data: { tracks: refs(lib.tracks.slice(0, 5).map((x) => x.id)), start_index: 0, label: "A", shuffle: false } });
     let v = await view();
     const after = v.entries[2]!.item.key;
     const many = lib.tracks.slice(100, 250).map((x) => x.id);
-    core.dispatch({ type: "insertTracks", data: { server_id: sid(), track_ids: many, keys: [], after, in_group: false } });
+    core.dispatch({ type: "insertTracks", data: { tracks: refs(many), keys: [], after, in_group: false } });
     v = await view();
     expect(v.total).toBe(5 + 150);
-    expect(v.entries[3]!.item.trackId).toBe(many[0]);
+    expect(v.entries[3]!.item.track.id).toBe(many[0]);
     expect(v.entries[3]!.item.added).toBe(true);
     const range = expectResult(await core.query({ type: "queueRange", data: { start: 150, count: 5 } }), "queue");
-    expect(range.entries[0]!.item.trackId).toBe(many[147]);
-    expect(range.entries[3]!.item.trackId).toBe(lib.tracks[3]!.id);
+    expect(range.entries[0]!.item.track.id).toBe(many[147]);
+    expect(range.entries[3]!.item.track.id).toBe(lib.tracks[3]!.id);
   });
 
   it("stashing the group only removes songs the stash took", async () => {
     const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
-    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(0, 3).map((x) => x.id), start_index: 0, label: "A", shuffle: false } });
-    core.dispatch({ type: "addToQueue", data: { server_id: sid(), track_ids: [lib.tracks[10]!.id], keys: [] } });
+    core.dispatch({ type: "playTracks", data: { tracks: refs(lib.tracks.slice(0, 3).map((x) => x.id)), start_index: 0, label: "A", shuffle: false } });
+    core.dispatch({ type: "addToQueue", data: { tracks: refs([lib.tracks[10]!.id]), keys: [] } });
     // An entry for a song the library (and so the stash) doesn't know.
-    const s = (core as unknown as { session: { list: { trackId: string; queued: boolean }[] } }).session;
-    s.list.splice(2, 0, { ...s.list[1]!, key: "ghost", trackId: "not-in-library", queued: true } as never);
+    const s = (core as unknown as { session: { list: { track: { source: string; id: string }; queued: boolean }[] } }).session;
+    s.list.splice(2, 0, { ...s.list[1]!, key: "ghost", track: { source: sid(), id: "not-in-library" }, queued: true } as never);
     core.dispatch({ type: "stashQueueGroup" });
     const v = await view();
     expect(v.groupCount).toBe(1);
-    expect(v.entries.find((e) => e.inGroup)?.item.trackId).toBe("not-in-library");
+    expect(v.entries.find((e) => e.inGroup)?.item.track.id).toBe("not-in-library");
   });
 
   it("restoring a shuffled queue rebuilt from its context shuffles what follows", async () => {
     const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
     const ids = lib.tracks.slice(0, 40).map((x) => x.id);
-    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: ids, start_index: 0, label: "Big", shuffle: false } });
-    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(50, 55).map((x) => x.id), start_index: 0, label: "B", shuffle: false } });
+    core.dispatch({ type: "playTracks", data: { tracks: refs(ids), start_index: 0, label: "Big", shuffle: false } });
+    core.dispatch({ type: "playTracks", data: { tracks: refs(lib.tracks.slice(50, 55).map((x) => x.id)), start_index: 0, label: "B", shuffle: false } });
     const saved = (core as unknown as { savedQueues: { history: unknown[]; upcoming: unknown[]; shuffle: boolean }[] }).savedQueues;
     const big = expectResult(await core.query({ type: "savedQueues" }), "savedQueues").find((q) => q.label === "Big")!;
     // As stored for a queue too long to keep entries for.
@@ -135,22 +136,22 @@ describe("FakeCore queue", () => {
     const v = await view();
     expect(v.total).toBe(40);
     expect(v.shuffle).toBe(true);
-    const order = v.entries.slice(1).map((e) => e.item.trackId);
+    const order = v.entries.slice(1).map((e) => e.item.track.id);
     expect(order).not.toEqual(ids.slice(1));
     expect([...order].sort()).toEqual(ids.slice(1).sort());
   });
 
   it("replacing the context auto-saves the outgoing list", async () => {
     const lib = (core as unknown as { lib: { tracks: { id: string }[] } }).lib;
-    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(0, 5).map((x) => x.id), start_index: 2, label: "A", shuffle: false } });
-    core.dispatch({ type: "playTracks", data: { server_id: sid(), track_ids: lib.tracks.slice(10, 15).map((x) => x.id), start_index: 0, label: "B", shuffle: false } });
+    core.dispatch({ type: "playTracks", data: { tracks: refs(lib.tracks.slice(0, 5).map((x) => x.id)), start_index: 2, label: "A", shuffle: false } });
+    core.dispatch({ type: "playTracks", data: { tracks: refs(lib.tracks.slice(10, 15).map((x) => x.id)), start_index: 0, label: "B", shuffle: false } });
     const saved = expectResult(await core.query({ type: "savedQueues" }), "savedQueues");
     expect(saved[0]?.label).toBe("A");
     expect(saved[0]?.history.length).toBe(2);
     expect(saved[0]?.upcoming.length).toBe(2);
     core.dispatch({ type: "restoreSavedQueue", data: { id: saved[0]!.id } });
     const v = await view();
-    expect(v.current?.item.trackId).toBe(lib.tracks[2]!.id);
+    expect(v.current?.item.track.id).toBe(lib.tracks[2]!.id);
     expect(v.historyCount).toBe(2);
   });
 });

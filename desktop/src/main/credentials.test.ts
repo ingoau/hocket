@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { accountIdFor } from "./account-id";
 
 vi.mock("electron", () => ({ safeStorage: undefined }));
 const { ServerCredentialStore, encryptionUsable } = await import("./credentials");
@@ -38,6 +39,40 @@ describe("ServerCredentialStore", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps this device's YouTube Music sign-in under one key and replays it", async () => {
+    const store = await open(dir);
+    store.intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SAPISID=abc; SID=x", js_host: true } } } });
+    await vi.waitFor(() => expect(existsSync(join(dir, "credentials.json"))).toBe(true));
+    expect(onDisk(dir)[0]!.blob).toBe(b64("enc:SAPISID=abc; SID=x"));
+    const again = await open(dir);
+    expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SAPISID=abc; SID=x", js_host: true } } } }]);
+    // Kept while any YouTube Music account is installed (its id is a channel id), dropped after.
+    again.retainOnly([{ id: "UCme", kind: "youtubeMusic" }]);
+    expect(again.replayCommands()).toHaveLength(1);
+    again.intercept({ type: "removeAccount", data: { account_id: "UCme" } });
+    again.retainOnly([]);
+    expect(again.replayCommands()).toEqual([]);
+    // Anonymous: replayed without cookies.
+    again.intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: true } } } });
+    await vi.waitFor(() => expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: undefined, js_host: true } } } }]));
+  });
+
+  it("an AccountsChanged from before the replay doesn't prune what is about to be replayed", async () => {
+    await (await open(dir)).remember("https://a.example", "alice", "pw");
+    (await open(dir)).intercept({ type: "addAccount", data: { setup: { type: "youtubeMusic", data: { cookies: "SID=x", js_host: true } } } });
+    await vi.waitFor(() => expect(onDisk(dir)).toHaveLength(2));
+    const again = await open(dir);
+    // The core starts with only the Navidrome account it keeps itself.
+    again.retainOnly([{ id: accountIdFor("https://a.example", "alice") }]);
+    expect(again.replayCommands()).toHaveLength(2);
+    expect(onDisk(dir)).toHaveLength(2);
+    // Once the core has listed it, a later list without it (after a removal) prunes it.
+    again.retainOnly([{ id: accountIdFor("https://a.example", "alice") }, { id: "UCme", kind: "youtubeMusic" }]);
+    again.intercept({ type: "removeAccount", data: { account_id: "UCme" } });
+    again.retainOnly([{ id: accountIdFor("https://a.example", "alice") }]);
+    expect(again.replayCommands()).toHaveLength(1);
+  });
+
   it("treats the Linux basic_text backend as no encryption at all", async () => {
     expect(await encryptionUsable(fakeStorage("basic_text"), "linux")).toBe(false);
     expect(await encryptionUsable(fakeStorage("gnome_libsecret"), "linux")).toBe(true);
@@ -50,7 +85,7 @@ describe("ServerCredentialStore", () => {
   it("with basic_text the password is volatile: nothing on disk, nothing replayed, but the UI is told", async () => {
     const store = await open(dir, "basic_text");
     expect(store.storageKind).toBe("volatile");
-    store.intercept({ type: "addServer", data: { url: "https://a.example/", username: "alice", password: "pw", name: undefined } });
+    store.intercept({ type: "addAccount", data: { setup: { type: "navidrome", data: { url: "https://a.example/", username: "alice", password: "pw", name: undefined } } } });
     expect(existsSync(join(dir, "credentials.json"))).toBe(false);
     expect(store.replayCommands()).toEqual([]);
     expect(store.hasAny()).toBe(true);
@@ -65,7 +100,7 @@ describe("ServerCredentialStore", () => {
     expect(raw).not.toContain("pw\"");
     expect(raw).toContain(Buffer.from("enc:pw").toString("base64"));
     const again = await open(dir);
-    expect(again.replayCommands()).toEqual([{ type: "addServer", data: { url: "https://a.example", username: "alice", password: "pw", name: "Home" } }]);
+    expect(again.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "navidrome", data: { url: "https://a.example", username: "alice", password: "pw", name: "Home" } } } }]);
     expect(again.passwordFor("https://a.example/", "alice")).toBe("pw");
   });
 
@@ -120,23 +155,23 @@ describe("ServerCredentialStore", () => {
       { url: "https://b.example", username: "bob", blob: b64("garbage") },
     ]);
     const store = await open(dir);
-    expect(store.replayCommands()).toEqual([{ type: "addServer", data: { url: "https://a.example", username: "alice", password: "pw", name: undefined } }]);
+    expect(store.replayCommands()).toEqual([{ type: "addAccount", data: { setup: { type: "navidrome", data: { url: "https://a.example", username: "alice", password: "pw", name: undefined } } } }]);
     expect(onDisk(dir).map((e) => e.blob).sort()).toEqual([b64("enc:pw"), b64("garbage")].sort());
     expect(store.hasAny()).toBe(true);
-    store.retainOnly([{ url: "https://a.example", username: "alice" }]);
+    store.retainOnly([{ id: accountIdFor("https://a.example", "alice") }]);
     expect(onDisk(dir).map((e) => e.url)).toEqual(["https://a.example"]);
   });
 
-  it("an empty ServersChanged only prunes after a RemoveServer", async () => {
+  it("an empty AccountsChanged only prunes after a RemoveAccount", async () => {
     const store = await open(dir);
     await store.remember("https://a.example", "alice", "pw");
     // Start: the core's server table couldn't be read → ServersChanged([]) with Started.
     store.retainOnly([]);
     expect(store.replayCommands()).toHaveLength(1);
     // A non-empty list still prunes others.
-    store.retainOnly([{ url: "https://a.example", username: "alice" }]);
+    store.retainOnly([{ id: accountIdFor("https://a.example", "alice") }]);
     expect(store.replayCommands()).toHaveLength(1);
-    store.intercept({ type: "removeServer", data: { server_id: "s1" } });
+    store.intercept({ type: "removeAccount", data: { account_id: "s1" } });
     store.retainOnly([]);
     expect(store.replayCommands()).toEqual([]);
     expect(store.hasAny()).toBe(false);

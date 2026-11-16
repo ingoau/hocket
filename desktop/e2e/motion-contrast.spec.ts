@@ -91,7 +91,7 @@ test.describe("motion, contrast and zoom", () => {
     expect(first).not.toMatch(/\d+:\d\d/);
     // A track change is announced.
     const sid = await serverId(page);
-    await page.evaluate((s) => window.hocket.dispatch({ type: "playTracks", data: { server_id: s, track_ids: ["tr-2"], start_index: 0, label: "e2e", shuffle: false } }), sid);
+    await page.evaluate((s) => window.hocket.dispatch({ type: "playTracks", data: { tracks: ["tr-2"].map((id) => ({ source: s, id })), start_index: 0, label: "e2e", shuffle: false } }), sid);
     await expect(announcer).not.toHaveText(first!);
     await expect(announcer).toHaveText(/^Now playing: /);
   });
@@ -123,7 +123,7 @@ test.describe("motion, contrast and zoom", () => {
     for (const theme of ["light", "dark"] as const) {
       await setTheme(page, theme);
       for (const track of ["tr-1", "tr-40", "tr-77"]) {
-        await page.evaluate(({ s, id }) => window.hocket.dispatch({ type: "playTracks", data: { server_id: s, track_ids: [id], start_index: 0, label: "e2e", shuffle: false } }), { s: sid, id: track });
+        await page.evaluate(({ s, id }) => window.hocket.dispatch({ type: "playTracks", data: { tracks: [id].map((id) => ({ source: s, id })), start_index: 0, label: "e2e", shuffle: false } }), { s: sid, id: track });
         await page.getByTestId("toggle-fullscreen").click();
         const fs = page.getByTestId("fullscreen-player");
         await expect(fs.getByTestId("fs-scrim")).toHaveAttribute("data-measured", "true");

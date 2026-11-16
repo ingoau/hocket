@@ -34,7 +34,8 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use crate::api::{
-    ActionTarget, Command, DeviceId, EpochMs, RatingTarget, SessionDocument, UndoEntry, UndoState,
+    ActionTarget, Command, DeviceId, EpochMs, RatingTarget, SessionDocument, TrackRef, UndoEntry,
+    UndoState,
 };
 
 /// Default byte budget for the whole stack (undo + redo).
@@ -61,7 +62,7 @@ pub enum UndoAction {
     Cas(Vec<CasMutation>),
     /// Put each track back to this snooze. `None` means not snoozed; `Some(until)` is snoozed
     /// (`None` inside means it doesn't end).
-    Snoozes(Vec<(String, Option<Option<EpochMs>>)>),
+    Snoozes(Vec<(TrackRef, Option<Option<EpochMs>>)>),
     Nothing,
 }
 
@@ -127,7 +128,10 @@ impl RemoteItem {
         use RemoteValue as V;
         Some(match (&self.target, to) {
             (T::Track { id }, V::Rating(r)) => Command::SetRating {
-                targets: vec![RatingTarget::Track { id: id.clone() }],
+                targets: vec![RatingTarget::Track {
+                    id: id.clone(),
+                    source: String::new(),
+                }],
                 rating: *r,
             },
             (T::Album { id }, V::Rating(r)) => Command::SetRating {
@@ -135,7 +139,10 @@ impl RemoteItem {
                 rating: *r,
             },
             (T::Track { id }, V::Loved(l)) => Command::SetLoved {
-                targets: vec![RatingTarget::Track { id: id.clone() }],
+                targets: vec![RatingTarget::Track {
+                    id: id.clone(),
+                    source: String::new(),
+                }],
                 loved: *l,
             },
             (T::Album { id }, V::Loved(l)) => Command::SetLoved {
@@ -157,7 +164,8 @@ impl RemoteItem {
                 },
             ) => Command::PlaylistAdd {
                 playlist_id: playlist_id.clone(),
-                track_ids: vec![track_id.clone()],
+                // No source: the playlist's own account's song.
+                tracks: vec![TrackRef::new("", track_id.clone())],
                 at_index: *index,
             },
             (T::PlaylistTrack { playlist_id, .. }, V::Member { present: false, .. }) => {
@@ -295,16 +303,16 @@ pub trait UndoableCommand: Send + Sync {
 pub struct SnoozeUndo {
     pub kind: String,
     pub label: String,
-    pub before: Vec<(String, Option<Option<EpochMs>>)>,
-    pub after: Vec<(String, Option<Option<EpochMs>>)>,
+    pub before: Vec<(TrackRef, Option<Option<EpochMs>>)>,
+    pub after: Vec<(TrackRef, Option<Option<EpochMs>>)>,
 }
 
 impl SnoozeUndo {
     pub fn new(
         kind: impl Into<String>,
         label: impl Into<String>,
-        before: Vec<(String, Option<Option<EpochMs>>)>,
-        after: Vec<(String, Option<Option<EpochMs>>)>,
+        before: Vec<(TrackRef, Option<Option<EpochMs>>)>,
+        after: Vec<(TrackRef, Option<Option<EpochMs>>)>,
     ) -> SnoozeUndo {
         SnoozeUndo {
             kind: kind.into(),
@@ -823,7 +831,7 @@ mod tests {
 
     fn tracks(ids: &[&str]) -> ActionTarget {
         ActionTarget::Tracks {
-            ids: ids.iter().map(|s| s.to_string()).collect(),
+            tracks: ids.iter().map(|s| TrackRef::new("s", *s)).collect(),
         }
     }
 
@@ -927,14 +935,20 @@ mod tests {
                 assert_eq!(
                     m[0].command,
                     Command::SetRating {
-                        targets: vec![RatingTarget::Track { id: "t".into() }],
+                        targets: vec![RatingTarget::Track {
+                            id: "t".into(),
+                            source: String::new()
+                        }],
                         rating: 0
                     }
                 );
                 assert_eq!(
                     m[1].command,
                     Command::SetRating {
-                        targets: vec![RatingTarget::Track { id: "u".into() }],
+                        targets: vec![RatingTarget::Track {
+                            id: "u".into(),
+                            source: String::new()
+                        }],
                         rating: 1
                     }
                 );
@@ -948,7 +962,10 @@ mod tests {
                 assert_eq!(
                     m[0].command,
                     Command::SetRating {
-                        targets: vec![RatingTarget::Track { id: "t".into() }],
+                        targets: vec![RatingTarget::Track {
+                            id: "t".into(),
+                            source: String::new()
+                        }],
                         rating: 4
                     }
                 );
@@ -1008,7 +1025,7 @@ mod tests {
             added.redo().unwrap().command,
             Command::PlaylistAdd {
                 playlist_id: "p".into(),
-                track_ids: vec!["t".into()],
+                tracks: vec![TrackRef::new("", "t")],
                 at_index: Some(4)
             }
         );
@@ -1030,7 +1047,7 @@ mod tests {
             removed.inverse().unwrap().command,
             Command::PlaylistAdd {
                 playlist_id: "p".into(),
-                track_ids: vec!["t".into()],
+                tracks: vec![TrackRef::new("", "t")],
                 at_index: Some(2)
             }
         );

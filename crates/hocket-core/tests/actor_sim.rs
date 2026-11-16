@@ -135,8 +135,10 @@ async fn random_scenario(seed: u64, steps: usize) {
         let action = rng.random_range(0..7u32);
         let cmd = match action {
             0 => Command::PlayTracks {
-                server_id: w.cores[i].server_id.clone(),
-                track_ids: tracks.choose_multiple(&mut rng, 3).cloned().collect(),
+                tracks: TrackRef::list(
+                    &w.cores[i].server_id,
+                    tracks.choose_multiple(&mut rng, 3).cloned(),
+                ),
                 start_index: 0,
                 label: "Sel".into(),
                 shuffle: rng.random_bool(0.3),
@@ -146,8 +148,10 @@ async fn random_scenario(seed: u64, steps: usize) {
             2 => Command::Previous,
             3 => Command::TogglePlay,
             4 => Command::PlayNext {
-                server_id: w.cores[i].server_id.clone(),
-                track_ids: vec![tracks.choose(&mut rng).cloned().unwrap()],
+                tracks: TrackRef::list(
+                    &w.cores[i].server_id,
+                    vec![tracks.choose(&mut rng).cloned().unwrap()],
+                ),
                 keys: vec![],
             },
             5 => Command::SeekTo {

@@ -18,6 +18,7 @@ import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueItem
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueView
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.api.TrackSummary
 import org.junit.Assert.assertEquals
@@ -44,12 +45,12 @@ class CoreSessionQueueTest {
     private val player = CoreSessionPlayer(Looper.getMainLooper(), { sent += it }, media = media)
 
     private fun entry(n: Int) = QueueEntry(
-        QueueItem("k$n", "t$n", QueueSource.Inserted, false),
+        QueueItem("k$n", TrackRef("s1", "t$n"), QueueSource.Inserted, false),
         TrackSummary("t$n", "s1", "Track $n", "Artist", "Album", "al1", "ar1", 180_000u, null, 0u, false, OfflineState.None),
     )
 
     private fun state(trackId: String) = MediaSessionState(
-        MediaSessionMetadata("Track now", "Artist", "Album", 200_000u, null, trackId, false, 0u), true,
+        MediaSessionMetadata("Track now", "Artist", "Album", 200_000u, null, trackId, null, false, 0u), true,
         PositionStamp(0u, 0.0, 1.0, true), false, RepeatMode.Off, 1.0, false,
         listOf(MediaSessionAction.Play, MediaSessionAction.Pause, MediaSessionAction.Next, MediaSessionAction.Previous, MediaSessionAction.Seek), true,
     )

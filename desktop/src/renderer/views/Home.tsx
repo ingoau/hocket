@@ -17,7 +17,8 @@ import { filterName } from "../lib/filters";
 import { showToast } from "../lib/ui-toast";
 import { filterMenuItems, playFilter } from "../lib/pin-menus";
 import { libraryDragProps } from "../lib/queue-drag";
-import { HOME_SECTIONS_KEY, isPinned, moveBefore, moveKnown, moveShown, parseSections, resolvedStyle, sectionDef, sectionsValue, updateSection, type HomeSectionId, type SectionPref, type SectionStyle } from "../lib/home-sections";
+import { HOME_SECTIONS_KEY, isPinned, moveBefore, moveKnown, moveShown, parseSections, resolvedStyle, sectionDef, sectionsValue, updateSection, setShelves, shelfOf, type SectionPref, type SectionStyle } from "../lib/home-sections";
+import { refOf } from "../lib/track-ref";
 
 /** How many items a section loads. */
 const SECTION_ITEMS = 12;
@@ -57,7 +58,12 @@ interface Item {
  */
 export function Home() {
   const stored = useJsonSetting(HOME_SECTIONS_KEY);
-  const prefs = useMemo(() => parseSections(stored), [stored]);
+  // The core's shelves (each account's and Continue listening) are sections too.
+  const shelves = useQuery(() => ({ type: "homeShelves" }), "homeShelves", []).data;
+  const prefs = useMemo(() => {
+    setShelves(shelves ?? []);
+    return parseSections(stored);
+  }, [stored, shelves]);
   const setSetting = useApp((s) => s.setSetting);
   const sync = useApp((s) => s.syncProgress);
   const [customising, setCustomising] = useState(false);
@@ -131,7 +137,7 @@ function styleIcon(st: SectionStyle): string {
 
 /** One section: loads its items (only while shown) and draws them in its style. */
 function Section({ pref, onEmpty, menu }: { pref: SectionPref; onEmpty: (empty: boolean) => void; menu: (title: string) => MenuItem[] }) {
-  const id = pref.id as HomeSectionId;
+  const id = pref.id;
   const style = resolvedStyle(pref);
   const data = useSectionData(id);
   const empty = data.ready && data.items.length === 0 && !data.listening;
@@ -206,12 +212,12 @@ interface SectionData {
 }
 
 /** A section's items from the core's existing queries (each section only runs its own). */
-function useSectionData(id: HomeSectionId): SectionData {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+function useSectionData(id: string): SectionData {
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const filters = useApp((s) => s.filters);
   const saved = useApp((s) => s.savedQueues);
-  const nowId = useApp((s) => s.session?.current?.trackId);
+  const nowId = useApp((s) => s.session?.current?.track.id);
   const stats = useListeningStats(id === "favouriteArtists" || id === "topGenre" || id === "moreFromArtist" || id === "onRepeat");
   const genre = useMemo(() => {
     const counts = new Map<string, number>();
@@ -219,13 +225,9 @@ function useSectionData(id: HomeSectionId): SectionData {
     return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   }, [stats]);
   const topArtist = stats?.topArtists[0];
-  const rediscover = useQuery(() => (id === "rediscover" ? { type: "tracks", data: { server_id: serverId, page: { offset: 0, limit: SECTION_ITEMS }, sort: "rating", descending: true, filter: REDISCOVER as never } } : null), "tracks", [id, serverId]);
-  const genreAlbums = useQuery(() => (id === "topGenre" && genre ? { type: "albums", data: { server_id: serverId, artist_id: undefined, genre, sort: "playCount", descending: true, page: { offset: 0, limit: SECTION_ITEMS } } } : null), "albums", [id, serverId, genre]);
-  const newest = useQuery(() => (id === "newInLibrary" ? { type: "albums", data: { server_id: serverId, artist_id: undefined, genre: undefined, sort: "dateAdded", descending: true, page: { offset: 0, limit: SECTION_ITEMS } } } : null), "albums", [id, serverId]);
+  const rediscover = useQuery(() => (id === "rediscover" ? { type: "tracks", data: { server_id: "", page: { offset: 0, limit: SECTION_ITEMS }, sort: "rating", descending: true, filter: REDISCOVER as never } } : null), "tracks", [id, serverId]);
+  const genreAlbums = useQuery(() => (id === "topGenre" && genre ? { type: "albums", data: { server_id: "", artist_id: undefined, genre, sort: "playCount", descending: true, page: { offset: 0, limit: SECTION_ITEMS } } } : null), "albums", [id, serverId, genre]);
   const artistSongs = useQuery(() => (id === "moreFromArtist" && topArtist ? { type: "artistTopSongs", data: { id: topArtist.id, count: SECTION_ITEMS } } : null), "trackList", [id, topArtist?.id]);
-  const history = useQuery(() => (id === "recentlyPlayed" ? { type: "recentlyPlayed", data: { limit: 100 } } : null), "history", [id, nowId]);
-  const recentIds = useMemo(() => [...new Set((history.data ?? []).map((h) => h.track.albumId).filter((x): x is string => !!x))].slice(0, SECTION_ITEMS), [history.data]);
-  const recentAlbums = useAlbumsByIds(id === "recentlyPlayed" ? recentIds : []);
   const week = useQuery(() => (id === "stats" ? { type: "stats", data: { period_days: 7 } } : null), "stats", [id, nowId]);
 
   const albumItem = (a: Album): Item => ({
@@ -244,9 +246,9 @@ function useSectionData(id: HomeSectionId): SectionData {
   });
   const trackItems = (tracks: TrackSummary[], label: string): Item[] => tracks.map((tr, i) => ({
     key: `t:${i}:${tr.id}`, title: tr.title, subtitle: tr.artist ?? t("misc.unknownArtist"), coverArt: tr.coverArt,
-    open: () => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: tracks.map((x) => x.id), start_index: i, label, shuffle: false } }),
-    menu: (e) => void openContextMenu(e, { type: "tracks", data: { ids: [tr.id] } }),
-    dragTarget: { type: "tracks", data: { ids: [tr.id] } },
+    open: () => bridge().dispatch({ type: "playTracks", data: { tracks: tracks.map(refOf), start_index: i, label, shuffle: false } }),
+    menu: (e) => void openContextMenu(e, { type: "tracks", data: { tracks: [refOf(tr)] } }),
+    dragTarget: { type: "tracks", data: { tracks: [refOf(tr)] } },
   }));
   const filterItem = (f: Filter): Item => ({
     key: `f:${f.id}`, title: filterName(f), subtitle: t("library.kind.filter"), icon: "filter",
@@ -272,24 +274,25 @@ function useSectionData(id: HomeSectionId): SectionData {
       return { ready: !!stats, items: (stats?.topArtists ?? []).slice(0, SECTION_ITEMS).map(artistItem) };
     case "topGenre":
       return { ready: !!stats && (!genre || !!genreAlbums.data), items: (genreAlbums.data?.items ?? []).map(albumItem), title: genre ? t("home.section.topGenre.named", { genre }) : undefined };
-    case "newInLibrary":
-      return { ready: !!newest.data, items: (newest.data?.items ?? []).map(albumItem) };
     case "moreFromArtist":
       return { ready: !!stats && (!topArtist || !!artistSongs.data), items: trackItems((artistSongs.data ?? []).map(toSummary), topArtist?.name ?? ""), title: topArtist ? t("home.section.moreFromArtist.named", { name: topArtist.name }) : undefined };
     case "onRepeat":
       return { ready: !!stats, items: (stats?.topAlbums ?? []).slice(0, SECTION_ITEMS).map(albumItem) };
-    case "recentlyPlayed":
-      return { ready: !!history.data && recentAlbums.ready, items: recentAlbums.albums.map(albumItem) };
     case "recentQueues":
       return { ready: true, items: saved.slice(0, SECTION_ITEMS).map(queueItem) };
     case "stats":
       return { ready: !!week.data, items: [], listening: week.data && week.data.totalPlays > 0 ? { totalMs: week.data.totalMs, byWeekday: week.data.playsByWeekday, onOpen: () => navigate({ view: "stats" }) } : undefined };
+    default: {
+      // A shelf the core supplied.
+      const shelf = shelfOf(id);
+      return { ready: !!shelf, items: (shelf?.albums ?? []).slice(0, SECTION_ITEMS).map(albumItem), title: shelf?.title };
+    }
   }
 }
 
 /** The listening stats the "favourite" sections read: the last month, or the year when the month was quiet. */
 function useListeningStats(enabled: boolean) {
-  const nowId = useApp((s) => s.session?.current?.trackId);
+  const nowId = useApp((s) => s.session?.current?.track.id);
   const month = useQuery(() => (enabled ? { type: "stats", data: { period_days: 30 } } : null), "stats", [enabled, nowId]);
   // A quiet month falls back to the year, so favourites are still there.
   const year = useQuery(() => (enabled && month.data && month.data.totalPlays === 0 ? { type: "stats", data: { period_days: 365 } } : null), "stats", [enabled, month.data?.totalPlays]);
@@ -311,27 +314,12 @@ function useSpotlightStats(enabled: boolean): { stats?: ListeningStats; settled:
   return year.data || year.error ? { stats: year.data ?? month.data, settled: true } : { settled: false };
 }
 
-/** Albums by id, in that order (recently played reads them one by one). */
-function useAlbumsByIds(ids: string[]): { ready: boolean; albums: Album[] } {
-  const key = ids.join(",");
-  const [state, setState] = useState<{ key: string; albums: Album[] } | undefined>(undefined);
-  useEffect(() => {
-    if (!ids.length) return;
-    let live = true;
-    void Promise.all(ids.map((id) => bridge().query({ type: "album", data: { id } }).then((r) => (r.type === "albumDetail" ? r.data : undefined)).catch(() => undefined)))
-      .then((list) => { if (live) setState({ key, albums: list.filter((a): a is Album => !!a) }); });
-    return () => { live = false; };
-  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!ids.length) return { ready: true, albums: [] };
-  return state?.key === key ? { ready: true, albums: state.albums } : { ready: false, albums: [] };
-}
-
 function toSummary(tr: { id: string; serverId: string; title: string; artist?: string; artistId?: string; album?: string; albumId?: string; coverArt?: string; durationMs: number } & Partial<TrackSummary>): TrackSummary {
   return tr as TrackSummary;
 }
 
 function playContext(serverId: string, kind: { type: "album" | "artist" | "playlist"; data: { id: string } }, label: string, shuffle = false): void {
-  bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: kind as never, label, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
+  bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: kind as never, label, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
 /** The Customise Home panel: every section in order, a switch, drag (or the arrows) to move, how it's shown. */
@@ -349,7 +337,7 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
   const endDrag = () => { setDragId(undefined); setOver(undefined); };
   // Named as on Home: "More from <artist>" once the artist is known.
   const topArtist = useListeningStats(known.some((p) => p.id === "moreFromArtist"))?.topArtists[0];
-  const titleOf = (id: string) => (id === "moreFromArtist" && topArtist ? t("home.section.moreFromArtist.named", { name: topArtist.name }) : t(`home.section.${id}` as never));
+  const titleOf = (id: string) => shelfOf(id)?.title ?? (id === "moreFromArtist" && topArtist ? t("home.section.moreFromArtist.named", { name: topArtist.name }) : t(`home.section.${id}` as never));
   return (
     <aside className="customise-panel" aria-label={t("home.customiseHome")} data-testid="home-customise-panel" onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } }}>
       <div className="customise-head">
@@ -362,7 +350,7 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
           const def = sectionDef(p.id);
           if (!def) return null;
           const title = titleOf(def.id);
-          const desc = t(`home.section.${def.id}.desc` as never);
+          const desc = shelfOf(def.id) ? t("home.section.shelf.desc") : t(`home.section.${def.id}.desc` as never);
           const style = resolvedStyle(p);
           // A pinned section (Spotlight) stays first: not draggable, no arrows, nothing moves above it.
           const pinned = isPinned(p.id);

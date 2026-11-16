@@ -19,6 +19,7 @@ import { openContextMenu, openMenuFromButton } from "../components/ContextMenu";
 import { DetailHead } from "../components/DetailHead";
 import { TOP_SONGS_COUNT, TOP_SONGS_PREVIEW as TOP_PREVIEW, topSongsSection } from "../lib/top-songs";
 import { byReleaseKind, type ReleaseKind } from "../lib/release-kind";
+import { ratingTarget, refOf } from "../lib/track-ref";
 
 /** Releases on a shelf before "View more". */
 const SHELF = 8;
@@ -31,11 +32,11 @@ export function releaseCounts(groups: { kind: ReleaseKind; albums: unknown[] }[]
 }
 
 export function ArtistDetail({ id }: { id: string }) {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const playing = useApp((s) => s.nowPlaying?.track.id);
   const artist = useQuery(() => ({ type: "artist", data: { id } }), "artistDetail", [id]);
-  const albums = useQuery(() => ({ type: "albums", data: { server_id: serverId, artist_id: id, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 500 } } }), "albums", [id, serverId]);
+  const albums = useQuery(() => ({ type: "albums", data: { server_id: "", artist_id: id, genre: undefined, sort: "year", descending: true, page: { offset: 0, limit: 500 } } }), "albums", [id, serverId]);
   const featured = useQuery(() => ({ type: "artistAppearsOn", data: { id } }), "albums", [id]);
   const top = useQuery(() => ({ type: "artistTopSongs", data: { id, count: TOP_SONGS_COUNT } }), "trackList", [id]);
   const info = useQuery(() => ({ type: "artistInfo", data: { id } }), "externalInfo", [id], { static: true });
@@ -51,11 +52,11 @@ export function ArtistDetail({ id }: { id: string }) {
     if (target && document.activeElement === document.body) document.querySelector<HTMLElement>(target)?.focus({ preventScroll: !grid });
   }, [grid]);
   const a = artist.data;
-  const play = (shuffle: boolean) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
+  const play = (shuffle: boolean) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "artist", data: { id } }, label: a?.name ?? "", sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
   const topAll = top.data ?? [];
   const topList = allTop ? topAll : topAll.slice(0, TOP_PREVIEW);
   const topSection = topSongsSection(top.data ? topList.length : undefined, top.error !== undefined);
-  const playTop = (i: number) => bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: topAll.map((x) => x.id), start_index: i, label: `${a?.name ?? ""} · ${t("artist.topSongs")}`, shuffle: false } });
+  const playTop = (i: number) => bridge().dispatch({ type: "playTracks", data: { tracks: topAll.map(refOf), start_index: i, label: `${a?.name ?? ""} · ${t("artist.topSongs")}`, shuffle: false } });
   const groups = byReleaseKind(albums.data?.items ?? []);
   const featuredOn = featured.data?.items ?? [];
   const shelves: { kind: Shelf; title: string; count: string; albums: Album[] }[] = [
@@ -111,7 +112,7 @@ export function ArtistDetail({ id }: { id: string }) {
                 ) : (
                   <ol className="plain-list top-songs" aria-labelledby="artist-top-title" data-testid="artist-top">
                     {topList.map((tr, i) => (
-                      <li key={tr.id} className={`top-song ${tr.id === playing ? "playing" : ""}`} onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { ids: [tr.id] } })}>
+                      <li key={tr.id} className={`top-song ${tr.id === playing ? "playing" : ""}`} onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { tracks: [refOf(tr)] } })}>
                         <button type="button" className="top-song-main" onClick={() => playTop(i)} aria-label={tr.id === playing ? `${t("artist.playTop", { title: tr.title, n: i + 1 })}, ${t("a11y.playingTrack")}` : t("artist.playTop", { title: tr.title, n: i + 1 })} aria-current={tr.id === playing || undefined} data-testid="artist-top-row">
                           <span className="top-song-art"><Artwork id={tr.coverArt} size={96} className="art" /><span className="top-song-n" aria-hidden="true">{tr.id === playing ? <Icon name="equalizer" size={18} /> : i + 1}</span></span>
                           <span className="grow" style={{ minWidth: 0 }}>
@@ -119,7 +120,7 @@ export function ArtistDetail({ id }: { id: string }) {
                             <span className="truncate top-song-sub">{[tr.album, fmtTime(tr.durationMs)].filter(Boolean).join(" · ")}</span>
                           </span>
                         </button>
-                        <Heart on={tr.loved} size={20} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "track", data: { id: tr.id } }], loved: !tr.loved } })} />
+                        <Heart on={tr.loved} size={20} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [ratingTarget(tr)], loved: !tr.loved } })} />
                       </li>
                     ))}
                   </ol>

@@ -20,10 +20,15 @@
   "command.playNext": {
     "type": "playNext",
     "data": {
-      "server_id": "srv",
-      "track_ids": [
-        "a",
-        "b"
+      "tracks": [
+        {
+          "source": "srv",
+          "id": "a"
+        },
+        {
+          "source": "srv",
+          "id": "b"
+        }
       ],
       "keys": []
     }
@@ -31,9 +36,11 @@
   "command.playTracks": {
     "type": "playTracks",
     "data": {
-      "server_id": "srv",
-      "track_ids": [
-        "a"
+      "tracks": [
+        {
+          "source": "srv",
+          "id": "a"
+        }
       ],
       "start_index": 0,
       "label": "Search: hello",
@@ -46,7 +53,7 @@
     "data": {
       "args": {
         "context": {
-          "serverId": "srv",
+          "source": "srv",
           "kind": {
             "type": "album",
             "data": {
@@ -70,7 +77,8 @@
         {
           "type": "track",
           "data": {
-            "id": "t1"
+            "id": "t1",
+            "source": "srv"
           }
         },
         {
@@ -178,8 +186,11 @@
       "target": {
         "type": "tracks",
         "data": {
-          "ids": [
-            "t1"
+          "tracks": [
+            {
+              "source": "srv",
+              "id": "t1"
+            }
           ]
         }
       }
@@ -407,7 +418,8 @@
           "musicBrainzId": null,
           "explicit": false,
           "comment": null,
-          "artists": []
+          "artists": [],
+          "isrc": null
         }
       ],
       "offset": 0,
@@ -422,7 +434,10 @@
         {
           "item": {
             "key": "h1",
-            "trackId": "t-h1",
+            "track": {
+              "source": "srv",
+              "id": "t-h1"
+            },
             "source": {
               "type": "context",
               "data": {
@@ -460,7 +475,10 @@
         {
           "item": {
             "key": "c",
-            "trackId": "t-c",
+            "track": {
+              "source": "srv",
+              "id": "t-c"
+            },
             "source": {
               "type": "context",
               "data": {
@@ -498,7 +516,10 @@
         {
           "item": {
             "key": "n1",
-            "trackId": "t-n1",
+            "track": {
+              "source": "srv",
+              "id": "t-n1"
+            },
             "source": {
               "type": "inserted"
             },
@@ -533,7 +554,10 @@
         {
           "item": {
             "key": "u1",
-            "trackId": "t-u1",
+            "track": {
+              "source": "srv",
+              "id": "t-u1"
+            },
             "source": {
               "type": "context",
               "data": {
@@ -571,7 +595,10 @@
         {
           "item": {
             "key": "a1",
-            "trackId": "t-a1",
+            "track": {
+              "source": "srv",
+              "id": "t-a1"
+            },
             "source": {
               "type": "autoplay",
               "data": {
@@ -618,7 +645,10 @@
       "current": {
         "item": {
           "key": "c",
-          "trackId": "t-c",
+          "track": {
+            "source": "srv",
+            "id": "t-c"
+          },
           "source": {
             "type": "context",
             "data": {
@@ -660,7 +690,10 @@
       "previous": {
         "item": {
           "key": "h1",
-          "trackId": "t-h1",
+          "track": {
+            "source": "srv",
+            "id": "t-h1"
+          },
           "source": {
             "type": "context",
             "data": {
@@ -846,6 +879,7 @@
           "durationMs": 213000,
           "artworkPath": "/cache/al1-640.jpg",
           "trackId": "t1",
+          "source": "srv",
           "loved": false,
           "rating": 0,
           "stashed": false
@@ -978,7 +1012,8 @@
     "data": {
       "kind": "auth",
       "message": "bad password",
-      "detail": null
+      "detail": null,
+      "account_id": "srv"
     }
   },
   "event.sessionChanged": {

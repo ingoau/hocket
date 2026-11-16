@@ -4,7 +4,7 @@ import { EMPTY_QUEUE } from "../store/reducer";
 import { mergePages, pagedFits, queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange } from "./queue-view";
 
 const entry = (key: string, extra: Partial<QueueEntry["item"]> = {}, more: Partial<QueueEntry> = {}): QueueEntry => ({
-  item: { key, trackId: `t-${key}`, source: { type: "context", data: { index: 0 } }, ...extra },
+  item: { key, track: { source: "s", id: `t-${key}` }, source: { type: "context", data: { index: 0 } }, ...extra },
   track: { id: `t-${key}`, serverId: "s", title: key, durationMs: 1, rating: 0, loved: false, offline: "none" },
   ...more,
 });

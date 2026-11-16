@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import app.hocket.core.groupEntries
 import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
@@ -269,7 +271,7 @@ class FullPlayerLayoutTest {
             val root = compose.onNodeWithTag("nowPlaying.sheet").fetchSemanticsNode().boundsInRoot
             fun snapshot() = controls.associateWith(::bounds)
             fun play(id: String) {
-                core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(id), 0, "Style"))
+                core.client.dispatch(Commands.playTracks((listOf(id)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Style"))
                 compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == id }
                 compose.mainClock.advanceTimeBy(1_000)
                 compose.waitForIdle()
@@ -308,7 +310,7 @@ class FullPlayerLayoutTest {
         val controller = androidx.core.view.WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
         controller.isAppearanceLightStatusBars = false
         try {
-            core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(next.id), 0, "Style"))
+            core.client.dispatch(Commands.playTracks((listOf(next.id)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Style"))
             compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == next.id }
             compose.mainClock.advanceTimeBy(1_000)
             compose.waitForIdle()
@@ -346,7 +348,7 @@ class FullPlayerLayoutTest {
         startExpanded()
         val lib = core.fake.library
         val duet = lib.tracks.first { (it.artists?.size ?: 0) == 2 }
-        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(duet.id), 0, "Duet"))
+        core.client.dispatch(Commands.playTracks((listOf(duet.id)).map { TrackRef(lib.serverId, it) }, 0, "Duet"))
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == duet.id }
         compose.waitForIdle()
         val (first, second) = duet.artists!!
@@ -380,7 +382,7 @@ class FullPlayerLayoutTest {
             return results.first()
         }
         fun queue(label: String) {
-            core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[3].id, lib.tracks[4].id), 0, label))
+            core.client.dispatch(Commands.playTracks((listOf(lib.tracks[3].id, lib.tracks[4].id)).map { TrackRef(lib.serverId, it) }, 0, label))
             compose.waitUntil(5_000) { core.client.queue.value.contextLabel == label }
             compose.waitForIdle()
         }
@@ -407,7 +409,7 @@ class FullPlayerLayoutTest {
         }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
-        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[0].id), 0, "Long"))
+        core.client.dispatch(Commands.playTracks((listOf(lib.tracks[0].id)).map { TrackRef(lib.serverId, it) }, 0, "Long"))
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.title == LONG_TITLE }
         compose.waitUntil(5_000) { exists("miniPlayer") }
         compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
@@ -849,7 +851,7 @@ class FullPlayerLayoutTest {
         startExpanded()
         val track = core.client.nowPlaying.value!!.track.id
         core.client.dispatch(Commands.setAutoplay(false))
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(track), 0, "One track"))
+        core.client.dispatch(Commands.playTracks((listOf(track)).map { TrackRef(core.fake.library.serverId, it) }, 0, "One track"))
         compose.waitUntil(5_000) { core.client.queue.value.restEntries.isEmpty() && core.client.nowPlaying.value?.track?.id == track }
         compose.waitForIdle()
         val rest = bounds("player.artwork")

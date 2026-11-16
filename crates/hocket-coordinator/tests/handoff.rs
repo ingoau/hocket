@@ -1,56 +1,20 @@
-//! Spins the coordinator on an ephemeral port next to a fake Subsonic
-//! server, drives two real engines over real WebSockets (the same transport
-//! the apps use), and walks them through a handoff.
+//! Spins the coordinator on an ephemeral port, claims it with one
+//! identity, drives two real engines of that identity over real WebSockets
+//! (the same transport the apps use), and walks them through a handoff.
 
-use std::net::SocketAddr;
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
-
-use axum::routing::get;
-use axum::Router;
 
 use hocket_coordinator::{serve, App, Args};
 use hocket_core::api::{DeviceInfo, Platform, PositionStamp};
 use hocket_core::connect::engine::{Engine, EngineConfig, Input, Output};
 use hocket_core::connect::session_adapter::RealReducer;
 use hocket_core::connect::transport::{connect_first, Connection, PeerIds, WsTransport};
-use hocket_core::connect::wire::{scope_key, Credential};
 use hocket_core::connect::SessionOp;
+use hocket_core::identity::{CoordinatorPin, Identity};
 use hocket_core::util::WallClock;
-
-/// A Subsonic that accepts exactly one token.
-async fn fake_subsonic() -> SocketAddr {
-    async fn ping(
-        q: axum::extract::Query<std::collections::HashMap<String, String>>,
-    ) -> axum::Json<serde_json::Value> {
-        let ok = q.get("u").map(|u| u == "alice").unwrap_or(false)
-            && q.get("t").map(|t| t == "good-token").unwrap_or(false);
-        let status = if ok { "ok" } else { "failed" };
-        axum::Json(
-            serde_json::json!({ "subsonic-response": { "status": status, "version": "1.16.1" } }),
-        )
-    }
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/rest/ping.view", get(ping)))
-            .await
-            .unwrap();
-    });
-    addr
-}
-
-fn credential(subsonic: SocketAddr, token: &str) -> Credential {
-    Credential {
-        server_url: format!("http://{subsonic}"),
-        username: "alice".into(),
-        token: Some(token.into()),
-        salt: Some("s".into()),
-        api_key: None,
-        client: "hocket-test".into(),
-        api_version: "1.16.1".into(),
-    }
-}
 
 /// The smallest actor: one engine, one upstream socket, a tick every 100 ms.
 struct Host {
@@ -62,7 +26,10 @@ struct Host {
 }
 
 impl Host {
-    fn new(id: &str, scope: &str, credential: Credential, ws_url: &str) -> Host {
+    fn new(identity: Identity, ws_url: &str) -> Host {
+        let id = identity.device_id.clone();
+        let scope = identity.id.clone();
+        let (id, scope) = (id.as_str(), scope.as_str());
         let device = DeviceInfo {
             id: id.into(),
             name: id.into(),
@@ -74,7 +41,7 @@ impl Host {
             is_self: true,
         };
         let mut cfg = EngineConfig::new(device, scope);
-        cfg.credential = Some(credential);
+        cfg.identity = Some(Arc::new(parking_lot::Mutex::new(identity)));
         cfg.coordinator_url = Some(ws_url.to_string());
         cfg.lan_enabled = false;
         let doc = hocket_core::session::new_document(scope, format!("session-{id}"), 0.0);
@@ -172,7 +139,7 @@ impl Host {
                 track_id,
                 position_ms,
                 ..
-            } => Some((track_id.clone(), *position_ms)),
+            } => Some((track_id.id.clone(), *position_ms)),
             _ => None,
         })
     }
@@ -183,10 +150,8 @@ async fn two_engines_hand_off_through_the_coordinator() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
         .try_init();
-    // The proxied ping must reach the loopback fake directly, whatever proxy the environment sets.
     std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
     std::env::set_var("no_proxy", "127.0.0.1,localhost");
-    let subsonic = fake_subsonic().await;
     let dir = tempfile::tempdir().unwrap();
     let mut args = Args::for_tests();
     args.data_dir = Some(dir.path().to_path_buf());
@@ -198,7 +163,18 @@ async fn two_engines_hand_off_through_the_coordinator() {
     .await
     .unwrap();
     let ws_url = format!("ws://{addr}/ws");
-    let scope = scope_key(&format!("http://{subsonic}"), "alice");
+    // The laptop claims the coordinator and pairs the phone.
+    let mut laptop = common::owner(&app, &ws_url, "laptop").await;
+    laptop.set_coordinator(
+        Some(CoordinatorPin {
+            url: ws_url.clone(),
+            keys: app.identities().keys(),
+            owner: true,
+        }),
+        1.0,
+    );
+    let phone = common::pair(&mut laptop, "phone");
+    let scope = laptop.id.clone();
 
     // health
     let health: serde_json::Value = reqwest::get(format!("http://{addr}/health"))
@@ -209,20 +185,26 @@ async fn two_engines_hand_off_through_the_coordinator() {
         .unwrap();
     assert_eq!(health["status"], "ok");
 
-    // a bad credential is refused by the proxied ping
-    let mut bad = Host::new("bad", &scope, credential(subsonic, "wrong"), &ws_url);
+    // a device of the identity it was never paired into is not admitted
+    let mut forged = Identity::create_with(
+        &scope,
+        "bad",
+        "bad",
+        hocket_core::identity::crypto::DeviceSecret::generate(),
+        1.0,
+    );
+    forged.set_coordinator(laptop.shared.coordinator_pin().cloned(), 1.0);
+    let mut bad = Host::new(forged, &ws_url);
     bad.handle(Input::Tick).await;
     bad.run(1500).await;
-    assert!(!bad.engine.is_connected(), "bad token must not be admitted");
+    assert!(
+        !bad.engine.is_connected(),
+        "a stranger must not be admitted"
+    );
     assert!(!app.has_member(&scope, "bad"));
 
-    let mut a = Host::new(
-        "laptop",
-        &scope,
-        credential(subsonic, "good-token"),
-        &ws_url,
-    );
-    let mut b = Host::new("phone", &scope, credential(subsonic, "good-token"), &ws_url);
+    let mut a = Host::new(laptop, &ws_url);
+    let mut b = Host::new(phone, &ws_url);
     a.handle(Input::Tick).await;
     b.handle(Input::Tick).await;
     a.run(800).await;
@@ -234,7 +216,6 @@ async fn two_engines_hand_off_through_the_coordinator() {
     // laptop plays a selection and takes transport
     a.handle(Input::LocalOp {
         op: SessionOp::PlayTracks {
-            server_id: "srv".into(),
             track_ids: vec!["t1".into(), "t2".into(), "t3".into()],
             start_index: 0,
             label: "Selection".into(),
@@ -253,7 +234,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             .document()
             .current
             .as_ref()
-            .map(|c| c.track_id.as_str()),
+            .map(|c| c.track.id.as_str()),
         Some("t1")
     );
     assert_eq!(app.live_owner(&scope).as_deref(), Some("laptop"));
@@ -287,7 +268,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             .document()
             .current
             .as_ref()
-            .map(|c| c.track_id.as_str()),
+            .map(|c| c.track.id.as_str()),
         Some("t2")
     );
     assert_eq!(
@@ -295,7 +276,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
             .document()
             .current
             .as_ref()
-            .map(|c| c.track_id.as_str()),
+            .map(|c| c.track.id.as_str()),
         Some("t2")
     );
     let key = a.engine.document().current.as_ref().unwrap().key.clone();
@@ -321,7 +302,7 @@ async fn two_engines_hand_off_through_the_coordinator() {
     a.run(400).await;
     b.run(400).await;
     let prepared = b.outputs.iter().find_map(|o| match o {
-        Output::PreBuffer { key, track_id, .. } => Some((key.clone(), track_id.clone())),
+        Output::PreBuffer { key, track_id, .. } => Some((key.clone(), track_id.id.clone())),
         _ => None,
     });
     assert_eq!(
@@ -359,13 +340,8 @@ async fn two_engines_hand_off_through_the_coordinator() {
             .document
             .current
             .as_ref()
-            .map(|c| c.track_id.as_str()),
+            .map(|c| c.track.id.as_str()),
         Some("t2")
-    );
-    let json = serde_json::to_string(&replica).unwrap();
-    assert!(
-        !json.contains("good-token"),
-        "credentials never reach the replica"
     );
 
     let _ = stop_tx.send(());

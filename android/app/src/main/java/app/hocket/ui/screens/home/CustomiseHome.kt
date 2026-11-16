@@ -70,7 +70,7 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
         value = moreFromArtist(client)?.name
     }
     // Sections this build doesn't know stay in the list (a newer device's), unlisted here.
-    val known = prefs.filter { it.section != null }
+    val known = prefs.filter { it.known }
     fun save(next: List<SectionPref>) = HomeSections.save(client, next)
     fun moveKnown(id: String, by: Int) {
         val i = known.indexOfFirst { it.id == id }
@@ -84,17 +84,17 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             LazyColumn(Modifier.weight(1f, fill = false)) {
                 items(known, key = { it.id }) { pref ->
-                    val section = pref.section ?: return@items
-                    val title = topArtist?.takeIf { section == HomeSection.MoreFromArtist }?.let { stringResource(R.string.home_section_more_from_named, it) } ?: stringResource(section.title)
+                    val section = pref.section
+                    val title = pref.shelf?.title ?: topArtist?.takeIf { section == HomeSection.MoreFromArtist }?.let { stringResource(R.string.home_section_more_from_named, it) } ?: section?.let { stringResource(it.title) } ?: return@items
                     val i = known.indexOf(pref)
                     Column(Modifier.animateItem().fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 8.dp, bottom = 8.dp).testTag("home.customise.${pref.id}")) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(title, style = MaterialTheme.typography.bodyLarge, color = if (pref.on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(stringResource(section.description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(section?.let { stringResource(it.description) } ?: stringResource(R.string.home_section_shelf_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             // A pinned section (Spotlight) stays first: no arrows, and nothing moves above it.
-                            if (!section.pinned) {
+                            if (section?.pinned != true) {
                                 IconButton(onClick = { moveKnown(pref.id, -1) }, enabled = i > 0 && known[i - 1].section?.pinned != true) {
                                     Icon(HocketIcons.Filled.KeyboardArrowDown, stringResource(R.string.home_section_move_up_named, title), Modifier.rotate(180f))
                                 }
@@ -107,13 +107,13 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
                             Switch(checked = pref.on, onCheckedChange = { on -> save(HomeSections.update(prefs, pref.id) { it.copy(on = on) }) },
                                 modifier = Modifier.semantics { contentDescription = showLabel }.testTag("home.customise.${pref.id}.switch"))
                         }
-                        if (pref.on && section.styles.size > 1) {
-                            StyleButtonGroup(section.styles, pref.resolvedStyle, Modifier.padding(top = 4.dp, end = 12.dp)) { st -> save(HomeSections.update(prefs, pref.id) { it.copy(style = st.id) }) }
+                        if (pref.on && pref.styles.size > 1) {
+                            StyleButtonGroup(pref.styles, pref.resolvedStyle, Modifier.padding(top = 4.dp, end = 12.dp)) { st -> save(HomeSections.update(prefs, pref.id) { it.copy(style = st.id) }) }
                         }
                     }
                 }
             }
-            TextButton(onClick = { save(HomeSections.DEFAULT) }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { Text(stringResource(R.string.home_customise_reset)) }
+            TextButton(onClick = { save(HomeSections.defaults()) }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { Text(stringResource(R.string.home_customise_reset)) }
         }
     }
 }
@@ -123,9 +123,9 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
 @Composable
 fun SectionMenuSheet(pref: SectionPref, title: String, onDismiss: () -> Unit, onHide: () -> Unit, onCustomise: () -> Unit) {
     val client = LocalCoreClient.current
-    val section = pref.section ?: return
+    if (!pref.known) return
     val prefs = HomeSections.current(client)
-    val shown = prefs.filter { it.on && it.section != null }
+    val shown = prefs.filter { it.on && it.known }
     val i = shown.indexOfFirst { it.id == pref.id }
     val current = prefs.firstOrNull { it.id == pref.id } ?: pref
     @Composable fun Item(label: String, enabled: Boolean = true, rotateIcon: Boolean = false, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
@@ -142,9 +142,9 @@ fun SectionMenuSheet(pref: SectionPref, title: String, onDismiss: () -> Unit, on
             Spacer(Modifier.height(8.dp))
             Item(stringResource(R.string.home_section_move_up), enabled = i > 0 && shown[i - 1].section?.pinned != true, rotateIcon = true, icon = HocketIcons.Filled.KeyboardArrowDown) { HomeSections.save(client, HomeSections.moveShown(prefs, pref.id, -1)); onDismiss() }
             Item(stringResource(R.string.home_section_move_down), enabled = i in 0 until shown.lastIndex, icon = HocketIcons.Filled.KeyboardArrowDown) { HomeSections.save(client, HomeSections.moveShown(prefs, pref.id, 1)); onDismiss() }
-            if (section.styles.size > 1) {
+            if (pref.styles.size > 1) {
                 Text(stringResource(R.string.home_section_show_as), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 24.dp, top = 12.dp))
-                StyleButtonGroup(section.styles, current.resolvedStyle, Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) { st ->
+                StyleButtonGroup(pref.styles, current.resolvedStyle, Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) { st ->
                     HomeSections.save(client, HomeSections.update(prefs, pref.id) { it.copy(style = st.id) })
                 }
             }

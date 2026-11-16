@@ -10,26 +10,28 @@ import { SortMenu } from "../components/SortMenu";
 import { usePagedGrid } from "./paged";
 import { loadListSort, saveListSort, type ListSort } from "../lib/list-sort";
 import { recentFromHistory } from "../lib/list-groups";
+import { SourceChips, useLibrarySource } from "../components/SourceChips";
 
 /** Artists: a grid of round portraits (Pinned, Recent, then all of them in the chosen order). */
 export function Artists() {
-  const serverId = useApp((s) => s.servers[0]?.id ?? "");
+  const serverId = useApp((s) => s.accounts[0]?.id ?? "");
+  const source = useLibrarySource();
   const navigate = useApp((s) => s.navigate);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("artists"));
   const sort = order.sort as SortOrder;
   const desc = order.descending;
   const fetchPage = useCallback(async (offset: number, limit: number) => {
-    const r = await bridge().query({ type: "artists", data: { server_id: serverId, page: { offset, limit }, sort, descending: desc } });
+    const r = await bridge().query({ type: "artists", data: { server_id: source, page: { offset, limit }, sort, descending: desc } });
     if (r.type !== "artists") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
-  }, [serverId, sort, desc]);
-  const { rows, total, onNeedRange } = usePagedGrid<Artist>(fetchPage, [serverId, sort, desc], 120);
+  }, [source, sort, desc]);
+  const { rows, total, onNeedRange } = usePagedGrid<Artist>(fetchPage, [source, sort, desc], 120);
   const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: albumCount(a), coverArt: a.coverArt, round: true } : undefined));
-  const playArtist = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "artist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: true, saveOutgoing: true } } });
+  const playArtist = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "artist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: true, saveOutgoing: true } } });
   const sorter = <SortMenu list="artists" value={order} onChange={(v) => { setOrder(v); saveListSort("artists", v); }} testId="artists-sort" />;
   return (
     <div className="view" data-testid="view-artists">
-      <div className="view-header"><h1 className="brand-type">{t("artists.title")}</h1><span className="muted count-chip">{total}</span></div>
+      <div className="view-header"><h1 className="brand-type">{t("artists.title")}</h1><span className="muted count-chip">{total}</span><SourceChips /></div>
       <AlbumGrid items={items} total={total} scope="artists" targetKind="artists" onOpen={(it) => navigate({ view: "artist", id: it.id })} onPlay={(it) => playArtist(it.id, it.title)} onNeedRange={onNeedRange} tileWidth={150} emptyMessage={t("artists.empty")} testId="artists-grid" label={t("artists.title")}
         header={<><ArtistGroups play={playArtist} /><ListHeader id="artists-all" title={t("artists.all")} actions={sorter} className="list-all" /></>} />
     </div>

@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{
     ActionDescriptor, ActionTarget, Command, ContextKind, MediaSessionAction, PinTarget, Platform,
     PlayContextArgs, PlaylistId, QueueContext, QueueKey, RatingTarget, RepeatMode, ServerId,
-    Shortcut, SortOrder, TrackId,
+    Shortcut, SortOrder, SourceId, TrackId, TrackRef,
 };
 
 pub mod chord;
@@ -106,6 +106,8 @@ pub struct StateView {
     pub repeat: RepeatMode,
     pub autoplay: bool,
     pub current_track_id: Option<TrackId>,
+    /// The current track, named by its account.
+    pub current_track: Option<TrackRef>,
     pub current_album_id: Option<String>,
     pub current_artist_id: Option<String>,
     pub current_loved: bool,
@@ -142,6 +144,9 @@ pub struct StateView {
     pub queue_section: bool,
     /// Entries in the "Next in queue" group.
     pub queue_group_count: u32,
+    /// Sources whose accounts keep no library of their own (anonymous
+    /// YouTube Music): their songs go into the Hocket library.
+    pub hocket_library_sources: Vec<SourceId>,
 }
 
 /// One entry of `library.pins`.
@@ -177,23 +182,33 @@ impl LibraryPin {
 /// Resolves what handlers need from the mirror. The actor implements it;
 /// [`NoResolver`] answers nothing (tests, pure descriptors).
 pub trait Resolver {
-    fn track_for_key(&self, key: &QueueKey) -> Option<TrackId>;
+    fn track_for_key(&self, key: &QueueKey) -> Option<TrackRef>;
+    /// A bare track id from a UI target, named by its account: the
+    /// highest-priority account whose mirror has it, else `fallback`.
+    fn track_ref(&self, id: &TrackId, fallback: &str) -> TrackRef {
+        TrackRef::new(fallback, id.clone())
+    }
+    /// The account an album, artist or playlist id belongs to (as for
+    /// [`Resolver::track_ref`]).
+    fn source_of(&self, _kind: &ContextKind) -> Option<SourceId> {
+        None
+    }
     /// The queue item is still to play (after the pointer).
     fn is_upcoming(&self, _key: &QueueKey) -> bool {
         false
     }
-    fn context_tracks(&self, server_id: &str, kind: &ContextKind) -> Vec<TrackId>;
-    fn context_label(&self, server_id: &str, kind: &ContextKind) -> String;
+    fn context_tracks(&self, source: &str, kind: &ContextKind) -> Vec<TrackRef>;
+    fn context_label(&self, source: &str, kind: &ContextKind) -> String;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoResolver;
 
 impl Resolver for NoResolver {
-    fn track_for_key(&self, _key: &QueueKey) -> Option<TrackId> {
+    fn track_for_key(&self, _key: &QueueKey) -> Option<TrackRef> {
         None
     }
-    fn context_tracks(&self, _server_id: &str, _kind: &ContextKind) -> Vec<TrackId> {
+    fn context_tracks(&self, _server_id: &str, _kind: &ContextKind) -> Vec<TrackRef> {
         vec![]
     }
     fn context_label(&self, _server_id: &str, kind: &ContextKind) -> String {
@@ -778,20 +793,20 @@ pub fn canonical_id(id: &str) -> &str {
 
 // -- helpers shared with the definitions ------------------------------------
 
-fn ids_of(target: &ActionTarget) -> &[String] {
+fn ids_of(target: &ActionTarget) -> Vec<&str> {
     match target {
-        ActionTarget::Tracks { ids }
-        | ActionTarget::Albums { ids }
+        ActionTarget::Tracks { tracks } => tracks.iter().map(|t| t.id.as_str()).collect(),
+        ActionTarget::Albums { ids }
         | ActionTarget::Artists { ids }
-        | ActionTarget::Playlists { ids } => ids,
-        ActionTarget::QueueItems { keys } => keys,
-        _ => &[],
+        | ActionTarget::Playlists { ids } => ids.iter().map(String::as_str).collect(),
+        ActionTarget::QueueItems { keys } => keys.iter().map(String::as_str).collect(),
+        _ => vec![],
     }
 }
 
 fn single_id(target: &ActionTarget) -> Option<&str> {
     let ids = ids_of(target);
-    (ids.len() == 1).then(|| ids[0].as_str())
+    (ids.len() == 1).then(|| ids[0])
 }
 
 fn context_of(
@@ -809,41 +824,58 @@ fn context_of(
         }
         _ => return None,
     };
+    let source = resolver
+        .source_of(&kind)
+        .unwrap_or_else(|| server_id.to_string());
     Some(QueueContext {
-        server_id: server_id.into(),
-        label: resolver.context_label(server_id, &kind),
-        tracks: resolver.context_tracks(server_id, &kind),
+        label: resolver.context_label(&source, &kind),
+        tracks: resolver.context_tracks(&source, &kind),
+        source,
         kind,
         sort: SortOrder::Default,
     })
 }
 
-/// Track ids a target stands for (resolving queue keys and containers).
-fn track_ids_of(target: &ActionTarget, state: &StateView, resolver: &dyn Resolver) -> Vec<TrackId> {
+/// The songs a target stands for (resolving queue keys and containers).
+fn track_refs_of(
+    target: &ActionTarget,
+    state: &StateView,
+    resolver: &dyn Resolver,
+) -> Vec<TrackRef> {
     let server = state.server_id.clone().unwrap_or_default();
+    let context = |kind: ContextKind| {
+        let source = resolver.source_of(&kind).unwrap_or_else(|| server.clone());
+        resolver.context_tracks(&source, &kind)
+    };
     match target {
-        ActionTarget::Tracks { ids } => ids.clone(),
+        ActionTarget::Tracks { tracks } => tracks.clone(),
         ActionTarget::QueueItems { keys } => keys
             .iter()
             .filter_map(|k| resolver.track_for_key(k))
             .collect(),
         ActionTarget::Albums { ids } => ids
             .iter()
-            .flat_map(|id| resolver.context_tracks(&server, &ContextKind::Album { id: id.clone() }))
+            .flat_map(|id| context(ContextKind::Album { id: id.clone() }))
             .collect(),
         ActionTarget::Artists { ids } => ids
             .iter()
-            .flat_map(|id| {
-                resolver.context_tracks(&server, &ContextKind::Artist { id: id.clone() })
-            })
+            .flat_map(|id| context(ContextKind::Artist { id: id.clone() }))
             .collect(),
         ActionTarget::Playlists { ids } => ids
             .iter()
-            .flat_map(|id| {
-                resolver.context_tracks(&server, &ContextKind::Playlist { id: id.clone() })
-            })
+            .flat_map(|id| context(ContextKind::Playlist { id: id.clone() }))
             .collect(),
-        ActionTarget::None => state.current_track_id.iter().cloned().collect(),
+        ActionTarget::None => state
+            .current_track
+            .clone()
+            .or_else(|| {
+                state
+                    .current_track_id
+                    .as_ref()
+                    .map(|id| TrackRef::new(server.clone(), id.clone()))
+            })
+            .into_iter()
+            .collect(),
         ActionTarget::SavedQueue { .. } => vec![],
     }
 }
@@ -858,9 +890,12 @@ fn rating_targets(
             .iter()
             .map(|id| RatingTarget::Album { id: id.clone() })
             .collect(),
-        _ => track_ids_of(target, state, resolver)
+        _ => track_refs_of(target, state, resolver)
             .into_iter()
-            .map(|id| RatingTarget::Track { id })
+            .map(|t| RatingTarget::Track {
+                id: t.id,
+                source: t.source,
+            })
             .collect(),
     }
 }
@@ -879,9 +914,9 @@ fn pin_targets(
             .iter()
             .map(|id| PinTarget::Playlist { id: id.clone() })
             .collect(),
-        _ => track_ids_of(target, state, resolver)
+        _ => track_refs_of(target, state, resolver)
             .into_iter()
-            .map(|id| PinTarget::Track { id })
+            .map(|t| PinTarget::Track { id: t.id })
             .collect(),
     }
 }
@@ -919,13 +954,12 @@ fn play_commands(
                     },
                 }];
             }
-            let track_ids = track_ids_of(target, state, resolver);
-            if track_ids.is_empty() {
+            let tracks = track_refs_of(target, state, resolver);
+            if tracks.is_empty() {
                 return vec![];
             }
             vec![Command::PlayTracks {
-                server_id: server,
-                track_ids,
+                tracks,
                 start_index: 0,
                 label: "Selection".into(),
                 shuffle,
@@ -945,30 +979,17 @@ pub(crate) fn queue_commands(
     placement: crate::session::QueuePlacement,
 ) -> Vec<Command> {
     use crate::session::QueuePlacement;
-    let server_id = state.server_id.clone().unwrap_or_default();
-    let (track_ids, keys) = match target {
+    let (tracks, keys) = match target {
         ActionTarget::QueueItems { keys } => (vec![], keys.clone()),
-        _ => (track_ids_of(target, state, resolver), vec![]),
+        _ => (track_refs_of(target, state, resolver), vec![]),
     };
-    if track_ids.is_empty() && keys.is_empty() {
+    if tracks.is_empty() && keys.is_empty() {
         return vec![];
     }
     vec![match placement {
-        QueuePlacement::Next => Command::PlayNext {
-            server_id,
-            track_ids,
-            keys,
-        },
-        QueuePlacement::Group => Command::AddToQueue {
-            server_id,
-            track_ids,
-            keys,
-        },
-        QueuePlacement::Later => Command::PlayLater {
-            server_id,
-            track_ids,
-            keys,
-        },
+        QueuePlacement::Next => Command::PlayNext { tracks, keys },
+        QueuePlacement::Group => Command::AddToQueue { tracks, keys },
+        QueuePlacement::Later => Command::PlayLater { tracks, keys },
     }]
 }
 
