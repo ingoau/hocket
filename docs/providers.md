@@ -822,7 +822,7 @@ Protocol and security changes from the PR review (Rust core and coordinator):
   nonce and its id; the joiner signs the whole transcript (both keys, both nonces, both ids).
   Keys per direction come from HKDF over the shared secret salted with the transcript, and every
   frame after the joiner's proof travels as `Msg::Sealed` (ChaCha20-Poly1305 with a frame counter
-  in the associated data: no replay, reorder or reflection). A device's own room requires the
+  in the associated data and a window of counters seen: no replay or reflection). A device's own room requires the
   channel, a joiner requires the leader's key, and anything plain or unopenable afterwards drops
   the socket, so a relay in the middle can neither read nor inject. The coordinator (TLS, pinned
   key) is unchanged. `PROTOCOL` and `PROTOCOL_MIN` are 6 (`connect::channel`).
