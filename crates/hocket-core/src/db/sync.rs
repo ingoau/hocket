@@ -569,7 +569,11 @@ impl LibrarySync {
             .api
             .album_list2(AlbumListType::Recent, RECENT_PLAYS_PAGE, 0)
             .await?;
-        let mut songs = 0;
+        // The changed stretch first, then applied oldest play first: if a
+        // read fails part way, what is left unrefreshed is the newer end,
+        // which the next sync still finds changed (it stops at the first
+        // album it agrees with).
+        let mut changed = vec![];
         for a in page {
             let Some(known) = self.db.album(&a.id)? else {
                 continue;
@@ -578,7 +582,11 @@ impl LibrarySync {
             if known.play_count == remote.play_count && known.last_played == remote.last_played {
                 break;
             }
-            let full = match self.api.album(&a.id).await {
+            changed.push(a.id);
+        }
+        let mut songs = 0;
+        for id in changed.into_iter().rev() {
+            let full = match self.api.album(&id).await {
                 Ok(f) => f,
                 Err(SubsonicError::NotFound(_)) => continue,
                 Err(e) => return Err(e.into()),

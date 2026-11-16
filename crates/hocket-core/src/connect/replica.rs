@@ -39,6 +39,9 @@ pub const SCROBBLE_LOG_CAP: usize = 500;
 pub const PLAY_LOG_TTL_MS: f64 = 90.0 * 24.0 * 3_600_000.0;
 /// Hard cap on the shared play log, oldest first.
 pub const PLAY_LOG_CAP: usize = 5_000;
+/// Plays dated further ahead than this (a device with a wrong clock) are
+/// not kept: they would never expire.
+pub const PLAY_FUTURE_SLACK_MS: f64 = 24.0 * 3_600_000.0;
 /// Plays per `PlaysLog` page (and per `PlaysPush` from a device): far
 /// below the frame cap.
 pub const PLAY_PAGE: usize = 500;

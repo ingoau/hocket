@@ -53,8 +53,14 @@ impl Actor {
         {
             self.log("debug", format!("prune play relays: {e}"));
         }
-        let marks = self.load_play_marks().0;
-        self.engine_input(Input::RequestPlays { marks });
+        let mut marks = self.load_play_marks();
+        if !marks.0.is_empty() && !self.has_play_history() {
+            // Marks left from before the server was removed (or its history
+            // lost): read every log from the start again.
+            marks.0.clear();
+            self.save_play_marks(&marks);
+        }
+        self.engine_input(Input::RequestPlays { marks: marks.0 });
     }
 
     pub(crate) fn on_plays_pushed(&mut self, batch: u32, log_id: String) {
@@ -156,6 +162,21 @@ impl Actor {
         let (ids, plays): (Vec<i64>, Vec<PlayRecord>) = rows.into_iter().unzip();
         self.plays_sync.in_flight = Some((batch, ids));
         self.engine_input(Input::PushPlays { batch, plays });
+    }
+
+    fn has_play_history(&self) -> bool {
+        let Some(server_id) = self.server_id() else {
+            return false;
+        };
+        self.db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM play_history WHERE server_id = ?1)",
+                    [&server_id],
+                    |r| r.get::<_, bool>(0),
+                )?)
+            })
+            .unwrap_or(true)
     }
 
     fn load_play_marks(&self) -> Marks {

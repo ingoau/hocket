@@ -471,7 +471,8 @@ pub enum Output {
         after: u32,
         plays: Vec<PlayRecord>,
     },
-    /// Our embedded room's replica changed (persist if you like).
+    /// Our embedded room's replica changed (persist if you like). Without
+    /// its play log, which every device already holds in its own history.
     ReplicaChanged(ReplicaState),
     Log {
         level: &'static str,
@@ -1570,9 +1571,10 @@ impl Engine {
                 RoomOutput::Verify { peer, credential } => {
                     self.out.push(Output::VerifyCredential { peer, credential })
                 }
-                RoomOutput::ReplicaChanged => self
-                    .out
-                    .push(Output::ReplicaChanged(self.room.replica().clone())),
+                RoomOutput::ReplicaChanged => {
+                    let replica = self.room.replica_without_plays();
+                    self.out.push(Output::ReplicaChanged(replica))
+                }
                 // Heartbeat-only: nothing worth persisting on a device.
                 RoomOutput::ReplicaTouched => {}
             }

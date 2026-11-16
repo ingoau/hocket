@@ -17,7 +17,10 @@ use std::sync::Arc;
 use crate::api::{DeviceId, DeviceInfo, EpochMs, QueueKey, TrackId, TransportLease};
 use crate::connect::auth::{self, LanKey, Role};
 use crate::connect::lease::{LeaseError, LeaseEvent, LeaseMachine};
-use crate::connect::replica::{new_replica, same_start, ReplicaExt, ScrobbleClaim, PLAY_PAGE};
+use crate::connect::replica::{
+    new_replica, same_start, ReplicaExt, ScrobbleClaim, PLAY_FUTURE_SLACK_MS, PLAY_LOG_CAP,
+    PLAY_PAGE,
+};
 use crate::connect::wire::{
     negotiate, scope_key, Credential, LastStamp, Msg, PlayRecord, RefuseReason, RejectReason,
     ReplicaState, WireMessage,
@@ -240,6 +243,15 @@ impl Room {
             last_sweep: now,
             out: vec![],
         }
+    }
+
+    /// The replica minus its play log (which can be large and is read
+    /// with `PlaysRequest`), without copying the log.
+    pub fn replica_without_plays(&mut self) -> ReplicaState {
+        let plays = std::mem::take(&mut self.replica.play_log);
+        let out = self.replica.clone();
+        self.replica.play_log = plays;
+        out
     }
 
     fn mint_play_log_id(&mut self) -> String {
@@ -852,9 +864,7 @@ impl Room {
         // identity from it (or pushes its own document into a trivial one).
         // The play log stays out: it can be large, and the joiner asks for
         // just what it lacks (`PlaysRequest`).
-        let mut replica = self.replica.clone();
-        replica.play_log.clear();
-        let replica = Some(replica);
+        let replica = Some(self.replica_without_plays());
         self.send(
             peer,
             Msg::Welcome {
@@ -1376,6 +1386,14 @@ impl Room {
                 );
             }
             Msg::PlaysPush { batch, plays } => {
+                let mut plays = plays;
+                // One push is at most a log's worth (a well-behaved device
+                // sends pages of PLAY_PAGE); the excess is never acknowledged
+                // as kept, so it is not acknowledged at all.
+                if plays.len() > PLAY_LOG_CAP {
+                    return;
+                }
+                plays.retain(|p| p.played_at <= now + PLAY_FUTURE_SLACK_MS);
                 let added = self.replica.add_plays(&plays, now);
                 let log_id = self.mint_play_log_id();
                 self.send(
@@ -1388,26 +1406,37 @@ impl Room {
                 if !added.is_empty() {
                     self.dirty = true;
                     // To everyone, the sender too: its mark moves past them.
-                    self.broadcast(
-                        Msg::PlaysLog {
-                            log_id,
-                            after: added[0].seq - 1,
-                            plays: added,
-                        },
-                        None,
-                    );
+                    let mut after = added[0].seq - 1;
+                    for page in added.chunks(PLAY_PAGE) {
+                        self.broadcast(
+                            Msg::PlaysLog {
+                                log_id: log_id.clone(),
+                                after,
+                                plays: page.to_vec(),
+                            },
+                            None,
+                        );
+                        after = page[page.len() - 1].seq;
+                    }
                 }
             }
             Msg::PlaysRequest { marks } => {
-                let log_id = self.mint_play_log_id();
+                let mut log_id = self.mint_play_log_id();
                 let mut after = marks
                     .iter()
                     .find(|m| m.log_id == log_id)
                     .map(|m| m.seq)
                     .unwrap_or(0);
                 if after > self.replica.play_seq {
-                    // A mark from a log this one replaced under the same id:
-                    // start over.
+                    // A device has read further than this log goes: the log
+                    // went back (restored from an older copy, or a crash
+                    // before its last save) and would hand out those seqs
+                    // again. Start a new log, so every device reads it from
+                    // the start and pushes again what this one lost.
+                    tracing::warn!(scope = %self.cfg.scope, mark = after, seq = self.replica.play_seq, "play log went back; starting a new one");
+                    self.replica.play_log_id = crate::util::new_id();
+                    self.dirty = true;
+                    log_id = self.replica.play_log_id.clone();
                     after = 0;
                 }
                 let plays: Vec<PlayRecord> = self
@@ -2815,12 +2844,17 @@ mod tests {
             seq: 3,
         };
         assert_eq!(ask(&mut r, vec![mark]), vec![(log_id.clone(), 3, vec![])]);
-        // A mark past the log's end (it was reset): from the start.
+        // A mark past the log's end (the log went back): a new log, read
+        // from the start.
         let mark = PlayLogMark {
             log_id: log_id.clone(),
             seq: 99,
         };
-        assert_eq!(ask(&mut r, vec![mark]), vec![(log_id, 0, vec![1, 2, 3])]);
+        let got = ask(&mut r, vec![mark]);
+        assert_eq!(got.len(), 1);
+        assert_ne!(got[0].0, log_id, "a new log id");
+        assert_eq!((got[0].1, got[0].2.clone()), (0, vec![1, 2, 3]));
+        assert_eq!(r.replica().play_log_id, got[0].0);
     }
 
     /// A long log is answered in pages, each continuing the last.
@@ -2829,8 +2863,23 @@ mod tests {
         let (mut r, _) = room();
         join(&mut r, "p1", "a");
         let n = PLAY_PAGE + 10;
-        let plays: Vec<_> = (0..n).map(|i| play(&format!("t{i}"), 100.0, "a")).collect();
-        push(&mut r, "p1", 1, plays);
+        let mut plays: Vec<_> = (0..n).map(|i| play(&format!("t{i}"), 100.0, "a")).collect();
+        // Dated a week ahead (a wrong clock): never kept, it would not expire.
+        plays.push(play("future", 1_000.0 + 7.0 * 86_400_000.0, "a"));
+        let outs = push(&mut r, "p1", 1, plays);
+        let relayed: Vec<_> = sent(&outs, "p1")
+            .into_iter()
+            .filter_map(|m| match m {
+                Msg::PlaysLog { after, plays, .. } => Some((*after, plays.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            relayed,
+            vec![(0, PLAY_PAGE), (PLAY_PAGE as u32, 10)],
+            "relayed in pages too"
+        );
+        assert!(r.replica().play_log.iter().all(|p| p.track_id != "future"));
         let outs = r.handle(RoomInput::Message(
             "p1".into(),
             WireMessage::new(Msg::PlaysRequest { marks: vec![] }),
