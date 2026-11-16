@@ -320,16 +320,27 @@ function Card({ id, title, link, linkLabel, onLink, children, testId, drill }: {
   );
 }
 
+const peekKeys = new WeakMap<object, number>();
+let peekSeq = 0;
+/** A key per object, for remounting what shows it when it is replaced. */
+function keyOf(o: object): number {
+  let k = peekKeys.get(o);
+  if (k === undefined) peekKeys.set(o, (k = ++peekSeq));
+  return k;
+}
+
 /** The previous, current and next lines, following playback (static for unsynced lyrics). Hidden when the song has none. */
 function LyricsCard({ trackId, durationMs }: { trackId: string; durationMs: number | undefined }) {
   const lyrics = useApp((s) => (s.lyrics && s.lyrics.trackId === trackId ? s.lyrics.lyrics : undefined));
   const mapped = useMemo(() => (lyrics ? mapLyrics(lyrics) : undefined), [lyrics]);
   const lines = useMemo(() => mapped?.lines.filter((l) => !l.isBG && l.words.some((w) => w.word.trim())) ?? [], [mapped]);
   const peekLines = useMemo(() => lines.map((l) => ({ text: l.words.map((w) => w.word).join(""), start: l.startTime })), [lines]);
+  // A new lyrics document remounts the peek, so the last one's line never glides to the new one's.
+  const peekKey = keyOf(peekLines);
   if (!mapped || !lines.length) return null;
   return (
     <Card id="lyrics" title={t("lyrics.title")} link={t("nowPlaying.showLyrics")} onLink={() => showSideView("lyrics")} drill="lyrics" testId="sidebar-lyrics-card">
-      {mapped.synced ? <SyncedPeek lines={peekLines} durationMs={durationMs} /> : (
+      {mapped.synced ? <SyncedPeek key={peekKey} lines={peekLines} durationMs={durationMs} /> : (
         <ol className="lyrics-peek" aria-label={t("lyrics.title")}>
           {lines.slice(0, 3).map((l, i) => <li key={i} className="peek-line">{l.words.map((w) => w.word).join("")}</li>)}
         </ol>
@@ -368,27 +379,27 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
     if (!ol) return;
     const place = (instant: boolean) => {
       const li = ol.children[anchor] as HTMLElement | undefined;
-      if (!li) return;
-      const cs = getComputedStyle(ol);
-      const y = parseFloat(cs.lineHeight) + (parseFloat(cs.rowGap) || 0) - li.offsetTop;
+      const first = ol.firstElementChild as HTMLElement | null;
+      if (!li || !first) return false;
+      // One line (a line's own height, not the list's) and the gap, less where the anchor starts.
+      const y = parseFloat(getComputedStyle(li).lineHeight) + (parseFloat(getComputedStyle(ol).rowGap) || 0) - (li.offsetTop - first.offsetTop);
       const transform = `translate3d(0, ${y}px, 0)`;
       if (!instant) {
         ol.style.transform = transform;
-        return;
+        return true;
       }
       ol.style.transition = "none";
       ol.style.transform = transform;
       void ol.offsetWidth;
       ol.style.transition = "";
+      return true;
     };
     const width = ol.clientWidth;
-    place(placed.current?.lines !== lines || placed.current.width !== width);
-    placed.current = { lines, width };
+    if (place(placed.current?.lines !== lines || placed.current.width !== width)) placed.current = { lines, width };
     const ro = new ResizeObserver(() => {
       const w = ol.clientWidth;
       if (w === placed.current?.width) return;
-      placed.current = { lines, width: w };
-      place(true);
+      if (place(true)) placed.current = { lines, width: w };
     });
     ro.observe(ol);
     return () => ro.disconnect();
