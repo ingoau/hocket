@@ -109,7 +109,7 @@ val SETTINGS_INDEX: List<SettingEntry> = listOf(
     SettingEntry("battery.customise", SettingsCategory.Battery, R.string.settings_battery_customise, R.string.settings_battery_customise_body, R.string.settings_search_kw_battery_customise),
     SettingEntry("battery.autoEngage", SettingsCategory.Battery, R.string.settings_battery_auto, keywords = R.string.settings_search_kw_battery),
     SettingEntry("battery.autoLevel", SettingsCategory.Battery, R.string.settings_battery_auto_level, keywords = R.string.settings_search_kw_battery),
-    SettingEntry("connect.coordinator", SettingsCategory.Connect, R.string.settings_coordinator_url, keywords = R.string.settings_search_kw_connect),
+    SettingEntry("connect.coordinator", SettingsCategory.Connect, R.string.identity_coordinator, keywords = R.string.settings_search_kw_coordinator),
     SettingEntry("connect.lan", SettingsCategory.Connect, R.string.settings_lan_discovery, keywords = R.string.settings_search_kw_connect),
     SettingEntry("pebble.watchapp", SettingsCategory.Pebble, R.string.pebble_watchapp, keywords = R.string.settings_search_kw_pebble),
     SettingEntry("pebble.touchNavigation", SettingsCategory.Pebble, R.string.pebble_touch_navigation, keywords = R.string.settings_search_kw_pebble),

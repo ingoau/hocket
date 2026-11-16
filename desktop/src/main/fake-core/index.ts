@@ -888,6 +888,10 @@ export class FakeCore implements CoreHandle {
         const url = cmd.data.url || "wss://coordinator.example/ws";
         this.identity = { ...this.identity, coordinator: { url, owner, holdsKey: this.identity.credentialSync } };
         this.emit({ type: "identityChanged", data: { identity: this.identity } });
+        // As the core does: the pinned coordinator becomes the one to connect to, and it connects.
+        this.connection = { ...this.connection, coordinatorUrl: url, tier: "coordinator", connected: true, roundTripMs: 48, peerCount: this.devices.length - 1, error: undefined };
+        this.setSettingValue("connect.coordinatorUrl", JSON.stringify(url));
+        this.emit({ type: "connectionChanged", data: { state: this.connection } });
         this.emit({ type: "coordinatorJoined", data: { url, owner } });
         return;
       }

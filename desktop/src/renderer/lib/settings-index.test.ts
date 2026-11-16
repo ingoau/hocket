@@ -35,6 +35,12 @@ describe("settings search", () => {
     expect(audio).toContain("replayGain");
   });
 
+  it("finds the one Coordinator section by its name and by claiming or joining", () => {
+    expect(ids("coordinator")).toEqual(["coordinator"]);
+    for (const q of ["claim", "invite", "relay", "coordinator address"]) expect(ids(q)).toContain("coordinator");
+    expect(SETTINGS_INDEX.find((e) => e.id === "coordinator")?.section).toBe("connect");
+  });
+
   it("needs every word to match", () => {
     expect(ids("gapless bass")).toEqual([]);
     expect(ids("zzzz")).toEqual([]);

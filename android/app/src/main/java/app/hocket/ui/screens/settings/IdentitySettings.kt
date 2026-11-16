@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,6 +38,7 @@ import app.hocket.core.api.CommandRedeemCoordinatorInviteInner
 import app.hocket.core.api.CommandRemoveDeviceInner
 import app.hocket.core.api.CommandRevokeCoordinatorInviteInner
 import app.hocket.core.api.CommandSetCredentialSyncInner
+import app.hocket.core.api.ConnectionTier
 import app.hocket.core.api.IdentityDevice
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.nav.PairDeviceSheet
@@ -46,7 +48,8 @@ import app.hocket.ui.screens.setup.PairingLinks
  * Settings → Connect's devices: the identity's devices (when each last synced, and Remove, which
  * says to change passwords), Add a device, credential sync (saying the coordinator holds the key
  * while it's on), and the coordinator: claim it with a `hocket-coordinator pair` code (typed or
- * scanned), join one with an invite, and the owner's invites and its YouTube Music analysis sign-in.
+ * scanned) or join one with an invite; once pinned, its address, whose it is, the connection to it
+ * and Disconnect / Reconnect; and the owner's invites and its YouTube Music analysis sign-in.
  */
 @Composable
 fun ColumnScope.IdentitySettings() {
@@ -96,6 +99,7 @@ private fun ColumnScope.Coordinator() {
     val context = LocalContext.current
     val identity by client.identity.collectAsStateWithLifecycle()
     val invites by client.coordinatorInvites.collectAsStateWithLifecycle()
+    val connection by client.connection.collectAsStateWithLifecycle()
     var url by rememberSaveable { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
     val pin = identity.coordinator
@@ -105,24 +109,37 @@ private fun ColumnScope.Coordinator() {
             client.dispatch(Command.CoordinatorYtmStatus)
         }
     }
-    SettingsSection(stringResource(R.string.identity_coordinator))
-    SettingRow(
-        when {
-            pin == null -> stringResource(R.string.identity_coordinator_none)
-            pin.owner -> stringResource(R.string.identity_coordinator_owner, pin.url)
-            else -> stringResource(R.string.identity_coordinator_guest, pin.url)
+    // The search's "coordinator" entry lands here.
+    SettingsSection(stringResource(R.string.identity_coordinator), tag = "connect.coordinator")
+    if (pin == null) {
+        SettingRow(stringResource(R.string.identity_coordinator_none), tag = "identity.coordinatorNone")
+        OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.identity_coordinator_url)) }, placeholder = { Text(stringResource(R.string.identity_coordinator_url_hint)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("identity.coordinatorUrl"))
+        OutlinedTextField(value = code, onValueChange = { code = it }, label = { Text(stringResource(R.string.identity_coordinator_code)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("identity.coordinatorCode"))
+        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(shapes = ButtonDefaults.shapes(), enabled = code.isNotBlank(), onClick = { client.dispatch(Command.ClaimCoordinator(CommandClaimCoordinatorInner(url.trim(), code.trim()))) }, modifier = Modifier.testTag("identity.claim")) { Text(stringResource(R.string.identity_claim)) }
+            TextButton(enabled = code.isNotBlank() && url.isNotBlank(), onClick = { client.dispatch(Command.RedeemCoordinatorInvite(CommandRedeemCoordinatorInviteInner(url.trim(), code.trim()))) }, modifier = Modifier.testTag("identity.redeem")) { Text(stringResource(R.string.identity_redeem)) }
+            if (app.hocket.SetupScanner.available) {
+                TextButton(onClick = {
+                    app.hocket.SetupScanner.scan(context, onResult = { text -> PairingLinks.claim(text)?.let { (u, c) -> if (u.isNotEmpty()) url = u; code = c } ?: run { code = text.trim() } }, onError = {})
+                }) { Text(stringResource(R.string.identity_scan_claim)) }
+            }
         }
-    )
-    OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text(stringResource(R.string.identity_coordinator_url)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("identity.coordinatorUrl"))
-    OutlinedTextField(value = code, onValueChange = { code = it }, label = { Text(stringResource(R.string.identity_coordinator_code)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("identity.coordinatorCode"))
-    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(shapes = ButtonDefaults.shapes(), enabled = code.isNotBlank(), onClick = { client.dispatch(Command.ClaimCoordinator(CommandClaimCoordinatorInner(url.trim(), code.trim()))) }, modifier = Modifier.testTag("identity.claim")) { Text(stringResource(R.string.identity_claim)) }
-        TextButton(enabled = code.isNotBlank() && url.isNotBlank(), onClick = { client.dispatch(Command.RedeemCoordinatorInvite(CommandRedeemCoordinatorInviteInner(url.trim(), code.trim()))) }) { Text(stringResource(R.string.identity_redeem)) }
-        if (app.hocket.SetupScanner.available) {
-            TextButton(onClick = {
-                app.hocket.SetupScanner.scan(context, onResult = { text -> PairingLinks.claim(text)?.let { (u, c) -> if (u.isNotEmpty()) url = u; code = c } ?: run { code = text.trim() } }, onError = {})
-            }) { Text(stringResource(R.string.identity_scan_claim)) }
+    } else {
+        // Pinned: where it is, whose it is, and how this device is connected to it.
+        SettingRow(stringResource(if (pin.owner) R.string.identity_coordinator_owner else R.string.identity_coordinator_guest, pin.url), tag = "identity.coordinatorPin")
+        val status = when (connection.tier) {
+            ConnectionTier.Local -> stringResource(R.string.connection_local)
+            ConnectionTier.Lan -> pluralStringResource(R.plurals.connection_lan, connection.peerCount.toInt(), connection.peerCount.toInt())
+            ConnectionTier.Coordinator -> pluralStringResource(R.plurals.connection_coordinator, connection.peerCount.toInt(), connection.peerCount.toInt())
         }
+        val connected = connection.connected && connection.tier == ConnectionTier.Coordinator
+        SettingRow(status, connection.error ?: connection.roundTripMs?.let { "${it.toInt()} ms" }, tag = "identity.coordinatorStatus", trailing = {
+            if (connected) {
+                TextButton(onClick = { client.dispatch(Command.DisconnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorDisconnect")) { Text(stringResource(R.string.identity_coordinator_disconnect)) }
+            } else {
+                TextButton(onClick = { client.dispatch(Command.ConnectCoordinator) }, modifier = Modifier.testTag("identity.coordinatorReconnect")) { Text(stringResource(R.string.identity_coordinator_reconnect)) }
+            }
+        })
     }
     if (pin?.owner == true) {
         SettingsSection(stringResource(R.string.identity_invites))

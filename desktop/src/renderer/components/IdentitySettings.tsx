@@ -1,7 +1,9 @@
-// Settings → Devices: the identity's devices (with when each last synced, and
-// Remove), Add a device, credential sync, and the coordinator (claim it with
-// a `hocket-coordinator pair` code, join one with an invite, and, for the
-// identity that claimed it, invites to give other people).
+// Settings → Connect: the identity's devices (with when each last synced, and
+// Remove), Add a device, credential sync, and the coordinator: with none
+// pinned, claim one with a `hocket-coordinator pair` code or join one with an
+// invite; once pinned, its address, whose it is, the connection to it and
+// Disconnect / Reconnect, and for the identity that claimed it, invites to
+// give other people.
 import { useEffect, useState } from "react";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -65,21 +67,26 @@ function Coordinator() {
   const join = (claim: boolean) => bridge().dispatch(claim ? { type: "claimCoordinator", data: { url: url.trim(), code: code.trim() } } : { type: "redeemCoordinatorInvite", data: { url: url.trim(), code: code.trim() } });
   return (
     <>
-      <h2 className="section-title">{t("identity.coordinator")}</h2>
-      <div className="setting-row">
-        <div className="label">
-          <div className="desc" data-testid="identity-coordinator">{pin ? (pin.owner ? t("identity.coordinatorOwner", { url: pin.url }) : t("identity.coordinatorGuest", { url: pin.url })) : t("identity.coordinatorNone")}</div>
-          {state.error ? <div className="desc error" role="alert">{state.error}</div> : null}
-        </div>
-      </div>
-      <div className="setting-row">
-        <div className="label" />
-        <div className="control">
-          <input className="input" placeholder="wss://coordinator.example.org/ws" aria-label={t("identity.coordinatorUrl")} value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 220 }} data-testid="identity-coordinator-url" />
-          <input className="input" placeholder="ABCD-EFGH" aria-label={t("identity.coordinatorCode")} value={code} onChange={(e) => setCode(e.target.value)} style={{ width: 110 }} data-testid="identity-coordinator-code" />
-          <button type="button" className="btn sm" disabled={!code.trim()} onClick={() => join(true)} data-testid="identity-claim">{t("identity.claim")}</button>
-          <button type="button" className="btn sm" disabled={!code.trim() || !url.trim()} onClick={() => join(false)} data-testid="identity-redeem">{t("identity.redeem")}</button>
-        </div>
+      {/* The settings search's "coordinator" entry lands here (`setting-coordinator`). */}
+      <div id="setting-coordinator" data-testid="identity-coordinator-section">
+        <h2 className="section-title">{t("identity.coordinator")}</h2>
+        {pin ? <PinnedCoordinator url={pin.url} owner={pin.owner} /> : (
+          <>
+            <div className="setting-row">
+              <div className="label"><div className="desc" data-testid="identity-coordinator">{t("identity.coordinatorNone")}</div></div>
+            </div>
+            <div className="setting-row">
+              <div className="label" />
+              <div className="control">
+                <input className="input" placeholder="wss://coordinator.example.org/ws" aria-label={t("identity.coordinatorUrl")} value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 220 }} data-testid="identity-coordinator-url" />
+                <input className="input" placeholder="ABCD-EFGH" aria-label={t("identity.coordinatorCode")} value={code} onChange={(e) => setCode(e.target.value)} style={{ width: 110 }} data-testid="identity-coordinator-code" />
+                <button type="button" className="btn sm" disabled={!code.trim()} onClick={() => join(true)} data-testid="identity-claim">{t("identity.claim")}</button>
+                <button type="button" className="btn sm" disabled={!code.trim() || !url.trim()} onClick={() => join(false)} data-testid="identity-redeem">{t("identity.redeem")}</button>
+              </div>
+            </div>
+          </>
+        )}
+        {state.error ? <div className="setting-row"><div className="label"><div className="desc error" role="alert">{state.error}</div></div></div> : null}
       </div>
       {pin?.owner ? (
         <>
@@ -124,6 +131,29 @@ function Coordinator() {
         </>
       ) : null}
     </>
+  );
+}
+
+/** The pinned coordinator: where it is, whose it is, the connection to it, and Disconnect / Reconnect. */
+function PinnedCoordinator({ url, owner }: { url: string; owner: boolean }) {
+  const connection = useApp((s) => s.connection);
+  const connected = connection.tier === "coordinator" && connection.connected;
+  const status = connected
+    ? t("identity.coordinatorConnected", { peers: t("connect.peers", { count: connection.peerCount }), ms: connection.roundTripMs ?? "?" })
+    : t("identity.coordinatorDisconnected");
+  return (
+    <div className="setting-row" data-testid="identity-coordinator-pinned">
+      <div className="label">
+        <div className="title" data-testid="identity-coordinator">{owner ? t("identity.coordinatorOwner", { url }) : t("identity.coordinatorGuest", { url })}</div>
+        <div className="desc" data-testid="identity-coordinator-status">{status}</div>
+        {connection.error ? <div className="desc error" role="alert">{connection.error}</div> : null}
+      </div>
+      <div className="control">
+        {connected
+          ? <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "disconnectCoordinator" })} data-testid="identity-coordinator-disconnect">{t("identity.coordinatorDisconnect")}</button>
+          : <button type="button" className="btn sm" onClick={() => bridge().dispatch({ type: "connectCoordinator" })} data-testid="identity-coordinator-reconnect">{t("identity.coordinatorReconnect")}</button>}
+      </div>
+    </div>
   );
 }
 

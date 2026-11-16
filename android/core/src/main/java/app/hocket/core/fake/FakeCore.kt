@@ -1211,6 +1211,10 @@ class FakeCore(
                 val shown = url.ifBlank { "wss://coordinator.example/ws" }
                 identity = identity.copy(coordinator = CoordinatorInfo(shown, owner, identity.credentialSync))
                 emitIdentity()
+                // As the core does: the pinned coordinator becomes the one to connect to, and it connects.
+                setSetting(SettingKeys.CONNECT_COORDINATOR_URL, "\"$shown\"")
+                connection = connection.copy(coordinatorUrl = shown, connected = true, tier = ConnectionTier.Coordinator, error = null, roundTripMs = 48.0)
+                emit(Event.ConnectionChanged(EventConnectionChangedInner(connection)))
                 emit(Event.CoordinatorJoined(EventCoordinatorJoinedInner(shown, owner)))
             }
             Command.CreateCoordinatorInvite -> {
