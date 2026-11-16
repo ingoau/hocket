@@ -104,6 +104,7 @@
     <string name="setup_pairing">Pairing with your other device…</string>
     <string name="setup_paired_password">Paired. Enter the password for %1$s on %2$s to finish.</string>
     <string name="setup_another_title">Add another source?</string>
+    <string name="setup_add_title">Add a source</string>
     <string name="setup_another_body">Songs from every source share one library and one queue.</string>
     <string name="setup_another_done">Not now</string>
     <string name="setup_source_ytm">YouTube Music</string>
@@ -120,7 +121,7 @@
     <string name="setup_ytm_cap_premium">Premium quality</string>
     <string name="setup_cancel">Cancel</string>
     <string name="settings_accounts_add">Add account</string>
-    <string name="settings_accounts_add_body">Another Navidrome server or login. Its songs join the same library.</string>
+    <string name="settings_accounts_add_body">A Navidrome server or YouTube Music. Its songs join the same library.</string>
     <string name="settings_accounts_order_hint">The first account plays first and holds this device\'s session.</string>
     <string name="settings_accounts_up">Move %1$s up</string>
     <string name="settings_accounts_down">Move %1$s down</string>
