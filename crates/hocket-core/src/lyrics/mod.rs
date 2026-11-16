@@ -11,6 +11,7 @@
 //! | Where is the cursor at position *p*? | [`locate`] / [`LyricsCursor::locate`] `→ CursorState` |
 //! | External lookup (behind the setting) | [`ExternalLyricsProvider`] with [`LrclibProvider`] + [`ReqwestLyricsHttp`] |
 //! | Cache storage keys / JSON | [`cache_key`], [`to_cache_json`], [`from_cache_json`], [`offset_state_key`] |
+//! | Search cached lyrics | [`search::index_document`], [`search::find_in_stored`] |
 //!
 //! Tier rules: syllable timing only where the server supplied it, never
 //! interpolated; a line without complete cue timing is a plain timed line
@@ -21,6 +22,7 @@ pub mod cursor;
 pub mod external;
 pub mod lrc;
 pub mod raw;
+pub mod search;
 
 #[cfg(test)]
 mod lyrics_never_panics;

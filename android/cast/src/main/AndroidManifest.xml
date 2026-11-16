@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- The Cast SDK's options: the Default Media Receiver, no notification or media session of its
+             own (the app's Media3 session is the only one), shown in the system output switcher. -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="app.hocket.cast.CastOptions" />
+        <!-- Lets the system output switcher move playback between this phone and Cast receivers. -->
+        <receiver
+            android:name="androidx.mediarouter.media.MediaTransferReceiver"
+            android:exported="true" />
+    </application>
+</manifest>

@@ -5,7 +5,7 @@ import { completeSetup, expect, test } from "./fixtures";
 
 async function seedPins(page: Page, hidden: object[] = []): Promise<string> {
   const genres = (await page.evaluate(async () => {
-    const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+    const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
     return window.hocket.query({ type: "genres", data: { server_id: s.data[0]!.id } });
   })) as { data?: { name: string }[] };
   const genre = genres.data?.[0]?.name ?? "Ambient";

@@ -27,6 +27,7 @@ Where it lives (the geometry is the same in each, and changes go to all of them)
 - `desktop/scripts/gen-app-icons.mjs` — renders `icon.icon`'s note layers, the Windows `.ico` and the Linux PNGs; the output is committed.
 - `desktop/src/main/brand.ts` — rasterised at runtime for the tray and the dev-build dock icon.
 - `android/app/src/main/res/drawable/ic_launcher_foreground.xml` — the adaptive icon's foreground and monochrome layer.
+- `android/app/src/main/res/drawable/splash_icon_animated.xml` — the Android splash screen (API 31+): the same mark drawn in note by note as it swells to size. It copies the foreground's geometry.
 - `desktop/src/renderer/components/BrandMark.tsx` and `android/app/src/main/java/app/hocket/ui/brand/Wordmark.kt` — the bare wave, cropped to x 10–90, y 28.4–71.6, for the lockups.
 
 
@@ -56,7 +57,7 @@ The word mark adds two inks, chosen with the word mark rather than taken from ex
 - **Case** always lowercase in the word mark. In running text the name is still written *Hocket*.
 - **Colour** one colour: `#ECE9FF` on dark, `#1B1730` on light. Never the voice colours, never split by letter or syllable; the mark carries the colour.
 - **No effects** — no gradients, outlines, shadows, or baseline shifts.
-- **Why Unbounded:** its wide, round letters match the mark's heavy stroke and the tile's rounded corners, and it sits with the Material 3 Expressive shapes in the app. It's wide, so the lockup needs horizontal room.
+- **Why Unbounded:** its wide, round letters match the mark's heavy stroke and the tile's rounded corners, and it sits with the rounded shapes of both apps (Material 3 Expressive on Android, the desktop's panes). It's wide, so the lockup needs horizontal room.
 - **Licence** SIL Open Font License 1.1 (Google Fonts), so it can ship in both apps.
 - **Bundled** in both, as live text, until the outlined SVGs exist (see Not done yet). Each ships the whole variable font with its licence beside it:
   - Desktop: `desktop/src/renderer/assets/fonts/unbounded.ttf`, licence `unbounded-OFL.txt` in the same folder, loaded by the `@font-face` in `desktop/src/renderer/styles/m3-pages.css` (served from the app, so the CSP's `font-src 'self'` holds).
@@ -78,7 +79,7 @@ The app's name as a page header, inside the app: the bare wave (no tile), then t
 
 Where it's used:
 
-- **Android Home** — the top bar's title (`HeaderLockup` in `android/app/src/main/java/app/hocket/ui/brand/Wordmark.kt`, used by `ui/screens/home/HomeScreen.kt`), at the collapsing bar's title size.
+- **Android Home** — the wave alone, no word mark (`HeaderMark` in `android/app/src/main/java/app/hocket/ui/brand/Wordmark.kt`, used by `ui/screens/home/HomeScreen.kt`), 22 dp tall in the single-row top bar, level with its actions; named *Hocket*. Over Spotlight it takes each slide's ink where that slide is behind it, split at the edge between slides, so a swipe wipes across it. The exception to "one-colour wave only beside the word mark": on a light cover it's in `#1B1730`.
 - **Desktop Home** — the page header (`h1.brand-lockup` in `desktop/src/renderer/views/Home.tsx`, the wave from `components/BrandMark.tsx`, styles in `styles/m3-pages.css`), at the Library title's size.
 - **Desktop first-run setup** — the hero (`.setup .brand` in `desktop/src/renderer/views/Setup.tsx` and `m3-pages.css`), the same lockup at hero size, above the setup heading.
 - **Android lyrics share card** — the footer (`Lockup` in `Wordmark.kt`) sets the bare wave and `hocket` in `#ECE9FF` alone, one colour, on the card's dark ground.
@@ -96,6 +97,21 @@ For outside the app (a website, a README, a store listing): the app icon (the ti
 - **Ground** the tile's edge has to read: on dark, use a ground darker than `#1B1730`; any light ground works.
 - The icon alone is fine anywhere. The word mark alone is fine where the icon is already nearby, such as an About dialog with the icon above the name.
 
+
+## The UI face  
+*Status: decided (desktop)*
+
+**Geist** (Vercel, with basement.studio), for all of the desktop app's text but the word mark and the page titles set in it, in every window (main, mini player).
+
+- **Licence** SIL Open Font License 1.1, from the official `geist` npm package (1.9.2).
+- **Bundled** as the variable font, weights 100–900, served from the app (CSP `font-src 'self'`): `desktop/src/renderer/assets/fonts/geist.woff2`, licence `geist-OFL.txt` in the same folder, loaded by the `@font-face` in `desktop/src/renderer/styles/global.css`; `--font-ui` falls back to the platform's sans.
+- **Numbers** in times and counts use `font-variant-numeric: tabular-nums`, not a mono face; Geist Mono isn't bundled.
+- **Android** keeps the platform's type.
+
+## Icons  
+*Status: decided (desktop)*
+
+**Phosphor** (MIT), Regular weight for outlined glyphs and Fill for filled ones (the transport, a loved heart, a set star), generated from `@iconify-json/ph` by `desktop/scripts/gen-icons.mjs` into `desktop/src/renderer/components/icons.ts`. Drawn with 8 of Phosphor's 256 units trimmed from each edge so they sit at Geist's optical size; the generator scales any glyph that reaches into that margin to fit, and checks it. Where a Fill weight is a solid tile with the glyph knocked out (close, check, plus, more, the waveform…), only the Regular one ships and an active state shows by colour. Android keeps Material Symbols Rounded, generated by `scripts/gen-android-icons.mjs` from `@iconify-json/material-symbols` (still a desktop dev dependency for that script).
 
 ## Not done yet
 

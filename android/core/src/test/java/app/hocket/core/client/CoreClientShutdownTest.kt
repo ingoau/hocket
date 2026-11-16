@@ -1,5 +1,7 @@
 package app.hocket.core.client
 
+import app.hocket.core.api.TrackRef
+
 import app.hocket.core.CoreHandle
 import app.hocket.core.CoreKind
 import app.hocket.core.Queries
@@ -65,7 +67,7 @@ class CoreClientShutdownTest {
             core.failure = failure
             assertNull(client.query(Queries.albums(serverId, Page(0u, 10u), SortOrder.Default)))
             assertNull(client.artworkPath("al-1", 160))
-            assertEquals(emptyList<Any>(), client.actions("contextMenu", app.hocket.core.Commands.tracks(listOf("t-1"))))
+            assertEquals(emptyList<Any>(), client.actions("contextMenu", app.hocket.core.Commands.tracks((listOf("t-1")).map { TrackRef("fake-server", it) })))
         }
         assertEquals(9, client.queryFailures.value)
         // The page caches' loaders go through the same path: the page stays absent (a later ensure()
@@ -88,7 +90,7 @@ class CoreClientShutdownTest {
             override fun close() = Unit
         }
         val client = CoreClient(core, backgroundScope)
-        val pending = async { client.query(Query.Servers) }
+        val pending = async { client.query(Query.Accounts) }
         runCurrent()
         pending.cancel()
         runCurrent()

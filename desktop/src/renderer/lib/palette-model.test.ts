@@ -53,6 +53,13 @@ describe("palette groups", () => {
     expect(groups.map((g) => g.id)).toEqual(["action"]);
   });
 
+  it("lists lyric hits under Songs, unranked, leaving out songs already listed", () => {
+    const hit = (id: string, title: string) => ({ ...e("track", id, title), id: `ly:${id}`, lyric: { line: "the sun is up", start: 4, end: 7 } });
+    const groups = paletteGroups("sun", src({ lyrics: [hit("t1", "Sunrise"), hit("t8", "Morning")] }));
+    expect(groups.map((g) => g.id).slice(0, 2)).toEqual(["track", "lyrics"]);
+    expect(groups[1]?.rows.map((r) => r.item.label)).toEqual(["Morning"]);
+  });
+
   it("limits each kind while searching", () => {
     const tracks = Array.from({ length: 20 }, (_, i) => e("track", `t${i}`, `Song ${i}`));
     expect(paletteGroups("song", src({ tracks })).find((g) => g.id === "track")?.rows).toHaveLength(6);
@@ -67,15 +74,22 @@ describe("palette recents", () => {
     expect(r.map((x) => x.label)).toEqual(["T5", "T7", "T6", "T4", "T3", "T2"]);
   });
 
+  it("remembers a lyric hit as its song", () => {
+    const hit = { ...e("track", "t1", "Sunrise", { sub: "the sun", ref: { source: "s", id: "t1" } }), id: "ly:t1", lyric: { line: "the sun", start: 4, end: 7 } };
+    expect(pushRecent([], hit)).toEqual([{ id: "t:t1", label: "Sunrise", kind: "track", sub: undefined, coverArt: undefined, icon: undefined, ref: { source: "s", id: "t1" } }]);
+  });
+
   it("reads back only well-formed entries", () => {
     expect(sanitizeRecents("nope")).toEqual([]);
-    expect(sanitizeRecents([{ id: "t:1", label: "A", kind: "track" }, { id: 3 }, { id: "x", label: "B", kind: "weird" }, null])).toEqual([{ id: "t:1", label: "A", kind: "track" }]);
+    const ok = { id: "t:1", label: "A", kind: "track", ref: { source: "s", id: "1" } };
+    expect(sanitizeRecents([ok, { id: "t:2", label: "No ref", kind: "track" }, { id: 3 }, { id: "x", label: "B", kind: "weird" }, null])).toEqual([ok]);
   });
 });
 
 describe("palette targets", () => {
   it("maps rows to the registry's targets", () => {
-    expect(targetOf(e("track", "t1", "x"))).toEqual({ type: "tracks", data: { ids: ["t1"] } });
+    expect(targetOf(e("track", "t1", "x", { ref: { source: "nd1", id: "t1" } }))).toEqual({ type: "tracks", data: { tracks: [{ source: "nd1", id: "t1" }] } });
+    expect(targetOf(e("track", "t1", "x"))).toBeUndefined();
     expect(targetOf(e("album", "a:1", "x"))).toEqual({ type: "albums", data: { ids: ["a:1"] } });
     expect(targetOf(e("playlist", "p1", "x"))).toEqual({ type: "playlists", data: { ids: ["p1"] } });
     expect(targetOf(e("action", "shuffle", "x"))).toBeUndefined();
@@ -84,7 +98,7 @@ describe("palette targets", () => {
 });
 
 describe("palette actions menu", () => {
-  const song = e("track", "t1", "Sunrise");
+  const song = e("track", "t1", "Sunrise", { ref: { source: "nd1", id: "t1" } });
   const songMenu = () => {
     const registry = menuActions(songActions);
     return paletteActions(song, buildMenu(registry, [], songFacts), registry);
@@ -126,6 +140,13 @@ describe("palette actions menu", () => {
 
   it("gives a command one action, Run", () => {
     expect(paletteActions(e("action", "shuffle", "Shuffle"), [], [])).toEqual([[{ key: "run", label: "Run command", icon: undefined, shortcut: "Enter", run: { type: "command", id: "shuffle" } }]]);
+  });
+
+  it("with the core's own Add to queue, Play later keeps its name and gives up the chord", () => {
+    const registry = menuActions([...songActions.slice(0, 3), d("addToQueue", "queue", { label: "Add to queue" }), ...songActions.slice(3)]);
+    const flat = paletteActions(song, buildMenu(registry, [], songFacts), registry).flat();
+    expect(flat.find((a) => a.key === "addToQueue")).toMatchObject({ shortcut: "Mod+Shift+Enter" });
+    expect(flat.find((a) => a.key === "playLater")).toMatchObject({ label: "Play later", shortcut: undefined });
   });
 
   it("leaves disabled actions out and keeps one row per chord", () => {

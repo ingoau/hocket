@@ -3,22 +3,21 @@
 use std::sync::Arc;
 
 use crate::api::*;
-use crate::connect::auth::LanKey;
-use crate::connect::wire::Credential as WireCredential;
 use crate::db::sync::LibrarySync;
+use crate::provider::{Provider, ProviderSet};
 use crate::subsonic::{Client, SubsonicApi};
 
-/// The one server (the registry always holds one for now).
-pub(crate) struct ServerState {
-    pub info: ServerInfo,
-    /// Present once the platform supplied credentials (`AddServer`).
-    pub api: Option<Arc<dyn SubsonicApi>>,
-    /// The concrete client, for the capability probe.
+/// One installed account: its row, its provider once credentials arrived,
+/// and its sync bookkeeping.
+pub(crate) struct AccountState {
+    pub info: AccountInfo,
+    /// Present once the platform supplied credentials (`AddAccount`).
+    pub provider: Option<Arc<dyn Provider>>,
+    /// The concrete Subsonic client, for the capability probe.
     pub client: Option<Arc<Client>>,
-    pub credential: Option<WireCredential>,
-    /// The scope's shared LAN key (mutual LAN auth), derived from the
-    /// password the user entered; the engine is rebuilt when it changes.
-    pub lan_key: Option<LanKey>,
+    /// The password the platform supplied (kept in memory only, for
+    /// credential sync).
+    pub password: Option<crate::api::Secret>,
     pub sync: Option<Arc<LibrarySync>>,
     pub probing: bool,
     pub sync_job: Option<JobId>,
@@ -26,20 +25,138 @@ pub(crate) struct ServerState {
     pub ready_tables: Vec<String>,
 }
 
-impl ServerState {
-    pub fn new(info: ServerInfo) -> ServerState {
-        ServerState {
+impl AccountState {
+    pub fn new(info: AccountInfo) -> AccountState {
+        AccountState {
             info,
-            api: None,
+            provider: None,
             client: None,
-            credential: None,
-            lan_key: None,
+            password: None,
             sync: None,
             probing: false,
             sync_job: None,
             last_sync_started: None,
             ready_tables: vec![],
         }
+    }
+
+    /// The Subsonic client, for a Navidrome account with credentials.
+    pub fn subsonic(&self) -> Option<Arc<dyn SubsonicApi>> {
+        self.provider.as_ref().and_then(|p| p.navidrome().cloned())
+    }
+}
+
+/// Every account, highest priority first. Replaces the one `server` the
+/// core used to hold: library rows, pins, the outbox and queue items name
+/// their account (their source), and the registry finds its provider.
+#[derive(Default)]
+pub(crate) struct AccountRegistry {
+    accounts: Vec<AccountState>,
+}
+
+impl AccountRegistry {
+    pub fn is_empty(&self) -> bool {
+        self.accounts.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.accounts.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &AccountState> {
+        self.accounts.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut AccountState> {
+        self.accounts.iter_mut()
+    }
+
+    pub fn get(&self, id: &str) -> Option<&AccountState> {
+        self.accounts.iter().find(|a| a.info.id == id)
+    }
+
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut AccountState> {
+        self.accounts.iter_mut().find(|a| a.info.id == id)
+    }
+
+    pub fn contains(&self, id: &str) -> bool {
+        self.get(id).is_some()
+    }
+
+    /// The account whose ids are valid in `source` (highest priority first).
+    pub fn for_source(&self, source: &str) -> Option<&AccountState> {
+        self.accounts.iter().find(|a| a.info.source == source)
+    }
+
+    /// The highest-priority Navidrome account: the library's default scope.
+    pub fn primary(&self) -> Option<&AccountState> {
+        self.accounts
+            .iter()
+            .find(|a| a.info.kind == AccountKind::Navidrome)
+    }
+
+    /// Add or replace (by id), keeping priority order.
+    pub fn insert(&mut self, state: AccountState) {
+        self.accounts.retain(|a| a.info.id != state.info.id);
+        self.accounts.push(state);
+        self.accounts.sort_by_key(|a| a.info.priority);
+    }
+
+    pub fn take(&mut self, id: &str) -> Option<AccountState> {
+        let i = self.accounts.iter().position(|a| a.info.id == id)?;
+        Some(self.accounts.remove(i))
+    }
+
+    /// The priority after every installed account's.
+    pub fn next_priority(&self) -> u32 {
+        self.accounts
+            .iter()
+            .map(|a| a.info.priority + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Put the named accounts first, in that order, the rest after them in
+    /// their current order; priorities become 0..n.
+    pub fn reorder(&mut self, ids: &[AccountId]) {
+        let mut rest = std::mem::take(&mut self.accounts);
+        let mut out = Vec::with_capacity(rest.len());
+        for id in ids {
+            if let Some(i) = rest.iter().position(|a| &a.info.id == id) {
+                out.push(rest.remove(i));
+            }
+        }
+        out.extend(rest);
+        for (i, a) in out.iter_mut().enumerate() {
+            a.info.priority = i as u32;
+        }
+        self.accounts = out;
+    }
+
+    /// Providers with credentials, highest priority first.
+    pub fn providers(&self) -> ProviderSet {
+        ProviderSet::new(
+            self.accounts
+                .iter()
+                .filter_map(|a| a.provider.clone())
+                .collect(),
+        )
+    }
+
+    pub fn ids(&self) -> Vec<AccountId> {
+        self.accounts.iter().map(|a| a.info.id.clone()).collect()
+    }
+
+    /// The accounts' sources (what pins, the mirror and providers are keyed
+    /// by), each once.
+    pub fn sources(&self) -> Vec<SourceId> {
+        let mut out: Vec<SourceId> = vec![];
+        for a in &self.accounts {
+            if !out.contains(&a.info.source) {
+                out.push(a.info.source.clone());
+            }
+        }
+        out
     }
 }
 
@@ -112,6 +229,21 @@ pub(crate) struct Playback {
     /// (`buffering`), the backend holds the old item paused, and
     /// `backend_key` is unset so the old item's reports are ignored.
     pub pending_load: Option<EpochMs>,
+    /// AutoMix: the loaded source's `mix_out_ms` (as handed to the backend).
+    pub mix_out_ms: Option<Ms>,
+    /// AutoMix: a transition into `next` the backend reported starting
+    /// (`TransitionStarted`) whose handover has not come yet.
+    pub transition: Option<ActiveTransition>,
+    /// Where the item adopted at the last boundary started: 0 after a gapless
+    /// join, B's position at the handover after a mix.
+    pub adopted_position_ms: Ms,
+}
+
+/// A transition the backend is playing (see `Playback::transition`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ActiveTransition {
+    pub from: QueueKey,
+    pub to: QueueKey,
 }
 
 impl Playback {
@@ -135,9 +267,39 @@ impl Playback {
         self.track.as_ref().map(|t| t.id.as_str())
     }
 
+    /// What plays, named by its account.
+    pub fn track_ref(&self) -> Option<TrackRef> {
+        self.track
+            .as_ref()
+            .map(|t| TrackRef::new(t.server_id.clone(), t.id.clone()))
+    }
+
     pub fn duration_ms(&self) -> Ms {
         self.track.as_ref().map(|t| t.duration_ms).unwrap_or(0)
     }
+}
+
+/// This device's playback, remembered so a preview can give it back.
+#[derive(Debug, Clone)]
+pub(crate) struct PreviewHold {
+    pub was_playing: bool,
+}
+
+/// The preview session. Not the transport: it never enters the queue,
+/// play history, scrobbles or the saved resume position.
+#[derive(Debug, Clone)]
+pub(crate) struct PreviewSession {
+    pub track_id: TrackId,
+    pub title: String,
+    pub duration_ms: Ms,
+    pub position_ms: Ms,
+    pub playing: bool,
+    /// Set when this device's own playback was paused for the preview.
+    /// `None` when a Connect peer is playing: that peer is left alone.
+    pub hold: Option<PreviewHold>,
+    /// The start offset has been applied. A song whose duration arrives
+    /// only once the player opens is seeked to 30% then.
+    pub positioned: bool,
 }
 
 /// Persisted next to the session document.
@@ -169,8 +331,14 @@ pub(crate) struct PendingScrobble {
 
 impl PendingScrobble {
     /// The same play (the engine's own tolerance for a `startedAt`).
-    pub fn is(&self, track_id: &str, started_at: EpochMs) -> bool {
-        self.track_id == track_id && (self.started_at - started_at).abs() < 1.0
+    pub fn is(&self, track: &TrackRef, started_at: EpochMs) -> bool {
+        self.server_id == track.source
+            && self.track_id == track.id
+            && (self.started_at - started_at).abs() < 1.0
+    }
+
+    pub fn track(&self) -> TrackRef {
+        TrackRef::new(self.server_id.clone(), self.track_id.clone())
     }
 }
 
@@ -194,7 +362,7 @@ pub(crate) struct PendingCas {
 #[derive(Debug, Default)]
 pub(crate) struct SummaryCache {
     pub generation: u64,
-    pub map: std::collections::HashMap<TrackId, TrackSummary>,
+    pub map: std::collections::HashMap<TrackRef, TrackSummary>,
 }
 
 impl SummaryCache {

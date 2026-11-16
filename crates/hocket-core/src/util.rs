@@ -29,3 +29,27 @@ impl Clock for WallClock {
 pub fn new_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
+
+/// A settable clock for tests.
+#[derive(Debug, Default)]
+pub struct FixedClock(parking_lot::Mutex<f64>);
+
+impl FixedClock {
+    pub fn new(now_ms: f64) -> FixedClock {
+        FixedClock(parking_lot::Mutex::new(now_ms))
+    }
+
+    pub fn set(&self, now_ms: f64) {
+        *self.0.lock() = now_ms;
+    }
+
+    pub fn advance(&self, ms: f64) {
+        *self.0.lock() += ms;
+    }
+}
+
+impl Clock for FixedClock {
+    fn now_ms(&self) -> f64 {
+        *self.0.lock()
+    }
+}

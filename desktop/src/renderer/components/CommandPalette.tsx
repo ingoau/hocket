@@ -5,7 +5,7 @@
 // the actions menu for the row, anchored bottom-right: the context menu's actions (lib/palette-model
 // over lib/menu-model), each with its chord as keycaps and its own filter field. Those chords also
 // work straight from the search field. Escape closes the menu, then the palette.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActionDescriptor, SearchResults } from "@core/api";
 import { canonicalActionId } from "@shared/keymap";
 import { t } from "@shared/strings";
@@ -17,6 +17,9 @@ import { fetchActions } from "../store/queries";
 import { useKeymap } from "../store/keyboard";
 import { chordFromEvent, parseChord, type Chord } from "../store/shortcuts";
 import { Artwork } from "./Artwork";
+import { LyricSnippet } from "./LyricSnippet";
+import { openContextMenu, openContextMenuFromKeyboard } from "./ContextMenu";
+import { refOf } from "../lib/track-ref";
 import { Icon, hasIcon } from "./Icon";
 import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
@@ -42,7 +45,9 @@ interface ActionsMenu {
 export function CommandPalette() {
   const open = useApp((s) => s.paletteOpen);
   const setOpen = useApp((s) => s.setPaletteOpen);
-  const serverId = useApp((s) => s.servers[0]?.id);
+  const serverId = useApp((s) => s.accounts[0]?.id);
+  // A dialog a result's menu opened (delete, rename, …) may have changed the results: search again once it closes.
+  const dialogOpen = useApp((s) => !!s.dialog);
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
   const navigate = useApp((s) => s.navigate);
@@ -83,7 +88,7 @@ export function CommandPalette() {
     }
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     session.current++;
     pending.current = false;
@@ -91,7 +96,9 @@ export function CommandPalette() {
     loaded.current.clear();
     setRecents(sanitizeRecents(loadLocal<unknown>(RECENTS_KEY, [])));
     void bridge().query({ type: "actions", data: { surface: "palette", target: { type: "none" } } }).then((r) => r.type === "actions" && setDescriptors(r.data));
-    setTimeout(() => input.current?.focus(), 0);
+    // At once, not on a timer: the shell is inert now but keeps focus until the
+    // browser's focus fixup, and a key typed meanwhile (Escape) would go to it.
+    input.current?.focus();
   }, [open]);
 
   useEffect(() => {
@@ -103,10 +110,10 @@ export function CommandPalette() {
     const id = `pal-${mine}`;
     // The local index only: it answers at once, and the palette never waits on the network.
     const h = setTimeout(() => {
-      void bridge().query({ type: "search", data: { server_id: serverId, query, limit: 8, include_server: false, request_id: id } }).then((r) => mine === seq.current && r.type === "search" && setResults(r.data));
+      void bridge().query({ type: "search", data: { server_id: "", query, limit: 8, include_server: false, request_id: id } }).then((r) => mine === seq.current && r.type === "search" && setResults(r.data));
     }, 40);
     return () => clearTimeout(h);
-  }, [open, query, serverId]);
+  }, [open, query, serverId, dialogOpen]);
 
   const commands = useMemo<PaletteEntry[]>(() => descriptors.filter((a) => a.enabled).map((a) => ({
     id: entryId("action", a.id),
@@ -116,14 +123,19 @@ export function CommandPalette() {
     shortcut: shortcuts.find((s) => s.actionId === a.id)?.shortcut ?? a.defaultShortcut,
   })), [descriptors, shortcuts]);
 
-  const groups = useMemo(() => paletteGroups(query, {
+  const groups = useMemo(() => {
+    // A slower answer for the previous letters must not stay on top of Enter.
+    const found = results?.query.trim().toLowerCase() === query.trim().toLowerCase() ? results : undefined;
+    return paletteGroups(query, {
     recents,
     commands,
-    tracks: (results?.tracks ?? []).map((x) => ({ id: entryId("track", x.id), label: x.title, sub: [x.artist, x.album].filter(Boolean).join(" · "), kind: "track", coverArt: x.coverArt })),
-    albums: (results?.albums ?? []).map((x) => ({ id: entryId("album", x.id), label: x.name, sub: x.artist, kind: "album", coverArt: x.coverArt })),
-    artists: (results?.artists ?? []).map((x) => ({ id: entryId("artist", x.id), label: x.name, kind: "artist", coverArt: x.coverArt })),
-    playlists: (results?.playlists ?? []).map((x) => ({ id: entryId("playlist", x.id), label: x.name, kind: "playlist", coverArt: x.coverArt })),
-  }), [query, recents, commands, results]);
+    tracks: (found?.tracks ?? []).map((x) => ({ id: entryId("track", x.id), label: x.title, sub: [x.artist, x.album].filter(Boolean).join(" · "), kind: "track", coverArt: x.coverArt, ref: refOf(x) })),
+    lyrics: (found?.lyrics ?? []).map((h) => ({ id: `ly:${h.track.id}`, label: h.track.title, sub: h.line.split("\n").join(" "), kind: "track", coverArt: h.track.coverArt, ref: refOf(h.track), lyric: { line: h.line, start: h.matchStart, end: h.matchEnd, startMs: h.startMs ?? undefined } })),
+    albums: (found?.albums ?? []).map((x) => ({ id: entryId("album", x.id), label: x.name, sub: x.artist, kind: "album", coverArt: x.coverArt })),
+    artists: (found?.artists ?? []).map((x) => ({ id: entryId("artist", x.id), label: x.name, kind: "artist", coverArt: x.coverArt })),
+    playlists: (found?.playlists ?? []).map((x) => ({ id: entryId("playlist", x.id), label: x.name, kind: "playlist", coverArt: x.coverArt })),
+    });
+  }, [query, recents, commands, results]);
   const rows = useMemo(() => flatRows(groups), [groups]);
   const current = rows[active]?.item;
 
@@ -197,6 +209,8 @@ export function CommandPalette() {
   const runPrimary = (entry: PaletteEntry) => {
     if (entry.kind === "action") return perform(entry, { key: "run", label: entry.label, run: { type: "command", id: rawId(entry) } });
     if (entry.kind !== "track") return perform(entry, { key: "open", label: "", run: { type: "open" } });
+    // A lyric hit plays from the line that matched.
+    if (entry.lyric) return playAlone(entry, entry.lyric.startMs ?? 0);
     const s = session.current;
     if (pending.current) return;
     pending.current = true;
@@ -206,10 +220,13 @@ export function CommandPalette() {
       const primary = g.flat().find((a) => a.shortcut === "Enter");
       if (primary) return perform(entry, primary);
       // No registry Play: play the song alone, as the palette always has.
-      remember(entry);
-      setOpen(false);
-      if (serverId) bridge().dispatch({ type: "playTracks", data: { server_id: serverId, track_ids: [rawId(entry)], start_index: 0, label: entry.label, shuffle: false } });
+      playAlone(entry, 0);
     });
+  };
+  const playAlone = (entry: PaletteEntry, from: number) => {
+    remember(entry);
+    setOpen(false);
+    if (entry.ref) bridge().dispatch({ type: "playTracks", data: { tracks: [entry.ref], start_index: 0, label: entry.label, shuffle: false, start_position_ms: from } });
   };
   /** A menu chord pressed on a row (from the field or the menu): run its action if the row has one. */
   const runChord = (entry: PaletteEntry, chord: Chord, e: React.KeyboardEvent): boolean => {
@@ -268,6 +285,8 @@ export function CommandPalette() {
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
     else if (e.key === "Enter" && plain) { e.preventDefault(); if (current) runPrimary(current); }
     else if (current && chord && runChord(current, chord, e)) { /* ran */ }
+    // The global handler leaves these to text fields; the input points at the active option, so open its context menu.
+    else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) { if (openContextMenuFromKeyboard()) e.preventDefault(); }
     else trapTab(e);
   };
 
@@ -302,7 +321,14 @@ export function CommandPalette() {
               <div className="group" id={`pal-group-${g.id}`} role="presentation">{groupLabel(g.id)}</div>
               {g.rows.map((r) => {
                 const i = ++index;
-                return <Row key={r.item.id} row={r} index={i} active={i === active} platform={platform} onHover={() => { if (!menu) setActive(i); }} onRun={() => runPrimary(r.item)} onMenu={() => { setActive(i); openMenu(r.item); }} />;
+                return <Row key={r.item.id} row={r} index={i} active={i === active} platform={platform} onHover={() => { if (!menu) setActive(i); }} onRun={() => runPrimary(r.item)} onContextMenu={(e) => {
+                  // The app's own context menu for a library result, as anywhere else.
+                  const target = targetOf(r.item);
+                  if (!target) return;
+                  setActive(i);
+                  input.current?.focus();
+                  void openContextMenu(e, target);
+                }} />;
               })}
             </div>
           ))}
@@ -370,7 +396,7 @@ export function CommandPalette() {
   );
 }
 
-function Row({ row, index, active, platform, onHover, onRun, onMenu }: { row: Ranked<PaletteEntry>; index: number; active: boolean; platform: Platform; onHover: () => void; onRun: () => void; onMenu: () => void }) {
+function Row({ row, index, active, platform, onHover, onRun, onContextMenu }: { row: Ranked<PaletteEntry>; index: number; active: boolean; platform: Platform; onHover: () => void; onRun: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
   const it = row.item;
   const command = it.kind === "action";
   const chord = command && it.shortcut ? parseChord(it.shortcut) : undefined;
@@ -381,15 +407,17 @@ function Row({ row, index, active, platform, onHover, onRun, onMenu }: { row: Ra
       role="option"
       aria-selected={active}
       onMouseMove={(e) => { if (e.movementX || e.movementY) onHover(); }}
+      // The search field keeps focus (and with it the keyboard).
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onRun}
-      onContextMenu={(e) => { e.preventDefault(); onMenu(); }}
+      onContextMenu={onContextMenu}
       data-testid="palette-item"
       data-kind={it.kind}
     >
       {command ? <span className="pi-icon"><Icon name={it.icon && hasIcon(it.icon) ? it.icon : "command"} size={16} /></span> : <Artwork id={it.coverArt} size={64} className={`art ${it.kind === "artist" ? "round" : ""}`} />}
       <div className="grow truncate">
         <span className="pi-title truncate"><Highlight text={it.label} matches={row.matches} /></span>
-        {it.sub ? <span className="sub">{it.sub}</span> : null}
+        {it.lyric ? <span className="sub"><LyricSnippet line={it.lyric.line} start={it.lyric.start} end={it.lyric.end} /></span> : it.sub ? <span className="sub">{it.sub}</span> : null}
       </div>
       {chord && it.shortcut ? <Keycaps shortcut={it.shortcut} platform={platform} /> : null}
       <span className="pi-type">{typeLabel(it.kind)}</span>

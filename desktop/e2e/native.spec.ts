@@ -18,7 +18,7 @@ async function launch(userData: string): Promise<{ app: ElectronApplication; pag
   // the fixed-key basic_text backend, which the app refuses to persist with;
   // opt in explicitly so the credential replay after restart is exercised.
   Object.assign(env, { HOCKET_USER_DATA: userData, HOCKET_DEVICE_NAME: "e2e-native", HOCKET_LOG: "warn", ELECTRON_ENABLE_LOGGING: "1", HOCKET_INSECURE_CREDENTIAL_STORE: "1" });
-  const app = await electron.launch({ args: [root, "--no-sandbox", "--disable-gpu"], env });
+  const app = await electron.launch({ args: [root, "--no-sandbox", "--disable-gpu", "--enable-unsafe-swiftshader"], env });
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
   return { app, page };
@@ -54,6 +54,9 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("setup-username").fill("alice");
       await page.getByTestId("setup-password").fill("secret");
       await page.getByTestId("setup-connect").click();
+      await page.getByTestId("setup-continue").click({ timeout: 30_000 });
+      // "Add another source?": not now.
+      await page.getByTestId("setup-done").click({ timeout: 30_000 });
       await expect(page.getByTestId("app")).toBeVisible({ timeout: 30_000 });
       await expect(page.getByTestId("dev-banner")).toHaveCount(0);
       expect(server.callsTo("ping").length).toBeGreaterThan(0);
@@ -74,8 +77,8 @@ test.describe("real core against a fake Navidrome", () => {
       await page.getByTestId("toggle-queue").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await expect(page.getByTestId("queue-row-current")).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByTestId("queue-row-upcoming")).toHaveCount(5);
-      await expect(page.getByTestId("queue-timeline")).toContainText("Continue playing");
+      await expect(page.getByTestId("queue-row-rest")).toHaveCount(5);
+      await expect(page.getByTestId("queue-timeline")).toContainText("Next from");
       const firstTitle = await page.getByTestId("queue-row-current").locator(".t1").textContent();
 
       // Position extrapolates from TransportChanged stamps while playing.

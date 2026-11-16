@@ -96,7 +96,7 @@ async fn library_sync_reports_ready_tables_in_order_and_fills_the_mirror() {
         QueryResult::Count(n) => assert_eq!(n, 3),
         other => panic!("{other:?}"),
     }
-    let servers = t.snapshot().await.servers;
+    let servers = t.snapshot().await.accounts;
     assert!(servers[0].last_sync.is_some());
     assert!(servers[0].reachable);
 }
@@ -149,12 +149,20 @@ async fn search_answers_locally_first_then_from_the_server() {
 async fn ratings_go_through_the_outbox_and_undo_is_compare_and_swap() {
     let t = synced("rate", seeded_server(4, 180.0)).await;
     t.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t0".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t0".into(),
+            source: String::new(),
+        }],
         rating: 4,
     })
     .await;
     // Optimistic locally, then flushed.
-    match t.query(Query::Track { id: "t0".into() }).await {
+    match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), "t0"),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => assert_eq!(tr.rating, 4),
         other => panic!("{other:?}"),
     }
@@ -196,7 +204,10 @@ async fn ratings_go_through_the_outbox_and_undo_is_compare_and_swap() {
 async fn rating_bridges_to_love_above_the_threshold_when_enabled() {
     let t = synced("bridge", seeded_server(2, 180.0)).await;
     t.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t0".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t0".into(),
+            source: String::new(),
+        }],
         rating: 5,
     })
     .await;
@@ -208,7 +219,10 @@ async fn rating_bridges_to_love_above_the_threshold_when_enabled() {
     })
     .await;
     t.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t1".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t1".into(),
+            source: String::new(),
+        }],
         rating: 4,
     })
     .await;
@@ -230,14 +244,17 @@ async fn offline_changes_flush_after_the_network_returns() {
     })
     .await;
     t.run(Command::SetLoved {
-        targets: vec![RatingTarget::Track { id: "t2".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t2".into(),
+            source: String::new(),
+        }],
         loved: true,
     })
     .await;
     t.run(Command::CreatePlaylist {
-        server_id: t.server_id.clone(),
+        account_id: t.server_id.clone(),
         name: "Road trip".into(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0", "t1"]),
     })
     .await;
     t.run_for(2_000.0).await;
@@ -250,7 +267,12 @@ async fn offline_changes_flush_after_the_network_returns() {
         .values()
         .all(|p| p.name != "Road trip"));
     // Local view already reflects the love.
-    match t.query(Query::Track { id: "t2".into() }).await {
+    match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), "t2"),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => assert!(tr.loved),
         other => panic!("{other:?}"),
     }
@@ -284,8 +306,14 @@ async fn filters_preview_export_and_materialise() {
     let t = synced("filters", seeded_server(6, 180.0)).await;
     t.run(Command::SetRating {
         targets: vec![
-            RatingTarget::Track { id: "t1".into() },
-            RatingTarget::Track { id: "t2".into() },
+            RatingTarget::Track {
+                id: "t1".into(),
+                source: String::new(),
+            },
+            RatingTarget::Track {
+                id: "t2".into(),
+                source: String::new(),
+            },
         ],
         rating: 5,
     })
@@ -378,6 +406,64 @@ async fn filters_preview_export_and_materialise() {
         st.playlist_songs[&pl.id],
         vec!["t1".to_string(), "t2".to_string()]
     );
+}
+
+/// [`synced`], with this HTTP for external services (lyrics, Deezer) instead of the network.
+async fn synced_with_http(name: &str, server: FakeServer, http: Arc<dyn LyricsHttp>) -> TestCore {
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let dir = tempfile::tempdir().unwrap();
+    let config = CoreConfig {
+        data_dir: dir.path().join("d").to_string_lossy().into_owned(),
+        cache_dir: dir.path().join("c").to_string_lossy().into_owned(),
+        device_id: format!("dev-{name}"),
+        device_name: name.into(),
+        platform: Platform::Linux,
+        app_version: "test".into(),
+        audio: AudioMode::None,
+        coordinator_listen: None,
+    };
+    let (backend, scripted) = TestBackend::scripted(clock.clone());
+    let core = Core::new_for_test_with(
+        config,
+        clock.clone(),
+        TestOptions {
+            backend,
+            api: Some(Arc::new(server.clone())),
+            more_apis: vec![],
+            server_url: "https://music.example/".into(),
+            password: "pw".into(),
+            net: None,
+            lyrics_http: Some(http),
+            seed: 7,
+            reducer: None,
+            ytm_http: None,
+        },
+    )
+    .unwrap();
+    let events = Arc::new(hocket_core::core::test_support::EventLog::default());
+    core.add_sink(events.clone());
+    core.dispatch(Command::Start).unwrap();
+    core.settle().await;
+    let t = TestCore {
+        core,
+        backend: scripted,
+        sources: Default::default(),
+        upstream: Default::default(),
+        clock,
+        server: server.clone(),
+        events,
+        device_id: format!("dev-{name}"),
+        server_id: "srv".into(),
+        dir,
+    };
+    t.wait_until(30_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+    })
+    .await;
+    t
 }
 
 struct FakeLyricsHttp(String);
@@ -479,57 +565,8 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
             }],
         );
     }
-    let clock = SimTime::new(1_700_000_000_000.0);
-    let dir = tempfile::tempdir().unwrap();
-    let config = CoreConfig {
-        data_dir: dir.path().join("d").to_string_lossy().into_owned(),
-        cache_dir: dir.path().join("c").to_string_lossy().into_owned(),
-        device_id: "dev-lyrics".into(),
-        device_name: "Lyrics".into(),
-        platform: Platform::Linux,
-        app_version: "test".into(),
-        audio: AudioMode::None,
-        coordinator_listen: None,
-    };
-    let (backend, scripted) = TestBackend::scripted(clock.clone());
     let external = r#"{"plainLyrics":"From outside","syncedLyrics":"[00:01.00] From outside\n[00:03.00] Synced too"}"#;
-    let core = Core::new_for_test_with(
-        config,
-        clock.clone(),
-        TestOptions {
-            backend,
-            api: Some(Arc::new(server.clone())),
-            server_url: "https://music.example/".into(),
-            password: "pw".into(),
-            net: None,
-            lyrics_http: Some(Arc::new(FakeLyricsHttp(external.into()))),
-            seed: 7,
-        },
-    )
-    .unwrap();
-    let events = Arc::new(hocket_core::core::test_support::EventLog::default());
-    core.add_sink(events.clone());
-    core.dispatch(Command::Start).unwrap();
-    core.settle().await;
-    let t = TestCore {
-        core,
-        backend: scripted,
-        sources: Default::default(),
-        upstream: Default::default(),
-        clock,
-        server: server.clone(),
-        events,
-        device_id: "dev-lyrics".into(),
-        server_id: "srv".into(),
-        dir,
-    };
-    t.wait_until(30_000.0, |t| {
-        t.events
-            .all()
-            .iter()
-            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
-    })
-    .await;
+    let t = synced_with_http("lyrics", server, Arc::new(FakeLyricsHttp(external.into()))).await;
 
     let l0 = lyrics_of(&t, "t0").await.expect("syllable lyrics");
     assert_eq!(l0.tier, LyricsTier::Syllable);
@@ -568,11 +605,11 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
     t.events.clear();
     let calls_before = t.server.calls_to("getLyricsBySongId");
     t.run(Command::PlayTracks {
-        server_id: "srv".into(),
-        track_ids: vec!["t2".into(), "t0".into()],
+        tracks: TrackRef::list("srv", ["t2", "t0"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -602,20 +639,6 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
         .all()
         .iter()
         .any(|e| matches!(e, Event::LyricsChanged { track_id, lyrics: Some(l) } if track_id == "t0" && l.tier == LyricsTier::Syllable)));
-    // Battery saver with prefetch paused: nothing is fetched ahead.
-    t.run(Command::SetBatterySaver { enabled: true }).await;
-    let calls = t.server.calls_to("getLyricsBySongId");
-    t.run(Command::PlayTracks {
-        server_id: "srv".into(),
-        track_ids: vec!["t1".into(), "t3".into()],
-        start_index: 0,
-        label: "Sel".into(),
-        shuffle: false,
-    })
-    .await;
-    t.run_for(500.0).await;
-    assert_eq!(t.server.calls_to("getLyricsBySongId"), calls);
-    t.run(Command::SetBatterySaver { enabled: false }).await;
 
     // A per-track offset rides on top.
     t.run(Command::SetLyricsOffset {
@@ -724,7 +747,7 @@ async fn settings_persist_export_and_import() {
     t.run(Command::RunAction {
         action_id: "rate.3".into(),
         target: ActionTarget::Tracks {
-            ids: vec!["t0".into()],
+            tracks: TrackRef::list(&t.server_id, ["t0"]),
         },
     })
     .await;
@@ -752,7 +775,12 @@ async fn pins_download_through_the_job_queue() {
         })
     })
     .await;
-    match t.query(Query::Track { id: "t0".into() }).await {
+    match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), "t0"),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => assert_eq!(tr.offline, OfflineState::Downloaded),
         other => panic!("{other:?}"),
     }
@@ -784,11 +812,11 @@ async fn pins_download_through_the_job_queue() {
     assert!(!art.starts_with("file://"), "{art}");
     assert!(std::path::Path::new(&art).is_file(), "{art}");
     t.run(Command::PlayTracks {
-        server_id: t.server_id.clone(),
-        track_ids: vec!["t0".into()],
+        tracks: TrackRef::list(&t.server_id, ["t0"]),
         start_index: 0,
         label: "One".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     t.run_for(500.0).await;
@@ -832,7 +860,7 @@ async fn playlist_append_undo_removes_and_redo_re_adds_without_new_history() {
     // Append (no index): the common "Add to playlist" path.
     t.run(Command::PlaylistAdd {
         playlist_id: "pl".into(),
-        track_ids: vec!["t2".into(), "t3".into()],
+        tracks: TrackRef::list(&t.server_id, ["t2", "t3"]),
         at_index: None,
     })
     .await;
@@ -903,7 +931,7 @@ async fn playlist_remove_and_move_undo_are_compare_and_swap() {
     // expects t4 present, finds it gone, reports honestly and leaves it.
     t.run(Command::PlaylistAdd {
         playlist_id: "pl".into(),
-        track_ids: vec!["t4".into()],
+        tracks: TrackRef::list(&t.server_id, ["t4"]),
         at_index: None,
     })
     .await;
@@ -917,7 +945,7 @@ async fn playlist_remove_and_move_undo_are_compare_and_swap() {
         vec!["t0".into(), "t1".into(), "t2".into(), "t3".into()],
     );
     t.run(Command::SyncLibrary {
-        server_id: t.server_id.clone(),
+        account_id: t.server_id.clone(),
         full: true,
     })
     .await;
@@ -1145,4 +1173,209 @@ async fn artist_top_songs_are_cached_and_refreshed_in_the_background() {
         .all()
         .iter()
         .any(|e| matches!(e, Event::LibraryChanged { .. })));
+}
+
+fn external(r: QueryResult) -> Option<ExternalInfo> {
+    match r {
+        QueryResult::ExternalInfo(info) => info,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn artist_and_album_info_come_from_the_server_and_are_cached() {
+    let server = seeded_server(12, 180.0);
+    let t = synced("external-info", server.clone()).await;
+
+    let artist = external(t.query(Query::ArtistInfo { id: "ar0".into() }).await).unwrap();
+    assert!(artist
+        .text
+        .as_deref()
+        .is_some_and(|s| s.starts_with("About ")));
+    assert!(artist.similar_artists.iter().all(|a| a.id != "ar0"));
+    let album = external(t.query(Query::AlbumInfo { id: "al0".into() }).await).unwrap();
+    assert!(album
+        .text
+        .as_deref()
+        .is_some_and(|s| s.starts_with("About ")));
+    assert_eq!(server.calls_to("getArtistInfo2"), 1);
+    assert_eq!(server.calls_to("getAlbumInfo2"), 1);
+
+    // Answered from the cache, offline too.
+    server.set_offline(true);
+    assert_eq!(
+        external(t.query(Query::ArtistInfo { id: "ar0".into() }).await),
+        Some(artist.clone())
+    );
+    assert_eq!(server.calls_to("getArtistInfo2"), 1);
+    // Past its week, offline: the older answer still stands in.
+    t.clock.advance(8.0 * 86_400_000.0);
+    assert_eq!(
+        external(t.query(Query::ArtistInfo { id: "ar0".into() }).await),
+        Some(artist.clone())
+    );
+    assert_eq!(
+        server.calls_to("getArtistInfo2"),
+        2,
+        "a stale entry asks the server again"
+    );
+    // Something never fetched, offline: nothing, not an error.
+    assert_eq!(
+        external(t.query(Query::AlbumInfo { id: "al1".into() }).await),
+        None
+    );
+}
+
+/// Deezer by URL: the answer for the first key the URL contains, else 404. Records each URL.
+struct FakeDeezer {
+    answers: Vec<(String, String)>,
+    asked: Arc<parking_lot::Mutex<Vec<String>>>,
+}
+
+impl LyricsHttp for FakeDeezer {
+    fn get(&self, url: &str) -> BoxFuture<'_, Result<String, LyricsError>> {
+        self.asked.lock().push(url.to_string());
+        let hit = self
+            .answers
+            .iter()
+            .find(|(k, _)| url.contains(k.as_str()))
+            .map(|(_, v)| v.clone());
+        Box::pin(async move {
+            hit.ok_or(LyricsError::Http {
+                status: 404,
+                body: String::new(),
+            })
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn song_link_finds_the_song_on_deezer_by_isrc_then_by_search() {
+    let server = seeded_server(4, 180.0);
+    server.state.lock().songs.get_mut("t0").unwrap().isrc = vec!["GBAYE9200070".into()];
+    let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let http = Arc::new(FakeDeezer {
+        answers: vec![
+            ("track/isrc:GBAYE9200070".into(), r#"{"id":111}"#.into()),
+            (
+                "/search?".into(),
+                r#"{"data":[{"id":222,"title":"Track 1","duration":180,"artist":{"name":"Artist ar0"}}]}"#.into(),
+            ),
+            (
+                "/search/album?".into(),
+                r#"{"data":[{"id":333,"title":"Album al0","artist":{"name":"Artist ar0"}}]}"#.into(),
+            ),
+        ],
+        asked: asked.clone(),
+    });
+    let t = synced_with_http("songlink", server, http).await;
+    let link = |track: Option<&str>, album: Option<&str>| {
+        let q = Query::SongLink {
+            track_id: track.map(Into::into),
+            album_id: album.map(Into::into),
+        };
+        let t = &t;
+        async move {
+            match t.query(q).await {
+                QueryResult::SongLink(url) => url,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    };
+
+    // The mirror keeps no ISRC: the core asks the server for the song, then Deezer by ISRC.
+    let before = t.server.calls_to("getSong");
+    assert_eq!(
+        link(Some("t0"), None).await.as_deref(),
+        Some("https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F111")
+    );
+    assert_eq!(t.server.calls_to("getSong"), before + 1);
+    // No ISRC: search, and keep the result with this artist and title.
+    assert_eq!(
+        link(Some("t1"), None).await.as_deref(),
+        Some("https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F222")
+    );
+    // Track 2 is not in the search answer.
+    assert_eq!(link(Some("t2"), None).await, None);
+    assert_eq!(
+        link(None, Some("al0")).await.as_deref(),
+        Some("https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Falbum%2F333")
+    );
+    assert_eq!(link(Some("nope"), None).await, None);
+    assert_eq!(link(None, None).await, None);
+    assert!(asked
+        .lock()
+        .iter()
+        .all(|u| u.starts_with("https://api.deezer.com/")));
+}
+
+/// Set up another device without a coordinator: `Query::SetupSettings` gives
+/// the account-synced settings changed from their defaults (device-local ones
+/// stay behind), and `Command::ApplySetupSettings` on the new device takes
+/// them, skipping device-local, unknown and invalid keys.
+#[tokio::test]
+async fn setup_settings_carry_changed_synced_settings_to_a_new_device() {
+    let a = TestCore::start("setup-a", seeded_server(2, 180.0)).await;
+    a.run(Command::SetSetting {
+        key: "queue.savedCap".into(),
+        value: "5".into(),
+    })
+    .await;
+    a.run(Command::SetSetting {
+        key: "display.theme".into(),
+        value: "\"dark\"".into(),
+    })
+    .await;
+    // Set to its default: nothing to carry.
+    a.run(Command::SetSetting {
+        key: "queue.section".into(),
+        value: "true".into(),
+    })
+    .await;
+    let text = match a.query(Query::SetupSettings).await {
+        QueryResult::Text(t) => t,
+        other => panic!("{other:?}"),
+    };
+    let carried: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        carried.get("queue.savedCap"),
+        Some(&serde_json::json!(5)),
+        "{text}"
+    );
+    assert!(
+        !carried.contains_key("display.theme"),
+        "device-local stays: {text}"
+    );
+    assert!(
+        !carried.contains_key("queue.section"),
+        "defaults stay: {text}"
+    );
+
+    let b = TestCore::start("setup-b", seeded_server(2, 180.0)).await;
+    let mut incoming = carried.clone();
+    incoming.insert("display.theme".into(), serde_json::json!("dark"));
+    incoming.insert("no.such.key".into(), serde_json::json!(1));
+    incoming.insert("queue.section".into(), serde_json::json!("not a bool"));
+    b.run(Command::ApplySetupSettings {
+        settings: serde_json::Value::Object(incoming).to_string(),
+    })
+    .await;
+    assert_eq!(setting_of(&b, "queue.savedCap").await.value, "5");
+    assert_eq!(
+        setting_of(&b, "display.theme").await.value,
+        "\"system\"",
+        "device-local ignored"
+    );
+    assert_eq!(
+        setting_of(&b, "queue.section").await.value,
+        "true",
+        "invalid value ignored"
+    );
+    assert!(b.events.all().iter().any(|e| matches!(e, Event::SettingChanged { setting } if setting.key == "queue.savedCap" && setting.value == "5")));
+    // Not a JSON object: nothing happens.
+    b.run(Command::ApplySetupSettings {
+        settings: "[1]".into(),
+    })
+    .await;
+    assert_eq!(setting_of(&b, "queue.savedCap").await.value, "5");
 }

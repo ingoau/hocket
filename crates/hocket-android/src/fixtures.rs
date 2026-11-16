@@ -39,12 +39,28 @@ mod tests {
         QueueEntry {
             item: QueueItem {
                 key: key.into(),
-                track_id: format!("t-{key}"),
+                track: TrackRef::new("srv", format!("t-{key}")),
                 source,
                 unavailable: false,
+                added: false,
+                queued: false,
+                ordinal: 0,
+                alts: vec![],
             },
             track: summary(&format!("t-{key}")),
+            in_group: false,
+            autoplay: source_is_autoplay(key),
         }
+    }
+
+    fn source_is_autoplay(key: &str) -> bool {
+        key.starts_with('a')
+    }
+
+    fn queued(mut e: QueueEntry) -> QueueEntry {
+        e.item.added = true;
+        e.item.queued = true;
+        e
     }
 
     fn fixtures() -> Vec<(&'static str, Value)> {
@@ -67,18 +83,18 @@ mod tests {
         push(
             "command.playNext",
             json!(Command::PlayNext {
-                server_id: "srv".into(),
-                track_ids: vec!["a".into(), "b".into()]
+                tracks: TrackRef::list("srv", ["a", "b"]),
+                keys: vec![]
             }),
         );
         push(
             "command.playTracks",
             json!(Command::PlayTracks {
-                server_id: "srv".into(),
-                track_ids: vec!["a".into()],
+                tracks: TrackRef::list("srv", ["a"]),
                 start_index: 0,
                 label: "Search: hello".into(),
-                shuffle: false
+                shuffle: false,
+                start_position_ms: 0,
             }),
         );
         push(
@@ -86,7 +102,7 @@ mod tests {
             json!(Command::PlayContext {
                 args: PlayContextArgs {
                     context: QueueContext {
-                        server_id: "srv".into(),
+                        source: "srv".into(),
                         kind: ContextKind::Album { id: "al1".into() },
                         label: "Album".into(),
                         sort: SortOrder::Default,
@@ -95,6 +111,7 @@ mod tests {
                     start_index: Some(2),
                     shuffle: true,
                     save_outgoing: true,
+                    start_position_ms: None,
                 }
             }),
         );
@@ -102,7 +119,10 @@ mod tests {
             "command.setRating",
             json!(Command::SetRating {
                 targets: vec![
-                    RatingTarget::Track { id: "t1".into() },
+                    RatingTarget::Track {
+                        id: "t1".into(),
+                        source: "srv".into(),
+                    },
                     RatingTarget::Album { id: "al1".into() }
                 ],
                 rating: 4
@@ -122,6 +142,12 @@ mod tests {
                     metered: false,
                     network_id: Some("abc".into())
                 }
+            }),
+        );
+        push(
+            "command.backendReport.loadApplied",
+            json!(Command::BackendReport {
+                report: BackendReport::LoadApplied { load_id: 7 }
             }),
         );
         push(
@@ -171,7 +197,7 @@ mod tests {
             json!(Command::RunAction {
                 action_id: "track.love".into(),
                 target: ActionTarget::Tracks {
-                    ids: vec!["t1".into()]
+                    tracks: TrackRef::list("srv", ["t1"])
                 }
             }),
         );
@@ -342,23 +368,35 @@ mod tests {
             "result.queue",
             json!(QueryResult::Queue(QueueView {
                 context_label: Some("Album".into()),
-                history: vec![entry("h1", QueueSource::Context { index: 0 })],
+                entries: vec![
+                    entry("h1", QueueSource::Context { index: 0 }),
+                    entry("c", QueueSource::Context { index: 1 }),
+                    QueueEntry {
+                        in_group: true,
+                        ..queued(entry("n1", QueueSource::Inserted))
+                    },
+                    entry("u1", QueueSource::Context { index: 2 }),
+                    entry(
+                        "a1",
+                        QueueSource::Autoplay {
+                            provider: AutoplayProvider::SonicSimilarity,
+                            reason: "Similar to X".into(),
+                            score: Some(0.91)
+                        }
+                    ),
+                ],
+                window_start: 0,
+                total: 5,
+                history_count: 1,
+                current_index: Some(1),
+                group_count: 1,
+                total_upcoming: 3,
                 current: Some(entry("c", QueueSource::Context { index: 1 })),
-                playing_next: vec![entry("n1", QueueSource::Inserted)],
-                upcoming: vec![entry(
-                    "u1",
-                    QueueSource::Autoplay {
-                        provider: AutoplayProvider::SonicSimilarity,
-                        reason: "Similar to X".into(),
-                        score: Some(0.91)
-                    }
-                )],
                 shuffle: false,
                 repeat: RepeatMode::All,
                 autoplay: true,
-                mode: QueueMode::Apple,
-                total_upcoming: 1,
-                wrap_next: Some(entry("ctx-0", QueueSource::Context { index: 0 })),
+                wrap_next: None,
+                previous: Some(entry("h1", QueueSource::Context { index: 0 })),
             })),
         );
         push(
@@ -421,10 +459,15 @@ mod tests {
                         mime_type: Some("audio/flac".into()),
                         gain_db: -6.5,
                         transcoded: false,
+                        local: false,
+                        artwork_url: None,
+                        mix_in: None,
+                        mix_out_ms: None,
                     },
                     next: None,
                     position_ms: 0,
                     play: true,
+                    load_id: 7,
                 }
             }),
         );
@@ -465,8 +508,10 @@ mod tests {
                         duration_ms: 213_000,
                         artwork_path: Some("/cache/al1-640.jpg".into()),
                         track_id: Some("t1".into()),
+                        source: Some("srv".into()),
                         loved: false,
                         rating: 0,
+                        stashed: false,
                     }),
                     is_playing: true,
                     position: PositionStamp {
@@ -541,7 +586,15 @@ mod tests {
         );
         push(
             "event.batterySaverChanged",
-            json!(Event::BatterySaverChanged { enabled: true }),
+            json!(Event::BatterySaverChanged {
+                saver: hocket_core::saver::resolve(
+                    SaverLevel::Off,
+                    SaverLevel::Medium,
+                    true,
+                    true,
+                    &[],
+                ),
+            }),
         );
         push(
             "event.libraryChanged",
@@ -576,7 +629,8 @@ mod tests {
             json!(Event::Error {
                 kind: ErrorKind::Auth,
                 message: "bad password".into(),
-                detail: None
+                detail: None,
+                account_id: Some("srv".into()),
             }),
         );
         push(
@@ -589,12 +643,10 @@ mod tests {
                     revision: 7,
                     updated_at: 1_700_000_000_000.0,
                     context: None,
-                    mode: QueueMode::Apple,
-                    cursor: 0,
-                    current: None,
                     history: vec![],
-                    insertions: vec![],
-                    shuffle: None,
+                    current: None,
+                    upcoming: vec![],
+                    shuffle: false,
                     repeat: RepeatMode::Off,
                     autoplay: false,
                     transport: TransportState::default(),
@@ -666,10 +718,10 @@ mod tests {
         assert_eq!(json!(Command::Play), json!({"type": "play"}));
         assert_eq!(
             json!(Command::PlayNext {
-                server_id: "s".into(),
-                track_ids: vec![]
+                tracks: vec![],
+                keys: vec![]
             }),
-            json!({"type": "playNext", "data": {"server_id": "s", "track_ids": []}})
+            json!({"type": "playNext", "data": {"tracks": [], "keys": []}})
         );
         assert_eq!(
             json!(QueryResult::Count(1)),

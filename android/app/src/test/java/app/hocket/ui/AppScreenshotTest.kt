@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
@@ -104,7 +106,7 @@ class AppScreenshotTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         val duet = lib.tracks.first { (it.artists?.size ?: 0) == 2 }
-        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(duet.id), 0, "Duet"))
+        core.client.dispatch(Commands.playTracks((listOf(duet.id)).map { TrackRef(lib.serverId, it) }, 0, "Duet"))
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == duet.id }
         awaitTag("miniPlayer")
         compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
@@ -131,7 +133,7 @@ class AppScreenshotTest {
         compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
-        core.client.dispatch(Commands.playTracks(lib.serverId, listOf(lib.tracks[0].id), 0, "Long"))
+        core.client.dispatch(Commands.playTracks((listOf(lib.tracks[0].id)).map { TrackRef(lib.serverId, it) }, 0, "Long"))
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.title == LONG_TITLE }
         awaitTag("miniPlayer")
         compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)

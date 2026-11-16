@@ -8,6 +8,8 @@
 // The fullscreen player's scrim is sized from the artwork's brightest pixel so
 // white text over the fluid background always reaches 4.5:1.
 
+import { DEFAULT_ACCENT } from "@shared/settings-keys";
+
 export interface Rgb {
   r: number;
   g: number;
@@ -104,8 +106,8 @@ export type ThemeName = "light" | "dark";
 
 /** The theme surfaces and text colours; mirrored from global.css (contrast.test.ts checks they match). */
 export const THEME_COLOURS: Record<ThemeName, { bg: string; elev: string; sunken: string; fg: string; muted: string; faint: string; softPct: number; selectionPct: number }> = {
-  light: { bg: "#f4f4f6", elev: "#ffffff", sunken: "#ebebef", fg: "#1b1b1f", muted: "#51515a", faint: "#5b5b64", softPct: 0.18, selectionPct: 0.22 },
-  dark: { bg: "#121214", elev: "#1c1c20", sunken: "#0d0d0f", fg: "#ececf1", muted: "#acacb5", faint: "#9f9fa8", softPct: 0.18, selectionPct: 0.3 },
+  light: { bg: "#eceaf4", elev: "#ffffff", sunken: "#e4e1ee", fg: "#1b1730", muted: "#4e4867", faint: "#57516f", softPct: 0.18, selectionPct: 0.22 },
+  dark: { bg: "#1b1730", elev: "#241f3d", sunken: "#16132a", fg: "#ece9ff", muted: "#b5aed8", faint: "#aaa3cf", softPct: 0.18, selectionPct: 0.3 },
 };
 
 export interface AccentTokens {
@@ -134,7 +136,7 @@ export function themeSurfaces(theme: ThemeName, tint?: Rgb): Rgb[] {
 
 export function accentTokens(raw: string, theme: ThemeName): AccentTokens {
   const c = THEME_COLOURS[theme];
-  const accent = parseColor(raw) ?? (parseColor("#6f5cff") as Rgb);
+  const accent = parseColor(raw) ?? (parseColor(DEFAULT_ACCENT) as Rgb);
   const fg = parseColor(c.fg) as Rgb;
   const faint = parseColor(c.faint) as Rgb;
   const bg = parseColor(c.bg) as Rgb;
@@ -185,4 +187,18 @@ export function brightestPixel(data: Uint8ClampedArray | Uint8Array): Rgb {
     }
   }
   return best;
+}
+
+/**
+ * A detail page's header colour from its artwork's accent: dark enough that white text (and white
+ * at 80%) reads at 4.5:1 on it, and white on the eyebrow chip (16% white over the wash), so the
+ * title, its lines and the chip always hold.
+ */
+export function heroWash(raw: string): string {
+  const c = parseColor(raw) ?? BLACK;
+  const holds = (wash: Rgb) => contrast(composite(WHITE, 0.8, wash), wash) >= 4.5 && contrast(WHITE, composite(WHITE, 0.16, wash)) >= 4.5;
+  // Rounded at each step: the hex written out is what has to pass.
+  let wash = roundRgb(ensureContrast(c, [WHITE], 4.5, BLACK));
+  for (let i = 0; i < 60 && !holds(wash); i++) wash = roundRgb(mix(wash, BLACK, 0.04));
+  return toHex(wash);
 }

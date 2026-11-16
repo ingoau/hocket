@@ -4,7 +4,7 @@
 // the registry's contextMenu descriptors), so Play next, Play later, Add to playlist, Love and the
 // rest are the same actions run the same way; only the shape differs (a flat list with a shortcut
 // on each row). The component (components/CommandPalette) fetches, draws and runs.
-import type { ActionDescriptor, ActionTarget } from "@core/api";
+import type { ActionDescriptor, ActionTarget, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { rank, type Rankable, type Ranked } from "../store/palette-rank";
 import { parseChord, chordsEqual, type Chord } from "../store/shortcuts";
@@ -18,9 +18,13 @@ export interface PaletteEntry extends Rankable {
   icon?: string;
   /** A command's chord, from the keymap. */
   shortcut?: string;
+  /** A song's reference on its account: what its actions run on. */
+  ref?: TrackRef;
+  /** A lyric hit: the line, the matched phrase in it, and where it is sung (synced lyrics). */
+  lyric?: { line: string; start: number; end: number; startMs?: number };
 }
 
-export type GroupId = "suggestions" | "track" | "album" | "artist" | "playlist" | "action";
+export type GroupId = "suggestions" | "track" | "lyrics" | "album" | "artist" | "playlist" | "action";
 
 export interface PaletteGroup {
   id: GroupId;
@@ -30,6 +34,8 @@ export interface PaletteGroup {
 export interface PaletteSources {
   recents: readonly PaletteEntry[];
   tracks: readonly PaletteEntry[];
+  /** Lyric hits, already matched by the core (which ignores case, punctuation and diacritics). */
+  lyrics?: readonly PaletteEntry[];
   albums: readonly PaletteEntry[];
   artists: readonly PaletteEntry[];
   playlists: readonly PaletteEntry[];
@@ -37,7 +43,7 @@ export interface PaletteSources {
 }
 
 /** How many rows each group shows while searching. */
-export const GROUP_LIMITS: Record<Exclude<GroupId, "suggestions">, number> = { track: 6, album: 4, artist: 4, playlist: 4, action: 6 };
+export const GROUP_LIMITS: Record<Exclude<GroupId, "suggestions">, number> = { track: 6, lyrics: 4, album: 4, artist: 4, playlist: 4, action: 6 };
 export const MAX_RECENTS = 6;
 
 /**
@@ -57,7 +63,19 @@ export function paletteGroups(query: string, src: PaletteSources): PaletteGroup[
     add("action", src.commands.filter((c) => !shown.has(c.id)).map((c) => ({ item: c, score: 1, matches: [] })));
     return groups;
   }
-  add("track", rank(q, [...src.tracks], GROUP_LIMITS.track));
+  const songs = rank(q, [...src.tracks], GROUP_LIMITS.track);
+  add("track", songs);
+  // Not ranked here (the palette's ranker can't see the match the core found); a song already
+  // listed under Songs isn't listed again.
+  const listed = new Set(songs.map((r) => rawId(r.item)));
+  const lyrics: Ranked<PaletteEntry>[] = [];
+  for (const hit of src.lyrics ?? []) {
+    const id = rawId(hit);
+    if (listed.has(id) || lyrics.length >= GROUP_LIMITS.lyrics) continue;
+    listed.add(id);
+    lyrics.push({ item: hit, score: 0, matches: [] });
+  }
+  add("lyrics", lyrics);
   add("album", rank(q, [...src.albums], GROUP_LIMITS.album));
   add("artist", rank(q, [...src.artists], GROUP_LIMITS.artist));
   add("playlist", rank(q, [...src.playlists], GROUP_LIMITS.playlist));
@@ -74,6 +92,7 @@ export function groupLabel(id: GroupId): string {
   switch (id) {
     case "suggestions": return t("palette.suggestions");
     case "track": return t("palette.songs");
+    case "lyrics": return t("palette.lyrics");
     case "album": return t("palette.albums");
     case "artist": return t("palette.artists");
     case "playlist": return t("palette.playlists");
@@ -94,8 +113,11 @@ export function typeLabel(kind: EntryKind): string {
 
 /** A pick goes to the front of the recents, once. */
 export function pushRecent(recents: readonly PaletteEntry[], entry: PaletteEntry, max = MAX_RECENTS): PaletteEntry[] {
-  const keep: PaletteEntry = { id: entry.id, label: entry.label, kind: entry.kind, sub: entry.sub, coverArt: entry.coverArt, icon: entry.icon };
-  return [keep, ...recents.filter((r) => r.id !== entry.id)].slice(0, max);
+  // A lyric hit is remembered as its song.
+  const id = entry.lyric ? entryId(entry.kind, rawId(entry)) : entry.id;
+  const sub = entry.lyric ? undefined : entry.sub;
+  const keep: PaletteEntry = { id, label: entry.label, kind: entry.kind, sub, coverArt: entry.coverArt, icon: entry.icon, ref: entry.ref };
+  return [keep, ...recents.filter((r) => r.id !== id)].slice(0, max);
 }
 
 /** Recents read back from storage: anything malformed is dropped. */
@@ -104,10 +126,12 @@ export function sanitizeRecents(raw: unknown): PaletteEntry[] {
   const kinds = new Set<EntryKind>(["track", "album", "artist", "playlist", "action"]);
   return raw
     .filter((r): r is PaletteEntry => !!r && typeof r === "object" && typeof r.id === "string" && typeof r.label === "string" && kinds.has(r.kind))
+    // A song needs its reference to be played or acted on.
+    .filter((r) => r.kind !== "track" || (!!r.ref && typeof r.ref.id === "string" && typeof r.ref.source === "string"))
     .slice(0, MAX_RECENTS);
 }
 
-/** Entry ids are `<prefix>:<library id>`; commands are `act:<action id>`. */
+/** Entry ids are `<prefix>:<library id>` (`ly:` for a lyric hit); commands are `act:<action id>`. */
 const PREFIX: Record<EntryKind, string> = { track: "t", album: "al", artist: "ar", playlist: "pl", action: "act" };
 export function entryId(kind: EntryKind, id: string): string {
   return `${PREFIX[kind]}:${id}`;
@@ -120,7 +144,7 @@ export function rawId(entry: Pick<PaletteEntry, "id">): string {
 export function targetOf(entry: PaletteEntry): ActionTarget | undefined {
   const ids = [rawId(entry)];
   switch (entry.kind) {
-    case "track": return { type: "tracks", data: { ids } };
+    case "track": return entry.ref ? { type: "tracks", data: { tracks: [entry.ref] } } : undefined;
     case "album": return { type: "albums", data: { ids } };
     case "artist": return { type: "artists", data: { ids } };
     case "playlist": return { type: "playlists", data: { ids } };
@@ -156,6 +180,8 @@ export interface PaletteAction {
 export const PALETTE_SHORTCUTS: Record<string, string> = {
   playShuffled: "Alt+Enter",
   playNext: "Mod+Enter",
+  // The core's Add to queue (the Queue section setting) takes the chord ahead of Play later.
+  addToQueue: "Mod+Shift+Enter",
   playLater: "Mod+Shift+Enter",
   addToPlaylist: "Mod+P",
   love: "Mod+L",
@@ -180,7 +206,7 @@ const LABELS: Record<string, Parameters<typeof t>[0]> = {
 
 const OPEN = { album: "palette.open.album", artist: "palette.open.artist", playlist: "palette.open.playlist" } as const;
 
-const ICONS: Record<string, string> = { play: "play", playShuffled: "shuffle", playNext: "playNext", playLater: "playLater", addToPlaylist: "playlistAdd", love: "heart", unlove: "heartOff", download: "download", unpin: "downloadOff", "ui.info": "info", goToAlbum: "album", goToArtist: "artist" };
+const ICONS: Record<string, string> = { addToQueue: "queue", play: "play", playShuffled: "shuffle", playNext: "playNext", playLater: "playLater", addToPlaylist: "playlistAdd", love: "heart", unlove: "heartOff", download: "download", unpin: "downloadOff", "ui.info": "info", goToAlbum: "album", goToArtist: "artist" };
 
 /** Registry descriptors the palette leaves out, as the context menu does (the inapplicable library pin). */
 export function menuActions(registry: readonly ActionDescriptor[]): ActionDescriptor[] {
@@ -191,7 +217,8 @@ export function menuActions(registry: readonly ActionDescriptor[]): ActionDescri
  * The actions menu for a row, in groups (drawn with separators between). For a library row, from
  * the context menu's rows: Open (albums, artists, playlists) and the play strip first, then Add to
  * playlist and the toggles, then the rest in the menu's order, the destructive last. The rating row
- * is left out (its digits are typing here). A command has one action, Run.
+ * is left out (its digits are typing here), and so are the menu's nested Share and Snooze menus and
+ * Open in Genius. A command has one action, Run.
  */
 export function paletteActions(entry: PaletteEntry, rows: readonly MenuRow[], registry: readonly ActionDescriptor[]): PaletteAction[][] {
   if (entry.kind === "action") return [[{ key: "run", label: t("palette.runCommand"), icon: entry.icon, shortcut: "Enter", run: { type: "command", id: rawId(entry) } }]];
@@ -211,16 +238,21 @@ export function paletteActions(entry: PaletteEntry, rows: readonly MenuRow[], re
   };
   for (const r of rows) {
     switch (r.kind) {
-      case "strip":
-        for (const c of r.cells) push(c.id, LABELS[c.id] ? t(LABELS[c.id] as Parameters<typeof t>[0]) : c.label, c.enabled);
+      case "strip": {
+        // Play later reads "Add to queue" here, unless the core offers its own Add to queue.
+        const ownQueue = r.cells.some((c) => c.id === "addToQueue");
+        for (const c of r.cells) push(c.id, LABELS[c.id] && !(c.id === "playLater" && ownQueue) ? t(LABELS[c.id] as Parameters<typeof t>[0]) : c.label, c.enabled);
         cut();
         break;
+      }
       case "check":
         // A checkbox in the menu; here the row names what it does: the registry's own label for the half that runs.
         push(r.runId, byId.get(r.runId)?.label || r.label, r.enabled, r.runId === "unpin");
         break;
       case "submenu":
-        push(r.id, t("palette.addToPlaylist"), r.enabled);
+        // Add to playlist opens the playlist picker; Share and Snooze are the context menu's own
+        // nested menus, so they stay there.
+        if (r.id === "addToPlaylist") push(r.id, t("palette.addToPlaylist"), r.enabled);
         break;
       case "action":
         push(r.action.id, LABELS[r.action.id] ? t(LABELS[r.action.id] as Parameters<typeof t>[0]) : r.label, r.action.enabled, r.destructive);

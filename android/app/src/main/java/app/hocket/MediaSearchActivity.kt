@@ -48,9 +48,9 @@ class MediaSearchActivity : ComponentActivity() {
         val extras = intent.extras
         lifecycleScope.launch {
             val client = withTimeoutOrNull(READY_MS) {
-                app.client.filterNotNull().first().also { c -> c.servers.first { it.isNotEmpty() } }
+                app.client.filterNotNull().first().also { c -> c.accounts.first { it.isNotEmpty() } }
             }
-            val server = client?.servers?.value?.firstOrNull()?.id
+            val server = client?.accounts?.value?.firstOrNull()?.id
             if (client == null || server == null) { openSearch(query); return@launch }
             val browser = LibraryBrowser(this@MediaSearchActivity, { client.core }, { server }, app.scope)
             val item = browser.resolveSearch(query, extras)

@@ -16,6 +16,12 @@ use crate::util::Clock;
 
 /// How many samples the sliding window keeps.
 pub const SAMPLE_WINDOW: usize = 8;
+/// Samples older than this (by local receive time, against the newest) leave
+/// the window too: eight pings at the normal 5 s cadence. At a slower
+/// keepalive cadence the window is then just the latest sample or two, so a
+/// low-round-trip sample from minutes ago (clock drift since then included)
+/// can never win over a fresh burst.
+pub const SAMPLE_MAX_AGE_MS: f64 = 40_000.0;
 /// Past this gap between a stamp and now, don't extrapolate: snap to the
 /// start of the track. "Past about an hour" in the design notes.
 pub const MAX_EXTRAPOLATION_GAP_MS: f64 = 3_600_000.0;
@@ -54,11 +60,14 @@ impl OffsetEstimator {
         Self::default()
     }
 
-    /// Record a sample; keeps the last [`SAMPLE_WINDOW`].
+    /// Record a sample; keeps the last [`SAMPLE_WINDOW`], none older than
+    /// [`SAMPLE_MAX_AGE_MS`] before this one.
     pub fn record(&mut self, sample: ClockSample) {
         if sample.t3 < sample.t0 || !sample.offset().is_finite() {
             return;
         }
+        self.samples
+            .retain(|s| sample.t3 - s.t3 <= SAMPLE_MAX_AGE_MS);
         self.samples.push_back(sample);
         while self.samples.len() > SAMPLE_WINDOW {
             self.samples.pop_front();
@@ -253,6 +262,21 @@ mod tests {
         }
         assert_eq!(e.sample_count(), SAMPLE_WINDOW);
         assert_eq!(e.offset_ms(), 75.0);
+    }
+
+    #[test]
+    fn old_samples_age_out() {
+        let mut e = OffsetEstimator::new();
+        e.record(sample(0.0, 10.0, 10.0, 2.0)); // rtt 2, offset 9
+                                                // 45 s later (a slow cadence), a worse trip but a fresh one.
+        e.record(sample(45_000.0, 45_100.0, 45_100.0, 45_050.0)); // rtt 50, offset 75
+        assert_eq!(e.sample_count(), 1);
+        assert_eq!(e.offset_ms(), 75.0);
+        // Inside the age limit the best trip still wins.
+        e.record(sample(50_000.0, 50_011.0, 50_011.0, 50_002.0)); // rtt 2, offset 10
+        e.record(sample(80_000.0, 80_100.0, 80_100.0, 80_050.0));
+        assert_eq!(e.sample_count(), 3);
+        assert_eq!(e.offset_ms(), 10.0);
     }
 
     #[test]

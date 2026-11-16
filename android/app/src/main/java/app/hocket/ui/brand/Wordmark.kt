@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.background
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -34,6 +35,14 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import app.hocket.R
 
 /**
@@ -135,29 +144,64 @@ fun brandTitleStyle(): TextStyle = LocalTextStyle.current.merge(
 )
 
 /**
- * The app's name as a page header (Home): the bare Crescendo wave, then "hocket" in the word mark,
- * at the size of the surrounding title style (the wave as tall as the type's x-height and a little
- * more, the gap 0.3 of the type size). On dark grounds the wave keeps its two voices; on light ones,
- * where the pale voice would vanish, it's one colour, the word mark's ink. It reads as one heading.
+ * Where a [HeaderMark] splits between two grounds: [x] in window pixels, the mark left of it in
+ * [left]'s ink and right of it in [right]'s (Spotlight's slides passing behind the Home bar).
+ */
+class MarkWipe(val x: Float, val left: Color, val right: Color)
+
+/**
+ * The app's mark as Home's header: the bare Crescendo wave, [height] tall, named "hocket" for
+ * accessibility. On dark grounds the wave keeps its two voices; on light ones, where the pale voice
+ * would vanish, it's one colour, the word mark's ink. With a [wipe] it's drawn in two inks split at
+ * the line it gives, read at draw time, so it can follow a swipe frame by frame without recomposing.
  */
 @Composable
-fun HeaderLockup(modifier: Modifier = Modifier) {
-    val style = brandTitleStyle()
+fun HeaderMark(modifier: Modifier = Modifier, height: Dp = 22.dp, ink: Color = brandInk(), wipe: (() -> MarkWipe?)? = null) {
     val name = stringResource(R.string.app_name)
-    val type = with(LocalDensity.current) { style.fontSize.toDp() }
-    val ink = brandInk()
-    val dark = ink == Brand.inkOnDark
-    Row(modifier.semantics(mergeDescendants = true) { contentDescription = name; heading() }, verticalAlignment = Alignment.CenterVertically) {
-        VoicedMark(height = type * 0.8f, voices = if (dark) listOf(Brand.voice1, Brand.voice2) else listOf(ink, ink))
-        Spacer(Modifier.width(type * 0.3f))
-        Text(
-            "hocket",
-            color = ink,
-            maxLines = 1,
-            style = style.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)),
-            modifier = Modifier.clearAndSetSemantics {},
-        )
+    val paths = remember { Brand.notes.map { PathParser().parsePathString(it).toPath() } }
+    var originX by remember { mutableFloatStateOf(0f) }
+    Canvas(
+        modifier.semantics { contentDescription = name; heading() }
+            .onGloballyPositioned { originX = it.positionInWindow().x }
+            .size(width = height * (Brand.WAVE_WIDTH / Brand.WAVE_HEIGHT), height = height),
+    ) {
+        val split = wipe?.invoke()
+        val at = split?.let { it.x - originX }
+        fun DrawScope.mark(c: Color) {
+            val voices = voicesFor(c)
+            val k = size.height / Brand.WAVE_HEIGHT
+            scale(k, k, pivot = Offset.Zero) {
+                translate(-Brand.WAVE_LEFT, -Brand.WAVE_TOP) {
+                    paths.forEachIndexed { i, p -> drawPath(p, voices[i % 2], style = Stroke(width = Brand.STROKE, cap = StrokeCap.Round)) }
+                }
+            }
+        }
+        when {
+            split == null || at == null -> mark(ink)
+            at >= size.width || split.left == split.right -> mark(split.left)
+            at <= 0f -> mark(split.right)
+            else -> {
+                clipRect(right = at) { mark(split.left) }
+                clipRect(left = at) { mark(split.right) }
+            }
+        }
     }
+}
+
+/** The wave's two voices on a ground whose ink is [ink]: the brand's pair on dark, the ink alone on light. */
+private fun voicesFor(ink: Color): List<Color> = if (ink == Brand.inkOnDark) listOf(Brand.voice1, Brand.voice2) else listOf(ink, ink)
+
+/**
+ * The app's tile (docs/brand.md): the two-voiced wave on the dark ink square, [size] wide, its
+ * corners the launcher's. Decorative; the screen names the app beside it.
+ */
+@Composable
+fun AppTile(size: Dp, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.Box(
+        modifier.size(size).clearAndSetSemantics { }
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color(0xFF29234A), Brand.inkOnLight)), androidx.compose.foundation.shape.RoundedCornerShape(size * 0.24f)),
+        contentAlignment = Alignment.Center,
+    ) { VoicedMark(height = size * (Brand.WAVE_HEIGHT / 100f), voices = listOf(Brand.voice1, Brand.voice2)) }
 }
 
 /** The bare wave [height] tall, notes 1 and 3 in the first of [voices], 2 and 4 in the second. */

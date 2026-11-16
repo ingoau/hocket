@@ -6,13 +6,16 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaLibraryService
 import app.hocket.core.CoreHandle
 import app.hocket.core.SettingKeys
+import app.hocket.core.Commands
+import app.hocket.core.api.BackendCommand
 import app.hocket.core.api.Command
 import app.hocket.core.api.Event
+import app.hocket.core.api.Renderer
 import app.hocket.playback.pebble.PebbleBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -59,12 +62,17 @@ import kotlinx.coroutines.launch
  */
 class PlaybackService : MediaLibraryService() {
     companion object {
-        private const val TAG = "PlaybackService"
         const val IDLE_TIMEOUT_MS = 5 * 60_000L
+        /** The service starting itself so a resumption outlives the binding that asked for it. */
+        const val ACTION_RESUME = "app.hocket.playback.RESUME"
         const val ACTION_BIND_CORE = "app.hocket.playback.BIND_CORE"
         const val EXTRA_BIND_TOKEN = "app.hocket.playback.BIND_TOKEN"
         /** Library changes arrive in bursts (a sync); browsers hear about them once they settle. */
         const val LIBRARY_NOTIFY_DEBOUNCE_MS = 2_000L
+        /** How long a Cast session's end waits for the next session (switching receivers). */
+        const val CAST_END_GRACE_MS = 3_000L
+        /** How long it waits while the provider reconnects to the same receiver (its receiver app starts anew). */
+        const val CAST_RECONNECT_GRACE_MS = 20_000L
 
         /**
          * True for this process's own core bind. `onBind` runs outside a binder transaction, so
@@ -99,15 +107,22 @@ class PlaybackService : MediaLibraryService() {
     private var serverId: String? = null
     private var libraryNotify: Job? = null
     private val foregroundHold = ForegroundHold(this, scope) { isPlaybackOngoing }
+    private val audioRoutes = AudioRouteLog(this)
+    private var cast: CastController? = null
+    /** The Cast receiver playback goes to, while a session is up. */
+    private var casting: Renderer? = null
+    /** A session's end, held back briefly: switching receivers ends one session and starts the next. */
+    private var castEnd: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
         core = CoreHost.acquire(this)
+        PlaybackLog.i("service created")
         backend = ExoBackend(this, scope, ::dispatch)
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         val browser = LibraryBrowser(this, { core }, { serverId }, scope)
         val player = CoreSessionPlayer(Looper.getMainLooper(), ::dispatch, media = browser, artwork = { t -> t.coverArt?.let { ArtworkProvider.uri(this, it) } })
-        bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope, ExternalControl(this))
+        bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope, ExternalControl(this), ::holdForResumption)
         addSession(bridge.session)
         network = NetworkMonitor(this, ::dispatch, onConnectivity = { online -> main.post { backend.onConnectivityChanged(online) } })
         battery = BatterySaverMonitor(this, ::dispatch)
@@ -123,9 +138,11 @@ class PlaybackService : MediaLibraryService() {
         network.start()
         battery.start()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            routeDiscovery = runCatching { ConnectRouteDiscovery(this).also { it.start() } }
-                .onFailure { Log.w(TAG, "route discovery unavailable: ${it.message}") }.getOrNull()
+            routeDiscovery = runCatching { ConnectRouteDiscovery(this, CastDevices.provider?.routeFeatures(this).orEmpty()).also { it.start() } }
+                .onFailure { PlaybackLog.w("route discovery unavailable: ${it.message}") }.getOrNull()
         }
+        audioRoutes.start()
+        startCast()
         core.dispatch(Command.RequestSnapshot)
         scheduleIdleStop()
     }
@@ -135,7 +152,7 @@ class PlaybackService : MediaLibraryService() {
     private fun onEvent(event: Event) {
         pebble.onEvent(event)
         when (event) {
-            is Event.Backend -> if (core.kind == app.hocket.core.CoreKind.Native) backend.handle(event.data.command) else Unit
+            is Event.Backend -> if (core.kind == app.hocket.core.CoreKind.Native) onBackendCommand(event.data.command) else Unit
             is Event.MediaSession -> {
                 applySession(event.data.state)
                 if (event.data.state.isPlaying) idleJob?.cancel() else scheduleIdleStop()
@@ -150,29 +167,100 @@ class PlaybackService : MediaLibraryService() {
                 val now = ConnectRoutes.state.value
                 if (now.remote != was.remote || now.remoteVolume != was.remoteVolume) applySession(bridge.player.state)
             }
-            is Event.QueueChanged -> bridge.applyQueue(event.data.queue)
-            is Event.ServersChanged -> serverId = event.data.servers.firstOrNull()?.id
+            is Event.QueueChanged -> {
+                bridge.applyQueue(event.data.queue)
+                backend.onQueueChanged(event.data.queue)
+            }
+            is Event.AccountsChanged -> serverId = event.data.accounts.firstOrNull()?.id
             is Event.LibraryChanged -> scheduleLibraryNotify()
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.Started -> applySnapshot(event.data.snapshot)
             is Event.Snapshot -> applySnapshot(event.data.snapshot)
+            is Event.AudioSettingsChanged -> backend.onAudioSettings(event.data.settings)
             is Event.SettingChanged -> when (event.data.setting.key) {
-                SettingKeys.BATTERY_AUTO_ENGAGE -> battery.automatic = event.data.setting.value.trim() != "false"
                 SettingKeys.MEDIA_EXTERNAL_CONTROL -> bridge.setExternalControl(event.data.setting.value.trim() == "true")
             }
             else -> Unit
         }
     }
 
+    /**
+     * The core's backend command, to the player playing: the Cast renderer while a session is up,
+     * ExoPlayer otherwise. Previews always play on the phone (they are a peek, not the play).
+     */
+    private fun onBackendCommand(command: BackendCommand) {
+        val renderer = cast?.backend
+        val preview = command is BackendCommand.PreviewLoad || command is BackendCommand.PreviewPlay ||
+            command is BackendCommand.PreviewPause || command is BackendCommand.PreviewSeek || command is BackendCommand.PreviewStop
+        if (casting != null && renderer != null && !preview) renderer.handle(command) else backend.handle(command)
+    }
+
+    private fun startCast() {
+        val provider = CastDevices.provider ?: return
+        val controller = runCatching {
+            provider.create(this, scope, ::dispatch, object : CastListener {
+                override fun onSessionStarted(renderer: Renderer) = main.post { castTo(renderer) }.let { }
+                override fun onSessionEnded(error: String?, stoppedHere: Boolean, reconnecting: Boolean) =
+                    main.post { castEnded(error, stoppedHere, reconnecting) }.let { }
+            })
+        }.onFailure { PlaybackLog.w("cast unavailable: ${it.message}") }.getOrNull()
+        cast = controller
+        CastDevices.attach(controller)
+    }
+
+    /**
+     * The session ended. Moving straight to another receiver ends this one first: an end this phone
+     * didn't ask for waits [CAST_END_GRACE_MS], and a session starting meanwhile takes over without
+     * playback coming here (which would leave it paused). A reconnect to the same receiver waits
+     * [CAST_RECONNECT_GRACE_MS].
+     */
+    private fun castEnded(error: String?, stoppedHere: Boolean, reconnecting: Boolean) {
+        CastDevices.dropOnStarted()
+        if (error != null) android.widget.Toast.makeText(this, error, android.widget.Toast.LENGTH_LONG).show()
+        if (casting == null) return
+        if (stoppedHere) return castTo(null)
+        castEnd?.let(main::removeCallbacks)
+        castEnd = Runnable { castEnd = null; castTo(null) }.also { main.postDelayed(it, if (reconnecting) CAST_RECONNECT_GRACE_MS else CAST_END_GRACE_MS) }
+    }
+
+    /**
+     * Playback moves to the Cast receiver [to], or back here (null). The phone's player stops and
+     * goes quiet first, so nothing it says about what it played reaches the core; the core then
+     * reloads the current item at its position on the player taking over (`Command.SetRenderer`):
+     * on the receiver it carries on, back here it waits, paused.
+     */
+    private fun castTo(to: Renderer?) {
+        val renderer = cast?.backend ?: return
+        castEnd?.let(main::removeCallbacks)
+        castEnd = null
+        if (to == null && casting == null) return
+        PlaybackLog.i(if (to != null) "casting to ${to.name}" else "casting ended")
+        val was = casting
+        casting = to
+        if (to != null && was == null) {
+            backend.active = false
+            backend.handle(BackendCommand.Stop)
+            renderer.setActive(true)
+        } else if (to == null) {
+            renderer.setActive(false)
+            backend.active = true
+        }
+        dispatch(Commands.setRenderer(to))
+        applySession(bridge.player.state)
+        // Picked while another device played: playback comes here now, to the receiver.
+        if (to != null) CastDevices.takeOnStarted()?.invoke()
+    }
+
     /** `Started` (once per core) and `Snapshot` (every RequestSnapshot) carry the same state. */
     private fun applySnapshot(snapshot: app.hocket.core.api.Snapshot) {
         clockOffsetMs = snapshot.connection.clockOffsetMs
-        serverId = snapshot.servers.firstOrNull()?.id
+        serverId = snapshot.accounts.firstOrNull()?.id
         bridge.applyQueue(snapshot.queue)
+        backend.onQueueChanged(snapshot.queue)
+        backend.onAudioSettings(snapshot.audio)
         ConnectRoutes.onDevices(snapshot.devices)
         ConnectRoutes.onTransport(snapshot.transport)
         applySession(snapshot.mediaSession)
-        battery.automatic = snapshot.settings.firstOrNull { it.key == SettingKeys.BATTERY_AUTO_ENGAGE }?.value?.trim() != "false"
         bridge.setExternalControl(snapshot.settings.firstOrNull { it.key == SettingKeys.MEDIA_EXTERNAL_CONTROL }?.value?.trim() == "true")
     }
 
@@ -181,7 +269,9 @@ class PlaybackService : MediaLibraryService() {
         ConnectRoutes.onMediaSession(state)
         val routes = ConnectRoutes.state.value
         val remote = routes.remote
-        bridge.apply(state, clockOffsetMs, remote = remote != null, remoteVolume = routes.remoteVolume != null)
+        // Casting plays elsewhere too: the session's volume (keys, slider) is the receiver's.
+        val casting = casting != null && remote == null
+        bridge.apply(state, clockOffsetMs, remote = remote != null || casting, remoteVolume = routes.remoteVolume != null || casting)
         NowPlayingWidget.update(this, WidgetState.of(state, remote?.name))
     }
 
@@ -193,12 +283,14 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    private fun isBusy(): Boolean = backend.isBusy() || (casting != null && cast?.backend?.isBusy() == true)
+
     private fun scheduleIdleStop() {
         idleJob?.cancel()
         idleJob = scope.launch {
             delay(IDLE_TIMEOUT_MS)
-            if (!bridge.player.state.isPlaying && boundClients == 0 && !backend.isBusy()) {
-                Log.i(TAG, "Idle for ${IDLE_TIMEOUT_MS / 1000}s with no clients; stopping")
+            if (!bridge.player.state.isPlaying && boundClients == 0 && !isBusy()) {
+                PlaybackLog.i("idle for ${IDLE_TIMEOUT_MS / 1000}s with no clients; stopping")
                 pauseAllPlayersAndStopSelf()
             } else if (boundClients == 0) {
                 // Still playing, buffering or recovering: look again later.
@@ -208,9 +300,36 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        PlaybackLog.i("start command #$startId: ${PlaybackLog.intent(intent)}")
         val result = super.onStartCommand(intent, flags, startId)
-        if (intent?.action == Intent.ACTION_MEDIA_BUTTON) foregroundHold.hold()
+        if (intent?.action == Intent.ACTION_MEDIA_BUTTON || intent?.action == ACTION_RESUME) {
+            foregroundHold.hold()
+            // Started now, so unbinding no longer ends the service: if nothing comes of the
+            // request, the idle stop does.
+            if (boundClients == 0) scheduleIdleStop()
+        }
         return result
+    }
+
+    /**
+     * A controller asked to resume while nothing was loaded. A service that is only bound (System
+     * UI's resumption card, a Media3 controller) is destroyed the moment that controller unbinds,
+     * which cancels the resumption before the core has answered. Starting it, in the foreground as
+     * Media3 would once playback begins, keeps it until the play has happened (or the idle stop).
+     */
+    private fun holdForResumption() {
+        if (isPlaybackOngoing) return
+        // A stop between this start and its onStartCommand would break the foreground promise;
+        // onStartCommand schedules the idle stop again.
+        idleJob?.cancel()
+        val intent = Intent(this, PlaybackService::class.java).setAction(ACTION_RESUME)
+        try {
+            ContextCompat.startForegroundService(this, intent)
+        } catch (e: IllegalStateException) {
+            // Not allowed to start in the foreground from here: a plain start still keeps it alive.
+            PlaybackLog.w("resumption: could not start in the foreground: ${e.message}")
+            try { startService(intent) } catch (e: IllegalStateException) { PlaybackLog.w("resumption: could not start the service: ${e.message}") }
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = bridge.session
@@ -218,6 +337,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onBind(intent: Intent?): IBinder? {
         if (isLocalBind(intent)) {
             boundClients++
+            PlaybackLog.d("app bound ($boundClients bound)")
             idleJob?.cancel()
             return LocalBinder()
         }
@@ -228,6 +348,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onUnbind(intent: Intent?): Boolean {
         if (isLocalBind(intent)) {
             boundClients = (boundClients - 1).coerceAtLeast(0)
+            PlaybackLog.d("app unbound ($boundClients bound)")
             if (!bridge.player.state.isPlaying) scheduleIdleStop()
             return true
         }
@@ -235,22 +356,35 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onRebind(intent: Intent?) {
-        if (isLocalBind(intent)) { boundClients++; idleJob?.cancel() } else super.onRebind(intent)
+        if (isLocalBind(intent)) {
+            boundClients++
+            PlaybackLog.d("app rebound ($boundClients bound)")
+            idleJob?.cancel()
+        } else {
+            super.onRebind(intent)
+        }
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         // The UI unbinds shortly after (ForegroundBinder); with nothing playing the service then goes.
         // A player that is still buffering or recovering from a network error is not "nothing".
-        if (!bridge.player.state.isPlaying && !backend.isBusy()) pauseAllPlayersAndStopSelf()
+        val stop = !bridge.player.state.isPlaying && !isBusy()
+        PlaybackLog.i(if (stop) "task removed with nothing playing; stopping" else "task removed while playing; staying")
+        if (stop) pauseAllPlayersAndStopSelf()
     }
 
     override fun onDestroy() {
+        PlaybackLog.i("service destroyed")
+        audioRoutes.stop()
         // Whatever was showing stays, but nothing plays from here any more.
         NowPlayingWidget.update(this, WidgetState.of(bridge.player.state, null).copy(playing = false))
         network.stop()
         battery.stop()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) (routeDiscovery as? ConnectRouteDiscovery)?.stop()
         ConnectRoutes.clear()
+        castEnd?.let(main::removeCallbacks)
+        CastDevices.attach(null)
+        cast?.release()
         backend.release()
         foregroundHold.release()
         bridge.release()

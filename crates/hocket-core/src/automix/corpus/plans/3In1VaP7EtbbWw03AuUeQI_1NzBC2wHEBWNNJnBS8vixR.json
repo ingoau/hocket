@@ -1,0 +1,15 @@
+{
+  "kind": "fade",
+  "tailStartMs": 227757,
+  "tailSourceMs": 6643,
+  "tailLenMs": 6643,
+  "incomingAtMs": 0,
+  "incomingFromMs": 43,
+  "handoverMs": 3321,
+  "outCurve": "equalPower",
+  "inCurve": "equalPower",
+  "tempo": null,
+  "bassSwap": null,
+  "highCut": null,
+  "incomingGainDb": 0.0
+}

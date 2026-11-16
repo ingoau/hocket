@@ -15,6 +15,9 @@ object PebbleProtocol {
     /** Rows per list page; the watch caches two pages. */
     const val PAGE = 12
 
+    /** `MAX_MENU_ITEMS` in hocket.h: how many menu or action ids one settings blob carries. */
+    const val MAX_MENU_ITEMS = 17
+
     /** Album-art bytes per message (the watch's inbox is 4 KiB). */
     const val ART_CHUNK = 1800
 
@@ -93,6 +96,7 @@ object PebbleProtocol {
         const val PLAY_NEXT = 14
         const val PLAY_LATER = 15
         const val SEEK = 16
+        const val STASH = 17
     }
 
     /** Max volume steps one VOLUME_UP / VOLUME_DOWN applies (the watch caps its merged count too). */
@@ -200,10 +204,10 @@ object PebbleProtocol {
     /** Menu and action ids, in the watch's numbering (`MenuItemId` in hocket.h). */
     val MENU_ITEMS = listOf(
         "nowPlaying", "queue", "library", "love", "rating", "shuffle", "repeat", "goAlbum",
-        "goArtist", "playOn", "playlists", "albums", "artists", "downloads", "search", "lyrics",
+        "goArtist", "playOn", "playlists", "albums", "artists", "downloads", "search", "lyrics", "stash",
     )
-    val DEFAULT_MENU = listOf("nowPlaying", "queue", "library", "love", "rating", "shuffle", "repeat", "goAlbum", "goArtist", "playOn")
-    val DEFAULT_ACTIONS = listOf("rating", "love", "shuffle", "repeat", "goAlbum", "goArtist", "playOn")
+    val DEFAULT_MENU = listOf("nowPlaying", "queue", "library", "love", "stash", "rating", "shuffle", "repeat", "goAlbum", "goArtist", "playOn")
+    val DEFAULT_ACTIONS = listOf("rating", "love", "stash", "shuffle", "repeat", "goAlbum", "goArtist", "playOn")
     val ACTION_ITEMS = DEFAULT_ACTIONS + "lyrics"
     val LIBRARY_SECTIONS = listOf("playlists", "albums", "artists", "recent", "downloads", "search")
 
@@ -241,7 +245,7 @@ object PebbleProtocol {
         for (i in 0 until 5) out.write(GESTURES.indexOf(s.gestures.getOrNull(i)).coerceAtLeast(0))
         out.write(s.menuTimeoutSeconds.coerceIn(0, 255))
         for (list in listOf(s.menu, s.actions)) {
-            val codes = list.map { MENU_ITEMS.indexOf(it) }.filter { it >= 0 }.take(16)
+            val codes = list.map { MENU_ITEMS.indexOf(it) }.filter { it >= 0 }.take(MAX_MENU_ITEMS)
             out.write(codes.size)
             codes.forEach(out::write)
         }

@@ -39,6 +39,13 @@ pub enum LyricsError {
 /// HTTP GET returning the body; `Err(Http{404})` for not found.
 pub trait LyricsHttp: Send + Sync {
     fn get(&self, url: &str) -> BoxFuture<'_, Result<String, LyricsError>>;
+
+    /// POST a JSON body, answering the response body. Only Squigly needs it, so by default it
+    /// fails and the caller falls back.
+    fn post_json(&self, url: &str, body: String) -> BoxFuture<'_, Result<String, LyricsError>> {
+        let _ = (url, body);
+        Box::pin(async { Err(LyricsError::Network("POST not supported".into())) })
+    }
 }
 
 /// An external lyrics source. `Ok(None)` means "not found", which callers
@@ -166,24 +173,34 @@ impl ReqwestLyricsHttp {
 
 impl LyricsHttp for ReqwestLyricsHttp {
     fn get(&self, url: &str) -> BoxFuture<'_, Result<String, LyricsError>> {
-        let url = url.to_string();
-        Box::pin(async move {
-            let resp = self
-                .client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| LyricsError::Network(e.to_string()))?;
-            let status = resp.status().as_u16();
-            let body = resp
-                .text()
-                .await
-                .map_err(|e| LyricsError::Network(e.to_string()))?;
-            if (200..300).contains(&status) {
-                Ok(body)
-            } else {
-                Err(LyricsError::Http { status, body })
-            }
-        })
+        let req = self.client.get(url);
+        Box::pin(send(req))
+    }
+
+    fn post_json(&self, url: &str, body: String) -> BoxFuture<'_, Result<String, LyricsError>> {
+        let req = self
+            .client
+            .post(url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body);
+        Box::pin(send(req))
+    }
+}
+
+/// Send, and answer the body of a 2xx.
+async fn send(req: reqwest::RequestBuilder) -> Result<String, LyricsError> {
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| LyricsError::Network(e.to_string()))?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| LyricsError::Network(e.to_string()))?;
+    if (200..300).contains(&status) {
+        Ok(body)
+    } else {
+        Err(LyricsError::Http { status, body })
     }
 }

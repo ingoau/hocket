@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// Chromecast through the Google Cast SDK (the :cast module), which is proprietary: a FOSS build
+// (-Phocket.foss=true, e.g. for F-Droid) leaves it out and shows no Cast devices (android/README.md, Cast).
+val foss = providers.gradleProperty("hocket.foss").orNull == "true"
+
 android {
     namespace = "app.hocket"
     compileSdk = 37
@@ -14,13 +18,30 @@ android {
         applicationId = "app.hocket"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI's release job passes -PversionCode/-PversionName (the run number), so each push to main
+        // is an upgrade over the last.
+        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 1
+        versionName = providers.gradleProperty("versionName").orNull ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Release signing comes from the environment (CI's release job); without it, release builds
+    // come out unsigned as before.
+    val releaseKeystore = System.getenv("HOCKET_KEYSTORE")?.let(::file)
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("HOCKET_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("HOCKET_KEY_ALIAS")
+                keyPassword = System.getenv("HOCKET_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
+            if (releaseKeystore != null) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -49,6 +70,7 @@ android {
     // The Pebble watchapp, when scripts/build-pebble.sh has staged it (docs/pebble.md, Distribution).
     val pebbleAssets = rootProject.file("../pebble/build/android-assets")
     if (pebbleAssets.isDirectory) sourceSets.getByName("main").assets.directories.add(pebbleAssets.path)
+    sourceSets.getByName("main").java.srcDir(if (foss) "src/foss/java" else "src/gms/java")
     lint {
         abortOnError = false
         checkReleaseBuilds = false
@@ -76,8 +98,15 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     implementation(project(":playback"))
+    if (!foss) implementation(project(":cast"))
+    // Scanning another device's setup code with Google's code scanner (no camera permission). A
+    // FOSS build leaves it out: the system camera opens the code's hocket://setup link instead.
+    if (!foss) implementation(libs.play.services.code.scanner)
+    // Drawing the setup code (pure Java, so FOSS builds keep it).
+    implementation(libs.zxing.core)
 
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -94,7 +123,6 @@ dependencies {
     implementation(libs.compose.runtime)
     implementation(libs.compose.animation)
     implementation(libs.compose.material3)
-    implementation(libs.compose.material3.window.size)
     implementation(libs.coil.compose)
     implementation(libs.reorderable)
     implementation(libs.kotlinx.coroutines.android)

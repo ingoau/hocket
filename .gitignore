@@ -25,3 +25,6 @@ android/core/src/main/java/app/hocket/core/api/Generated.kt
 desktop/src/core/api.ts
 desktop/native/index.js
 desktop/native/index.d.ts
+
+# AutoMix test corpus (tracks fetched from the test server; see docs/automix.md -> Harness)
+automix-corpus/

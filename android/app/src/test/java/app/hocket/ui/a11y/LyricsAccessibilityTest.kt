@@ -1,5 +1,7 @@
 package app.hocket.ui.a11y
 
+import app.hocket.core.api.TrackRef
+
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -63,7 +65,7 @@ class LyricsAccessibilityTest {
         }
         core.start()
         advanceUntil("the core to start") { core.client.started.value }
-        core.client.dispatch(Commands.playTracks(core.fake.library.serverId, listOf(trackId), 0, "Lyrics a11y"))
+        core.client.dispatch(Commands.playTracks((listOf(trackId)).map { TrackRef(core.fake.library.serverId, it) }, 0, "Lyrics a11y"))
         advanceUntil("the track") { core.client.nowPlaying.value?.track?.id == trackId }
         advanceUntil("the lyrics") { exists("lyrics.line.0") && exists("lyrics.background") }
         return doc!!

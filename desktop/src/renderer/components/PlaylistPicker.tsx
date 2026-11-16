@@ -47,5 +47,5 @@ export function PlaylistPicker() {
     close();
     then?.();
   };
-  return <PlaylistSubmenu key={value.trackIds.join()} trackIds={value.trackIds} anchor={value.anchor} closing={closing} motion={motion} onBack={close} onClose={finish} exitProps={exitProps} />;
+  return <PlaylistSubmenu key={value.tracks.map((r) => r.id).join()} tracks={value.tracks} anchor={value.anchor} closing={closing} motion={motion} onBack={close} onClose={finish} exitProps={exitProps} />;
 }

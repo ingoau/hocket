@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Event, Snapshot } from "@core/api";
-import { applySnapshot, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
+import { SAVER_OFF, applySnapshot, dismissToast, initialCoreState, reduce, saverEngaged, saverHas, settingValue } from "./reducer";
 
 const snapshot: Snapshot = {
-  servers: [],
+  identity: { id: "i", deviceId: "me", devices: [], removed: false, credentialSync: false, coordinator: undefined },
+  accounts: [],
   session: undefined,
-  queue: { contextLabel: "Album", history: [], current: undefined, playingNext: [], upcoming: [], shuffle: true, repeat: "all", autoplay: true, mode: "apple", totalUpcoming: 0 },
+  queue: { contextLabel: "Album", entries: [], windowStart: 0, total: 0, historyCount: 0, currentIndex: undefined, groupCount: 0, totalUpcoming: 0, current: undefined, shuffle: true, repeat: "all", autoplay: true },
   transport: { lease: { owner: "me", epoch: 3, expiresAt: 1 }, position: { positionMs: 5000, takenAt: 0, rate: 1, isPlaying: true }, buffering: false, playedMs: 0, volume: 0.5 },
   connection: { tier: "lan", connected: true, coordinatorUrl: undefined, clockOffsetMs: 0, roundTripMs: 4, peerCount: 1, error: undefined },
   devices: [],
@@ -18,7 +19,7 @@ const snapshot: Snapshot = {
   resumeOffer: undefined,
   sleepTimer: undefined,
   network: undefined,
-  batterySaver: true,
+  batterySaver: { level: "light", automatic: false, features: ["stillBackground", "stillSeekWave", "lighterLyrics"] },
   syncProgress: undefined,
 };
 
@@ -28,9 +29,22 @@ describe("reducer", () => {
     expect(s.ready).toBe(true);
     expect(s.queue.shuffle).toBe(true);
     expect(s.transport.volume).toBe(0.5);
-    expect(s.batterySaver).toBe(true);
+    expect(saverEngaged(s.batterySaver)).toBe(true);
+    expect(saverHas(s.batterySaver, "stillBackground")).toBe(true);
+    expect(saverHas(s.batterySaver, "simpleLyrics")).toBe(false);
     expect(settingValue(s, "appearance.theme", "system")).toBe("dark");
     expect(settingValue(s, "missing", 42)).toBe(42);
+  });
+
+  it("counts every pairing failure, the same message twice included, across new invites", () => {
+    const fail = (s: typeof initialCoreState) => reduce(s, { type: "pairingFailed", data: { message: "invite expired" } });
+    const s1 = fail(initialCoreState);
+    const s2 = fail(s1);
+    expect(s2.pairing.error).toBe("invite expired");
+    expect([s1.pairing.failures, s2.pairing.failures]).toEqual([1, 2]);
+    const s3 = reduce(s2, { type: "pairingInvite", data: { link: "hocket://pair?d=x", expires_at: 1 } });
+    expect(s3.pairing.error).toBeUndefined();
+    expect(fail(s3).pairing.failures).toBe(3);
   });
 
   it("does not mirror mediaSession into view state (OS session is main-process only)", () => {
@@ -80,13 +94,14 @@ describe("reducer", () => {
 
   it("patches ratings and loves from libraryItemsChanged into now playing, the queue and server search results", () => {
     const track = (id: string) => ({ id, serverId: "s", title: id, durationMs: 1, rating: 0, loved: false, offline: "none" as const });
-    const entry = (id: string) => ({ item: { key: `k-${id}`, trackId: id, source: { type: "context" as const, data: { index: 0 } } }, track: track(id) });
-    let s = applySnapshot(initialCoreState, { ...snapshot, queue: { ...snapshot.queue, current: entry("t1"), upcoming: [entry("t2"), entry("t1")] } });
-    s = reduce(s, { type: "searchResults", data: { results: { requestId: "r", query: "q", tracks: [track("t1"), track("t3")], albums: [], artists: [], playlists: [], fromServer: true } } });
+    const entry = (id: string) => ({ item: { key: `k-${id}`, track: { source: "s", id }, source: { type: "context" as const, data: { index: 0 } } }, track: track(id) });
+    let s = applySnapshot(initialCoreState, { ...snapshot, queue: { ...snapshot.queue, current: entry("t1"), entries: [entry("t1"), entry("t2"), entry("t1")], total: 3, currentIndex: 0, totalUpcoming: 2 } });
+    s = reduce(s, { type: "searchResults", data: { results: { requestId: "r", query: "q", tracks: [track("t1"), track("t3")], albums: [], artists: [], playlists: [], fromServer: true, lyrics: [] } } });
     const version = s.libraryVersion;
     s = reduce(s, { type: "libraryItemsChanged", data: { server_id: "s", items: [{ kind: "track", id: "t1", rating: 4, loved: true }], from_device: "other" } });
     expect(s.nowPlaying?.track).toMatchObject({ rating: 4, loved: true });
-    expect(s.queue.upcoming.map((e) => e.track.rating)).toEqual([0, 4]);
+    expect(s.queue.entries.map((e) => e.track.rating)).toEqual([4, 0, 4]);
+    expect(s.queue.current?.track.rating).toBe(4);
     expect(s.lastServerSearch?.tracks.map((t) => t.loved)).toEqual([true, false]);
     // Lists refetch on the libraryChanged that follows, not twice.
     expect(s.libraryVersion).toBe(version);
@@ -105,11 +120,20 @@ describe("reducer", () => {
     expect(s.network).toBeUndefined();
   });
 
+  it("follows the report upload, and forgets it when the core does", () => {
+    const status = { state: "uploading" as const, sentBytes: 5, totalBytes: 10, reportId: undefined, error: undefined, errorDetail: undefined, startedAt: 1 };
+    const s = reduce(initialCoreState, { type: "reportUploadChanged", data: { status } } as Event);
+    expect(s.reportUpload).toEqual(status);
+    expect(reduce(s, { type: "reportUploadChanged", data: { status: undefined } } as Event).reportUpload).toBeUndefined();
+  });
+
   it("tracks battery saver from its event, without waiting for a snapshot", () => {
-    let s = reduce(initialCoreState, { type: "batterySaverChanged", data: { enabled: true } });
-    expect(s.batterySaver).toBe(true);
-    s = reduce(s, { type: "batterySaverChanged", data: { enabled: false } });
-    expect(s.batterySaver).toBe(false);
+    expect(saverEngaged(initialCoreState.batterySaver)).toBe(false);
+    let s = reduce(initialCoreState, { type: "batterySaverChanged", data: { saver: { level: "max", automatic: true, features: ["simpleLyrics", "lighterLyrics"] } } });
+    expect(s.batterySaver).toMatchObject({ level: "max", automatic: true });
+    expect(saverHas(s.batterySaver, "simpleLyrics")).toBe(true);
+    s = reduce(s, { type: "batterySaverChanged", data: { saver: SAVER_OFF } });
+    expect(saverEngaged(s.batterySaver)).toBe(false);
   });
 
   it("announces a fresh queue-replacing undo entry with one Undo toast, never twice, and not on undo/redo", () => {
@@ -176,7 +200,7 @@ describe("reducer", () => {
   });
 
   it("nowPlaying follows QueueChanged and NowPlayingChanged", () => {
-    const entry = { item: { key: "k", trackId: "t", source: { type: "inserted" as const }, unavailable: false }, track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" as const } };
+    const entry = { item: { key: "k", track: { source: "s", id: "t" }, source: { type: "inserted" as const }, unavailable: false }, track: { id: "t", serverId: "s", title: "T", durationMs: 1, rating: 0, loved: false, offline: "none" as const } };
     let s = reduce(initialCoreState, { type: "queueChanged", data: { queue: { ...snapshot.queue, current: entry } } });
     expect(s.nowPlaying?.track.id).toBe("t");
     s = reduce(s, { type: "nowPlayingChanged", data: { entry: undefined } });

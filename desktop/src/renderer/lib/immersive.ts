@@ -4,7 +4,7 @@
 // (hocket_core::artwork, over IPC); this side reads the cover's pixels from a
 // canvas and draws the continuation, once per track and window size, as a
 // still on a canvas: nothing redraws per frame.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ArtworkEdge, ArtworkLayout, ImmersiveArtwork } from "@core/api";
 import { bridge } from "../core/bridge";
 import { resolveArtwork } from "../components/Artwork";
@@ -72,7 +72,12 @@ export interface Scene {
   img: HTMLImageElement | undefined;
   /** Undefined without the native core (or for a cover that could not be read): a card. */
   layout: ArtworkLayout | undefined;
+  /** Still being prepared: the last scene's layout around no image (a placeholder), see [useScene]. */
+  pending?: boolean;
 }
+
+/** A React key for a scene on screen (a pending one and the ready one it becomes are both there while it fades in). */
+export const sceneKey = (s: Scene) => (s.pending ? `${s.coverArt}~pending` : s.coverArt);
 
 /** Scenes being prepared or ready, most recent last; a few are kept (the current, the next, the last). */
 const scenes = new Map<string, Promise<Scene>>();
@@ -107,8 +112,10 @@ export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dar
 }
 
 /**
- * The scene to show for `coverArt`: the one before it until its own is ready (undefined only
- * before the first, or without a cover).
+ * The scene to show for `coverArt`, once ready (at once for one prepared ahead, the next track's).
+ * Until then a pending one: the last ready scene's layout (so the layout does not jump to a card and
+ * back) with no image, a placeholder, never the last cover itself (#147). Undefined without a cover,
+ * or before the first.
  */
 export function useScene(coverArt: string | undefined, preference: ImmersiveArtwork, dark: boolean): Scene | undefined {
   const key = coverArt ? `${coverArt}|${preference}|${dark}` : undefined;
@@ -126,7 +133,17 @@ export function useScene(coverArt: string | undefined, preference: ImmersiveArtw
       alive = false;
     };
   }, [coverArt, preference, dark]);
-  return coverArt ? scene : undefined;
+  const current = coverArt && scene?.coverArt === coverArt ? scene : undefined;
+  const last = useRef<Scene | undefined>(undefined);
+  if (!coverArt) last.current = undefined;
+  else if (current) last.current = current;
+  const held = last.current;
+  // One object while it waits: the consumers compare scenes by identity.
+  const pending = useMemo<Scene | undefined>(
+    () => (coverArt && !current && held ? { coverArt, url: undefined, img: undefined, layout: held.layout, pending: true } : undefined),
+    [coverArt, current, held],
+  );
+  return current ?? pending;
 }
 
 /**
@@ -289,6 +306,8 @@ export function withTone(edge: ArtworkEdge, light: boolean, textAlpha = 1): Artw
 
 /** The share of the artwork that fades into the continuation (the CSS mask on .np-art matches it). */
 export const FEATHER = 0.3;
+/** The share of the artwork that fades into a flat extension (its colour, not a blurred copy). */
+export const CRISP_FEATHER = 0.04;
 /** Blur at the seam and far from it, as shares of the artwork's side. */
 // Strong enough at the seam that a thin strip along the artwork's edge (a shadow, a border)
 // averages away instead of reading, doubled by its own reflection, as a band.
@@ -341,7 +360,8 @@ function mirrored(source: CanvasImageSource, W: number, S: number, blur: number)
  * never cuts over: the artwork fades out over its last FEATHER (a CSS mask) onto a
  * blurred copy of itself drawn here, and the continuation starts at that same blur.
  * Except a flat extension ([isFlat]): the artwork already ends in that one colour, so
- * it stays crisp to its edge and the colour simply carries on.
+ * only its last CRISP_FEATHER fades, onto that colour, which carries on with the cover's
+ * grain drawn over it (so a texture does not stop dead at the seam).
  * Mirror: the reflection, blurring further with distance. Extend: a short blurred
  * reflection bridging into the colours along the edge, softening sideways with
  * distance. Both fade out (to the fluid background beneath) except over a light
@@ -405,10 +425,17 @@ function draw(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge
   else if (side) ctx.setTransform(0, 1, 1, 0, 0, 0);
   const region = H - S;
   const flat = isFlat(edge);
-  const band0 = flat ? S : Math.round(S * (1 - FEATHER));
+  const band0 = Math.round(S * (1 - (flat ? CRISP_FEATHER : FEATHER)));
   if (flat || edge.light || baseFill) {
     ctx.fillStyle = hex(edge.baseColor);
     ctx.fillRect(0, band0, W, H - band0);
+  }
+  if (flat) {
+    const pattern = ctx.createPattern(grainTile(edge.metrics.grain ?? 0), "repeat");
+    if (pattern) {
+      ctx.fillStyle = pattern;
+      ctx.fillRect(0, band0, W, H - band0);
+    }
   }
   /** Draws `paint` into a layer below the seam, masked to `stops` ([fraction of S from the seam, alpha]). */
   const band = (stops: [number, number][], paint: (c: CanvasRenderingContext2D) => void) => {
@@ -522,6 +549,37 @@ function draw(canvas: HTMLCanvasElement, img: HTMLImageElement | undefined, edge
     lc.fillRect(0, 0, layer.width, layer.height);
   }
   ctx.drawImage(layer, x0, top);
+}
+
+/** Grain tiles by amplitude (sRGB levels), kept: the same few serve every cover. */
+const grainTiles = new Map<number, HTMLCanvasElement>();
+/**
+ * A tile of grain about `grain` levels (the core's [ArtworkMetrics.grain], at least a faint one,
+ * which also dithers the flat colour): each pixel lightens or darkens a little, from a fixed seed
+ * so a cover always draws the same.
+ */
+export function grainTile(grain: number): HTMLCanvasElement {
+  const amp = Math.round(Math.min(6, Math.max(1.5, grain * 2)) * 2) / 2;
+  const hit = grainTiles.get(amp);
+  if (hit) return hit;
+  const T = 128;
+  const c = document.createElement("canvas");
+  c.width = c.height = T;
+  const ctx = c.getContext("2d");
+  if (ctx) {
+    const d = ctx.createImageData(T, T);
+    let seed = 0x2545f491;
+    for (let i = 0; i < T * T; i++) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      // Triangular noise in [-1, 1]: grain-like, rarely at full amplitude.
+      const n = ((seed & 0xffff) + (seed >>> 16)) / 65535 - 1;
+      const v = n > 0 ? 255 : 0;
+      d.data.set([v, v, v, Math.round((Math.abs(n) * amp * 255) / 128)], i * 4);
+    }
+    ctx.putImageData(d, 0, 0);
+  }
+  grainTiles.set(amp, c);
+  return c;
 }
 
 /**

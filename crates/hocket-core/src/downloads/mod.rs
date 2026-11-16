@@ -10,7 +10,11 @@
 //!   fetches them through a [`SubsonicApi`] with bounded concurrency and files
 //!   out-of-space as a loud `Problem`. [`Downloads::reconcile_playlist`] keeps
 //!   a playlist pin in step when the playlist changes (enqueues fetches and
-//!   removals). [`Downloads::set_gain`] stores gain computed at download time.
+//!   removals). [`Downloads::set_gain`] stores gain computed at download
+//!   time; when the server provides none, a background worker measures the
+//!   finished file on this device ([`GainScanner`], EBU R128, one thread)
+//!   and stores the result — for downloads and for complete stream-cache
+//!   entries alike, so levelling works for untagged tracks.
 //!   A track already complete in the stream cache (the pin's profile or the
 //!   original) is moved into downloads instead of fetched again.
 //! - Stream cache (see `stream_cache.rs`): complete and partial entries
@@ -34,12 +38,13 @@
 //! `<cache_dir>/stream/<server_id>/<track_id>[.<profile key>].<random>.<suffix>`
 //! (partial entries are sparse files of the stream's full length).
 
+pub mod receivers;
 pub mod spans;
 mod stream_cache;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 pub use stream_cache::{
     eviction_score, CacheRow, CacheSignal, EntryKey, EvictFacts, MergeOutcome, Traffic,
@@ -57,8 +62,9 @@ use crate::api::{
 };
 use crate::db::{Db, DbError, DbResult};
 use crate::jobs::{JobContext, JobError, JobResult, JobRunner, JobSpec, RetryAction};
+use crate::provider::{Provider, ProviderSet, ResolvedStream, StreamRequest};
 use crate::subsonic::client::StreamOptions;
-use crate::subsonic::{SubsonicApi, SubsonicError};
+use crate::subsonic::SubsonicError;
 use crate::util::Clock;
 
 /// Free-space source, injected so tests can simulate a full disk.
@@ -99,6 +105,39 @@ fn dir_bytes(path: &Path) -> f64 {
             }
         })
         .sum()
+}
+
+/// Measures ReplayGain of a finished file, off the playback path: the
+/// download or stream-cache entry of a track the server left without a
+/// track gain. Injected so tests substitute a fake; the real one needs the
+/// Symphonia decoder (feature `decode`, included by `native-audio` and
+/// `automix-analysis`).
+pub trait GainScanner: Send + Sync + 'static {
+    /// `(track gain dB, peak)` for the file, or `None` when it cannot be
+    /// decoded (unsupported format, unreadable). Digital silence measures
+    /// 0 dB, not `None`.
+    fn scan(&self, path: &Path) -> Option<(f64, f64)>;
+}
+
+/// The real scanner: a full EBU R128 pass with the native decoder.
+struct NativeGainScanner;
+
+impl GainScanner for NativeGainScanner {
+    fn scan(&self, path: &Path) -> Option<(f64, f64)> {
+        #[cfg(feature = "decode")]
+        match crate::audio::dsp::loudness::compute_replaygain(path) {
+            Ok(rg) => rg.track_gain_db.map(|g| (g, rg.track_peak.unwrap_or(0.0))),
+            Err(e) => {
+                tracing::debug!(error = %e, path = %path.display(), "measuring ReplayGain");
+                None
+            }
+        }
+        #[cfg(not(feature = "decode"))]
+        {
+            let _ = path;
+            None
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -225,11 +264,22 @@ struct Inner {
     cache_budget_auto: RwLock<bool>,
     warn_threshold: RwLock<Option<f64>>,
     policy: RwLock<TranscodingPolicy>,
+    /// Track gain a provider reported when it resolved a stream (YouTube
+    /// Music's `loudnessDb`), by (source, track): used when nothing was scanned.
+    provider_gain: RwLock<HashMap<(String, String), f64>>,
     network: RwLock<Option<api::NetworkState>>,
+    /// `storage.prefetchOnMobileData`.
+    prefetch_on_mobile_data: RwLock<bool>,
     cache_use: parking_lot::Mutex<CacheUse>,
     traffic: Traffic,
     /// The traffic totals last persisted.
     traffic_saved: parking_lot::Mutex<Option<TrafficTotals>>,
+    /// Measures ReplayGain for tracks the server left without a track gain.
+    gain_scanner: RwLock<Arc<dyn GainScanner>>,
+    /// Queued (server, track) scans for the worker thread.
+    gain_tx: mpsc::Sender<(String, String)>,
+    /// What the worker has not taken yet (dedup for repeat completions).
+    gain_queued: parking_lot::Mutex<HashSet<(String, String)>>,
 }
 
 /// `(server_id, track_id)`: a track whose offline state may have changed.
@@ -290,6 +340,7 @@ impl Downloads {
         }) {
             tracing::warn!(error = %e, "resetting interrupted downloads");
         }
+        let (gain_tx, gain_rx) = mpsc::channel();
         Downloads {
             inner: Arc::new(Inner {
                 db,
@@ -302,14 +353,126 @@ impl Downloads {
                 cache_budget_auto: RwLock::new(true),
                 warn_threshold: RwLock::new(None),
                 policy: RwLock::new(TranscodingPolicy::default()),
+                provider_gain: RwLock::new(HashMap::new()),
                 network: RwLock::new(None),
+                prefetch_on_mobile_data: RwLock::new(false),
                 cache_use: parking_lot::Mutex::new(CacheUse::default()),
                 traffic: Traffic::default(),
                 traffic_saved: parking_lot::Mutex::new(None),
+                gain_scanner: RwLock::new(Arc::new(NativeGainScanner)),
+                gain_tx,
+                gain_queued: parking_lot::Mutex::new(HashSet::new()),
             }),
         }
+        .spawn_gain_worker(gain_rx)
         .sweep_stream_cache()
         .reconcile_at_start()
+    }
+
+    /// Replace the ReplayGain measurement (tests inject a fake). The
+    /// catch-up queue goes round again: files whose first scan ran with the
+    /// replaced scanner get another chance.
+    pub fn with_gain_scanner(self, scanner: Arc<dyn GainScanner>) -> Self {
+        *self.inner.gain_scanner.write() = scanner;
+        self.schedule_catchup_scans();
+        self
+    }
+
+    /// The scan worker: one file at a time on its own thread, nothing on
+    /// the playback or pin path. Exits when the `Downloads` is gone.
+    fn spawn_gain_worker(self, rx: mpsc::Receiver<(String, String)>) -> Self {
+        let weak = Arc::downgrade(&self.inner);
+        if let Err(e) = std::thread::Builder::new()
+            .name("replaygain-scan".into())
+            .spawn(move || {
+                while let Ok((server_id, track_id)) = rx.recv() {
+                    let Some(inner) = weak.upgrade() else {
+                        break;
+                    };
+                    inner
+                        .gain_queued
+                        .lock()
+                        .remove(&(server_id.clone(), track_id.clone()));
+                    Downloads { inner }.run_gain_scan(&server_id, &track_id);
+                }
+            })
+        {
+            tracing::warn!(error = %e, "spawning the ReplayGain scan worker");
+        }
+        self
+    }
+
+    /// Queue an on-device ReplayGain scan for the track: when its finished
+    /// file (download or complete stream-cache entry) is the only gain we
+    /// will ever have, the worker measures it and stores the result.
+    /// Deduplicated while a scan is already pending; a send failure (the
+    /// worker never started) does not leave the key stuck in the set.
+    fn schedule_gain_scan(&self, server_id: &str, track_id: &str) {
+        let key = (server_id.to_string(), track_id.to_string());
+        if self.inner.gain_queued.lock().insert(key.clone())
+            && self.inner.gain_tx.send(key.clone()).is_err()
+        {
+            self.inner.gain_queued.lock().remove(&key);
+        }
+    }
+
+    /// The worker's step: measure the track's finished file once and store
+    /// the result. Skips when the server already provides a track gain, a
+    /// value is already stored, or there is no complete file to measure.
+    fn run_gain_scan(&self, server_id: &str, track_id: &str) {
+        let server_gain: Option<f64> = self
+            .inner
+            .db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT rg_track_gain FROM tracks WHERE server_id = ?1 AND id = ?2",
+                    params![server_id, track_id],
+                    |r| r.get::<_, Option<f64>>(0),
+                )
+                .optional()?
+                .flatten())
+            })
+            .unwrap_or(None);
+        if server_gain.is_some() || self.gain(server_id, track_id).unwrap_or(None).is_some() {
+            return;
+        }
+        // The pin's file when there is one, else the newest complete cache
+        // entry — the same track either way, only the format differs.
+        let pin_path = self.downloaded_path(server_id, track_id).unwrap_or(None);
+        let file = pin_path.clone().or_else(|| {
+            self.inner
+                .db
+                .with_conn(|c| {
+                    Ok(c.query_row(
+                        "SELECT path FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND complete = 1 ORDER BY last_used_at DESC LIMIT 1",
+                        params![server_id, track_id],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()?)
+                })
+                .unwrap_or(None)
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+        });
+        let Some(file) = file else {
+            return;
+        };
+        let Some((gain_db, peak)) = self.inner.gain_scanner.read().scan(&file) else {
+            tracing::debug!(path = %file.display(), "ReplayGain scan could not decode the file");
+            return;
+        };
+        tracing::info!(track = %track_id, gain_db, peak, "stored a measured ReplayGain");
+        if pin_path.is_some() {
+            let _ = self.set_gain(server_id, track_id, Some(gain_db), Some(peak));
+        } else {
+            let _ = self.inner.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE cache_entries SET gain_db = ?3, peak = ?4 WHERE server_id = ?1 AND track_id = ?2 AND path = ?5 AND complete = 1",
+                    params![server_id, track_id, gain_db, peak, file.to_string_lossy().as_ref()],
+                )?;
+                Ok(())
+            });
+        }
     }
 
     /// Startup: drop temp files a previous process left mid-write, and
@@ -357,7 +520,30 @@ impl Downloads {
             tracing::warn!(error = %e, "reconciling the stream cache");
         }
         self.load_traffic();
+        self.schedule_catchup_scans();
         self
+    }
+
+    /// The scan queue lives in memory: a process that died between a file's
+    /// completion and its scan loses the measurement. Completed files
+    /// without a stored gain go back in; the worker's own skip checks make
+    /// the extra entries cheap (server-tagged tracks are dropped there).
+    fn schedule_catchup_scans(&self) {
+        let Ok(candidates) = self.inner.db.with_conn(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT server_id, track_id FROM pin_tracks WHERE state = 'done' AND gain_db IS NULL
+                 UNION
+                 SELECT server_id, track_id FROM cache_entries WHERE complete = 1 AND gain_db IS NULL",
+            )?;
+            let rows =
+                st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        }) else {
+            return;
+        };
+        for (server_id, track_id) in candidates {
+            self.schedule_gain_scan(&server_id, &track_id);
+        }
     }
 
     pub fn db(&self) -> &Db {
@@ -401,6 +587,21 @@ impl Downloads {
 
     pub fn set_network(&self, network: Option<api::NetworkState>) {
         *self.inner.network.write() = network;
+    }
+
+    pub fn set_prefetch_on_mobile_data(&self, on: bool) {
+        *self.inner.prefetch_on_mobile_data.write() = on;
+    }
+
+    /// On a metered or cellular network without `storage.prefetchOnMobileData`:
+    /// fetch only a little ahead of what plays (the rest may never be heard).
+    pub fn fetch_ahead_limited(&self) -> bool {
+        self.inner
+            .network
+            .read()
+            .as_ref()
+            .is_some_and(|n| n.metered || n.kind == api::NetworkKind::Cellular)
+            && !*self.inner.prefetch_on_mobile_data.read()
     }
 
     fn now(&self) -> f64 {
@@ -535,7 +736,10 @@ impl Downloads {
     }
 
     /// The tracks a target currently resolves to (from the mirror).
-    fn member_ids(&self, target: &PinTarget) -> DbResult<Vec<String>> {
+    /// The songs a pin of `target` under `server_id` downloads: for a
+    /// playlist, those from that source (a Mixed playlist is pinned under
+    /// each source its songs come from).
+    fn member_ids(&self, server_id: &str, target: &PinTarget) -> DbResult<Vec<String>> {
         Ok(match target {
             PinTarget::Track { id } => vec![id.clone()],
             PinTarget::Album { id } => self
@@ -545,14 +749,14 @@ impl Downloads {
                 .into_iter()
                 .map(|t| t.id)
                 .collect(),
-            PinTarget::Playlist { id } => self.inner.db.playlist_track_ids(id)?,
+            PinTarget::Playlist { id } => self.inner.db.playlist_track_ids_on(id, server_id)?,
         })
     }
 
     /// Insert `wanted` rows for members not yet tracked. For album/track pins
     /// the set is fixed at pin time; playlists re-run this on change.
     fn materialise(&self, server_id: &str, target: &PinTarget) -> Result<(), DownloadError> {
-        let members = self.member_ids(target)?;
+        let members = self.member_ids(server_id, target)?;
         let kind = kind_name(target);
         let id = target_id(target);
         self.inner.db.with_tx(|tx| {
@@ -569,7 +773,12 @@ impl Downloads {
         Ok(())
     }
 
-    /// Job spec fetching whatever the pin still needs.
+    /// Job spec fetching whatever the pin still needs. Tracks still pending in
+    /// an unfinished download job for this pin are left to it, so re-planning
+    /// while a job runs (a sync reconciling a playlist pin, a second tap on
+    /// download) doesn't start a duplicate job for the same tracks. Other
+    /// pins' jobs don't count: they stop once their own pin goes, and
+    /// `claim` already keeps two jobs from fetching one track at once.
     pub fn plan(
         &self,
         server_id: &str,
@@ -578,7 +787,14 @@ impl Downloads {
     ) -> Result<Option<JobSpec>, DownloadError> {
         let missing: Vec<String> = self.inner.db.with_conn(|c| {
             let mut st = c.prepare_cached(
-                "SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state IN ('wanted','failed') ORDER BY rowid",
+                "SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state IN ('wanted','failed')
+                 AND track_id NOT IN (
+                     SELECT ji.item FROM job_items ji JOIN jobs j ON j.id = ji.job_id
+                     WHERE j.kind = 'download' AND j.state IN ('queued','running','paused') AND ji.state = 'pending'
+                       AND json_extract(j.payload, '$.serverId') = ?1
+                       AND json_extract(j.payload, '$.target.type') = ?2
+                       AND json_extract(j.payload, '$.target.data.id') = ?3)
+                 ORDER BY rowid",
             )?;
             let rows = st.query_map(params![server_id, kind_name(target), target_id(target)], |r| r.get::<_, String>(0))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -605,6 +821,50 @@ impl Downloads {
         ))
     }
 
+    /// Fetch jobs for this account's pins with wanted tracks no unfinished
+    /// job is fetching: pins restored from a version-10 backup, which come
+    /// without their jobs. Run once, after the account's first sync
+    /// (planning and fetching need its tracks, and an account that synced
+    /// is signed in); see `restore_v10::REPLAN_PREFIX`.
+    pub fn replan_wanted(&self, server_id: &str) -> Result<Vec<JobSpec>, DownloadError> {
+        let mut out = vec![];
+        for pin in self.pins(server_id)? {
+            let unplanned: i64 = self.inner.db.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state = 'wanted'
+                     AND track_id NOT IN (
+                         SELECT ji.item FROM job_items ji JOIN jobs j ON j.id = ji.job_id
+                         WHERE j.kind = 'download' AND j.state IN ('queued','running','paused') AND ji.state = 'pending'
+                           AND json_extract(j.payload, '$.serverId') = ?1
+                           AND json_extract(j.payload, '$.target.type') = ?2
+                           AND json_extract(j.payload, '$.target.data.id') = ?3)",
+                    params![server_id, kind_name(&pin.target), target_id(&pin.target)],
+                    |r| r.get(0),
+                )?)
+            })?;
+            if unplanned > 0 {
+                if let Some(spec) = self.plan(server_id, &pin.target, pin.transcoded)? {
+                    out.push(spec);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Unfinished download jobs fetching for this pin.
+    pub fn unfinished_jobs(&self, server_id: &str, target: &PinTarget) -> DbResult<Vec<String>> {
+        self.inner.db.with_conn(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT id FROM jobs WHERE kind = 'download' AND state IN ('queued','running','paused')
+                 AND json_extract(payload, '$.serverId') = ?1
+                 AND json_extract(payload, '$.target.type') = ?2
+                 AND json_extract(payload, '$.target.data.id') = ?3",
+            )?;
+            let rows = st.query_map(params![server_id, kind_name(target), target_id(target)], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     /// A pinned playlist changed: add new members, drop removed ones (deleting
     /// files no other pin needs). Returns a fetch job for additions, if any.
     pub fn reconcile_playlist(
@@ -618,7 +878,7 @@ impl Downloads {
         if !self.is_pinned(server_id, &target)? {
             return Ok(None);
         }
-        let members = self.member_ids(&target)?;
+        let members = self.member_ids(server_id, &target)?;
         let tracked: Vec<(String, Option<String>)> = self.inner.db.with_conn(|c| {
             let mut st = c.prepare_cached("SELECT track_id, path FROM pin_tracks WHERE server_id = ?1 AND target_kind = 'playlist' AND target_id = ?2")?;
             let rows = st.query_map(params![server_id, playlist_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -660,7 +920,8 @@ impl Downloads {
         self.plan(server_id, &target, transcoded)
     }
 
-    /// Gain computed at download time (from the audio module's tag reader),
+    /// Gain for the track's downloads: computed at download time (from the
+    /// server, or the audio module's on-device scan of the finished file),
     /// stored on every pin row for the track.
     pub fn set_gain(
         &self,
@@ -677,17 +938,57 @@ impl Downloads {
         })
     }
 
-    /// Stored download gain for a track, if any.
-    pub fn gain(&self, server_id: &str, track_id: &str) -> DbResult<Option<f64>> {
-        self.inner.db.with_conn(|c| {
+    /// Stored gain for a track: a download's value, else one measured from
+    /// a complete stream-cache entry (the on-device ReplayGain scan), so
+    /// levelling also works for untagged tracks that were never pinned.
+    /// The original beats a transcoded variant when both were measured.
+    pub fn gain_with_peak(
+        &self,
+        server_id: &str,
+        track_id: &str,
+    ) -> DbResult<Option<(f64, Option<f64>)>> {
+        let pin = self.inner.db.with_conn(|c| {
             Ok(c.query_row(
-                "SELECT gain_db FROM pin_tracks WHERE server_id = ?1 AND track_id = ?2 AND gain_db IS NOT NULL LIMIT 1",
+                "SELECT gain_db, peak FROM pin_tracks WHERE server_id = ?1 AND track_id = ?2 AND gain_db IS NOT NULL LIMIT 1",
                 params![server_id, track_id],
-                |r| r.get::<_, Option<f64>>(0),
+                |r| Ok((r.get::<_, f64>(0)?, r.get::<_, Option<f64>>(1)?)),
             )
-            .optional()?
-            .flatten())
-        })
+            .optional()?)
+        })?;
+        if pin.is_some() {
+            return Ok(pin);
+        }
+        let scanned = self.inner.db.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT gain_db, peak FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND complete = 1 AND gain_db IS NOT NULL ORDER BY (profile = '') DESC, last_used_at DESC LIMIT 1",
+                params![server_id, track_id],
+                |r| Ok((r.get::<_, f64>(0)?, r.get::<_, Option<f64>>(1)?)),
+            )
+            .optional()?)
+        })?;
+        Ok(scanned.or_else(|| {
+            self.inner
+                .provider_gain
+                .read()
+                .get(&(server_id.to_string(), track_id.to_string()))
+                .map(|g| (*g, None))
+        }))
+    }
+
+    /// The track gain a provider reported for a stream it resolved.
+    pub fn note_provider_gain(&self, server_id: &str, track_id: &str, gain_db: f64) {
+        let mut m = self.inner.provider_gain.write();
+        if m.len() > 4096 {
+            m.clear();
+        }
+        m.insert((server_id.to_string(), track_id.to_string()), gain_db);
+    }
+
+    /// Stored gain for a track, if any.
+    pub fn gain(&self, server_id: &str, track_id: &str) -> DbResult<Option<f64>> {
+        Ok(self
+            .gain_with_peak(server_id, track_id)?
+            .map(|(gain_db, _)| gain_db))
     }
 
     /// Path of a completed download for the track, if the file exists.
@@ -744,7 +1045,7 @@ impl Downloads {
     /// a track never write the same file concurrently.
     pub async fn fetch_track(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         server_id: &str,
         track_id: &str,
         transcode: bool,
@@ -752,7 +1053,7 @@ impl Downloads {
         let track = self
             .inner
             .db
-            .track(track_id)?
+            .track_ref(&api::TrackRef::new(server_id, track_id))?
             .ok_or_else(|| DownloadError::UnknownTrack(track_id.into()))?;
         let profile = if transcode {
             self.profile_for_downloads()
@@ -768,20 +1069,40 @@ impl Downloads {
                 return Err(DownloadError::OutOfSpace { needed, free });
             }
         }
-        let (url, suffix) = match &profile {
-            Some(p) => (
-                api.stream_url(
-                    track_id,
-                    &StreamOptions {
-                        format: p.format.clone(),
-                        max_bit_rate: p.max_bit_rate,
-                        ..Default::default()
-                    },
-                ),
-                p.format.clone().or(track.suffix.clone()),
-            ),
-            None => (api.download_url(track_id), track.suffix.clone()),
+        // The original file when the provider offers one, else its stream
+        // (in the profile, when transcoding).
+        let original = profile
+            .is_none()
+            .then(|| provider.download_url(track_id))
+            .flatten();
+        let stream = match original {
+            Some(url) => ResolvedStream {
+                url,
+                headers: HashMap::new(),
+                expires_at: None,
+                container: track.suffix.clone(),
+                codec: None,
+                gain_db: None,
+                range_capable: true,
+                transcoded: false,
+                max_range: None,
+                content_length: None,
+                variant: String::new(),
+            },
+            None => {
+                provider
+                    .resolve_stream(
+                        track_id,
+                        &StreamRequest {
+                            profile: profile.clone(),
+                            offset_s: None,
+                            suffix: track.suffix.clone(),
+                        },
+                    )
+                    .await?
+            }
         };
+        let suffix = stream.container.clone().or(track.suffix.clone());
         let dest = self.download_path(server_id, track_id, suffix.as_deref());
         debug_assert!(dest.starts_with(self.downloads_dir(server_id)));
         loop {
@@ -814,7 +1135,7 @@ impl Downloads {
         let (dest, suffix, result) = match adopted {
             Some((path, suffix, out)) => (path, suffix, Ok(out)),
             None => {
-                let result = api.download_to_file(url, &dest).await;
+                let result = provider.download_to_file(&stream, &dest).await;
                 (dest, suffix, result)
             }
         };
@@ -839,6 +1160,11 @@ impl Downloads {
                     Ok(())
                 })?;
                 self.refresh_offline(server_id, track_id)?;
+                // No server-provided track gain: measure the finished file
+                // in the background, so levelling works for untagged tracks.
+                if rg.and_then(|g| g.track_gain_db).is_none() {
+                    self.schedule_gain_scan(server_id, track_id);
+                }
                 Ok(out.bytes)
             }
             Err(e) => {
@@ -935,6 +1261,12 @@ impl Downloads {
                 self.drop_row(&row, &mut changed)?;
             }
             tracing::info!(track = %track.id, moved, "pinned from the stream cache, no download");
+            // A measured gain follows the file into the pins (a rescan of
+            // the same bytes would only repeat the work): stored now, the
+            // pin update's COALESCE keeps it.
+            if row.gain_db.is_some() {
+                let _ = self.set_gain(server_id, &track.id, row.gain_db, row.peak);
+            }
             return Ok(Some((
                 dest,
                 suffix,
@@ -1296,6 +1628,15 @@ impl Downloads {
     /// Effective transcoding profile for streaming now: the per-network
     /// profile, with the platform's `cannot_decode` list merged in, forced
     /// to a transcode when the track's container can't be decoded.
+    /// The profile a track streams with: none for a source that can't
+    /// transcode (YouTube Music streams its one AAC format).
+    pub fn track_profile(&self, track: &api::Track) -> Option<TranscodingProfile> {
+        if track.server_id == crate::ytm::SOURCE {
+            return None;
+        }
+        self.effective_profile(track.suffix.as_deref())
+    }
+
     pub fn effective_profile(&self, suffix: Option<&str>) -> Option<TranscodingProfile> {
         let network = self.inner.network.read().clone();
         let mut profile = self
@@ -1337,11 +1678,11 @@ impl Downloads {
     /// uses [`resolve_with`](Self::resolve_with) and a proxy.
     pub fn resolve(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         key: &str,
         track: &api::Track,
     ) -> DbResult<MediaSource> {
-        self.resolve_with(api, key, track, None)
+        self.resolve_with(provider, key, track, None)
     }
 
     /// Resolve how to play a track: a completed download is a `file://`
@@ -1351,7 +1692,7 @@ impl Downloads {
     /// to a cached `file://` or the server's stream URL.
     pub fn resolve_with(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         key: &str,
         track: &api::Track,
         proxy: Option<&dyn StreamMinter>,
@@ -1371,9 +1712,18 @@ impl Downloads {
                 mime_type: ct.or(track.content_type.clone()),
                 gain_db,
                 transcoded: false,
+                local: true,
+                artwork_url: None,
+                mix_in: None,
+                mix_out_ms: None,
             });
         }
-        let profile = self.effective_profile(track.suffix.as_deref());
+        // A provider that can't transcode (YouTube Music) streams its one format.
+        let profile = if provider.capabilities().transcode {
+            self.track_profile(track)
+        } else {
+            None
+        };
         let transcoded = profile
             .as_ref()
             .is_some_and(|p| p.format.is_some() || p.max_bit_rate.is_some());
@@ -1386,9 +1736,12 @@ impl Downloads {
             track.content_type.clone()
         };
         if let Some(proxy) = proxy {
-            let cached = self.cache_lookup(sid, &track.id, profile.as_ref(), false)?;
+            // Touched: a source resolved as local is about to play, so it is
+            // the last entry the budget should evict.
+            let cached = self.cache_lookup(sid, &track.id, profile.as_ref(), true)?;
             // A complete original serves a transcoded request as it is.
             let transcoded = transcoded && !cached.as_ref().is_some_and(|e| e.profile.is_empty());
+            let local = cached.is_some();
             let cached_type = cached.and_then(|e| e.content_type);
             let suffix = if transcoded {
                 profile.as_ref().and_then(|p| p.format.clone())
@@ -1402,6 +1755,7 @@ impl Downloads {
                 profile: profile.clone(),
                 suffix,
                 mime_type: mime_type.clone(),
+                duration_ms: (track.duration_ms > 0).then_some(track.duration_ms as f64),
             }) {
                 return Ok(MediaSource {
                     key: key.into(),
@@ -1411,6 +1765,10 @@ impl Downloads {
                     mime_type,
                     gain_db,
                     transcoded,
+                    local,
+                    artwork_url: None,
+                    mix_in: None,
+                    mix_out_ms: None,
                 });
             }
         }
@@ -1423,17 +1781,106 @@ impl Downloads {
                 mime_type: ct.or(track.content_type.clone()),
                 gain_db,
                 transcoded: profile.is_some(),
+                local: true,
+                artwork_url: None,
+                mix_in: None,
+                mix_out_ms: None,
             });
         }
-        let opts = stream_options(profile.as_ref());
+        let stream = resolve_now(provider, &track.id, profile.as_ref(), track.suffix.clone())?;
         Ok(MediaSource {
             key: key.into(),
             track: summary,
-            url: api.stream_url(&track.id, &opts).to_string(),
-            headers: HashMap::new(),
+            url: stream.url.to_string(),
+            headers: stream.headers,
             mime_type: mime,
             gain_db,
             transcoded,
+            local: false,
+            artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
+        })
+    }
+
+    /// Resolve a track for a remote renderer (a Cast device), which fetches
+    /// it itself: always the server's stream URL, never a download, the
+    /// stream cache or a `hocket-stream://` handle it can't open. Formats
+    /// the renderer can't play (no Cast receiver's, or this one's:
+    /// `cannot_play`, see [`receivers`]), and transcodes to a format it
+    /// can't, become mp3; the network's transcoding profile still applies
+    /// otherwise.
+    /// [`Self::resolve_remote`] for a provider that resolves streams over
+    /// the network: the URL it already fetched (`stream`), as it is. Nothing
+    /// is transcoded; the receiver fetches the URL without its headers.
+    pub fn resolve_remote_live(
+        &self,
+        provider: &dyn Provider,
+        key: &str,
+        track: &api::Track,
+        stream: crate::provider::ResolvedStream,
+    ) -> DbResult<MediaSource> {
+        let mime_type = match stream.container.as_deref() {
+            Some(c) => mime_for(c),
+            None => track.content_type.clone().unwrap_or_else(|| mime_for("")),
+        };
+        Ok(MediaSource {
+            key: key.into(),
+            track: crate::subsonic::convert::summary_of(track),
+            url: stream.url.to_string(),
+            headers: HashMap::new(),
+            mime_type: Some(mime_type),
+            gain_db: stream.gain_db.unwrap_or(0.0),
+            transcoded: false,
+            local: false,
+            artwork_url: track
+                .cover_art
+                .as_deref()
+                .and_then(|id| provider.cover_art_url(id, Some(REMOTE_ARTWORK_SIZE)))
+                .map(|u| u.to_string()),
+            mix_in: None,
+            mix_out_ms: None,
+        })
+    }
+
+    pub fn resolve_remote(
+        &self,
+        provider: &dyn Provider,
+        key: &str,
+        track: &api::Track,
+        cannot_play: bool,
+    ) -> DbResult<MediaSource> {
+        let gain_db = self.gain(&track.server_id, &track.id)?.unwrap_or(0.0);
+        let profile = remote_profile(
+            self.effective_profile(track.suffix.as_deref()),
+            track.suffix.as_deref(),
+            cannot_play,
+        );
+        let transcoded = profile
+            .as_ref()
+            .is_some_and(|p| p.format.is_some() || p.max_bit_rate.is_some());
+        let mime_type = match profile.as_ref().and_then(|p| p.format.as_deref()) {
+            Some(f) => Some(mime_for(f)),
+            None => track.content_type.clone(),
+        };
+        Ok(MediaSource {
+            key: key.into(),
+            track: crate::subsonic::convert::summary_of(track),
+            url: resolve_now(provider, &track.id, profile.as_ref(), track.suffix.clone())?
+                .url
+                .to_string(),
+            headers: HashMap::new(),
+            mime_type,
+            gain_db,
+            transcoded,
+            local: false,
+            artwork_url: track
+                .cover_art
+                .as_deref()
+                .and_then(|id| provider.cover_art_url(id, Some(REMOTE_ARTWORK_SIZE)))
+                .map(|u| u.to_string()),
+            mix_in: None,
+            mix_out_ms: None,
         })
     }
 
@@ -1523,6 +1970,9 @@ pub struct StreamTarget {
     /// File extension of what will be served (URL hint, cache file name).
     pub suffix: Option<String>,
     pub mime_type: Option<String>,
+    /// The track's length, when known (how many bytes a span of playing
+    /// time is).
+    pub duration_ms: Option<f64>,
 }
 
 /// Turns a [`StreamTarget`] into a URL a platform player can open (the
@@ -1541,10 +1991,91 @@ pub struct CacheEntry {
     pub profile: String,
 }
 
+/// File types a Cast receiver can't play (the Default Media Receiver plays
+/// MP3, AAC, FLAC, Opus, Vorbis and WAV in MP3, MP4, Ogg, WAV and WebM).
+const REMOTE_CANNOT_DECODE: &[&str] = &[
+    "ape", "dsf", "dff", "wv", "tak", "shn", "wma", "aif", "aiff", "mpc", "alac",
+];
+/// Transcode formats a Cast receiver plays.
+const REMOTE_FORMATS: &[&str] = &["mp3", "aac", "m4a", "flac", "opus", "ogg", "oga", "wav"];
+/// Cover art size for a remote renderer (a TV shows it large).
+const REMOTE_ARTWORK_SIZE: u32 = 800;
+/// What a remote renderer transcodes to when it can't play the original.
+const REMOTE_TRANSCODE_FORMAT: &str = "mp3";
+/// The bitrate (kbps) of that transcode, unless the profile caps it lower.
+const REMOTE_TRANSCODE_BIT_RATE: u32 = 320;
+
+/// `profile` (this device's) adjusted for a remote renderer: the original
+/// is transcoded (to mp3 at up to 320 kbps) when the renderer can't play
+/// its `suffix` (`cannot_play`: this receiver can't, whatever others do),
+/// and a format the renderer can't play becomes mp3.
+fn remote_profile(
+    profile: Option<TranscodingProfile>,
+    suffix: Option<&str>,
+    cannot_play: bool,
+) -> Option<TranscodingProfile> {
+    let undecodable = cannot_play
+        || suffix.is_some_and(|s| {
+            REMOTE_CANNOT_DECODE
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(s))
+        });
+    let mut profile = match profile {
+        Some(p) => p,
+        None if undecodable => TranscodingProfile {
+            format: None,
+            max_bit_rate: None,
+            cannot_decode: vec![],
+        },
+        None => return None,
+    };
+    let playable = |f: &str| REMOTE_FORMATS.iter().any(|x| x.eq_ignore_ascii_case(f));
+    match profile.format.as_deref() {
+        Some(f) if !playable(f) => profile.format = Some(REMOTE_TRANSCODE_FORMAT.into()),
+        // A bitrate cap alone transcodes to the server's default format,
+        // which the receiver may not play and the MIME type can't name.
+        None if undecodable || profile.max_bit_rate.is_some() => {
+            profile.format = Some(REMOTE_TRANSCODE_FORMAT.into())
+        }
+        _ => {}
+    }
+    // Forced, not chosen: as good as the receiver takes (the server's
+    // default bitrate for mp3 is often lower).
+    if undecodable && profile.format.as_deref() == Some(REMOTE_TRANSCODE_FORMAT) {
+        let cap = profile.max_bit_rate.unwrap_or(REMOTE_TRANSCODE_BIT_RATE);
+        profile.max_bit_rate = Some(cap.min(REMOTE_TRANSCODE_BIT_RATE));
+    }
+    Some(profile)
+}
+
 fn default_transcode_format(platform: Platform) -> &'static str {
     match platform {
         Platform::Android => "opus",
         _ => "flac",
+    }
+}
+
+/// A provider's stream for a track, resolved on the spot. Navidrome's is
+/// ready at once (a URL with credentials); a provider that must ask its
+/// service first is played through the stream reader, which awaits it.
+fn resolve_now(
+    provider: &dyn Provider,
+    id: &str,
+    profile: Option<&TranscodingProfile>,
+    suffix: Option<String>,
+) -> DbResult<ResolvedStream> {
+    use futures::FutureExt;
+    let req = StreamRequest {
+        profile: profile.cloned(),
+        offset_s: None,
+        suffix,
+    };
+    match provider.resolve_stream(id, &req).now_or_never() {
+        Some(Ok(s)) => Ok(s),
+        Some(Err(e)) => Err(DbError::Io(std::io::Error::other(e.to_string()))),
+        None => Err(DbError::Io(std::io::Error::other(
+            "this provider's streams play through the stream reader",
+        ))),
     }
 }
 
@@ -1655,22 +2186,32 @@ pub fn file_url(p: &Path) -> String {
 /// silently unpinning.
 pub struct DownloadRunner {
     downloads: Downloads,
-    api: Arc<dyn SubsonicApi>,
+    providers: ProviderSet,
 }
 
 impl DownloadRunner {
-    pub fn new(downloads: Downloads, api: Arc<dyn SubsonicApi>) -> Self {
-        DownloadRunner { downloads, api }
+    pub fn new(downloads: Downloads, providers: ProviderSet) -> Self {
+        DownloadRunner {
+            downloads,
+            providers,
+        }
     }
 }
 
 impl JobRunner for DownloadRunner {
     fn run(&self, ctx: JobContext) -> BoxFuture<'static, JobResult<()>> {
         let dl = self.downloads.clone();
-        let api = self.api.clone();
+        let providers = self.providers.clone();
         Box::pin(async move {
             let payload: DownloadJobPayload = serde_json::from_str(&ctx.payload)
                 .map_err(|e| JobError::Failed(format!("bad payload: {e}")))?;
+            // The pin's account: its provider fetches every track of it.
+            let Some(provider) = providers.for_source(&payload.server_id).cloned() else {
+                return Err(JobError::Failed(format!(
+                    "account {} is not signed in",
+                    payload.server_id
+                )));
+            };
             let items = ctx.pending_items()?;
             let total = items.len() as u32;
             let mut done = 0u32;
@@ -1683,7 +2224,7 @@ impl JobRunner for DownloadRunner {
                 }
                 match dl
                     .fetch_track(
-                        api.as_ref(),
+                        provider.as_ref(),
                         &payload.server_id,
                         &it.item,
                         payload.transcode,
@@ -1734,9 +2275,43 @@ mod tests {
         server: FakeServer,
         dl: Downloads,
         storage: Arc<FixedStorage>,
+        scanner: Arc<FakeScanner>,
+    }
+
+    /// Counts the files it is asked to measure and reports a fixed result.
+    struct FakeScanner {
+        result: Option<(f64, f64)>,
+        calls: parking_lot::Mutex<Vec<String>>,
+    }
+
+    impl FakeScanner {
+        fn silent() -> Arc<Self> {
+            Arc::new(Self {
+                result: None,
+                calls: parking_lot::Mutex::new(vec![]),
+            })
+        }
+
+        fn measuring(gain_db: f64, peak: f64) -> Arc<Self> {
+            Arc::new(Self {
+                result: Some((gain_db, peak)),
+                calls: parking_lot::Mutex::new(vec![]),
+            })
+        }
+    }
+
+    impl GainScanner for FakeScanner {
+        fn scan(&self, path: &Path) -> Option<(f64, f64)> {
+            self.calls.lock().push(path.display().to_string());
+            self.result
+        }
     }
 
     fn fixture() -> Fixture {
+        fixture_with(FakeScanner::silent())
+    }
+
+    fn fixture_with(scanner: Arc<FakeScanner>) -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open_in_memory().unwrap();
         let server = FakeServer::new("srv", "alice");
@@ -1801,14 +2376,41 @@ mod tests {
             &dir.path().join("data"),
             &dir.path().join("cache"),
             Platform::Linux,
-        );
+        )
+        .with_gain_scanner(scanner.clone());
         Fixture {
             dir,
             db,
             server,
             dl,
             storage,
+            scanner,
         }
+    }
+
+    /// A track the server left without ReplayGain, plus its media bytes.
+    fn add_untagged_track(f: &Fixture, id: &str) {
+        let mut c = FakeServer::song(id, &format!("Track {id}"), "al0", "ar", 100.0);
+        c.size = Some(1000.0);
+        f.server.add_song(c.clone());
+        f.server.set_media(id, vec![b'x'; 1000]);
+        f.db.upsert_tracks(
+            &[crate::subsonic::convert::track_from_child("srv", &c)],
+            &[],
+            1,
+        )
+        .unwrap();
+    }
+
+    /// The scan runs on its own thread: poll for the stored gain.
+    fn wait_for_gain(f: &Fixture, track: &str) -> Option<f64> {
+        for _ in 0..400 {
+            if let Some(g) = f.dl.gain("srv", track).unwrap() {
+                return Some(g);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        f.dl.gain("srv", track).unwrap()
     }
 
     async fn run_job(f: &Fixture, spec: JobSpec) -> api::Job {
@@ -1818,7 +2420,7 @@ mod tests {
             2,
             Arc::new(DownloadRunner::new(
                 f.dl.clone(),
-                Arc::new(f.server.clone()),
+                crate::provider::ProviderSet::single(Arc::new(f.server.provider())),
             )),
         );
         let id = q.submit(spec).unwrap();
@@ -1867,6 +2469,175 @@ mod tests {
         assert_eq!(f.dl.downloads_bytes().unwrap(), 3000.0);
         // download URL, never a stream/transcode
         assert!(f.server.calls().iter().all(|c| c != "stream"));
+    }
+
+    #[tokio::test]
+    async fn untagged_download_measures_replaygain_in_background() {
+        let f = fixture_with(FakeScanner::measuring(-7.5, 0.7));
+        add_untagged_track(&f, "u1");
+        let target = PinTarget::Track { id: "u1".into() };
+        run_job(&f, f.dl.pin("srv", &target, false).unwrap().unwrap()).await;
+        assert_eq!(wait_for_gain(&f, "u1"), Some(-7.5));
+        // The measured file is the pin's download, measured once, with peak.
+        let p = f.dl.downloaded_path("srv", "u1").unwrap().unwrap();
+        let calls = f.scanner.calls.lock().clone();
+        assert_eq!(calls, vec![p.display().to_string()]);
+        let peak: Option<f64> = f
+            .db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT peak FROM pin_tracks WHERE server_id = 'srv' AND track_id = 'u1' LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten())
+            })
+            .unwrap();
+        assert_eq!(peak, Some(0.7));
+        // The resolved source levels with the measured gain.
+        let track = f.db.track("u1").unwrap().unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
+        assert_eq!(s.gain_db, -7.5);
+    }
+
+    #[tokio::test]
+    async fn server_reported_gain_needs_no_scan() {
+        let f = fixture_with(FakeScanner::measuring(-7.5, 0.7));
+        run_job(
+            &f,
+            f.dl.pin("srv", &PinTarget::Track { id: "t0".into() }, false)
+                .unwrap()
+                .unwrap(),
+        )
+        .await;
+        // Give a wrongly scheduled scan its chance to run.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(f.dl.gain("srv", "t0").unwrap(), Some(-3.5));
+        assert!(
+            f.scanner.calls.lock().is_empty(),
+            "the server provides a track gain"
+        );
+    }
+
+    #[test]
+    fn complete_stream_cache_entry_measured_for_untagged_track() {
+        let f = fixture_with(FakeScanner::measuring(-6.0, 0.5));
+        add_untagged_track(&f, "u2");
+        let row =
+            f.dl.cache_begin(
+                "srv",
+                "u2",
+                None,
+                Some("flac"),
+                Some(1000),
+                Some("audio/flac"),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        let key = row.key();
+        write_at(&row.path, 0, &[1u8; 1000]);
+        let out =
+            f.dl.cache_merge(&key, &spans::SpanSet::of(0, 1000), Some(1000), None)
+                .unwrap();
+        assert!(out.complete);
+        assert_eq!(wait_for_gain(&f, "u2"), Some(-6.0));
+        // Stored on the cache entry: no pin rows exist for this track.
+        let (gain_db, peak): (Option<f64>, Option<f64>) = f
+            .db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT gain_db, peak FROM cache_entries WHERE server_id = 'srv' AND track_id = 'u2'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!((gain_db, peak), (Some(-6.0), Some(0.5)));
+        let pinned: i64 =
+            f.db.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM pin_tracks WHERE server_id = 'srv' AND track_id = 'u2'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(pinned, 0);
+        // The resolved source levels with the measured gain.
+        let track = f.db.track("u2").unwrap().unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
+        assert_eq!(s.gain_db, -6.0);
+    }
+
+    #[tokio::test]
+    async fn undecodable_file_stays_gainless_without_rescans() {
+        let f = fixture_with(FakeScanner::silent());
+        add_untagged_track(&f, "u3");
+        run_job(
+            &f,
+            f.dl.pin("srv", &PinTarget::Track { id: "u3".into() }, false)
+                .unwrap()
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            wait_for_gain(&f, "u3"),
+            None,
+            "a decode failure stores no gain"
+        );
+        // Measured once: a failed scan is not retried on every completion.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(f.scanner.calls.lock().len(), 1);
+    }
+
+    #[test]
+    fn startup_scans_files_completed_while_away() {
+        let f = fixture_with(FakeScanner::silent());
+        add_untagged_track(&f, "u4");
+        let row =
+            f.dl.cache_begin(
+                "srv",
+                "u4",
+                None,
+                Some("flac"),
+                Some(1000),
+                Some("audio/flac"),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        let key = row.key();
+        write_at(&row.path, 0, &[1u8; 1000]);
+        let out =
+            f.dl.cache_merge(&key, &spans::SpanSet::of(0, 1000), Some(1000), None)
+                .unwrap();
+        assert!(out.complete);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(f.dl.gain("srv", "u4").unwrap(), None, "the scan was silent");
+
+        // A fresh process finds the completed file without a stored gain
+        // and measures it.
+        let dl2 = Downloads::new(
+            f.db.clone(),
+            Arc::new(WallClock),
+            f.storage.clone(),
+            &f.dir.path().join("data"),
+            &f.dir.path().join("cache"),
+            Platform::Linux,
+        )
+        .with_gain_scanner(FakeScanner::measuring(-5.0, 0.4));
+        for _ in 0..400 {
+            if dl2.gain("srv", "u4").unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(dl2.gain("srv", "u4").unwrap(), Some(-5.0));
+        assert_eq!(f.dl.gain("srv", "u4").unwrap(), Some(-5.0));
     }
 
     #[tokio::test]
@@ -1933,6 +2704,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replanning_leaves_pending_tracks_to_the_unfinished_job() {
+        let f = fixture();
+        let pl = PinTarget::Playlist { id: "pl".into() };
+        let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
+        let first = q
+            .submit(f.dl.pin("srv", &pl, false).unwrap().unwrap())
+            .unwrap();
+        // A sync finishing mid-download reconciles the pin: only the new track.
+        f.db.set_playlist_tracks("srv", "pl", &["t0".into(), "t4".into(), "t5".into()])
+            .unwrap();
+        let spec = f.dl.reconcile_playlist("srv", "pl").unwrap().unwrap();
+        assert_eq!(spec.items, vec!["t5"]);
+        q.submit(spec).unwrap();
+        assert!(f.dl.reconcile_playlist("srv", "pl").unwrap().is_none());
+        assert!(f.dl.pin("srv", &pl, false).unwrap().is_none(), "re-pin");
+        // Another pin's job doesn't hold them: it stops if its own pin goes.
+        let t4 = PinTarget::Track { id: "t4".into() };
+        assert_eq!(
+            f.dl.pin("srv", &t4, false).unwrap().unwrap().items,
+            vec!["t4"]
+        );
+        assert!(f.dl.unfinished_jobs("srv", &t4).unwrap().is_empty());
+        assert_eq!(f.dl.unfinished_jobs("srv", &pl).unwrap().len(), 2);
+        // Cancelling hands the tracks back.
+        q.cancel(&first).unwrap();
+        let spec = f.dl.plan("srv", &pl, false).unwrap().unwrap();
+        assert_eq!(spec.items, vec!["t0", "t4"]);
+    }
+
+    #[tokio::test]
     async fn out_of_space_is_a_loud_problem_not_a_silent_unpin() {
         let f = fixture();
         *f.storage.0.lock() = Some(MIN_FREE_BYTES + 1500.0);
@@ -1944,7 +2745,7 @@ mod tests {
             1,
             Arc::new(DownloadRunner::new(
                 f.dl.clone(),
-                Arc::new(f.server.clone()),
+                crate::provider::ProviderSet::single(Arc::new(f.server.provider())),
             )),
         );
         let id = q.submit(spec).unwrap();
@@ -2168,11 +2969,79 @@ mod tests {
         assert!(c.exists());
     }
 
+    #[test]
+    fn remote_profile_transcodes_what_a_cast_receiver_cannot_play() {
+        assert_eq!(remote_profile(None, Some("flac"), false), None);
+        let p = remote_profile(None, Some("ape"), false).unwrap();
+        assert_eq!(p.format.as_deref(), Some("mp3"));
+        assert_eq!(p.max_bit_rate, Some(320));
+        let p = remote_profile(None, Some("flac"), true).unwrap();
+        assert_eq!(p.format.as_deref(), Some("mp3"), "this receiver can't");
+        assert_eq!(p.max_bit_rate, Some(320));
+        let cellular = TranscodingProfile {
+            format: Some("opus".into()),
+            max_bit_rate: Some(96),
+            cannot_decode: vec![],
+        };
+        let p = remote_profile(Some(cellular.clone()), Some("flac"), false).unwrap();
+        assert_eq!(p, cellular, "a format the receiver plays stays");
+        let p = remote_profile(Some(cellular.clone()), Some("flac"), true).unwrap();
+        assert_eq!(p, cellular, "already transcoded to something it plays");
+        let weird = TranscodingProfile {
+            format: Some("wma".into()),
+            ..cellular
+        };
+        let p = remote_profile(Some(weird), Some("flac"), false).unwrap();
+        assert_eq!(p.format.as_deref(), Some("mp3"));
+        assert_eq!(p.max_bit_rate, Some(96));
+        let capped = TranscodingProfile {
+            format: None,
+            max_bit_rate: Some(192),
+            cannot_decode: vec![],
+        };
+        let p = remote_profile(Some(capped.clone()), Some("flac"), false).unwrap();
+        assert_eq!(
+            p.format.as_deref(),
+            Some("mp3"),
+            "a bare cap names its format"
+        );
+        assert_eq!(p.max_bit_rate, Some(192));
+        let p = remote_profile(Some(capped), Some("flac"), true).unwrap();
+        assert_eq!(p.max_bit_rate, Some(192), "a lower cap stays");
+    }
+
+    #[tokio::test]
+    async fn resolve_remote_streams_from_the_server_even_when_cached() {
+        let f = fixture();
+        let track = f.db.track("t0").unwrap().unwrap();
+        let p = f.dl.cache_path("srv", "t0", None, Some("flac"));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"abc").unwrap();
+        f.dl.cache_put("srv", "t0", None, &p, 3.0, Some("audio/flac"))
+            .unwrap();
+        assert!(f
+            .dl
+            .resolve(&f.server.provider(), "k1", &track)
+            .unwrap()
+            .url
+            .starts_with("file://"));
+        let s =
+            f.dl.resolve_remote(&f.server.provider(), "k1", &track, false)
+                .unwrap();
+        assert!(
+            s.url.starts_with("https://srv.fake/rest/stream?id=t0"),
+            "{}",
+            s.url
+        );
+        assert!(!s.local && !s.transcoded);
+        assert_eq!(s.key, "k1");
+    }
+
     #[tokio::test]
     async fn resolve_prefers_download_then_cache_then_stream() {
         let f = fixture();
         let track = f.db.track("t0").unwrap().unwrap();
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(
             s.url.starts_with("https://srv.fake/rest/stream?id=t0"),
             "{}",
@@ -2206,7 +3075,7 @@ mod tests {
             metered: true,
             network_id: None,
         }));
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(s.transcoded && s.url.contains("format=opus") && s.url.contains("maxBitRate=96"));
         assert_eq!(s.mime_type.as_deref(), Some("audio/ogg"));
         // wifi with no profile → original
@@ -2215,7 +3084,12 @@ mod tests {
             metered: false,
             network_id: Some("home".into()),
         }));
-        assert!(!f.dl.resolve(&f.server, "k1", &track).unwrap().transcoded);
+        assert!(
+            !f.dl
+                .resolve(&f.server.provider(), "k1", &track)
+                .unwrap()
+                .transcoded
+        );
         // per-network-id override wins
         f.dl.set_transcoding_profile(
             Some("home".into()),
@@ -2227,7 +3101,7 @@ mod tests {
         );
         assert!(f
             .dl
-            .resolve(&f.server, "k1", &track)
+            .resolve(&f.server.provider(), "k1", &track)
             .unwrap()
             .url
             .contains("format=mp3"));
@@ -2242,7 +3116,7 @@ mod tests {
         // platform can't decode APE → forced transcode even on wifi
         let mut ape = track.clone();
         ape.suffix = Some("ape".into());
-        let s = f.dl.resolve(&f.server, "k1", &ape).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &ape).unwrap();
         assert!(s.transcoded && s.url.contains("format=flac"), "{}", s.url);
         // cached file wins over streaming
         let p = f.dl.cache_path("srv", "t0", None, Some("flac"));
@@ -2250,7 +3124,7 @@ mod tests {
         std::fs::write(&p, b"abc").unwrap();
         f.dl.cache_put("srv", "t0", None, &p, 3.0, Some("audio/flac"))
             .unwrap();
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(
             s.url.starts_with("file://") && s.url.ends_with("t0.flac"),
             "{}",
@@ -2266,7 +3140,7 @@ mod tests {
         .await;
         f.dl.set_gain("srv", "t0", Some(-6.0), None).unwrap();
         let track = f.db.track("t0").unwrap().unwrap();
-        let s = f.dl.resolve(&f.server, "k1", &track).unwrap();
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(s.url.contains("/downloads/srv/"), "{}", s.url);
         assert_eq!(s.gain_db, -6.0);
         assert_eq!(track.offline, OfflineState::Downloaded);
@@ -2415,13 +3289,18 @@ mod tests {
             },
         );
         cfg.max_concurrent = 4;
-        let api: Arc<dyn SubsonicApi> =
+        let api: Arc<dyn crate::subsonic::SubsonicApi> =
             Arc::new(crate::subsonic::Client::new(cfg, transport.clone()));
         let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
         q.register(
             api::JobKind::Download,
             2,
-            Arc::new(DownloadRunner::new(f.dl.clone(), api)),
+            Arc::new(DownloadRunner::new(
+                f.dl.clone(),
+                crate::provider::ProviderSet::single(Arc::new(
+                    crate::provider::NavidromeProvider::new(api),
+                )),
+            )),
         );
         let album = PinTarget::Album { id: "al0".into() };
         let playlist = PinTarget::Playlist { id: "pl".into() };
@@ -2500,13 +3379,13 @@ mod tests {
             1,
         );
         let e =
-            f.dl.fetch_track(&f.server, "srv", "t1", false)
+            f.dl.fetch_track(&f.server.provider(), "srv", "t1", false)
                 .await
                 .unwrap_err();
         assert!(matches!(e, DownloadError::Server(_)), "{e}");
         assert!(p.exists(), "the earlier complete download is not removed");
         assert_eq!(
-            f.dl.fetch_track(&f.server, "srv", "t1", false)
+            f.dl.fetch_track(&f.server.provider(), "srv", "t1", false)
                 .await
                 .unwrap(),
             1000
@@ -2518,7 +3397,7 @@ mod tests {
         // an unpinned track is reported as such rather than fetched
         f.dl.unpin("srv", &target).unwrap();
         assert!(matches!(
-            f.dl.fetch_track(&f.server, "srv", "t1", false)
+            f.dl.fetch_track(&f.server.provider(), "srv", "t1", false)
                 .await
                 .unwrap_err(),
             DownloadError::NotPinned(_)

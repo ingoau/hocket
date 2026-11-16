@@ -8,7 +8,7 @@ import type { Page } from "@playwright/test";
 import { completeSetup, expect, launchFake, openPlace, resizeWindow, test } from "./fixtures";
 
 async function serverId(page: Page): Promise<string> {
-  const s = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: { id: string }[] };
+  const s = (await page.evaluate(() => window.hocket.query({ type: "accounts" }))) as { data: { id: string }[] };
   return s.data[0]!.id;
 }
 

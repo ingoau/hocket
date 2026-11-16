@@ -66,6 +66,8 @@ pub struct SubsonicResponse {
     pub top_songs: Option<Songs>,
     #[serde(default)]
     pub artist_info2: Option<ArtistInfo2>,
+    #[serde(default)]
+    pub album_info: Option<AlbumInfo>,
     /// `sonicSimilarity` extension (Navidrome ≥ 0.62): a flat array of matches.
     #[serde(default)]
     pub sonic_match: Option<Vec<SonicMatch>>,
@@ -78,6 +80,9 @@ pub struct SubsonicResponse {
     pub play_queue: Option<PlayQueue>,
     #[serde(default)]
     pub now_playing: Option<NowPlaying>,
+    /// `createShare`: the public links just created.
+    #[serde(default)]
+    pub shares: Option<Shares>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
@@ -89,6 +94,23 @@ pub struct ErrorBody {
     pub message: String,
     #[serde(default)]
     pub help_url: Option<String>,
+}
+
+/// `createShare` answer: one wrapper, a list of public links.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shares {
+    #[serde(default)]
+    pub share: Vec<Share>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Share {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
@@ -236,6 +258,9 @@ pub struct AlbumId3 {
     pub music_brainz_id: Option<String>,
     #[serde(default)]
     pub is_compilation: Option<bool>,
+    /// OpenSubsonic: `["Album"]`, `["EP"]`, `["Single", "Live"]`... (MusicBrainz release types).
+    #[serde(default)]
+    pub release_types: Vec<String>,
     #[serde(default)]
     pub sort_name: Option<String>,
     #[serde(default)]
@@ -632,6 +657,24 @@ pub struct ArtistInfo2 {
     pub large_image_url: Option<String>,
     #[serde(default)]
     pub similar_artist: Vec<ArtistId3>,
+}
+
+/// `getAlbumInfo2` answers with an `albumInfo` element.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumInfo {
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub music_brainz_id: Option<String>,
+    #[serde(default)]
+    pub last_fm_url: Option<String>,
+    #[serde(default)]
+    pub small_image_url: Option<String>,
+    #[serde(default)]
+    pub medium_image_url: Option<String>,
+    #[serde(default)]
+    pub large_image_url: Option<String>,
 }
 
 /// `sonicSimilarity` match: a song and a normalised similarity in 0..1

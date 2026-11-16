@@ -6,8 +6,6 @@ use tokio::sync::mpsc;
 use crate::api::*;
 use crate::connect::discovery::PeerAdvert;
 use crate::connect::transport::Connection;
-use crate::connect::wire::Credential;
-use crate::connect::PeerId;
 use crate::core::actor::Actor;
 use crate::core::{ActorMsg, Internal};
 
@@ -196,18 +194,6 @@ impl Actor {
         }
     }
 
-    pub(crate) fn io_verify(&mut self, peer: PeerId, credential: Credential) {
-        let io = self.io.clone();
-        let tx = self.tx.clone();
-        self.spawn(async move {
-            let ok = io.verify(credential).await;
-            let _ = tx.send(ActorMsg::Internal(Internal::CredentialVerified {
-                peer,
-                ok,
-            }));
-        });
-    }
-
     /// Connect a preset (test) server's fake socket: unused in production.
     #[allow(dead_code)]
     pub(crate) fn adopt_connection(&mut self, conn: Connection) {
@@ -226,7 +212,7 @@ impl Actor {
             if let Some(s) = self.settings.setting(&key) {
                 self.emit(Event::SettingChanged { setting: s });
             }
-            self.apply_setting_side_effects(&key, false);
+            self.apply_setting_side_effects(&key);
         }
     }
 

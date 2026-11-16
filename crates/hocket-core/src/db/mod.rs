@@ -15,7 +15,10 @@
 //! The schema contract shared with the filters module is `schema.sql`.
 //! `WhereClause` lets that module hand over raw SQL against `tracks`.
 
+pub mod catalogue;
+pub mod links;
 pub mod queries;
+pub mod restore_v10;
 pub mod sync;
 
 use std::path::{Path, PathBuf};
@@ -26,39 +29,15 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 
 use crate::util::{now_ms, Clock};
 
-/// Numbered, forward-only migrations. `0001` is `schema.sql` itself (the
-/// v1 snapshot; never edited), later ones live in `migrations/`.
-pub const MIGRATIONS: &[(u32, &str, &str)] = &[
-    (1, "0001_init", include_str!("schema.sql")),
-    (
-        2,
-        "0002_outbox_server_ref",
-        include_str!("migrations/0002_outbox_server_ref.sql"),
-    ),
-    (
-        3,
-        "0003_stream_cache_spans",
-        include_str!("migrations/0003_stream_cache_spans.sql"),
-    ),
-    (
-        4,
-        "0004_play_history_unique",
-        include_str!("migrations/0004_play_history_unique.sql"),
-    ),
-    (
-        5,
-        "0005_track_artists",
-        include_str!("migrations/0005_track_artists.sql"),
-    ),
-    (
-        6,
-        "0006_artist_sort_index",
-        include_str!("migrations/0006_artist_sort_index.sql"),
-    ),
-];
+/// The schema, applied as one migration. Hocket has no users yet: a schema
+/// change edits `schema.sql` and bumps the version, and a database from an
+/// older version is backed up and recreated (`migrate`). 11 squashed the
+/// earlier 0001–0010 and renamed `servers` to `accounts`; 12 added dedup
+/// links, ISRCs and Mixed playlists' per-song sources; 13 the live catalogue.
+pub const MIGRATIONS: &[(u32, &str, &str)] = &[(13, "0013_catalogue", include_str!("schema.sql"))];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -71,13 +50,15 @@ pub const MIRROR_TABLES: &[&str] = &[
     "capabilities",
     "image_cache",
     "lyrics_cache",
+    "lyrics_search",
     "metadata_cache",
     "cache_entries",
+    "catalogue",
 ];
 
 /// Tables that cannot be rebuilt from the server (backed up before migrating).
 pub const DURABLE_TABLES: &[&str] = &[
-    "servers",
+    "accounts",
     "pins",
     "pin_tracks",
     "outbox",
@@ -88,6 +69,7 @@ pub const DURABLE_TABLES: &[&str] = &[
     "saved_state",
     "settings",
     "filters",
+    "automix_records",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -126,6 +108,9 @@ pub struct OpenReport {
     pub backup_path: Option<PathBuf>,
     /// The mirror was dropped and must be re-synced.
     pub mirror_rebuilt: bool,
+    /// What was restored from the backup of a version-10 database
+    /// ([`restore_v10`]); `None` when no restore ran.
+    pub restore: Option<restore_v10::RestoreReport>,
 }
 
 struct Inner {
@@ -153,6 +138,20 @@ impl std::fmt::Debug for Db {
     }
 }
 
+/// Bring the lyric search index in line with the cache in one transaction. The
+/// index only serves search, so a failure is logged and the core still starts;
+/// the next open tries again.
+fn sync_lyrics_index_on_open(conn: &mut Connection) {
+    let result = conn.transaction().map_err(DbError::from).and_then(|tx| {
+        queries::sync_lyrics_index(&tx)?;
+        tx.commit()?;
+        Ok(())
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "could not update the lyrics search index");
+    }
+}
+
 impl Db {
     /// Open (creating if needed) the database at `path`, applying migrations.
     /// `backup_dir` receives a copy of the file before a migration when the
@@ -161,7 +160,7 @@ impl Db {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open_with_flags(
+        let mut conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
@@ -169,14 +168,16 @@ impl Db {
         )?;
         configure(&conn)?;
         let report = migrate(&conn, Some(path), Some(backup_dir))?;
+        sync_lyrics_index_on_open(&mut conn);
         Ok(Self::wrap(conn, Some(path.to_path_buf()), report))
     }
 
     /// An in-memory database (tests).
     pub fn open_in_memory() -> DbResult<Db> {
-        let conn = Connection::open_in_memory()?;
+        let mut conn = Connection::open_in_memory()?;
         configure(&conn)?;
         let report = migrate(&conn, None, None)?;
+        sync_lyrics_index_on_open(&mut conn);
         Ok(Self::wrap(conn, None, report))
     }
 
@@ -414,6 +415,9 @@ fn migrate(
     }
     let pending: Vec<_> = MIGRATIONS.iter().filter(|(v, _, _)| *v > from).collect();
     if pending.is_empty() {
+        if path.is_some() {
+            report.restore = restore_v10::after_open(conn);
+        }
         return Ok(report);
     }
     if from > 0 {
@@ -433,22 +437,135 @@ fn migrate(
             report.backup_path = Some(dest);
         }
     }
-    for (version, name, sql) in pending {
-        match apply_migration(conn, *version, sql) {
-            Ok(()) => tracing::info!(version, name, "applied migration"),
-            Err(first) => {
-                tracing::warn!(version, name, error = %first, "migration failed; rebuilding mirror tables");
-                drop_mirror_tables(conn)?;
-                report.mirror_rebuilt = true;
-                apply_migration(conn, *version, sql).map_err(|source| DbError::Migration {
-                    version: *version,
-                    source,
-                })?;
+    if from > 0 && from < MIGRATIONS[0].0 {
+        // Older than the squashed schema: nothing to migrate from. The
+        // backup above keeps the old file; start over and restore what the
+        // server can't give back from the first version-10 backup (the copy
+        // taken before any interrupted attempt), all in one transaction.
+        tracing::warn!(from, "database predates the squashed schema; recreating it");
+        report.mirror_rebuilt = true;
+        let backup = if from == restore_v10::FROM_VERSION {
+            path.zip(backup_dir)
+                .and_then(|(p, d)| restore_v10::first_backup(d, p))
+                .or_else(|| report.backup_path.clone())
+        } else {
+            tracing::info!(from, "no restore from a version-{from} database");
+            None
+        };
+        report.restore = recreate(conn, backup.as_deref())?;
+        report.to_version = MIGRATIONS[0].0;
+    } else {
+        for (version, name, sql) in pending {
+            match apply_migration(conn, *version, sql) {
+                Ok(()) => tracing::info!(version, name, "applied migration"),
+                Err(first) => {
+                    tracing::warn!(version, name, error = %first, "migration failed; rebuilding mirror tables");
+                    drop_mirror_tables(conn)?;
+                    report.mirror_rebuilt = true;
+                    apply_migration(conn, *version, sql).map_err(|source| DbError::Migration {
+                        version: *version,
+                        source,
+                    })?;
+                }
             }
+            report.to_version = *version;
         }
-        report.to_version = *version;
+    }
+    if report.restore.is_none() && path.is_some() {
+        report.restore = restore_v10::after_open(conn);
     }
     Ok(report)
+}
+
+/// Drop everything and apply the current schema, then restore from
+/// `backup`, in one transaction: a crash leaves the old database whole. A
+/// restore SQLite rolled back takes the recreation with it; the recreation
+/// is then redone without it, recording in the same transaction that the
+/// next open retries the restore (`restore_v10::after_open`).
+fn recreate(
+    conn: &Connection,
+    backup: Option<&Path>,
+) -> DbResult<Option<restore_v10::RestoreReport>> {
+    // Not inside a transaction (it would be a no-op there): dropping a
+    // parent table before its children must not trip foreign keys.
+    conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+    let result = match recreate_once(conn, backup, None) {
+        Ok(Err(aborted)) => recreate_once(conn, None, backup).map(|_| Some(aborted)),
+        other => other.map(|r| r.ok().flatten()),
+    };
+    conn.execute_batch("PRAGMA foreign_keys = ON")?;
+    result
+}
+
+/// `Ok(Err(report))`: the restore was aborted and nothing was committed.
+/// `retry_from`: no restore now, the next open restores from that backup.
+#[allow(clippy::type_complexity)]
+fn recreate_once(
+    conn: &Connection,
+    backup: Option<&Path>,
+    retry_from: Option<&Path>,
+) -> DbResult<Result<Option<restore_v10::RestoreReport>, restore_v10::RestoreReport>> {
+    let (version, _, sql) = MIGRATIONS[0];
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let out = drop_all_tables(conn)
+        .and_then(|()| {
+            conn.execute_batch(sql)
+                .and_then(|()| {
+                    conn.execute(
+                        "INSERT INTO schema_version(version, applied_at) VALUES (?1, ?2)",
+                        rusqlite::params![version, now_ms()],
+                    )
+                })
+                .and_then(|_| match retry_from {
+                    Some(b) => restore_v10::mark_retry(conn, b),
+                    None => Ok(()),
+                })
+                .map_err(|source| DbError::Migration { version, source })
+        })
+        .map(|_| match backup {
+            Some(b) => restore_v10::restore_in(conn, b, false)
+                .map(Some)
+                .map_err(|restore_v10::Aborted(r)| r),
+            None => Ok(None),
+        });
+    match out {
+        Ok(Ok(restored)) => match conn.execute_batch("COMMIT") {
+            Ok(()) => Ok(Ok(restored)),
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e.into())
+            }
+        },
+        Ok(Err(aborted)) => {
+            if !conn.is_autocommit() {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+            Ok(Err(aborted))
+        }
+        Err(e) => {
+            if !conn.is_autocommit() {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+            Err(e)
+        }
+    }
+}
+
+fn drop_all_tables(conn: &Connection) -> DbResult<()> {
+    let names: Vec<(String, String)> = {
+        let mut st = conn.prepare(
+            "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger', 'index')
+             AND name NOT LIKE 'sqlite_%' ORDER BY type = 'table'",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for (kind, name) in names {
+        // FTS shadow tables vanish with their virtual table.
+        let kind = kind.to_uppercase();
+        conn.execute_batch(&format!("DROP {kind} IF EXISTS \"{name}\""))?;
+    }
+    Ok(())
 }
 
 fn drop_mirror_tables(conn: &Connection) -> DbResult<()> {
@@ -486,6 +603,7 @@ mod tests {
             assert!(tables.contains(&t.to_string()), "missing {t}");
         }
         assert!(tables.contains(&"tracks_fts".to_string()));
+        assert!(tables.contains(&"lyrics_search_fts".to_string()));
     }
 
     #[test]
@@ -544,23 +662,19 @@ mod tests {
     }
 
     #[test]
-    fn migration_4_drops_duplicate_plays() {
+    fn database_older_than_the_squashed_schema_is_recreated() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hocket.db");
         {
-            // A version 3 database holding one play recorded twice.
+            // A pre-squash database (version 10, `servers` table).
             let db = Db::open(&path, &dir.path().join("backups")).unwrap();
             db.with_conn(|c| {
                 c.execute_batch(
-                    "DROP INDEX idx_play_history_play;
-                     ALTER TABLE tracks DROP COLUMN artists;
-                     DELETE FROM schema_version WHERE version >= 4;
-                     INSERT INTO tracks(id, server_id, title, local_play_count) VALUES ('t', 's', 'T', 3), ('u', 's', 'U', 1);
-                     INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES
-                         ('s', 't', 1790294961606.5, 126260, 0, 'd'),
-                         ('s', 't', 1790294961606.5, 132388, 1, 'd'),
-                         ('s', 't', 1790294000000.0, 126260, 0, 'd'),
-                         ('s', 'u', 1790294961606.5, 126260, 0, 'd');",
+                    "DROP TABLE accounts;
+                     CREATE TABLE servers (id TEXT PRIMARY KEY);
+                     DELETE FROM schema_version;
+                     INSERT INTO schema_version(version, applied_at) VALUES (10, 0);
+                     INSERT INTO tracks(id, server_id, title) VALUES ('t', 's', 'T');",
                 )?;
                 Ok(())
             })
@@ -568,81 +682,18 @@ mod tests {
         }
         let db = Db::open(&path, &dir.path().join("backups")).unwrap();
         assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
-        let rows: Vec<(String, f64, i64, i64)> = db
+        assert!(db.open_report().backup_path.is_some());
+        let (servers, tracks): (i64, i64) = db
             .with_conn(|c| {
-                let mut st = c.prepare(
-                    "SELECT track_id, played_at, played_ms, scrobbled FROM play_history ORDER BY id",
-                )?;
-                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
-                Ok(rows.collect::<Result<Vec<_>, _>>()?)
-            })
-            .unwrap();
-        assert_eq!(
-            rows,
-            vec![
-                ("t".into(), 1790294961606.5, 126260, 1),
-                ("t".into(), 1790294000000.0, 126260, 0),
-                ("u".into(), 1790294961606.5, 126260, 0),
-            ]
-        );
-        let counts: Vec<i64> = db
-            .with_conn(|c| {
-                let mut st = c.prepare("SELECT local_play_count FROM tracks ORDER BY id")?;
-                let rows = st.query_map([], |r| r.get(0))?;
-                Ok(rows.collect::<Result<Vec<_>, _>>()?)
-            })
-            .unwrap();
-        assert_eq!(counts, vec![2, 1]);
-        // The index refuses a copy from now on.
-        assert!(db
-            .with_conn(|c| {
-                c.execute(
-                    "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id) VALUES ('s', 'u', 1790294961606.5, 1, 0, 'd')",
+                Ok(c.query_row(
+                    "SELECT (SELECT count(*) FROM sqlite_master WHERE name = 'servers'), (SELECT count(*) FROM tracks)",
                     [],
-                )?;
-                Ok(())
-            })
-            .is_err());
-    }
-
-    #[test]
-    fn migration_5_adds_track_artists_and_makes_the_next_sync_full() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("hocket.db");
-        {
-            // A version 4 database with a song and a server synced in full once.
-            let db = Db::open(&path, &dir.path().join("backups")).unwrap();
-            db.with_conn(|c| {
-                c.execute_batch(
-                    "ALTER TABLE tracks DROP COLUMN artists;
-                     DELETE FROM schema_version WHERE version >= 5;
-                     INSERT INTO tracks(id, server_id, title, artist_id, artist) VALUES ('t', 's', 'T', 'ar1', 'A feat. B');
-                     INSERT INTO saved_state VALUES ('sync:s', '{\"gen\":3,\"phase\":\"done\",\"lastFullAt\":1790000000000.0,\"readyTables\":[\"tracks\"]}', 0);
-                     INSERT INTO saved_state VALUES ('sync:never', '{\"gen\":0,\"phase\":\"done\"}', 0);",
-                )?;
-                Ok(())
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
             })
             .unwrap();
-        }
-        let db = Db::open(&path, &dir.path().join("backups")).unwrap();
-        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
-        // A row from before the list: its one artist.
-        let t = db.track("t").unwrap().unwrap();
-        assert_eq!(t.artist.as_deref(), Some("A feat. B"));
-        assert_eq!(
-            t.artists,
-            vec![crate::api::ArtistRef {
-                id: Some("ar1".into()),
-                name: "A feat. B".into()
-            }]
-        );
-        // The synced server's next sync is a full one (it refetches every song); still synced once.
-        let c: sync::SyncCursor = db.saved_state_get("sync:s").unwrap().unwrap();
-        assert_eq!(c.last_full_at, Some(0.0));
-        assert!(c.has_completed_once());
-        assert_eq!(c.gen, 3);
-        let never: sync::SyncCursor = db.saved_state_get("sync:never").unwrap().unwrap();
-        assert_eq!(never.last_full_at, None);
+        assert_eq!((servers, tracks), (0, 0));
+        assert!(db.accounts().unwrap().is_empty());
     }
 
     #[test]

@@ -3,19 +3,19 @@
 // `dispatch`/`query` which go straight to the bridge.
 import { useMemo } from "react";
 import { create } from "zustand";
-import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting } from "@core/api";
-import type { AppMeta, AppPrefs, WindowState } from "@shared/bridge-types";
+import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting, TrackRef } from "@core/api";
+import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/bridge-types";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
-import { type CoreState, dismissToast, initialCoreState, reduce, settingValue } from "./reducer";
+import { type CoreState, dismissToast, initialCoreState, reduce, saverHas, settingValue } from "./reducer";
 import { EMPTY_SELECTION, type Selection } from "./selection";
 import { ticker } from "./position";
 import { BACKGROUND_FPS, perfForWindow } from "../lib/kawarp-budget";
 import { SK } from "@shared/settings-keys";
 import type { MenuFacts } from "../lib/menu-model";
 
-export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "developer" | "album" | "artist" | "playlist" | "genre" | "filter" | "search";
+export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "developer" | "album" | "artist" | "playlist" | "genre" | "filter" | "search" | "snoozed";
 
 export interface Route {
   view: ViewName;
@@ -25,6 +25,7 @@ export interface Route {
 }
 
 /** What the fullscreen player's stage shows: the big artwork, or one of its panes (the artwork shrinks next to the title). */
+export type SelectionKind = "tracks" | "albums" | "artists" | "playlists" | "queueItems";
 export type NowPlayingMode = "art" | "lyrics" | "queue" | "about";
 const NOW_PLAYING_MODES: readonly NowPlayingMode[] = ["art", "lyrics", "queue", "about"];
 
@@ -37,6 +38,8 @@ export interface PanelState {
   rightView: SideView;
   rightWidth: number;
   sidebarWidth: number;
+  /** The sidebar folded to a rail of icons and covers (the top bar's first button, Mod+B). */
+  sidebarCollapsed: boolean;
 }
 
 /** A menu item the renderer runs itself (a pin's "When clicked" choice, moving a Home section). */
@@ -72,19 +75,29 @@ export type DialogState =
   | { kind: "prompt"; title: string; label: string; initial?: string; confirmLabel?: string; onConfirm: (value: string) => void }
   | { kind: "confirm"; title: string; message: string; confirmLabel?: string; destructive?: boolean; onConfirm: () => void }
   | { kind: "sleepTimer" }
+  /** Snooze songs until a chosen date and time (the Snooze submenu's Custom row). */
+  | { kind: "snoozeUntil"; tracks: TrackRef[] }
   | { kind: "connect" }
-  | { kind: "trackInfo"; trackId: string }
-  | { kind: "albumInfo"; albumId: string };
+  | { kind: "trackInfo"; track: TrackRef }
+  /** Name a new playlist, and with several accounts pick where it lives (or Mixed). */
+  | { kind: "newPlaylist"; tracks: TrackRef[]; initial?: string }
+  | { kind: "albumInfo"; albumId: string }
+  /** Save to Coordinator; `allDevices` as the diagnostics page's bundle options. */
+  | { kind: "report"; allDevices: boolean }
+  | { kind: "pairDevice" }
+  /** Remove a device from this identity (with the password-change prompt). */
+  | { kind: "removeDevice"; deviceId: string; name: string; self: boolean };
 
 /** The Add to playlist picker opened on its own (a "+" button, the shortcut), beside what opened it. */
 export interface PlaylistPickerState {
-  trackIds: string[];
+  tracks: TrackRef[];
   /** The button (or focused item) it opens from, in window coordinates. */
   anchor: { left: number; right: number; top: number; bottom: number };
 }
 
 export interface UiState {
   meta: AppMeta | undefined;
+  credentialStorage: CredentialStorage | undefined;
   windowState: WindowState;
   route: Route;
   history: Route[];
@@ -92,12 +105,20 @@ export interface UiState {
   panels: PanelState;
   fullscreen: boolean;
   paletteOpen: boolean;
+  /** The stash popover in the top bar. */
+  stashOpen: boolean;
   contextMenu: ContextMenuState | undefined;
   playlistPicker: PlaylistPickerState | undefined;
   dialog: DialogState | undefined;
+  /** A pairing link (hocket://pair) opened from outside, for the setup screen to join with. */
+  pendingPair: string | undefined;
   selection: Selection;
   /** View id the selection belongs to; a route change clears it. */
   selectionScope: string;
+  /** What the selected ids are (track ids, album ids, queue keys…), for shortcuts that act on it. */
+  selectionKind: SelectionKind | undefined;
+  /** A song selection's references (the list knows each row's account), when it is one. */
+  selectionRefs: TrackRef[] | undefined;
   searchQuery: string;
   searchFocusNonce: number;
   accent: string | undefined;
@@ -119,6 +140,9 @@ export interface UiState {
    * when the drag ends.
    */
   queueDropReveal: boolean;
+  /** The source filter chip: the account the library, search and playlists show ("" = all, `hocket` = Mixed playlists). */
+  librarySource: string;
+  setLibrarySource(source: string): void;
 }
 
 export interface AppStore extends CoreState, UiState {
@@ -132,13 +156,15 @@ export interface AppStore extends CoreState, UiState {
   setPanels(patch: Partial<PanelState>): void;
   setFullscreen(on: boolean): void;
   setPaletteOpen(open: boolean): void;
+  setStashOpen(open: boolean): void;
   openContextMenu(menu: ContextMenuState): void;
   closeContextMenu(): void;
   openPlaylistPicker(picker: PlaylistPickerState): void;
   closePlaylistPicker(): void;
   openDialog(dialog: DialogState): void;
   closeDialog(): void;
-  setSelection(selection: Selection, scope: string): void;
+  setPendingPair(link: string | undefined): void;
+  setSelection(selection: Selection, scope: string, kind?: SelectionKind, refs?: TrackRef[]): void;
   clearSelection(): void;
   setSearchQuery(q: string): void;
   focusSearch(): void;
@@ -156,7 +182,12 @@ export interface AppStore extends CoreState, UiState {
   runAction(actionId: string, target?: ActionTarget): void;
 }
 
-const defaultPanels: PanelState = { rightOpen: true, rightView: "overview", rightWidth: 360, sidebarWidth: 220 };
+/** The sidebar's resize range, and the rail's width when it is collapsed (or the window narrow). */
+export const SIDEBAR_MIN = 200;
+export const SIDEBAR_MAX = 420;
+export const SIDEBAR_RAIL = 72;
+
+const defaultPanels: PanelState = { rightOpen: true, rightView: "overview", rightWidth: 360, sidebarWidth: 280, sidebarCollapsed: false };
 
 /** The remembered panels, minus anything an older build stored (the queue/lyrics split). */
 function loadPanels(): PanelState {
@@ -165,7 +196,8 @@ function loadPanels(): PanelState {
   if (typeof saved.rightOpen === "boolean") panels.rightOpen = saved.rightOpen;
   // Saved widths are clamped to what the resize handles allow (an older build, a hand-edited file).
   if (typeof saved.rightWidth === "number") panels.rightWidth = Math.max(300, Math.min(560, saved.rightWidth));
-  if (typeof saved.sidebarWidth === "number") panels.sidebarWidth = Math.max(160, Math.min(360, saved.sidebarWidth));
+  if (typeof saved.sidebarWidth === "number") panels.sidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, saved.sidebarWidth));
+  if (typeof saved.sidebarCollapsed === "boolean") panels.sidebarCollapsed = saved.sidebarCollapsed;
   if (SIDE_VIEWS.includes(saved.rightView as SideView)) panels.rightView = saved.rightView as SideView;
   return panels;
 }
@@ -173,6 +205,7 @@ function loadPanels(): PanelState {
 export const useApp = create<AppStore>((set, get) => ({
   ...initialCoreState,
   meta: undefined,
+  credentialStorage: undefined,
   windowState: { maximized: false, fullscreen: false, focused: true, visible: true, alwaysOnTop: false },
   route: { view: "home" },
   history: [],
@@ -180,11 +213,15 @@ export const useApp = create<AppStore>((set, get) => ({
   panels: loadPanels(),
   fullscreen: false,
   paletteOpen: false,
+  stashOpen: false,
   contextMenu: undefined,
   playlistPicker: undefined,
   dialog: undefined,
+  pendingPair: undefined,
   selection: EMPTY_SELECTION,
   selectionScope: "",
+  selectionKind: undefined,
+  selectionRefs: undefined,
   searchQuery: "",
   searchFocusNonce: 0,
   accent: undefined,
@@ -196,6 +233,7 @@ export const useApp = create<AppStore>((set, get) => ({
   editingPins: false,
   editPinsFrom: undefined,
   queueDropReveal: false,
+  librarySource: "",
 
   dispatch(command) {
     bridge().dispatch(command);
@@ -210,8 +248,12 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   navigate(route, replace = false) {
     const cur = get().route;
-    if (cur.view === route.view && cur.id === route.id && cur.param === route.param) return;
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", contextMenu: undefined, playlistPicker: undefined }));
+    // Going where you already are still takes the palette (and any menu) away.
+    if (cur.view === route.view && cur.id === route.id && cur.param === route.param) {
+      if (get().paletteOpen) set({ paletteOpen: false, contextMenu: undefined, playlistPicker: undefined });
+      return;
+    }
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, selectionRefs: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false }));
   },
   back() {
     const { history, route } = get();
@@ -236,6 +278,9 @@ export const useApp = create<AppStore>((set, get) => ({
   setPaletteOpen(open) {
     set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined });
   },
+  setStashOpen(open) {
+    set({ stashOpen: open });
+  },
   openContextMenu(menu) {
     set({ contextMenu: menu, playlistPicker: undefined });
   },
@@ -254,8 +299,11 @@ export const useApp = create<AppStore>((set, get) => ({
   closeDialog() {
     set({ dialog: undefined });
   },
-  setSelection(selection, scope) {
-    set({ selection, selectionScope: scope });
+  setPendingPair(pendingPair) {
+    set({ pendingPair });
+  },
+  setSelection(selection, scope, kind, refs) {
+    set({ selection, selectionScope: scope, selectionKind: kind, selectionRefs: refs });
   },
   clearSelection() {
     set({ selection: EMPTY_SELECTION });
@@ -292,6 +340,9 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   setEditingPins(editingPins, from) {
     set({ editingPins, editPinsFrom: editingPins ? from : undefined });
+  },
+  setLibrarySource(librarySource) {
+    set({ librarySource });
   },
   setQueueDropReveal(queueDropReveal) {
     if (get().queueDropReveal === queueDropReveal) return;
@@ -378,9 +429,9 @@ function recomputePerf(): void {
   const perf = perfForWindow(s.windowState.visible, s.windowState.focused);
   if (perf !== s.perf) useApp.setState({ perf });
   // Position ticker: stopped when hidden; 24 fps in the background; capped by
-  // battery saver (30 fps) and the lyrics fps setting when focused.
+  // battery saver's lighter lyrics (battery.lyricsFps) and the lyrics fps setting when focused.
   ticker.setPaused(perf === "stopped");
-  const cap = s.batterySaver ? Math.max(10, settingValue(s, SK.batteryLyricsFps, 30)) : Math.max(10, Math.min(144, settingValue(s, SK.displayLyricsFps, 30)));
+  const cap = saverHas(s.batterySaver, "lighterLyrics") ? Math.max(10, settingValue(s, SK.batteryLyricsFps, 30)) : Math.max(10, Math.min(144, settingValue(s, SK.displayLyricsFps, 30)));
   ticker.fps = perf === "background" ? Math.min(BACKGROUND_FPS, cap) : cap;
 }
 
@@ -395,7 +446,19 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
       if (r.type === "lyricsResult" && r.data) useApp.getState().applyEvent({ type: "lyricsChanged", data: { track_id: trackId, lyrics: r.data } });
     }).catch(() => undefined);
   };
+  // Stash events sent before this window subscribed are gone: ask once.
+  if (kind === "main") {
+    void b.query({ type: "stash" }).then((r) => {
+      if (r.type === "stashItems") useApp.getState().applyEvent({ type: "stashChanged", data: { items: r.data } });
+    }).catch(() => undefined);
+    void b.query({ type: "snoozes" }).then((r) => {
+      if (r.type === "snoozeItems") useApp.getState().applyEvent({ type: "snoozesChanged", data: { items: r.data } });
+    }).catch(() => undefined);
+  }
+  // A report upload already running (resumed as the core started) has sent its events by now: ask.
+  let reportEventSeen = false;
   const offEvent = b.onEvent((e) => {
+    if (e.type === "reportUploadChanged") reportEventSeen = true;
     useApp.getState().applyEvent(e);
     const snapshot = snapshotOf(e);
     if (snapshot) requestLyrics(snapshot.queue.current?.track.id);
@@ -404,6 +467,7 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
   });
   const offState = b.window.onState((st) => useApp.getState().setWindowState(st));
   void b.meta().then((m) => useApp.getState().setMeta(m));
+  void b.credentialStorage().then((credentialStorage) => useApp.setState({ credentialStorage }));
   void b.prefs.get().then((prefs) => useApp.setState({ prefs }));
   void b.window.getState().then((st) => st && useApp.getState().setWindowState(st));
   const onVis = () => {
@@ -417,6 +481,11 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
   const onOnline = () => b.window.reportNetwork(navigator.onLine);
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOnline);
+  if (kind === "main") {
+    void b.query({ type: "reportUpload" }).then((r) => {
+      if (r.type === "reportUpload" && !reportEventSeen) useApp.getState().applyEvent({ type: "reportUploadChanged", data: { status: r.data } });
+    }).catch(() => undefined);
+  }
   // Attach: the core re-emits everything with current state.
   b.dispatch({ type: "requestSnapshot" });
   return () => {

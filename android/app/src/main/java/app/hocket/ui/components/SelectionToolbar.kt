@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DropdownMenu
@@ -59,10 +60,12 @@ import kotlinx.coroutines.launch
  * editable playlist) removes the selected entries from it ("Remove 3 from Late night").
  */
 @Composable
-fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = null, context: String? = null, onRemoveFromContext: (() -> Unit)? = null) {
+fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = null, context: String? = null, onRemoveFromContext: (() -> Unit)? = null, kinds: Set<SelectionKind>? = null) {
     val client = LocalCoreClient.current
-    val selection by client.selection.collectAsStateWithLifecycleCompat()
+    val selectionAll by client.selection.collectAsStateWithLifecycleCompat()
     val kind by client.selectionKind.collectAsStateWithLifecycleCompat()
+    // Two panes side by side each have a toolbar: [kinds] keeps each to what its own pane selects.
+    val selection = if (kinds == null || kind in kinds) selectionAll else Selection()
     var actions by remember { mutableStateOf<List<ActionDescriptor>>(emptyList()) }
     var menu by remember { mutableStateOf(false) }
     var playlistPicker by remember { mutableStateOf(false) }
@@ -97,10 +100,14 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
             HorizontalFloatingToolbar(
                 expanded = true,
                 colors = FloatingToolbarDefaults.vibrantFloatingToolbarColors(),
-                modifier = Modifier.semantics { contentDescription = count },
+                modifier = Modifier.semantics { contentDescription = count }.testTag("selection.toolbar"),
                 leadingContent = {
-                    IconButton(onClick = { client.clearSelection() }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.action_clear_selection)) }
-                    Text(count, style = MaterialTheme.typography.labelLarge)
+                    // Centred on the icons explicitly: the toolbar's leading slot tops-aligns its
+                    // children, which left "1 selected" riding above the buttons (R-20261103-hpkz).
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("selection.leading")) {
+                        IconButton(onClick = { client.clearSelection() }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.action_clear_selection)) }
+                        Text(count, style = MaterialTheme.typography.labelLarge, modifier = Modifier.testTag("selection.count"))
+                    }
                 },
                 trailingContent = {
                     if (onSelectAll != null) IconButton(onClick = onSelectAll) { Icon(HocketIcons.Filled.SelectAll, stringResource(R.string.action_select_all)) }
@@ -133,7 +140,6 @@ fun SelectionToolbar(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? =
                         onClick = { remove(); client.clearSelection() }, destructive = true, testTag = "selectionMenu.removeFromPlaylist", replaces = ActionIds.REMOVE_FROM_PLAYLIST)
                 }),
                 onDismiss = { songsMenu = null },
-                onAddToPlaylist = { playlistPicker = true },
                 onRan = { client.clearSelection() },
                 tag = "selectionMenu",
             )
@@ -157,10 +163,10 @@ internal suspend fun selectionSubject(client: CoreClient, selection: Selection, 
     val tracks: List<TrackSummary> = if (selection.inverted) emptyList() else when (kind) {
         SelectionKind.QueueItems -> {
             val q = client.queue.value
-            val all = q.history + listOfNotNull(q.current) + q.playingNext + q.upcoming
+            val all = q.entries + listOfNotNull(q.current)
             selection.ids.mapNotNull { k -> all.firstOrNull { it.item.key == k }?.track }
         }
-        else -> (client.query(Queries.tracksByIds(selection.ids.toList())) as? QueryResult.TrackList)?.data?.map { it.toSummary() }.orEmpty()
+        else -> (client.query(Queries.tracksByIds((client.selectionTarget() as? app.hocket.core.api.ActionTarget.Tracks)?.data?.tracks.orEmpty())) as? QueryResult.TrackList)?.data?.map { it.toSummary() }.orEmpty()
     }
     return songsSubject(count, tracks, context, resources, dot, removeFromQueue = kind == SelectionKind.QueueItems)
 }

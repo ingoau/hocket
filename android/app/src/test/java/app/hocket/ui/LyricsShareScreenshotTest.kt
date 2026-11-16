@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.api.TrackRef
+
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
@@ -87,7 +89,7 @@ class LyricsShareScreenshotTest {
         client.requestSnapshot()
         compose.waitUntil(5_000) { client.started.value }
         val (trackId, doc) = fake.library.lyricsByTrack.entries.first { it.value?.tier == LyricsTier.Syllable }
-        client.dispatch(Commands.playTracks(fake.library.serverId, listOf(trackId), 0, "Share"))
+        client.dispatch(Commands.playTracks((listOf(trackId)).map { TrackRef(fake.library.serverId, it) }, 0, "Share"))
         awaitTag("miniPlayer")
         compose.onNodeWithTag("miniPlayer.info").performSemanticsAction(SemanticsActions.OnClick)
         awaitTag("player.mode.lyrics")

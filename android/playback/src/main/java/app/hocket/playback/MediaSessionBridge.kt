@@ -24,6 +24,7 @@ import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import app.hocket.core.Commands
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSessionAction
 import app.hocket.core.api.MediaSessionState
@@ -40,7 +41,7 @@ import kotlin.math.roundToInt
 /**
  * Builds the Media3 [MediaLibrarySession] over a [CoreSessionPlayer] and keeps its custom button
  * layout in step with the core's customised action list (`MediaSessionState.actions`): love,
- * shuffle, repeat and rate as media button preferences, so they appear on the notification and on
+ * shuffle, repeat, rate and stash as media button preferences, so they appear on the notification and on
  * Wear/Auto surfaces that honour them. Transport buttons come from the player's available commands.
  *
  * The library side ([browser]) answers other apps' browsing and search (Android Auto, Wear,
@@ -65,19 +66,26 @@ import kotlin.math.roundToInt
  * cuts off controllers that are already connected ([setExternalControl], [listenerObserver]).
  */
 class MediaSessionBridge(
-    context: Context,
+    private val context: Context,
     val player: CoreSessionPlayer,
     private val dispatch: (Command) -> Unit,
     launchIntent: Intent?,
     private val browser: LibraryBrowser,
     private val scope: CoroutineScope,
     private val control: ExternalControl,
+    /**
+     * A play request is waiting on [onPlaybackResumption]. The service has to outlive the
+     * controller that asked: System UI's resumption card binds, sends play and unbinds within a
+     * second, and a core that is still starting takes longer than that to name the resume item.
+     */
+    private val onResumeRequested: () -> Unit = {},
 ) {
     companion object {
         const val CMD_LOVE = "app.hocket.LOVE"
         const val CMD_SHUFFLE = "app.hocket.SHUFFLE"
         const val CMD_REPEAT = "app.hocket.REPEAT"
         const val CMD_RATE = "app.hocket.RATE"
+        const val CMD_STASH = "app.hocket.STASH"
         const val EXTRA_RATING = "rating"
 
         /**
@@ -85,21 +93,33 @@ class MediaSessionBridge(
          * unset heart unlove), stars and percentages rate out of five (unset clears the rating).
          * Null for a rating type there is no meaning for.
          */
-        fun ratingCommand(trackId: String, rating: Rating): Command? = when (rating) {
-            is HeartRating -> Commands.loveTrack(trackId, rating.isRated && rating.isHeart)
-            is ThumbRating -> Commands.loveTrack(trackId, rating.isRated && rating.isThumbsUp)
-            is StarRating -> Commands.rateTrack(trackId, if (rating.isRated) (rating.starRating / rating.maxStars * 5).roundToInt().coerceIn(0, 5) else 0)
-            is PercentageRating -> Commands.rateTrack(trackId, if (rating.isRated) (rating.percent / 20f).roundToInt().coerceIn(0, 5) else 0)
+        fun ratingCommand(track: TrackRef, rating: Rating): Command? = when (rating) {
+            is HeartRating -> Commands.loveTrack(track, rating.isRated && rating.isHeart)
+            is ThumbRating -> Commands.loveTrack(track, rating.isRated && rating.isThumbsUp)
+            is StarRating -> Commands.rateTrack(track, if (rating.isRated) (rating.starRating / rating.maxStars * 5).roundToInt().coerceIn(0, 5) else 0)
+            is PercentageRating -> Commands.rateTrack(track, if (rating.isRated) (rating.percent / 20f).roundToInt().coerceIn(0, 5) else 0)
             else -> null
         }
     }
 
-    private val customCommands = listOf(CMD_LOVE, CMD_SHUFFLE, CMD_REPEAT, CMD_RATE).map { SessionCommand(it, Bundle.EMPTY) }
+    private val customCommands = listOf(CMD_LOVE, CMD_SHUFFLE, CMD_REPEAT, CMD_RATE, CMD_STASH).map { SessionCommand(it, Bundle.EMPTY) }
     /** Library commands too: without them a browser's root and children requests are refused. */
     private val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon().apply { customCommands.forEach { add(it) } }.build()
 
     private fun permitted(session: MediaSession, controller: MediaSession.ControllerInfo): Boolean =
         session.isMediaNotificationController(controller) || control.permits(controller.packageName, controller.uid)
+
+    /** A controller for the log: its package, and which of Media3's stand-ins it is, if one. */
+    private fun who(session: MediaSession, controller: MediaSession.ControllerInfo): String {
+        val role = when {
+            session.isMediaNotificationController(controller) -> " (notification)"
+            session.isAutomotiveController(controller) -> " (automotive)"
+            session.isAutoCompanionController(controller) -> " (Auto companion)"
+            controller.packageName == context.packageName -> " (this app)"
+            else -> ""
+        }
+        return "${controller.packageName}$role"
+    }
 
     private fun <T : Any> refused(): ListenableFuture<LibraryResult<T>> = Futures.immediateFuture(LibraryResult.ofError<T>(SessionError.ERROR_PERMISSION_DENIED))
 
@@ -112,7 +132,11 @@ class MediaSessionBridge(
 
     val session: MediaLibraryService.MediaLibrarySession = MediaLibraryService.MediaLibrarySession.Builder(context, player, object : MediaLibraryService.MediaLibrarySession.Callback {
             override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-                if (!permitted(session, controller)) return MediaSession.ConnectionResult.reject()
+                if (!permitted(session, controller)) {
+                    PlaybackLog.i("controller refused: ${who(session, controller)}")
+                    return MediaSession.ConnectionResult.reject()
+                }
+                PlaybackLog.d("controller connected: ${who(session, controller)}")
                 ArtworkProvider.allow(controller.packageName)
                 return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                     .setAvailableSessionCommands(sessionCommands)
@@ -120,13 +144,40 @@ class MediaSessionBridge(
                     .build()
             }
 
+            override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
+                PlaybackLog.d("controller disconnected: ${who(session, controller)}")
+            }
+
+            override fun onMediaButtonEvent(session: MediaSession, controller: MediaSession.ControllerInfo, intent: Intent): Boolean {
+                @Suppress("DEPRECATION")
+                val key = intent.getParcelableExtra<android.view.KeyEvent>(Intent.EXTRA_KEY_EVENT)
+                PlaybackLog.i("media button ${key?.let(PlaybackLog::key) ?: "(no key)"} via ${who(session, controller)}")
+                return super.onMediaButtonEvent(session, controller, intent)
+            }
+
+            override fun onPlayerCommandRequest(session: MediaSession, controller: MediaSession.ControllerInfo, playerCommand: Int): Int {
+                // Every transport request reaches the core as a plain command; this is the one place
+                // that knows which app (or key, through Media3's stand-in controller) asked.
+                // Seeks and volume steps (a slider sends many) only in developer mode.
+                val line = "${PlaybackLog.command(playerCommand)} from ${who(session, controller)}"
+                when (playerCommand) {
+                    Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SET_VOLUME,
+                    Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS, Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS,
+                    -> PlaybackLog.d(line)
+                    else -> PlaybackLog.i(line)
+                }
+                return super.onPlayerCommandRequest(session, controller, playerCommand)
+            }
+
             override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
                 if (!permitted(session, controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                PlaybackLog.d("custom command ${customCommand.customAction} from ${who(session, controller)}")
                 when (customCommand.customAction) {
                     CMD_LOVE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Love))
                     CMD_SHUFFLE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Shuffle))
                     CMD_REPEAT -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Repeat))
                     CMD_RATE -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Rate, args.getInt(EXTRA_RATING, 0).toDouble()))
+                    CMD_STASH -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Stash))
                     else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
                 }
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -139,10 +190,16 @@ class MediaSessionBridge(
                 // The resume item plays as `MediaSessionAction.Play` ([LibraryBrowser.playNow]): the core
                 // carries on with its own session. Nothing loaded: an empty list, and the play that
                 // follows is still the core's to judge.
+                if (isForPlayback) onResumeRequested()
                 return async {
                     val item = this@MediaSessionBridge.browser.resumeItem()
+                    val position = if (item == null) 0L else this@MediaSessionBridge.browser.resumePositionMs()
+                    PlaybackLog.i(
+                        "playback resumption ${if (isForPlayback) "to play" else "asked what would play"} from ${who(session, controller)}: " +
+                            (item?.let { "${it.mediaId} at $position ms" } ?: "nothing to resume"),
+                    )
                     if (item == null) MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
-                    else MediaSession.MediaItemsWithStartPosition(listOf(item), 0, this@MediaSessionBridge.browser.resumePositionMs())
+                    else MediaSession.MediaItemsWithStartPosition(listOf(item), 0, position)
                 }
             }
 
@@ -270,7 +327,9 @@ class MediaSessionBridge(
 
     /** Dispatches [rating] for [trackId] ([ratingCommand]); a bad value when either is unusable. */
     private fun rate(trackId: String?, rating: Rating): SessionResult {
-        val command = trackId?.let { ratingCommand(it, rating) } ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
+        // The playing song names its account; another (a browsed row) is the core's to resolve.
+        val source = player.state.metadata?.takeIf { it.trackId == trackId }?.source.orEmpty()
+        val command = trackId?.let { ratingCommand(TrackRef(source, it), rating) } ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
         dispatch(command)
         return SessionResult(SessionResult.RESULT_SUCCESS)
     }
@@ -306,6 +365,10 @@ class MediaSessionBridge(
                     .setDisplayName("Repeat").setSessionCommand(SessionCommand(CMD_REPEAT, Bundle.EMPTY)).build()
                 MediaSessionAction.Rate -> CommandButton.Builder(if ((meta?.rating ?: 0u) > 0u) CommandButton.ICON_STAR_FILLED else CommandButton.ICON_STAR_UNFILLED)
                     .setDisplayName("Rate").setSessionCommand(SessionCommand(CMD_RATE, Bundle().apply { putInt(EXTRA_RATING, if ((meta?.rating ?: 0u) >= 5u) 0 else 5) })).setEnabled(meta != null).build()
+                // Filled once this track is in the stash; tapping again takes it out (the core toggles).
+                MediaSessionAction.Stash -> CommandButton.Builder(if (meta?.stashed == true) CommandButton.ICON_BOOKMARK_FILLED else CommandButton.ICON_BOOKMARK_UNFILLED)
+                    .setDisplayName(if (meta?.stashed == true) "Remove from stash" else "Stash")
+                    .setSessionCommand(SessionCommand(CMD_STASH, Bundle.EMPTY)).setEnabled(meta != null).build()
                 else -> null // transport actions are player commands
             }
         }

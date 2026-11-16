@@ -40,10 +40,10 @@ class LibraryPatchesTest {
     fun queuePatchReturnsTheSameInstanceWhenNothingQueuedChanged() {
         val items = listOf(state(LibraryItemKind.Track, "other", 5u, true))
         val current = QueueEntry(
-            QueueItem("k", "t1", QueueSource.Inserted, false),
+            QueueItem("k", TrackRef("s", "t1"), QueueSource.Inserted, false),
             summary("t1"),
         )
-        val q = QueueView("Album", emptyList(), current, emptyList(), emptyList(), false, RepeatMode.Off, false, QueueMode.Apple, 0u)
+        val q = app.hocket.core.queueViewOf(current = current, contextLabel = "Album")
         assertSame(q, LibraryPatches.queue(q, items))
     }
 

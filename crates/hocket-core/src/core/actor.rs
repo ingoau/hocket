@@ -17,7 +17,6 @@ use crate::autoplay::AutoplayEngine;
 use crate::cache::Caches;
 use crate::connect::discovery::Discovery;
 use crate::connect::engine::{Engine, Input, PersistedConnectState};
-use crate::connect::session_adapter::ReducerPolicy;
 use crate::connect::transport::PeerIds;
 use crate::connect::wire::WireMessage;
 use crate::connect::PeerId;
@@ -31,7 +30,7 @@ use crate::undo::UndoStack;
 use crate::util::Clock;
 
 use super::io::ConnectIo;
-use super::state::{PendingCas, Playback, SavedPosition, ServerState};
+use super::state::{AccountRegistry, AccountState, PendingCas, Playback, SavedPosition};
 use super::{ActorMsg, BackendChoice, CoreError, Deps, EventSink, Internal, PollFn};
 
 /// Session document persistence debounce.
@@ -108,6 +107,9 @@ impl SettingsStore for DbSettingsStore {
     }
 }
 
+/// Live home shelves by account, with when they were fetched.
+pub(crate) type LiveHome = Arc<Mutex<HashMap<String, (f64, Vec<crate::api::HomeShelf>)>>>;
+
 pub(crate) struct Actor {
     pub cfg: CoreConfig,
     pub clock: Arc<dyn Clock>,
@@ -137,8 +139,20 @@ pub(crate) struct Actor {
     /// `Command::SetBackendCapabilities`). Otherwise media sources carry
     /// the server URL directly.
     pub core_stream: bool,
+    /// The remote renderer (a Cast device) the external backend plays
+    /// through (`Command::SetRenderer`); `None` plays here.
+    pub renderer: Option<crate::api::Renderer>,
+    /// Formats particular receivers turned out not to play
+    /// (`Command::RendererFailed`), as saved.
+    pub renderer_formats: crate::downloads::receivers::Learned,
+    /// Stream URLs the renderer waits for (live providers on a Cast device).
+    pub remote: super::handlers::remote_streams::RemoteStreams,
     /// Background prefetch of the next queue items (transport owner only).
     pub prefetch: super::handlers::prefetch::PrefetchState,
+    /// AutoMix analysis on a miss (desktop).
+    pub(crate) analysis: super::handlers::analysis::AnalysisState,
+    /// AutoMix records fetched from and uploaded to the coordinator.
+    pub(crate) share: super::handlers::analysis_share::ShareState,
     /// The album primer (first seconds of a track the user is about to play).
     pub prime: super::handlers::prime::PrimeState,
     /// Stream-cache bookkeeping (offline skips, budget checks).
@@ -156,7 +170,9 @@ pub(crate) struct Actor {
     /// it): a batch that found nothing is not asked for again on every
     /// change, and one that lands after the queue moved on is dropped.
     pub autoplay_prefetched: Option<QueueKey>,
-    pub reducer_policy: Arc<ReducerPolicy>,
+    /// Stands in for [`crate::connect::session_adapter::RealReducer`] when set (tests: a room running
+    /// another build).
+    pub reducer_override: Option<crate::connect::ReducerHandle>,
     pub entropy: Arc<dyn Entropy>,
 
     pub backend: Arc<dyn PlaybackBackend>,
@@ -171,19 +187,48 @@ pub(crate) struct Actor {
     pub listener_port: Option<u16>,
     pub listener_stop: Option<tokio::sync::oneshot::Sender<()>>,
     pub discovery: Option<Box<dyn Discovery>>,
+    /// The LAN adverts seen and not lost, for a session opened later (a
+    /// pairing moved this device to another identity).
+    pub lan_adverts: HashMap<DeviceId, crate::connect::discovery::PeerAdvert>,
     pub lyrics_http: Option<Arc<dyn crate::lyrics::LyricsHttp>>,
 
-    pub server: Option<ServerState>,
-    /// Servers added but not yet verified by a probe.
-    pub pending_servers: HashMap<ServerId, super::PendingServer>,
+    pub accounts: AccountRegistry,
+    /// Accounts added but not yet verified by a probe.
+    pub pending_accounts: HashMap<AccountId, super::PendingAccount>,
+    /// Live home shelves by account, with when they were fetched.
+    pub live_home: LiveHome,
+    pub live_home_fetching: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// The InnerTube transport tests inject (`None`: reqwest).
+    pub ytm_http: Option<Arc<dyn crate::ytm::http::YtmHttp>>,
+    /// YouTube Music JS host requests waiting for the platform's answer.
+    pub ytm_js_pending:
+        HashMap<String, tokio::sync::oneshot::Sender<Result<crate::api::YtmJsAnswer, String>>>,
     pub engine: Option<Engine>,
+    /// The session's scope: the identity id while a session is open.
     pub scope: Option<String>,
+    /// This device's identity (shared with the engine; persisted on change).
+    pub identity: crate::identity::SharedIdentity,
+    /// The coordinator the identity pinned when last looked at: when the pin
+    /// goes away, so does the coordinator address it set.
+    pub pinned_coordinator: Option<String>,
     pub queued_inputs: VecDeque<Input>,
     /// Effects the reducer reported for the local op being submitted.
     pub pending_effects: Option<Vec<crate::session::Effect>>,
     pub last_doc: Option<SessionDocument>,
     pub last_saved_queues: Vec<SavedQueue>,
-    pub last_transport: TransportState,
+    /// The signed-in account's song stash, tombstones included (`crate::stash`).
+    pub stash: Vec<crate::api::StashEntry>,
+    /// The signed-in account's snoozes, tombstones included (`crate::snooze`).
+    pub snoozes: Vec<crate::api::Snooze>,
+    /// Where albums were left off, tombstones included (`crate::album_resume`).
+    pub album_resumes: Vec<crate::api::AlbumResumeEntry>,
+    /// The identity's library: manual links, Mixed playlists, the Hocket
+    /// library (`crate::library`), tombstones included.
+    pub library_records: Vec<crate::library::LibraryRecord>,
+    /// Track and position the next local load should land on (album resume).
+    pub pending_resume_at: Option<(TrackRef, Ms)>,
+    /// When the oldest offered album resume point expires (re-announced from the tick).
+    pub album_resume_expires_at: Option<crate::api::EpochMs>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
     /// sent: one that would only repeat it is not sent (see
     /// [`Actor::emit_transport_state`]).
@@ -192,11 +237,14 @@ pub(crate) struct Actor {
     pub emitted_devices: Option<Vec<DeviceInfo>>,
     /// Plays waiting for the session's scrobble verdict (mirrors the durable
     /// [`super::state::PendingScrobble`] records of the open scope).
-    pub pending_submits: HashMap<(TrackId, u64), super::state::PendingScrobble>,
+    pub pending_submits: HashMap<(TrackRef, u64), super::state::PendingScrobble>,
     pub pending_cas: HashMap<String, PendingCas>,
     pub outbox_entries: HashMap<String, String>,
 
     pub playback: Playback,
+    /// Song preview, separate from the transport. `None` when nothing is
+    /// being previewed.
+    pub preview: Option<super::state::PreviewSession>,
     /// Track summaries already read from the mirror, for the queue view
     /// (rebuilt on every queue change): see [`Actor::summaries`].
     pub summary_cache: Mutex<super::state::SummaryCache>,
@@ -211,7 +259,10 @@ pub(crate) struct Actor {
     pub network: Option<NetworkState>,
     pub visible: bool,
     pub focused: bool,
-    pub battery_saver: bool,
+    /// The device's own power-save state (`SetPowerSave`).
+    pub power_save: bool,
+    /// Battery saver as engaged ([`crate::saver::resolve`]).
+    pub battery_saver: crate::api::BatterySaver,
     pub selection: ActionTarget,
     pub sync_progress: Option<SyncProgress>,
     pub resume_offer: Option<ResumeOffer>,
@@ -222,6 +273,18 @@ pub(crate) struct Actor {
     pub lyrics_for: Option<TrackId>,
     pub media_art_pending: Option<(String, u32)>,
     pub log_ring: VecDeque<String>,
+    /// `Query::RoomDiagnostics` waiting for the room's answers.
+    pub diagnostics_collections: Vec<(
+        crate::connect::diagnostics::Collection,
+        tokio::sync::oneshot::Sender<QueryResult>,
+    )>,
+    /// The newest room diagnostics collection the room answered (its final
+    /// status and text), kept for a request the room turns away.
+    pub last_room_diagnostics: Option<(RoomDiagnosticsStatus, String)>,
+    /// Other devices' diagnostics requests waiting for the platform's bundle.
+    pub diagnostics_answers: Vec<crate::core::handlers::diagnostics::PendingAnswer>,
+    /// Save to Coordinator: the coordinator's grant and the upload.
+    pub reports: crate::core::handlers::reports::ReportsState,
 
     pub started: bool,
     pub shutting_down: bool,
@@ -258,6 +321,22 @@ impl Actor {
             .map_err(|e| CoreError::Other(format!("open database: {e}")))?;
         let open_report = db.open_report().clone();
         let clock = deps.clock.clone();
+        let identity = Arc::new(Mutex::new(crate::core::handlers::identity::load_identity(
+            &db,
+            &cfg.device_id,
+            &cfg.device_name,
+            clock.now_ms(),
+            deps.identity.clone(),
+        )));
+        // State a version-10 database kept per session scope now belongs to
+        // the identity's session: write it there, once.
+        let scope = identity.lock().id.clone();
+        let pinned_coordinator = identity
+            .lock()
+            .shared
+            .coordinator_pin()
+            .map(|p| p.url.clone());
+        crate::db::restore_v10::finish(&db, &scope, clock.as_ref());
         let settings_store = DbSettingsStore {
             db: db.clone(),
             clock: clock.clone(),
@@ -356,11 +435,6 @@ impl Actor {
         if let Ok(Some(ids)) = db.saved_state_get::<Vec<TrackId>>("autoplay:exclusion") {
             autoplay.restore_exclusion(ids);
         }
-        let reducer_policy = ReducerPolicy::new(
-            settings.get_i64(keys::QUEUE_HISTORY_CAP).max(10) as usize,
-            crate::session::SavedQueuePolicy::default()
-                .with_cap(settings.get_i64(keys::QUEUE_SAVED_CAP).max(0) as u32),
-        );
 
         let (backend, backend_poll, external): (
             Arc<dyn PlaybackBackend>,
@@ -403,6 +477,11 @@ impl Actor {
 
         let core_stream = cfg.audio == AudioMode::Native;
         let volume = saved_volume(&db, clock.as_ref());
+        let renderer_formats = db
+            .saved_state_get(crate::downloads::receivers::STATE_KEY)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let muted = db
             .saved_state_get::<bool>(MUTED_KEY)
             .ok()
@@ -428,7 +507,12 @@ impl Actor {
             downloads,
             stream_reader,
             core_stream,
+            renderer: None,
+            renderer_formats,
+            remote: Default::default(),
             prefetch: Default::default(),
+            analysis: Default::default(),
+            share: Default::default(),
             prime: Default::default(),
             cache: Default::default(),
             caches,
@@ -439,7 +523,7 @@ impl Actor {
             autoplay_wanted: false,
             autoplay_advance: false,
             autoplay_prefetched: None,
-            reducer_policy,
+            reducer_override: deps.reducer.clone(),
             entropy,
             backend,
             backend_poll,
@@ -452,16 +536,28 @@ impl Actor {
             listener_port: None,
             listener_stop: None,
             discovery: None,
+            lan_adverts: HashMap::new(),
             lyrics_http: deps.lyrics_http,
-            server: None,
-            pending_servers: HashMap::new(),
+            accounts: AccountRegistry::default(),
+            pending_accounts: HashMap::new(),
+            ytm_js_pending: HashMap::new(),
+            ytm_http: deps.ytm_http.clone(),
+            live_home: Arc::default(),
+            live_home_fetching: Arc::default(),
             engine: None,
             scope: None,
+            identity,
+            pinned_coordinator,
             queued_inputs: VecDeque::new(),
             pending_effects: None,
             last_doc: None,
             last_saved_queues: vec![],
-            last_transport: TransportState::default(),
+            stash: vec![],
+            snoozes: vec![],
+            album_resumes: vec![],
+            library_records: vec![],
+            pending_resume_at: None,
+            album_resume_expires_at: None,
             emitted_transport: None,
             emitted_media_session: None,
             emitted_devices: None,
@@ -473,6 +569,7 @@ impl Actor {
                 muted,
                 ..Default::default()
             },
+            preview: None,
             summary_cache: Mutex::new(Default::default()),
             last_skip_at: None,
             skip_op: false,
@@ -480,7 +577,8 @@ impl Actor {
             network: None,
             visible: true,
             focused: true,
-            battery_saver: false,
+            power_save: false,
+            battery_saver: crate::api::BatterySaver::default(),
             selection: ActionTarget::None,
             sync_progress: None,
             resume_offer: None,
@@ -490,6 +588,10 @@ impl Actor {
             lyrics_for: None,
             media_art_pending: None,
             log_ring: VecDeque::new(),
+            diagnostics_collections: vec![],
+            last_room_diagnostics: None,
+            diagnostics_answers: vec![],
+            reports: Default::default(),
             started: false,
             shutting_down: false,
             in_flight: 0,
@@ -506,8 +608,17 @@ impl Actor {
         actor.undo = UndoStack::new(actor.cfg.device_id.clone(), crate::undo::DEFAULT_MAX_BYTES);
         actor.apply_storage_settings();
         actor.apply_transcoding_settings();
+        // A level chosen earlier is in force from the start (no event yet: nothing listens).
+        actor.battery_saver = crate::saver::resolve(
+            crate::saver::parse_level(&actor.settings.get(crate::settings::keys::BATTERY_LEVEL))
+                .unwrap_or(crate::api::SaverLevel::Off),
+            crate::api::SaverLevel::Off,
+            false,
+            false,
+            &crate::saver::parse_custom(&actor.settings.get(crate::settings::keys::BATTERY_CUSTOM)),
+        );
         crate::devlog::set_detailed(actor.settings.get_bool(keys::DEVELOPER_MODE));
-        if let Some(preset) = deps.server {
+        for preset in deps.servers {
             actor.attach_preset_server(preset);
         }
         Ok(actor)
@@ -577,7 +688,19 @@ impl Actor {
                 }
             },
             Internal::SyncProgress(p) => self.on_sync_progress(p),
-            Internal::Probed { server_id, result } => self.on_probed(server_id, result),
+            Internal::Probed { account_id, result } => self.on_probed(account_id, result),
+            Internal::YtmProbed {
+                cookies,
+                js_host,
+                result,
+            } => self.on_ytm_probed(cookies, js_host, result),
+            Internal::YtmJs { request, reply } => self.on_ytm_js(request, reply),
+            Internal::RemoteStreamResolved {
+                source,
+                track_id,
+                error,
+            } => self.on_remote_stream_resolved(source, track_id, error),
+            Internal::LiveHomeFetched { account_id } => self.on_live_home_fetched(account_id),
             Internal::Connected { peer, url, tx } => {
                 self.conns.insert(peer.clone(), tx);
                 self.engine_input(Input::Connected { peer, url });
@@ -606,16 +729,16 @@ impl Actor {
             Internal::Discovery(ev) => match ev {
                 crate::connect::discovery::DiscoveryEvent::Found(a) => {
                     if a.device_id != self.cfg.device_id {
+                        self.lan_adverts.insert(a.device_id.clone(), a.clone());
                         self.engine_input(Input::PeerDiscovered(a));
                     }
                 }
                 crate::connect::discovery::DiscoveryEvent::Lost { device_id } => {
+                    self.lan_adverts.remove(&device_id);
                     self.engine_input(Input::PeerLost { device_id });
                 }
             },
-            Internal::CredentialVerified { peer, ok } => {
-                self.engine_input(Input::CredentialVerified { peer, ok });
-            }
+            Internal::Exchange(r) => self.on_exchange(r),
             Internal::Autoplay {
                 engine,
                 picks,
@@ -666,16 +789,29 @@ impl Actor {
                 generation,
                 outcome,
             } => self.on_prefetch_done(track_id, generation, outcome),
+            Internal::AnalysisDone {
+                server_id,
+                track_id,
+                result,
+            } => self.on_analysis_done(server_id, track_id, result),
             Internal::SkipOffline { key } => self.on_skip_offline(key),
             Internal::ClearOfflineSkips => self.clear_offline_skips(),
+            Internal::OfferAlternates => self.offer_alternates(),
             Internal::RetryOfflineClear => self.run_offline_clear(false),
             Internal::PrimeDone { generation } => self.on_prime_done(generation),
+            Internal::ReportUpload(msg) => self.on_report_upload(msg),
+            #[cfg(any(feature = "sim", test))]
+            Internal::ReportGrant(grant) => self.reports.grant = Some(grant),
             Internal::TaskDone => {
                 self.in_flight = self.in_flight.saturating_sub(1);
             }
             Internal::Barrier(reply) => {
                 let busy = self.in_flight > 0 || self.flush_in_flight || self.jobs_busy();
                 let _ = reply.send(busy);
+            }
+            #[cfg(feature = "sim")]
+            Internal::EngineSlowSync(reply) => {
+                let _ = reply.send(self.engine.as_ref().map(|e| e.slow_sync()));
             }
         }
     }
@@ -729,18 +865,18 @@ impl Actor {
                 "coordinator mode: no audio, no credentials, room served by hocket-coordinator",
             );
         }
-        // Servers (metadata only; credentials arrive with AddServer).
-        if self.server.is_none() {
-            match self.db.servers() {
-                Ok(list) => {
-                    if let Some(info) = list.into_iter().next() {
-                        self.server = Some(ServerState::new(info));
+        // Servers (metadata only; credentials arrive with AddAccount).
+        match self.db.accounts() {
+            Ok(list) => {
+                for info in list {
+                    if !self.accounts.contains(&info.id) {
+                        self.accounts.insert(AccountState::new(info));
                     }
                 }
-                Err(e) => self.error(ErrorKind::Storage, "load servers", Some(e.to_string())),
             }
+            Err(e) => self.error(ErrorKind::Storage, "load accounts", Some(e.to_string())),
         }
-        if self.server.is_some() && self.engine.is_none() {
+        if self.engine.is_none() {
             self.open_session();
         }
         // Jobs and outbox.
@@ -761,6 +897,7 @@ impl Actor {
             self.log("debug", format!("set_volume: {e}"));
         }
         self.output_devices = self.backend.output_devices();
+        self.restore_report_upload();
         self.emit_everything(true);
         // Kick the connect tier selection, library sync and the outbox.
         self.engine_input(Input::Tick);
@@ -791,6 +928,8 @@ impl Actor {
         let _ = self.backend.stop();
         self.cancel_prefetch();
         self.cancel_prime();
+        // An upload still running carries on from `job.json` next time.
+        self.reports.abort();
         if let Some(r) = &self.stream_reader {
             r.stop();
         }
@@ -811,8 +950,8 @@ impl Actor {
                 snapshot: snapshot.clone(),
             });
         }
-        self.emit(Event::ServersChanged {
-            servers: snapshot.servers.clone(),
+        self.emit(Event::AccountsChanged {
+            accounts: snapshot.accounts.clone(),
         });
         if let Some(doc) = &snapshot.session {
             self.emit(Event::SessionChanged {
@@ -833,9 +972,12 @@ impl Actor {
             queues: snapshot
                 .session
                 .as_ref()
-                .map(|d| d.saved_queues.clone())
+                .map(|d| self.visible_of(&d.saved_queues))
                 .unwrap_or_default(),
         });
+        self.emit_stash();
+        self.emit_snoozes();
+        self.emit_album_resumes();
         self.emit(Event::UndoChanged {
             state: snapshot.undo.clone(),
         });
@@ -852,7 +994,7 @@ impl Actor {
             network: snapshot.network.clone(),
         });
         self.emit(Event::BatterySaverChanged {
-            enabled: snapshot.battery_saver,
+            saver: snapshot.battery_saver.clone(),
         });
         self.emitted_devices = Some(snapshot.devices.clone());
         self.emit(Event::DevicesChanged {
@@ -880,6 +1022,9 @@ impl Actor {
         self.emit(Event::OutputDevicesChanged {
             devices: self.output_devices.clone(),
         });
+        self.emit(Event::ReportUploadChanged {
+            status: self.reports.status.clone(),
+        });
         self.emit(Event::SleepTimerChanged {
             timer: snapshot.sleep_timer.clone(),
         });
@@ -899,6 +1044,7 @@ impl Actor {
         self.emit(Event::MediaSession {
             state: snapshot.media_session,
         });
+        self.emit_preview();
     }
 
     // -- tick -----------------------------------------------------------------
@@ -918,14 +1064,19 @@ impl Actor {
             return;
         }
         self.hot.store(
-            self.playback.playing || self.playback.buffering || self.pending_load_timer.is_some(),
+            self.playback.playing
+                || self.playback.buffering
+                || self.pending_load_timer.is_some()
+                || self.preview.as_ref().is_some_and(|p| p.playing),
             Ordering::Relaxed,
         );
         if now - self.last_engine_tick >= ENGINE_TICK_MS - 1.0 {
             self.last_engine_tick = now;
             self.engine_input(Input::Tick);
         }
+        self.diagnostics_tick(now);
         self.prefetch_tick(now);
+        self.analysis_tick(now);
         self.flush_pending_load(false);
         self.playback_tick(now);
         self.remote_volume_tick(now);
@@ -939,12 +1090,24 @@ impl Actor {
         if self.playback.playing && now - self.position_saved_at >= POSITION_HEARTBEAT_MS {
             self.save_position();
         }
+        if self.playback.playing {
+            self.capture_album_resume(false);
+        }
+        self.album_resume_tick(now);
         // Outbox retry.
         if now - self.last_outbox_retry >= OUTBOX_RETRY_MS {
             self.last_outbox_retry = now;
             if self.outbox.pending_count().unwrap_or(0) > 0 {
                 self.schedule_flush();
             }
+        }
+        // A snooze whose end has passed drops out of the lists as soon as the clock passes it.
+        if self
+            .snoozes
+            .iter()
+            .any(|e| !e.removed && e.until.is_some_and(|u| u <= now))
+        {
+            self.prune_snoozes();
         }
         // Library sync timer (checked once a minute).
         if now - self.last_sync_check >= 60_000.0 {
@@ -977,6 +1140,7 @@ impl Actor {
             Err(e) => self.log("warn", format!("stream cache reconcile: {e}")),
         }
         self.downloads.save_traffic();
+        self.prune_snoozes();
     }
 
     // -- persistence ----------------------------------------------------------
@@ -1118,6 +1282,7 @@ impl Actor {
             kind,
             message: message.into(),
             detail,
+            account_id: None,
         });
     }
 
@@ -1177,12 +1342,37 @@ impl Actor {
         });
     }
 
-    pub(crate) fn server_id(&self) -> Option<String> {
-        self.server.as_ref().map(|s| s.info.id.clone())
+    /// The account the session is scoped to (Phase 1: the highest-priority
+    /// Navidrome account). Session-wide state (the document, the stash,
+    /// snoozes, album resume points, shared analysis) lives under it.
+    pub(crate) fn scope_account(&self) -> Option<String> {
+        self.accounts.primary().map(|s| s.info.id.clone())
     }
 
-    pub(crate) fn api(&self) -> Option<Arc<dyn crate::subsonic::SubsonicApi>> {
-        self.server.as_ref().and_then(|s| s.api.clone())
+    /// The provider whose ids are valid in `source`, once it has credentials.
+    pub(crate) fn provider_for(&self, source: &str) -> Option<Arc<dyn crate::provider::Provider>> {
+        self.accounts
+            .for_source(source)
+            .and_then(|a| a.provider.clone())
+    }
+
+    /// The Subsonic client for `source`, when it is a Navidrome account
+    /// with credentials: for work that is Subsonic through and through.
+    pub(crate) fn subsonic_for(
+        &self,
+        source: &str,
+    ) -> Option<Arc<dyn crate::subsonic::SubsonicApi>> {
+        self.accounts.for_source(source).and_then(|a| a.subsonic())
+    }
+
+    /// Every provider with credentials, highest priority first.
+    pub(crate) fn providers(&self) -> crate::provider::ProviderSet {
+        self.accounts.providers()
+    }
+
+    /// Whether any account can reach its server right now.
+    pub(crate) fn any_provider(&self) -> bool {
+        self.accounts.iter().any(|a| a.provider.is_some())
     }
 
     /// The gain the backend applies: the volume slider, scaled by the sleep
@@ -1202,7 +1392,7 @@ impl Actor {
     }
 
     pub(crate) fn snapshot(&mut self) -> Snapshot {
-        let servers = self.server_infos();
+        let accounts = self.account_infos();
         let session = self.engine.as_ref().map(|e| e.document().clone());
         let queue = self.queue_view();
         let transport = self.transport_state();
@@ -1212,7 +1402,7 @@ impl Actor {
         };
         let media_session = self.media_session_state(&queue, &transport);
         Snapshot {
-            servers,
+            accounts,
             session,
             queue,
             transport,
@@ -1227,7 +1417,8 @@ impl Actor {
             resume_offer: self.resume_offer.clone(),
             sleep_timer: self.sleep.state(),
             network: self.network.clone(),
-            battery_saver: self.battery_saver,
+            battery_saver: self.battery_saver.clone(),
+            identity: self.identity_info(),
             sync_progress: self.sync_progress.clone(),
         }
     }
@@ -1305,6 +1496,7 @@ fn native_backend(
             device_id: audio.output_device.clone(),
             sample_rate: None,
             null_sink: false,
+            tap: None,
         },
         audio: audio.clone(),
         watch_devices: true,

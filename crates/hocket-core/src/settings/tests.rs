@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::api::{AutoplaySettings, Filter, FilterNode, ServerInfo, Shortcut};
+use crate::api::{AccountInfo, AutoplaySettings, Filter, FilterNode, Shortcut};
 
 #[test]
 fn registry_is_complete_and_consistent() {
@@ -44,7 +44,7 @@ fn defaults_match_the_design() {
     assert_eq!(s.get_i64(keys::BATTERY_LYRICS_FPS), 30);
     assert!(s.get_bool(keys::DISPLAY_ANIMATED_BACKGROUND));
     assert_eq!(s.get_i64(keys::QUEUE_SAVED_CAP), 10);
-    assert_eq!(s.get_string(keys::QUEUE_MODE).as_deref(), Some("apple"));
+    assert!(s.get_bool(keys::QUEUE_SECTION));
     assert_eq!(s.get_string(keys::CONNECT_COORDINATOR_URL), None);
     let ap: AutoplaySettings = s.get_typed(keys::AUTOPLAY_SETTINGS).unwrap();
     assert_eq!(ap, crate::autoplay::default_settings());
@@ -86,10 +86,12 @@ fn set_validate_reset_and_persist() {
         Err(SettingsError::UnknownKey(_))
     ));
     assert!(matches!(
-        s.set_json(keys::QUEUE_MODE, "\"spotify\"", 101.0),
+        s.set_json(keys::DISPLAY_THEME, "\"sepia\"", 101.0),
         Err(SettingsError::Invalid { .. })
     ));
-    assert!(s.set_json(keys::QUEUE_MODE, "\"youTube\"", 101.0).is_ok());
+    assert!(s.set_json(keys::DISPLAY_THEME, "\"dark\"", 101.0).is_ok());
+    assert!(s.set_json(keys::QUEUE_SECTION, "\"yes\"", 101.0).is_err());
+    assert!(s.set_json(keys::QUEUE_SECTION, "false", 101.0).is_ok());
     assert!(s
         .set_json(keys::DISPLAY_ACCENT, "\"#ff8800\"", 101.0)
         .is_ok());
@@ -186,9 +188,10 @@ fn set_validate_reset_and_persist() {
     let back = Settings::load(&store).unwrap();
     assert_eq!(back.to_api(), s.to_api());
     assert_eq!(
-        back.get_string(keys::QUEUE_MODE).as_deref(),
-        Some("youTube")
+        back.get_string(keys::DISPLAY_THEME).as_deref(),
+        Some("dark")
     );
+    assert!(!back.get_bool(keys::QUEUE_SECTION));
     let ap: AutoplaySettings = back.get_typed(keys::AUTOPLAY_SETTINGS).unwrap();
     assert_eq!(ap.seed_window, 3);
 
@@ -272,7 +275,7 @@ fn lww_merge_is_pure_and_scoped() {
             999.0,
         ), // registry says local → ignored
         setting(
-            keys::QUEUE_HISTORY_CAP,
+            keys::RATINGS_LOVE_BRIDGE_THRESHOLD,
             "99999",
             SettingScope::AccountSynced,
             999.0,
@@ -365,7 +368,7 @@ fn merge_remote_respects_master_toggle() {
 fn config_document_builds_and_round_trips() {
     let mut s = Settings::new();
     s.set_json(keys::QUEUE_SAVED_CAP, "7", 10.0).unwrap();
-    let server = ServerInfo {
+    let server = AccountInfo {
         id: "srv1".into(),
         url: "https://music.example".into(),
         username: "me".into(),

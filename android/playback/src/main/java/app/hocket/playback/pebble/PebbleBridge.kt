@@ -2,13 +2,16 @@ package app.hocket.playback.pebble
 
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
 import app.hocket.core.Commands
+import app.hocket.core.historyEntries
+import app.hocket.core.upcomingEntries
 import app.hocket.core.CoreHandle
 import app.hocket.core.HocketJson
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Command
+import app.hocket.core.api.CommandStashAddInner
 import app.hocket.core.api.DeviceInfo
 import app.hocket.core.api.Event
 import app.hocket.core.api.LyricsTier
@@ -72,7 +75,6 @@ class PebbleBridge(
     }
 
     companion object {
-        private const val TAG = "PebbleBridge"
         /** Session updates come in bursts (a skip changes metadata, then position); the watch hears once. */
         const val NOW_DEBOUNCE_MS = 150L
         /**
@@ -122,6 +124,8 @@ class PebbleBridge(
     private var nowDirty = false
     /** The settings blob the watch last took; the same one is not sent again. */
     private var lastSettings: ByteArray? = null
+    /** Why the last attempt to hand a message over failed, for the log. */
+    private var lastFailure = "nacked or unanswered"
 
     // -- core events (main thread) -----------------------------------------------------------------
 
@@ -162,7 +166,8 @@ class PebbleBridge(
         // Auto-open: this device started playing (not the first state seen, not a remote device).
         val started = before != null && !(before.isPlaying && before.ownsTransport) && state.isPlaying && state.ownsTransport
         if (started && bool(SettingKeys.PEBBLE_AUTO_OPEN, false) && !open) {
-            scope.launch { runCatching { sender.startAppOnTheWatch(PebbleProtocol.APP_UUID) }.onFailure { Log.w(TAG, "start app failed: ${it.message}") } }
+            PebbleLog.i("auto-open: playback started here, opening the watchapp")
+            scope.launch { runCatching { sender.startAppOnTheWatch(PebbleProtocol.APP_UUID) }.onFailure { PebbleLog.w("start app failed: ${it.message}") } }
         }
         if (shouldPushNow()) pushNowSoon()
     }
@@ -180,9 +185,13 @@ class PebbleBridge(
 
     // -- the watch -----------------------------------------------------------------------------------
 
-    fun appOpened() { open = true }
+    fun appOpened() {
+        if (!open) PebbleLog.i("watchapp opened")
+        open = true
+    }
 
     fun appClosed() {
+        if (open) PebbleLog.i("watchapp closed")
         open = false
         lastSettings = null
         nowJob?.cancel()
@@ -196,8 +205,17 @@ class PebbleBridge(
     }
 
     suspend fun onMessage(data: PebbleDictionary) {
+        if (!open) PebbleLog.i("watchapp open (a message arrived)")
         open = true
-        when (num(data, Key.TYPE)) {
+        val type = num(data, Key.TYPE)
+        when (type) {
+            Type.HELLO -> Unit
+            Type.CMD -> PebbleLog.d("<- cmd ${PebbleLog.cmd(num(data, Key.CMD))} arg=${num(data, Key.ARG)} path=${PebbleLog.path(text(data, Key.PATH))} item=${text(data, Key.ITEM)}")
+            Type.LIST_REQ -> PebbleLog.d("<- list-req #${num(data, Key.REQ_ID)} ${PebbleLog.path(text(data, Key.PATH))}@${num(data, Key.OFFSET)}")
+            Type.ART_REQ -> PebbleLog.d("<- art-req gen=${num(data, Key.ART_GEN)}")
+            else -> PebbleLog.w("<- unknown message ${PebbleLog.type(type)} (keys ${data.keys})")
+        }
+        when (type) {
             // Off the watch's message too: its outbox waits for this ack, and the replies would hold it.
             Type.HELLO -> { val proto = num(data, Key.PROTO); val build = text(data, Key.BUILD); scope.launch { onHello(proto, build) } }
             Type.CMD -> onCommand(num(data, Key.CMD), num(data, Key.ARG), text(data, Key.PATH), text(data, Key.ITEM))
@@ -208,6 +226,8 @@ class PebbleBridge(
     }
 
     private suspend fun onHello(proto: Int, build: String) {
+        val stale = proto != PebbleProtocol.PROTO || build != PebbleInstaller.bundledVersion
+        PebbleLog.i("<- hello: watchapp ${build.ifEmpty { "(no build)" }} proto $proto; phone bundles ${PebbleInstaller.bundledVersion} proto ${PebbleProtocol.PROTO}${if (stale) ", offering the update" else ""}")
         send(mapOf(Key.TYPE to u8(Type.HELLO_REPLY), Key.PROTO to u32(PebbleProtocol.PROTO), Key.BUILD to PebbleDictionaryItem.Text(PebbleInstaller.bundledVersion)))
         // A watchapp saying hello starts afresh: it may have restarted with the settings it persisted.
         lastSettings = null
@@ -215,7 +235,7 @@ class PebbleBridge(
         if (settingsLoaded) sendSettings()
         sendNow()
         if (build.isNotEmpty()) PebbleInstaller.recordWatchVersion(context, build)
-        if (proto != PebbleProtocol.PROTO || build != PebbleInstaller.bundledVersion) PebbleInstaller.notifyUpdate(context)
+        if (stale) PebbleInstaller.notifyUpdate(context)
     }
 
     private fun pushNowSoon() {
@@ -256,31 +276,39 @@ class PebbleBridge(
      * a couple of times, instead of leaving the watch stale until the next change.
      */
     private suspend fun send(message: PebbleDictionary): Boolean = sendLock.withLock {
+        val type = PebbleLog.type(num(message, Key.TYPE))
         for (attempt in 0..SEND_RETRIES) {
             if (attempt > 0) delay(SEND_RETRY_MS * attempt)
             when (deliver(message)) {
-                Delivery.Sent -> return@withLock true
+                Delivery.Sent -> {
+                    PebbleLog.d("-> $type${if (attempt > 0) " (attempt ${attempt + 1})" else ""}")
+                    return@withLock true
+                }
                 Delivery.AppGone -> {
                     // Closed under us without a close event: stop pushing until it says hello.
+                    if (open) PebbleLog.i("-> $type: watchapp unreachable, pushes stop until it says hello")
                     open = false
                     return@withLock false
                 }
                 Delivery.Failed -> Unit
             }
         }
+        PebbleLog.w("-> $type not delivered after ${SEND_RETRIES + 1} attempts: $lastFailure")
         false
     }
 
     private suspend fun deliver(message: PebbleDictionary): Delivery {
+        lastFailure = "nacked or unanswered"
         transmit?.let { return it(message) }
         val results = runCatching { sender.sendDataToPebble(PebbleProtocol.APP_UUID, message) }
-            .onFailure { Log.w(TAG, "send failed: ${it.message}") }
+            .onFailure { lastFailure = "${it.javaClass.simpleName}: ${it.message}"; PebbleLog.d("send attempt failed: $lastFailure") }
             .getOrElse { return Delivery.Failed }
         // null: the Pebble app is unreachable; empty: no watch connected.
         if (results.isNullOrEmpty()) return Delivery.AppGone
         if (results.values.any { it is TransmissionResult.Success }) return Delivery.Sent
         if (results.values.all { it is TransmissionResult.FailedDifferentAppOpen || it is TransmissionResult.FailedWatchNotConnected || it is TransmissionResult.FailedNoPermissions }) return Delivery.AppGone
-        Log.w(TAG, "send failed: ${results.values}")
+        lastFailure = results.values.toString()
+        PebbleLog.d("send attempt failed: $lastFailure")
         return Delivery.Failed
     }
 
@@ -321,6 +349,7 @@ class PebbleBridge(
     private suspend fun onCommand(cmd: Int, arg: Int, path: String, item: String) {
         val s = session
         val trackId = s?.metadata?.trackId
+        val playingRef = trackId?.let { TrackRef(s.metadata?.source.orEmpty(), it) }
         when (cmd) {
             Cmd.PLAY_PAUSE -> dispatch(Commands.mediaSessionCommand(if (s?.isPlaying == true) MediaSessionAction.Pause else MediaSessionAction.Play))
             Cmd.PLAY -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Play))
@@ -329,19 +358,22 @@ class PebbleBridge(
             Cmd.PREVIOUS -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Previous))
             Cmd.VOLUME_UP -> changeVolume(up = true, PebbleProtocol.volumeSteps(arg))
             Cmd.VOLUME_DOWN -> changeVolume(up = false, PebbleProtocol.volumeSteps(arg))
-            Cmd.TOGGLE_LOVE -> trackId?.let { dispatch(Commands.loveTrack(it, !(s.metadata?.loved ?: false))) }
-            Cmd.SET_RATING -> trackId?.let { dispatch(Commands.rateTrack(it, arg.coerceIn(0, 5))) }
+            Cmd.TOGGLE_LOVE -> playingRef?.let { dispatch(Commands.loveTrack(it, !(s.metadata?.loved ?: false))) }
+            Cmd.SET_RATING -> playingRef?.let { dispatch(Commands.rateTrack(it, arg.coerceIn(0, 5))) }
             Cmd.TOGGLE_SHUFFLE -> dispatch(Commands.setShuffle(!(s?.shuffle ?: false)))
             Cmd.CYCLE_REPEAT -> dispatch(Commands.setRepeat(when (s?.repeat) { RepeatMode.Off, null -> RepeatMode.All; RepeatMode.All -> RepeatMode.One; RepeatMode.One -> RepeatMode.Off }))
             Cmd.RESUME -> dispatch(if (resumeOffer != null) Command.ResumeHere else Commands.mediaSessionCommand(MediaSessionAction.Play))
             Cmd.SEEK -> dispatch(Commands.mediaSessionCommand(MediaSessionAction.Seek, arg.coerceAtLeast(0).toDouble()))
+            // Add only: the watch says "Stashed", so it never takes a song out (the notification toggles).
+            Cmd.STASH -> playingRef?.let { dispatch(Command.StashAdd(CommandStashAddInner(listOf(it)))) }
             Cmd.ACTIVATE -> activate(path, item)
             Cmd.PLAY_NEXT, Cmd.PLAY_LATER -> {
                 val server = serverId() ?: return
                 // A whole playlist can take a few queries: off the watch's message.
                 scope.launch {
                     val ids = trackIds(path, item)
-                    if (ids.isNotEmpty()) dispatch(if (cmd == Cmd.PLAY_NEXT) Commands.playNext(server, ids) else Commands.playLater(server, ids))
+                    val refs = ids.map { TrackRef(server, it) }
+                    if (refs.isNotEmpty()) dispatch(if (cmd == Cmd.PLAY_NEXT) Commands.playNext(refs) else Commands.playLater(refs))
                 }
             }
         }
@@ -397,13 +429,13 @@ class PebbleBridge(
     private suspend fun playRow(server: String, item: String) {
         if (item.startsWith("track:")) {
             val id = item.removePrefix("track:")
-            dispatch(Commands.playTracks(server, listOf(id), 0, trackTitle(id) ?: ""))
+            dispatch(Commands.playTracks(listOf(TrackRef(server, id)), 0, trackTitle(TrackRef(server, id)) ?: ""))
         }
     }
 
     private suspend fun playTopResult(server: String, text: String) {
         val r = search(server, text) ?: return
-        r.tracks.firstOrNull()?.let { dispatch(Commands.playTracks(server, listOf(it.id), 0, it.title)); return }
+        r.tracks.firstOrNull()?.let { dispatch(Commands.playTracks(listOf(TrackRef(it.serverId, it.id)), 0, it.title)); return }
         r.albums.firstOrNull()?.let { dispatch(Commands.playContext(Commands.albumContext(server, it.id, it.name))); return }
         r.artists.firstOrNull()?.let { dispatch(Commands.playContext(Commands.artistContext(server, it.id, it.name))); return }
         r.playlists.firstOrNull()?.let { dispatch(Commands.playContext(Commands.playlistContext(server, it.id, it.name))) }
@@ -440,9 +472,11 @@ class PebbleBridge(
     // -- lists ---------------------------------------------------------------------------------------
 
     private suspend fun onListRequest(reqId: Int, rawPath: String, offset: Int) {
+        val started = SystemClock.elapsedRealtime()
         val (total, rows, title) = runCatching { list(rawPath, offset.coerceAtLeast(0)) }
-            .onFailure { Log.w(TAG, "list $rawPath failed: ${it.message}") }
+            .onFailure { PebbleLog.w("list ${PebbleLog.path(rawPath)} failed: ${it.message}") }
             .getOrDefault(Triple(0, emptyList(), null))
+        PebbleLog.d("list #$reqId ${PebbleLog.path(rawPath)}@$offset: ${rows.size} of $total rows in ${SystemClock.elapsedRealtime() - started} ms")
         val message = mutableMapOf(
             Key.TYPE to u8(Type.LIST),
             Key.REQ_ID to u16(reqId),
@@ -473,14 +507,14 @@ class PebbleBridge(
             else -> {
                 if (server == null) return Triple(0, emptyList(), title)
                 when (kind) {
-                    "playlists" -> whole((query(Queries.playlists(server)) as? QueryResult.Playlists)?.data.orEmpty()
+                    "playlists" -> whole((query(Queries.playlists("")) as? QueryResult.Playlists)?.data.orEmpty()
                         .map { Row("playlist:${it.id}", it.name, "${it.songCount} songs", RowFlag.BROWSABLE) })
                     "albums" -> {
-                        val page = (query(Queries.albums(server, Page(offset.toUInt(), PAGE.toUInt()))) as? QueryResult.Albums)?.data
+                        val page = (query(Queries.albums("", Page(offset.toUInt(), PAGE.toUInt()))) as? QueryResult.Albums)?.data
                         Triple(page?.total?.toInt() ?: 0, page?.items.orEmpty().map { Row("album:${it.id}", it.name, it.artist ?: "", RowFlag.BROWSABLE) }, title)
                     }
                     "artists" -> {
-                        val page = (query(Queries.artists(server, Page(offset.toUInt(), PAGE.toUInt()))) as? QueryResult.Artists)?.data
+                        val page = (query(Queries.artists("", Page(offset.toUInt(), PAGE.toUInt()))) as? QueryResult.Artists)?.data
                         Triple(page?.total?.toInt() ?: 0, page?.items.orEmpty().map { Row("artist:${it.id}", it.name, "${it.albumCount} albums", RowFlag.BROWSABLE) }, title)
                     }
                     "recent" -> whole((query(Queries.recentlyPlayed(RECENT_LIMIT)) as? QueryResult.History)?.data.orEmpty()
@@ -505,7 +539,7 @@ class PebbleBridge(
                     }
                     "artist" -> {
                         val from = (offset - 2).coerceAtLeast(0)
-                        val page = (query(Queries.albums(server, Page(from.toUInt(), PAGE.toUInt()), artistId = id)) as? QueryResult.Albums)?.data
+                        val page = (query(Queries.albums("", Page(from.toUInt(), PAGE.toUInt()), artistId = id)) as? QueryResult.Albums)?.data
                         val albums = page?.items.orEmpty().map { Row("album:${it.id}", it.name, it.year?.toString() ?: "", RowFlag.BROWSABLE) }
                         val rows = (if (offset < 2) playShuffle().drop(offset) else emptyList()) + albums
                         Triple(2 + (page?.total?.toInt() ?: 0), rows, title)
@@ -531,8 +565,8 @@ class PebbleBridge(
 
     private fun trackRow(t: TrackSummary) = Row("track:${t.id}", t.title, t.artist ?: "", RowFlag.TRACK)
 
-    /** Recent history (enough to scroll back a little), the current track, Playing Next and the rest. */
-    private fun queueEntries() = queue?.let { it.history.takeLast(QUEUE_HISTORY) + listOfNotNull(it.current) + it.playingNext + it.upcoming }.orEmpty()
+    /** Recent history (enough to scroll back a little), the current track and what follows it. */
+    private fun queueEntries() = queue?.let { it.historyEntries.takeLast(QUEUE_HISTORY) + listOfNotNull(it.current) + it.upcomingEntries }.orEmpty()
 
     /** The queue entry a row id the watch sent back stands for ([PebbleProtocol.queueRowId]). */
     private fun queueEntry(rowId: String) = queueEntries().firstOrNull { PebbleProtocol.queueRowId(it.item.key) == rowId }
@@ -574,8 +608,8 @@ class PebbleBridge(
     /** `goAlbum` / `goArtist` become the playing track's album / artist; null when there is none. */
     private suspend fun resolve(path: String): String? = when (path) {
         "goAlbum", "goArtist" -> {
-            val trackId = session?.metadata?.trackId
-            val track = trackId?.let { (query(Queries.track(it)) as? QueryResult.TrackDetail)?.data }
+            val meta = session?.metadata
+            val track = meta?.trackId?.let { (query(Queries.track(TrackRef(meta.source.orEmpty(), it))) as? QueryResult.TrackDetail)?.data }
             if (path == "goAlbum") track?.albumId?.let { "album:$it" } else track?.artistId?.let { "artist:$it" }
         }
         else -> path
@@ -586,7 +620,7 @@ class PebbleBridge(
 
     private suspend fun search(server: String, text: String): SearchResults? {
         lastSearch?.takeIf { it.first == text }?.let { return it.second }
-        val r = (query(Queries.search(server, text.trim(), SEARCH_LIMIT, includeServer = false, requestId = "pebble-" + UUID.randomUUID())) as? QueryResult.Search)?.data
+        val r = (query(Queries.search("", text.trim(), SEARCH_LIMIT, includeServer = false, requestId = "pebble-" + UUID.randomUUID())) as? QueryResult.Search)?.data
         if (r != null) lastSearch = text to r
         return r
     }
@@ -594,16 +628,18 @@ class PebbleBridge(
     // -- album art -----------------------------------------------------------------------------------
 
     private fun onArtRequest(gen: Int, size: Int) {
-        val path = session?.metadata?.artworkPath ?: return
-        if (gen != PebbleProtocol.artGeneration(path)) return
+        val path = session?.metadata?.artworkPath ?: return PebbleLog.d("art gen $gen: no cover for the playing track")
+        if (gen != PebbleProtocol.artGeneration(path)) return PebbleLog.d("art gen $gen: stale (now ${PebbleProtocol.artGeneration(path)})")
         // The watch retries when chunks are slow; a transfer of this cover still going carries on.
         if (artJob?.isActive == true && artJobGen == gen) return
         artJob?.cancel()
         artJobGen = gen
         artJob = scope.launch {
             val art = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                runCatching { PebbleArt.load(path, size ushr 16, size and 0xffff) }.getOrNull()
-            } ?: return@launch
+                runCatching { PebbleArt.load(path, size ushr 16, size and 0xffff) }
+                    .onFailure { PebbleLog.w("art gen $gen failed: ${it.message}") }.getOrNull()
+            } ?: return@launch PebbleLog.w("art gen $gen: the cover could not be read")
+            val started = SystemClock.elapsedRealtime()
             var offset = 0
             while (offset < art.data.size) {
                 val end = minOf(offset + PebbleProtocol.ART_CHUNK, art.data.size)
@@ -621,9 +657,13 @@ class PebbleBridge(
                 }
                 // A chunk the watch never took would leave a gap it throws the cover away for
                 // (main.c); it asks again on its own, so stop here.
-                if (!send(message)) return@launch
+                if (!send(message)) {
+                    PebbleLog.w("art gen $gen stopped at $offset of ${art.data.size} bytes")
+                    return@launch
+                }
                 offset = end
             }
+            PebbleLog.d("art gen $gen sent: ${art.width}x${art.height}, ${art.data.size} bytes in ${SystemClock.elapsedRealtime() - started} ms")
         }
     }
 
@@ -664,13 +704,13 @@ class PebbleBridge(
     private fun dispatch(command: Command) = core().dispatch(command)
 
     private suspend fun query(q: app.hocket.core.api.Query): QueryResult? =
-        runCatching { core().query(q) }.onFailure { Log.w(TAG, "query failed: ${it.message}") }.getOrNull()
+        runCatching { core().query(q) }.onFailure { PebbleLog.w("query ${q::class.simpleName} failed: ${it.message}") }.getOrNull()
 
     private suspend fun albumTracks(id: String) = (query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data.orEmpty()
     private suspend fun albumName(id: String) = (query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data?.name
     private suspend fun playlistName(id: String) = (query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data?.name
     private suspend fun artistName(id: String) = (query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data?.name
-    private suspend fun trackTitle(id: String) = (query(Queries.track(id)) as? QueryResult.TrackDetail)?.data?.title
+    private suspend fun trackTitle(track: TrackRef) = (query(Queries.track(track)) as? QueryResult.TrackDetail)?.data?.title
 
     private fun num(data: PebbleDictionary, key: UInt): Int = when (val v = data[key]) {
         is PebbleDictionaryItem.UInt32 -> v.value.toInt()

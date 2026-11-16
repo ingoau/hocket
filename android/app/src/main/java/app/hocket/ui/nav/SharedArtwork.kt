@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
@@ -145,6 +146,16 @@ internal fun Modifier.sharedArtworkDestination(key: String?, zIndex: Float = 1f)
 /** The flight's spec: the page push's own duration and curve, so the art lands as the page settles. */
 private fun <T> flightSpec() = tween<T>(PUSH_MS, easing = MiuixEasing)
 
+/**
+ * The art landing on an opened page: a little underdamped (about 1.5% past its slot) and stiff
+ * enough to settle with the 500 ms push, so it lands as the page does.
+ */
+private val LandingSpec = androidx.compose.animation.core.spring(
+    dampingRatio = 0.8f,
+    stiffness = 300f,
+    visibilityThreshold = Rect.VisibilityThreshold,
+)
+
 /** A source when [sourceId] is set, else a destination. */
 @Composable
 private fun sharedArtworkModifier(
@@ -177,7 +188,10 @@ private fun sharedArtworkModifier(
         }
         Modifier.graphicsLayer { rotationZ = lean * if (source) shown else 1f - shown }
     }
-    val bounds = { _: Rect, _: Rect -> flightSpec<Rect>() }
+    // The arriving side's spec drives a flight. Opening a page (a destination arriving) lands the
+    // art on a soft spring, a touch past its slot and back, as the answer to the tap; going back (a
+    // source arriving, maybe scrubbed by a predictive back) stays on the page's own calm curve.
+    val bounds = if (source) { _: Rect, _: Rect -> flightSpec<Rect>() } else { _: Rect, _: Rect -> LandingSpec }
     return with(scope) {
         Modifier.sharedElement(
             state,

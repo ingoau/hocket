@@ -44,6 +44,71 @@ class ExoBackendTest {
         "file:///nonexistent/$key.wav", HashMap(), "audio/wav", 0.0, false,
     )
 
+    /** A core stream the core does not have whole yet. */
+    private fun stream(key: String, local: Boolean? = null) = source(key).copy(url = "hocket-stream://tok-$key", local = local)
+
+    /** The core's answers to [app.hocket.core.CoreStreams.streamLocal], by URL. */
+    private class LocalStreams : app.hocket.core.CoreStreams {
+        val local = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        override fun streamOpen(url: String, offset: Long, length: Long?): app.hocket.core.CoreStreamInfo = throw UnsupportedOperationException()
+        override fun streamRead(handle: Long, maxBytes: Int): ByteArray = throw UnsupportedOperationException()
+        override fun streamClose(handle: Long) {}
+        override fun streamLocal(url: String): Boolean = local[url] ?: false
+    }
+
+    /** Runs the main looper until the backend's wake mode is [mode] (the core is asked off the main thread). */
+    private fun awaitWakeMode(b: ExoBackend, mode: Int) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (b.wakeMode != mode && System.currentTimeMillis() < deadline) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.sleep(5)
+        }
+        assertEquals(mode, b.wakeMode)
+    }
+
+    @Test
+    fun theWifiLockIsHeldOnlyWhileTheCurrentOrNextItemIsStreamed() {
+        val core = LocalStreams()
+        val b = ExoBackend(ApplicationProvider.getApplicationContext(), scope, { dispatched += it }, { core })
+        try {
+            val network = androidx.media3.common.C.WAKE_MODE_NETWORK
+            val local = androidx.media3.common.C.WAKE_MODE_LOCAL
+            assertEquals(network, b.wakeMode)
+            // Both on the device (`file:`): the wake lock alone.
+            b.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false, 1u)))
+            awaitWakeMode(b, local)
+            // A streamed follow-up needs the network, whatever the queue shows: a copy at another
+            // profile makes the track Cached while this stream still comes from the server.
+            b.handle(BackendCommand.SetNext(BackendCommandSetNextInner(stream("c"))))
+            awaitWakeMode(b, network)
+            b.onQueueChanged()
+            awaitWakeMode(b, network)
+            // The core fetched it whole (and says so): the queue changing asks again.
+            core.local["hocket-stream://tok-c"] = true
+            b.onQueueChanged()
+            awaitWakeMode(b, local)
+            // Local when resolved, but evicted since: the core's "no" wins over the flag.
+            b.handle(BackendCommand.Load(BackendCommandLoadInner(stream("d", local = true), null, 0u, false, 1u)))
+            awaitWakeMode(b, network)
+            core.local["hocket-stream://tok-d"] = true
+            b.handle(BackendCommand.Load(BackendCommandLoadInner(stream("d", local = true), null, 0u, false, 1u)))
+            awaitWakeMode(b, local)
+            core.local.remove("hocket-stream://tok-d")
+            b.onQueueChanged()
+            awaitWakeMode(b, network)
+        } finally {
+            b.release()
+        }
+    }
+
+    @Test
+    fun wakeModeForNeedsEveryItemOnTheDevice() {
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, ExoBackend.wakeModeFor(true, null))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, ExoBackend.wakeModeFor(true, true))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, ExoBackend.wakeModeFor(true, false))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, ExoBackend.wakeModeFor(false, true))
+    }
+
     @Before
     fun setUp() {
         backend = ExoBackend(ApplicationProvider.getApplicationContext(), scope, { dispatched += it })
@@ -64,7 +129,7 @@ class ExoBackendTest {
     @Test
     fun errorsAreAttributedToTheLastLoadUntilStop() {
         assertNull(backend.errorKey())
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false, 1u)))
         assertEquals("a", backend.errorKey())
         backend.handle(BackendCommand.Stop)
         assertNull("after Stop there is nothing to report an error against", backend.errorKey())
@@ -96,7 +161,7 @@ class ExoBackendTest {
 
     @Test
     fun autoTransitionEndsThePlayedItemBeforeTheTransition() {
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false, 1u)))
         // Stand-in for ExoPlayer's own advance: the follow-up becomes current, then the AUTO callback.
         backend.player.seekToNextMediaItem()
         dispatched.clear()
@@ -109,8 +174,25 @@ class ExoBackendTest {
     }
 
     @Test
+    fun aLoadIsAcknowledgedBeforeAnythingIsReportedAboutIt() {
+        // The core drops reports about items between a `Load` and its acknowledgement
+        // (R-20261115-2fea): nothing about the new items may come before it.
+        dispatched.clear()
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, true, 7u)))
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        val about = reports().filter { it !is BackendReport.SystemVolume }
+        assertEquals(BackendReport.LoadApplied(app.hocket.core.api.BackendReportLoadAppliedInner(7u)), about.first())
+        assertEquals(1, about.count { it is BackendReport.LoadApplied })
+        // Even from a player that isn't the one playing (casting): the `Load` came here.
+        backend.active = false
+        dispatched.clear()
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), null, 0u, false, 8u)))
+        assertEquals(listOf<BackendReport>(BackendReport.LoadApplied(app.hocket.core.api.BackendReportLoadAppliedInner(8u))), reports())
+    }
+
+    @Test
     fun audioHeardReportsOnlyWhilePlaying() {
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false)))
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), source("b"), 0u, false, 1u)))
         dispatched.clear()
         backend.onAudioHeard()
         assertTrue("a paused player has nothing to re-stamp", reports().none { it is BackendReport.Position })
@@ -158,7 +240,7 @@ class ExoBackendTest {
     @Test
     fun thePlayerIsBusyWhileItStillMeansToPlayAndIdleAfterStop() {
         assertFalse(backend.isBusy())
-        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), null, 0u, true)))
+        backend.handle(BackendCommand.Load(BackendCommandLoadInner(source("a"), null, 0u, true, 1u)))
         assertTrue("loading with play: the service must not stop it", backend.isBusy())
         backend.handle(BackendCommand.Pause)
         assertFalse("paused: idle as far as the service is concerned", backend.isBusy())

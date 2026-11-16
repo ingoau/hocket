@@ -1,10 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The player's queue list (history, now playing, playing next, continue playing). -->
+<!-- The player's queue list (history, now playing, next in queue, next from). -->
 <resources>
     <string name="queue_section_history">History</string>
-    <string name="queue_section_continue">Continue playing</string>
-    <string name="queue_section_from">From %1$s</string>
     <string name="queue_section_clear">Clear</string>
     <string name="queue_clear_history">Clear history</string>
     <string name="queue_undo_history">Undo history</string>
+    <string name="queue_section_group">Next in queue · %1$d</string>
+    <string name="queue_section_next_from">Next from: %1$s</string>
+    <string name="queue_section_later">Later</string>
+    <string name="queue_group_stash">Stash</string>
+    <string name="queue_group_stash_a11y">Stash next in queue</string>
+    <string name="queue_group_clear_a11y">Clear next in queue</string>
+    <string name="queue_group_cleared">Cleared next in queue</string>
+    <string name="queue_group_stashed">Stashed next in queue</string>
+    <string name="queue_row_added">Added by you</string>
+    <string name="queue_row_autoplay">Autoplay</string>
+    <string name="queue_play_later">Play later</string>
+    <string name="settings_queue_section">Queue section</string>
+    <string name="settings_queue_section_desc">Adds “Add to queue”, which puts songs in a “Next in queue” section after the current song. Turn this off to have just Play next and Play later.</string>
 </resources>
