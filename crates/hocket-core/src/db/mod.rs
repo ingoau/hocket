@@ -34,10 +34,20 @@ use crate::util::{now_ms, Clock};
 /// older version is backed up and recreated (`migrate`). 11 squashed the
 /// earlier 0001–0010 and renamed `servers` to `accounts`; 12 added dedup
 /// links, ISRCs and Mixed playlists' per-song sources; 13 the live catalogue.
-pub const MIGRATIONS: &[(u32, &str, &str)] = &[(13, "0013_catalogue", include_str!("schema.sql"))];
+///
+/// Changes since are forward migrations on top, so a version-13 database
+/// keeps its listening history: 14 shares play history between devices.
+pub const MIGRATIONS: &[(u32, &str, &str)] = &[
+    (13, "0013_catalogue", include_str!("schema.sql")),
+    (
+        14,
+        "0014_shared_play_history",
+        include_str!("migrations/0014_shared_play_history.sql"),
+    ),
+];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -454,6 +464,15 @@ fn migrate(
         };
         report.restore = recreate(conn, backup.as_deref())?;
         report.to_version = MIGRATIONS[0].0;
+        // Then the migrations on top of the squashed schema.
+        for (version, name, sql) in MIGRATIONS.iter().skip(1) {
+            apply_migration(conn, *version, sql).map_err(|source| DbError::Migration {
+                version: *version,
+                source,
+            })?;
+            tracing::info!(version, name, "applied migration");
+            report.to_version = *version;
+        }
     } else {
         for (version, name, sql) in pending {
             match apply_migration(conn, *version, sql) {

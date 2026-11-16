@@ -609,6 +609,9 @@ impl SimDevice {
             | Output::TransportChanged { .. }
             | Output::SettingsMerged(_)
             | Output::UndoEntryReceived { .. }
+            | Output::PlaysSyncReady
+            | Output::PlaysPushed { .. }
+            | Output::PlaysReceived { .. }
             | Output::DiagnosticsRequested { .. }
             | Output::DiagnosticsReply(_)
             | Output::ReplicaChanged(_)

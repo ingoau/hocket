@@ -1697,6 +1697,10 @@ impl Db {
     pub fn delete_account(&self, account_id: &str) -> DbResult<()> {
         self.clear_mirror(account_id)?;
         self.with_tx(|tx| {
+            tx.execute(
+                "DELETE FROM play_relays WHERE history_id IN (SELECT id FROM play_history WHERE server_id = ?1)",
+                [account_id],
+            )?;
             for t in ["pins", "pin_tracks", "outbox", "play_history"] {
                 tx.execute(
                     &format!("DELETE FROM {t} WHERE server_id = ?1"),
@@ -2032,12 +2036,14 @@ pub fn recorded_play_in(
 
 /// [`Db::record_play`] inside the caller's transaction: a `play_history`
 /// row (returning its id) and the track's `local_play_count` /
-/// `local_last_played` bump. The one place these rows are written.
+/// `local_last_played` bump. The one place this device's own plays are
+/// written ([`import_plays_in`] writes other devices').
 ///
 /// A play is recorded once: when this play (track and start) already has a
 /// row (it came back to this device after a handoff and reached its
-/// threshold here again), that row's id is returned and nothing is counted
-/// twice; it is only marked `scrobbled` if this verdict says so.
+/// threshold here again, or another device shared it first), that row's id
+/// is returned and nothing is counted twice; it is only marked `scrobbled`
+/// if this verdict says so, and a shared row becomes this device's own.
 pub fn record_play_in(
     tx: &Connection,
     server_id: &str,
@@ -2048,9 +2054,10 @@ pub fn record_play_in(
     device_id: &str,
 ) -> DbResult<i64> {
     if let Some(id) = recorded_play_in(tx, server_id, track_id, played_at)? {
-        if scrobbled {
-            tx.execute("UPDATE play_history SET scrobbled = 1 WHERE id = ?1", [id])?;
-        }
+        tx.execute(
+            "UPDATE play_history SET remote = 0, scrobbled = MAX(scrobbled, ?2) WHERE id = ?1",
+            params![id, scrobbled as i64],
+        )?;
         return Ok(id);
     }
     tx.execute(
@@ -2058,11 +2065,130 @@ pub fn record_play_in(
         params![server_id, track_id, played_at, played_ms, scrobbled as i64, device_id],
     )?;
     let id = tx.last_insert_rowid();
+    bump_local_plays(tx, server_id, track_id, played_at)?;
+    Ok(id)
+}
+
+/// Whether this device recorded the play itself (a row another device
+/// shared does not count: this device's verdict on it is still its own).
+pub fn recorded_own_play_in(
+    tx: &Connection,
+    server_id: &str,
+    track_id: &str,
+    played_at: f64,
+) -> DbResult<bool> {
+    Ok(tx
+        .query_row(
+            "SELECT 1 FROM play_history WHERE server_id = ?1 AND track_id = ?2 AND played_at = ?3 AND remote = 0",
+            params![server_id, track_id, played_at],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn bump_local_plays(
+    tx: &Connection,
+    server_id: &str,
+    track_id: &str,
+    played_at: f64,
+) -> DbResult<()> {
     tx.execute(
-        "UPDATE tracks SET local_play_count = local_play_count + 1, local_last_played = ?3 WHERE server_id = ?1 AND id = ?2",
+        "UPDATE tracks SET local_play_count = local_play_count + 1,
+             local_last_played = MAX(COALESCE(local_last_played, ?3), ?3)
+         WHERE server_id = ?1 AND id = ?2",
         params![server_id, track_id, played_at],
     )?;
-    Ok(id)
+    Ok(())
+}
+
+/// Plays read from a room's shared log (`log_id`): each one of a source in
+/// `sources` (the accounts this device has; a play's source is its
+/// account id, the same on every device) that this device has no row for is
+/// recorded as `remote` (never as scrobbled: whether the server has it is
+/// the recording device's business, and a flag here would stop this device
+/// from ever submitting the same play itself) and counts toward the track's
+/// local stats. Every play recorded, new or not, is noted as held by that
+/// log so it is never pushed back. Returns how many were new.
+pub fn import_plays_in(
+    tx: &Connection,
+    plays: &[crate::connect::wire::PlayRecord],
+    sources: &[String],
+    log_id: &str,
+) -> DbResult<usize> {
+    let mut added = 0;
+    for p in plays {
+        let (source, track) = (&p.track_id.source, &p.track_id.id);
+        if track.is_empty() || !p.played_at.is_finite() || !sources.contains(source) {
+            continue;
+        }
+        let id = match recorded_play_in(tx, source, track, p.played_at)? {
+            Some(id) => id,
+            None => {
+                tx.execute(
+                    "INSERT INTO play_history(server_id, track_id, played_at, played_ms, scrobbled, device_id, remote) VALUES (?1, ?2, ?3, ?4, 0, ?5, 1)",
+                    params![source, track, p.played_at, p.played_ms, p.device_id],
+                )?;
+                bump_local_plays(tx, source, track, p.played_at)?;
+                added += 1;
+                tx.last_insert_rowid()
+            }
+        };
+        tx.execute(
+            "INSERT OR IGNORE INTO play_relays(history_id, log_id) VALUES (?1, ?2)",
+            params![id, log_id],
+        )?;
+    }
+    Ok(added)
+}
+
+/// Plays since `since` (epoch ms), of every account, that the log `log_id`
+/// is not known to hold, oldest recorded first, at most `limit`:
+/// `(row id, play)`.
+pub fn unrelayed_plays_in(
+    tx: &Connection,
+    log_id: &str,
+    since: f64,
+    limit: usize,
+) -> DbResult<Vec<(i64, crate::connect::wire::PlayRecord)>> {
+    let mut st = tx.prepare_cached(
+        "SELECT h.id, h.server_id, h.track_id, h.played_at, h.played_ms, h.device_id FROM play_history h
+         WHERE h.played_at >= ?2
+           AND NOT EXISTS (SELECT 1 FROM play_relays r WHERE r.history_id = h.id AND r.log_id = ?1)
+         ORDER BY h.id LIMIT ?3",
+    )?;
+    let rows = st.query_map(params![log_id, since, limit as i64], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            crate::connect::wire::PlayRecord {
+                track_id: api::TrackRef::new(r.get::<_, String>(1)?, r.get::<_, String>(2)?),
+                played_at: r.get(3)?,
+                played_ms: r.get::<_, i64>(4)?.clamp(0, i64::from(u32::MAX)) as u32,
+                device_id: r.get(5)?,
+                seq: 0,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// The log `log_id` holds these plays (the room acknowledged them).
+pub fn mark_relayed_in(tx: &Connection, ids: &[i64], log_id: &str) -> DbResult<()> {
+    let mut st =
+        tx.prepare_cached("INSERT OR IGNORE INTO play_relays(history_id, log_id) VALUES (?1, ?2)")?;
+    for id in ids {
+        st.execute(params![id, log_id])?;
+    }
+    Ok(())
+}
+
+/// Forget relay notes of plays older than `before` (no room keeps them).
+pub fn prune_play_relays_in(tx: &Connection, before: f64) -> DbResult<()> {
+    tx.execute(
+        "DELETE FROM play_relays WHERE history_id IN (SELECT id FROM play_history WHERE played_at < ?1)",
+        [before],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3295,6 +3421,99 @@ mod tests {
         assert!(h[2].scrobbled);
         assert_eq!(h[2].played_ms, 60_000);
         assert_eq!(db.recently_played(1).unwrap().len(), 1);
+    }
+
+    /// Plays from a room's log are recorded once, count toward local stats
+    /// without moving `local_last_played` back, are never pushed back to
+    /// that log, and are pushed to any other until it acknowledges them.
+    #[test]
+    fn shared_plays_import_once_and_relay_per_log() {
+        use crate::connect::wire::PlayRecord;
+        let db = seeded();
+        let p = |track: &str, at: f64| PlayRecord {
+            track_id: api::TrackRef::new("s", track),
+            played_at: at,
+            played_ms: 50_000,
+            device_id: "other".into(),
+            seq: 0,
+        };
+        let own = db
+            .record_play("s", "1", 300.0, 60_000, false, "me")
+            .unwrap();
+        let src = vec!["s".to_string()];
+        let added = db
+            .with_tx(|tx| {
+                import_plays_in(
+                    tx,
+                    &[p("1", 100.0), p("1", 300.0), p("3", 200.0)],
+                    &src,
+                    "L1",
+                )
+            })
+            .unwrap();
+        assert_eq!(added, 2, "the play at 300 is this device's own");
+        let again = db
+            .with_tx(|tx| import_plays_in(tx, &[p("1", 100.0)], &src, "L1"))
+            .unwrap();
+        assert_eq!(again, 0);
+        let elsewhere = PlayRecord {
+            track_id: api::TrackRef::new("not-here", "1"),
+            ..p("1", 400.0)
+        };
+        assert_eq!(
+            db.with_tx(|tx| import_plays_in(tx, &[elsewhere], &src, "L1"))
+                .unwrap(),
+            0,
+            "a play of an account this device does not have is not kept"
+        );
+        let h = db.recently_played(10).unwrap();
+        assert_eq!(h.len(), 3);
+        assert_eq!(h[0].device_id, "me");
+        assert_eq!(h[1].device_id, "other");
+        assert!(h.iter().all(|e| !e.scrobbled));
+        let (lpc, llp): (i64, f64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT local_play_count, local_last_played FROM tracks WHERE id = '1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            (lpc, llp),
+            (2, 300.0),
+            "an older shared play keeps the newer last-played"
+        );
+
+        // L1 holds all three now; L2 holds none until it acknowledges.
+        let to = |log: &str| {
+            db.with_tx(|tx| unrelayed_plays_in(tx, log, 0.0, 10))
+                .unwrap()
+        };
+        assert!(to("L1").is_empty());
+        let pending = to("L2");
+        assert_eq!(pending.len(), 3);
+        assert_eq!(pending[0].0, own, "oldest recorded first");
+        assert_eq!(pending[0].1.device_id, "me");
+        let first: Vec<i64> = pending.iter().take(2).map(|r| r.0).collect();
+        db.with_tx(|tx| mark_relayed_in(tx, &first, "L2")).unwrap();
+        assert_eq!(to("L2").len(), 1);
+        assert_eq!(
+            db.with_tx(|tx| unrelayed_plays_in(tx, "L3", 250.0, 10))
+                .unwrap()
+                .len(),
+            1,
+            "only plays since the cut-off"
+        );
+        db.with_tx(|tx| prune_play_relays_in(tx, 250.0)).unwrap();
+        assert_eq!(to("L1").len(), 2, "relay notes of old plays are forgotten");
+
+        db.delete_account("s").unwrap();
+        let left: i64 = db
+            .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM play_relays", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     #[test]

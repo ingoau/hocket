@@ -1903,6 +1903,7 @@ impl Actor {
         if submit {
             self.schedule_flush();
         }
+        self.pump_plays();
         self.emit(Event::LibraryChanged {
             server_id,
             tables: vec!["tracks".into(), "play_history".into()],

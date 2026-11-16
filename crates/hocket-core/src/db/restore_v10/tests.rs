@@ -530,7 +530,9 @@ fn an_unreadable_backup_restores_nothing() {
     let junk = dir.path().join("hocket.sqlite.v10.1.bak");
     std::fs::write(&junk, b"this is not a database").unwrap();
     let c = Connection::open_in_memory().unwrap();
-    c.execute_batch(super::super::MIGRATIONS[0].2).unwrap();
+    for (_, _, sql) in super::super::MIGRATIONS {
+        c.execute_batch(sql).unwrap();
+    }
     let r = retry(&c, &junk);
     assert_eq!(r.errors.len(), 1, "{r:?}");
     assert!(r.restored.is_empty());
@@ -587,7 +589,9 @@ fn a_database_recreated_by_a_build_without_the_restore_is_left_alone() {
     }
     {
         let c = Connection::open(f.db_path()).unwrap();
-        c.execute_batch(super::super::MIGRATIONS[0].2).unwrap();
+        for (_, _, sql) in super::super::MIGRATIONS {
+            c.execute_batch(sql).unwrap();
+        }
         c.execute(
             "INSERT INTO schema_version(version, applied_at) VALUES (?1, 0)",
             [SCHEMA_VERSION],
@@ -702,7 +706,9 @@ fn a_retry_sqlite_rolls_back_gives_up_without_writing_anything() {
     let f = fixture();
     let backup = back_up(&f, 1_000);
     let c = Connection::open_in_memory().unwrap();
-    c.execute_batch(super::super::MIGRATIONS[0].2).unwrap();
+    for (_, _, sql) in super::super::MIGRATIONS {
+        c.execute_batch(sql).unwrap();
+    }
     mark_retry(&c, &backup).unwrap();
     let r = {
         let _abort = AbortAt::set("cacheEntries");

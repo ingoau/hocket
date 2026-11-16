@@ -25,9 +25,12 @@ use crate::connect::lease::{
     cadence_slack_ms, clamp_cadence, lease_window_ms, LeaseError, LeaseEvent, LeaseMachine,
     HEARTBEAT_INTERVAL_MS, LEASE_DURATION_MS,
 };
-use crate::connect::replica::{new_replica, same_start, ReplicaExt, ScrobbleClaim};
+use crate::connect::replica::{
+    new_replica, same_start, ReplicaExt, ScrobbleClaim, PLAY_FUTURE_SLACK_MS, PLAY_LOG_CAP,
+    PLAY_PAGE,
+};
 use crate::connect::wire::{
-    negotiate, LastStamp, Msg, RefuseReason, RejectReason, ReplicaState, WireMessage,
+    negotiate, LastStamp, Msg, PlayRecord, RefuseReason, RejectReason, ReplicaState, WireMessage,
 };
 use crate::connect::{apply_op, op_context, PeerId, ReducerHandle, LOOPBACK};
 use crate::identity::crypto::DeviceSecret;
@@ -299,6 +302,22 @@ impl Room {
             diagnostics_requests: HashMap::new(),
             out: vec![],
         }
+    }
+
+    /// The replica minus its play log (which can be large and is read
+    /// with `PlaysRequest`), without copying the log.
+    pub fn replica_without_plays(&mut self) -> ReplicaState {
+        let plays = std::mem::take(&mut self.replica.play_log);
+        let out = self.replica.clone();
+        self.replica.play_log = plays;
+        out
+    }
+
+    fn mint_play_log_id(&mut self) -> String {
+        if self.replica.play_log_id.is_empty() {
+            self.dirty = true;
+        }
+        self.replica.play_log_id()
     }
 
     pub fn scope(&self) -> &str {
@@ -1321,7 +1340,9 @@ impl Room {
         });
         // Always sent, even when empty: the joiner adopts the room's session
         // identity from it (or pushes its own document into a trivial one).
-        let replica = Some(self.replica.clone());
+        // The play log stays out: it can be large, and the joiner asks for
+        // just what it lacks (`PlaysRequest`).
+        let replica = Some(self.replica_without_plays());
         self.send(
             peer,
             Msg::Welcome {
@@ -1985,6 +2006,93 @@ impl Room {
                     Some(peer),
                 );
             }
+            Msg::PlaysPush { batch, plays } => {
+                let mut plays = plays;
+                // One push is at most a log's worth (a well-behaved device
+                // sends pages of PLAY_PAGE); the excess is never acknowledged
+                // as kept, so it is not acknowledged at all.
+                if plays.len() > PLAY_LOG_CAP {
+                    return;
+                }
+                plays.retain(|p| p.played_at <= now + PLAY_FUTURE_SLACK_MS);
+                let added = self.replica.add_plays(&plays, now);
+                let log_id = self.mint_play_log_id();
+                self.send(
+                    peer,
+                    Msg::PlaysPushed {
+                        batch,
+                        log_id: log_id.clone(),
+                    },
+                );
+                if !added.is_empty() {
+                    self.dirty = true;
+                    // To everyone, the sender too: its mark moves past them.
+                    let mut after = added[0].seq - 1;
+                    for page in added.chunks(PLAY_PAGE) {
+                        self.broadcast(
+                            Msg::PlaysLog {
+                                log_id: log_id.clone(),
+                                after,
+                                plays: page.to_vec(),
+                            },
+                            None,
+                        );
+                        after = page[page.len() - 1].seq;
+                    }
+                }
+            }
+            Msg::PlaysRequest { marks } => {
+                let mut log_id = self.mint_play_log_id();
+                let mut after = marks
+                    .iter()
+                    .find(|m| m.log_id == log_id)
+                    .map(|m| m.seq)
+                    .unwrap_or(0);
+                if after > self.replica.play_seq {
+                    // A device has read further than this log goes: the log
+                    // went back (restored from an older copy, or a crash
+                    // before its last save) and would hand out those seqs
+                    // again. Start a new log, so every device reads it from
+                    // the start and pushes again what this one lost.
+                    tracing::warn!(scope = %self.cfg.scope, mark = after, seq = self.replica.play_seq, "play log went back; starting a new one");
+                    self.replica.play_log_id = crate::util::new_id();
+                    self.dirty = true;
+                    log_id = self.replica.play_log_id.clone();
+                    after = 0;
+                }
+                let plays: Vec<PlayRecord> = self
+                    .replica
+                    .play_log
+                    .iter()
+                    .filter(|p| p.seq > after)
+                    .cloned()
+                    .collect();
+                if plays.is_empty() {
+                    // Still answered, so the device learns the log's id and
+                    // that it is caught up.
+                    self.send(
+                        peer,
+                        Msg::PlaysLog {
+                            log_id: log_id.clone(),
+                            after,
+                            plays: vec![],
+                        },
+                    );
+                }
+                for page in plays.chunks(PLAY_PAGE) {
+                    let last = page[page.len() - 1].seq;
+                    self.send(
+                        peer,
+                        Msg::PlaysLog {
+                            log_id: log_id.clone(),
+                            after,
+                            plays: page.to_vec(),
+                        },
+                    );
+                    after = last;
+                }
+            }
+            Msg::PlaysPushed { .. } | Msg::PlaysLog { .. } => {}
             Msg::LibraryEdited {
                 items, playlists, ..
             } => {
@@ -3637,5 +3745,211 @@ mod tests {
             WireMessage::new(Msg::Unknown),
         ));
         assert!(outs.is_empty());
+    }
+
+    fn play(track: &str, at: f64, device: &str) -> crate::connect::wire::PlayRecord {
+        crate::connect::wire::PlayRecord {
+            track_id: track.into(),
+            played_at: at,
+            played_ms: 120_000,
+            device_id: device.into(),
+            seq: 0,
+        }
+    }
+
+    fn push(
+        r: &mut Room,
+        peer: &str,
+        batch: u32,
+        plays: Vec<crate::connect::wire::PlayRecord>,
+    ) -> Vec<RoomOutput> {
+        r.handle(RoomInput::Message(
+            peer.into(),
+            WireMessage::new(Msg::PlaysPush { batch, plays }),
+        ))
+    }
+
+    /// A pushed play is acknowledged to its sender and relayed to every
+    /// member (the sender too, so its read mark moves past it); a play the
+    /// log already has is acknowledged and not relayed again.
+    #[test]
+    fn pushed_plays_are_acknowledged_kept_once_and_relayed_to_all() {
+        let (mut r, _) = room();
+        join(&mut r, "p1", "a");
+        join(&mut r, "p2", "b");
+        let outs = push(
+            &mut r,
+            "p1",
+            7,
+            vec![play("t1", 500.0, "a"), play("t1", 500.0, "a")],
+        );
+        let to_a = sent(&outs, "p1");
+        let log_id = match to_a[0] {
+            Msg::PlaysPushed { batch: 7, log_id } => log_id.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(!log_id.is_empty());
+        for peer in ["p1", "p2"] {
+            assert!(
+                sent(&outs, peer).iter().any(|m| matches!(m,
+                    Msg::PlaysLog { log_id: l, after: 0, plays } if *l == log_id && plays.len() == 1 && plays[0].seq == 1)),
+                "{peer} gets the new play once"
+            );
+        }
+        assert!(outs.contains(&RoomOutput::ReplicaChanged) || r.replica().play_log.len() == 1);
+
+        // b pushes the same play (it learnt it here) and one of its own.
+        let outs = push(
+            &mut r,
+            "p2",
+            1,
+            vec![play("t1", 500.0, "a"), play("t2", 600.0, "b")],
+        );
+        assert!(matches!(
+            sent(&outs, "p2")[0],
+            Msg::PlaysPushed { batch: 1, .. }
+        ));
+        let relayed: Vec<_> = sent(&outs, "p1")
+            .into_iter()
+            .filter_map(|m| match m {
+                Msg::PlaysLog { after, plays, .. } => Some((*after, plays.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(relayed.len(), 1);
+        assert_eq!(relayed[0].0, 1, "continues after seq 1");
+        assert_eq!(relayed[0].1.len(), 1);
+        assert_eq!(relayed[0].1[0].track_id, "t2");
+        assert_eq!(relayed[0].1[0].seq, 2);
+        assert_eq!(r.replica().play_log.len(), 2);
+
+        // Nothing new: acknowledged, nothing relayed.
+        let outs = push(&mut r, "p2", 2, vec![play("t2", 600.0, "b")]);
+        assert!(sent(&outs, "p1").is_empty());
+        assert!(matches!(
+            sent(&outs, "p2")[0],
+            Msg::PlaysPushed { batch: 2, .. }
+        ));
+    }
+
+    /// A joiner's welcome carries no play log; it asks for what it has not
+    /// read and gets exactly that, from its mark or (for a log it does not
+    /// know) from the start.
+    #[test]
+    fn a_play_request_answers_from_the_mark_and_the_welcome_leaves_the_log_out() {
+        use crate::connect::wire::PlayLogMark;
+        let (mut r, _) = room();
+        join(&mut r, "p1", "a");
+        let plays: Vec<_> = (0..3)
+            .map(|i| play(&format!("t{i}"), 100.0 + f64::from(i), "a"))
+            .collect();
+        push(&mut r, "p1", 1, plays);
+        let log_id = r.replica().play_log_id.clone();
+
+        let outs = join(&mut r, "p2", "b");
+        match sent(&outs, "p2")[0] {
+            Msg::Welcome {
+                replica: Some(rep), ..
+            } => {
+                assert!(rep.play_log.is_empty());
+                assert_eq!(rep.play_seq, 3);
+            }
+            other => panic!("{other:?}"),
+        }
+        let ask = |r: &mut Room, marks: Vec<PlayLogMark>| {
+            let outs = r.handle(RoomInput::Message(
+                "p2".into(),
+                WireMessage::new(Msg::PlaysRequest { marks }),
+            ));
+            sent(&outs, "p2")
+                .into_iter()
+                .filter_map(|m| match m {
+                    Msg::PlaysLog {
+                        log_id,
+                        after,
+                        plays,
+                    } => Some((
+                        log_id.clone(),
+                        *after,
+                        plays.iter().map(|p| p.seq).collect::<Vec<_>>(),
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ask(&mut r, vec![]),
+            vec![(log_id.clone(), 0, vec![1, 2, 3])]
+        );
+        let other = PlayLogMark {
+            log_id: "elsewhere".into(),
+            seq: 2,
+        };
+        assert_eq!(
+            ask(&mut r, vec![other.clone()]),
+            vec![(log_id.clone(), 0, vec![1, 2, 3])]
+        );
+        let mark = PlayLogMark {
+            log_id: log_id.clone(),
+            seq: 2,
+        };
+        assert_eq!(
+            ask(&mut r, vec![other, mark]),
+            vec![(log_id.clone(), 2, vec![3])]
+        );
+        // Caught up: an empty answer still names the log.
+        let mark = PlayLogMark {
+            log_id: log_id.clone(),
+            seq: 3,
+        };
+        assert_eq!(ask(&mut r, vec![mark]), vec![(log_id.clone(), 3, vec![])]);
+        // A mark past the log's end (the log went back): a new log, read
+        // from the start.
+        let mark = PlayLogMark {
+            log_id: log_id.clone(),
+            seq: 99,
+        };
+        let got = ask(&mut r, vec![mark]);
+        assert_eq!(got.len(), 1);
+        assert_ne!(got[0].0, log_id, "a new log id");
+        assert_eq!((got[0].1, got[0].2.clone()), (0, vec![1, 2, 3]));
+        assert_eq!(r.replica().play_log_id, got[0].0);
+    }
+
+    /// A long log is answered in pages, each continuing the last.
+    #[test]
+    fn a_long_play_log_is_paged() {
+        let (mut r, _) = room();
+        join(&mut r, "p1", "a");
+        let n = PLAY_PAGE + 10;
+        let mut plays: Vec<_> = (0..n).map(|i| play(&format!("t{i}"), 100.0, "a")).collect();
+        // Dated a week ahead (a wrong clock): never kept, it would not expire.
+        plays.push(play("future", 1_000.0 + 7.0 * 86_400_000.0, "a"));
+        let outs = push(&mut r, "p1", 1, plays);
+        let relayed: Vec<_> = sent(&outs, "p1")
+            .into_iter()
+            .filter_map(|m| match m {
+                Msg::PlaysLog { after, plays, .. } => Some((*after, plays.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            relayed,
+            vec![(0, PLAY_PAGE), (PLAY_PAGE as u32, 10)],
+            "relayed in pages too"
+        );
+        assert!(r.replica().play_log.iter().all(|p| p.track_id != "future"));
+        let outs = r.handle(RoomInput::Message(
+            "p1".into(),
+            WireMessage::new(Msg::PlaysRequest { marks: vec![] }),
+        ));
+        let pages: Vec<_> = sent(&outs, "p1")
+            .into_iter()
+            .filter_map(|m| match m {
+                Msg::PlaysLog { after, plays, .. } => Some((*after, plays.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pages, vec![(0, PLAY_PAGE), (PLAY_PAGE as u32, 10)]);
     }
 }
