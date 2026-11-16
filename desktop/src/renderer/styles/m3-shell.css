@@ -450,6 +450,67 @@
 }
 .palette .pi.active { border-radius: var(--shape-full); }
 .palette .pi .art { width: 30px; height: 30px; border-radius: var(--shape-sm); }
+.palette .pi .art.round { border-radius: 50%; }
+/* Raycast-style frame: a fixed height (the list doesn't jump as results arrive, and the actions
+   menu always has room), the search field with its glass, a footer naming what Enter and the
+   palette chord do. */
+.palette { position: relative; display: flex; flex-direction: column; padding-bottom: 0; }
+.palette-search { position: relative; display: flex; align-items: center; }
+.palette-search > svg { position: absolute; left: 20px; color: var(--fg-muted); pointer-events: none; }
+.palette .palette-search .input { padding-left: 52px; }
+.palette .list { height: min(400px, 52vh); max-height: none; flex: 0 0 auto; }
+.palette .palette-empty { position: absolute; top: 76px; left: 10px; right: 10px; }
+.palette .pi .grow { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.palette .pi .pi-title { flex: 0 1 auto; min-width: 0; }
+.palette .pi .sub { flex: 1 1 0; min-width: 0; color: var(--fg-muted); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette .pi .pi-icon { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--shape-sm); background: var(--bg-sunken); color: var(--fg-muted); }
+.palette .pi.active .pi-icon { color: var(--accent-text); }
+.palette .pi .pi-type { flex: 0 0 auto; margin-left: 4px; font-size: var(--fs-sm); color: var(--fg-faint); }
+.palette .pi.active .pi-type { color: var(--fg-muted); }
+.palette .keycaps { display: inline-flex; gap: 3px; flex: 0 0 auto; }
+.palette .keycap {
+  min-width: 20px; height: 20px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; background: var(--bg-sunken); color: var(--fg-muted); font: 600 11px/1 var(--font-ui);
+}
+.palette-footer {
+  display: flex; align-items: center; gap: 6px; height: 46px; margin: 6px -10px 0; padding: 0 12px 0 18px;
+  border-top: 1px solid var(--border); color: var(--fg-muted); font-size: var(--fs-sm);
+}
+.palette-footer .pf-btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px 0 10px; border: 0; border-radius: var(--shape-full);
+  background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer;
+}
+.palette-footer .pf-btn:hover:not(:disabled), .palette-footer .pf-btn[aria-expanded="true"] { background: var(--state-selected); }
+.palette-footer .pf-btn:disabled { color: var(--fg-faint); cursor: default; }
+.palette-footer .pf-sep { width: 1px; height: 16px; background: var(--border); }
+/* The actions menu: a popover on the palette, bottom-right above the footer, the context menu's
+   surface and rows, grouped with separators, its own filter field at the foot. */
+.palette-actions {
+  position: absolute; right: 10px; bottom: 54px; z-index: 2; width: 340px; max-width: calc(100% - 20px); max-height: calc(100% - 128px);
+  display: flex; flex-direction: column; padding: 6px; border-radius: 20px; background: var(--bg-elev); border: 1px solid var(--border);
+  box-shadow: var(--shadow-2), var(--shadow); transform-origin: bottom right; animation: palette-actions-in var(--dur-spring) var(--spring-fast);
+}
+@keyframes palette-actions-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } to { opacity: 1; transform: none; } }
+.palette-actions .pa-title { padding: 6px 10px 4px; font-size: var(--fs-xs); font-weight: 700; color: var(--fg-muted); }
+.palette-actions .pa-list { overflow-y: auto; min-height: 0; }
+.palette-actions .pa-group + .pa-group { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--border); }
+.palette-actions .pa-item { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 6px 0 10px; border-radius: 10px; cursor: default; color: var(--fg); }
+.palette-actions .pa-item > svg { color: var(--fg-muted); flex: 0 0 auto; }
+.palette-actions .pa-item.active { background: var(--state-selected); }
+.palette-actions .pa-item.destructive, .palette-actions .pa-item.destructive > svg { color: var(--danger); }
+.palette-actions .pa-empty { padding: 8px 10px; color: var(--fg-muted); font-size: var(--fs-sm); }
+.palette-actions .pa-filter {
+  flex: 0 0 auto; height: 38px; margin: 6px -6px -6px; padding: 0 16px; border: 0; border-top: 1px solid var(--border);
+  border-radius: 0 0 20px 20px; background: transparent; color: var(--fg); font: inherit; outline: none;
+}
+.palette-actions .pa-filter::placeholder { color: var(--fg-faint); }
+@media (prefers-reduced-motion: reduce) { .palette-actions { animation: none; } }
+@media (forced-colors: active) {
+  .palette-actions { border-color: CanvasText; }
+  .palette-actions .pa-item.active { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .palette-actions .pa-item.active * { color: HighlightText !important; }
+  .palette .keycap { border: 1px solid CanvasText; }
+}
 
 /* ---- Dialogs ------------------------------------------------------------- */
 .dialog { width: 460px; border: 0; border-radius: 32px; padding: 28px; gap: 16px; box-shadow: var(--shadow-2), var(--shadow); }
