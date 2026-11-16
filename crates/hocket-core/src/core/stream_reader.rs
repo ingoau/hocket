@@ -581,6 +581,9 @@ impl StreamReader {
     /// left for the reader to meet at the byte where it happened.
     async fn pump(self, h: Arc<Handle>) {
         tracing::debug!(target: "hocket::stream", "fetching the rest of the stream ahead of the player");
+        // Where a refused URL was last resolved again: a second refusal
+        // there waits for the retry.
+        let mut refused_at: Option<u64> = None;
         loop {
             let mut src = tokio::select! {
                 _ = h.cancel.cancelled() => break,
@@ -613,6 +616,15 @@ impl StreamReader {
                         // The reader opened this gap itself meanwhile (it
                         // caught up): its fetch serves it.
                         Ok(_) if c.seg.is_some() || c.fill_from() != Some(open.from) => {
+                            PumpStep::More
+                        }
+                        // An expired URL: forgotten, so the next step
+                        // resolves the same gap again.
+                        Ok(up)
+                            if refused_at != Some(open.from)
+                                && c.forget_refused_url(up.status, open.from) =>
+                        {
+                            refused_at = Some(open.from);
                             PumpStep::More
                         }
                         Ok(up) => match c.attach_segment(open.from, open.gap_end, up) {
@@ -1563,18 +1575,28 @@ impl CacheSource {
         let (request, gap_end) = self.segment_request(pos).await?;
         let mut up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
         let mut gap_end = gap_end;
-        if matches!(up.status, 403 | 410) {
-            // An expiring URL (googlevideo's last ~6 h, bound to this IP):
-            // the provider forgets it and the same range goes to a fresh one.
-            if let Some(api) = &self.api {
-                tracing::info!(target: "hocket::stream", track = %self.token.track_id, status = up.status, at = pos, "stream URL refused; resolving it again");
-                api.stream_failed(&self.token.track_id, up.status);
-                let (request, end) = self.segment_request(pos).await?;
-                gap_end = end;
-                up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
-            }
+        if self.forget_refused_url(up.status, pos) {
+            let (request, end) = self.segment_request(pos).await?;
+            gap_end = end;
+            up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
         }
         self.attach_segment(pos, gap_end, up)
+    }
+
+    /// A refused stream URL (403/410: googlevideo's expire after ~6 h and
+    /// are bound to this IP): the provider forgets it, so the next request
+    /// for the stream resolves a fresh one. Whether it was one. Shared by
+    /// the reader and the pump.
+    fn forget_refused_url(&self, status: u16, at: u64) -> bool {
+        if !matches!(status, 403 | 410) {
+            return false;
+        }
+        let Some(api) = &self.api else {
+            return false;
+        };
+        tracing::info!(target: "hocket::stream", track = %self.token.track_id, status, at, "stream URL refused; resolving it again");
+        api.stream_failed(&self.token.track_id, status);
+        true
     }
 
     /// The request for the gap at `pos`, and where the gap ends.
@@ -2434,5 +2456,84 @@ mod googlevideo_tests {
             .any(|(k, v)| k == "User-Agent" && (v.contains("Safari") == u.ends_with("n=1")))));
         // loudnessDb became the track gain.
         assert_eq!(dl.gain("ytm", "vid").unwrap(), Some(-2.5));
+    }
+
+    /// The pump (fetching ahead of the player) meets the refused URL: it is
+    /// resolved again there too, and the rest of the stream lands in the
+    /// cache, instead of the same refused URL being retried for ever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_pump_resolves_a_refused_url_again() {
+        let resolves = Arc::new(Mutex::new(0u32));
+        let http = {
+            let resolves = resolves.clone();
+            FakeYtmHttp::new(move |r| {
+                if r.url.contains("sw.js_data") {
+                    return Some(HttpResponse::json(
+                        200,
+                        include_str!("../ytm/fixtures/sw_js_data.txt"),
+                    ));
+                }
+                let mut n = resolves.lock();
+                *n += 1;
+                let v = serde_json::json!({"playabilityStatus": {"status": "OK"}, "streamingData": {"expiresInSeconds": "21540", "adaptiveFormats": [
+                    {"itag": 140, "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "contentLength": LEN.to_string(),
+                     "url": format!("https://rr1.googlevideo.com/videoplayback?itag=140&n={}", *n), "loudnessDb": 2.5}]}});
+                Some(HttpResponse::json(200, &v.to_string()))
+            })
+        };
+        let fixed = Arc::new(crate::util::FixedClock::new(crate::util::now_ms()));
+        let clock: Arc<dyn Clock> = fixed.clone();
+        let it = Arc::new(crate::ytm::client::InnerTube::new(
+            Arc::new(http),
+            clock.clone(),
+            None,
+        ));
+        let provider = Arc::new(crate::ytm::YtmProvider::new(
+            crate::ytm::ANON,
+            it,
+            clock.clone(),
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let dl = Downloads::new(
+            crate::db::Db::open_in_memory().unwrap(),
+            clock.clone(),
+            Arc::new(crate::downloads::UnknownStorage),
+            &dir.path().join("data"),
+            &dir.path().join("cache"),
+            crate::api::Platform::Linux,
+        );
+        let bytes: Arc<Vec<u8>> = Arc::new((0..LEN).map(|i| (i * 13 % 251) as u8).collect());
+        let upstream = Arc::new(Googlevideo {
+            bytes,
+            log: Mutex::default(),
+        });
+        let r = StreamReader::new(dl.clone(), clock, upstream.clone(), Arc::new(|_| {}));
+        r.set_providers(crate::provider::ProviderSet::single(provider));
+        let url = r
+            .mint(StreamTarget {
+                server_id: "ytm".into(),
+                track_id: "vid".into(),
+                profile: None,
+                suffix: Some("m4a".into()),
+                mime_type: Some("audio/mp4".into()),
+                duration_ms: Some(370_000.0),
+            })
+            .unwrap();
+        let info = r.open(&url, 0, None).await.unwrap();
+        assert!(!r.read(info.handle, 64 * 1024).await.unwrap().is_empty());
+        // Past the pump's start delay, a read starts it.
+        fixed.advance(PUMP_START_DELAY_MS + 1_000.0);
+        assert!(!r.read(info.handle, 64 * 1024).await.unwrap().is_empty());
+        let t = std::time::Instant::now();
+        while !r.is_local(&url) {
+            assert!(
+                t.elapsed() < std::time::Duration::from_secs(20),
+                "the pump never got past the refused URL ({} resolves)",
+                *resolves.lock()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(*resolves.lock(), 2);
+        r.close(info.handle);
     }
 }
