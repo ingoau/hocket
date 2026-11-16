@@ -49,6 +49,19 @@ class CoreClientTest {
     }
 
     @Test
+    fun aNewPairingInviteNeverShowsThePreviousOne() = runTest {
+        val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
+        val client = CoreClient(core, backgroundScope, now = { clock })
+        runCurrent()
+        client.onEvent(Event.PairingInvite(EventPairingInviteInner("hocket://pair?old", 1.0)))
+        client.createPairingInvite()
+        assertTrue(client.pairingInvite.value?.link != "hocket://pair?old")
+        client.onEvent(Event.PairingInvite(EventPairingInviteInner("hocket://pair?new", 2.0)))
+        client.onEvent(Event.PairingFailed(EventPairingFailedInner("no network")))
+        assertEquals(null, client.pairingInvite.value)
+    }
+
+    @Test
     fun reportUploadFollowsTheCoresEvents() = runTest {
         val core = FakeCore(seed = 3, timers = false, now = { clock }, dispatcher = Dispatchers.Unconfined)
         val client = CoreClient(core, backgroundScope, now = { clock })

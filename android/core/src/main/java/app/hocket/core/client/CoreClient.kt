@@ -465,6 +465,12 @@ class CoreClient(
 
     fun dispatch(command: Command) = core.dispatch(command)
 
+    /** Asks for a new pairing invite; the previous one is gone until it arrives (never shown again). */
+    fun createPairingInvite() {
+        _pairingInvite.value = null
+        core.dispatch(Command.CreatePairingInvite)
+    }
+
     /** Saves a report on the coordinator (`docs/reports.md`); progress arrives on [reportUpload]. */
     fun startReportUpload(note: String, bundle: String, attachments: List<ReportAttachment>) =
         dispatch(Command.StartReportUpload(CommandStartReportUploadInner(note, bundle, attachments)))
@@ -597,7 +603,9 @@ class CoreClient(
             is Event.CoordinatorInvites -> _coordinatorInvites.value = event.data
             is Event.CoordinatorYtmStatus -> _coordinatorYtm.value = event.data
             is Event.DevicePaired -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
-            is Event.PairingFinished, is Event.PairingFailed, is Event.CredentialsSynced,
+            // A failed invite leaves no stale one up (a failed join has none to show either).
+            is Event.PairingFailed -> { _pairingInvite.value = null; _identityEvents.tryEmit(event) }
+            is Event.PairingFinished, is Event.CredentialsSynced,
             is Event.CoordinatorJoined, is Event.CoordinatorFailed -> _identityEvents.tryEmit(event)
             is Event.SyncProgress -> _syncProgress.value = event.data.progress
             is Event.LibraryChanged -> {

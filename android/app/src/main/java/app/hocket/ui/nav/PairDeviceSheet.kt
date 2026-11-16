@@ -41,7 +41,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
-import app.hocket.core.api.Command
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.icons.HocketIcons
 import com.google.zxing.BarcodeFormat
@@ -62,7 +61,7 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 fun PairDeviceSheet(onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("pairDevice.sheet")) {
         val client = LocalCoreClient.current
-        LaunchedEffect(client) { client.dispatch(Command.CreatePairingInvite) }
+        LaunchedEffect(client) { client.createPairingInvite() }
         val invite by client.pairingInvite.collectAsStateWithLifecycle()
         PairDeviceSheetContent(invite?.link, invite?.expires_at)
     }
