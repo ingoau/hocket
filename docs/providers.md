@@ -830,15 +830,25 @@ Protocol and security changes from the PR review (Rust core and coordinator):
   past, are *contested*: both devices are out, neither removal's new key is used, and a remaining
   member rotates (`MemberState::rekey`). This replaces "lowest op hash wins", which a removed
   device could win by signing a counter-removal from before its own removal (and retrying `at`).
-  A removal only acts while no other removal voids it; a cycle of three or more falls back to the
-  lowest hash.
+  A contested removal may be backdated, so it voids only what its target did that its partner (the
+  removal of its author) doesn't have in its past: whatever the remover did before removing it
+  (other removals, adds, rotations) stands. When a contested pair would leave no members, the
+  senior device stays (its `Add` comes first in the log's order; the founding device is the most
+  senior). The trade-off: a stolen device can always take one other device out with it, and in a
+  two-device identity the senior device survives, whichever one was stolen. A removal only acts
+  while no other removal voids it; a cycle of three or more falls back to the lowest hash.
 - **Member list hygiene.** Signatures are lowercase hex only (one hash per op). A merge refuses
   batches over `MAX_OPS` before any work, orders ops parents-first in one pass, and drops void ops
-  by removed devices that nothing kept builds on, so a removed device can't fill the log. The
-  device id `coordinator` can't be added.
-- **Identity sync only after proof.** Rooms and LAN joiners check a proof against a scratch copy of
-  the member list plus the ops it carried, and merge the peer's sync only once it proved
-  membership. Unsigned times (blob, last synced) beyond now + 5 min are refused; key holders keep
+  by removed devices that nothing kept builds on, so a removed device can't fill the log. Pruned
+  ops are remembered with their parents (still known for a peer's heads, and ancestry passes through
+  them), so pruning can't split a LAN. The author-key check is memoised per `Add`. The device id
+  `coordinator` can't be added.
+- **Identity sync only after proof.** Rooms and LAN joiners check a member's proof against their
+  own list when it knows the prover's heads; otherwise the proof must verify with a key the prover
+  could have before its ops go into a scratch copy, and the peer's sync is merged only once it
+  proved membership. A coordinator redeem (or claim) of a known identity merges nothing; of a new
+  one, only what signatures prove. Room snapshots merge into the coordinator's stored state, never
+  replace it. Unsigned times (blob, last synced) beyond now + 5 min are refused; key holders keep
   only a blob and a grant to them that open.
 - **Coordinator.** Each room has its own lock (a heavy merge in one room no longer stalls the
   others); `coordinator-key.json` and the YouTube Music session are written 0600 from creation;
