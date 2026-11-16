@@ -81,10 +81,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.hocket.R
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
+import app.hocket.core.MIXED_SOURCE
+import app.hocket.core.ref
+import app.hocket.core.api.TrackRef
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.ActionTarget
@@ -119,7 +123,10 @@ private data class PickerSubject(val title: String, val detail: String?, val cov
 
 /** Everything the sheet needs, loaded once when it opens. */
 @Immutable
-private data class PickerData(val trackIds: List<String>, val subject: PickerSubject, val playlists: List<Playlist>, val edits: PickerEdits)
+private data class PickerData(val tracks: List<TrackRef>, val subject: PickerSubject, val playlists: List<Playlist>, val edits: PickerEdits) {
+    /** The picker's model counts songs by id; commands name them by reference. */
+    fun refOf(id: String): TrackRef = tracks.firstOrNull { it.id == id } ?: TrackRef("", id)
+}
 
 /**
  * Add to playlist: the playlists the songs can go in (pinned, recent, then all; one "Matches" group
@@ -133,9 +140,37 @@ private data class PickerData(val trackIds: List<String>, val subject: PickerSub
  */
 @Composable
 fun PlaylistPicker(target: ActionTarget, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("picker")) {
+        PlaylistPickerBody(target, onDismiss, modifier = Modifier.fillMaxHeight().imePadding()) {
+            Text(stringResource(R.string.action_add_to_playlist), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+        }
+    }
+}
+
+/**
+ * The add to playlist picker's content ([PlaylistPicker]'s, and the song menu's sub-page's): what
+ * Done applies then goes away through [onClose]. [listHeight] fixes the list's height (a sub-menu
+ * scrolls in place, one size whether loading or holding few playlists or many); with null it takes
+ * the column's remaining height (the full-height sheet). [navigationBarPad]
+ * adds the navigation bars' padding to the summary bar (the menu's column already carries it).
+ * [title] replaces the sheet's "Add to playlist" headline; a sub-menu passes none, its header
+ * gives the title. [showSubject] shows what is being added under the headline (a sub-menu's own
+ * header already does). Tags: `picker.*` (the same either way).
+ */
+@Composable
+fun PlaylistPickerBody(
+    target: ActionTarget,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    listHeight: Dp? = null,
+    navigationBarPad: Boolean = true,
+    showSubject: Boolean = true,
+    title: (@Composable () -> Unit)? = null,
+) {
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycleCompat()
     val serverId = server?.id ?: return
+    val accountCount = client.accounts.collectAsStateWithLifecycleCompat().value.size
     val settings by client.settings.collectAsStateWithLifecycleCompat()
     val pinnedIds = remember(settings[SettingKeys.LIBRARY_PINS]?.value) {
         LibraryPins.parse(settings[SettingKeys.LIBRARY_PINS]?.value).filter { it.kind == PinKind.Playlist.id }.map { it.id }
@@ -152,7 +187,7 @@ fun PlaylistPicker(target: ActionTarget, onDismiss: () -> Unit) {
 
     fun apply() {
         val e = edits ?: return
-        val commands = e.commands()
+        val commands = e.commands(data!!::refOf)
         if (commands.isEmpty()) return
         val text = e.outcome(data!!.playlists.associate { it.id to it.name })?.let { outcomeText(resources, it) }
         val before = client.undo.value.history.map { it.id }.toSet()
@@ -166,102 +201,103 @@ fun PlaylistPicker(target: ActionTarget, onDismiss: () -> Unit) {
         }
     }
 
-    fun create(name: String) {
-        val ids = data?.trackIds ?: return
+    fun create(name: String, accountId: String) {
+        val tracks = data?.tracks ?: return
         apply()
-        client.dispatch(Commands.createPlaylist(serverId, name.trim(), ids))
-        onDismiss()
+        client.dispatch(Commands.createPlaylist(accountId, name.trim(), tracks))
+        onClose()
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("picker")) {
-        Column(Modifier.fillMaxHeight().imePadding()) {
-            Column(Modifier.padding(start = 20.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(stringResource(R.string.action_add_to_playlist), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                data?.subject?.let { s ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Artwork(s.coverArt, ArtworkSizes.THUMB, null, Modifier.size(24.dp), RoundedCornerShape(7.dp))
-                        Text(
-                            buildAnnotatedString {
-                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)) { append(s.title) }
-                                s.detail?.let { append(stringResource(R.string.dot_separator)); append(it) }
-                            },
-                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag("picker.subject"),
-                        )
+    Column(modifier) {
+        if (title != null || showSubject) Column(Modifier.padding(start = 20.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            title?.invoke()
+            data?.subject?.takeIf { showSubject }?.let { s ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Artwork(s.coverArt, ArtworkSizes.THUMB, null, Modifier.size(24.dp), RoundedCornerShape(7.dp))
+                    Text(
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)) { append(s.title) }
+                            s.detail?.let { append(stringResource(R.string.dot_separator)); append(it) }
+                        },
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("picker.subject"),
+                    )
+                }
+            }
+        }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text(stringResource(R.string.picker_search)) },
+            leadingIcon = { Icon(HocketIcons.Filled.Search, null) },
+            trailingIcon = if (query.isNotEmpty()) { { IconButton(onClick = { query = "" }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.search_clear)) } } } else null,
+            singleLine = true,
+            shape = RoundedCornerShape(26.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = menuRowColor(), unfocusedContainerColor = menuRowColor(), unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 10.dp).testTag("picker.search"),
+        )
+        Box(Modifier.fillMaxWidth().let { if (listHeight == null) it.weight(1f) else it.height(listHeight) }) {
+            val d = data
+            val e = edits
+            if (d == null || e == null) {
+                LoadingIndicator(Modifier.align(Alignment.Center))
+            } else {
+                val sections = pickerSections(d.playlists, pinnedIds, query)
+                LazyColumn(Modifier.fillMaxWidth().testTag("picker.list"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
+                    item(key = "new") {
+                        NewPlaylistButton(query.trim()) {
+                            // With several accounts the dialog asks where it lives.
+                            if (query.isNotBlank() && accountCount < 2) create(query, serverId) else naming = true
+                        }
+                    }
+                    if (query.isNotBlank() && sections.isEmpty()) item(key = "empty") {
+                        Surface(shape = RoundedCornerShape(20.dp), color = menuRowColor(), modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
+                            Text(stringResource(R.string.picker_no_match, query.trim()), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(20.dp).testTag("picker.empty"))
+                        }
+                    }
+                    sections.forEach { section ->
+                        item(key = "h.${section.group}") { GroupLabel(section.group) }
+                        itemsIndexed(section.playlists, key = { _, p -> "${section.group}.${p.id}" }) { i, p ->
+                            PickerRowItem(
+                                playlist = p,
+                                row = e.row(p),
+                                shape = connectedShape(i, section.playlists.size),
+                                onTap = {
+                                    when (val r = e.tap(p.id)) {
+                                        is PickerTap.Changed -> edits = r.edits
+                                        PickerTap.AskWhichCopies -> asking = p
+                                    }
+                                },
+                                onAddCopy = { edits = e.addCopy(p.id) },
+                                onOpen = navigator?.openPlaylist?.let { open -> { onClose(); open(p.id) } },
+                                modifier = Modifier.padding(bottom = 2.dp),
+                            )
+                        }
                     }
                 }
             }
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text(stringResource(R.string.picker_search)) },
-                leadingIcon = { Icon(HocketIcons.Filled.Search, null) },
-                trailingIcon = if (query.isNotEmpty()) { { IconButton(onClick = { query = "" }) { Icon(HocketIcons.Filled.Close, stringResource(R.string.search_clear)) } } } else null,
-                singleLine = true,
-                shape = RoundedCornerShape(26.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = menuRowColor(), unfocusedContainerColor = menuRowColor(), unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 10.dp).testTag("picker.search"),
-            )
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                val d = data
-                val e = edits
-                if (d == null || e == null) {
-                    LoadingIndicator(Modifier.align(Alignment.Center))
-                } else {
-                    val sections = pickerSections(d.playlists, pinnedIds, query)
-                    LazyColumn(Modifier.fillMaxWidth().testTag("picker.list"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
-                        item(key = "new") {
-                            NewPlaylistButton(query.trim()) { if (query.isNotBlank()) create(query) else naming = true }
-                        }
-                        if (query.isNotBlank() && sections.isEmpty()) item(key = "empty") {
-                            Surface(shape = RoundedCornerShape(20.dp), color = menuRowColor(), modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
-                                Text(stringResource(R.string.picker_no_match, query.trim()), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(20.dp).testTag("picker.empty"))
-                            }
-                        }
-                        sections.forEach { section ->
-                            item(key = "h.${section.group}") { GroupLabel(section.group) }
-                            itemsIndexed(section.playlists, key = { _, p -> "${section.group}.${p.id}" }) { i, p ->
-                                PickerRowItem(
-                                    playlist = p,
-                                    row = e.row(p),
-                                    shape = connectedShape(i, section.playlists.size),
-                                    onTap = {
-                                        when (val r = e.tap(p.id)) {
-                                            is PickerTap.Changed -> edits = r.edits
-                                            PickerTap.AskWhichCopies -> asking = p
-                                        }
-                                    },
-                                    onAddCopy = { edits = e.addCopy(p.id) },
-                                    onOpen = navigator?.openPlaylist?.let { open -> { onDismiss(); open(p.id) } },
-                                    modifier = Modifier.padding(bottom = 2.dp),
-                                )
-                            }
-                        }
-                    }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(Modifier.fillMaxWidth().then(if (navigationBarPad) Modifier.navigationBarsPadding() else Modifier).padding(start = 24.dp, end = 16.dp, top = 14.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            val e = edits
+            val ids = data?.playlists?.map { it.id }.orEmpty()
+            val summary = if (e == null) "" else {
+                val (adding, removing) = e.pending(ids)
+                when {
+                    adding > 0 || removing > 0 -> listOfNotNull(
+                        adding.takeIf { it > 0 }?.let { stringResource(R.string.picker_adding_count, it) },
+                        removing.takeIf { it > 0 }?.let { stringResource(R.string.picker_removing_count, it) },
+                    ).joinToString(stringResource(R.string.dot_separator))
+                    e.inCount(ids) > 0 -> pluralStringResource(R.plurals.picker_in_playlists, e.inCount(ids), e.inCount(ids))
+                    else -> stringResource(R.string.picker_not_in_any)
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 24.dp, end = 16.dp, top = 14.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                val e = edits
-                val ids = data?.playlists?.map { it.id }.orEmpty()
-                val summary = if (e == null) "" else {
-                    val (adding, removing) = e.pending(ids)
-                    when {
-                        adding > 0 || removing > 0 -> listOfNotNull(
-                            adding.takeIf { it > 0 }?.let { stringResource(R.string.picker_adding_count, it) },
-                            removing.takeIf { it > 0 }?.let { stringResource(R.string.picker_removing_count, it) },
-                        ).joinToString(stringResource(R.string.dot_separator))
-                        e.inCount(ids) > 0 -> pluralStringResource(R.plurals.picker_in_playlists, e.inCount(ids), e.inCount(ids))
-                        else -> stringResource(R.string.picker_not_in_any)
-                    }
-                }
-                Text(summary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }.testTag("picker.summary"))
-                Button(onClick = { apply(); onDismiss() }, enabled = e != null, modifier = Modifier.heightIn(min = 52.dp).widthIn(min = 116.dp).testTag("picker.done")) {
-                    Text(stringResource(R.string.picker_done), style = MaterialTheme.typography.titleSmall)
-                }
+            Text(summary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }.testTag("picker.summary"))
+            Button(onClick = { apply(); onClose() }, enabled = e != null, modifier = Modifier.heightIn(min = 52.dp).widthIn(min = 116.dp).testTag("picker.done")) {
+                Text(stringResource(R.string.picker_done), style = MaterialTheme.typography.titleSmall)
             }
         }
     }
@@ -269,7 +305,7 @@ fun PlaylistPicker(target: ActionTarget, onDismiss: () -> Unit) {
         val e = edits
         if (e != null) RemoveCopiesDialog(p.name, e.copies(p.id), onRemoveAll = { edits = e.removeAll(p.id); asking = null }, onRemoveOne = { edits = e.removeOne(p.id); asking = null }, onDismiss = { asking = null })
     }
-    if (naming) NewPlaylistDialog(onCreate = { naming = false; create(it) }, onDismiss = { naming = false })
+    if (naming) NewPlaylistDialog(onCreate = { name, account -> naming = false; create(name, account) }, onDismiss = { naming = false }, songs = data?.tracks.orEmpty())
 }
 
 /** The snackbar's words for what Done did. */
@@ -285,17 +321,20 @@ internal fun outcomeText(resources: android.content.res.Resources, outcome: Pick
 
 /** The songs, the line describing them, the playlists they can go in and where they already are. */
 private suspend fun loadPicker(client: CoreClient, serverId: String, target: ActionTarget, resources: android.content.res.Resources): PickerData {
-    val ids = resolveTrackIds(client, target)
+    val refs = resolveTrackRefs(client, target)
+    val ids = refs.map { it.id }
     val album = (target as? ActionTarget.Albums)?.data?.ids?.singleOrNull()?.let { (client.query(Queries.album(it)) as? QueryResult.AlbumDetail)?.data }
-    val first = ids.firstOrNull()?.let { (client.query(Queries.tracksByIds(listOf(it))) as? QueryResult.TrackList)?.data?.firstOrNull() }
+    val first = refs.firstOrNull()?.let { (client.query(Queries.tracksByIds(listOf(it))) as? QueryResult.TrackList)?.data?.firstOrNull() }
     val subject = when {
         album != null -> PickerSubject(album.name, album.artist, album.coverArt)
         ids.size == 1 && first != null -> PickerSubject(first.title, first.artist, first.coverArt)
         else -> PickerSubject(resources.getQuantityString(R.plurals.menu_songs, ids.size, ids.size), null, first?.coverArt)
     }
-    val playlists = addablePlaylists((client.query(Queries.playlists(serverId)) as? QueryResult.Playlists)?.data.orEmpty())
-    val membership = (client.query(Queries.playlistMembership(serverId, ids)) as? QueryResult.Membership)?.data.orEmpty()
-    return PickerData(ids, subject, playlists, PickerEdits.of(ids, membership))
+    // Every account's playlists and the Mixed ones: another account's song goes in as the
+    // playlist account's copy (or the core offers to make the playlist Mixed).
+    val playlists = addablePlaylists((client.query(Queries.playlists("")) as? QueryResult.Playlists)?.data.orEmpty())
+    val membership = (client.query(Queries.playlistMembership("", refs)) as? QueryResult.Membership)?.data.orEmpty()
+    return PickerData(refs, subject, playlists, PickerEdits.of(ids, membership))
 }
 
 @Composable
@@ -444,30 +483,50 @@ private fun RemoveCopiesDialog(name: String, copies: Int, onRemoveAll: () -> Uni
 
 /** "New playlist" with nothing typed in the search: ask for its name. */
 @Composable
-private fun NewPlaylistDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun NewPlaylistDialog(onCreate: (name: String, accountId: String) -> Unit, onDismiss: () -> Unit, songs: List<TrackRef> = emptyList()) {
+    val client = LocalCoreClient.current
+    val accounts by client.accounts.collectAsStateWithLifecycleCompat()
     var name by remember { mutableStateOf("") }
+    // With several accounts the playlist lives on one of them, or Hocket keeps it (Mixed).
+    var account by remember(accounts, songs) { mutableStateOf(NewPlaylistChoice.initial(accounts, songs)) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.playlist_new)) },
         text = {
-            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(stringResource(R.string.playlist_name)) }, singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("picker.newName"))
+            Column {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(stringResource(R.string.playlist_name)) }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("picker.newName"))
+                if (accounts.size > 1) {
+                    Text(stringResource(R.string.playlist_keep_on), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                        accounts.forEach { a ->
+                            androidx.compose.material3.FilterChip(selected = account == a.id, onClick = { account = a.id }, label = { Text(a.name.ifBlank { a.url }) },
+                                modifier = Modifier.testTag("picker.account.${a.id}"))
+                        }
+                        androidx.compose.material3.FilterChip(selected = account == MIXED_SOURCE, onClick = { account = MIXED_SOURCE }, label = { Text(stringResource(R.string.source_mixed)) },
+                            modifier = Modifier.testTag("picker.account.mixed"))
+                    }
+                }
+            }
         },
-        confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { onCreate(name) }, modifier = Modifier.testTag("picker.create")) { Text(stringResource(R.string.picker_create)) } },
+        confirmButton = { TextButton(enabled = name.isNotBlank() && account.isNotEmpty(), onClick = { onCreate(name, account) }, modifier = Modifier.testTag("picker.create")) { Text(stringResource(R.string.picker_create)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }
 
 /** Expands a target to track ids for playlist adds (albums/artists/playlists via their track queries). */
-suspend fun resolveTrackIds(client: CoreClient, target: ActionTarget): List<String> = when (target) {
-    is ActionTarget.Tracks -> target.data.ids
-    is ActionTarget.Albums -> target.data.ids.flatMap { id -> (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data?.map { it.id } ?: emptyList() }
-    is ActionTarget.Artists -> target.data.ids.flatMap { id -> (client.query(Queries.artistTopSongs(id, 500)) as? QueryResult.TrackList)?.data?.map { it.id } ?: emptyList() }
-    is ActionTarget.Playlists -> target.data.ids.flatMap { id -> (client.query(Queries.playlistTracks(id, app.hocket.core.api.Page(0u, 5000u))) as? QueryResult.Tracks)?.data?.items?.map { it.id } ?: emptyList() }
+suspend fun resolveTrackIds(client: CoreClient, target: ActionTarget): List<String> = resolveTrackRefs(client, target).map { it.id }
+
+/** Expands a target to its songs (albums/artists/playlists via their track queries). */
+suspend fun resolveTrackRefs(client: CoreClient, target: ActionTarget): List<TrackRef> = when (target) {
+    is ActionTarget.Tracks -> target.data.tracks
+    is ActionTarget.Albums -> target.data.ids.flatMap { id -> (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data?.map { it.ref } ?: emptyList() }
+    is ActionTarget.Artists -> target.data.ids.flatMap { id -> (client.query(Queries.artistTopSongs(id, 500)) as? QueryResult.TrackList)?.data?.map { it.ref } ?: emptyList() }
+    is ActionTarget.Playlists -> target.data.ids.flatMap { id -> (client.query(Queries.playlistTracks(id, app.hocket.core.api.Page(0u, 5000u))) as? QueryResult.Tracks)?.data?.items?.map { it.ref } ?: emptyList() }
     is ActionTarget.QueueItems -> {
         val q = client.queue.value
-        val all = q.history + listOfNotNull(q.current) + q.playingNext + q.upcoming
-        target.data.keys.mapNotNull { k -> all.firstOrNull { it.item.key == k }?.track?.id }
+        val all = q.entries + listOfNotNull(q.current)
+        target.data.keys.mapNotNull { k -> all.firstOrNull { it.item.key == k }?.item?.track }
     }
     else -> emptyList()
 }

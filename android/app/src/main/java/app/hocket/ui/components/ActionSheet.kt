@@ -47,6 +47,8 @@ fun actionIcon(name: String): ImageVector = when (name) {
     "queue_music" -> HocketIcons.Filled.QueueMusic
     "favorite" -> HocketIcons.Filled.Favorite
     "heart_minus", "heart_broken" -> HocketIcons.Filled.FavoriteBorder
+    "library_add" -> HocketIcons.Filled.Add
+    "library_remove" -> HocketIcons.Filled.PlaylistRemove
     "star", "star_rate" -> HocketIcons.Filled.Star
     "star_outline" -> HocketIcons.Filled.StarOutline
     "download" -> HocketIcons.Filled.Download
@@ -54,6 +56,8 @@ fun actionIcon(name: String): ImageVector = when (name) {
     "delete", "delete_forever" -> HocketIcons.Filled.Delete
     "remove" -> HocketIcons.Filled.Remove
     "clear_all" -> HocketIcons.Filled.ClearAll
+    "stash", "inventory_2" -> HocketIcons.Filled.Inventory2
+    "headphones" -> HocketIcons.Filled.Headphones
     "album" -> HocketIcons.Filled.Album
     "artist", "person" -> HocketIcons.Filled.Person
     "history" -> HocketIcons.Filled.History
@@ -73,7 +77,8 @@ fun actionIcon(name: String): ImageVector = when (name) {
  * built from `Query.Actions(surface = "contextMenu", target)` with the registry's ids and run
  * through `Command.RunAction`. The item and its actions are loaded before the sheet shows, so it
  * opens at its final height. [title] and [subtitle] head it until (or where) nothing more is known.
- * The registry's ui-handled ids are performed here: Add to playlist opens the picker, go-to
+ * The registry's ui-handled ids are performed here: Add to playlist opens as a sub-page of the
+ * sheet, go-to
  * navigates, Album info opens the album's details. [extraTop] sits under the header.
  */
 @Composable
@@ -85,6 +90,8 @@ fun ActionSheet(
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: (() -> Unit)? = null,
     extraTop: (@Composable () -> Unit)? = null,
+    /** Rows the page adds (a playlist's Select songs). */
+    extras: List<SongMenuExtra> = emptyList(),
 ) {
     val client = LocalCoreClient.current
     val resources = LocalResources.current
@@ -94,17 +101,16 @@ fun ActionSheet(
         val (subject, album) = menuSubject(client, target, title, subtitle, resources, dot, client.pins.value)
         value = Triple(subject, album, client.actions("contextMenu", target))
     }
-    // The sheet, then what it opened (the picker, the album's details); the caller hears once all are gone.
+    // The sheet, then what it opened (the album's details); the caller hears once all are gone.
     var sheetOpen by remember { mutableStateOf(true) }
-    var picker by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf<Album?>(null) }
     val current = loaded
     if (sheetOpen && current != null) {
         val (subject, album, actions) = current
         MenuSheet(
             subject, target, actions,
-            onDismiss = { sheetOpen = false; if (!picker && info == null) onDismiss() },
-            onAddToPlaylist = { picker = true },
+            onDismiss = { sheetOpen = false; if (info == null) onDismiss() },
+            extras = extras,
             onGoToAlbum = onGoToAlbum,
             onGoToArtist = onGoToArtist ?: subject.artistId?.let { id -> navigator?.let { { it.openArtist(id) } } },
             onInfo = album?.let { a -> { info = a } },
@@ -112,7 +118,6 @@ fun ActionSheet(
             tag = "itemMenu",
         )
     }
-    if (picker) PlaylistPicker(target = target, onDismiss = { picker = false; onDismiss() })
     info?.let { a ->
         ModalBottomSheet(onDismissRequest = { info = null; onDismiss() }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("itemMenu.infoSheet")) {
             app.hocket.ui.player.AlbumAbout(a, stringResource(R.string.menu_album_info), Modifier.fillMaxWidth().navigationBarsPadding(),
@@ -149,6 +154,7 @@ private suspend fun menuSubject(
                 meta = songs(a.songCount.toInt()) + dot + durationWords(resources, a.durationMs.toLong()),
                 coverArt = a.coverArt,
                 loved = if (a.loved) Tick.On else Tick.Off,
+                rating = a.rating.toInt(),
                 downloaded = a.offline == OfflineState.Downloaded || pins.any { it.target == Commands.albumPin(a.id) },
                 downloadNote = songs(a.songCount.toInt()),
                 albumId = a.id, album = a.name,

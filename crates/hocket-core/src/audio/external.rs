@@ -30,6 +30,20 @@
 //! The bridge tracks the key of the item it believes is current so it can
 //! drop stale reports from a previous load (Media3 reports `Ended` for an
 //! item that was replaced by a later `Load` before the report arrived).
+//!
+//! Keys alone can't catch every such report: a `Load` of the item that was
+//! just playing (Previous at the start of a track) reuses its key, and the
+//! item it had transitioned into is `next` again. So every `Load` carries a
+//! `load_id` that the platform acknowledges with
+//! [`BackendReport::LoadApplied`] before it reports anything about it, and
+//! reports about items that arrive between a `Load` and its acknowledgement
+//! are dropped (R-20261115-2fea: a crossfade's handover arrived after
+//! Previous had reloaded the outgoing track, and the core moved on to the
+//! incoming one while the player played the reloaded one).
+//!
+//! The actor filters a report with [`ExternalBackend::admit`] when it
+//! processes it, in order with the `Load`s it issues; filtering when the
+//! report arrived and acting on it later let a `Load` slip in between.
 
 use std::sync::Arc;
 
@@ -49,6 +63,10 @@ struct State {
     pre_buffer: Option<QueueKey>,
     /// Keys that were loaded then replaced; reports for them are dropped.
     retired: Vec<QueueKey>,
+    /// `load_id` of the last `Load` sent.
+    load_id: u32,
+    /// True from a `Load` until the platform acknowledges it.
+    unapplied: bool,
 }
 
 /// See the module docs.
@@ -75,13 +93,33 @@ impl ExternalBackend {
         Ok(())
     }
 
-    /// Entry point for [`crate::api::Command::BackendReport`]. Forwards to the
-    /// actor after filtering reports about items this backend no longer has
-    /// loaded (late reports from a replaced item).
+    /// Filters a report and forwards it to the report sink. The actor calls
+    /// [`ExternalBackend::admit`] itself instead, so that it filters and acts
+    /// on a report in one step.
     pub fn report(&self, report: BackendReport) {
+        if self.admit(&report) {
+            (self.reports)(report);
+        }
+    }
+
+    /// Whether the actor should act on a report: false for reports about
+    /// items this backend no longer has loaded (late reports from a replaced
+    /// item), for anything about an item sent before the platform applied
+    /// the last `Load`, and for the acknowledgement itself.
+    pub fn admit(&self, report: &BackendReport) -> bool {
         let forward = {
             let mut st = self.state.lock();
-            match &report {
+            // Before the platform applied the last `Load`, whatever it says
+            // about an item is about what was loaded before.
+            let unapplied = st.unapplied;
+            match report {
+                BackendReport::LoadApplied { load_id } => {
+                    if *load_id == st.load_id {
+                        st.unapplied = false;
+                    }
+                    return false;
+                }
+                _ if unapplied && Self::about_an_item(report) => false,
                 BackendReport::TransitionedToNext { key } => {
                     if st.next.as_ref() == Some(key) {
                         if let Some(old) = st.current.replace(key.clone()) {
@@ -90,6 +128,9 @@ impl ExternalBackend {
                         st.next = None;
                     }
                     true
+                }
+                BackendReport::TransitionStarted { from, to, .. } => {
+                    !st.retired.contains(from) && !st.retired.contains(to)
                 }
                 BackendReport::PreBufferReady { key } => st.pre_buffer.as_ref() == Some(key),
                 BackendReport::Ready { key, .. }
@@ -101,14 +142,35 @@ impl ExternalBackend {
                 | BackendReport::Error { key, .. } => !st.retired.contains(key),
                 BackendReport::AudioFocusLost { .. }
                 | BackendReport::OutputDevicesChanged { .. }
-                | BackendReport::SystemVolume { .. } => true,
+                | BackendReport::SystemVolume { .. }
+                | BackendReport::PreviewReady { .. }
+                | BackendReport::PreviewProgress { .. }
+                | BackendReport::PreviewEnded
+                | BackendReport::PreviewFailed
+                | BackendReport::PreviewInterrupted => true,
             }
         };
-        if forward {
-            (self.reports)(report);
-        } else {
+        if !forward {
             tracing::debug!(target: "hocket::audio::external", ?report, "dropped stale report");
         }
+        forward
+    }
+
+    /// Reports about an item of the main player's playlist. The pre-buffer
+    /// and the preview are separate players a `Load` doesn't touch.
+    fn about_an_item(report: &BackendReport) -> bool {
+        matches!(
+            report,
+            BackendReport::Ready { .. }
+                | BackendReport::Playing { .. }
+                | BackendReport::Paused { .. }
+                | BackendReport::Buffering { .. }
+                | BackendReport::Position { .. }
+                | BackendReport::Ended { .. }
+                | BackendReport::TransitionedToNext { .. }
+                | BackendReport::TransitionStarted { .. }
+                | BackendReport::Error { .. }
+        )
     }
 
     /// Key of the item the bridge believes is current, for diagnostics.
@@ -125,7 +187,7 @@ impl PlaybackBackend for ExternalBackend {
         position_ms: u32,
         play: bool,
     ) -> Result<(), BackendError> {
-        {
+        let load_id = {
             let mut st = self.state.lock();
             let new_key = source.key.clone();
             if let Some(old) = st.current.take() {
@@ -151,12 +213,16 @@ impl PlaybackBackend for ExternalBackend {
             if st.pre_buffer.as_ref() == st.current.as_ref() {
                 st.pre_buffer = None;
             }
-        }
+            st.load_id = st.load_id.wrapping_add(1);
+            st.unapplied = true;
+            st.load_id
+        };
         self.send(BackendCommand::Load {
             source,
             next,
             position_ms,
             play,
+            load_id,
         })
     }
 
@@ -203,6 +269,10 @@ impl PlaybackBackend for ExternalBackend {
 
     fn seek(&self, position_ms: u32) -> Result<(), BackendError> {
         self.send(BackendCommand::Seek { position_ms })
+    }
+
+    fn complete_transition(&self) -> Result<(), BackendError> {
+        self.send(BackendCommand::CompleteTransition)
     }
 
     fn set_volume(&self, volume: f64) -> Result<(), BackendError> {
@@ -252,6 +322,29 @@ impl PlaybackBackend for ExternalBackend {
     fn name(&self) -> &'static str {
         "external"
     }
+
+    fn preview_load(&self, source: MediaSource, position_ms: u32) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewLoad {
+            source,
+            position_ms,
+        })
+    }
+
+    fn preview_play(&self) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewPlay)
+    }
+
+    fn preview_pause(&self) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewPause)
+    }
+
+    fn preview_seek(&self, position_ms: u32) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewSeek { position_ms })
+    }
+
+    fn preview_stop(&self) -> Result<(), BackendError> {
+        self.send(BackendCommand::PreviewStop)
+    }
 }
 
 #[cfg(test)]
@@ -272,10 +365,28 @@ mod tests {
             mime_type: None,
             gain_db: -3.0,
             transcoded: false,
+            local: false,
+            artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
         }
     }
 
     type Log<T> = Arc<Mutex<Vec<T>>>;
+
+    /// The platform's acknowledgement of the last `Load` sent.
+    fn applied(b: &ExternalBackend, cmds: &Log<BackendCommand>) {
+        let load_id = cmds
+            .lock()
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                BackendCommand::Load { load_id, .. } => Some(*load_id),
+                _ => None,
+            })
+            .expect("a Load was sent");
+        b.report(BackendReport::LoadApplied { load_id });
+    }
 
     fn harness() -> (ExternalBackend, Log<BackendCommand>, Log<BackendReport>) {
         let cmds: Log<BackendCommand> = Default::default();
@@ -298,7 +409,7 @@ mod tests {
         b.set_gapless(false).unwrap();
         let cmds = cmds.lock();
         assert!(
-            matches!(&cmds[0], BackendCommand::Load { source, next: Some(n), position_ms: 1500, play: true } if source.key == "a" && n.key == "b")
+            matches!(&cmds[0], BackendCommand::Load { source, next: Some(n), position_ms: 1500, play: true, load_id: 1 } if source.key == "a" && n.key == "b")
         );
         assert_eq!(cmds[1], BackendCommand::SetVolume { volume: 1.0 });
         assert_eq!(cmds[2], BackendCommand::Seek { position_ms: 20 });
@@ -307,9 +418,10 @@ mod tests {
 
     #[test]
     fn stale_reports_are_dropped_after_reload() {
-        let (b, _, reps) = harness();
+        let (b, cmds, reps) = harness();
         b.load(source("a"), None, 0, true).unwrap();
         b.load(source("b"), None, 0, true).unwrap();
+        applied(&b, &cmds);
         b.report(BackendReport::Ended { key: "a".into() });
         b.report(BackendReport::Playing {
             key: "b".into(),
@@ -322,8 +434,9 @@ mod tests {
 
     #[test]
     fn transition_promotes_next_and_retires_current() {
-        let (b, _, reps) = harness();
+        let (b, cmds, reps) = harness();
         b.load(source("a"), Some(source("b")), 0, true).unwrap();
+        applied(&b, &cmds);
         b.report(BackendReport::Ended { key: "a".into() });
         b.report(BackendReport::TransitionedToNext { key: "b".into() });
         assert_eq!(b.current_key().as_deref(), Some("b"));
@@ -343,8 +456,9 @@ mod tests {
     #[test]
     fn transition_without_ended_still_promotes_next() {
         // Media3's auto-advance: only the transition is reported.
-        let (b, _, reps) = harness();
+        let (b, cmds, reps) = harness();
         b.load(source("a"), Some(source("b")), 0, true).unwrap();
+        applied(&b, &cmds);
         b.report(BackendReport::TransitionedToNext { key: "b".into() });
         b.report(BackendReport::Ended { key: "b".into() });
         b.report(BackendReport::Ended { key: "a".into() });
@@ -352,6 +466,93 @@ mod tests {
         let reps = reps.lock();
         assert_eq!(reps.len(), 2, "a late Ended for the played item is stale");
         assert!(matches!(&reps[1], BackendReport::Ended { key } if key == "b"));
+    }
+
+    #[test]
+    fn loads_are_numbered() {
+        let (b, cmds, _) = harness();
+        b.load(source("a"), None, 0, true).unwrap();
+        b.load(source("b"), None, 0, true).unwrap();
+        let ids: Vec<u32> = cmds
+            .lock()
+            .iter()
+            .filter_map(|c| match c {
+                BackendCommand::Load { load_id, .. } => Some(*load_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn reports_before_the_load_is_applied_are_dropped() {
+        let (b, cmds, reps) = harness();
+        b.load(source("a"), None, 0, true).unwrap();
+        applied(&b, &cmds);
+        b.load(source("b"), None, 0, true).unwrap();
+        // Still about "a"'s playlist, though "b" is named: the platform had
+        // not applied the second `Load` yet.
+        b.report(BackendReport::Playing {
+            key: "b".into(),
+            position_ms: 0,
+        });
+        // Not about an item: let through.
+        b.report(BackendReport::SystemVolume {
+            volume: 0.5,
+            muted: false,
+        });
+        assert_eq!(reps.lock().len(), 1);
+        // An acknowledgement of an earlier load opens nothing.
+        b.report(BackendReport::LoadApplied { load_id: 1 });
+        b.report(BackendReport::Ready {
+            key: "b".into(),
+            duration_ms: None,
+        });
+        assert_eq!(reps.lock().len(), 1);
+        applied(&b, &cmds);
+        b.report(BackendReport::Ready {
+            key: "b".into(),
+            duration_ms: None,
+        });
+        let reps = reps.lock();
+        assert_eq!(reps.len(), 2, "the acknowledgement itself is not forwarded");
+        assert!(matches!(&reps[1], BackendReport::Ready { key, .. } if key == "b"));
+    }
+
+    /// R-20261115-2fea: Previous during a crossfade from "a" into "b" reloads
+    /// "a" with "b" next again. The handover the player sent before it got
+    /// that `Load` names "b", which is `next` again, so only the
+    /// acknowledgement tells it apart from a real transition.
+    #[test]
+    fn a_handover_from_before_a_reload_of_the_same_item_is_dropped() {
+        let (b, cmds, reps) = harness();
+        b.load(source("a"), Some(source("b")), 0, true).unwrap();
+        applied(&b, &cmds);
+        assert!(b.admit(&BackendReport::TransitionStarted {
+            from: "a".into(),
+            to: "b".into(),
+            tail_len_ms: 4000,
+            incoming_at_ms: 0,
+            handover_ms: 2000,
+        }));
+        b.load(source("a"), Some(source("b")), 0, true).unwrap();
+        assert!(!b.admit(&BackendReport::Ended { key: "a".into() }));
+        assert!(!b.admit(&BackendReport::TransitionedToNext { key: "b".into() }));
+        assert!(!b.admit(&BackendReport::Position {
+            key: "b".into(),
+            position_ms: 2100,
+        }));
+        assert_eq!(b.current_key().as_deref(), Some("a"));
+        applied(&b, &cmds);
+        assert!(b.admit(&BackendReport::Ready {
+            key: "a".into(),
+            duration_ms: Some(1000),
+        }));
+        // Later, the reloaded "a" really hands over to "b".
+        assert!(b.admit(&BackendReport::Ended { key: "a".into() }));
+        assert!(b.admit(&BackendReport::TransitionedToNext { key: "b".into() }));
+        assert_eq!(b.current_key().as_deref(), Some("b"));
+        assert!(reps.lock().is_empty(), "admit forwards nothing itself");
     }
 
     #[test]

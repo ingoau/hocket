@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ConfigDocument, ServerInfo } from "@core/api";
+import type { ConfigDocument, AccountInfo } from "@core/api";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
 
-const server = (id: string, url: string, username: string) => ({ id, url, username, name: `srv ${id}`, reachable: true }) as unknown as ServerInfo;
+const server = (id: string, url: string, username: string) => ({ id, url, username, name: `srv ${id}`, reachable: true }) as unknown as AccountInfo;
 
 const doc = (secrets?: Record<string, string>): ConfigDocument => ({
   version: 1,

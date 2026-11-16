@@ -50,7 +50,7 @@ fn two_devices_share_a_queue_and_one_plays() {
             .current
             .as_ref()
             .unwrap()
-            .track_id,
+            .track,
         t[0]
     );
     // the other device presses next: the queue moves for both, transport stays
@@ -63,7 +63,7 @@ fn two_devices_share_a_queue_and_one_plays() {
             .current
             .as_ref()
             .unwrap()
-            .track_id,
+            .track,
         t[1]
     );
     assert_eq!(
@@ -99,7 +99,7 @@ fn two_people_pressing_next_produce_one_skip() {
             .current
             .as_ref()
             .unwrap()
-            .track_id,
+            .track,
         t[1]
     );
     assert_eq!(
@@ -109,7 +109,7 @@ fn two_people_pressing_next_produce_one_skip() {
             .current
             .as_ref()
             .unwrap()
-            .track_id,
+            .track,
         t[1]
     );
     w.finish();
@@ -352,7 +352,7 @@ fn offline_edits_fast_forward_when_nobody_else_moved() {
             .current
             .as_ref()
             .unwrap()
-            .track_id,
+            .track,
         "t20",
         "{}\n{}",
         w.devices[0].log.join("\n"),
@@ -389,7 +389,7 @@ fn crash_and_restart_rejoins_with_persisted_state() {
             .current
             .as_ref()
             .unwrap()
-            .track_id,
+            .track,
         t[1]
     );
     assert_eq!(
@@ -420,7 +420,7 @@ fn track_end_advances_only_on_the_owner_and_everyone_follows() {
     }
     for d in &w.devices {
         assert_eq!(
-            d.engine.document().current.as_ref().unwrap().track_id,
+            d.engine.document().current.as_ref().unwrap().track,
             "t1",
             "{}",
             d.id
@@ -464,7 +464,7 @@ fn lan_election_serves_a_room_and_peers_converge() {
     w.run_for(2_000.0);
     for d in &w.devices {
         assert_eq!(
-            d.engine.document().current.as_ref().unwrap().track_id,
+            d.engine.document().current.as_ref().unwrap().track,
             t[0],
             "{}",
             d.id
@@ -474,7 +474,7 @@ fn lan_election_serves_a_room_and_peers_converge() {
     w.run_for(2_000.0);
     for d in &w.devices {
         assert_eq!(
-            d.engine.document().current.as_ref().unwrap().track_id,
+            d.engine.document().current.as_ref().unwrap().track,
             t[1],
             "{}",
             d.id
@@ -557,7 +557,7 @@ fn hostile_lan_peer_is_never_admitted_and_lan_hellos_carry_no_credential() {
     w.run_for(2_000.0);
     for d in &w.devices[..3] {
         assert_eq!(
-            d.engine.document().current.as_ref().unwrap().track_id,
+            d.engine.document().current.as_ref().unwrap().track,
             t[1],
             "{}",
             d.id
@@ -613,7 +613,7 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
     w.run_for(2_000.0);
     for d in &w.devices {
         assert_eq!(
-            d.engine.document().current.as_ref().unwrap().track_id,
+            d.engine.document().current.as_ref().unwrap().track,
             t[2],
             "{} on the LAN",
             d.id
@@ -631,7 +631,7 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
             d.id
         );
         assert_eq!(
-            d.engine.document().current.as_ref().unwrap().track_id,
+            d.engine.document().current.as_ref().unwrap().track,
             t[2],
             "{} kept the LAN session",
             d.id
@@ -639,7 +639,7 @@ fn lan_session_carries_over_when_the_coordinator_returns() {
         assert_eq!(d.filed_count, 0, "{} filed nothing", d.id);
     }
     let room_doc = &w.coordinator.as_ref().unwrap().room.replica().document;
-    assert_eq!(room_doc.current.as_ref().unwrap().track_id, t[2]);
+    assert_eq!(room_doc.current.as_ref().unwrap().track, t[2]);
     assert_eq!(owner(&w).as_deref(), Some("dev-a"));
     w.finish();
     w.assert_ok();

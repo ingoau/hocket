@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { bridge } from "../core/bridge";
 import { useApp } from "../store/app";
 import { IntentPrimer, VisitDwell, type Point } from "./prime";
+import { parseRefKey } from "./track-ref";
 
 /** The window is on screen, focused, and nothing modal covers the page. */
 function useActivePage(): boolean {
@@ -52,7 +53,8 @@ export interface Primer {
 export function usePlayIntent(visitKey: string, kind: "track" | "album" = "track"): Primer {
   const primer = useMemo(() => {
     void visitKey; // a new visit is a new primer: every id may prime again
-    return new IntentPrimer((id) => bridge().dispatch(kind === "album" ? { type: "primeAlbum", data: { album_id: id } } : { type: "primeTrack", data: { track_id: id } }));
+    // A song is bound by `refKey` (its account and id).
+    return new IntentPrimer((id) => bridge().dispatch(kind === "album" ? { type: "primeAlbum", data: { album_id: id } } : { type: "primeTrack", data: { track: parseRefKey(id) } }));
   }, [visitKey, kind]);
   useEffect(() => {
     let pointer: Point | undefined;

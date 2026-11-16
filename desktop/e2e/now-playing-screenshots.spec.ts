@@ -16,7 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type ElectronApplication, type Page } from "@playwright/test";
-import type { DeviceInfo, ServerInfo } from "../src/core/api";
+import type { DeviceInfo, AccountInfo } from "../src/core/api";
 import { completeSetup, expect, launchFake, resizeWindow } from "./fixtures";
 
 const out = process.env.HOCKET_SCREENSHOT_DIR;
@@ -50,11 +50,11 @@ async function setSetting(page: Page, key: string, value: unknown): Promise<void
 }
 
 async function playAlbum(page: Page, index: number, label: string): Promise<void> {
-  const servers = (await page.evaluate(() => window.hocket.query({ type: "servers" }))) as { data: ServerInfo[] };
+  const servers = (await page.evaluate(() => window.hocket.query({ type: "accounts" }))) as { data: AccountInfo[] };
   const serverId = servers.data[0]!.id;
   // The fake library's albums are al-1, al-2, …; with HOCKET_FAKE_COVERS album n wears cover n - 1.
   const id = `al-${index + 1}`;
-  await page.evaluate(({ serverId, id, label }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { serverId, kind: { type: "album", data: { id } }, label, sort: "default" }, shuffle: false, saveOutgoing: true } } }), { serverId, id, label });
+  await page.evaluate(({ serverId, id, label }) => window.hocket.dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label, sort: "default" }, shuffle: false, saveOutgoing: true } } }), { serverId, id, label });
   await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { albumId?: string } } } } }).data.queue.current?.track.albumId).toBe(id);
   // A track with synced lyrics, a little way in, so the lyrics views have lines to show.
   for (let i = 0; i < 8; i++) {
@@ -155,9 +155,9 @@ test("now playing surfaces", async () => {
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "queue");
       await shot("sidebar-queue");
       await page.getByTestId("queue-selector").click();
-      await expect(page.getByTestId("queue-selector-menu")).toBeVisible();
-      await shot("sidebar-queue-selector");
-      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("saved-queues")).toBeVisible();
+      await shot("sidebar-queues");
+      await page.getByTestId("sidebar-back").click();
       await page.getByTestId("sidebar-back").click();
       await page.getByTestId("sidebar-about-card-link").click();
       await expect(page.getByTestId("right-panel")).toHaveAttribute("data-view", "about");

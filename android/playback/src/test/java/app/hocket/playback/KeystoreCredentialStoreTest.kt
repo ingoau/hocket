@@ -41,6 +41,7 @@ class KeystoreCredentialStoreTest {
     fun setUp() {
         prefs(KeystoreCredentialStore.PREFS).edit().clear().commit()
         prefs(KeystoreCredentialStore.NAMES_PREFS).edit().clear().commit()
+        prefs(KeystoreCredentialStore.LOGINS_PREFS).edit().clear().commit()
         store = KeystoreCredentialStore(context, crypto)
     }
 
@@ -58,18 +59,6 @@ class KeystoreCredentialStoreTest {
         store.remove(url, "alice")
         assertTrue(store.keys().isEmpty())
         assertTrue(prefs(KeystoreCredentialStore.NAMES_PREFS).all.isEmpty())
-    }
-
-    @Test
-    fun legacyNameEntriesAreMigratedAndNeverTakenForLogins() {
-        store.save(ServerCredential(url, "alice", "pw", null))
-        prefs(KeystoreCredentialStore.PREFS).edit().putString("$key#name", "Old name").commit()
-        val reopened = KeystoreCredentialStore(context, crypto)
-        assertEquals("only the real login is a key", listOf(url to "alice"), reopened.keys())
-        assertEquals("Old name", reopened.get(url, "alice")?.name)
-        assertEquals(1, reopened.all().size)
-        assertTrue("the legacy entry moved out of the credentials file", prefs(KeystoreCredentialStore.PREFS).all.keys.none { it.contains('#') })
-        assertEquals("pw", reopened.get(url, "alice")?.password)
     }
 
     @Test

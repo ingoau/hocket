@@ -24,6 +24,8 @@ We cannot replace the system music app; this is a separate "Hocket" watchapp in 
 
 **Link behaviour.** Now goes out when something the watch draws changes, on a seek or a stall (the stamp drifting 1.5 s from the last one sent), and otherwise once a minute while playing as a safety net; the watch interpolates position in between. Settings go out only when the blob differs from the one the watch last took. The phone answers Hello off the watch's message (its ack is not held up by the three replies), sends a message the watch nacked or did not answer again after 250 ms and 500 ms, counts a Now as pushed only once delivered, and stops pushing when the watchapp turns out to be closed (until the next Hello). The watch says Hello again (5 s, doubling to 60 s) until a HelloReply arrives, so a phone service that was still starting cannot leave it on "Open Hocket". An art transfer with a missing chunk is dropped rather than shown with a blank band; the request's retry fetches it again. The watch's inbox is 4 KB with art, 2 KB without (a list page is under 1.8 KB). Inbox handlers keep their stack small: the app stack is 2 KB on all but Time 2 and Round 2.
 
+**Logs.** The phone side logs the link (`PebbleLog`, tag `kotlin/Pebble`) into the core's capture, so the developer diagnostics page (shake, or Settings → Developer) has it next to the core's lines for the last hour. It logs the open and close of the watchapp, Hello with both versions, sends that were never delivered (with the last reason), failed lists, queries and art, and the listener's binding (a watch message nacked because the playback service never bound). Every message in each direction is logged at debug, which is kept only in developer mode. Search text is never logged (`search:…`). The lines don't go to logcat, which the bundle also reads, so they aren't duplicated there. The watchapp itself logs nothing.
+
 
 ## Watches  
 *Status: decided*
@@ -88,6 +90,7 @@ Queue
 Library
 ───────────
 ♥ Love
+Stash
 Rating ★★★☆☆
 Shuffle: Off
 Repeat: All
@@ -107,7 +110,7 @@ Play on…
 
 Press and hold on Now Playing (touch mode), or the lower half of the menu (buttons-only):
 
-- Rate (1–5 stars) and Love
+- Rate (1–5 stars), Love and Stash (stashes the playing track, then back to Now Playing with a short "Stashed")
 - Shuffle, Repeat (off / all / one)
 - Go to album, Go to artist
 - Play on… (Connect handoff)
@@ -151,7 +154,7 @@ A Pebble page in the Android app's Settings. Keys are `pebble.*` in the core set
 - Touch navigation: On / Off (default Off)
 - Buttons-only mode (Time 2)
 - Gestures: swipe up / down / left / right and press-and-hold, each one of Queue, Library, Actions, Back, Lyrics, Nothing. Defaults as in Now Playing. The back button always goes back, so no assignment can trap you.
-- Buttons-only menu: items and order. Items can be screens (Now Playing, Queue, Library, Lyrics), actions (Love, Rating, Shuffle, Repeat, Go to album / artist, Play on…), or shortcuts (Playlists, Albums, Artists, Downloads, Search).
+- Buttons-only menu: items and order. Items can be screens (Now Playing, Queue, Library, Lyrics), actions (Love, Stash, Rating, Shuffle, Repeat, Go to album / artist, Play on…), or shortcuts (Playlists, Albums, Artists, Downloads, Search).
 - Actions menu: items and order
 - Library sections: items and order
 - Menu timeout: Off / 3 / 5 / 10 s (default 5)

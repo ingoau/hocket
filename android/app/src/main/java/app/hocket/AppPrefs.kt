@@ -19,7 +19,10 @@ import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "hocket-app")
+/** The app preferences' DataStore name; [BackupSet] backs up its file. */
+internal const val APP_PREFS_DATASTORE = "hocket-app"
+
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = APP_PREFS_DATASTORE)
 
 /** Where the bottom bar's items are kept: ordered ids, empty = the default bar. */
 interface NavBarPrefs {
@@ -102,4 +105,36 @@ class ListSortPrefs(context: Context) {
     fun get(list: String): String? = prefs.getString(list, null)
 
     fun set(list: String, sort: String) = prefs.edit().putString(list, sort).apply()
+}
+
+/**
+ * Recent searches: kept on this phone only (never synced to the server or other devices). Newest
+ * first, once each ignoring case, at most [MAX]. SharedPreferences, like [ListSortPrefs], so the
+ * list is there on the search tab's first frame.
+ */
+class RecentSearchPrefs(context: Context) {
+    private val prefs = context.applicationContext.getSharedPreferences("hocket-recent-searches", Context.MODE_PRIVATE)
+
+    fun list(): List<String> = prefs.getString(KEY, null)?.split('\n')?.filter { it.isNotBlank() }?.take(MAX) ?: emptyList()
+
+    fun remember(query: String): List<String> {
+        val q = query.trim()
+        if (q.isEmpty()) return list()
+        return save(listOf(q) + list().filterNot { it.equals(q, ignoreCase = true) })
+    }
+
+    fun forget(query: String): List<String> = save(list() - query)
+
+    fun clear(): List<String> = save(emptyList())
+
+    private fun save(items: List<String>): List<String> {
+        val kept = items.take(MAX)
+        prefs.edit().putString(KEY, kept.joinToString("\n")).apply()
+        return kept
+    }
+
+    private companion object {
+        const val KEY = "recent"
+        const val MAX = 6
+    }
 }

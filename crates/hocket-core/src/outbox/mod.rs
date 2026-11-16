@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{self, RatingTarget};
 use crate::db::{Db, DbError, DbResult};
 use crate::jobs::{JobContext, JobError, JobResult, JobRunner, RetryAction};
+use crate::provider::{Provider, ProviderSet};
 use crate::subsonic::{PlayQueueSave, PlaylistUpdate, StarTarget, SubsonicApi, SubsonicError};
 use crate::util::{new_id, Clock};
 
@@ -58,7 +59,7 @@ pub enum LoveTarget {
 impl From<RatingTarget> for LoveTarget {
     fn from(t: RatingTarget) -> Self {
         match t {
-            RatingTarget::Track { id } => LoveTarget::Track { id },
+            RatingTarget::Track { id, .. } => LoveTarget::Track { id },
             RatingTarget::Album { id } => LoveTarget::Album { id },
         }
     }
@@ -127,7 +128,7 @@ impl Mutation {
     pub fn target_key(&self) -> String {
         match self {
             Mutation::SetRating {
-                target: RatingTarget::Track { id },
+                target: RatingTarget::Track { id, .. },
                 ..
             } => format!("rating:track:{id}"),
             Mutation::SetRating {
@@ -266,6 +267,26 @@ pub struct FlushReport {
     /// Playlists whose mirror row or order was rewritten from the server's
     /// answer (or removed because the server no longer has them), in order.
     pub playlists: Vec<String>,
+    /// Accounts with an entry applied.
+    pub servers: Vec<String>,
+}
+
+impl FlushReport {
+    /// Fold another account's report into this one.
+    pub fn absorb(&mut self, other: FlushReport) {
+        self.applied += other.applied;
+        self.deferred += other.deferred;
+        self.failed.extend(other.failed);
+        self.expired += other.expired;
+        self.conflicts.extend(other.conflicts);
+        self.created_playlists.extend(other.created_playlists);
+        self.playlists.extend(other.playlists);
+        for s in other.servers {
+            if !self.servers.contains(&s) {
+                self.servers.push(s);
+            }
+        }
+    }
 }
 
 /// Compare-and-swap target for inverses of sent mutations.
@@ -424,7 +445,7 @@ impl Outbox {
             "INSERT INTO outbox(id, server_id, mutation, status, created_at, attempts, next_attempt_at, target, expected_prior) VALUES (?1, ?2, ?3, 'pending', ?4, 0, ?4, ?5, ?6)",
             params![id, server_id, json, now, target, prior_json],
         )?;
-        apply_local(tx, &mutation)?;
+        apply_local(tx, server_id, &mutation)?;
         Ok(id)
     }
 
@@ -454,6 +475,22 @@ impl Outbox {
             let rows = st.query_map([], entry_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
+    }
+
+    /// Pending entries for these accounts (the ones that can be sent now).
+    pub fn pending_count_for(&self, accounts: &[String]) -> DbResult<u32> {
+        let mut n = 0u32;
+        for a in accounts {
+            n += self.db.with_conn(|c| {
+                let n: i64 = c.query_row(
+                    "SELECT count(*) FROM outbox WHERE server_id = ?1 AND status IN ('pending','inflight')",
+                    [a],
+                    |r| r.get(0),
+                )?;
+                Ok(n as u32)
+            })?;
+        }
+        Ok(n)
     }
 
     pub fn pending_count(&self) -> DbResult<u32> {
@@ -525,9 +562,10 @@ impl Outbox {
 
     /// Send every due entry for the api's server. Stops early on the first
     /// network failure (the rest would fail the same way) and reschedules.
-    pub async fn flush(&self, api: &dyn SubsonicApi, max: usize) -> DbResult<FlushReport> {
+    pub async fn flush(&self, provider: &dyn Provider, max: usize) -> DbResult<FlushReport> {
         let now = self.clock.now_ms();
-        let server_id = api.server_id().to_string();
+        // Rows name the source their ids are valid in.
+        let server_id = provider.source().to_string();
         let due: Vec<OutboxEntry> = self.db.with_conn(|c| {
             let mut st = c.prepare_cached(&format!(
                 "SELECT {ENTRY_COLUMNS} FROM outbox WHERE server_id = ?1 AND status = 'pending' AND next_attempt_at <= ?2 ORDER BY created_at ASC LIMIT ?3"
@@ -565,7 +603,7 @@ impl Outbox {
             if !claimed {
                 continue; // cancelled meanwhile
             }
-            match self.execute(api, &entry, &mut report).await {
+            match self.execute(provider, &entry, &mut report).await {
                 Ok(post) => {
                     // Mirror update and `done` are one transaction: either
                     // both land or the entry is replayed (idempotently).
@@ -596,6 +634,9 @@ impl Outbox {
                         return Err(e);
                     }
                     report.applied += 1;
+                    if !report.servers.contains(&server_id) {
+                        report.servers.push(server_id.clone());
+                    }
                 }
                 // Local DB trouble (`Io`) after a server call is not a reason
                 // to give up: the replay is idempotent, so defer like a
@@ -646,18 +687,26 @@ impl Outbox {
     /// the call may already have been applied (crash, lost response).
     async fn execute(
         &self,
-        api: &dyn SubsonicApi,
+        provider: &dyn Provider,
         entry: &OutboxEntry,
         report: &mut FlushReport,
     ) -> Result<PostCall, SubsonicError> {
+        if matches!(entry.mutation, Mutation::Scrobble { .. }) {
+            return self.execute_scrobble(provider, entry).await;
+        }
+        // Everything else is a Subsonic edit (ratings, stars, playlists by
+        // index, the play queue).
+        let Some(api) = provider.navidrome().map(|a| a.as_ref()) else {
+            return self.execute_provider(provider, entry, report).await;
+        };
         let replay = entry.attempts > 0;
         match &entry.mutation {
             Mutation::SetRating { target, rating } => {
                 let id = match target {
-                    RatingTarget::Track { id } | RatingTarget::Album { id } => id,
+                    RatingTarget::Track { id, .. } | RatingTarget::Album { id } => id,
                 };
                 if let Some(Prior::Rating(expected)) = &entry.expected_prior {
-                    if let RatingTarget::Track { id } = target {
+                    if let RatingTarget::Track { id, .. } = target {
                         match api.song(id).await {
                             Ok(song) => {
                                 let found = song.user_rating.unwrap_or(0);
@@ -908,38 +957,7 @@ impl Outbox {
                 }
                 self.refresh_playlist(api, playlist_id).await
             }
-            Mutation::Scrobble {
-                track_id,
-                played_at,
-                submission,
-                history_id,
-            } => {
-                // A submission whose history row is already scrobbled was
-                // delivered on a previous attempt: done, never sent twice.
-                if let (true, Some(h)) = (submission, history_id) {
-                    let already: bool = self
-                        .db
-                        .with_conn(|c| {
-                            Ok(c.query_row(
-                                "SELECT scrobbled FROM play_history WHERE id = ?1",
-                                [h],
-                                |r| r.get::<_, i64>(0),
-                            )
-                            .optional()?
-                            .is_some_and(|v| v != 0))
-                        })
-                        .map_err(db_err)?;
-                    if already {
-                        return Ok(PostCall::None);
-                    }
-                }
-                api.scrobble(track_id, Some(*played_at), *submission)
-                    .await?;
-                Ok(match (submission, history_id) {
-                    (true, Some(h)) => PostCall::Scrobbled(*h),
-                    _ => PostCall::None,
-                })
-            }
+            Mutation::Scrobble { .. } => self.execute_scrobble(provider, entry).await,
             Mutation::SavePlayQueue {
                 track_ids,
                 current,
@@ -954,6 +972,218 @@ impl Outbox {
                 Ok(PostCall::None)
             }
         }
+    }
+
+    /// A mutation for a provider without a Subsonic client (YouTube Music),
+    /// through [`Provider::write`]. Playlist positions are the mirror's
+    /// (what Hocket lists); the provider maps them onto its own order.
+    async fn execute_provider(
+        &self,
+        provider: &dyn Provider,
+        entry: &OutboxEntry,
+        report: &mut FlushReport,
+    ) -> Result<PostCall, SubsonicError> {
+        use crate::provider::{LibraryTarget, ProviderWrite, WriteOutcome};
+        let refresh = |id: &str| id.to_string();
+        let playlist_id = match &entry.mutation {
+            Mutation::SetRating { .. } | Mutation::SavePlayQueue { .. } => {
+                // No ratings, no server play queue: nothing to send.
+                return Ok(PostCall::None);
+            }
+            Mutation::SetLoved { target, loved } => {
+                let w = match target {
+                    LoveTarget::Track { id } => {
+                        let t = vec![RatingTarget::Track {
+                            id: id.clone(),
+                            source: provider.source().to_string(),
+                        }];
+                        if *loved {
+                            ProviderWrite::Star(t)
+                        } else {
+                            ProviderWrite::Unstar(t)
+                        }
+                    }
+                    LoveTarget::Album { id } => {
+                        let t = LibraryTarget::Album { id: id.clone() };
+                        if *loved {
+                            ProviderWrite::LibraryAdd(t)
+                        } else {
+                            ProviderWrite::LibraryRemove(t)
+                        }
+                    }
+                    LoveTarget::Artist { id } => {
+                        let t = LibraryTarget::Artist { id: id.clone() };
+                        if *loved {
+                            ProviderWrite::LibraryAdd(t)
+                        } else {
+                            ProviderWrite::LibraryRemove(t)
+                        }
+                    }
+                };
+                provider.write(w).await?;
+                return Ok(PostCall::None);
+            }
+            Mutation::PlaylistCreate { name, track_ids } => {
+                let id = match &entry.server_ref {
+                    Some(r) => r.clone(),
+                    None => match provider
+                        .write(ProviderWrite::CreatePlaylist {
+                            name: name.clone(),
+                            track_ids: track_ids.clone(),
+                        })
+                        .await?
+                    {
+                        WriteOutcome::Created(id) => id,
+                        WriteOutcome::Done => {
+                            return Err(SubsonicError::Protocol("no playlist id".into()))
+                        }
+                    },
+                };
+                self.db
+                    .with_conn(|c| {
+                        c.execute(
+                            "UPDATE outbox SET server_ref = ?2 WHERE id = ?1",
+                            params![entry.id, id],
+                        )?;
+                        Ok(())
+                    })
+                    .map_err(db_err)?;
+                report
+                    .created_playlists
+                    .push((entry.id.clone(), id.clone()));
+                refresh(&id)
+            }
+            Mutation::PlaylistDelete { playlist_id } => {
+                provider
+                    .write(ProviderWrite::DeletePlaylist {
+                        id: playlist_id.clone(),
+                    })
+                    .await?;
+                return Ok(PostCall::None);
+            }
+            Mutation::PlaylistRename {
+                playlist_id, name, ..
+            } => {
+                if let Some(name) = name {
+                    provider
+                        .write(ProviderWrite::RenamePlaylist {
+                            id: playlist_id.clone(),
+                            name: name.clone(),
+                        })
+                        .await?;
+                }
+                return Ok(PostCall::None);
+            }
+            Mutation::PlaylistAdd {
+                playlist_id,
+                track_ids,
+                at_index,
+            } => {
+                let mut to_add = track_ids.clone();
+                if entry.attempts > 0 && at_index.is_none() {
+                    // The append may have landed on a previous attempt.
+                    let have = provider.playlist(playlist_id).await?.visible_ids();
+                    to_add.retain(|t| !have.contains(t));
+                }
+                if !to_add.is_empty() {
+                    provider
+                        .write(ProviderWrite::PlaylistAdd {
+                            id: playlist_id.clone(),
+                            track_ids: to_add,
+                            at_index: *at_index,
+                        })
+                        .await?;
+                }
+                refresh(playlist_id)
+            }
+            Mutation::PlaylistRemove {
+                playlist_id,
+                track_ids,
+                indices,
+            } => {
+                provider
+                    .write(ProviderWrite::PlaylistRemove {
+                        id: playlist_id.clone(),
+                        track_ids: track_ids.clone(),
+                        indices: indices.clone(),
+                    })
+                    .await?;
+                refresh(playlist_id)
+            }
+            Mutation::PlaylistMove {
+                playlist_id,
+                track_id,
+                from_index,
+                to_index,
+            } => {
+                provider
+                    .write(ProviderWrite::PlaylistMove {
+                        id: playlist_id.clone(),
+                        track_id: track_id.clone(),
+                        from_index: *from_index,
+                        to_index: *to_index,
+                    })
+                    .await?;
+                refresh(playlist_id)
+            }
+            Mutation::Scrobble { .. } => return self.execute_scrobble(provider, entry).await,
+        };
+        match provider.playlist(&playlist_id).await {
+            Ok(c) => {
+                let track_ids = c.visible_ids();
+                let mut playlist = c.playlist;
+                playlist.id = playlist_id;
+                Ok(PostCall::Playlist {
+                    playlist,
+                    track_ids,
+                })
+            }
+            Err(SubsonicError::NotFound(_)) => Ok(PostCall::PlaylistGone(playlist_id)),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// A scrobble (or "now playing"): the one mutation every provider takes.
+    async fn execute_scrobble(
+        &self,
+        provider: &dyn Provider,
+        entry: &OutboxEntry,
+    ) -> Result<PostCall, SubsonicError> {
+        let Mutation::Scrobble {
+            track_id,
+            played_at,
+            submission,
+            history_id,
+        } = &entry.mutation
+        else {
+            return Ok(PostCall::None);
+        };
+        // A submission whose history row is already scrobbled was
+        // delivered on a previous attempt: done, never sent twice.
+        if let (true, Some(h)) = (submission, history_id) {
+            let already: bool = self
+                .db
+                .with_conn(|c| {
+                    Ok(c.query_row(
+                        "SELECT scrobbled FROM play_history WHERE id = ?1",
+                        [h],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .is_some_and(|v| v != 0))
+                })
+                .map_err(db_err)?;
+            if already {
+                return Ok(PostCall::None);
+            }
+        }
+        provider
+            .report_play(track_id, Some(*played_at), *submission)
+            .await?;
+        Ok(match (submission, history_id) {
+            (true, Some(h)) => PostCall::Scrobbled(*h),
+            _ => PostCall::None,
+        })
     }
 
     /// Re-read a playlist after an edit; the mirror write happens with `done`.
@@ -992,7 +1222,7 @@ impl Outbox {
     ) -> Result<CasOutcome, SubsonicError> {
         match (&target, &expected, &new) {
             (
-                CasTarget::Rating(RatingTarget::Track { id }),
+                CasTarget::Rating(RatingTarget::Track { id, .. }),
                 Prior::Rating(exp),
                 Prior::Rating(new_r),
             ) => {
@@ -1070,15 +1300,17 @@ fn db_err(e: DbError) -> SubsonicError {
 }
 
 /// Optimistic mirror update at enqueue time.
-fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
+/// The mutation's effect on `server_id`'s mirror (another account's copy with the same id is
+/// another song, or gets its own mutation).
+fn apply_local(tx: &rusqlite::Connection, server_id: &str, m: &Mutation) -> DbResult<()> {
     match m {
         Mutation::SetRating {
-            target: RatingTarget::Track { id },
+            target: RatingTarget::Track { id, .. },
             rating,
         } => {
             tx.execute(
-                "UPDATE tracks SET rating = ?2 WHERE id = ?1",
-                params![id, rating.min(&5)],
+                "UPDATE tracks SET rating = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, rating.min(&5), server_id],
             )?;
         }
         Mutation::SetRating {
@@ -1086,8 +1318,8 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             rating,
         } => {
             tx.execute(
-                "UPDATE albums SET rating = ?2 WHERE id = ?1",
-                params![id, rating.min(&5)],
+                "UPDATE albums SET rating = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, rating.min(&5), server_id],
             )?;
         }
         Mutation::SetLoved {
@@ -1095,8 +1327,8 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             loved,
         } => {
             tx.execute(
-                "UPDATE tracks SET loved = ?2 WHERE id = ?1",
-                params![id, *loved as i64],
+                "UPDATE tracks SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *loved as i64, server_id],
             )?;
         }
         Mutation::SetLoved {
@@ -1104,8 +1336,8 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             loved,
         } => {
             tx.execute(
-                "UPDATE albums SET loved = ?2 WHERE id = ?1",
-                params![id, *loved as i64],
+                "UPDATE albums SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *loved as i64, server_id],
             )?;
         }
         Mutation::SetLoved {
@@ -1113,8 +1345,8 @@ fn apply_local(tx: &rusqlite::Connection, m: &Mutation) -> DbResult<()> {
             loved,
         } => {
             tx.execute(
-                "UPDATE artists SET loved = ?2 WHERE id = ?1",
-                params![id, *loved as i64],
+                "UPDATE artists SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *loved as i64, server_id],
             )?;
         }
         Mutation::PlaylistRename {
@@ -1252,7 +1484,7 @@ fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbRes
     match (m, prior) {
         (
             Mutation::SetRating {
-                target: RatingTarget::Track { id },
+                target: RatingTarget::Track { id, .. },
                 ..
             },
             Prior::Rating(r),
@@ -1337,19 +1569,19 @@ pub struct FlushJobPayload {
 /// for permanently failed entries and one for entries stuck for many attempts.
 pub struct OutboxFlushRunner {
     outbox: Outbox,
-    api: Arc<dyn SubsonicApi>,
+    providers: ProviderSet,
 }
 
 impl OutboxFlushRunner {
-    pub fn new(outbox: Outbox, api: Arc<dyn SubsonicApi>) -> Self {
-        OutboxFlushRunner { outbox, api }
+    pub fn new(outbox: Outbox, providers: ProviderSet) -> Self {
+        OutboxFlushRunner { outbox, providers }
     }
 }
 
 impl JobRunner for OutboxFlushRunner {
     fn run(&self, ctx: JobContext) -> BoxFuture<'static, JobResult<()>> {
         let outbox = self.outbox.clone();
-        let api = self.api.clone();
+        let providers = self.providers.clone();
         Box::pin(async move {
             let payload: FlushJobPayload = serde_json::from_str(&ctx.payload).unwrap_or_default();
             if payload.retry_failed {
@@ -1359,14 +1591,18 @@ impl JobRunner for OutboxFlushRunner {
             ctx.set_progress(0, Some(total));
             let mut done = 0u32;
             let mut all_failed: Vec<(String, String)> = vec![];
-            loop {
-                ctx.checkpoint().await?;
-                let r = outbox.flush(api.as_ref(), 50).await?;
-                done += (r.applied + r.failed.len()) as u32;
-                ctx.set_progress(done.min(total), Some(total));
-                all_failed.extend(r.failed);
-                if r.applied == 0 || r.deferred > 0 {
-                    break;
+            // Each account's entries go to its own provider; one that is
+            // offline defers its entries without holding up the others.
+            for provider in providers.iter() {
+                loop {
+                    ctx.checkpoint().await?;
+                    let r = outbox.flush(provider.as_ref(), 50).await?;
+                    done += (r.applied + r.failed.len()) as u32;
+                    ctx.set_progress(done.min(total), Some(total));
+                    all_failed.extend(r.failed);
+                    if r.applied == 0 || r.deferred > 0 {
+                        break;
+                    }
                 }
             }
             for (entry_id, err) in &all_failed {
@@ -1484,7 +1720,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 3,
                 },
                 Some(Prior::Rating(2)),
@@ -1495,7 +1734,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 5,
                 },
                 Some(Prior::Rating(3)),
@@ -1509,7 +1751,7 @@ mod tests {
             "original prior inherited"
         );
         assert_eq!(outbox.pending_count().unwrap(), 1);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(s.rating_of("t0"), 5);
         assert_eq!(s.calls_to("setRating"), 1);
@@ -1558,7 +1800,7 @@ mod tests {
                 Some(Prior::Loved(false)),
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert!(s.starred("t1"));
         assert_eq!(
             outbox.cancel_if_unsent(&id).unwrap(),
@@ -1573,14 +1815,17 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t2".into() },
+                    target: RatingTarget::Track {
+                        id: "t2".into(),
+                        source: String::new(),
+                    },
                     rating: 4,
                 },
                 Some(Prior::Rating(2)),
             )
             .unwrap();
         s.set_rating("t2", 1).await.unwrap(); // changed elsewhere meanwhile
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(s.rating_of("t2"), 4);
         assert_eq!(r.conflicts.len(), 1);
@@ -1596,7 +1841,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 1,
                 },
                 None,
@@ -1608,6 +1856,7 @@ mod tests {
                 Mutation::SetRating {
                     target: RatingTarget::Track {
                         id: "missing".into(),
+                        source: String::new(),
                     },
                     rating: 1,
                 },
@@ -1615,7 +1864,7 @@ mod tests {
             )
             .unwrap();
         s.set_offline(true);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.deferred, 1);
         assert_eq!(r.applied, 0);
         let e = outbox.entry(&id).unwrap().unwrap();
@@ -1624,10 +1873,10 @@ mod tests {
         assert!(e.next_attempt_at > clock.now_ms());
         assert!(e.last_error.is_some());
         s.set_offline(false);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!((r.applied, r.deferred), (0, 0), "not due yet");
         *clock.0.lock() += backoff_ms(1) + 1.0;
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(r.failed.len(), 1);
         assert_eq!(r.failed[0].0, bad);
@@ -1653,6 +1902,7 @@ mod tests {
                     Mutation::SetRating {
                         target: RatingTarget::Track {
                             id: format!("t{i}"),
+                            source: String::new(),
                         },
                         rating: 1,
                     },
@@ -1661,7 +1911,7 @@ mod tests {
                 .unwrap();
         }
         s.fail_next(SubsonicError::Network("x".into()), 1);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.deferred, 1);
         assert_eq!(
             s.calls_to("setRating"),
@@ -1712,7 +1962,7 @@ mod tests {
                 "t3".into(),
             ],
         );
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(
             s.playlist_song_ids("pl"),
@@ -1753,7 +2003,7 @@ mod tests {
                 .map(String::from)
                 .collect(),
         );
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(s.playlist_song_ids("pl"), vec!["t3", "t4", "t2", "t0"]);
 
         // Insert at index and append.
@@ -1779,7 +2029,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(
             s.playlist_song_ids("pl"),
             vec!["t3", "t1", "t4", "t2", "t0", "t1"]
@@ -1835,7 +2085,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(db.playlist("pl").unwrap().unwrap().name, "Renamed");
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 2);
         let (eid, pid) = &r.created_playlists[0];
         assert_eq!(eid, &id);
@@ -1853,7 +2103,7 @@ mod tests {
             )
             .unwrap();
         assert!(db.playlist("pl").unwrap().is_none());
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert!(!s.state.lock().playlists.contains_key("pl"));
         // deleting again (already gone on server) is not an error
         outbox
@@ -1865,7 +2115,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
     }
 
@@ -1928,7 +2178,7 @@ mod tests {
             3,
             "play queue saves coalesce"
         );
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 3);
         let sc = s.scrobbles();
         assert_eq!(sc.len(), 2);
@@ -1976,7 +2226,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         let pid = r.created_playlists[0].1.clone();
         assert_eq!(
@@ -1997,7 +2247,7 @@ mod tests {
         crash_after_call(&db, &id);
         db.delete_playlist(&pid).unwrap();
         assert_eq!(outbox.recover().unwrap(), 1);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!((r.applied, r.failed.len()), (1, 0));
         assert_eq!(count_named(&s), 1, "reused the recorded id");
         assert_eq!(r.created_playlists[0].1, pid);
@@ -2015,7 +2265,7 @@ mod tests {
         })
         .unwrap();
         outbox.recover().unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(count_named(&s), 1, "matched by name/owner, no duplicate");
         assert_eq!(r.created_playlists[0].1, pid);
@@ -2032,7 +2282,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(count_named(&s), 2);
     }
 
@@ -2057,14 +2307,14 @@ mod tests {
                 ])),
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(
             s.playlist_song_ids("pl"),
             vec!["t0", "t1", "t2", "t3", "t4"]
         );
         crash_after_call(&db, &id);
         outbox.recover().unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(
             s.playlist_song_ids("pl"),
@@ -2099,12 +2349,12 @@ mod tests {
                 None,
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(s.scrobbles().len(), 1);
         assert!(db.recently_played(1).unwrap()[0].scrobbled);
         crash_after_call(&db, &id);
         outbox.recover().unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(s.scrobbles().len(), 1, "never duplicated");
         assert_eq!(
@@ -2143,7 +2393,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!((r.expired, r.applied), (1, 1));
         let sc = s.scrobbles();
         assert_eq!(sc.len(), 1);
@@ -2159,14 +2409,17 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 4,
                 },
                 None,
             )
             .unwrap();
         s.fail_next(SubsonicError::Io("database is locked".into()), 1);
-        let r = outbox.flush(&s, 10).await.unwrap();
+        let r = outbox.flush(&s.provider(), 10).await.unwrap();
         assert_eq!((r.deferred, r.failed.len()), (1, 0));
         let e = outbox.entry(&id).unwrap().unwrap();
         assert_eq!(e.status, EntryStatus::Pending);
@@ -2220,18 +2473,24 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 4,
                 },
                 None,
             )
             .unwrap();
-        outbox.flush(&s, 10).await.unwrap();
+        outbox.flush(&s.provider(), 10).await.unwrap();
         let pending = outbox
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t1".into() },
+                    target: RatingTarget::Track {
+                        id: "t1".into(),
+                        source: String::new(),
+                    },
                     rating: 4,
                 },
                 None,
@@ -2260,7 +2519,10 @@ mod tests {
     #[tokio::test]
     async fn compare_and_swap() {
         let (db, s, outbox, _) = setup();
-        let t = CasTarget::Rating(RatingTarget::Track { id: "t0".into() });
+        let t = CasTarget::Rating(RatingTarget::Track {
+            id: "t0".into(),
+            source: String::new(),
+        });
         assert_eq!(
             outbox
                 .execute_cas(&s, t.clone(), Prior::Rating(2), Prior::Rating(5))
@@ -2305,7 +2567,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "ghost".into() },
+                    target: RatingTarget::Track {
+                        id: "ghost".into(),
+                        source: String::new(),
+                    },
                     rating: 1,
                 },
                 None,
@@ -2315,7 +2580,10 @@ mod tests {
             .enqueue(
                 "srv",
                 Mutation::SetRating {
-                    target: RatingTarget::Track { id: "t0".into() },
+                    target: RatingTarget::Track {
+                        id: "t0".into(),
+                        source: String::new(),
+                    },
                     rating: 1,
                 },
                 None,
@@ -2325,7 +2593,10 @@ mod tests {
         q.register(
             api::JobKind::OutboxFlush,
             1,
-            Arc::new(OutboxFlushRunner::new(outbox.clone(), Arc::new(s.clone()))),
+            Arc::new(OutboxFlushRunner::new(
+                outbox.clone(),
+                crate::provider::ProviderSet::single(Arc::new(s.provider())),
+            )),
         );
         let id = q
             .submit(JobSpec::new(api::JobKind::OutboxFlush, "Sync changes"))
@@ -2359,7 +2630,10 @@ mod tests {
     #[test]
     fn mutation_json_is_adjacently_tagged() {
         let m = Mutation::SetRating {
-            target: RatingTarget::Track { id: "x".into() },
+            target: RatingTarget::Track {
+                id: "x".into(),
+                source: String::new(),
+            },
             rating: 3,
         };
         let j = serde_json::to_value(&m).unwrap();

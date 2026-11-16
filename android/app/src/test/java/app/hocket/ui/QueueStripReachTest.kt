@@ -18,7 +18,6 @@ import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueItem
-import app.hocket.core.api.QueueMode
 import app.hocket.core.api.QueueSource
 import app.hocket.core.api.QueueSourceContextInner
 import app.hocket.core.api.QueueView
@@ -27,7 +26,6 @@ import app.hocket.core.api.TrackSummary
 import app.hocket.core.api.OfflineState
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.player.Neighbours
-import app.hocket.ui.player.previousRestarts
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

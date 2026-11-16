@@ -13,17 +13,23 @@ android/
 
 Requirements: JDK 17+, Android SDK with platform 37 (AGP installs it when licences are accepted),
 NDK 27, Rust with the Android targets (`aarch64-linux-android`, `armv7-linux-androideabi`,
-`x86_64-linux-android`), `cargo-ndk`, `typeshare-cli`.
+`x86_64-linux-android`), `typeshare-cli`.
 
 ```
 scripts/gen-bindings.sh          # typeshare -> core/src/main/java/app/hocket/core/api/Generated.kt
                                  # uniffi-bindgen -> core/src/main/java/app/hocket/core/ffi/hocket_android.kt
-scripts/build-android-core.sh    # cargo-ndk -> core/src/main/jniLibs/<abi>/libhocket_android.so
+scripts/build-android-core.sh    # cargo build (all ABIs in one go) -> core/src/main/jniLibs/<abi>/libhocket_android.so
 cd android
 ./gradlew assembleDebug          # ANDROID_HOME=/path/to/sdk (or sdk.dir in local.properties)
 ./gradlew testDebugUnitTest      # JVM tests: JSON round-trips, client, lyrics cursor, fake core, Compose UI
 ./gradlew lint
+./gradlew -Phocket.foss=true assembleRelease   # FOSS build: no Google Cast SDK (`:cast` left out)
 ```
+
+`:cast` holds the Google Cast SDK (proprietary). The app includes it unless `-Phocket.foss=true`,
+which compiles `app/src/foss` instead of `app/src/gms` (`CastSetup`): no Cast provider is installed
+and the UI offers no Cast devices. A property rather than product flavours, so task names and APK
+paths stay the same.
 
 The generated Kotlin and the `.so` are gitignored; the build scripts produce them. Gradle 9.7 /
 AGP 9.4 with the Kotlin Gradle plugin kept on (`android.builtInKotlin=false`) because the
@@ -56,7 +62,10 @@ fixture so serde/kotlinx drift fails a JVM test.
 `PlaybackService` (a Media3 `MediaLibraryService`, `foregroundServiceType="mediaPlayback"`) owns
 the one core for the process through `CoreHost`:
 
-- `Event.Backend(BackendCommand)` -> `ExoBackend` -> ExoPlayer. `Load` builds a per-item media
+- `Event.Backend(BackendCommand)` -> `ExoBackend` -> ExoPlayer. `Load` is first acknowledged with
+  `LoadApplied(load_id)` (the Cast renderer does the same): the core drops reports about items that
+  arrive between a `Load` and its acknowledgement, since they were sent about what was loaded before.
+  `Load` then builds a per-item media
   source through `DefaultMediaSourceFactory` over `CoreStreamDataSourceFactory` (each item carries its
   own headers) plus the gapless follow-up as a second playlist item; `SetNext` replaces everything after the current item; the transition is
   detected from `onMediaItemTransition(AUTO)`, reported as `Ended` (played item) then
@@ -71,8 +80,11 @@ the one core for the process through `CoreHost`:
   and the service never stops itself under a player that is buffering or recovering
   (`ExoBackend.isBusy`). `PreBuffer` prepares a
   second silent ExoPlayer at the requested position (`PreBufferReady` when READY); `DiscardPreBuffer`
-  releases it. `gain_db` is applied as `10^(gain/20) * masterVolume` clamped to 1.0 — Media3 has no
-  gain stage, so positive gain is an approximation (documented in `ExoBackend`).
+  releases it. `gain_db` (boost included), the in-app EQ and the limiter run in the core's DSP
+  chain inside the main player's audio sink (`MixProcessor`, direct JNI into `libhocket_android`,
+  `crates/hocket-android/src/dsp.rs`), switching gain at a gapless join's first sample;
+  `player.volume` is only the master volume. AutoMix transitions mix in the same processor (see
+  `docs/automix.md` → Platforms → Android).
 - Core streams: `CoreHost.start` sends `SetBackendCapabilities{core_stream}` ahead of `Start` on
   every core start (the core does not persist it), so the native core hands ExoPlayer
   `hocket-stream://<token>` sources instead of server URLs. `HocketStreamDataSource`
@@ -168,7 +180,21 @@ the one core for the process through `CoreHost`:
   device on the media controls' output chip; the other devices are routes in the system output
   switcher, and picking one (or this phone) is a `HandoffTo`. `PlaybackService` feeds
   `ConnectRoutes` from `DevicesChanged`/`TransportChanged`/`MediaSession` and registers the app's
-  MediaRouter2 discovery preference for `app.hocket.feature.CONNECT`, which keeps the provider bound.
+  MediaRouter2 discovery preference for `app.hocket.feature.CONNECT` (plus the Cast category, see
+  Cast), which keeps the provider bound.
+- Cast: the app installs `HocketCast` (`:cast`) as `CastDevices.provider` at startup. The service
+  creates its controller (Default Media Receiver; the SDK's own media session and notification off),
+  which publishes receivers to `CastDevices` (HandoffSheet's Cast group, scanning actively while the
+  sheet is open) and adds the Cast category to the MediaRouter2 discovery preference, so receivers
+  show in the system output switcher too. A session starting (here, from the output switcher, or
+  resumed) silences and stops `ExoBackend`, sends `SetRenderer(name)` and routes backend commands to
+  `CastRenderer` (previews stay on the phone); the core reloads the current item there with server
+  URLs. The session's end routes them back and sends `SetRenderer(null)`: the core reloads it here,
+  paused. `CastRenderer` keeps the receiver's queue at current + next, maps its status to reports
+  (`CastStatus`), reloads transcodes at `timeOffset` to seek, drives the receiver's volume as the
+  system volume (the session reports remote playback with volume while casting), and holds a wake
+  and Wi-Fi lock while the receiver plays. A receiver that fails before anything played ends the
+  session with a toast saying it can't reach the server.
 - Launcher shortcuts (`AppShortcuts`, app module): Resume, Shuffle loved / all / offline songs and
   Search, up to four, chosen in Settings > Playback (an app preference). They are dynamic shortcuts
   to `MainActivity` whose intents carry a per-install token (`hocket-shortcuts`, excluded from
@@ -178,7 +204,7 @@ the one core for the process through `CoreHost`:
   directly only with "Allow control by other apps" on; otherwise (or with no match) it opens search
   with the query.
 - `NetworkMonitor` -> `SetNetworkState` (kind, metered, hashed SSID or transport id);
-  `BatterySaverMonitor` -> `SetBatterySaver` while `battery.autoSaver` is on.
+  `BatterySaverMonitor` -> `SetPowerSave` (the core applies `battery.autoEngage`).
 - The app binds with `ACTION_BIND_CORE` (plus a per-process token, since the service is exported
   for Media3) only while some UI is started (`ForegroundBinder` on `ProcessLifecycleOwner`), with a
   plain `startService` (never `startForegroundService`: Media3 promotes the service itself once
@@ -202,7 +228,7 @@ id-keyed selection with select-all as a predicate.
 
 The app reads and writes only the core registry's keys (`app.hocket.core.SettingKeys`, mirroring
 `crates/hocket-core/src/settings/registry.rs`): `display.theme`, `display.accent` (null or
-`#RRGGBB`), `display.dynamicColour`, `display.animatedBackground`, `battery.autoEngage`,
+`#RRGGBB`), `display.dynamicColour`, `display.animatedBackground`, `battery.{level,autoLevel,custom,autoEngage}`,
 `lyrics.external.enabled`, `ratings.loveBridge.{enabled,threshold}`, `queue.savedCap`,
 `transcoding.profiles` (one map keyed `default` / `cellular` / `<networkId>`), `sync.enabled`,
 `connect.{coordinatorUrl,lanDiscovery}`, `actions.order.{contextMenu,sidebar,mediaSession}`, ….
@@ -280,6 +306,13 @@ Symbols name in the script, list it under its group, and re-run; the output is c
 
 - Anything the finger drives settles with a spring (`ui/theme/Motion.kt`): low-bouncy for the
   sheet and swipes, medium-bouncy for snaps, no-bounce for values that must not overshoot.
+- Bounce answers a touch. Pressed controls, cards and tiles dip and spring back past full size
+  (`Modifier.pressScale`, `ui/theme/PressScale.kt`), a held Library tile's badge morphs towards a
+  circle (`ui/theme/MorphShape.kt`), loving pops the heart with a ring (`LoveBurst`), and an
+  opened page's cover lands a touch past its slot. What happens without a touch (page pushes and
+  pops, track changes, lists loading) stays calm, and so do surfaces that move content.
+- Pull down on Home or the Library to sync the library now (`SyncRefreshBox`), with the expressive
+  loading indicator.
 - Now-playing sheet: `AnchoredDraggable` with a velocity-aware fling, scrim, corners morphing from
   pill to square, the artwork scaling from the 48 dp thumbnail to the hero; predictive back drags
   it down with the gesture.
@@ -289,7 +322,8 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   corners round while it moves. Pops reverse it. Predictive back scrubs that same pop, always
   toward the trailing edge, whatever edge the swipe started at. Bar switches stay a short
   fade-through. Album, artist and playlist covers fly from the list into the detail header
-  and back again on pop (`ui/nav/SharedArtwork.kt`, after Navic). The Library's Albums tile
+  (landing on a soft spring) and back again on pop on the page's own curve
+  (`ui/nav/SharedArtwork.kt`, after Navic). The Library's Albums tile
   fans the same Recent covers as the albums page and those three fly into that row. Reduced
   motion makes it a crossfade. Holding the
   bottom bar does nothing special: it is edited from Settings > Customise or the account sheet.
@@ -305,7 +339,8 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   in an expressive `HorizontalFloatingToolbar`; drag handles reorder (playlists, queue); swipe
   removes from the queue (undo from the core's toast).
 - Lyrics: syllable gradient sweep per syllable driven by `withFrameNanos` and `LyricsCursor`,
-  30 fps in battery saver, stopped when not visible; AGSL warp background on Android 13+, static
+  30 fps with battery saver's lighter lyrics (whole lines at ~12 fps with simple lyrics), stopped
+  when not visible; AGSL warp background on Android 13+, static
   blurred still otherwise or when battery saver / "animated background off" applies. Holding a line
   (`LyricsShareDialog`) flies its text out of the lyrics into its place on a share card, which forms
   around it over a fading scrim while the options slide up (two copies of the line crossfade in

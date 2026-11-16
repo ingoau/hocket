@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SECTIONS, HOME_SECTIONS, moveBefore, moveShown, parseSections, sectionsValue } from "./home-sections";
+import { DEFAULT_SECTIONS, HOME_SECTIONS, moveBefore, moveShown, parseSections, sectionDef, sectionsValue, setShelves } from "./home-sections";
 import { LIBRARY_PINS_MAX, choosesTap, movePin, parsePins, pinTap, restorePin, shownNeighbour, togglePin, type LibraryPin } from "./library-pins";
 
 describe("home sections", () => {
   // The phone's HomeLibraryLogicTest checks the same list, so the two platforms stay in step.
   it("has the phone's catalogue, defaults and order", () => {
     expect(HOME_SECTIONS.map((s) => `${s.id}:${s.defaultOn ? "on" : "off"}:${s.defaultStyle}`)).toEqual([
-      "rediscover:on:row", "filters:on:row", "favouriteArtists:on:row", "topGenre:on:grid", "newInLibrary:on:row",
-      "moreFromArtist:off:list", "onRepeat:off:row", "recentlyPlayed:off:row", "recentQueues:off:list", "stats:off:tile",
+      "spotlight:on:hero", "rediscover:on:row", "filters:on:row", "favouriteArtists:on:row", "topGenre:on:grid",
+      "moreFromArtist:off:list", "onRepeat:off:row", "recentQueues:off:list", "stats:off:tile",
     ]);
   });
 
@@ -15,10 +15,47 @@ describe("home sections", () => {
     expect(parseSections([])).toEqual(DEFAULT_SECTIONS);
     expect(parseSections("junk")).toEqual(DEFAULT_SECTIONS);
     const parsed = parseSections([{ id: "stats", on: true }, { id: "fromTheFuture", on: true, style: "wall" }, { id: "stats", on: false }]);
-    expect(parsed[0]).toEqual({ id: "stats", on: true });
-    expect(parsed[1]).toEqual({ id: "fromTheFuture", on: true, style: "wall" });
+    // Spotlight (pinned) arrives first and on; every other new section arrives off.
+    expect(parsed[0]).toEqual({ id: "spotlight", on: true, style: "hero" });
+    expect(parsed[1]).toEqual({ id: "stats", on: true });
+    expect(parsed[2]).toEqual({ id: "fromTheFuture", on: true, style: "wall" });
     expect(parsed).toHaveLength(HOME_SECTIONS.length + 1);
-    expect(new Set(parsed.slice(2).map((p) => p.on))).toEqual(new Set([false]));
+    expect(new Set(parsed.slice(3).map((p) => p.on))).toEqual(new Set([false]));
+  });
+
+  it("keeps Spotlight first and never moves it", () => {
+    expect(parseSections([{ id: "stats", on: true }, { id: "spotlight", on: false }])[0]).toEqual({ id: "spotlight", on: false });
+    const prefs = [{ id: "spotlight", on: true }, { id: "rediscover", on: true }, { id: "filters", on: true }];
+    expect(moveShown(prefs, "spotlight", 1)).toEqual(prefs);
+    expect(moveShown(prefs, "rediscover", -1)).toEqual(prefs);
+    expect(moveBefore(prefs, "filters", "spotlight")).toEqual(prefs);
+    expect(moveShown(prefs, "rediscover", 1).map((p) => p.id)).toEqual(["spotlight", "filters", "rediscover"]);
+  });
+
+  it("lists the core's shelves: Continue listening after Spotlight, the accounts' after the sections that are on", () => {
+    setShelves([
+      { id: "hocket/continueListening", title: "Continue listening", defaultOn: true },
+      { id: "a/recentlyAdded", title: "Recently added", defaultOn: true },
+      { id: "a/mostPlayed", title: "Most played", defaultOn: false },
+    ]);
+    try {
+      const parsed = parseSections([]);
+      expect(parsed.map((p) => `${p.id}:${p.on ? "on" : "off"}`)).toEqual([
+        "spotlight:on", "shelf:hocket/continueListening:on", "rediscover:on", "filters:on", "favouriteArtists:on", "topGenre:on",
+        "shelf:a/recentlyAdded:on", "shelf:a/mostPlayed:off", "moreFromArtist:off", "onRepeat:off", "recentQueues:off", "stats:off",
+      ]);
+      expect(sectionDef("shelf:a/mostPlayed")?.styles).toEqual(["row", "grid", "list"]);
+      expect(sectionsValue(parsed)).toEqual([]);
+      // A stored list gets a new account's shelves at the end, as they default.
+      const stored = parseSections([{ id: "rediscover", on: true }]);
+      expect(stored.find((p) => p.id === "shelf:a/recentlyAdded")?.on).toBe(true);
+      expect(stored.find((p) => p.id === "shelf:a/mostPlayed")?.on).toBe(false);
+      // Hidden and moved like any section.
+      const moved = moveShown(parsed, "shelf:a/recentlyAdded", -1).map((p) => p.id);
+      expect(moved.indexOf("shelf:a/recentlyAdded")).toBeLessThan(moved.indexOf("topGenre"));
+    } finally {
+      setShelves([]);
+    }
   });
 
   it("stores the default as [] so later defaults reach it", () => {

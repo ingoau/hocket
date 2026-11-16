@@ -1,158 +1,43 @@
-//! The unauthenticated surface: refused sockets persist nothing, the verify
-//! proxy cannot be pointed at this host's own network and never follows a
-//! redirect, oversized frames end the socket, and one address cannot open
-//! connections without bound.
+//! The unauthenticated surface: sockets of unknown identities (or of
+//! devices their identity doesn't list) are refused and persist nothing,
+//! claims need the current code, oversized frames end the socket, and one
+//! address cannot open connections without bound.
 
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+mod common;
+
 use std::time::Duration;
 
-use axum::routing::get;
-use axum::Router;
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
-use hocket_coordinator::{serve, App, Args, MAX_FRAME_BYTES};
-use hocket_core::api::{DeviceInfo, Platform};
-use hocket_core::connect::wire::{scope_key, Credential, Msg, RefuseReason, WireMessage};
-use hocket_core::connect::wire::{PROTOCOL, PROTOCOL_MIN};
-
-/// A fake Subsonic that counts what reaches it. `/rest/ping.view` answers
-/// ok for the token `good-token`, or redirects to `/elsewhere` when
-/// `redirect` is set; `/elsewhere` always answers ok.
-struct FakeSubsonic {
-    addr: SocketAddr,
-    pings: Arc<AtomicUsize>,
-    elsewhere: Arc<AtomicUsize>,
-}
-
-async fn fake_subsonic(redirect: bool) -> FakeSubsonic {
-    let pings = Arc::new(AtomicUsize::new(0));
-    let elsewhere = Arc::new(AtomicUsize::new(0));
-    let p = pings.clone();
-    let e = elsewhere.clone();
-    let ping = move |q: axum::extract::Query<std::collections::HashMap<String, String>>| {
-        let p = p.clone();
-        async move {
-            p.fetch_add(1, Ordering::SeqCst);
-            if redirect {
-                return axum::response::Redirect::temporary("/elsewhere").into_response();
-            }
-            let ok = q.get("t").map(|t| t == "good-token").unwrap_or(false);
-            let status = if ok { "ok" } else { "failed" };
-            axum::Json(serde_json::json!({ "subsonic-response": { "status": status } }))
-                .into_response()
-        }
-    };
-    let other = move || {
-        let e = e.clone();
-        async move {
-            e.fetch_add(1, Ordering::SeqCst);
-            axum::Json(serde_json::json!({ "subsonic-response": { "status": "ok" } }))
-        }
-    };
-    use axum::response::IntoResponse;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            Router::new()
-                .route("/rest/ping.view", get(ping))
-                .route("/elsewhere", get(other)),
-        )
-        .await
-        .unwrap();
-    });
-    FakeSubsonic {
-        addr,
-        pings,
-        elsewhere,
-    }
-}
-
-async fn start(args: Args) -> (Arc<App>, String, tokio::sync::oneshot::Sender<()>) {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
-        .try_init();
-    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
-    std::env::set_var("no_proxy", "127.0.0.1,localhost");
-    let app = App::new(args).unwrap();
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let (addr, _server) = serve(app.clone(), "127.0.0.1:0".parse().unwrap(), async {
-        let _ = stop_rx.await;
-    })
-    .await
-    .unwrap();
-    (app, format!("ws://{addr}/ws"), stop_tx)
-}
-
-fn hello(scope: &str, credential: Option<Credential>) -> Message {
-    let m = WireMessage::new(Msg::Hello {
-        device: DeviceInfo {
-            id: "raw".into(),
-            name: "raw".into(),
-            platform: Platform::Linux,
-            app_version: "test".into(),
-            playing: false,
-            ready: false,
-            last_seen: 0.0,
-            is_self: true,
-        },
-        protocol_min: PROTOCOL_MIN,
-        protocol_max: PROTOCOL,
-        scope: scope.into(),
-        credential,
-        session_id: None,
-        session_revision: 0,
-        held_epoch: None,
-        extra: Default::default(),
-    });
-    Message::text(m.encode().unwrap())
-}
-
-fn credential(server_url: &str, token: &str) -> Credential {
-    Credential {
-        server_url: server_url.into(),
-        username: "alice".into(),
-        token: Some(token.into()),
-        salt: Some("s".into()),
-        api_key: None,
-        client: "hocket-test".into(),
-        api_version: "1.16.1".into(),
-    }
-}
-
-/// Send one frame and collect what comes back until the socket closes (or
-/// 3 s pass).
-async fn exchange(url: &str, frames: Vec<Message>) -> Vec<Msg> {
-    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-    for f in frames {
-        ws.send(f).await.unwrap();
-    }
-    let mut got = vec![];
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        match tokio::time::timeout_at(deadline, ws.next()).await {
-            Ok(Some(Ok(Message::Text(t)))) => {
-                if let Ok(m) = WireMessage::decode(&t) {
-                    got.push(m.msg);
-                }
-            }
-            Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) | Err(_) => break,
-            Ok(Some(Ok(_))) => {}
-        }
-    }
-    got
-}
+use common::{exchange, frame, join, owner, pair, start, try_join};
+use hocket_coordinator::{Args, MAX_FRAME_BYTES};
+use hocket_core::connect::auth;
+use hocket_core::connect::wire::{Msg, RefuseReason};
+use hocket_core::identity::Identity;
 
 fn replica_files(dir: &std::path::Path) -> usize {
     std::fs::read_dir(dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            n.ends_with(".json")
+                && n != hocket_coordinator::identities::KEY_FILE
+                && n != hocket_coordinator::identities::IDENTITIES_FILE
+                && n != hocket_coordinator::identities::CLAIM_FILE
+        })
         .count()
+}
+
+fn refused(got: &[Msg]) -> bool {
+    matches!(
+        got.first(),
+        Some(Msg::Refuse {
+            reason: RefuseReason::Unauthorised,
+            ..
+        })
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -162,159 +47,146 @@ async fn refused_sockets_persist_nothing_and_open_no_lasting_room() {
     args.data_dir = Some(dir.path().to_path_buf());
     let (app, url, _stop) = start(args).await;
 
-    // a frame before Hello
+    // a frame that names no identity
     let got = exchange(
         &url,
         vec![Message::text(
-            "{\"protocolVersion\":2,\"msg\":{\"type\":\"syncRequest\",\"data\":null}}",
+            "{\"protocolVersion\":5,\"msg\":{\"type\":\"syncRequest\",\"data\":null}}",
         )],
     )
     .await;
-    assert!(
-        matches!(
-            got.first(),
-            Some(Msg::Refuse {
-                reason: RefuseReason::Unauthorised,
-                ..
-            })
-        ),
-        "{got:?}"
-    );
+    assert!(refused(&got), "{got:?}");
 
-    // a Hello without a credential, for a hundred different scopes
-    for i in 0..100 {
-        let got = exchange(&url, vec![hello(&format!("https://x{i}|alice"), None)]).await;
-        assert!(
-            matches!(
-                got.first(),
-                Some(Msg::Refuse {
-                    reason: RefuseReason::Unauthorised,
-                    ..
-                })
-            ),
-            "{got:?}"
-        );
+    // a hundred identities it never admitted
+    for _ in 0..100 {
+        let stranger = Identity::create("dev", "Dev", 1.0);
+        let got = exchange(
+            &url,
+            vec![frame(Msg::Challenge {
+                nonce: auth::new_nonce(),
+                identity: Some(stranger.id.clone()),
+                heads: stranger.heads(),
+                eph: None,
+            })],
+        )
+        .await;
+        assert!(refused(&got), "{got:?}");
     }
-    // the refused Hello opened a room for the duration of the socket only,
-    // and the closing Disconnected did not resurrect it from disk
+    // a claim with a made-up code
+    let stranger = Identity::create("dev", "Dev", 1.0);
+    let got = exchange(
+        &url,
+        vec![frame(Msg::CoordClaim {
+            code: "ABCD-EFGH".into(),
+            sync: Box::new(stranger.sync()),
+        })],
+    )
+    .await;
+    assert!(refused(&got), "{got:?}");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(app.room_count(), 0);
     assert_eq!(
         replica_files(dir.path()),
         0,
-        "nothing on disk for refused scopes"
+        "nothing on disk for refused sockets"
     );
     app.flush_all();
     assert_eq!(replica_files(dir.path()), 0);
     assert_eq!(app.connection_count(), 0);
+    assert_eq!(app.identities().count(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_verify_proxy_never_fetches_private_addresses_by_default() {
-    let subsonic = fake_subsonic(false).await;
-    let mut args = Args::for_tests();
-    args.allow_private_servers = false;
-    let (app, url, _stop) = start(args).await;
-    let scope = scope_key(&format!("http://{}", subsonic.addr), "alice");
-    for named in [
-        format!("http://{}", subsonic.addr),
-        format!("http://localhost:{}", subsonic.addr.port()),
-        "http://169.254.169.254/latest/meta-data".into(),
-        format!("http://user:pw@{}", subsonic.addr),
-        "ftp://music.example/".into(),
-    ] {
-        let got = exchange(
-            &url,
-            vec![hello(&scope, Some(credential(&named, "good-token")))],
-        )
-        .await;
-        // Refused either way: a scope mismatch before the check, or the check.
-        assert!(
-            matches!(got.first(), Some(Msg::Refuse { .. })),
-            "{named}: {got:?}"
-        );
-    }
-    assert_eq!(app.verification_count(), 0, "no ping was ever sent");
-    assert_eq!(subsonic.pings.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_verify_proxy_does_not_follow_redirects() {
-    let subsonic = fake_subsonic(true).await;
+async fn claiming_needs_the_current_code_and_an_expired_one_fails() {
     let (app, url, _stop) = start(Args::for_tests()).await;
-    let base = format!("http://{}", subsonic.addr);
-    let scope = scope_key(&base, "alice");
+    let a = Identity::create("a", "A", 1.0);
+    let now = app.now_ms();
+    let expired = app.identities().issue_claim(now - 120_000, 60_000).unwrap();
     let got = exchange(
         &url,
-        vec![hello(&scope, Some(credential(&base, "good-token")))],
+        vec![frame(Msg::CoordClaim {
+            code: expired.code,
+            sync: Box::new(a.sync()),
+        })],
     )
     .await;
-    assert!(
-        matches!(
-            got.first(),
-            Some(Msg::Refuse {
-                reason: RefuseReason::Unauthorised,
-                ..
-            })
-        ),
-        "{got:?}"
-    );
-    assert_eq!(app.verification_count(), 1);
-    assert_eq!(subsonic.pings.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        subsonic.elsewhere.load(Ordering::SeqCst),
-        0,
-        "the credential was not forwarded to the redirect target"
-    );
+    assert!(refused(&got), "{got:?}");
+    assert!(app.identities().owner().is_none());
+    let mut a = owner(&app, &url, "a").await;
+    assert_eq!(app.identities().owner().as_deref(), Some(a.id.as_str()));
+    join(&app, &url, &mut a).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_good_credential_is_admitted_and_the_room_persists_only_then() {
-    let subsonic = fake_subsonic(false).await;
+async fn a_member_is_admitted_and_the_room_persists_only_then() {
     let dir = tempfile::tempdir().unwrap();
     let mut args = Args::for_tests();
     args.data_dir = Some(dir.path().to_path_buf());
     let (app, url, _stop) = start(args).await;
-    let base = format!("http://{}", subsonic.addr);
-    let scope = scope_key(&base, "alice");
-    // wrong token: refused, nothing on disk
-    let got = exchange(&url, vec![hello(&scope, Some(credential(&base, "wrong")))]).await;
-    assert!(matches!(got.first(), Some(Msg::Refuse { .. })), "{got:?}");
+    let mut a = owner(&app, &url, "a").await;
+    // A device the identity doesn't list (its own keys, claiming a's identity): refused.
+    let mut forged = Identity::create_with(
+        &a.id,
+        "x",
+        "X",
+        hocket_core::identity::crypto::DeviceSecret::generate(),
+        1.0,
+    );
+    let got = try_join(&app, &url, &mut forged, false)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        got.iter().any(|m| matches!(m, Msg::Refuse { .. })),
+        "{got:?}"
+    );
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(replica_files(dir.path()), 0);
-    // right token: welcomed; the room is on disk once the socket goes
-    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
-    ws.send(hello(&scope, Some(credential(&base, "good-token"))))
-        .await
-        .unwrap();
-    let first = tokio::time::timeout(Duration::from_secs(3), ws.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let Message::Text(t) = first else {
-        panic!("{first:?}")
-    };
-    assert!(matches!(
-        WireMessage::decode(&t).unwrap().msg,
-        Msg::Welcome { .. }
-    ));
-    assert!(app.has_member(&scope, "raw"));
+    // A paired device the coordinator hasn't heard of yet brings its own add.
+    let mut b = pair(&mut a, "b");
+    let mut ws = join(&app, &url, &mut b).await;
+    assert!(app.has_member(&b.id, "b"));
     ws.close(None).await.unwrap();
     drop(ws);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(app.room_count(), 0);
     assert_eq!(replica_files(dir.path()), 1);
-    let stored = std::fs::read_to_string(
-        std::fs::read_dir(dir.path())
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path(),
-    )
+    let mut shared = app.identities().shared(&a.id).unwrap();
+    assert!(shared.state().is_member("b"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_removed_device_is_turned_away() {
+    let (app, url, _stop) = start(Args::for_tests()).await;
+    let mut a = owner(&app, &url, "a").await;
+    let mut b = pair(&mut a, "b");
+    let mut c = pair(&mut a, "c");
+    let mut wa = join(&app, &url, &mut a).await;
+    let mut wb = join(&app, &url, &mut b).await;
+    // a removes b and tells the room.
+    a.remove_device("b", 5.0).unwrap();
+    wa.send(frame(Msg::IdentitySync {
+        sync: Box::new(a.sync()),
+    }))
+    .await
     .unwrap();
-    assert!(!stored.contains("good-token"));
+    // b is dropped at once.
+    let got = common::until(&mut wb, |m| matches!(m, Msg::Refuse { .. })).await;
+    assert!(
+        got.iter().any(|m| matches!(m, Msg::Refuse { .. })),
+        "{got:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!app.has_member(&a.id, "b"));
+    // and can't come back with its old list.
+    let got = try_join(&app, &url, &mut b, false).await.err().unwrap();
+    assert!(
+        got.iter().any(|m| matches!(m, Msg::Refuse { .. })),
+        "{got:?}"
+    );
+    assert!(b.was_removed(), "the coordinator's proof told it");
+    // c, which was offline, still gets in.
+    join(&app, &url, &mut c).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -371,7 +243,7 @@ async fn one_address_cannot_open_connections_without_bound() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_socket_that_never_says_hello_is_dropped() {
+async fn a_socket_that_never_speaks_is_dropped() {
     let (app, url, _stop) = start(Args::for_tests()).await;
     let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -393,4 +265,50 @@ async fn a_socket_that_never_says_hello_is_dropped() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(app.connection_count(), 0);
     assert_eq!(app.room_count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_owner_invites_and_revokes_over_the_socket() {
+    let (app, url, _stop) = start(Args::for_tests()).await;
+    let mut a = owner(&app, &url, "a").await;
+    let mut ws = join(&app, &url, &mut a).await;
+    ws.send(frame(Msg::CoordInviteCreate)).await.unwrap();
+    let got = common::until(&mut ws, |m| matches!(m, Msg::CoordInvites { .. })).await;
+    let Some(Msg::CoordInvites {
+        created: Some(code),
+        invites,
+    }) = got.last()
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(invites.len(), 1);
+    ws.send(frame(Msg::CoordInviteRevoke { code: code.clone() }))
+        .await
+        .unwrap();
+    let got = common::until(&mut ws, |m| matches!(m, Msg::CoordInvites { .. })).await;
+    assert!(
+        matches!(got.last(), Some(Msg::CoordInvites { invites, .. }) if invites.is_empty()),
+        "{got:?}"
+    );
+    // A revoked code admits nobody.
+    let guest = Identity::create("g", "G", 1.0);
+    let got = exchange(
+        &url,
+        vec![frame(Msg::CoordRedeem {
+            code: code.clone(),
+            sync: Box::new(guest.sync()),
+        })],
+    )
+    .await;
+    assert!(refused(&got), "{got:?}");
+    assert!(!app.identities().is_admitted(&guest.id));
+    // A guest identity's devices can't make invites.
+    let mut g = common::invited(&app, &url, &a.id, "g").await;
+    let mut gws = join(&app, &url, &mut g).await;
+    gws.send(frame(Msg::CoordInviteCreate)).await.unwrap();
+    let got = common::until(&mut gws, |m| matches!(m, Msg::CoordInvites { .. })).await;
+    assert!(
+        !got.iter().any(|m| matches!(m, Msg::CoordInvites { .. })),
+        "{got:?}"
+    );
 }

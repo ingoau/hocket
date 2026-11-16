@@ -68,8 +68,11 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
             colorScheme = animatedScheme(scheme, reducedMotion),
             motionScheme = MotionScheme.expressive(),
             typography = expressiveTypography(MaterialTheme.typography),
-            content = content,
-        )
+        ) {
+            // Text outside any Surface (most pages sit straight on the window) in the scheme's
+            // on-background, not the platform's default black.
+            CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground, content = content)
+        }
     }
 }
 
@@ -80,7 +83,7 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
  * scheme switches at once.
  */
 @Composable
-private fun animatedScheme(target: ColorScheme, reducedMotion: Boolean): ColorScheme {
+internal fun animatedScheme(target: ColorScheme, reducedMotion: Boolean): ColorScheme {
     if (reducedMotion) return target
     @Composable fun Color.animated(): Color = animateColorAsState(this, ColorSpring, label = "scheme").value
     return target.copy(

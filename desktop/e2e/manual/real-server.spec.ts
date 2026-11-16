@@ -72,6 +72,7 @@ test.describe("real server (manual)", () => {
       await page.getByTestId("setup-username").fill(user!);
       await page.getByTestId("setup-password").fill(pass!);
       await page.getByTestId("setup-connect").click();
+      await page.getByTestId("setup-continue").click({ timeout: 60_000 });
       await expect(page.getByTestId("app")).toBeVisible({ timeout: 60_000 });
       await expect(page.getByTestId("dev-banner")).toHaveCount(0);
 

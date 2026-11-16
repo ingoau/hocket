@@ -12,6 +12,7 @@ import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
 import app.hocket.core.Queries
 import app.hocket.core.QuickPlay
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Command
@@ -103,10 +104,10 @@ class LibraryBrowser(
             is MediaId.Section -> {
                 val server = serverId() ?: return emptyList()
                 when (id.section) {
-                    LibrarySection.Albums -> (query(Queries.albums(server, window)) as? QueryResult.Albums)?.data?.items.orEmpty().map(::album)
-                    LibrarySection.Artists -> (query(Queries.artists(server, window)) as? QueryResult.Artists)?.data?.items.orEmpty().map(::artist)
-                    LibrarySection.Playlists -> (query(Queries.playlists(server)) as? QueryResult.Playlists)?.data.orEmpty().map(::playlist).window(window)
-                    LibrarySection.Genres -> (query(Queries.genres(server)) as? QueryResult.Genres)?.data.orEmpty().map { genre(server, it) }.window(window)
+                    LibrarySection.Albums -> (query(Queries.albums("", window)) as? QueryResult.Albums)?.data?.items.orEmpty().map(::album)
+                    LibrarySection.Artists -> (query(Queries.artists("", window)) as? QueryResult.Artists)?.data?.items.orEmpty().map(::artist)
+                    LibrarySection.Playlists -> (query(Queries.playlists("")) as? QueryResult.Playlists)?.data.orEmpty().map(::playlist).window(window)
+                    LibrarySection.Genres -> (query(Queries.genres("")) as? QueryResult.Genres)?.data.orEmpty().map { genre(server, it) }.window(window)
                 }
             }
             is MediaId.Album -> albumTracks(id.id).mapIndexed { i, t -> track(t.toSummary(), MediaId.AlbumTrack(id.serverId, id.id, i)) }.window(window)
@@ -131,7 +132,7 @@ class LibraryBrowser(
         is MediaId.Playlist -> playlistDetail(id.id)?.let(::playlist)
         is MediaId.PlaylistTrack -> playlistTrack(id.playlistId, id.index)?.let { track(it, id) }
         is MediaId.Genre -> folder(id, id.name, MediaMetadata.MEDIA_TYPE_GENRE, style(STYLE_GRID), playable = true)
-        is MediaId.Track -> trackDetail(id.id)?.let { track(it.toSummary(), id) }
+        is MediaId.Track -> trackDetail(TrackRef(id.serverId, id.id))?.let { track(it.toSummary(), id) }
         is MediaId.QueueItem -> null
         MediaId.Recent -> recentRoot()
         MediaId.Suggested -> suggestedRoot()
@@ -148,7 +149,7 @@ class LibraryBrowser(
     private suspend fun searchResults(text: String, limit: Int): SearchResults? {
         val server = serverId() ?: return null
         if (text.isBlank()) return null
-        return (query(Queries.search(server, text.trim(), limit, includeServer = false, requestId = "browse-" + UUID.randomUUID())) as? QueryResult.Search)?.data
+        return (query(Queries.search("", text.trim(), limit, includeServer = false, requestId = "browse-" + UUID.randomUUID())) as? QueryResult.Search)?.data
     }
 
     /**
@@ -162,7 +163,7 @@ class LibraryBrowser(
         val focus = extras?.getString(MediaStore.EXTRA_MEDIA_FOCUS)
         if (focus == MediaStore.Audio.Genres.ENTRY_CONTENT_TYPE) {
             val genre = extras.getString(MediaStore.EXTRA_MEDIA_GENRE)?.takeIf { it.isNotBlank() } ?: text
-            val known = (query(Queries.genres(server)) as? QueryResult.Genres)?.data.orEmpty()
+            val known = (query(Queries.genres("")) as? QueryResult.Genres)?.data.orEmpty()
             known.firstOrNull { it.name.equals(genre.trim(), ignoreCase = true) }?.let { return genre(server, it) }
         }
         val r = searchResults(text, SEARCH_LIMIT) ?: return null
@@ -198,7 +199,7 @@ class LibraryBrowser(
         // A list of lone tracks (a controller setting search results) plays as one ad-hoc list.
         val tracks = ids.filterIsInstance<MediaId.Track>()
         if (tracks.size == ids.size && tracks.size > 1 && tracks.all { it.serverId == tracks[0].serverId }) {
-            dispatch(Commands.playTracks(tracks[0].serverId, tracks.map { it.id }, start, label(tracks[start].id)))
+            dispatch(Commands.playTracks(tracks.map { TrackRef(it.serverId, it.id) }, start, label(TrackRef(tracks[start].serverId, tracks[start].id))))
             return true
         }
         val command = when (val id = ids[start]) {
@@ -208,7 +209,7 @@ class LibraryBrowser(
             is MediaId.Playlist -> playlistDetail(id.id)?.let { Commands.playContext(Commands.playlistContext(id.serverId, id.id, it.name)) }
             is MediaId.PlaylistTrack -> playlistDetail(id.playlistId)?.let { Commands.playContext(Commands.playlistContext(id.serverId, id.playlistId, it.name), startIndex = id.index) }
             is MediaId.Genre -> Commands.playContext(Commands.genreContext(id.serverId, id.name))
-            is MediaId.Track -> Commands.playTracks(id.serverId, listOf(id.id), 0, label(id.id))
+            is MediaId.Track -> TrackRef(id.serverId, id.id).let { Commands.playTracks(listOf(it), 0, label(it)) }
             is MediaId.QueueItem -> Commands.jumpToQueueItem(id.key)
             is MediaId.Shuffle -> quickPlay(id)
             MediaId.Root, is MediaId.Section, MediaId.Recent, MediaId.Suggested, null -> null
@@ -234,7 +235,8 @@ class LibraryBrowser(
         var any = false
         for ((server, ids) in byServer) {
             if (ids.isEmpty()) continue
-            dispatch(if (next) Commands.playNext(server, ids) else Commands.playLater(server, ids))
+            val refs = ids.map { TrackRef(server, it) }
+            dispatch(if (next) Commands.playNext(refs) else Commands.playLater(refs))
             any = true
         }
         return any
@@ -320,8 +322,8 @@ class LibraryBrowser(
                 .build(),
         ).build()
 
-    private suspend fun label(trackId: String): String =
-        trackDetail(trackId)?.title ?: context.getString(R.string.browse_root)
+    private suspend fun label(track: TrackRef): String =
+        trackDetail(track)?.title ?: context.getString(R.string.browse_root)
 
     // -- items -------------------------------------------------------------------------------------
 
@@ -373,7 +375,7 @@ class LibraryBrowser(
     private suspend fun albumDetail(id: String): Album? = (query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data
     private suspend fun albumTracks(id: String): List<Track> = (query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data.orEmpty()
     private suspend fun playlistDetail(id: String): Playlist? = (query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data
-    private suspend fun trackDetail(id: String): Track? = (query(Queries.track(id)) as? QueryResult.TrackDetail)?.data
+    private suspend fun trackDetail(track: TrackRef): Track? = (query(Queries.track(track)) as? QueryResult.TrackDetail)?.data
     private suspend fun playlistTrack(id: String, index: Int): TrackSummary? =
         (query(Queries.playlistTracks(id, Page(index.toUInt(), 1u))) as? QueryResult.Tracks)?.data?.items?.firstOrNull()?.toSummary()
 

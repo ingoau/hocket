@@ -31,21 +31,24 @@ export function resolveArtwork(id: string | undefined, size: number): Promise<st
 }
 
 export function useArtwork(id: string | undefined, size: number): string | undefined {
-  const [url, setUrl] = useState<string | undefined>(undefined);
+  const key = `${id}@${size}`;
+  // The url with the id and size it is for: on a change the last one is never returned, not even
+  // for the render before the effect runs (that is another track's cover, #147).
+  const [resolved, setResolved] = useState<{ key: string; url: string | undefined }>({ key: "", url: undefined });
   useEffect(() => {
     let alive = true;
-    setUrl(undefined);
-    void resolveArtwork(id, size).then((u) => alive && setUrl(u));
+    void resolveArtwork(id, size).then((u) => alive && setResolved({ key, url: u }));
     return () => {
       alive = false;
     };
-  }, [id, size]);
-  return url;
+  }, [id, size, key]);
+  return resolved.key === key ? resolved.url : undefined;
 }
 
 export function Artwork({ id, size = ARTWORK_SIZES.grid, className = "art", alt = "", round = false }: { id: string | undefined; size?: number; className?: string; alt?: string; round?: boolean }) {
   const url = useArtwork(id, size);
   const cls = `${className}${round ? " round" : ""}`;
   if (!url) return <div className={`${cls} placeholder`} aria-hidden="true"><Icon name="music" size={size > 100 ? 28 : 14} /></div>;
-  return <img className={cls} src={url} alt={alt} loading="lazy" draggable={false} />;
+  // A new element per url: one handed a new src keeps showing the old image until it decodes.
+  return <img key={url} className={cls} src={url} alt={alt} loading="lazy" draggable={false} />;
 }

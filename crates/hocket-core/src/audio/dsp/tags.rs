@@ -129,14 +129,14 @@ pub fn has_any(rg: &ReplayGain) -> bool {
 /// Read ReplayGain tags from a local file via Symphonia's metadata, falling
 /// back to the LAME header for MP3. `Ok(None)` when the file has no
 /// loudness tags at all (the caller then computes them).
-#[cfg(feature = "native-audio")]
+#[cfg(feature = "decode")]
 pub fn read_replaygain(
     path: &std::path::Path,
-) -> Result<Option<ReplayGain>, crate::audio::native::decoder::DecodeError> {
+) -> Result<Option<ReplayGain>, crate::audio::decoder::DecodeError> {
     use symphonia::core::meta::{StandardTagKey, Value};
 
     let mut rg = ReplayGain::default();
-    let mut opened = crate::audio::native::decoder::open_file(path)?;
+    let mut opened = crate::audio::decoder::open_file(path)?;
     let mut apply_revision = |tags: &[symphonia::core::meta::Tag]| {
         for tag in tags {
             let value = match &tag.value {

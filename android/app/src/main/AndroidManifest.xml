@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- "Save to Coordinator" uploads (ReportUploadService): a dataSync foreground service with a
+         progress notification. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" xmlns:tools="http://schemas.android.com/tools" />
 
     <!-- Package visibility (API 30+): whether the device has an equalizer panel to link to
@@ -10,11 +15,19 @@
         <intent>
             <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
         </intent>
+        <!-- Open in Genius searches in the Genius app, else the website in the browser (ShareLinks.kt). -->
+        <package android:name="com.genius.android" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application
         android:name="app.hocket.HocketApp"
         android:allowBackup="true"
+        android:backupAgent="app.hocket.HocketBackupAgent"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -46,13 +59,19 @@
                 android:resource="@xml/share_paths" />
         </provider>
 
+        <!-- Keeps a report upload (docs/reports.md) going outside the app; started and stopped by the app only. -->
+        <service
+            android:name="app.hocket.diagnostics.ReportUploadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <activity
             android:name="app.hocket.MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|smallestScreenSize"
             android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.Hocket">
+            android:theme="@style/Theme.Hocket.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -64,10 +83,25 @@
                 <category android:name="android.intent.category.APP_MUSIC" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <!-- Another device's pairing code (Add a device): hocket://pair?d=…, and a coordinator
+                 claim (from hocket-coordinator pair with a URL): hocket://claim?…, from the system camera, a
+                 shared link or the in-app scanner (PairingLinks). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="hocket" android:host="pair" />
+                <data android:scheme="hocket" android:host="claim" />
+            </intent-filter>
         </activity>
         <!-- Assistant's discovery intent ("play … on Hocket"): no UI, finishes once it has played or
              handed the query to search (MediaSearchActivity; plays directly only with "Allow control
              by other apps" on). -->
+        <activity
+            android:name="app.hocket.YtmSignInActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|smallestScreenSize"
+            android:theme="@style/Theme.Hocket" />
         <activity
             android:name="app.hocket.MediaSearchActivity"
             android:excludeFromRecents="true"

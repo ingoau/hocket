@@ -2,7 +2,7 @@
 //
 // On the blurred, artwork-coloured background (FluidBackground): the artwork,
 // a controls card (title, artist, love / add to playlist / More, the
-// rating, the wavy seek bar and the transport), the collapse and window
+// rating, the seek bar and the transport), the collapse and window
 // fullscreen buttons top right, and a pill bottom right with the Connect
 // device and the Lyrics / Queue / About toggles (choosing the one that is on
 // goes back to the artwork alone), then the sleep timer and volume.
@@ -40,7 +40,7 @@ import { bridge } from "../core/bridge";
 import { FluidBackground } from "../components/FluidBackground";
 import { Artwork, useArtwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
-import { WavySeek } from "../components/WavySeek";
+import { Seek } from "../components/Seek";
 import { QueuePanel } from "../components/QueuePanel";
 import { LyricsPane } from "../components/NowPlayingSidebar";
 import { AboutSong } from "../components/AboutSong";
@@ -51,9 +51,10 @@ import { Stars } from "../components/Stars";
 import { Slider } from "../components/controls";
 import { openMenuFromButton } from "../components/ContextMenu";
 import { trapTab, useReturnFocus } from "../lib/focus";
+import { upcomingEntries } from "../lib/queue-view";
 import { usePresence, type Presence } from "../lib/presence";
 import { useMediaQuery, usePrefersReducedMotion } from "../lib/media";
-import { drawContinuation, isFlat, prepareScene, useScene, withTone, type Orientation, type Scene } from "../lib/immersive";
+import { drawContinuation, isFlat, prepareScene, sceneKey, useScene, withTone, type Orientation, type Scene } from "../lib/immersive";
 import { IDLE_HIDE_MS, useIdleHide } from "../lib/idle-hide";
 import { extractBrightest } from "../lib/accent";
 import { scrimAlpha } from "../lib/contrast";
@@ -62,6 +63,7 @@ import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
 import { useVolumeControl } from "../lib/volume";
 import { useConnectSyncing } from "../lib/connect-sync";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
+import { ratingTarget, refOf } from "../lib/track-ref";
 
 type Pane = Exclude<NowPlayingMode, "art">;
 const PANES: { key: Pane; icon: string }[] = [
@@ -179,7 +181,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   // The artwork, its layout and its continuation switch together, once the new cover's scene is
   // ready (the next track's is prepared ahead), and the new scene crossfades in over the last.
   const scene = useScene(track?.coverArt, preference, dark);
-  const next = (queue.playingNext[0] ?? queue.upcoming[0])?.track.coverArt;
+  const next = upcomingEntries(queue)[0]?.track.coverArt;
   useEffect(() => {
     if (next) void prepareScene(next, preference, dark);
   }, [next, preference, dark]);
@@ -220,7 +222,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const fading = shown.length > 1;
   const layers = shown.filter((s, i) => i === shown.length - 1 || !immersiveOf(s) === !immersive);
   const bigArtContent = layers.length ? (
-    layers.map((s, i) => (s.url ? <img key={s.coverArt} className={`np-art-img np-scene${fading && i === layers.length - 1 ? " np-scene-in" : ""}`} src={s.url} alt="" draggable={false} onAnimationEnd={settle} /> : <div key={s.coverArt} className="np-art-img np-scene placeholder"><Icon name="music" size={48} /></div>))
+    layers.map((s, i) => (s.url ? <img key={sceneKey(s)} className={`np-art-img np-scene${fading && i === layers.length - 1 ? " np-scene-in" : ""}`} src={s.url} alt="" draggable={false} onAnimationEnd={settle} /> : <div key={sceneKey(s)} className="np-art-img np-scene placeholder"><Icon name="music" size={48} /></div>))
   ) : (
     <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>
   );
@@ -351,7 +353,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       {layers.map((s) => {
         const im = immersiveOf(s);
         return im ? (
-          <Fragment key={s.coverArt}>
+          <Fragment key={sceneKey(s)}>
             <ImmersiveContinuation img={s.img} edge={im.edge} orientation={im.orientation} controls={im.orientation === "right" ? pill : controls} split={!!im.left} />
             {im.left ? <ImmersiveContinuation img={s.img} edge={im.left} orientation="left" controls={pill} split shown={centred} /> : null}
           </Fragment>
@@ -359,6 +361,8 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
       })}
       <div className="np-fade" aria-hidden="true" />
 
+      {/* The window's drag strip while the player covers the top bar (the buttons stay clickable). */}
+      <div className="np-drag" aria-hidden="true" />
       <header className="np-head np-chrome">
         <button type="button" className="np-icon-btn np-round" aria-pressed={windowFullscreen} aria-label={t("player.windowFullscreen")} title={windowFullscreen ? t("player.exitWindowFullscreen") : t("player.windowFullscreen")} onClick={toggleWindowFullscreen} data-testid="fs-window-fullscreen"><Icon name={windowFullscreen ? "fullscreenExit" : "fullscreen"} size={22} /></button>
         <button ref={closeRef} type="button" className="np-icon-btn np-round" aria-label={t("fullscreen.exit")} title={t("fullscreen.exit")} onClick={() => setFullscreen(false)} data-testid="fullscreen-exit"><Icon name="closeFullscreen" size={22} /></button>
@@ -385,20 +389,20 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
               </div>
               {track ? (
                 <div className="np-actions">
-                  <button type="button" className={`np-icon-btn np-round heart ${track.loved ? "on" : ""}`} aria-pressed={track.loved} aria-label={t("player.love")} title={track.loved ? t("player.unlove") : t("player.love")} onClick={() => d({ type: "setLoved", data: { targets: [{ type: "track", data: { id: track.id } }], loved: !track.loved } })} data-testid="np-love"><Icon name="heart" size={20} filled={track.loved} /></button>
+                  <button type="button" className={`np-icon-btn np-round heart ${track.loved ? "on" : ""}`} aria-pressed={track.loved} aria-label={t("player.love")} title={track.loved ? t("player.unlove") : t("player.love")} onClick={() => d({ type: "setLoved", data: { targets: [ratingTarget(track)], loved: !track.loved } })} data-testid="np-love"><Icon name="heart" size={20} filled={track.loved} /></button>
                   <button type="button" className="np-icon-btn np-round" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={(e) => void executeAction("addToPlaylist", undefined, { anchor: e.currentTarget })} aria-haspopup="menu" data-testid="np-add"><Icon name="playlistAdd" size={20} /></button>
                   <button type="button" className="np-icon-btn np-round" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => now && openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } })} data-testid="np-more"><Icon name="more" size={20} /></button>
                 </div>
               ) : null}
             </div>
-            {track && showRating ? <div className="np-stars" data-testid="np-stars"><Stars value={track.rating} size={20} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [{ type: "track", data: { id: track.id } }], rating: r } })} /></div> : null}
+            {track && showRating ? <div className="np-stars" data-testid="np-stars"><Stars value={track.rating} size={20} label={t("a11y.ratingOf", { title: track.title })} onChange={(r) => d({ type: "setRating", data: { targets: [ratingTarget(track)], rating: r } })} /></div> : null}
 
-            <WavySeek durationMs={track?.durationMs} playing={playing && !transport.buffering} />
+            <Seek durationMs={track?.durationMs} />
 
             <div className="np-transport">
               <button type="button" className={`np-tonal np-flank ${queue.shuffle ? "on" : ""}`} aria-pressed={queue.shuffle} aria-label={t("player.shuffle")} title={t("player.shuffle")} onClick={() => d({ type: "setShuffle", data: { enabled: !queue.shuffle } })} data-testid="fs-shuffle"><Icon name="shuffle" size={22} filled={queue.shuffle} /></button>
               <button type="button" className="np-skip" aria-label={t("player.previous")} title={t("player.previous")} onClick={() => d({ type: "previous" })} data-testid="fs-previous"><Icon name="previous" size={36} filled /></button>
-              <button type="button" className={`np-play ${playing ? "playing" : "paused"}`} aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="fs-play-pause">
+              <button type="button" className="np-play" aria-label={playing ? t("player.pause") : t("player.play")} title={playing ? t("player.pause") : t("player.play")} onClick={() => d({ type: "togglePlay" })} data-testid="fs-play-pause">
                 {transport.buffering ? <Icon name="spinner" className="spin" size={34} /> : <Icon name={playing ? "pause" : "play"} size={40} filled />}
               </button>
               <button type="button" className="np-skip" aria-label={t("player.next")} title={t("player.next")} onClick={() => d({ type: "next" })} data-testid="fs-next"><Icon name="next" size={36} filled /></button>
@@ -414,7 +418,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
             {mode === "about" ? (
               // Scrolls when long: focusable so the keyboard can scroll it.
               <div className="np-about-scroll" tabIndex={0} role="group" aria-label={t("nowPlaying.details")}>
-                <AboutSong variant="fullscreen" trackId={track?.id} onNavigate={go} />
+                <AboutSong variant="fullscreen" track={track ? refOf(track) : undefined} onNavigate={go} />
               </div>
             ) : null}
           </section>

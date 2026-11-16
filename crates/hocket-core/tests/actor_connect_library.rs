@@ -25,7 +25,12 @@ async fn pair() -> (TestCore, TestCore) {
 }
 
 async fn track(t: &TestCore, id: &str) -> Track {
-    match t.query(Query::Track { id: id.into() }).await {
+    match t
+        .query(Query::Track {
+            track: TrackRef::new(t.server_id.clone(), id),
+        })
+        .await
+    {
         QueryResult::TrackDetail(Some(tr)) => tr,
         other => panic!("{other:?}"),
     }
@@ -72,11 +77,11 @@ fn item_events(t: &TestCore, id: &str) -> Vec<(LibraryItemState, Option<String>)
 async fn ratings_and_loves_reach_the_other_device_and_its_now_playing() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
-        server_id: a.server_id.clone(),
-        track_ids: vec!["t0".into(), "t1".into()],
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
+        start_position_ms: 0,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 2_000.0).await;
@@ -84,12 +89,18 @@ async fn ratings_and_loves_reach_the_other_device_and_its_now_playing() {
     b.events.clear();
 
     a.run(Command::SetRating {
-        targets: vec![RatingTarget::Track { id: "t0".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t0".into(),
+            source: String::new(),
+        }],
         rating: 3,
     })
     .await;
     a.run(Command::SetLoved {
-        targets: vec![RatingTarget::Track { id: "t0".into() }],
+        targets: vec![RatingTarget::Track {
+            id: "t0".into(),
+            source: String::new(),
+        }],
         loved: true,
     })
     .await;
@@ -152,7 +163,7 @@ async fn playlist_edits_reach_the_other_device() {
 
     a.run(Command::PlaylistAdd {
         playlist_id: "pl".into(),
-        track_ids: vec!["t4".into()],
+        tracks: TrackRef::list(&a.server_id, ["t4"]),
         at_index: None,
     })
     .await;
@@ -176,9 +187,9 @@ async fn playlist_edits_reach_the_other_device() {
 
     // A new playlist shows up once the server has given it an id.
     a.run(Command::CreatePlaylist {
-        server_id: a.server_id.clone(),
+        account_id: a.server_id.clone(),
         name: "Road trip".into(),
-        track_ids: vec!["t2".into(), "t3".into()],
+        tracks: TrackRef::list(&a.server_id, ["t2", "t3"]),
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;

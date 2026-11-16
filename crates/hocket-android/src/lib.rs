@@ -178,6 +178,13 @@ impl HocketCore {
             .to_vec())
     }
 
+    /// Whether a `hocket-stream://` source needs no network now: a download, or the complete cache
+    /// entry an open would serve for its profile. A quick index lookup, but it touches the database:
+    /// call it off the main thread.
+    pub fn stream_local(&self, url: String) -> bool {
+        self.core.stream_local(&url)
+    }
+
     /// Close a stream; a read in progress on it fails with `Closed`. Never blocks. Idempotent.
     pub fn stream_close(&self, handle: u64) {
         self.core.stream_close(handle);
@@ -247,10 +254,114 @@ pub fn artwork_layout(
     })
 }
 
+// -- AutoMix (src/dsp.rs) ----------------------------------------------------------------------
+//
+// One-shot calls for a background thread. PCM crosses as little-endian `f32` bytes (a Kotlin
+// `ByteArray`; a `Vec<f32>` would be a boxed `List<Float>`). The per-buffer calls are JNI.
+
+/// [`automix_prepare_tail`]'s result, each as LE `f32` bytes (see [`dsp::PreparedTail`]).
+#[derive(uniffi::Record)]
+pub struct PreparedTail {
+    /// Exactly `tail_len_ms` at `out_rate` × `out_channels`.
+    pub tail: Vec<u8>,
+    /// A just before `tail_start_ms`, at `out_rate` × `out_channels`.
+    pub lead: Vec<u8>,
+    /// A from `tail_start_ms` through A's chain, at `in_rate` × `in_channels`.
+    pub after: Vec<u8>,
+}
+
+/// The rendered tail of a transition (`docs/automix.md`): `pcm` is A from `tail_start_ms −
+/// context_ms`, `in_channels` at `in_rate`; it goes through a DSP chain like A's
+/// (`audio_settings_json`, an `AudioSettings`, and A's `gain_db`), is mapped to B's channels,
+/// resampled to B's rate and rendered with `render_tail`. Also returns A's audio either side of
+/// `tail_start_ms` for a seamless switch of the output resampler.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn automix_prepare_tail(
+    plan_json: String,
+    pcm: Vec<u8>,
+    context_ms: u32,
+    in_channels: u32,
+    in_rate: u32,
+    out_channels: u32,
+    out_rate: u32,
+    audio_settings_json: Option<String>,
+    gain_db: f64,
+) -> Result<PreparedTail, HocketError> {
+    let failed = |reason: String| HocketError::Failed { reason };
+    let plan = dsp::parse_plan(&plan_json).map_err(failed)?;
+    let audio = audio_settings_json
+        .as_deref()
+        .map(dsp::parse_audio_settings)
+        .transpose()
+        .map_err(failed)?;
+    let pcm = dsp::f32_from_le(&pcm);
+    let prepared = dsp::prepare_tail(
+        &plan,
+        dsp::TailInput {
+            pcm: &pcm,
+            context_ms,
+            in_channels: in_channels as usize,
+            in_rate,
+            out_channels: out_channels as usize,
+            out_rate,
+            audio: audio.as_ref(),
+            gain_db,
+        },
+    )
+    .map_err(failed)?;
+    Ok(PreparedTail {
+        tail: dsp::f32_to_le(&prepared.tail),
+        lead: dsp::f32_to_le(&prepared.lead),
+        after: dsp::f32_to_le(&prepared.after),
+    })
+}
+
+/// A loudness-only `AnalysisRecord` (JSON, producer Device) from a track's decoded head (from 0)
+/// and tail (from `tail_start_ms`), LE `f32` bytes, `channels` at `rate`.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn automix_loudness_record(
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    tail_start_ms: u32,
+    channels: u32,
+    rate: u32,
+    duration_ms: u32,
+    transcoded: bool,
+    created_at: f64,
+) -> Result<String, HocketError> {
+    let r = dsp::loudness_record(
+        &dsp::f32_from_le(&head),
+        &dsp::f32_from_le(&tail),
+        tail_start_ms,
+        channels as usize,
+        rate,
+        duration_ms,
+        transcoded,
+        created_at,
+    );
+    serde_json::to_string(&r).map_err(|e| HocketError::Failed {
+        reason: e.to_string(),
+    })
+}
+
+/// Whether a stored record (`Query::TrackAnalysis`) is usable for a track of `duration_ms`: the
+/// current analysis version and a matching duration. False for anything unparseable.
+#[uniffi::export]
+pub fn automix_record_usable(record_json: String, duration_ms: u32) -> bool {
+    serde_json::from_str(&record_json)
+        .map(|r| dsp::record_usable(&r, duration_ms))
+        .unwrap_or(false)
+}
+
 #[uniffi::export]
 pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+pub mod dsp;
+pub mod resampler;
 
 #[cfg(test)]
 mod fixtures;
@@ -392,7 +503,7 @@ mod ffi_tests {
         let listener = Arc::new(FailingListener(AtomicUsize::new(0)));
         c.set_listener(listener.clone());
         c.dispatch(r#"{"type":"start"}"#.into()).unwrap();
-        let first = futures::executor::block_on(c.query(r#"{"type":"servers"}"#.into()));
+        let first = futures::executor::block_on(c.query(r#"{"type":"accounts"}"#.into()));
         assert!(
             first.is_ok(),
             "the actor answers after a failing callback: {first:?}"

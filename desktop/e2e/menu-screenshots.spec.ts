@@ -54,16 +54,21 @@ test("context menu and add to playlist", async () => {
       await setSetting(page, "library.pins", [{ kind: "playlist", id: "pl-2", tap: "open" }, { kind: "playlist", id: "pl-1", tap: "open" }]);
       // A few more playlists (they become Recent), one with a name long enough to truncate.
       await page.evaluate(async () => {
-        const servers = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
-        for (const name of ["Road trip 2024 (the extended summer edition)", "Run club", "Focus"]) window.hocket.dispatch({ type: "createPlaylist", data: { server_id: servers.data[0]!.id, name, track_ids: [] } });
+        const servers = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+        for (const name of ["Road trip 2024 (the extended summer edition)", "Run club", "Focus"]) window.hocket.dispatch({ type: "createPlaylist", data: { account_id: servers.data[0]!.id, name, tracks: [] } });
       });
       await openPlaylist(page, "Slow Sundays");
+      // The new playlists toast for 5s; wait them out so they don't sit on the menu.
+      await expect(page.getByTestId("toast")).toHaveCount(0, { timeout: 12_000 });
       const menu = page.getByTestId("context-menu");
       const row = page.getByTestId("track-row").first();
       await row.click({ button: "right" });
       await expect(menu).toBeVisible();
       await page.mouse.move(5, 5);
       await shot("01-song-menu");
+      await menu.locator('[data-action="share"]').hover();
+      await expect(page.getByTestId("share-submenu")).toBeVisible();
+      await shot("01c-share-submenu");
 
       const sub = page.getByTestId("playlist-submenu");
       await menu.locator('[data-action="addToPlaylist"]').hover();
@@ -104,6 +109,11 @@ test("context menu and add to playlist", async () => {
       await expect(menu).toBeVisible();
       await page.mouse.move(5, 5);
       await shot("08-album-menu");
+      await menu.locator('[data-action="share"]').hover();
+      await expect(page.getByTestId("share-submenu")).toBeVisible();
+      await shot("08b-album-share");
+      await menu.locator('[data-action="play"]').hover();
+      await expect(page.getByTestId("share-submenu")).toHaveCount(0);
       await menu.getByRole("menuitem", { name: "Album info", exact: true }).click();
       await expect(page.getByTestId("dialog-albumInfo")).toBeVisible();
       await shot("09-album-info");
@@ -137,7 +147,7 @@ test("context menu and add to playlist", async () => {
 
       // Edit pins (the phone's pin edit mode): from a pin's menu, a chip cycled, a tile picked up, one unpinned.
       const genres = (await page.evaluate(async () => {
-        const s = (await window.hocket.query({ type: "servers" })) as { data: { id: string }[] };
+        const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
         return window.hocket.query({ type: "genres", data: { server_id: s.data[0]!.id } });
       })) as { data?: { name: string }[] };
       await setSetting(page, "library.pins", [

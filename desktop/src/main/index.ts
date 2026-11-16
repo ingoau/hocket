@@ -25,6 +25,8 @@ import { StoreFile } from "./store-file";
 import { AppTray, appIcon } from "./tray";
 import { installUpdater } from "./updater";
 import { Windows } from "./windows";
+import { openHiddenPage, YtmJsHost } from "./ytm-js-host";
+import { isSignInContents } from "./ytm-signin";
 
 // Chromium must not grab the media keys or publish its own media session:
 // audio comes out of Rust and the OS session is playwire's (design.md).
@@ -40,7 +42,9 @@ if (process.env.HOCKET_USER_DATA) app.setPath("userData", userData);
 
 protocol.registerSchemesAsPrivileged([
   { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false } },
-  { scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  // corsEnabled: the renderer reads artwork pixels (fluid background, accent picker) through
+  // crossOrigin <img>s, and Chromium 156 refuses cross-origin requests to a scheme without it.
+  { scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
 if (!app.requestSingleInstanceLock()) {
@@ -100,7 +104,12 @@ async function main(): Promise<void> {
     devlog.append("error", "main", `${origin}: ${err.stack ?? String(err)}`);
     devlog.flush();
   });
-  const credentials = new ServerCredentialStore(userData);
+  // Opening the store asks the OS keystore (a Keychain prompt, a locked keyring), so it must not
+  // hold up the window or the core: anything that needs it waits on this promise instead.
+  // Callbacks chained on it run in order, so commands still reach it in the order they were sent.
+  const credentialsOpen = ServerCredentialStore.open(userData);
+  let credentials: ServerCredentialStore | undefined;
+  void credentialsOpen.then((c) => (credentials = c));
   mkdirSync(cacheDir, { recursive: true });
   const artwork = new ArtworkRegistry(realpathSync(cacheDir));
 
@@ -151,14 +160,15 @@ async function main(): Promise<void> {
     core,
     windows,
     artwork,
-    credentials,
+    credentials: { passwordFor: (url, username) => credentials?.passwordFor(url, username) },
     artworkLayout: classify,
     devlog,
     diagnosticsDir: join(logDir, "diagnostics"),
+    reportStagingDir: join(userData, "report-staging"),
     diagnosticsExtra: () => ({
       core: core.kind === "native" ? `native addon ${native?.module.coreVersion() ?? "?"} (${native?.path ?? "?"})` : "fake core",
       "media session": mediaSession.status,
-      credentials: credentials.storageKind,
+      credentials: credentials?.storageKind ?? "still opening",
       windows: windows
         .all()
         .filter((w) => !w.isDestroyed())
@@ -171,6 +181,7 @@ async function main(): Promise<void> {
       "data dir": dataDir,
       "log dir": logDir,
     }),
+    credentialStorage: async () => (await credentialsOpen).storageKind,
     meta: () => ({
       version: app.getVersion(),
       platform,
@@ -179,18 +190,9 @@ async function main(): Promise<void> {
       deviceName: config.deviceName,
       dataDir,
       cacheDir,
-      credentialStorage: credentials.storageKind,
     }),
     onCommand: (command: Command) => {
-      credentials.intercept(command);
-      if (command.type === "setSetting" && command.data.key === "battery.autoEngage") {
-        try {
-          store.set("batterySaverAuto", JSON.parse(command.data.value) !== false);
-          applyBattery();
-        } catch {
-          /* ignore */
-        }
-      }
+      void credentialsOpen.then((c) => c.intercept(command));
     },
     prefs: {
       get: () => ({ closeToTray: store.get("closeToTray") ?? true }),
@@ -221,8 +223,22 @@ async function main(): Promise<void> {
   ]);
   // Position reports (~1 Hz while playing) stay here: every window extrapolates from the stamp it has.
   const ticks = new PositionTickFilter();
+  // YouTube Music's web client puzzles (signature, n, PO token) in a hidden window.
+  const ytmJs = new YtmJsHost(
+    openHiddenPage,
+    async () => {
+      const r = await core.query({ type: "ytmJsHostScript" });
+      if (r.type !== "text") throw new Error("the core has no JS host script");
+      return r.data;
+    },
+    (c) => core.dispatch(c),
+  );
   core.onEvent((event: Event) => {
-    if (event.type !== "mediaSession" && event.type !== "backend" && event.type !== "log" && ticks.pass(event)) {
+    if (event.type === "ytmJsRequest") {
+      void ytmJs.handle(event.data.request_id, event.data.request);
+      return;
+    }
+    if (event.type !== "mediaSession" && event.type !== "backend" && event.type !== "log" && event.type !== "diagnosticsRequested" && ticks.pass(event)) {
       for (const w of windows.all()) {
         if (w.isDestroyed()) continue;
         if (windows.mini && w === windows.mini && !miniEvents.has(event.type)) continue;
@@ -245,23 +261,33 @@ async function main(): Promise<void> {
       // renderer, whether the core answers with `snapshot` or a second
       // `started`) must not add the server again.
       replayed = true;
-      for (const cmd of credentials.replayCommands()) core.dispatch(cmd);
+      void credentialsOpen.then((c) => {
+        for (const cmd of c.replayCommands()) core.dispatch(cmd);
+      });
       applySettingsFromSnapshot(snapshot.settings);
       applyBattery();
       pushNetwork(net.isOnline());
     }
-    if (event.type === "serversChanged") credentials.retainOnly(event.data.servers);
+    if (event.type === "credentialsSynced") {
+      // Credential sync brought passwords (the core already added the accounts): keep them as if typed here.
+      const synced = event.data.credentials;
+      void credentialsOpen.then((c) => {
+        for (const s of synced) void c.remember(s.url, s.username, s.password);
+      });
+    }
+    if (event.type === "accountsChanged") {
+      const accounts = event.data.accounts;
+      void credentialsOpen.then((c) => c.retainOnly(accounts));
+    }
     if (event.type === "settingChanged") applySettingsFromSnapshot([event.data.setting]);
   });
   let lastPlaying = false;
   let lastNowPlaying: string | undefined;
   let replayed = false;
 
-  // battery.autoEngage is a registry setting; mirror it so the power monitor can act before the UI attaches.
   const applySettingsFromSnapshot = (settings: { key: string; value: string }[]) => {
     for (const s of settings) {
       try {
-        if (s.key === "battery.autoEngage") store.set("batterySaverAuto", JSON.parse(s.value) !== false);
         if (s.key === "developer.mode") devlog.setDetailed(JSON.parse(s.value) === true);
       } catch {
         /* ignore */
@@ -269,12 +295,9 @@ async function main(): Promise<void> {
     }
   };
 
-  // Power: battery saver engages automatically on battery when the setting is on.
-  const applyBattery = () => {
-    const auto = store.get("batterySaverAuto") ?? true;
-    const onBattery = powerMonitor.isOnBatteryPower();
-    core.dispatch({ type: "setBatterySaver", data: { enabled: auto && onBattery } });
-  };
+  // Power: running on battery is this device's power-save state. The core
+  // decides what it engages (battery.autoEngage / battery.autoLevel).
+  const applyBattery = () => core.dispatch({ type: "setPowerSave", data: { enabled: powerMonitor.isOnBatteryPower() } });
   powerMonitor.on("on-battery", applyBattery);
   powerMonitor.on("on-ac", applyBattery);
   powerMonitor.on("suspend", () => core.dispatch({ type: "setVisibility", data: { visible: false, focused: false } }));
@@ -336,6 +359,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     windows.quitting = true;
+    ytmJs.close();
     mediaSession.dispose();
     tray.destroy();
     void core
@@ -383,7 +407,12 @@ function installProtocols(appRoot: string, artwork: ArtworkRegistry): void {
     if (url.host !== ART_HOST) return new Response("forbidden", { status: 403 });
     const file = await artwork.resolve(url.pathname.replace(/^\/+/, ""));
     if (!file) return new Response("not found", { status: 404 });
-    return net.fetch(pathToFileURL(file).toString(), { headers: { "Cache-Control": "max-age=3600" } });
+    const res = await net.fetch(pathToFileURL(file).toString());
+    // Any origin may read it: a token only exists once main handed it to one of our windows.
+    const headers = new Headers(res.headers);
+    headers.set("Cache-Control", "max-age=3600");
+    headers.set("Access-Control-Allow-Origin", "*");
+    return new Response(res.body, { status: res.status, headers });
   });
 }
 
@@ -411,8 +440,12 @@ function installCsp(isDev: boolean): void {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, cb) => cb(false));
   app.on("web-contents-created", (_e, contents) => {
     contents.on("will-attach-webview", (e) => e.preventDefault());
+    // The YouTube Music sign-in window replaces this with its own (Google's pages only).
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
-    // No window (main, mini, anchor) ever navigates away from the app bundle.
-    contents.on("will-navigate", (e) => e.preventDefault());
+    // No app window (main, mini, anchor, the hidden JS host) ever navigates away from where it
+    // was loaded. The sign-in window has its own rule: Google's sign-in redirects must go ahead.
+    contents.on("will-navigate", (e) => {
+      if (!isSignInContents(contents)) e.preventDefault();
+    });
   });
 }
