@@ -354,16 +354,56 @@ function SyncedPeek({ lines, durationMs }: { lines: { text: string; start: numbe
   // Re-renders only when the current line changes, and follows playback only while it plays.
   const active = usePositionValue(stamp, durationMs, offset, lineAt, !covered);
   const reduced = usePrefersReducedMotion();
-  // Before the first line: the first two, still to come.
-  const shown = active < 0 ? [undefined, 0, 1] : [active - 1, active, active + 1];
+  // The line held in the current line's place: before the first line, the first, still to come.
+  const anchor = Math.max(active, 0);
+  const list = useRef<HTMLOListElement>(null);
+  // Every line sits in one column at one size whichever is current (the current one is only
+  // scaled up and brightened, both composited), and the column slides under a fixed window, the
+  // anchor one line down under the line before it. Nothing changes size, so the card keeps its
+  // height and the cards below stay put. A new line glides (CSS, unless motion is reduced); a new
+  // song or a new width jumps.
+  const placed = useRef<{ lines: typeof lines; width: number } | undefined>(undefined);
+  useLayoutEffect(() => {
+    const ol = list.current;
+    if (!ol) return;
+    const place = (instant: boolean) => {
+      const li = ol.children[anchor] as HTMLElement | undefined;
+      if (!li) return;
+      const cs = getComputedStyle(ol);
+      const y = parseFloat(cs.lineHeight) + (parseFloat(cs.rowGap) || 0) - li.offsetTop;
+      const transform = `translate3d(0, ${y}px, 0)`;
+      if (!instant) {
+        ol.style.transform = transform;
+        return;
+      }
+      ol.style.transition = "none";
+      ol.style.transform = transform;
+      void ol.offsetWidth;
+      ol.style.transition = "";
+    };
+    const width = ol.clientWidth;
+    place(placed.current?.lines !== lines || placed.current.width !== width);
+    placed.current = { lines, width };
+    const ro = new ResizeObserver(() => {
+      const w = ol.clientWidth;
+      if (w === placed.current?.width) return;
+      placed.current = { lines, width: w };
+      place(true);
+    });
+    ro.observe(ol);
+    return () => ro.disconnect();
+  }, [anchor, lines]);
   return (
-    <ol className={`lyrics-peek synced ${reduced ? "" : "moving"}`} aria-label={t("lyrics.title")} data-active={active}>
-      {shown.map((i, slot) => {
-        const line = i !== undefined && i >= 0 ? lines[i] : undefined;
-        const current = slot === 1 && active >= 0;
-        return <li key={i ?? `none-${slot}`} className={`peek-line ${current ? "current" : ""}`} aria-current={current ? "true" : undefined}>{line?.text ?? " "}</li>;
-      })}
-    </ol>
+    <div className="lyrics-peek-window">
+      <ol ref={list} className={`lyrics-peek synced ${reduced ? "" : "moving"}`} aria-label={t("lyrics.title")} data-active={active}>
+        {lines.map((line, i) => {
+          const current = i === active;
+          // The peek is the lines around the current one; the rest are out of the window.
+          const near = active < 0 ? i <= 1 : Math.abs(i - active) <= 1;
+          return <li key={i} className={`peek-line ${current ? "current" : ""} ${near ? "" : "far"}`} aria-current={current ? "true" : undefined} aria-hidden={near ? undefined : true}>{line.text}</li>;
+        })}
+      </ol>
+    </div>
   );
 }
 

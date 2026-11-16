@@ -690,7 +690,7 @@ async function overviewContrast(page: Page): Promise<{ min: number; worst: strin
     const sx = canvas.width / box.width;
     let min = Infinity;
     let worst = "";
-    const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line, .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)");
+    const texts = root.querySelectorAll<HTMLElement>(":scope > .side-title-row :is(.side-title, .side-artist, .side-icon-btn), :scope > .side-card :is(.side-card-title, .side-card-link, .peek-line:not(.far), .upnext-row .t1, .upnext-row .t2, .upnext-row .dur, .side-fact dt, .side-fact dd)");
     for (const el of Array.from(texts)) {
       const r = el.getBoundingClientRect();
       if (!r.width || !r.height) continue;
