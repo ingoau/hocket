@@ -23,7 +23,7 @@ export interface HomeSectionDef {
 
 export const HOME_SECTIONS: readonly HomeSectionDef[] = [
   { id: "spotlight", styles: ["hero"], defaultOn: true, defaultStyle: "hero", pinned: true },
-  { id: "rediscover", styles: ["row", "list"], defaultOn: true, defaultStyle: "row" },
+  { id: "rediscover", styles: ["row", "grid", "list"], defaultOn: true, defaultStyle: "row" },
   { id: "filters", styles: ["row", "grid", "list"], defaultOn: true, defaultStyle: "row" },
   { id: "favouriteArtists", styles: ["row", "grid"], defaultOn: true, defaultStyle: "row" },
   { id: "topGenre", styles: ["row", "grid", "list"], defaultOn: true, defaultStyle: "grid" },

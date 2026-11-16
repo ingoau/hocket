@@ -130,6 +130,27 @@ impl Actor {
                 }
                 QueryResult::TrackList(tracks)
             }
+            Query::AlbumsOfTracks {
+                server_id,
+                filter,
+                sort,
+                descending,
+                limit,
+            } => {
+                let filter = self.where_for(filter.as_ref());
+                let q = TrackQuery {
+                    server_id,
+                    filter,
+                    sort,
+                    descending,
+                    page: None,
+                };
+                QueryResult::Albums(self.db.albums_of_tracks(&q, limit).unwrap_or(AlbumPage {
+                    items: vec![],
+                    offset: 0,
+                    total: 0,
+                }))
+            }
             Query::Artists {
                 server_id,
                 page,

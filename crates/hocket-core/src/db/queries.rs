@@ -939,6 +939,49 @@ impl Db {
         })
     }
 
+    /// The albums of the tracks `q` matches, in the order of each album's first matching track,
+    /// at most `limit` of them (`q.page` is ignored); `total` counts them all. Each album is the
+    /// one on its track's account; albums missing from that account's mirror are left out, and so
+    /// are hidden copies in the unified library (`server_id` "").
+    pub fn albums_of_tracks(&self, q: &TrackQuery, limit: u32) -> DbResult<api::AlbumPage> {
+        let seed = self.random_seed();
+        self.with_conn(|c| {
+            let (where_sql, params) = track_where(&q.server_id, &q.filter);
+            let sql = format!(
+                "SELECT server_id, album_id FROM tracks WHERE ({where_sql}) AND album_id IN (SELECT al.id FROM albums al WHERE al.server_id = tracks.server_id AND (?1 != '' OR NOT {})) ORDER BY {}",
+                hidden_copy(LinkKind::Album, "al"),
+                track_order(q.sort, q.descending, seed),
+            );
+            let mut st = c.prepare_cached(&sql)?;
+            let mut rows = st.query(params_from_iter(params.iter()))?;
+            let mut seen = std::collections::HashSet::new();
+            let mut keys = vec![];
+            while let Some(row) = rows.next()? {
+                let key: (String, String) = (row.get(0)?, row.get(1)?);
+                if seen.insert(key.clone()) && keys.len() < limit as usize {
+                    keys.push(key);
+                }
+            }
+            let mut album = c.prepare_cached(&format!(
+                "SELECT {ALBUM_COLUMNS} FROM albums WHERE server_id = ?1 AND id = ?2"
+            ))?;
+            let mut items = vec![];
+            for (server, id) in &keys {
+                if let Some(a) = album
+                    .query_row([server.as_str(), id.as_str()], album_from_row)
+                    .optional()?
+                {
+                    items.push(a);
+                }
+            }
+            Ok(api::AlbumPage {
+                items,
+                offset: 0,
+                total: seen.len() as u32,
+            })
+        })
+    }
+
     pub fn upsert_albums(
         &self,
         albums: &[Album],
@@ -3309,5 +3352,71 @@ mod tests {
             .is_empty());
         let v: serde_json::Value = db.saved_state_get("session").unwrap().unwrap();
         assert_eq!(v["rev"], 3, "durable state untouched by mirror clear");
+    }
+
+    /// Albums of the matching tracks, placed by each one's best track, each once, up to the limit;
+    /// tracks without an album, and albums missing from the mirror, are left out.
+    #[test]
+    fn albums_of_tracks_go_by_their_best_track() {
+        let db = Db::open_in_memory().unwrap();
+        let rated = |id: &str, album: &str, rating: u32| Track {
+            rating,
+            ..t(id, id, album, "A")
+        };
+        let mut loose = rated("5", "x", 5);
+        loose.album_id = None;
+        let tracks = [
+            rated("1", "low", 2),
+            rated("2", "high", 5),
+            rated("3", "low", 4),
+            rated("4", "high", 3),
+            rated("6", "gone", 5),
+            loose,
+        ];
+        db.upsert_tracks(&tracks, &[None; 6], 1).unwrap();
+        let album = |id: &str| Album {
+            id: id.into(),
+            server_id: "s".into(),
+            name: id.into(),
+            ..Default::default()
+        };
+        db.upsert_albums(&[album("al-low"), album("al-high")], &[None, None], 1)
+            .unwrap();
+        // The same id on another server is not this server's album.
+        let elsewhere = Album {
+            server_id: "t".into(),
+            ..album("al-gone")
+        };
+        db.upsert_albums(&[elsewhere], &[None], 1).unwrap();
+        let q = TrackQuery {
+            server_id: "s".into(),
+            filter: None,
+            sort: SortOrder::Rating,
+            descending: true,
+            page: None,
+        };
+        let page = db.albums_of_tracks(&q, 10).unwrap();
+        let ids: Vec<_> = page.items.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["al-high", "al-low"]);
+        assert_eq!(page.total, 2);
+        // The unified library: every account's albums, by the account each track is on.
+        let all = db
+            .albums_of_tracks(
+                &TrackQuery {
+                    server_id: String::new(),
+                    ..q.clone()
+                },
+                10,
+            )
+            .unwrap();
+        let keys: Vec<_> = all
+            .items
+            .iter()
+            .map(|a| (a.server_id.as_str(), a.id.as_str()))
+            .collect();
+        assert_eq!(keys, [("s", "al-high"), ("s", "al-low")]);
+        let one = db.albums_of_tracks(&q, 1).unwrap();
+        assert_eq!(one.items.len(), 1);
+        assert_eq!(one.total, 2);
     }
 }

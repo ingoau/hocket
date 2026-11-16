@@ -33,7 +33,7 @@ sealed interface SectionContent {
 /** How many items a section loads. */
 const val SECTION_ITEMS = 12
 
-/** "Loved or rated 4+, and not played in the last 90 days". */
+/** Songs "loved or rated 4+, and not played in the last 90 days": Rediscover shows their albums. */
 private val REDISCOVER: FilterNode = FilterNode.All(listOf(
     FilterNode.Any(listOf(
         FilterNode.Rule(FilterRule(FilterField.Loved, FilterOp.IsTrue, FilterValue.Bool(true))),
@@ -71,8 +71,8 @@ suspend fun loadHomeFeed(
         val content: SectionContent? = when (section) {
             // Loaded on its own (HomeScreen), not with the feed.
             HomeSection.Spotlight -> null
-            HomeSection.Rediscover -> (client.query(Queries.tracks("", Page(0u, SECTION_ITEMS.toUInt()), SortOrder.Rating, descending = true, filter = REDISCOVER)) as? QueryResult.Tracks)
-                ?.data?.items?.map { it.toSummary() }?.let { SectionContent.Tracks(it) }
+            HomeSection.Rediscover -> (client.query(Queries.albumsOfTracks("", SECTION_ITEMS, SortOrder.Rating, descending = true, filter = REDISCOVER)) as? QueryResult.Albums)
+                ?.data?.items?.let { SectionContent.Albums(it) }
             HomeSection.Filters, HomeSection.RecentQueues -> SectionContent.FromFlow
             HomeSection.FavouriteArtists -> SectionContent.Artists(stats?.topArtists.orEmpty().take(SECTION_ITEMS))
             HomeSection.OnRepeat -> SectionContent.Albums(stats?.topAlbums.orEmpty().take(SECTION_ITEMS))
