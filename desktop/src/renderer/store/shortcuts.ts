@@ -120,6 +120,16 @@ export function chordFromEvent(e: KeyLike, platform: "macOs" | "linux" | "window
   };
 }
 
+/**
+ * The platform's primary modifier as `mod`. The native core writes it as "Cmd" on macOS (parsed as
+ * `meta`) and "Ctrl" elsewhere, while chordFromEvent reports that key as `mod`: fold it so a chord
+ * the core spells matches the key that was pressed.
+ */
+export function foldPrimary(c: Chord, platform: "macOs" | "linux" | "windows"): Chord {
+  if (platform === "macOs") return c.meta ? { ...c, meta: false, mod: true } : c;
+  return c.ctrl ? { ...c, ctrl: false, mod: true } : c;
+}
+
 export function chordsEqual(a: Chord, b: Chord): boolean {
   return a.mod === b.mod && a.ctrl === b.ctrl && a.alt === b.alt && a.shift === b.shift && a.meta === b.meta && a.key.toLowerCase() === b.key.toLowerCase();
 }
@@ -132,16 +142,15 @@ export interface Binding {
 export class Keymap {
   private byChord = new Map<string, string[]>();
   /**
-   * Off macOS, Ctrl *is* the platform modifier: chordFromEvent reports it as
-   * `mod`, so a binding written "Ctrl+Z" (how the core spells its defaults
-   * there) is folded into "Mod+Z" to match.
+   * The core spells the platform modifier "Cmd" on macOS and "Ctrl" elsewhere;
+   * chordFromEvent reports it as `mod`, so bindings are folded into "Mod+…" to match.
    */
   constructor(bindings: { actionId: string; shortcut: string | undefined }[], platform: "macOs" | "linux" | "windows" = "linux") {
     for (const b of bindings) {
       if (!b.shortcut) continue;
       const parsed = parseChord(b.shortcut);
       if (!parsed) continue;
-      const c = platform !== "macOs" && parsed.ctrl ? { ...parsed, ctrl: false, mod: true } : parsed;
+      const c = foldPrimary(parsed, platform);
       const k = chordToString(c).toLowerCase();
       this.byChord.set(k, [...(this.byChord.get(k) ?? []), b.actionId]);
     }

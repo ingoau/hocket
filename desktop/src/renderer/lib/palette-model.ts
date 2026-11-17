@@ -7,7 +7,7 @@
 import type { ActionDescriptor, ActionTarget, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { rank, type Rankable, type Ranked } from "../store/palette-rank";
-import { parseChord, chordsEqual, type Chord } from "../store/shortcuts";
+import { parseChord, chordsEqual, chordToString, foldPrimary, type Chord } from "../store/shortcuts";
 import type { MenuRow } from "./menu-model";
 
 export type EntryKind = Rankable["kind"];
@@ -220,7 +220,7 @@ export function menuActions(registry: readonly ActionDescriptor[]): ActionDescri
  * is left out (its digits are typing here), and so are the menu's nested Share and Snooze menus and
  * Open in Genius. A command has one action, Run.
  */
-export function paletteActions(entry: PaletteEntry, rows: readonly MenuRow[], registry: readonly ActionDescriptor[]): PaletteAction[][] {
+export function paletteActions(entry: PaletteEntry, rows: readonly MenuRow[], registry: readonly ActionDescriptor[], platform: "macOs" | "linux" | "windows" = "linux"): PaletteAction[][] {
   if (entry.kind === "action") return [[{ key: "run", label: t("palette.runCommand"), icon: entry.icon, shortcut: "Enter", run: { type: "command", id: rawId(entry) } }]];
   const byId = new Map(registry.map((a) => [a.id, a]));
   const groups: PaletteAction[][] = [];
@@ -233,7 +233,7 @@ export function paletteActions(entry: PaletteEntry, rows: readonly MenuRow[], re
   if (collection) cur.push({ key: "open", label: t(OPEN[entry.kind as keyof typeof OPEN]), icon: "chevronRight", shortcut: "Enter", run: { type: "open" } });
   const push = (id: string, label: string, enabled: boolean, destructive = false) => {
     if (!enabled) return;
-    const shortcut = id === "play" ? (collection ? "Shift+Enter" : "Enter") : (PALETTE_SHORTCUTS[id] ?? modifierChord(byId.get(id)?.defaultShortcut));
+    const shortcut = id === "play" ? (collection ? "Shift+Enter" : "Enter") : (PALETTE_SHORTCUTS[id] ?? modifierChord(byId.get(id)?.defaultShortcut, platform));
     cur.push({ key: id, label, icon: ICONS[id] ?? byId.get(id)?.icon, shortcut, destructive: destructive || undefined, run: { type: "action", id } });
   };
   for (const r of rows) {
@@ -268,10 +268,14 @@ export function paletteActions(entry: PaletteEntry, rows: readonly MenuRow[], re
   return dedupeShortcuts(groups);
 }
 
-/** A descriptor's default chord, only when it has a modifier (a bare key is typing in the palette). */
-function modifierChord(s: string | undefined): string | undefined {
-  const c = s ? parseChord(s) : undefined;
-  return c && (c.mod || c.ctrl || c.alt || c.meta) ? s : undefined;
+/**
+ * A descriptor's default chord, only when it has a modifier (a bare key is typing in the palette),
+ * in "Mod+…" form: the core spells it "Cmd+…" or "Ctrl+…", and the pressed key arrives as `mod`.
+ */
+function modifierChord(s: string | undefined, platform: "macOs" | "linux" | "windows"): string | undefined {
+  const parsed = s ? parseChord(s) : undefined;
+  const c = parsed && foldPrimary(parsed, platform);
+  return c && (c.mod || c.ctrl || c.alt || c.meta) ? chordToString(c) : undefined;
 }
 
 /** One action per chord: a later row that repeats an earlier row's chord shows none. */
