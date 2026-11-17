@@ -152,7 +152,7 @@ export function CommandPalette() {
       p = target
         ? Promise.all([fetchActions("contextMenu", target), fetchMenuFacts(target)]).then(([all, facts]) => {
             const registry = menuActions(all);
-            return paletteActions(entry, buildMenu(registry, [], facts), registry);
+            return paletteActions(entry, buildMenu(registry, [], facts), registry, platform);
           })
         : Promise.resolve(paletteActions(entry, [], []));
       p = p.then((g) => {

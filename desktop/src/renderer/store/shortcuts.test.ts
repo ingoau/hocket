@@ -58,6 +58,16 @@ describe("shortcut parser", () => {
     expect(mac.lookup(ev("macOs", { key: "k", code: "KeyK", metaKey: true }))).toEqual(["palette"]);
   });
 
+  it("treats a Cmd binding as the platform modifier on macOS (the native core spells its defaults that way)", () => {
+    const mac = new Keymap([{ actionId: "openCommandPalette", shortcut: "Cmd+K" }, { actionId: "redo", shortcut: "Shift+Cmd+Z" }], "macOs");
+    const ev = (e: { key: string; code: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }) =>
+      chordFromEvent({ altKey: false, shiftKey: false, ctrlKey: false, metaKey: false, ...e }, "macOs")!;
+    expect(mac.lookup(ev({ key: "k", code: "KeyK", metaKey: true }))).toEqual(["openCommandPalette"]);
+    expect(mac.lookup(ev({ key: "Z", code: "KeyZ", metaKey: true, shiftKey: true }))).toEqual(["redo"]);
+    // Control is not Command.
+    expect(mac.lookup(ev({ key: "k", code: "KeyK", ctrlKey: true }))).toEqual([]);
+  });
+
   it("recognises text inputs", () => {
     expect(isTextInput(null)).toBe(false);
     expect(isTextInput({ tagName: "INPUT", type: "text" } as unknown as HTMLElement)).toBe(true);
