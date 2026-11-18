@@ -1,10 +1,16 @@
 // Virtualised, keyboard-navigable, multi-select track table. Selection is
 // keyed by id; Ctrl+A selects the predicate ("all matching") using `total`.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { ActionTarget, SortOrder, Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
-import { useApp } from "../store/app";
+import { useApp, useSetting } from "../store/app";
+import { SK } from "@shared/settings-keys";
+import { useSurfaceTuning } from "../lib/gesture-prefs";
+import { useSettle, useSwipe } from "../lib/swipe-hook";
+import { isRtl, rowSwipeAction, runRowSwipe, SWIPE_DEFAULTS, SWIPE_KEYS, type RowSwipeAction } from "../lib/swipe-actions";
+import { usePrefersReducedMotion } from "../lib/media";
+import { SwipeReveal } from "./SwipeReveal";
 import { EMPTY_SELECTION, clearSelection, isSelected, navigate, selectAll, selectOnly, selectRange, selectionCount, toggle, typeAhead, type Selection } from "../store/selection";
 import { bridge } from "../core/bridge";
 import { openContextMenu } from "./ContextMenu";
@@ -194,6 +200,47 @@ export function TrackTable(props: TrackTableProps) {
   }, []);
   const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => TRACK_ROW_H, overscan: 6, rangeExtractor });
   const items = rowVirtualizer.getVirtualItems();
+
+  // Two-finger swipes on a row run the swipe.list.* settings' actions on that one song (the
+  // trackpad's version of Android's swipe actions; the same actions are in the row's menu).
+  const swipeTuning = useSurfaceTuning("rows");
+  const reducedMotion = usePrefersReducedMotion();
+  const settle = useSettle(swipeTuning, reducedMotion);
+  const queueSection = useSetting<boolean>(SK.queueSection, true);
+  const swipeStart = useSetting<string>(SWIPE_KEYS.list.startToEnd, SWIPE_DEFAULTS.list.startToEnd);
+  const swipeEnd = useSetting<string>(SWIPE_KEYS.list.endToStart, SWIPE_DEFAULTS.list.endToStart);
+  /** The actions a row's swipe right and left run (right is start-to-end in left-to-right text). */
+  const swipeActions = (tr: Track | undefined): { right: RowSwipeAction | null; left: RowSwipeAction | null } => {
+    if (!tr) return { right: null, left: null };
+    const facts = { loved: !!tr.loved, downloaded: tr.offline === "downloaded", snoozed: snoozed.has(tr.id), queueSection };
+    const rtl = isRtl();
+    return { right: rowSwipeAction(rtl ? swipeEnd : swipeStart, facts), left: rowSwipeAction(rtl ? swipeStart : swipeEnd, facts) };
+  };
+  /** The swiped row, by index and song: a row that changes under the index (the song left the list) is not it. */
+  type SwipeKey = { i: number; id: string };
+  const [flash, setFlash] = useState<SwipeKey | undefined>(undefined);
+  const swipe = useSwipe<SwipeKey>(parentRef, {
+    tuning: swipeTuning,
+    begin: (e) => {
+      const row = (e.target as Element | null)?.closest<HTMLElement>("[data-testid=track-row]");
+      const i = row ? Number(row.dataset.index) : NaN;
+      const tr = tracks[i];
+      const a = swipeActions(tr);
+      return tr && Number.isFinite(i) && (a.right || a.left) ? { key: { i, id: tr.id }, sides: { start: !!a.right, end: !!a.left } } : null;
+    },
+    onCommit: (side, _how, key) => {
+      const tr = key && tracks[key.i]?.id === key.id ? tracks[key.i] : undefined;
+      const a = tr ? (side > 0 ? swipeActions(tr).right : swipeActions(tr).left) : null;
+      if (!tr || !a || !key) return;
+      setFlash(key);
+      setTimeout(() => setFlash((f) => (f === key ? undefined : f)), 450);
+      // The reveal sits where the row rests; the row itself is still pushed aside.
+      const body = parentRef.current;
+      const anchor = body?.querySelector<HTMLElement>("[data-testid=swipe-reveal]") ?? body?.querySelector<HTMLElement>(`[data-testid=track-row][data-index="${key.i}"]`) ?? null;
+      const ref = refOf(tr);
+      runRowSwipe(a, { type: "tracks", data: { tracks: [ref] } }, ref, anchor, { ...context, indices: [key.i] });
+    },
+  });
   useEffect(() => {
     if (!onNeedRange || !items.length) return;
     const first = items[0]?.index ?? 0;
@@ -374,17 +421,21 @@ export function TrackTable(props: TrackTableProps) {
             const focused = vi.index === focusIdx;
             const playing = !!tr && tr.id === playingTrackId;
             const faded = !!tr && snoozed.has(tr.id);
+            const swiped = !!tr && swipe.key?.i === vi.index && swipe.key.id === tr.id && (swipe.stage === "tracking" || swipe.settling);
+            const tracking = swiped && swipe.stage === "tracking";
+            const reveal = swiped && swipe.side !== 0 ? (swipe.side > 0 ? swipeActions(tr).right : swipeActions(tr).left) : null;
             return (
+              <Fragment key={vi.key}>
+              {reveal && swipe.side !== 0 ? <SwipeReveal action={reveal} side={swipe.side} armed={swipe.armed !== 0} style={{ top: 0, left: "var(--table-inset)", right: "var(--table-inset)", height: vi.size, transform: `translateY(${vi.start}px)` }} /> : null}
               <div
-                key={vi.key}
-                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
+                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}${swiped ? " swiping" : ""}${flash && flash.i === vi.index && flash.id === tr?.id ? " swipe-flash" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
                 role="row"
                 aria-selected={selected}
                 aria-rowindex={vi.index + 2}
                 aria-current={playing ? "true" : undefined}
                 tabIndex={focused ? 0 : -1}
                 data-index={vi.index}
-                style={{ gridTemplateColumns: template, transform: `translateY(${vi.start}px)`, height: vi.size }}
+                style={{ gridTemplateColumns: template, transform: `translateY(${vi.start}px)`, height: vi.size, ...(swiped ? { translate: `${tracking ? swipe.offset : 0}px 0`, transition: tracking ? "none" : settle } : null) }}
                 onFocus={(e) => { if (e.target !== e.currentTarget) return; if (vi.index !== focusIdx) setFocusIdx(vi.index); primer?.enter(primeKey(tr)); }}
                 onBlur={(e) => { if (e.target === e.currentTarget) primer?.leave(primeKey(tr)); }}
                 onClick={(e) => click(e, vi.index)}
@@ -410,6 +461,7 @@ export function TrackTable(props: TrackTableProps) {
                   <Cell key={c} col={c} track={tr} index={vi.index} playing={playing} serverId={serverId} onPlay={onPlay} primer={primer} omitArtist={props.omitArtist} resume={props.resumeTrackId && tr?.id === props.resumeTrackId ? (props.resumeFraction ?? 0) : undefined} />
                 ))}
               </div>
+              </Fragment>
             );
           })}
         </div>

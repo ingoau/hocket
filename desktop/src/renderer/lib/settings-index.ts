@@ -6,7 +6,7 @@
 // view scrolls to and highlights when a result is picked.
 import { t, type StringId } from "@shared/strings";
 
-export const SETTINGS_SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "shortcuts", "backup", "diagnostics", "advanced", "about"] as const;
+export const SETTINGS_SECTIONS = ["general", "audio", "transcoding", "connect", "storage", "lyrics", "appearance", "customisation", "gestures", "shortcuts", "backup", "diagnostics", "advanced", "about"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export interface SettingEntry {
@@ -65,6 +65,18 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "sidebarItems", section: "customisation", label: "settings.sidebarItems", keywords: "settingsSearch.kw.customise" },
   { id: "contextMenuItems", section: "customisation", label: "settings.contextMenuItems", keywords: "settingsSearch.kw.customise" },
   { id: "mediaSessionButtons", section: "customisation", label: "settings.mediaSessionButtons", keywords: "settingsSearch.kw.customise" },
+  { id: "gesturesEnabled", section: "gestures", label: "settings.gestures.enabled", desc: "settings.gestures.enabledDesc", keywords: "settingsSearch.kw.gestures" },
+  { id: "gestureRows", section: "gestures", label: "settings.gestures.rows", desc: "settings.gestures.rowsDesc", keywords: "settingsSearch.kw.gestures" },
+  { id: "gestureQueue", section: "gestures", label: "settings.gestures.queue", desc: "settings.gestures.queueDesc", keywords: "settingsSearch.kw.gestures" },
+  { id: "gestureCover", section: "gestures", label: "settings.gestures.cover", desc: "settings.gestures.coverDesc", keywords: "settingsSearch.kw.gestures" },
+  { id: "gesturePage", section: "gestures", label: "settings.gestures.page", desc: "settings.gestures.pageDesc", keywords: "settingsSearch.kw.gestures" },
+  { id: "swipeListRight", section: "gestures", label: "settings.gestures.listRight", keywords: "settingsSearch.kw.gestures" },
+  { id: "swipeListLeft", section: "gestures", label: "settings.gestures.listLeft", keywords: "settingsSearch.kw.gestures" },
+  { id: "swipeQueueRight", section: "gestures", label: "settings.gestures.queueRight", keywords: "settingsSearch.kw.gestures" },
+  { id: "swipeQueueLeft", section: "gestures", label: "settings.gestures.queueLeft", keywords: "settingsSearch.kw.gestures" },
+  { id: "swipeDirection", section: "gestures", label: "settings.gestures.direction", desc: "settings.gestures.directionDesc", keywords: "settingsSearch.kw.gestures" },
+  { id: "swipeSensitivity", section: "gestures", label: "settings.gestures.sensitivity", desc: "settings.gestures.sensitivityDesc", keywords: "settingsSearch.kw.gestures" },
+  { id: "swipeHaptics", section: "gestures", label: "settings.gestures.haptics", desc: "settings.gestures.hapticsDesc", keywords: "settingsSearch.kw.gestures" },
   { id: "exportConfig", section: "backup", label: "settings.exportConfig", keywords: "settingsSearch.kw.backup" },
   { id: "importConfig", section: "backup", label: "settings.importConfig", keywords: "settingsSearch.kw.backup" },
   { id: "copyDiagnostics", section: "diagnostics", label: "settings.copyDiagnostics", keywords: "settingsSearch.kw.diagnostics" },
@@ -76,6 +88,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 /** Keywords for a whole section, so "keys" finds Keyboard shortcuts and "logs" finds Diagnostics. */
 const SECTION_KEYWORDS: Partial<Record<SettingsSection, StringId>> = {
   customisation: "settingsSearch.kw.customise",
+  gestures: "settingsSearch.kw.gestures",
   shortcuts: "settingsSearch.kw.shortcuts",
   backup: "settingsSearch.kw.backup",
   diagnostics: "settingsSearch.kw.diagnostics",

@@ -3,7 +3,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ArtworkLayout, ArtworkLayoutRequest, Command, Event, Query, QueryResult } from "@core/api";
 import type { RoomDiagnosticsStatus } from "@core/api";
-import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, StagedScreenshot, UndecodedImage, ThemeChoice, WindowControl, WindowState, YtmSignInResult } from "@shared/bridge-types";
+import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, HapticPattern, HocketBridge, OpenDialogRequest, OpenedTextFile, PickedRecording, ReportSendRequest, SaveDialogRequest, ScrollPhase, StagedScreenshot, UndecodedImage, ThemeChoice, WindowControl, WindowState, YtmSignInResult } from "@shared/bridge-types";
 import { IPC } from "@shared/bridge-types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -90,6 +90,13 @@ const bridge: HocketBridge = {
   onUiAction: (listener) => subscribe<string>(IPC.uiAction, listener),
   artworkLayout: (rgba: Uint8Array, width: number, height: number, request: ArtworkLayoutRequest) =>
     ipcRenderer.invoke(IPC.artworkLayout, rgba, width, height, request) as Promise<ArtworkLayout | undefined>,
+  gestures: {
+    hapticsAvailable: () => ipcRenderer.invoke(IPC.hapticsAvailable) as Promise<boolean>,
+    haptic: (pattern: HapticPattern) => ipcRenderer.send(IPC.haptic, pattern),
+    actuatorAvailable: () => ipcRenderer.invoke(IPC.actuatorAvailable) as Promise<boolean>,
+    actuate: (actuation: number, arg1: number, arg2: number) => ipcRenderer.send(IPC.actuate, actuation, arg1, arg2),
+    onScrollPhase: (listener) => subscribe<ScrollPhase>(IPC.scrollPhase, listener),
+  },
 };
 
 contextBridge.exposeInMainWorld("hocket", bridge);

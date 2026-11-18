@@ -57,7 +57,7 @@ const MAP = {
   sidebarClose: "arrow-line-left", sidebarOpen: "arrow-line-right", sort: "sort-ascending",
   // Settings sections, setup and stats.
   visibility: "eye", visibilityOff: "eye-slash",
-  tune: "sliders-horizontal", equalizer: "waveform", transcode: "swap", connectCast: "screencast", palette: "palette", keyboard: "keyboard", backup: "cloud-arrow-up", customise: "layout", headphones: "headphones", schedule: "clock", dns: "database", key: "key",
+  tune: "sliders-horizontal", swipe: "hand-swipe-right", equalizer: "waveform", transcode: "swap", connectCast: "screencast", palette: "palette", keyboard: "keyboard", backup: "cloud-arrow-up", customise: "layout", headphones: "headphones", schedule: "clock", dns: "database", key: "key",
   // The library lists' sort popover: one leading icon per sort.
   sortAlpha: "text-aa", calendar: "calendar-blank", update: "clock-clockwise", timer: "timer", speed: "gauge",
   // Advanced settings and the developer diagnostics page.

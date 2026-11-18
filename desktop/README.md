@@ -203,6 +203,23 @@ Optional fields arrive as `null`, never `undefined`. A fresh undoable mutation p
   own always-off setting.
 - Lyrics tiers are honoured honestly: syllables → AMLL words, line tier → one word per
   line, unsynced → a static list. Agents map to duet alignment, background lines to `isBG`.
+- Trackpad swipes (two fingers, sideways; `lib/swipe.ts` is the engine, `lib/swipe-hook.ts`
+  drives it from `wheel` events): a song row runs `swipe.list.*`, a queue row `swipe.queue.*`
+  (remove, sliding out, by default; the core's synced settings, the phone's too), the
+  now-playing artwork skips (left next, right previous) and a swipe over the page goes back
+  (right) or forward (left) with an arrow at the edge. A row past the threshold shows its
+  action's colour and icon; letting go runs it, short of it springs back. Each is a shortcut:
+  the menus, buttons and keys do the same. Settings → Gestures turns them off (all or per
+  surface) and sets sensitivity and direction ("Follow system" is AppKit's scroll direction on
+  macOS, natural scrolling elsewhere); that and haptics are device-local (`hocket.gestures`,
+  `lib/gesture-prefs.ts`). The end of a swipe comes from AppKit's scroll phases on macOS
+  (`crates/hocket-node/src/gestures.rs`), from decaying deltas on Windows (precision touchpads
+  coast) and from a gap in the events on Linux. A mouse wheel never swipes: lines, Shift, or a
+  first delta of a notch's size (≥ 50 px) leave the stream alone. Haptics (macOS): AppKit
+  "alignment" ticks on the way to the threshold, the trackpad actuator through
+  MultitouchSupport's `MTActuatorActuate` (a private API, falling back to AppKit's "generic")
+  when crossing it, "alignment" when pulled back, "levelChange" on a row's commit. Reduced
+  motion drops the springs and slides.
 
 ## Accessibility
 

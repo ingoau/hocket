@@ -30,6 +30,7 @@ import { SavedQueues } from "./SavedQueues";
 import { LyricsView } from "./LyricsView";
 import { EmptyState } from "./EmptyState";
 import { Artwork } from "./Artwork";
+import { useCoverSwipe } from "../lib/cover-swipe";
 import { AboutSong, formatLine } from "./AboutSong";
 import { ArtistChooser } from "./ArtistChooser";
 import { Icon } from "./Icon";
@@ -145,6 +146,8 @@ function Overview() {
   const track = now?.track;
   const scene = useOverviewScene(track?.coverArt);
   const overview = useRef<HTMLDivElement>(null);
+  const art = useRef<HTMLDivElement>(null);
+  const coverSwipe = useCoverSwipe(art);
   const immersive = !!scene.edge;
   // A reflection fades into its end colour behind the first card under the title row (Lyrics, or
   // Up next without lyrics): from the title row's bottom to that card's bottom. Kept on the
@@ -182,7 +185,7 @@ function Overview() {
           {layers.map((l, i) => (l.edge ? <SideContinuation key={sceneKey(l.scene)} img={l.scene.img} edge={l.edge} entering={fading && i === layers.length - 1} /> : null))}
         </div>
       ) : null}
-      <div className="side-art" data-testid="sidebar-art" data-immersive={edge ? edge.style : undefined} {...dragSource(nowDrag(now.item.track, track.title), { allowControls: true })}>
+      <div ref={art} className={`side-art ${coverSwipe.className}`} style={coverSwipe.style} data-testid="sidebar-art" data-immersive={edge ? edge.style : undefined} {...dragSource(nowDrag(now.item.track, track.title), { allowControls: true })}>
         {layers.length ? layers.map((l, i) => (l.scene.url ? <img key={sceneKey(l.scene)} src={l.scene.url} alt="" draggable={false} className={fading && i === layers.length - 1 ? "fade-in-art" : ""} onAnimationEnd={settle} /> : <div key={sceneKey(l.scene)} className="placeholder"><Icon name="music" size={48} /></div>)) : <div className="placeholder"><Icon name="music" size={48} /></div>}
       </div>
       <div className="side-title-row">

@@ -10,7 +10,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ArtworkLayout, Command, Query, QueryResult, RoomDiagnosticsStatus } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import type { AppMeta, AppPrefs, CredentialStorage, DiagnosticsOptions, DiagnosticsSummary, OpenDialogRequest, OpenedTextFile, SaveDialogRequest, WindowControl, YtmSignInResult } from "@shared/bridge-types";
-import { ARTWORK_LAYOUT_MAX_SIDE, IPC } from "@shared/bridge-types";
+import { ARTWORK_LAYOUT_MAX_SIDE, HAPTIC_PATTERNS, IPC } from "@shared/bridge-types";
 import { t } from "@shared/strings";
 import type { ArtworkRegistry } from "./artwork";
 import { extractSecrets, parseConfigDocument, resolveSecretReferences } from "./config-secrets";
@@ -43,6 +43,11 @@ export interface IpcDeps {
   diagnosticsExtra: () => Record<string, string>;
   /** The core's immersive-artwork classifier (JSON in and out), when the native core has it. */
   artworkLayout?: (rgba: Buffer, width: number, height: number, requestJson: string) => string;
+  /** Trackpad haptics (macOS with the native addon). */
+  haptic?: (pattern: string) => void;
+  /** The private trackpad actuator (macOS, experimental): whether it opened, and fire it. */
+  actuatorAvailable?: () => boolean;
+  actuate?: (actuation: number, arg1: number, arg2: number) => boolean;
 }
 
 /** A side for `artworkLayout`: a whole number of pixels from 1 to ARTWORK_LAYOUT_MAX_SIDE. */
@@ -166,6 +171,29 @@ export function installIpc(deps: IpcDeps): void {
     } catch (err) {
       console.error("[ipc] shareAudio failed", err);
       return "failed";
+    }
+  });
+
+  ipcMain.handle(IPC.hapticsAvailable, (e) => isOurs(windows, e.sender) && !!deps.haptic);
+  ipcMain.on(IPC.haptic, (e, pattern: unknown) => {
+    if (!isOurs(windows, e.sender) || !deps.haptic || !HAPTIC_PATTERNS.includes(pattern as never)) return;
+    try {
+      deps.haptic(pattern as string);
+    } catch (err) {
+      console.error("[ipc] haptic failed", err);
+    }
+  });
+
+  ipcMain.handle(IPC.actuatorAvailable, (e) => isOurs(windows, e.sender) && !!deps.actuatorAvailable?.());
+  ipcMain.on(IPC.actuate, (e, actuation: unknown, arg1: unknown, arg2: unknown) => {
+    if (!isOurs(windows, e.sender)) return;
+    if (!Number.isInteger(actuation) || typeof arg1 !== "number" || typeof arg2 !== "number" || !Number.isFinite(arg1) || !Number.isFinite(arg2)) return;
+    const id = actuation as number;
+    if (id < 0 || id > 64) return;
+    try {
+      if (!deps.actuate?.(id, Math.max(-10, Math.min(10, arg1)), Math.max(-10, Math.min(10, arg2)))) deps.haptic?.("generic");
+    } catch (err) {
+      console.error("[ipc] actuate failed", err);
     }
   });
 

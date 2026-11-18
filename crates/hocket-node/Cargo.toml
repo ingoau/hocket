@@ -25,5 +25,12 @@ tokio.workspace = true
 tracing.workspace = true
 playwire = { workspace = true, optional = true }
 
+# Trackpad haptics and scroll-gesture phases for the desktop's swipe gestures (src/gestures.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+libc = "0.2"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "NSEvent", "NSHapticFeedback"] }
+
 [build-dependencies]
 napi-build.workspace = true

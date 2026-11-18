@@ -8,6 +8,7 @@ import "./styles/controls.css";
 import "./styles/now-playing.css";
 import "./styles/menus.css";
 import "./styles/panes.css";
+import "./styles/gestures.css";
 import { App } from "./App";
 import { MiniApp } from "./views/MiniApp";
 import { connectStore } from "./store/app";
