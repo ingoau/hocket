@@ -9,10 +9,13 @@
 //! - [`media_session::MediaSession`] is the desktop `MediaSessionAdapter`
 //!   (docs/design.md "OS media session") over the `playwire` crate. It takes
 //!   a serialised `MediaSessionState` and hands back serialised `Command`s.
+//! - [`gestures::ScrollPhaseMonitor`] reports trackpad scroll phases, and
+//!   [`gestures::haptic`] plays trackpad haptics (macOS; no-ops elsewhere).
 //!
 //! Every export is `catch_unwind`: a Rust panic on a JS-thread path becomes a
 //! thrown JS error instead of aborting the Electron main process.
 
+mod gestures;
 mod media_session;
 
 use std::sync::Arc;
@@ -23,6 +26,7 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 
+pub use gestures::{actuate, actuator_available, haptic, haptics_available, ScrollPhaseMonitor};
 pub use media_session::{media_session_available, MediaSession, MediaSessionOptions};
 
 /// JSON string callback: `(eventJson: string) => void`, never receives an error argument.

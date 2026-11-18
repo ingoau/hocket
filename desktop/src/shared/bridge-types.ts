@@ -245,6 +245,44 @@ export interface HocketBridge {
   artworkLayout(rgba: Uint8Array, width: number, height: number, request: ArtworkLayoutRequest): Promise<ArtworkLayout | undefined>;
   /** Tray/menu asks the renderer to run a UI action ("ui.palette" etc.). */
   onUiAction(listener: (actionId: string) => void): () => void;
+  /** Trackpad swipe support: haptics and scroll phases (macOS; inert elsewhere). */
+  gestures: {
+    /** Whether this build can play trackpad haptics (macOS with the native addon). */
+    hapticsAvailable(): Promise<boolean>;
+    /** Play a trackpad haptic now. Felt only on a Force Touch trackpad with a finger on it. */
+    haptic(pattern: HapticPattern): void;
+    /** Whether the private trackpad actuator (MultitouchSupport) opened. Experimental. */
+    actuatorAvailable(): Promise<boolean>;
+    /**
+     * Fire the trackpad actuator directly: an actuation ID and two floats, reaching lighter clicks
+     * than AppKit's patterns. Without the actuator, main plays AppKit's "generic" instead.
+     */
+    actuate(actuation: number, arg1: number, arg2: number): void;
+    /** Scroll gesture phase transitions, from AppKit (the web's `wheel` has none). */
+    onScrollPhase(listener: (phase: ScrollPhase) => void): () => void;
+  };
+}
+
+/** AppKit's trackpad haptic patterns (`NSHapticFeedbackPattern`). */
+export type HapticPattern = "generic" | "alignment" | "levelChange";
+export const HAPTIC_PATTERNS: readonly HapticPattern[] = ["generic", "alignment", "levelChange"];
+
+/** An `NSEventPhase`, by name. */
+export type GesturePhase = "none" | "mayBegin" | "began" | "changed" | "stationary" | "ended" | "cancelled";
+
+/**
+ * A scroll event that changed phase (crates/hocket-node/src/gestures.rs). `phase` is the fingers'
+ * (began on touch, ended on lift); `momentum` is the coasting after a flick, with no finger down.
+ */
+export interface ScrollPhase {
+  phase: GesturePhase;
+  momentum: GesturePhase;
+  /** A trackpad or Magic Mouse (pixel deltas), not a notched wheel. */
+  precise: boolean;
+  /** Natural scrolling: the deltas are inverted from the fingers' direction. */
+  inverted: boolean;
+  /** AppKit's event timestamp, ms since boot. */
+  t: number;
 }
 
 export const IPC = {
@@ -273,6 +311,11 @@ export const IPC = {
   prefsSet: "hocket:prefs:set",
   uiAction: "hocket:ui-action",
   artworkLayout: "hocket:artwork:layout",
+  hapticsAvailable: "hocket:gestures:haptics-available",
+  haptic: "hocket:gestures:haptic",
+  actuatorAvailable: "hocket:gestures:actuator-available",
+  actuate: "hocket:gestures:actuate",
+  scrollPhase: "hocket:gestures:scroll-phase",
   diagnosticsSummary: "hocket:diagnostics:summary",
   diagnosticsCollect: "hocket:diagnostics:collect",
   diagnosticsSave: "hocket:diagnostics:save",

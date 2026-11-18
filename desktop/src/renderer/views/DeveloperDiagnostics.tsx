@@ -24,6 +24,7 @@ export function DeveloperDiagnostics() {
   const viaCoordinator = useApp((s) => s.connection.tier === "coordinator" && s.connection.connected);
   const uploading = useApp((s) => s.reportUpload?.state === "uploading");
   const openDialog = useApp((s) => s.openDialog);
+  const navigate = useApp((s) => s.navigate);
   const [summary, setSummary] = useState<DiagnosticsSummary | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   // Other devices only ever answer while developer mode is on here too.
@@ -85,6 +86,7 @@ export function DeveloperDiagnostics() {
       <div className="view-header">
         <h1 className="brand-type">{t("developer.title")}</h1>
         <div className="actions">
+          <button type="button" className="btn" onClick={() => navigate({ view: "gestures" })} data-testid="developer-gestures"><Icon name="tune" size={16} /> Gesture playground</button>
           <button type="button" className="btn" onClick={() => { refresh(); if (devMode) collect(true); }} disabled={blocked} data-testid="developer-refresh"><Icon name="refresh" size={16} /> {t("developer.refresh")}</button>
         </div>
       </div>

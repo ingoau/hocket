@@ -18,6 +18,7 @@ import { Filters } from "./Filters";
 import { Stats } from "./Stats";
 import { Settings } from "./Settings";
 import { DeveloperDiagnostics } from "./DeveloperDiagnostics";
+import { GesturePlayground } from "./GesturePlayground";
 
 /** Detail views: a different id is a different page. */
 const DETAIL = new Set<Route["view"]>(["album", "artist", "playlist", "genre"]);
@@ -75,5 +76,7 @@ function RouteView({ route }: { route: Route }) {
       return <Settings section={route.param} />;
     case "developer":
       return <DeveloperDiagnostics />;
+    case "gestures":
+      return <GesturePlayground />;
   }
 }

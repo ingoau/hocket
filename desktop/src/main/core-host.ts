@@ -33,6 +33,12 @@ export interface NativeModule {
   /** The immersive-artwork classifier (addons built before it existed lack it). */
   artworkLayout?(rgba: Buffer, width: number, height: number, requestJson: string): string;
   mediaSessionAvailable(): boolean;
+  /** Trackpad haptics and scroll phases (src/gestures.rs; addons built before it existed lack them). */
+  hapticsAvailable?(): boolean;
+  haptic?(pattern: string): void;
+  actuatorAvailable?(): boolean;
+  actuate?(actuation: number, arg1: number, arg2: number): boolean;
+  ScrollPhaseMonitor?: new (cb: (json: string) => void) => { stop(): void };
 }
 
 export interface LoadedNative {

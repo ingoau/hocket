@@ -156,12 +156,30 @@ async function main(): Promise<void> {
   // screenshots against the fake core, HOCKET_FAKE_COVERS) the addon loaded for it alone.
   const classifier = native?.module ?? (forceFake && process.env.HOCKET_FAKE_COVERS ? loadNative(appRoot)?.module : undefined);
   const classify = classifier?.artworkLayout?.bind(classifier);
+  // Trackpad swipes: haptics and scroll phases, from the addon whichever core runs (macOS only).
+  const gestureAddon = process.platform === "darwin" ? (native?.module ?? loadNative(appRoot)?.module) : undefined;
+  const haptic = gestureAddon?.hapticsAvailable?.() ? gestureAddon.haptic?.bind(gestureAddon) : undefined;
+  if (gestureAddon?.ScrollPhaseMonitor) {
+    const monitor = new gestureAddon.ScrollPhaseMonitor((json) => {
+      let phase: unknown;
+      try {
+        phase = JSON.parse(json);
+      } catch {
+        return;
+      }
+      for (const w of windows.all()) if (!w.isDestroyed()) w.webContents.send(IPC.scrollPhase, phase);
+    });
+    app.once("will-quit", () => monitor.stop());
+  }
   installIpc({
     core,
     windows,
     artwork,
     credentials: { passwordFor: (url, username) => credentials?.passwordFor(url, username) },
     artworkLayout: classify,
+    haptic,
+    actuatorAvailable: gestureAddon?.actuatorAvailable?.bind(gestureAddon),
+    actuate: gestureAddon?.actuate?.bind(gestureAddon),
     devlog,
     diagnosticsDir: join(logDir, "diagnostics"),
     reportStagingDir: join(userData, "report-staging"),
