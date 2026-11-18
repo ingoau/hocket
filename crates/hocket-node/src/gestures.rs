@@ -60,7 +60,9 @@ pub struct ScrollPhaseMonitor {
 impl ScrollPhaseMonitor {
     #[napi(constructor, catch_unwind)]
     pub fn new(callback: JsonCallback) -> Result<Self> {
-        Ok(Self { inner: imp::Monitor::start(callback).map_err(Error::from_reason)? })
+        Ok(Self {
+            inner: imp::Monitor::start(callback).map_err(Error::from_reason)?,
+        })
     }
 
     /// Remove the monitor. Idempotent.
@@ -247,7 +249,10 @@ mod imp {
             });
             // SAFETY: the block returns the event it was given, a valid pointer.
             let token = unsafe {
-                NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::ScrollWheel, &block)
+                NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                    NSEventMask::ScrollWheel,
+                    &block,
+                )
             };
             Ok(token.map(|token| Self { token }))
         }
