@@ -8,15 +8,23 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 /**
  * Scanning another device's setup code with Google's code scanner: Play services draws the
  * camera UI, so the app needs no camera permission. [onResult] gets the code's text, [onError] runs
- * when the scanner could not start (no camera, its module not downloaded yet); cancelling calls neither.
+ * when the scanner could not start (no camera, its module not downloaded yet, ML Kit failing to set
+ * itself up); cancelling calls neither.
  */
 internal object SetupScanner {
     const val available = true
 
     fun scan(context: Context, onResult: (String) -> Unit, onError: () -> Unit) {
         val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
-        GmsBarcodeScanning.getClient(context, options).startScan()
-            .addOnSuccessListener { code -> code.rawValue?.let(onResult) }
+        // getClient and startScan throw rather than fail the task when ML Kit can't set itself up;
+        // that is a failed scan, not a crash.
+        val scan = runCatching { GmsBarcodeScanning.getClient(context, options).startScan() }
+            .getOrElse { e ->
+                android.util.Log.w("SetupScanner", "code scanner failed to start", e)
+                onError()
+                return
+            }
+        scan.addOnSuccessListener { code -> code.rawValue?.let(onResult) }
             .addOnFailureListener { onError() }
     }
 }

@@ -129,7 +129,7 @@ private fun ColumnScope.Coordinator() {
             TextButton(enabled = code.isNotBlank() && url.isNotBlank(), onClick = { client.dispatch(Command.RedeemCoordinatorInvite(CommandRedeemCoordinatorInviteInner(url.trim(), code.trim()))) }, modifier = Modifier.testTag("identity.redeem")) { Text(stringResource(R.string.identity_redeem)) }
             if (app.hocket.SetupScanner.available) {
                 TextButton(onClick = {
-                    app.hocket.SetupScanner.scan(context, onResult = { text -> PairingLinks.claim(text)?.let { (u, c) -> if (u.isNotEmpty()) url = u; code = c } ?: run { code = text.trim() } }, onError = {})
+                    app.hocket.SetupScanner.scan(context, onResult = { text -> PairingLinks.claim(text)?.let { (u, c) -> if (u.isNotEmpty()) url = u; code = c } ?: run { code = text.trim() } }, onError = { android.widget.Toast.makeText(context, R.string.setup_scan_failed, android.widget.Toast.LENGTH_LONG).show() })
                 }) { Text(stringResource(R.string.identity_scan_claim)) }
             }
         }
