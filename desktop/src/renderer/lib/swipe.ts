@@ -11,11 +11,22 @@
 // - "momentum": deltas shrinking for a few events in a row read as the coast after a lift. A
 //   finger slowing down looks the same, so it can end a swipe early.
 //
+// Windows has no phases, but its precision touchpads coast through Chromium too, so it uses
+// "momentum"; Linux uses "idle" ("native" falls back to it when no phase ever arrives).
+//
+// A mouse wheel is never a swipe: a notched wheel comes as lines, or (Windows, Linux) as coarse
+// pixel deltas of 50 to 120 a notch, and Shift turns a wheel sideways. `coarseWheel` spots them and
+// the tracker leaves a stream that starts like that alone.
+//
 // Pure: time comes in with each call and side effects go out as `SwipeEffect`s, so it is tested
 // without a DOM. `useSwipe` (swipe-hook.ts) drives it from real events.
 import type { HapticPattern, ScrollPhase } from "@shared/bridge-types";
 
-/** "actuator": the private trackpad actuator, with the tuning's actuator settings (lighter clicks). */
+/**
+ * "actuator": the trackpad's actuator driven directly (`kickId`, `kickArg1`, `kickArg2`) through
+ * MultitouchSupport's MTActuatorActuate, a private macOS API (crates/hocket-node/src/gestures.rs):
+ * a firmer click than AppKit's patterns. Falls back to AppKit's "generic" where it is missing.
+ */
 export type HapticSource = HapticPattern | "actuator";
 export type HapticChoice = HapticSource | "none";
 export type ReleaseMode = "native" | "idle" | "momentum";
@@ -52,18 +63,7 @@ export interface SwipeTuning {
   detentPx: number;
   /** 1: evenly spaced detents; above 1 they crowd towards the threshold (spacing ∝ distance^(ramp−1)). */
   detentRamp: number;
-  /**
-   * "actuator" detents: MTActuatorActuate's actuation ID runs from `detentIdFrom` (the first tick)
-   * to `detentIdTo` (the last before the threshold) along progress^`detentStrengthCurve` (above 1
-   * stays light for longer). HapticKey's IDs: 3 weak, 4 medium, 6 strong; 1 and 2 are unexplored.
-   */
-  detentIdFrom: number;
-  detentIdTo: number;
-  detentStrengthCurve: number;
-  /** MTActuatorActuate's float arguments for the detents (HapticKey: 0, then 2 on a press). */
-  actuatorArg1: number;
-  actuatorArg2: number;
-  /** Every other "actuator" haptic (the arm, the commit): the big one. */
+  /** An "actuator" haptic: MTActuatorActuate's actuation ID and its two float arguments. */
   kickId: number;
   kickArg1: number;
   kickArg2: number;
@@ -78,7 +78,7 @@ export interface SwipeTuning {
   springDamping: number;
 }
 
-/** Tuned in the gesture playground (song rows and the queue). */
+/** Tuned on a MacBook's trackpad: song rows and the queue. */
 export const DEFAULT_TUNING: SwipeTuning = {
   gain: 1,
   threshold: 0.2,
@@ -95,11 +95,6 @@ export const DEFAULT_TUNING: SwipeTuning = {
   flingVelocity: 1,
   detentPx: 28,
   detentRamp: 3,
-  detentIdFrom: 1,
-  detentIdTo: 4,
-  detentStrengthCurve: 2.5,
-  actuatorArg1: 0,
-  actuatorArg2: 0,
   kickId: 15,
   kickArg1: 3,
   kickArg2: 3,
@@ -118,8 +113,7 @@ export type Side = 1 | -1;
 export type HapticReason = "start" | "detent" | "arm" | "disarm" | "commit";
 
 export type SwipeEffect =
-  /** `progress`: of the way to the threshold (detents only), for their strength ramp. */
-  | { kind: "haptic"; pattern: HapticSource; reason: HapticReason; progress?: number }
+  | { kind: "haptic"; pattern: HapticSource; reason: HapticReason }
   | { kind: "commit"; side: Side; how: "threshold" | "release" | "fling" }
   | { kind: "release"; committed: boolean; reason: string }
   | { kind: "decided"; axis: "x" | "y" };
@@ -141,6 +135,8 @@ export type SwipeStage = "idle" | "deciding" | "tracking" | "passthrough" | "coa
 export class WheelSequence {
   /** Time of the last wheel event anywhere. */
   lastWheel = -Infinity;
+  /** The one before it: nested surfaces (a row inside the page) see the same event in turn. */
+  private prevWheel = -Infinity;
   /** Whether AppKit phases have arrived (so "native" can rely on them). */
   native = false;
   fingersDown = false;
@@ -159,11 +155,14 @@ export class WheelSequence {
 
   /** Whether an event at `t` (before `note`) may start a new swipe. */
   canStart(t: number, idleMs: number): boolean {
-    if (this.native) return !this.momentum && (this.fingersDown || t - this.lastWheel > idleMs);
-    return t - this.lastWheel > idleMs;
+    const last = t === this.lastWheel ? this.prevWheel : this.lastWheel;
+    if (this.native) return !this.momentum && (this.fingersDown || t - last > idleMs);
+    return t - last > idleMs;
   }
 
   note(t: number): void {
+    if (t === this.lastWheel) return;
+    this.prevWheel = this.lastWheel;
     this.lastWheel = t;
   }
 }
@@ -193,12 +192,6 @@ export function detentIndex(a: number, thr: number, t: SwipeTuning): number {
   return Math.floor(n * Math.pow(Math.max(0, Math.min(1, a / thr)), Math.max(0.2, t.detentRamp)) + 1e-9);
 }
 
-/** The actuation ID of a detent `progress` (0..1) of the way to the threshold. */
-export function detentActuation(t: SwipeTuning, progress: number): number {
-  const k = Math.pow(Math.max(0, Math.min(1, progress)), Math.max(0.1, t.detentStrengthCurve));
-  return Math.round(t.detentIdFrom + (t.detentIdTo - t.detentIdFrom) * k);
-}
-
 export class SwipeTracker {
   stage: SwipeStage = "idle";
   /** Raw finger travel (px, signed by Side). */
@@ -225,9 +218,10 @@ export class SwipeTracker {
 
   /**
    * One wheel event: deltas as the event has them (px), at `t` ms. `consumed` says the caller
-   * should preventDefault it (it belongs to a swipe).
+   * should preventDefault it (it belongs to a swipe). `coarse`: it looks like a mouse wheel
+   * (`coarseWheel`); a stream that starts like that is left alone.
    */
-  wheel(dx: number, dy: number, t: number): { consumed: boolean; effects: SwipeEffect[] } {
+  wheel(dx: number, dy: number, t: number, coarse = false): { consumed: boolean; effects: SwipeEffect[] } {
     const effects: SwipeEffect[] = [];
     const tun = this.tuning;
     const fresh = t - this.lastT > tun.idleMs;
@@ -244,7 +238,8 @@ export class SwipeTracker {
       return { consumed: this.stage === "coasting", effects };
     }
     if (this.stage === "idle") {
-      if (!startable) {
+      // A mouse wheel, momentum from elsewhere, or nothing to swipe to: not a swipe.
+      if (!startable || coarse || (!this.sides[1] && !this.sides[-1])) {
         this.stage = "passthrough";
         this.lastT = t;
         return { consumed: false, effects };
@@ -344,7 +339,7 @@ export class SwipeTracker {
       const top = Math.max(detent, this.detent);
       this.detent = detent;
       if (this.armed === 0 && a < thr && top < detentCount(thr, tun)) {
-        for (const e of this.haptic(tun.hapticDetent, "detent")) effects.push({ ...e, progress: a / thr } as SwipeEffect);
+        effects.push(...this.haptic(tun.hapticDetent, "detent"));
       }
     }
     if (this.armed === 0 && a >= thr && this.offset !== 0) {
@@ -408,4 +403,94 @@ export class SwipeTracker {
   private haptic(choice: HapticChoice, reason: HapticReason): SwipeEffect[] {
     return choice === "none" ? [] : [{ kind: "haptic", pattern: choice, reason }];
   }
+}
+
+/** The wheel event fields `coarseWheel` reads. */
+export interface WheelLike {
+  deltaX: number;
+  deltaY: number;
+  /** 0: pixels; 1: lines; 2: pages. */
+  deltaMode: number;
+  shiftKey: boolean;
+}
+
+/** Above this in one event (px), the first event of a stream is a mouse wheel's notch, not fingers. */
+export const NOTCH_PX = 50;
+
+/**
+ * Whether a wheel event looks like a mouse wheel rather than a trackpad: lines or pages, Shift held
+ * (Shift turns a wheel sideways), or a coarse jump no finger starts with (Windows reports a notch
+ * as ~100 px, Linux as ~53, or multiples of 120). Only the first event of a stream decides:
+ * trackpad momentum gets as large later on.
+ */
+export function coarseWheel(e: WheelLike): boolean {
+  if (e.deltaMode !== 0 || e.shiftKey) return true;
+  return Math.max(Math.abs(e.deltaX), Math.abs(e.deltaY)) >= NOTCH_PX;
+}
+
+export type Platform = "macOs" | "windows" | "linux";
+
+/**
+ * How a swipe ends by default on each platform: AppKit's phases on macOS; on Windows the decaying
+ * deltas, as precision touchpads coast through Chromium (with the idle gap a flick would only end
+ * once the coasting stops); on Linux the idle gap.
+ */
+export function defaultRelease(platform: Platform): ReleaseMode {
+  return platform === "macOs" ? "native" : platform === "windows" ? "momentum" : "idle";
+}
+
+/**
+ * "Follow system" by platform. macOS says (AppKit's natural scrolling flag). Elsewhere nothing
+ * does: precision touchpads on Windows and GNOME's touchpad default both scroll naturally.
+ */
+export function systemDirection(platform: Platform): DirectionMode {
+  return platform === "macOs" ? "auto" : "natural";
+}
+
+export type SwipeSurface = "rows" | "queue" | "cover" | "page";
+export type Sensitivity = "low" | "medium" | "high";
+/** The direction setting: "system" follows the platform (`systemDirection`). */
+export type DirectionPref = "system" | "natural" | "reversed";
+
+/** Each surface's tuning before the person's settings. */
+export const SURFACE_TUNING: Record<SwipeSurface, SwipeTuning> = {
+  rows: DEFAULT_TUNING,
+  queue: DEFAULT_TUNING,
+  // Swipe the artwork to skip: further to go, a short leash, and the skip says it all (no commit haptic).
+  cover: { ...DEFAULT_TUNING, threshold: 0.4, maxTravel: 0.35, resistance: 0.25, flingVelocity: 1.2, hapticCommit: "none" },
+  // Back and forward over the page: a short pull with a lot of resistance.
+  page: { ...DEFAULT_TUNING, threshold: 0.16, maxTravel: 0.3, resistance: 0.6, flingVelocity: 1, hapticDisarm: "none", hapticCommit: "none" },
+};
+
+/** How far a swipe has to go, by sensitivity: of the surface's threshold (high = shorter). */
+export const SENSITIVITY_SCALE: Record<Sensitivity, number> = { low: 1.35, medium: 1, high: 0.7 };
+
+export interface TuningPrefs {
+  sensitivity: Sensitivity;
+  direction: DirectionPref;
+  haptics: boolean;
+}
+
+/**
+ * A surface's tuning on a platform with the person's settings: sensitivity scales the threshold
+ * (and the detent spacing and the fling speed with it, so the feel stays the same, only shorter or
+ * longer), the direction setting picks the direction, and haptics off silences every haptic.
+ */
+export function resolveTuning(surface: SwipeSurface, platform: Platform, prefs: TuningPrefs): SwipeTuning {
+  const base = SURFACE_TUNING[surface];
+  const k = SENSITIVITY_SCALE[prefs.sensitivity] ?? 1;
+  const t: SwipeTuning = {
+    ...base,
+    threshold: base.threshold * k,
+    // The threshold must stay inside the travel.
+    maxTravel: Math.max(base.maxTravel, base.threshold * k + 0.05),
+    detentPx: base.detentPx * k,
+    flingVelocity: base.flingVelocity * k,
+    release: base.release === "native" ? defaultRelease(platform) : base.release,
+    direction: prefs.direction === "system" ? systemDirection(platform) : prefs.direction,
+  };
+  if (!prefs.haptics || platform !== "macOs") {
+    t.hapticStart = t.hapticDetent = t.hapticArm = t.hapticDisarm = t.hapticCommit = "none";
+  }
+  return t;
 }

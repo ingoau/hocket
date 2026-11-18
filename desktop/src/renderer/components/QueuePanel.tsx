@@ -29,11 +29,16 @@ import { OfflineBadge } from "./OfflineBadge";
 import { fmtTime } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/media";
 import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, previewMoves, queueDragLayout, sameOrder, stepMove, type QueueMove } from "../lib/queue-drag";
-import { queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange, windowEnd, mergePages, pagedFits, type QueueRowKind } from "../lib/queue-view";
+import { entryByKey, queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange, windowEnd, mergePages, pagedFits, type QueueRowKind } from "../lib/queue-view";
 import { EmptyState } from "./EmptyState";
 import { clearDropHighlights, dragLabel, dragSource, highlightDrop, type DragPayload } from "../lib/drag";
 import { dropOnPlaylist, playlistAccepts, playlistTargetAt } from "../lib/playlist-drop";
 import { QueueHeader } from "./QueueSelector";
+import { SwipeReveal } from "./SwipeReveal";
+import { useSurfaceTuning } from "../lib/gesture-prefs";
+import { useSettle, useSwipe } from "../lib/swipe-hook";
+import { isRtl, rowSwipeAction, runRowSwipe, SWIPE_DEFAULTS, SWIPE_KEYS, type RowSwipeAction } from "../lib/swipe-actions";
+import type { Side } from "../lib/swipe";
 
 /** How long after the last scroll, wheel or pointer activity the list may follow the current item again. */
 const IDLE_MS = 4000;
@@ -267,6 +272,49 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   // Rest with the current item at the top; follow it when it changes, unless
   // the user scrolled, pointed or focused into the list in the last few seconds.
   const reducedMotion = usePrefersReducedMotion();
+
+  // Two-finger swipes on a row run the swipe.queue.* settings' actions on it (remove by default,
+  // which slides the row out). The same actions are in the row's menu and on Delete.
+  const swipeTuning = useSurfaceTuning("queue");
+  const settle = useSettle(swipeTuning, reducedMotion);
+  const swipeStart = useSetting<string>(SWIPE_KEYS.queue.startToEnd, SWIPE_DEFAULTS.queue.startToEnd);
+  const swipeEnd = useSetting<string>(SWIPE_KEYS.queue.endToStart, SWIPE_DEFAULTS.queue.endToStart);
+  const snoozedIds = useApp((s) => s.snoozes.map((x) => x.trackRef.id).join("\n"));
+  const swipeActions = (e: QueueEntry | undefined): { right: RowSwipeAction | null; left: RowSwipeAction | null } => {
+    if (!e) return { right: null, left: null };
+    const facts = { loved: !!e.track.loved, downloaded: e.track.offline === "downloaded", snoozed: snoozedIds.split("\n").includes(e.track.id), queueSection: section };
+    const rtl = isRtl();
+    return { right: rowSwipeAction(rtl ? swipeEnd : swipeStart, facts), left: rowSwipeAction(rtl ? swipeStart : swipeEnd, facts) };
+  };
+  /** A row swiped away: it slides out, then its slot collapses while the core removes it. */
+  const [leaving, setLeaving] = useState<{ key: string; side: Side } | undefined>(undefined);
+  const swipe = useSwipe<string>(scrollRef, {
+    tuning: swipeTuning,
+    disabled: !!dragBlock || outside,
+    begin: (ev) => {
+      const key = (ev.target as Element | null)?.closest<HTMLElement>(".qrow[data-key]")?.dataset.key;
+      const a = swipeActions(key ? entryByKey(queue, key) : undefined);
+      return key && key !== leaving?.key && (a.right || a.left) ? { key, sides: { start: !!a.right, end: !!a.left } } : null;
+    },
+    onCommit: (side, _how, key) => {
+      const a = key ? (side > 0 ? swipeActions(entryByKey(queue, key)).right : swipeActions(entryByKey(queue, key)).left) : null;
+      if (!key || !a) return;
+      const row = scrollRef.current?.querySelector<HTMLElement>(`.qrow[data-key="${window.CSS.escape(key)}"]`) ?? null;
+      const run = () => runRowSwipe(a, { type: "queueItems", data: { keys: [key] } }, row);
+      if (!a.dismisses) return run();
+      setLeaving({ key, side });
+      // Let the row slide out before the list drops it.
+      window.setTimeout(run, reducedMotion ? 0 : 200);
+      window.setTimeout(() => setLeaving((l) => (l?.key === key ? undefined : l)), 1500);
+    },
+  });
+  const swipeOf = (e: QueueEntry): RowSwipe | undefined => {
+    const k = e.item.key;
+    if (leaving?.key === k) return { offset: 0, tracking: false, armed: true, side: leaving.side, reveal: leaving.side > 0 ? swipeActions(e).right : swipeActions(e).left, leaving: leaving.side, settle };
+    if (swipe.key !== k || !(swipe.stage === "tracking" || swipe.settling)) return undefined;
+    const reveal = swipe.side === 0 ? null : swipe.side > 0 ? swipeActions(e).right : swipeActions(e).left;
+    return { offset: swipe.stage === "tracking" ? swipe.offset : 0, tracking: swipe.stage === "tracking", armed: swipe.armed !== 0, side: swipe.side, reveal, leaving: 0, settle };
+  };
   const lastTouch = useRef(0);
   const programmatic = useRef(false);
   const touched = useCallback(() => {
@@ -374,7 +422,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const header = <QueueHeader large={large} />;
   const optionId = (key: string) => `${idPrefix}-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   const row = (e: QueueEntry, kind: QueueRowKind) => (
-    <QueueRow key={e.item.key} id={optionId(e.item.key)} entry={e} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "group" || kind === "rest"} carried={!!dragBlock?.has(e.item.key) || (outside && rowDrag.current?.target.type === "queueItems" && rowDrag.current.target.data.keys.includes(e.item.key))}
+    <QueueRow key={e.item.key} id={optionId(e.item.key)} entry={e} swipe={swipeOf(e)} kind={kind} large={large} selected={isSelected(selection, e.item.key)} focused={focusKey === e.item.key} sortable={kind === "group" || kind === "rest"} carried={!!dragBlock?.has(e.item.key) || (outside && rowDrag.current?.target.type === "queueItems" && rowDrag.current.target.data.keys.includes(e.item.key))}
       dropAt={dropAt(kind, e.item.key)} onLibraryOver={(ev) => onLibraryOver(ev, kind, e.item.key)}
       onClick={(ev) => click(ev, e.item.key)} onDoubleClick={() => d({ type: "jumpToQueueItem", data: { key: e.item.key } })} onContextMenu={(ev) => onContext(ev, e.item.key)} />
   );
@@ -446,14 +494,36 @@ function SectionHeading({ labelId, label, anchorName, sortId, onDragOver }: { la
   );
 }
 
-const QueueRow = memo(function QueueRow({ id, entry, kind, large, selected, focused, sortable, carried, dropAt, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; kind: QueueRowKind; large: boolean; selected: boolean; focused: boolean; sortable: boolean; carried: boolean; dropAt?: "before" | "after"; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
+/** A row on the move under a swipe (QueuePanel's `swipeOf`). */
+interface RowSwipe {
+  offset: number;
+  tracking: boolean;
+  armed: boolean;
+  side: Side | 0;
+  reveal: RowSwipeAction | null;
+  /** Swiped away towards this side: it slides out and its slot collapses. */
+  leaving: Side | 0;
+  /** The settle transition (`useSettle`). */
+  settle: string;
+}
+
+/** The swipe's part of a row's style: `translate`, beside dnd-kit's `transform` and its transition. */
+function swipeStyle(swipe: RowSwipe | undefined, dndTransition: string | undefined): React.CSSProperties {
+  if (!swipe) return { transition: dndTransition };
+  const own = swipe.leaving ? "translate 180ms cubic-bezier(.3,0,.8,.15)" : swipe.tracking || swipe.settle === "none" ? undefined : swipe.settle;
+  return { translate: swipe.leaving ? `${swipe.leaving * 105}% 0` : `${swipe.offset}px 0`, transition: [dndTransition, own].filter(Boolean).join(", ") || undefined };
+}
+
+const QueueRow = memo(function QueueRow({ id, entry, swipe, kind, large, selected, focused, sortable, carried, dropAt, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; swipe?: RowSwipe; kind: QueueRowKind; large: boolean; selected: boolean; focused: boolean; sortable: boolean; carried: boolean; dropAt?: "before" | "after"; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.item.key, disabled: !sortable });
   const snoozed = useApp((s) => s.snoozes.some((x) => x.trackRef.id === entry.track.id));
   const src = entry.item.source;
   const sub = src.type === "autoplay" ? t("queue.autoplayFrom", { reason: src.data.reason }) : entry.track.artist ?? "";
   const marker = rowMarker(entry, kind);
   return (
-    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`qrow ${kind} ${selected ? "selected" : ""} ${isDragging || carried ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""} ${snoozed ? "snoozed" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
+    <div className={`qrow-slot${swipe?.leaving ? " leaving" : ""}`}>
+    {swipe?.reveal && swipe.side !== 0 ? <SwipeReveal action={swipe.reveal} side={swipe.side} armed={swipe.armed} /> : null}
+    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), ...swipeStyle(swipe, transition) }} className={`qrow ${kind} ${swipe ? "swiping" : ""} ${selected ? "selected" : ""} ${isDragging || carried ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""} ${snoozed ? "snoozed" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
       onClick={onClick} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} onDragOver={onLibraryOver} title={entry.item.unavailable ? t("queue.unavailable") : undefined}
       // Rows that can't move (history, the current song) still drag, as their songs: onto a playlist, or the queue to hear again.
       {...(sortable ? listeners : dragSource({ target: { type: "queueItems", data: { keys: [entry.item.key] } }, label: entry.track.title }))}
@@ -469,6 +539,7 @@ const QueueRow = memo(function QueueRow({ id, entry, kind, large, selected, focu
       {/* Visual hint; the whole row is the pointer drag (the keyboard uses Alt+Up/Down). */}
       {sortable ? <span className="grip" aria-hidden="true"><Icon name={large ? "dragHandle" : "grip"} size={large ? 18 : 14} /></span> : <span className="grip-space" aria-hidden="true" />}
       {entry.item.unavailable ? <span className="sr-only">{t("queue.unavailable")}</span> : null}
+    </div>
     </div>
   );
 });

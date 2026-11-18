@@ -64,6 +64,7 @@ import { useVolumeControl } from "../lib/volume";
 import { useConnectSyncing } from "../lib/connect-sync";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
 import { ratingTarget, refOf } from "../lib/track-ref";
+import { useCoverSwipe } from "../lib/cover-swipe";
 
 type Pane = Exclude<NowPlayingMode, "art">;
 const PANES: { key: Pane; icon: string }[] = [
@@ -142,6 +143,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const reducedMotion = usePrefersReducedMotion();
   const closeRef = useRef<HTMLButtonElement>(null);
   const bigArt = useRef<HTMLDivElement>(null);
+  const coverSwipe = useCoverSwipe(bigArt);
   const thumbArt = useRef<HTMLButtonElement>(null);
   const controls = useRef<HTMLDivElement>(null);
   const pill = useRef<HTMLDivElement>(null);
@@ -372,7 +374,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
         <div className="np-col">
           {mode === "art" ? (
             <div className="np-art-slot">
-              <div ref={bigArt} className="np-art" data-testid="np-artwork" data-cover={layers.length === 1 ? scene?.coverArt : undefined}>{bigArtContent}</div>
+              <div ref={bigArt} className={`np-art ${coverSwipe.className}`} style={coverSwipe.style} data-testid="np-artwork" data-cover={layers.length === 1 ? scene?.coverArt : undefined}>{bigArtContent}</div>
             </div>
           ) : !thumbByTitle ? (
             <div className="np-art-slot">

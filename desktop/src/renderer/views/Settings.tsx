@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountKind, ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
 import { TransitionModeValues } from "@core/api";
-import { t } from "@shared/strings";
+import { t, type StringId } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
 import { useQuery } from "../store/queries";
 import { bridge } from "../core/bridge";
@@ -21,6 +21,8 @@ import { CredentialWarning } from "../components/CredentialWarning";
 import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
 import { setIdleHide, useIdleHide } from "../lib/idle-hide";
+import { setGesturePrefs, useGesturePrefs, type GesturePrefs } from "../lib/gesture-prefs";
+import { SWIPE_DEFAULTS, SWIPE_KEYS, SWIPE_LIST_ACTIONS, SWIPE_QUEUE_ACTIONS, swipeChoiceLabel } from "../lib/swipe-actions";
 import { Select, Slider, Switch } from "../components/controls";
 import { warnChoices } from "../lib/storage-warn";
 import { SettingsSearch, useSettingsJump } from "../components/SettingsSearch";
@@ -35,11 +37,11 @@ type Section = SettingsSection;
 const SECTION_GROUPS: { title: Parameters<typeof t>[0]; sections: Section[] }[] = [
   { title: "settings.group.lookAndSound", sections: ["appearance", "audio", "transcoding", "lyrics"] },
   { title: "settings.group.libraryAndStorage", sections: ["general", "storage"] },
-  { title: "settings.group.devicesAndControls", sections: ["connect", "customisation", "shortcuts"] },
+  { title: "settings.group.devicesAndControls", sections: ["connect", "customisation", "gestures", "shortcuts"] },
   { title: "settings.group.app", sections: ["backup", "diagnostics", "advanced", "about"] },
 ];
 const ACCOUNT_KIND_LABEL: Record<AccountKind, Parameters<typeof t>[0]> = { navidrome: "settings.accounts.kind.navidrome", youtubeMusic: "settings.accounts.kind.youtubeMusic" };
-const SECTION_ICONS: Record<Section, string> = { general: "tune", audio: "equalizer", transcoding: "transcode", connect: "connectCast", storage: "cached", lyrics: "lyrics", appearance: "palette", customisation: "customise", shortcuts: "keyboard", backup: "backup", diagnostics: "bug", advanced: "code", about: "info" };
+const SECTION_ICONS: Record<Section, string> = { general: "tune", audio: "equalizer", transcoding: "transcode", connect: "connectCast", storage: "cached", lyrics: "lyrics", appearance: "palette", customisation: "customise", gestures: "swipe", shortcuts: "keyboard", backup: "backup", diagnostics: "bug", advanced: "code", about: "info" };
 
 export function Settings({ section }: { section?: string }) {
   const navigate = useApp((s) => s.navigate);
@@ -73,6 +75,7 @@ export function Settings({ section }: { section?: string }) {
           {current === "lyrics" ? <LyricsSettings /> : null}
           {current === "appearance" ? <Appearance /> : null}
           {current === "customisation" ? <Customisation /> : null}
+          {current === "gestures" ? <Gestures /> : null}
           {current === "shortcuts" ? <Shortcuts /> : null}
           {current === "backup" ? <Backup /> : null}
           {current === "diagnostics" ? <Diagnostics /> : null}
@@ -123,11 +126,11 @@ function ScopeBadge({ settingKey }: { settingKey: string }) {
 }
 
 /** A setting: its title (and scope badge), an optional description, and its control. [anchor] is its id in the settings search index (`lib/settings-index`). */
-function Row({ title, desc, settingKey, anchor, children, stacked = false }: { title: string; desc?: string; settingKey?: string; anchor?: string; children: React.ReactNode; stacked?: boolean }) {
+function Row({ title, desc, settingKey, local = false, anchor, children, stacked = false }: { title: string; desc?: string; settingKey?: string; local?: boolean; anchor?: string; children: React.ReactNode; stacked?: boolean }) {
   return (
     <div className={`setting-row ${stacked ? "stacked" : ""}`} id={anchor ? `setting-${anchor}` : undefined}>
       <div className="label">
-        <div className="title">{title}{settingKey ? <ScopeBadge settingKey={settingKey} /> : null}</div>
+        <div className="title">{title}{settingKey ? <ScopeBadge settingKey={settingKey} /> : local ? <span className="badge">{t("settings.scope.local")}</span> : null}</div>
         {desc ? <div className="desc">{desc}</div> : null}
       </div>
       <div className="control">{children}</div>
@@ -680,6 +683,63 @@ function Customisation() {
       <OrderList surface="contextMenu" anchor="contextMenuItems" title={t("settings.contextMenuItems")} />
       <OrderList surface="mediaSession" anchor="mediaSessionButtons" title={t("settings.mediaSessionButtons")} />
     </>
+  );
+}
+
+/**
+ * Trackpad swipes: on or off (all, and each surface), what a song row's swipe does (the core's
+ * synced swipe.* settings, the phone's too), and this device's direction, sensitivity and haptics
+ * (lib/gesture-prefs).
+ */
+function Gestures() {
+  const prefs = useGesturePrefs();
+  const mac = useApp((s) => s.meta?.platform) === "macOs";
+  const surface = (id: keyof GesturePrefs["surfaces"], anchor: string, title: StringId, desc: StringId) => (
+    <Row anchor={anchor} title={t(title)} desc={t(desc)} local>
+      <Switch checked={prefs.surfaces[id]} disabled={!prefs.enabled} onChange={(checked) => setGesturePrefs({ surfaces: { [id]: checked } })} aria-label={t(title)} data-testid={`setting-gesture-${id}`} />
+    </Row>
+  );
+  return (
+    <>
+      <div className="muted small" style={{ marginBottom: 12 }}>{t("settings.gestures.hint")}</div>
+      <Row anchor="gesturesEnabled" title={t("settings.gestures.enabled")} desc={t("settings.gestures.enabledDesc")} local>
+        <Switch checked={prefs.enabled} onChange={(checked) => setGesturePrefs({ enabled: checked })} aria-label={t("settings.gestures.enabled")} data-testid="setting-gestures" />
+      </Row>
+      {surface("rows", "gestureRows", "settings.gestures.rows", "settings.gestures.rowsDesc")}
+      <SwipeChoice anchor="swipeListRight" settingKey={SWIPE_KEYS.list.startToEnd} fallback={SWIPE_DEFAULTS.list.startToEnd} choices={SWIPE_LIST_ACTIONS} title={t("settings.gestures.listRight")} testId="setting-swipe-list-right" />
+      <SwipeChoice anchor="swipeListLeft" settingKey={SWIPE_KEYS.list.endToStart} fallback={SWIPE_DEFAULTS.list.endToStart} choices={SWIPE_LIST_ACTIONS} title={t("settings.gestures.listLeft")} testId="setting-swipe-list-left" />
+      {surface("queue", "gestureQueue", "settings.gestures.queue", "settings.gestures.queueDesc")}
+      <SwipeChoice anchor="swipeQueueRight" settingKey={SWIPE_KEYS.queue.startToEnd} fallback={SWIPE_DEFAULTS.queue.startToEnd} choices={SWIPE_QUEUE_ACTIONS} title={t("settings.gestures.queueRight")} testId="setting-swipe-queue-right" />
+      <SwipeChoice anchor="swipeQueueLeft" settingKey={SWIPE_KEYS.queue.endToStart} fallback={SWIPE_DEFAULTS.queue.endToStart} choices={SWIPE_QUEUE_ACTIONS} title={t("settings.gestures.queueLeft")} testId="setting-swipe-queue-left" />
+      {surface("cover", "gestureCover", "settings.gestures.cover", "settings.gestures.coverDesc")}
+      {surface("page", "gesturePage", "settings.gestures.page", "settings.gestures.pageDesc")}
+      <Row anchor="swipeDirection" title={t("settings.gestures.direction")} desc={t("settings.gestures.directionDesc")} local>
+        <Select value={prefs.direction} disabled={!prefs.enabled} aria-label={t("settings.gestures.direction")} onChange={(e) => setGesturePrefs({ direction: e.target.value as GesturePrefs["direction"] })} data-testid="setting-swipe-direction">
+          {(["system", "natural", "reversed"] as const).map((d) => <option key={d} value={d}>{t(`settings.gestures.direction.${d}`)}</option>)}
+        </Select>
+      </Row>
+      <Row anchor="swipeSensitivity" title={t("settings.gestures.sensitivity")} desc={t("settings.gestures.sensitivityDesc")} local>
+        <Select value={prefs.sensitivity} disabled={!prefs.enabled} aria-label={t("settings.gestures.sensitivity")} onChange={(e) => setGesturePrefs({ sensitivity: e.target.value as GesturePrefs["sensitivity"] })} data-testid="setting-swipe-sensitivity">
+          {(["low", "medium", "high"] as const).map((v) => <option key={v} value={v}>{t(`settings.gestures.sensitivity.${v}`)}</option>)}
+        </Select>
+      </Row>
+      <Row anchor="swipeHaptics" title={t("settings.gestures.haptics")} desc={mac ? t("settings.gestures.hapticsDesc") : `${t("settings.gestures.hapticsDesc")} ${t("settings.gestures.hapticsMacOnly")}`} local>
+        <Switch checked={mac && prefs.haptics} disabled={!mac || !prefs.enabled} onChange={(checked) => setGesturePrefs({ haptics: checked })} aria-label={t("settings.gestures.haptics")} data-testid="setting-swipe-haptics" />
+      </Row>
+    </>
+  );
+}
+
+/** What one side of a row's swipe does: the core's synced setting, from that list's choices. */
+function SwipeChoice({ anchor, settingKey, fallback, choices, title, testId }: { anchor: string; settingKey: string; fallback: string; choices: readonly string[]; title: string; testId: string }) {
+  const value = useSetting<string>(settingKey, fallback);
+  const set = useApp((s) => s.setSetting);
+  return (
+    <Row anchor={anchor} title={title} desc={t("settings.gestures.actionsDesc")} settingKey={settingKey}>
+      <Select value={value} aria-label={title} onChange={(e) => set(settingKey, e.target.value)} data-testid={testId}>
+        {choices.map((id) => <option key={id} value={id}>{swipeChoiceLabel(id)}</option>)}
+      </Select>
+    </Row>
   );
 }
 

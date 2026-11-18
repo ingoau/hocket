@@ -31,6 +31,7 @@ import { handOnFocus } from "./lib/focus";
 import { loadAmll } from "./lib/amll";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ReportUploadBar } from "./components/ReportUploadBar";
+import { PageSwipe } from "./components/PageSwipe";
 import { useHeadphoneWatch } from "./lib/headphone-watch";
 
 // One retry: React.lazy keeps a failed import for good, which would leave fullscreen broken.
@@ -39,6 +40,7 @@ const FullscreenPlayer = lazy(() => loadFullscreen().catch(loadFullscreen));
 
 export function App() {
   const ready = useApp((s) => s.ready);
+  const main = useRef<HTMLElement>(null);
   // The core probes before installing: ServersChanged only arrives once a server is real.
   const hasServer = useApp((s) => s.accounts.length > 0);
   const setupSummary = useSetupSummary();
@@ -99,7 +101,8 @@ export function App() {
       </header>
         <div className="app-body" inert={modal} style={{ "--sidebar-w": `${panels.sidebarCollapsed ? SIDEBAR_RAIL : panels.sidebarWidth}px`, "--right-w": (panels.rightOpen || queueDropReveal) && !narrow ? `${panels.rightWidth}px` : "0px" } as CSSProperties} data-testid="app-body">
         <Sidebar />
-        <main className="content" id="main" tabIndex={-1} data-testid="content">
+        <main ref={main} className="content" id="main" tabIndex={-1} data-testid="content">
+          <PageSwipe target={main} />
           {/* Edit pins opens at the content's leading edge, beside the sidebar it edits. */}
           <EditPinsPanel />
           <Router />

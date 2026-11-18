@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScrollPhase } from "@shared/bridge-types";
-import { DEFAULT_TUNING as TUNED, detentActuation, detentIndex, shapeTravel, SwipeTracker, WheelSequence, type SwipeEffect, type SwipeTuning } from "./swipe";
+import { coarseWheel, DEFAULT_TUNING as TUNED, defaultRelease, detentIndex, resolveTuning, shapeTravel, SURFACE_TUNING, SwipeTracker, systemDirection, WheelSequence, type SwipeEffect, type SwipeTuning, type TuningPrefs } from "./swipe";
 
 const W = 400;
 /** Fixed numbers for these tests, whatever the tuned defaults become: a 120 px threshold. */
@@ -174,22 +174,6 @@ describe("SwipeTracker", () => {
     expect(detentIndex(60, 120, { ...t, detentRamp: 1 })).toBe(5);
   });
 
-  it("ramps the detents' actuation from light to strong, slowly at first", () => {
-    const t = { ...DEFAULT_TUNING, detentIdFrom: 1, detentIdTo: 4, detentStrengthCurve: 2.5 };
-    expect(detentActuation(t, 0)).toBe(1);
-    expect(detentActuation(t, 0.3)).toBe(1);
-    expect(detentActuation(t, 0.5)).toBe(2);
-    expect(detentActuation(t, 0.8)).toBe(3);
-    expect(detentActuation(t, 1)).toBe(4);
-  });
-
-  it("tells each detent how far along it is", () => {
-    const { tracker } = setup({ detentPx: 20, detentRamp: 1, resistance: 0 });
-    const { effects } = swipe(tracker, 110, 11, 1);
-    const progress = effects.flatMap((e) => (e.kind === "haptic" && e.reason === "detent" ? [e.progress ?? -1] : []));
-    expect(progress).toEqual([20 / 120, 40 / 120, 60 / 120, 80 / 120, 100 / 120]);
-  });
-
   it("ticks a detent every detentPx short of the threshold, and none past it", () => {
     const { tracker } = setup({ detentPx: 20, detentRamp: 1, resistance: 0 });
     tracker.phase(phase({ phase: "began" }), 0);
@@ -200,11 +184,123 @@ describe("SwipeTracker", () => {
     expect(kinds(effects).indexOf("haptic:arm")).toBeGreaterThan(kinds(effects).lastIndexOf("haptic:detent"));
   });
 
+  it("leaves a stream alone when neither side has an action", () => {
+    const { tracker } = setup();
+    tracker.sides = { 1: false, [-1]: false };
+    const { consumed } = swipe(tracker, 200, 10, 1);
+    expect(consumed).toBe(false);
+    expect(tracker.stage).toBe("passthrough");
+  });
+
+  it("never swipes on a mouse wheel's stream", () => {
+    const { tracker } = setup();
+    // A tilt wheel or Shift+wheel: 100 px notches sideways.
+    const r = tracker.wheel(-100, 0, 1, true);
+    expect(r.consumed).toBe(false);
+    expect(tracker.stage).toBe("passthrough");
+    // The notches after it are the same stream, coarse or not.
+    for (let i = 1; i < 6; i++) expect(tracker.wheel(-100, 0, 1 + i * 30, false).consumed).toBe(false);
+    expect(tracker.offset).toBe(0);
+    // A trackpad stream after a pause swipes again.
+    const { consumed } = swipe(tracker, 160, 10, 1000);
+    expect(consumed).toBe(true);
+    expect(tracker.armed).toBe(1);
+  });
+
+  it("lets nested surfaces read the same event as the start of a stream", () => {
+    const seq = new WheelSequence();
+    const inner = setup({}, seq).tracker;
+    const outer = setup({}, seq).tracker;
+    inner.sides = { 1: false, [-1]: false };
+    // The inner surface sees each event first and passes it on.
+    for (let i = 0; i < 10; i++) {
+      const t = 1 + i * 8;
+      inner.wheel(-16, 0, t);
+      outer.wheel(-16, 0, t);
+    }
+    expect(inner.stage).toBe("passthrough");
+    expect(outer.stage).toBe("tracking");
+    expect(outer.armed).toBe(1);
+  });
+
   it("does not move towards a side without an action", () => {
     const { tracker } = setup();
     tracker.sides = { 1: false, [-1]: true };
     swipe(tracker, 200, 10, 1);
     expect(tracker.offset).toBe(0);
     expect(tracker.armed).toBe(0);
+  });
+});
+
+describe("coarseWheel", () => {
+  const ev = (deltaX: number, deltaY: number, more: { deltaMode?: number; shiftKey?: boolean } = {}) => ({ deltaX, deltaY, deltaMode: 0, shiftKey: false, ...more });
+  it("takes lines, Shift and notch-sized jumps for a mouse wheel", () => {
+    expect(coarseWheel(ev(0, 3, { deltaMode: 1 }))).toBe(true);
+    expect(coarseWheel(ev(0, 4, { shiftKey: true }))).toBe(true);
+    // Windows: 100 px a notch (120 on some mice); Linux: ~53.
+    expect(coarseWheel(ev(0, 100))).toBe(true);
+    expect(coarseWheel(ev(-120, 0))).toBe(true);
+    expect(coarseWheel(ev(0, 53.33))).toBe(true);
+  });
+  it("takes the small pixel deltas fingers start with for a trackpad", () => {
+    expect(coarseWheel(ev(-4, 0.5))).toBe(false);
+    expect(coarseWheel(ev(12.5, -3))).toBe(false);
+  });
+});
+
+describe("resolveTuning", () => {
+  const prefs: TuningPrefs = { sensitivity: "medium", direction: "system", haptics: true };
+  it("ends swipes by AppKit's phases on macOS, decaying deltas on Windows and an idle gap on Linux", () => {
+    expect(defaultRelease("macOs")).toBe("native");
+    expect(defaultRelease("windows")).toBe("momentum");
+    expect(defaultRelease("linux")).toBe("idle");
+    expect(resolveTuning("rows", "windows", prefs).release).toBe("momentum");
+    expect(resolveTuning("page", "linux", prefs).release).toBe("idle");
+    expect(resolveTuning("cover", "macOs", prefs).release).toBe("native");
+  });
+
+  it("keeps the shipped tuning at medium on a Mac", () => {
+    expect(resolveTuning("rows", "macOs", prefs)).toEqual({ ...SURFACE_TUNING.rows, release: "native", direction: "auto" });
+    expect(resolveTuning("queue", "macOs", prefs)).toEqual(resolveTuning("rows", "macOs", prefs));
+    expect(SURFACE_TUNING.rows).toMatchObject({ threshold: 0.2, hapticDetent: "alignment", hapticArm: "actuator", kickId: 15, kickArg1: 3, kickArg2: 3, hapticDisarm: "alignment", hapticCommit: "levelChange", hapticStart: "none" });
+    expect(SURFACE_TUNING.cover).toMatchObject({ threshold: 0.4, maxTravel: 0.35, resistance: 0.25, flingVelocity: 1.2, hapticCommit: "none" });
+    expect(SURFACE_TUNING.page).toMatchObject({ threshold: 0.16, maxTravel: 0.3, resistance: 0.6, flingVelocity: 1, hapticDisarm: "none", hapticCommit: "none" });
+  });
+
+  it("scales the threshold (and the detents and fling with it) by sensitivity", () => {
+    const low = resolveTuning("rows", "macOs", { ...prefs, sensitivity: "low" });
+    const high = resolveTuning("rows", "macOs", { ...prefs, sensitivity: "high" });
+    expect(low.threshold).toBeGreaterThan(0.2);
+    expect(high.threshold).toBeLessThan(0.2);
+    expect(high.detentPx / high.threshold).toBeCloseTo(TUNED.detentPx / 0.2);
+    expect(high.flingVelocity).toBeLessThan(low.flingVelocity);
+    // Still inside the travel, even on the cover's short leash.
+    const cover = resolveTuning("cover", "macOs", { ...prefs, sensitivity: "low" });
+    expect(cover.maxTravel).toBeGreaterThan(cover.threshold);
+  });
+
+  it("swipes a shorter way at high sensitivity", () => {
+    const run = (sensitivity: TuningPrefs["sensitivity"]) => {
+      const tracker = new SwipeTracker(resolveTuning("rows", "linux", { ...prefs, sensitivity }), new WheelSequence());
+      tracker.width = W;
+      swipe(tracker, 70, 7, 1);
+      return tracker.armed;
+    };
+    // 70 of 400 px: short of medium's 80 px threshold, past high's 56.
+    expect(run("medium")).toBe(0);
+    expect(run("high")).toBe(1);
+  });
+
+  it("follows AppKit on macOS and natural scrolling elsewhere, unless told", () => {
+    expect(systemDirection("macOs")).toBe("auto");
+    expect(systemDirection("windows")).toBe("natural");
+    expect(resolveTuning("rows", "linux", prefs).direction).toBe("natural");
+    expect(resolveTuning("rows", "macOs", { ...prefs, direction: "reversed" }).direction).toBe("reversed");
+  });
+
+  it("silences every haptic when they are off, and off macOS", () => {
+    for (const t of [resolveTuning("rows", "macOs", { ...prefs, haptics: false }), resolveTuning("rows", "windows", prefs)]) {
+      expect([t.hapticStart, t.hapticDetent, t.hapticArm, t.hapticDisarm, t.hapticCommit]).toEqual(["none", "none", "none", "none", "none"]);
+    }
   });
 });

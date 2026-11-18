@@ -254,8 +254,9 @@ export interface HocketBridge {
     /** Whether the private trackpad actuator (MultitouchSupport) opened. Experimental. */
     actuatorAvailable(): Promise<boolean>;
     /**
-     * Fire the trackpad actuator directly: an actuation ID and two floats, reaching lighter clicks
-     * than AppKit's patterns. Without the actuator, main plays AppKit's "generic" instead.
+     * Fire the trackpad actuator directly (MultitouchSupport's MTActuatorActuate, a private macOS
+     * API that can change or go away): an actuation ID and two floats, a firmer click than
+     * AppKit's patterns. Without the actuator, main plays AppKit's "generic" instead.
      */
     actuate(actuation: number, arg1: number, arg2: number): void;
     /** Scroll gesture phase transitions, from AppKit (the web's `wheel` has none). */

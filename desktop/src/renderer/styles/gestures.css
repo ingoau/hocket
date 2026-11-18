@@ -1,106 +1,52 @@
-/* Gesture playground (views/GesturePlayground.tsx). */
-.page-gestures .view-body { container-type: inline-size; }
-.page-gestures .gp-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 16px; align-items: start; max-width: 1280px; }
-@container (max-width: 660px) { .page-gestures .gp-layout { grid-template-columns: minmax(0, 1fr); } .page-gestures .gp-panel { position: static; max-height: none; } }
-.page-gestures .gp-surfaces { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-.page-gestures .gp-panel { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 0; max-height: calc(100vh - 120px); overflow: auto; }
-.page-gestures .gp-card { padding: 16px; }
+/* Trackpad swipes (lib/swipe.ts): song rows and queue rows, the now-playing artwork, back and forward
+   over the page. Every moving part moves with `translate`, so it composes with the `transform`
+   the list's virtualiser, dnd-kit or the fullscreen player's fly-in already set. */
+:root { --swipe-surface: var(--bg-elev); }
 
-.gp-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.gp-chip { font-size: var(--fs-sm); padding: 4px 10px; border-radius: var(--shape-full); background: var(--bg-sunken); color: var(--fg-muted); }
-.gp-chip.ok { background: color-mix(in srgb, #2fbf71 18%, transparent); color: var(--fg); }
-.gp-chip.no { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--fg); }
-.gp-try { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: var(--fs-sm); color: var(--fg-muted); margin-left: auto; }
+/* The action a row uncovers. */
+.swipe-reveal { position: absolute; display: flex; align-items: center; gap: 10px; padding: 0 20px; font-weight: 600; font-size: var(--fs-sm); color: var(--fg); border-radius: var(--shape-sm); pointer-events: none; overflow: hidden; }
+.swipe-reveal.from-end { flex-direction: row-reverse; }
+.swipe-reveal svg { flex: none; transition: transform 160ms cubic-bezier(.3, 1.6, .5, 1); }
+.swipe-reveal.armed svg { transform: scale(1.25); }
+.swipe-reveal.primary { background: color-mix(in srgb, var(--accent) 30%, var(--bg-elev)); }
+.swipe-reveal.secondary { background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev)); }
+.swipe-reveal.tertiary { background: color-mix(in srgb, var(--accent-tint, var(--accent)) 22%, var(--bg-elev)); }
+.swipe-reveal.danger { background: color-mix(in srgb, var(--danger) 28%, var(--bg-elev)); }
+.swipe-reveal:not(.armed) { filter: saturate(0.55); }
 
-.gp-section { padding: 16px; outline: 2px solid transparent; transition: outline-color 150ms; }
-.gp-section.active { outline-color: var(--accent); }
-.gp-section-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
-.gp-section-head .card-title { margin: 0; }
+/* A row on the move takes an opaque surface over what it uncovers (rows are see-through at rest). */
+.tr.swiping, .qrow.swiping { background-image: linear-gradient(var(--row-tint, transparent), var(--row-tint, transparent)); background-color: var(--swipe-surface); z-index: 1; }
+.tr.swiping:hover, .qrow.swiping:hover { --row-tint: var(--bg-hover); }
+.tr.swiping.selected, .qrow.swiping.selected { --row-tint: var(--selection); }
+.tr.swiping.playing { --row-tint: var(--accent-soft); }
+.tr.swipe-flash { animation: swipe-flash 450ms ease; }
+@keyframes swipe-flash { 30% { background-color: var(--state-selected, var(--bg-active)); } }
 
-/* Rows */
-.gp-list { display: flex; flex-direction: column; gap: 2px; border-radius: var(--shape-md); overflow: hidden; }
-.gp-queue { max-height: 300px; overflow-y: auto; }
-.gp-row { position: relative; overflow: hidden; border-radius: var(--shape-sm); flex: none; }
-.gp-row.leaving { animation: gp-collapse 200ms 160ms ease forwards; }
-@keyframes gp-collapse { to { height: 0; opacity: 0; } }
-.gp-row-fg { position: relative; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface-tonal); will-change: transform; }
-.gp-row-fg.flash { animation: gp-flash 450ms ease; }
-@keyframes gp-flash { 30% { background: var(--state-selected, var(--bg-active)); } }
-.gp-row-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.gp-row-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gp-row-artist { font-size: var(--fs-sm); }
-.gp-thumb { display: block; flex: none; border-radius: var(--shape-sm); }
-.gp-row-bg { position: absolute; inset: 0; display: flex; align-items: center; gap: 10px; padding: 0 20px; font-weight: 600; font-size: var(--fs-sm); }
-.gp-row-bg.from-end { flex-direction: row-reverse; }
-.gp-row-bg svg { transition: transform 160ms cubic-bezier(.3, 1.6, .5, 1); }
-.gp-row-bg.armed svg { transform: scale(1.25); }
-.gp-row-bg.primary { background: color-mix(in srgb, var(--accent) 30%, var(--bg-elev)); color: var(--fg); }
-.gp-row-bg.secondary { background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev)); color: var(--fg); }
-.gp-row-bg.danger { background: color-mix(in srgb, var(--danger) 28%, var(--bg-elev)); color: var(--fg); }
-.gp-row-bg:not(.armed) { filter: saturate(0.55); }
-.gp-last { margin: 8px 0 0; }
+/* Queue rows sit in a slot that holds the reveal; one that is swiped away collapses after. */
+.qrow-slot { position: relative; interpolate-size: allow-keywords; }
+.qrow-slot > .swipe-reveal { inset: 0 4px; }
+.right-panel .qrow-slot > .swipe-reveal { inset: 0 8px; border-radius: var(--shape-md); }
+.np .qrow-slot > .swipe-reveal { inset: 0 0 2px; border-radius: var(--shape-lg); }
+.np { --swipe-surface: color-mix(in srgb, #000 55%, transparent); }
+.np .qrow.swiping { backdrop-filter: blur(24px); }
+.qrow-slot.leaving { animation: swipe-collapse 200ms 160ms ease forwards; overflow: hidden; }
+@keyframes swipe-collapse { to { height: 0; opacity: 0; } }
 
-/* Cover */
-.gp-cover-wrap { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
-.gp-cover { position: relative; width: 220px; height: 220px; flex: none; overflow: hidden; border-radius: var(--shape-lg); }
-.gp-cover-strip { position: absolute; inset: 0; will-change: transform; }
-.gp-cover-slot { position: absolute; top: 0; width: 100%; height: 100%; }
-.gp-cover-slot .gp-thumb { border-radius: var(--shape-lg); }
-.gp-cover.armed { box-shadow: 0 0 0 3px var(--accent); }
-.gp-cover-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.gp-cover-controls { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+/* The artwork: follows the fingers, then slides out the way it went while the next song comes in. */
+.cover-swipe { touch-action: pan-y; }
+.cover-swipe.armed { filter: brightness(1.06); }
 
-/* Page */
-.gp-page { position: relative; overflow: hidden; height: 260px; border-radius: var(--shape-md); background: var(--surface-tonal); }
-.gp-page-body { height: 100%; padding: 16px 20px; will-change: transform; }
-.gp-page-content h3 { margin: 6px 0 10px; font-size: var(--title-card); }
-.gp-page-content ul { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
-.gp-page-content li { padding: 10px 12px; border-radius: var(--shape-sm); background: var(--bg-sunken); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gp-page-content.enter-back { animation: gp-enter-back 220ms ease; }
-.gp-page-content.enter-fwd { animation: gp-enter-fwd 220ms ease; }
-@keyframes gp-enter-back { from { opacity: 0; transform: translateX(-24px); } }
-@keyframes gp-enter-fwd { from { opacity: 0; transform: translateX(24px); } }
-.gp-crumbs { display: flex; gap: 6px; }
-.gp-crumbs span + span::before { content: "›"; margin-right: 6px; }
-.gp-crumbs .on { color: var(--fg); font-weight: 600; }
-.gp-page-arrow { position: absolute; top: 50%; z-index: 2; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-elev); color: var(--fg); box-shadow: var(--shadow); pointer-events: none; }
-.gp-page-arrow.back { left: 0; }
-.gp-page-arrow.fwd { right: 0; }
-.gp-page-arrow.armed { background: var(--accent); color: var(--accent-fg); }
-
-/* Panel */
-.gp-tabs { display: flex; gap: 4px; padding: 4px; border-radius: var(--shape-full); background: var(--bg-sunken); margin-bottom: 12px; }
-.gp-tab { flex: 1; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--fs-sm); font-weight: 600; padding: 6px 8px; border-radius: var(--shape-full); cursor: pointer; white-space: nowrap; }
-.gp-tab.on { background: var(--accent); color: var(--accent-fg); }
-.gp-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-.gp-form { display: flex; flex-direction: column; gap: 10px; }
-.gp-choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--fs-sm); }
-.gp-choice > :last-child { min-width: 150px; }
-.gp-num { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); }
-.gp-num-head { display: flex; justify-content: space-between; gap: 8px; }
-.gp-num .m3-slider { flex: none; width: 100%; }
-.gp-num-v { font-variant-numeric: tabular-nums; font-weight: 600; }
-.gp-haptics { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
-.gp-trace { display: block; width: 100%; height: 140px; border-radius: var(--shape-sm); background: var(--bg-sunken); }
-.gp-log-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.gp-log-head .card-title { margin: 0; margin-right: auto; }
-.gp-check { display: inline-flex; gap: 6px; align-items: center; font-size: var(--fs-sm); color: var(--fg-muted); }
-.gp-log { margin: 0; padding: 0; list-style: none; font-family: var(--font-mono); font-size: var(--fs-xs); max-height: 260px; overflow: auto; user-select: text; }
-.gp-log li { padding: 2px 0; display: flex; gap: 8px; white-space: nowrap; }
-.gp-log-t { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
-.gp-log-s { color: var(--fg-muted); min-width: 56px; }
-.gp-log-phase { color: #4a9eff; }
-.gp-log-haptic { color: var(--accent-text); }
-.gp-log-commit { color: #2fbf71; font-weight: 600; }
-.gp-log-wheel { opacity: 0.6; }
+/* Back and forward: an arrow at the edge that fills once letting go would go there. */
+.page-arrow { position: absolute; top: 50%; z-index: 5; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-elev); color: var(--fg); box-shadow: var(--shadow); pointer-events: none; }
+.page-arrow.back { left: 0; }
+.page-arrow.fwd { right: 0; }
+.page-arrow.armed { background: var(--accent); color: var(--accent-fg); }
 
 @media (prefers-reduced-motion: reduce) {
-  .gp-page-content.enter-back, .gp-page-content.enter-fwd, .gp-row-fg.flash { animation: none; }
+  .qrow-slot.leaving { animation-duration: 1ms; animation-delay: 0ms; }
+  .tr.swipe-flash { animation: none; }
+  .swipe-reveal svg { transition: none; }
 }
 
-/* Haptic lab */
-.gp-lab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
-.gp-lab-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: 64px; border-radius: var(--shape-md); background: var(--surface-tonal); user-select: none; transition: background 120ms; }
-.gp-lab-tile.on { background: color-mix(in srgb, var(--accent) 28%, var(--surface-tonal)); }
-.gp-lab-label { font-weight: 700; }
-.gp-lab-args { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+/* The page leaning the way a back or forward swipe pulls it (PageSwipe). */
+.content[data-page-swipe] > .view { translate: var(--page-swipe-x, 0px) 0; transition: var(--page-swipe-transition, none); }
