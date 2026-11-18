@@ -14,11 +14,17 @@
 .swipe-reveal.danger { background: color-mix(in srgb, var(--danger) 28%, var(--bg-elev)); }
 .swipe-reveal:not(.armed) { filter: saturate(0.55); }
 
-/* A row on the move takes an opaque surface over what it uncovers (rows are see-through at rest). */
-.tr.swiping, .qrow.swiping { background-image: linear-gradient(var(--row-tint, transparent), var(--row-tint, transparent)); background-color: var(--swipe-surface); z-index: 1; }
+/* A row on the move takes an opaque surface over what it uncovers (rows are see-through at rest).
+   !important: the row's own state backgrounds (playing, hovered, the fullscreen queue's current
+   row) use the shorthand at higher specificity, and would let the reveal show through. */
+.tr.swiping, .qrow.swiping { background-image: linear-gradient(var(--row-tint, transparent), var(--row-tint, transparent)) !important; background-color: var(--swipe-surface) !important; z-index: 1; }
 .tr.swiping:hover, .qrow.swiping:hover { --row-tint: var(--bg-hover); }
 .tr.swiping.selected, .qrow.swiping.selected { --row-tint: var(--selection); }
-.tr.swiping.playing { --row-tint: var(--accent-soft); }
+.tr.swiping.playing, .qrow.swiping.current { --row-tint: var(--accent-soft); }
+.right-panel .qrow.swiping.current { --row-tint: var(--state-selected); }
+.np .qrow.swiping.current { --row-tint: rgba(255, 255, 255, 0.16); }
+/* A row pushed sideways would widen its list's scroll range (and show a scrollbar). */
+.table-body:has(.swiping), .queue-scroll:has(.swiping), .queue-scroll:has(.leaving) { overflow-x: hidden; }
 .tr.swipe-flash { animation: swipe-flash 450ms ease; }
 @keyframes swipe-flash { 30% { background-color: var(--state-selected, var(--bg-active)); } }
 
@@ -38,8 +44,8 @@
 
 /* Back and forward: an arrow at the edge that fills once letting go would go there. */
 .page-arrow { position: absolute; top: 50%; z-index: 5; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-elev); color: var(--fg); box-shadow: var(--shadow); pointer-events: none; }
-.page-arrow.back { left: 0; }
-.page-arrow.fwd { right: 0; }
+.page-arrow.left { left: 0; }
+.page-arrow.right { right: 0; }
 .page-arrow.armed { background: var(--accent); color: var(--accent-fg); }
 
 @media (prefers-reduced-motion: reduce) {

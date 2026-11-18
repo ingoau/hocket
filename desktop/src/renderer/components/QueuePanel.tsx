@@ -284,7 +284,10 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     if (!e) return { right: null, left: null };
     const facts = { loved: !!e.track.loved, downloaded: e.track.offline === "downloaded", snoozed: snoozedIds.split("\n").includes(e.track.id), queueSection: section };
     const rtl = isRtl();
-    return { right: rowSwipeAction(rtl ? swipeEnd : swipeStart, facts), left: rowSwipeAction(rtl ? swipeStart : swipeEnd, facts) };
+    // The song playing never swipes out of the queue (as on Android); its other actions still run.
+    const current = e.item.key === queue.current?.item.key;
+    const of = (id: string) => (current && id === "removeFromQueue" ? null : rowSwipeAction(id, facts));
+    return { right: of(rtl ? swipeEnd : swipeStart), left: of(rtl ? swipeStart : swipeEnd) };
   };
   /** A row swiped away: it slides out, then its slot collapses while the core removes it. */
   const [leaving, setLeaving] = useState<{ key: string; side: Side } | undefined>(undefined);
@@ -297,10 +300,13 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
       return key && key !== leaving?.key && (a.right || a.left) ? { key, sides: { start: !!a.right, end: !!a.left } } : null;
     },
     onCommit: (side, _how, key) => {
-      const a = key ? (side > 0 ? swipeActions(entryByKey(queue, key)).right : swipeActions(entryByKey(queue, key)).left) : null;
-      if (!key || !a) return;
-      const row = scrollRef.current?.querySelector<HTMLElement>(`.qrow[data-key="${window.CSS.escape(key)}"]`) ?? null;
-      const run = () => runRowSwipe(a, { type: "queueItems", data: { keys: [key] } }, row);
+      const entry = key ? entryByKey(queue, key) : undefined;
+      const a = entry ? (side > 0 ? swipeActions(entry).right : swipeActions(entry).left) : null;
+      if (!key || !entry || !a) return;
+      // Its slot: where the row rests, not where the swipe pushed it.
+      const slot = scrollRef.current?.querySelector<HTMLElement>(`.qrow[data-key="${window.CSS.escape(key)}"]`)?.parentElement ?? null;
+      const ref = entry.item.track;
+      const run = () => runRowSwipe(a, { type: "queueItems", data: { keys: [key] } }, ref, slot);
       if (!a.dismisses) return run();
       setLeaving({ key, side });
       // Let the row slide out before the list drops it.

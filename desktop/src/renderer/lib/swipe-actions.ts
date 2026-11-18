@@ -2,10 +2,12 @@
 // same as the phone's, `SWIPE_LIST_ACTIONS` / `SWIPE_QUEUE_ACTIONS` in the core's settings
 // registry) turned into the revealed action for one row, and running it through the action
 // registry like the context menu does. Android's counterpart is ui/components/SwipeActions.kt.
-import type { ActionTarget } from "@core/api";
+import type { ActionTarget, TrackRef } from "@core/api";
 import { t, type StringId } from "@shared/strings";
 import { executeAction, type ActionContext } from "../store/actions";
 import { openContextMenu } from "../components/ContextMenu";
+import { bridge } from "../core/bridge";
+import { useApp } from "../store/app";
 import type { Side } from "./swipe";
 
 /** The setting keys, with the registry's defaults (crates/hocket-core/src/settings/registry.rs). */
@@ -93,15 +95,26 @@ export function isRtl(): boolean {
 }
 
 /**
- * Run a row's swipe on `target`. Add to playlist opens the picker beside the row; preview opens
- * the song's menu there, which holds the preview (it plays while the menu is open). Everything else
- * is the registry's, as from the context menu.
+ * Run a row's swipe on `target`, `track` being its song. `anchor` is where the row sits at rest
+ * (not where the swipe pushed it). Add to playlist opens the picker there; preview opens the song's
+ * menu there and starts the preview, which plays while the menu is open (as Android's does).
+ * Everything else is the registry's, as from the context menu.
  */
-export function runRowSwipe(a: RowSwipeAction, target: ActionTarget, row: HTMLElement | null, ctx: ActionContext = {}): void {
+export function runRowSwipe(a: RowSwipeAction, target: ActionTarget, track: TrackRef, anchor: HTMLElement | null, ctx: ActionContext = {}): void {
   if (a.runId === "preview") {
-    const r = row?.getBoundingClientRect();
-    void openContextMenu({ clientX: Math.round(r ? r.left + 24 : 0), clientY: Math.round(r ? r.bottom : 0), preventDefault: () => {} }, target, ctx);
+    const r = anchor?.getBoundingClientRect();
+    void openContextMenu({ clientX: Math.round(r ? r.left + 24 : 0), clientY: Math.round(r ? r.bottom : 0), preventDefault: () => {} }, target, ctx).then(() => {
+      // Don't start one there is no menu to show it in.
+      if (useApp.getState().contextMenu) bridge().dispatch({ type: "previewStart", data: { track } });
+    });
     return;
   }
-  void executeAction(a.runId, target, a.runId === "addToPlaylist" ? { ...ctx, anchor: row ?? undefined } : ctx);
+  if (a.runId === "addToPlaylist") {
+    // A picker already open (for another song) would take this as the + that closes it.
+    const app = useApp.getState();
+    if (app.playlistPicker) app.closePlaylistPicker();
+    void executeAction("addToPlaylist", target, { ...ctx, anchor: anchor ?? undefined });
+    return;
+  }
+  void executeAction(a.runId, target, ctx);
 }

@@ -174,9 +174,11 @@ export function useSwipe<K = string>(ref: RefObject<HTMLElement | null>, opts: U
       if (e.ctrlKey) return; // a pinch
       if (claimed.has(e)) return; // an inner surface's
       const o = optsRef.current;
-      if (o.disabled && tracker.stage !== "tracking") return;
-      if (tracker.stage === "idle") {
-        if (o.begin) {
+      // A new stream says what it is on first. Disabled, it is still fed (with nothing to swipe
+      // to), so the sequence and the tracker keep up with the momentum going past.
+      if (tracker.wouldStart(e.timeStamp)) {
+        if (o.disabled) tracker.sides = { ...NO_SIDES };
+        else if (o.begin) {
           const b = inHorizontalScroller(e.target as Element | null, el) ? null : o.begin(e);
           pending = b?.key;
           tracker.sides = b ? { 1: b.sides.start, [-1]: b.sides.end } : { ...NO_SIDES };

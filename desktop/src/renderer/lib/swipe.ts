@@ -132,6 +132,11 @@ export type SwipeStage = "idle" | "deciding" | "tracking" | "passthrough" | "coa
  * start of a stream of events, never on a surface that momentum (or a scroll that moved the list)
  * brings under the pointer halfway through one.
  */
+/** Momentum with no wheel event for this long is over, even without its "ended" (it went to another app). */
+export const STALE_MOMENTUM_MS = 400;
+/** Fingers resting this long without a wheel event no longer hold a swipe or a stream open. */
+export const STALE_FINGERS_MS = 3000;
+
 export class WheelSequence {
   /** Time of the last wheel event anywhere. */
   lastWheel = -Infinity;
@@ -143,25 +148,51 @@ export class WheelSequence {
   momentum = false;
   /** Natural scrolling, from AppKit; macOS's default until told otherwise. */
   inverted = true;
+  /** A touch began and no wheel event has come since: the next one starts a stream. */
+  private began = false;
+  /** When that first event came (nested surfaces see it in turn). */
+  private startT = NaN;
 
   phase(p: ScrollPhase): void {
     this.native = true;
     this.inverted = p.inverted;
-    if (p.phase === "began" || p.phase === "mayBegin") this.fingersDown = true;
+    if (p.phase === "began" || p.phase === "mayBegin") {
+      this.fingersDown = true;
+      this.began = true;
+    }
     if (p.phase === "ended" || p.phase === "cancelled") this.fingersDown = false;
     if (p.momentum === "began") this.momentum = true;
     if (p.momentum === "ended" || p.momentum === "cancelled" || p.phase === "began" || p.phase === "mayBegin") this.momentum = false;
   }
 
-  /** Whether an event at `t` (before `note`) may start a new swipe. */
+  /** Fingers on the pad, as of `t` (a lift that never reached us expires). */
+  fingersAt(t: number): boolean {
+    return this.native && this.fingersDown && t - this.lastWheel <= STALE_FINGERS_MS;
+  }
+
+  /** Momentum still coasting, as of `t`. */
+  momentumAt(t: number): boolean {
+    return this.native && this.momentum && t - this.lastWheel <= STALE_MOMENTUM_MS;
+  }
+
+  /**
+   * Whether an event at `t` (before `note`) may start a new swipe: after a gap in the events, or
+   * with AppKit's phases the first event of a touch. Never halfway through one, nor in momentum.
+   */
   canStart(t: number, idleMs: number): boolean {
     const last = t === this.lastWheel ? this.prevWheel : this.lastWheel;
-    if (this.native) return !this.momentum && (this.fingersDown || t - last > idleMs);
-    return t - last > idleMs;
+    const gap = t - last > idleMs;
+    if (!this.native) return gap;
+    if (this.momentum && t - last <= STALE_MOMENTUM_MS) return false;
+    return gap || this.began || t === this.startT;
   }
 
   note(t: number): void {
     if (t === this.lastWheel) return;
+    if (this.began) {
+      this.startT = t;
+      this.began = false;
+    }
     this.prevWheel = this.lastWheel;
     this.lastWheel = t;
   }
@@ -217,6 +248,16 @@ export class SwipeTracker {
   ) {}
 
   /**
+   * Whether a wheel event at `t` would start a new stream here (so the caller can say what it is
+   * on first). Ask before `wheel`.
+   */
+  wouldStart(t: number): boolean {
+    if (!this.seq.canStart(t, this.tuning.idleMs)) return false;
+    if (this.stage === "idle") return true;
+    return t - this.lastT > this.tuning.idleMs && (this.stage === "passthrough" || this.stage === "coasting");
+  }
+
+  /**
    * One wheel event: deltas as the event has them (px), at `t` ms. `consumed` says the caller
    * should preventDefault it (it belongs to a swipe). `coarse`: it looks like a mouse wheel
    * (`coarseWheel`); a stream that starts like that is left alone.
@@ -231,7 +272,7 @@ export class SwipeTracker {
     // A stream that ended without a phase (or without native phases at all) ends here.
     if ((this.stage === "passthrough" || this.stage === "coasting") && fresh && startable) this.stage = "idle";
     // A finger resting on the pad is not a lift when the phases say so.
-    const held = this.tuning.release === "native" && this.seq.native && this.seq.fingersDown;
+    const held = this.tuning.release === "native" && this.seq.fingersAt(t);
     if (this.stage === "tracking" && fresh && !held) effects.push(...this.release(t, "idle gap"));
     if (this.stage === "coasting" || this.stage === "passthrough") {
       this.lastT = t;
@@ -305,11 +346,11 @@ export class SwipeTracker {
     if (t - this.lastT <= this.tuning.idleMs) return [];
     if (this.stage === "tracking") {
       // With native phases, "ended" decides; a quiet finger still on the pad is not a lift.
-      if (this.tuning.release === "native" && this.seq.native && this.seq.fingersDown) return [];
+      if (this.tuning.release === "native" && this.seq.fingersAt(t)) return [];
       return this.release(t, "idle gap");
     }
     if (this.stage === "deciding") this.stage = "idle";
-    if ((this.stage === "coasting" || this.stage === "passthrough") && !(this.seq.native && (this.seq.fingersDown || this.seq.momentum))) this.stage = "idle";
+    if ((this.stage === "coasting" || this.stage === "passthrough") && !(this.seq.fingersAt(t) || this.seq.momentumAt(t))) this.stage = "idle";
     return [];
   }
 

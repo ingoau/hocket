@@ -216,22 +216,29 @@ export function TrackTable(props: TrackTableProps) {
     const rtl = isRtl();
     return { right: rowSwipeAction(rtl ? swipeEnd : swipeStart, facts), left: rowSwipeAction(rtl ? swipeStart : swipeEnd, facts) };
   };
-  const [flashIdx, setFlashIdx] = useState<number | undefined>(undefined);
-  const swipe = useSwipe<number>(parentRef, {
+  /** The swiped row, by index and song: a row that changes under the index (the song left the list) is not it. */
+  type SwipeKey = { i: number; id: string };
+  const [flash, setFlash] = useState<SwipeKey | undefined>(undefined);
+  const swipe = useSwipe<SwipeKey>(parentRef, {
     tuning: swipeTuning,
     begin: (e) => {
       const row = (e.target as Element | null)?.closest<HTMLElement>("[data-testid=track-row]");
       const i = row ? Number(row.dataset.index) : NaN;
-      const a = swipeActions(tracks[i]);
-      return Number.isFinite(i) && (a.right || a.left) ? { key: i, sides: { start: !!a.right, end: !!a.left } } : null;
+      const tr = tracks[i];
+      const a = swipeActions(tr);
+      return tr && Number.isFinite(i) && (a.right || a.left) ? { key: { i, id: tr.id }, sides: { start: !!a.right, end: !!a.left } } : null;
     },
-    onCommit: (side, _how, i) => {
-      const tr = i === undefined ? undefined : tracks[i];
+    onCommit: (side, _how, key) => {
+      const tr = key && tracks[key.i]?.id === key.id ? tracks[key.i] : undefined;
       const a = tr ? (side > 0 ? swipeActions(tr).right : swipeActions(tr).left) : null;
-      if (!tr || !a || i === undefined) return;
-      setFlashIdx(i);
-      setTimeout(() => setFlashIdx((f) => (f === i ? undefined : f)), 450);
-      runRowSwipe(a, { type: "tracks", data: { tracks: [refOf(tr)] } }, parentRef.current?.querySelector<HTMLElement>(`[data-testid=track-row][data-index="${i}"]`) ?? null, { ...context, indices: [i] });
+      if (!tr || !a || !key) return;
+      setFlash(key);
+      setTimeout(() => setFlash((f) => (f === key ? undefined : f)), 450);
+      // The reveal sits where the row rests; the row itself is still pushed aside.
+      const body = parentRef.current;
+      const anchor = body?.querySelector<HTMLElement>("[data-testid=swipe-reveal]") ?? body?.querySelector<HTMLElement>(`[data-testid=track-row][data-index="${key.i}"]`) ?? null;
+      const ref = refOf(tr);
+      runRowSwipe(a, { type: "tracks", data: { tracks: [ref] } }, ref, anchor, { ...context, indices: [key.i] });
     },
   });
   useEffect(() => {
@@ -414,14 +421,14 @@ export function TrackTable(props: TrackTableProps) {
             const focused = vi.index === focusIdx;
             const playing = !!tr && tr.id === playingTrackId;
             const faded = !!tr && snoozed.has(tr.id);
-            const swiped = swipe.key === vi.index && (swipe.stage === "tracking" || swipe.settling);
+            const swiped = !!tr && swipe.key?.i === vi.index && swipe.key.id === tr.id && (swipe.stage === "tracking" || swipe.settling);
             const tracking = swiped && swipe.stage === "tracking";
             const reveal = swiped && swipe.side !== 0 ? (swipe.side > 0 ? swipeActions(tr).right : swipeActions(tr).left) : null;
             return (
               <Fragment key={vi.key}>
               {reveal && swipe.side !== 0 ? <SwipeReveal action={reveal} side={swipe.side} armed={swipe.armed !== 0} style={{ top: 0, left: "var(--table-inset)", right: "var(--table-inset)", height: vi.size, transform: `translateY(${vi.start}px)` }} /> : null}
               <div
-                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}${swiped ? " swiping" : ""}${flashIdx === vi.index ? " swipe-flash" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
+                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}${swiped ? " swiping" : ""}${flash && flash.i === vi.index && flash.id === tr?.id ? " swipe-flash" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
                 role="row"
                 aria-selected={selected}
                 aria-rowindex={vi.index + 2}

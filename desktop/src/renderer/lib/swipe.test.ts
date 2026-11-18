@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScrollPhase } from "@shared/bridge-types";
-import { coarseWheel, DEFAULT_TUNING as TUNED, defaultRelease, detentIndex, resolveTuning, shapeTravel, SURFACE_TUNING, SwipeTracker, systemDirection, WheelSequence, type SwipeEffect, type SwipeTuning, type TuningPrefs } from "./swipe";
+import { coarseWheel, DEFAULT_TUNING as TUNED, STALE_MOMENTUM_MS, defaultRelease, detentIndex, resolveTuning, shapeTravel, SURFACE_TUNING, SwipeTracker, systemDirection, WheelSequence, type SwipeEffect, type SwipeTuning, type TuningPrefs } from "./swipe";
 
 const W = 400;
 /** Fixed numbers for these tests, whatever the tuned defaults become: a 120 px threshold. */
@@ -190,6 +190,50 @@ describe("SwipeTracker", () => {
     const { consumed } = swipe(tracker, 200, 10, 1);
     expect(consumed).toBe(false);
     expect(tracker.stage).toBe("passthrough");
+  });
+
+  it("never starts halfway through a touch, even with the fingers down (AppKit)", () => {
+    const seq = new WheelSequence();
+    const page = setup({}, seq).tracker;
+    const row = setup({}, seq).tracker;
+    page.phase(phase({ phase: "began" }), 0);
+    // The page takes the touch's first events; a row the lean brings under the pointer joins late.
+    swipe(page, 40, 4, 1);
+    expect(page.stage).toBe("tracking");
+    expect(row.wouldStart(40)).toBe(false);
+    expect(row.wheel(-10, 0, 40).consumed).toBe(false);
+    expect(row.stage).toBe("passthrough");
+    // The next touch starts afresh.
+    seq.phase(phase({ phase: "ended" }));
+    page.phase(phase({ phase: "ended" }), 60);
+    seq.phase(phase({ phase: "began" }));
+    expect(row.wouldStart(500)).toBe(true);
+  });
+
+  it("asks again where a stream starts after a pause with the fingers resting", () => {
+    const { tracker, seq } = setup();
+    tracker.phase(phase({ phase: "began" }), 0);
+    for (let i = 0; i < 10; i++) tracker.wheel(0, 20, 1 + i * 8);
+    expect(tracker.stage).toBe("passthrough");
+    expect(tracker.wouldStart(90)).toBe(false);
+    // A pause past the idle gap: what comes next is a new stream, on whatever is under the pointer now.
+    expect(tracker.wouldStart(300)).toBe(true);
+    expect(seq.fingersDown).toBe(true);
+  });
+
+  it("lets go of momentum whose end never arrived", () => {
+    const { tracker, seq } = setup();
+    tracker.phase(phase({ phase: "began" }), 0);
+    swipe(tracker, 160, 10, 1);
+    tracker.phase(phase({ phase: "ended" }), 90);
+    tracker.phase(phase({ momentum: "began" }), 95);
+    tracker.wheel(-30, 0, 100);
+    expect(tracker.stage).toBe("coasting");
+    // The pointer left the window: no momentum "ended". After a quiet spell it is over.
+    tracker.tick(100 + STALE_MOMENTUM_MS + 1);
+    expect(tracker.stage).toBe("idle");
+    expect(seq.canStart(100 + STALE_MOMENTUM_MS + 1, DEFAULT_TUNING.idleMs)).toBe(true);
+    expect(tracker.wheel(0, 30, 100 + STALE_MOMENTUM_MS + 2).consumed).toBe(false);
   });
 
   it("never swipes on a mouse wheel's stream", () => {

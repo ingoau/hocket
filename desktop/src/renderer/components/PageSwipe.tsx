@@ -48,14 +48,16 @@ export function PageSwipe({ target }: { target: RefObject<HTMLElement | null> })
   const width = target.current?.clientWidth ?? 1;
   const progress = tuning ? Math.min(1, Math.abs(view.offset) / (tuning.threshold * width)) : 0;
   const ease = tracking || reducedMotion ? "none" : "opacity 200ms ease, transform 200ms ease, background-color 120ms";
+  /** An arrow at the `edge` the page is pulled away from: back is on the left in left-to-right text. */
   const arrow = (dir: "back" | "fwd", shown: boolean, armed: boolean) => {
     const p = shown ? progress : 0;
-    const from = dir === "back" ? -48 : 48;
-    const x = dir === "back" ? p * 56 - 48 : 48 - p * 56;
+    const left = (dir === "back") !== rtl;
+    const hidden = left ? -48 : 48;
+    const x = left ? p * 56 - 48 : 48 - p * 56;
     return (
-      <div className={`page-arrow ${dir} ${armed ? "armed" : ""}`} aria-hidden="true" data-testid={`page-swipe-${dir}`} data-armed={armed || undefined}
-        style={{ opacity: p, transform: `translate(${shown ? x : from}px, -50%) scale(${0.6 + 0.4 * p})`, transition: ease }}>
-        <Icon name={dir === "back" ? "chevronLeft" : "chevronRight"} size={22} />
+      <div className={`page-arrow ${dir} ${left ? "left" : "right"} ${armed ? "armed" : ""}`} aria-hidden="true" data-testid={`page-swipe-${dir}`} data-armed={armed || undefined}
+        style={{ opacity: p, transform: `translate(${shown ? x : hidden}px, -50%) scale(${0.6 + 0.4 * p})`, transition: ease }}>
+        <Icon name={left ? "chevronLeft" : "chevronRight"} size={22} />
       </div>
     );
   };
