@@ -505,14 +505,16 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     // Featured on names whose album it is.
     val featuredMeta = { al: Album -> listOfNotNull(al.artist, al.year?.takeIf { it > 0u }?.toString()).joinToString(dot) }
     val playTop = { i: Int -> top?.let { list -> client.dispatch(Commands.playTracks(list.map { it.ref }, i, ar.name)) } }
-    val topRow = @Composable { i: Int, t: Track, segment: Pair<Int, Int>, modifier: Modifier ->
+    // [swipe] off where the rows page sideways (the page's shelf), so a horizontal drag scrolls it.
+    val topRow = @Composable { i: Int, t: Track, segment: Pair<Int, Int>, swipe: Boolean, modifier: Modifier ->
         TrackRow(t.toSummary(), onClick = { playTop(i) }, onMore = { songMenu.open(t.toSummary()) }, nowPlaying = nowPlaying?.track?.id == t.id, segment = segment, rank = i + 1,
-            subtitle = listOfNotNull(t.album, formatClock(t.durationMs.toLong())).joinToString(dot), showDuration = false, nowPlayingMark = false, modifier = modifier)
+            subtitle = listOfNotNull(t.album, formatClock(t.durationMs.toLong())).joinToString(dot), showDuration = false, nowPlayingMark = false,
+            swipe = if (swipe) app.hocket.ui.components.SwipeSurface.List else null, modifier = modifier)
     }
     when (val v = view) {
         ArtistView.TopSongs -> ArtistSubPage(ar.name, stringResource(R.string.artist_top_songs), null, onBack = { view = null }) {
             val list = top.orEmpty()
-            itemsIndexed(list, key = { _, t -> "all" + t.id }) { i, t -> topRow(i, t, i to list.size, Modifier.segmentItem(i)) }
+            itemsIndexed(list, key = { _, t -> "all" + t.id }) { i, t -> topRow(i, t, i to list.size, true, Modifier.segmentItem(i)) }
         }
         is ArtistView.Releases, ArtistView.Featured -> {
             val kind = (v as? ArtistView.Releases)?.kind
@@ -567,7 +569,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
                             val columns = topSongs.withIndex().chunked(TOP_PER_COLUMN)
                             items(columns.size, key = { "topcol$it" }) { c ->
                                 Column(Modifier.width(columnWidth), verticalArrangement = Arrangement.spacedBy(androidx.compose.material3.ListItemDefaults.SegmentedGap)) {
-                                    columns[c].forEachIndexed { j, (i, t) -> topRow(i, t, j to columns[c].size, Modifier) }
+                                    columns[c].forEachIndexed { j, (i, t) -> topRow(i, t, j to columns[c].size, false, Modifier) }
                                 }
                             }
                         }
