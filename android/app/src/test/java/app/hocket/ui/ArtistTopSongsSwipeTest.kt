@@ -10,7 +10,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeRight
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.ui.screens.detail.ArtistDetailScreen
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,6 +45,6 @@ class ArtistTopSongsSwipeTest {
         compose.waitForIdle()
         Thread.sleep(300)
         compose.waitForIdle()
-        assertTrue(core.client.queue.value.entries.map { it.track.id } == before)
+        assertEquals(before, core.client.queue.value.entries.map { it.track.id })
     }
 }
