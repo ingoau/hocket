@@ -406,6 +406,46 @@ async fn session_undo_is_shared_but_only_the_author_can_undo() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_from_a_remote_control_resumes_the_outgoing_track_where_it_was() {
+    let (a, b) = pair().await;
+    a.run(Command::PlayTracks {
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert!(a.backend.is_playing());
+
+    // a is 90 s into t0 when b, only a remote, replaces the queue.
+    TestCore::run_all_for(&[&a, &b], 90_000.0).await;
+    b.run(Command::PlayTracks {
+        tracks: TrackRef::list(&b.server_id, ["t2", "t3"]),
+        start_index: 0,
+        label: "Other".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t2"));
+    assert!(a.backend.is_playing(), "a still plays");
+    assert!(!b.backend.is_playing(), "b stayed a remote");
+
+    b.run(Command::Undo).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t0"));
+    let (key, pos) = a.backend.current().unwrap();
+    assert_eq!(key, a.queue().await.current.unwrap().item.key);
+    assert!(
+        (88_000..100_000).contains(&pos),
+        "t0 resumed at {pos} ms, not where it was"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {

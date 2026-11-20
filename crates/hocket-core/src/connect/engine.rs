@@ -3780,7 +3780,13 @@ impl Engine {
                 let doc = self.doc.clone();
                 self.confirmed = self.doc.clone();
                 let base = room_rev;
-                self.submit_at(SessionOp::Replace { document: doc }, base);
+                self.submit_at(
+                    SessionOp::Replace {
+                        document: doc,
+                        start_position_ms: 0,
+                    },
+                    base,
+                );
             } else if let Some(rd) = &room_doc {
                 self.adopt(rd.clone(), DocChange::Sync);
             }
@@ -3811,7 +3817,13 @@ impl Engine {
                     let doc = self.doc.clone();
                     self.confirmed = rd.clone();
                     self.doc = rd.clone();
-                    self.submit_at(SessionOp::Replace { document: doc }, rd.revision);
+                    self.submit_at(
+                        SessionOp::Replace {
+                            document: doc,
+                            start_position_ms: 0,
+                        },
+                        rd.revision,
+                    );
                 } else {
                     let ops: Vec<PendingOp> = std::mem::take(&mut self.unsynced);
                     self.confirmed = rd.clone();
@@ -6391,6 +6403,7 @@ mod tests {
                 msg: WireMessage::new(Msg::OpCommitted {
                     op: SessionOp::Replace {
                         document: theirs.clone(),
+                        start_position_ms: 0,
                     },
                     revision: 1,
                     device_id: "c".into(),
@@ -9056,7 +9069,7 @@ mod tests {
             m,
             Msg::Op {
                 base_revision: 2,
-                op: SessionOp::Replace { document },
+                op: SessionOp::Replace { document, start_position_ms: 0 },
                 ..
             } if document.current.is_some()
         )));

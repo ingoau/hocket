@@ -257,7 +257,10 @@ mod tests {
         let out = apply_op(
             &r,
             &base,
-            &SessionOp::Replace { document: other },
+            &SessionOp::Replace {
+                document: other,
+                start_position_ms: 0,
+            },
             &op_context("o", 5.0, 0),
             4,
         )
@@ -282,7 +285,10 @@ mod tests {
             5,
         )
         .unwrap();
-        let op = SessionOp::Replace { document: theirs };
+        let op = SessionOp::Replace {
+            document: theirs,
+            start_position_ms: 0,
+        };
         let ctx = op_context("o", 5.0, 0);
         // Every replica applies the commit to the same (empty) base, so the
         // room and all of its members agree on the adopted id.
@@ -299,6 +305,7 @@ mod tests {
             &room,
             &SessionOp::Replace {
                 document: crate::session::new_document("scope", "late-sid".into(), 0.0),
+                start_position_ms: 0,
             },
             &ctx,
             2,
@@ -386,7 +393,8 @@ mod tests {
             assert!(to_queue_op(&op).is_some(), "{op:?}");
         }
         assert!(to_queue_op(&SessionOp::Replace {
-            document: crate::session::new_document("s", "x".into(), 0.0)
+            document: crate::session::new_document("s", "x".into(), 0.0),
+            start_position_ms: 0,
         })
         .is_none());
     }

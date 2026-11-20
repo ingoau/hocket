@@ -530,6 +530,7 @@ mod tests {
                 base_revision: u32::MAX,
                 op: SessionOp::Replace {
                     document: doc.clone(),
+                    start_position_ms: 0,
                 },
                 device_id: device.into(),
                 op_id: key(u32::MAX as usize, 0),

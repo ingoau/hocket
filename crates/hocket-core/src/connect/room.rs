@@ -2474,7 +2474,16 @@ mod tests {
         d.revision = 17;
         let outs = r.handle(RoomInput::Message(
             "p1".into(),
-            op(0, SessionOp::Replace { document: d }, "a", "o1", None),
+            op(
+                0,
+                SessionOp::Replace {
+                    document: d,
+                    start_position_ms: 0,
+                },
+                "a",
+                "o1",
+                None,
+            ),
         ));
         assert!(matches!(
             sent(&outs, "p1")[0],
