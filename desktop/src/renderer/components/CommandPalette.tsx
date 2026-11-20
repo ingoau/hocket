@@ -26,6 +26,7 @@ import { usePresence } from "../lib/presence";
 import { loadLocal, saveLocal } from "../lib/local-settings";
 import { fetchMenuFacts } from "../lib/menu-facts";
 import { buildMenu } from "../lib/menu-model";
+import { SLOW_SEARCH_MS, recordPaletteEvent, telemetryEnabled, type PickVia } from "../lib/palette-telemetry";
 import {
   actionForChord, ariaShortcut, entryId, filterActions, flatRows, groupLabel, isPaletteChord, keycaps, menuActions, paletteActions,
   paletteGroups, pushRecent, rawId, sanitizeRecents, targetOf, typeLabel, type PaletteAction, type PaletteEntry,
@@ -33,6 +34,16 @@ import {
 
 const RECENTS_KEY = "palette.recent";
 type Platform = "macOs" | "linux" | "windows";
+
+/** One opening, for the opt-in telemetry (lib/palette-telemetry). */
+interface Session {
+  openedAt: number;
+  arrowPresses: number;
+  emptyQueries: string[];
+  picked: boolean;
+}
+
+const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 interface ActionsMenu {
   entry: PaletteEntry;
@@ -71,6 +82,10 @@ export function CommandPalette() {
   /** Each row's actions, fetched once per opening (prefetched for the active row). */
   const loading = useRef(new Map<string, Promise<PaletteAction[][]>>());
   const loaded = useRef(new Map<string, PaletteAction[][]>());
+  /** Telemetry for this opening; `via` is how the next pick is being made. */
+  const tele = useRef<Session | undefined>(undefined);
+  const via = useRef<PickVia>("enter");
+  const latest = useRef({ query: "", rows: 0 });
   // The closed palette stays mounted, inert, while its exit plays.
   const { value: shown, closing, motion, exitProps } = usePresence<true, HTMLDivElement>(open || undefined);
   useReturnFocus(open);
@@ -87,6 +102,16 @@ export function CommandPalette() {
       setMenu(null);
     }
   }
+
+  useLayoutEffect(() => {
+    if (open) {
+      tele.current = { openedAt: Date.now(), arrowPresses: 0, emptyQueries: [], picked: false };
+      return;
+    }
+    const s = tele.current;
+    tele.current = undefined;
+    if (s && !s.picked) recordPaletteEvent({ type: "dismiss", at: Date.now(), query: latest.current.query.trim(), rows: latest.current.rows, arrowPresses: s.arrowPresses, msOpen: Date.now() - s.openedAt, emptyQueries: s.emptyQueries });
+  }, [open]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -110,7 +135,13 @@ export function CommandPalette() {
     const id = `pal-${mine}`;
     // The local index only: it answers at once, and the palette never waits on the network.
     const h = setTimeout(() => {
-      void bridge().query({ type: "search", data: { server_id: "", query, limit: 8, include_server: false, request_id: id } }).then((r) => mine === seq.current && r.type === "search" && setResults(r.data));
+      const started = performance.now();
+      void bridge().query({ type: "search", data: { server_id: "", query, limit: 8, include_server: false, request_id: id } }).then((r) => {
+        const ms = Math.round(performance.now() - started);
+        if (ms > SLOW_SEARCH_MS) recordPaletteEvent({ type: "error", at: Date.now(), where: "slowSearch", message: `${ms} ms`, query: query.trim(), ms });
+        if (r.type !== "search") recordPaletteEvent({ type: "error", at: Date.now(), where: "search", message: `unexpected ${r.type}`, query: query.trim() });
+        else if (mine === seq.current) setResults(r.data);
+      }, (e: unknown) => recordPaletteEvent({ type: "error", at: Date.now(), where: "search", message: errorMessage(e), query: query.trim() }));
     }, 40);
     return () => clearTimeout(h);
   }, [open, query, serverId, dialogOpen]);
@@ -138,6 +169,16 @@ export function CommandPalette() {
   }, [query, recents, commands, results]);
   const rows = useMemo(() => flatRows(groups), [groups]);
   const current = rows[active]?.item;
+  const resultsPending = !!query.trim() && !!serverId && results?.query.trim().toLowerCase() !== query.trim().toLowerCase();
+  latest.current = { query, rows: rows.length };
+
+  // A query whose answer came back empty: logged once per opening.
+  useEffect(() => {
+    const s = tele.current;
+    const q = query.trim();
+    if (!open || !s || !q || resultsPending || rows.length || s.emptyQueries.includes(q)) return;
+    s.emptyQueries = [...s.emptyQueries, q].slice(-20);
+  }, [open, query, resultsPending, rows.length]);
 
   useEffect(() => setActive(0), [rows.length, query]);
   useEffect(() => {
@@ -158,8 +199,9 @@ export function CommandPalette() {
       p = p.then((g) => {
         loaded.current.set(entry.id, g);
         return g;
-      }, () => {
+      }, (e: unknown) => {
         loading.current.delete(entry.id);
+        recordPaletteEvent({ type: "error", at: Date.now(), where: "actions", message: errorMessage(e), query: query.trim() });
         return [];
       });
       loading.current.set(entry.id, p);
@@ -176,17 +218,36 @@ export function CommandPalette() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the row, not its object
   }, [open, currentId]);
 
+  // Keep the actions menu's active row in view as the arrows move it.
+  useEffect(() => {
+    if (menu) document.getElementById(`pa-opt-${menu.active}`)?.scrollIntoView({ block: "nearest" });
+  }, [menu?.active, menu?.groups, menu?.filter]); // eslint-disable-line react-hooks/exhaustive-deps -- the row, not the menu object
+
   useEffect(() => {
     if (menu) filterInput.current?.focus();
   }, [menu?.entry.id]); // eslint-disable-line react-hooks/exhaustive-deps -- once per menu
 
   if (!shown) return null;
 
-  const remember = (entry: PaletteEntry) => {
+  const remember = (entry: PaletteEntry, action: string) => {
     const next = pushRecent(recents, entry);
     setRecents(next);
     saveLocal(RECENTS_KEY, next);
+    const s = tele.current;
+    if (!s || !telemetryEnabled()) return;
+    s.picked = true;
+    const position = rows.findIndex((r) => r.item.id === entry.id);
+    const group = groups.find((g) => g.rows.some((r) => r.item.id === entry.id));
+    const first = rows[0]?.item;
+    recordPaletteEvent({
+      type: "pick", at: Date.now(), query: query.trim(), label: entry.label, kind: entry.kind, position,
+      group: group?.id ?? "", groupPosition: group ? group.rows.findIndex((r) => r.item.id === entry.id) : -1,
+      first: position !== 0 && first ? { label: first.label, kind: first.kind } : undefined,
+      action, via: via.current, rows: rows.length, arrowPresses: s.arrowPresses, msOpen: Date.now() - s.openedAt,
+      emptyQueries: s.emptyQueries, resultsPending,
+    });
   };
+  const failed = (e: unknown) => recordPaletteEvent({ type: "error", at: Date.now(), where: "run", message: errorMessage(e) });
   const openPage = (entry: PaletteEntry) => {
     const id = rawId(entry);
     if (entry.kind === "album") navigate({ view: "album", id });
@@ -195,14 +256,14 @@ export function CommandPalette() {
   };
   /** Close, then run: the palette's return focus yields to a dialog or picker the action opens. */
   const perform = (entry: PaletteEntry, action: PaletteAction) => {
-    remember(entry);
+    remember(entry, action.key);
     setOpen(false);
     const run = action.run;
     if (run.type === "open") openPage(entry);
-    else if (run.type === "command") void executeAction(run.id);
+    else if (run.type === "command") void executeAction(run.id).catch(failed);
     else {
       const target = targetOf(entry);
-      if (target) void executeAction(run.id, target);
+      if (target) void executeAction(run.id, target).catch(failed);
     }
   };
   /** Enter: a song plays (the registry's Play, as the context menu's), anything else opens or runs. */
@@ -224,7 +285,7 @@ export function CommandPalette() {
     });
   };
   const playAlone = (entry: PaletteEntry, from: number) => {
-    remember(entry);
+    remember(entry, "play");
     setOpen(false);
     if (entry.ref) bridge().dispatch({ type: "playTracks", data: { tracks: [entry.ref], start_index: 0, label: entry.label, shuffle: false, start_position_ms: from } });
   };
@@ -264,6 +325,8 @@ export function CommandPalette() {
 
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     e.stopPropagation();
+    // A pick this key makes is a menu chord unless Enter says otherwise below.
+    via.current = "chord";
     const chord = chordFromEvent(e, platform);
     const toggle = !!chord && (keymap.lookup(chord).includes("openCommandPalette") || (chord.mod && !chord.alt && !chord.shift && chord.key === "K"));
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
@@ -273,7 +336,7 @@ export function CommandPalette() {
       if (e.key === "Escape" || toggle) { e.preventDefault(); closeMenu(); }
       else if (e.key === "ArrowDown") { e.preventDefault(); setMenu({ ...menu, active: Math.min(menuFlat.length - 1, menu.active + 1) }); }
       else if (e.key === "ArrowUp") { e.preventDefault(); setMenu({ ...menu, active: Math.max(0, menu.active - 1) }); }
-      else if (e.key === "Enter" && plain) { e.preventDefault(); const a = menuFlat[menu.active]; if (a) perform(menu.entry, a); }
+      else if (e.key === "Enter" && plain) { e.preventDefault(); const a = menuFlat[menu.active]; via.current = "menu"; if (a) perform(menu.entry, a); }
       else if (chord && runChord(menu.entry, chord, e)) { /* ran */ }
       // Tab stays in the menu: its filter is the one stop.
       else if (e.key === "Tab") { e.preventDefault(); filterInput.current?.focus(); }
@@ -281,9 +344,9 @@ export function CommandPalette() {
     }
     if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
     else if (toggle) { e.preventDefault(); if (current) openMenu(current); else setOpen(false); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(rows.length - 1, a + 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
-    else if (e.key === "Enter" && plain) { e.preventDefault(); if (current) runPrimary(current); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); if (tele.current) tele.current.arrowPresses++; setActive((a) => Math.min(rows.length - 1, a + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (tele.current) tele.current.arrowPresses++; setActive((a) => Math.max(0, a - 1)); }
+    else if (e.key === "Enter" && plain) { e.preventDefault(); via.current = "enter"; if (current) runPrimary(current); }
     else if (current && chord && runChord(current, chord, e)) { /* ran */ }
     // The global handler leaves these to text fields; the input points at the active option, so open its context menu.
     else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) { if (openContextMenuFromKeyboard()) e.preventDefault(); }
@@ -295,7 +358,7 @@ export function CommandPalette() {
   let index = -1;
   let actionIndex = -1;
   return (
-    <div className={`overlay ${closing ? "closing" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
+    <div className={`overlay palette-overlay ${closing ? "closing" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
       <div
         {...exitProps}
         className={`palette ${motion}`}
@@ -321,7 +384,7 @@ export function CommandPalette() {
               <div className="group" id={`pal-group-${g.id}`} role="presentation">{groupLabel(g.id)}</div>
               {g.rows.map((r) => {
                 const i = ++index;
-                return <Row key={r.item.id} row={r} index={i} active={i === active} platform={platform} onHover={() => { if (!menu) setActive(i); }} onRun={() => runPrimary(r.item)} onContextMenu={(e) => {
+                return <Row key={r.item.id} row={r} index={i} active={i === active} platform={platform} onHover={() => { if (!menu) setActive(i); }} onRun={() => { via.current = "click"; runPrimary(r.item); }} onContextMenu={(e) => {
                   // The app's own context menu for a library result, as anywhere else.
                   const target = targetOf(r.item);
                   if (!target) return;
@@ -336,7 +399,7 @@ export function CommandPalette() {
         <div className="palette-footer">
           <span className="grow" />
           {primaryLabel ? (
-            <button type="button" className="pf-btn" tabIndex={-1} onClick={() => current && runPrimary(current)} data-testid="palette-primary">
+            <button type="button" className="pf-btn" tabIndex={-1} onClick={() => { via.current = "footer"; if (current) runPrimary(current); }} data-testid="palette-primary">
               {primaryLabel}<Keycaps shortcut="Enter" platform={platform} />
             </button>
           ) : null}
@@ -363,7 +426,7 @@ export function CommandPalette() {
                         aria-keyshortcuts={ariaShortcut(a.shortcut, platform)}
                         className={`pa-item ${i === menu.active ? "active" : ""} ${a.destructive ? "destructive" : ""}`}
                         onMouseMove={(e) => { if ((e.movementX || e.movementY) && menu.active !== i) setMenu({ ...menu, active: i }); }}
-                        onClick={() => perform(menu.entry, a)}
+                        onClick={() => { via.current = "menu"; perform(menu.entry, a); }}
                         data-testid="palette-action"
                       >
                         <Icon name={a.icon && hasIcon(a.icon) ? a.icon : "command"} size={16} />

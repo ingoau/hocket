@@ -3,6 +3,7 @@
 // value, so edits made since (here or on another device) are kept.
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
+import { noteUndo } from "./palette-telemetry";
 
 let seq = 0;
 const undos = new Map<string, () => void>();
@@ -54,6 +55,7 @@ export function runUiUndo(id: string): boolean {
   const undo = undos.get(id);
   if (!undo) return false;
   undos.delete(id);
+  noteUndo("uiUndo");
   undo();
   return true;
 }

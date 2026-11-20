@@ -439,7 +439,7 @@
 /* ---- Command palette ----------------------------------------------------- */
 .overlay { background: rgba(0, 0, 0, 0.4); }
 .palette { width: 640px; border: 0; border-radius: 32px; padding: 10px; box-shadow: var(--shadow-2), var(--shadow); }
-.palette.fade-in, .dialog.fade-in { animation: sheet-spring var(--dur-spring-long) var(--spring-fast); }
+.dialog.fade-in { animation: sheet-spring var(--dur-spring-long) var(--spring-fast); }
 @keyframes sheet-spring { from { opacity: 0; transform: translateY(-14px) scale(0.92); } 40% { opacity: 1; } to { opacity: 1; transform: none; } }
 /* Out the way it came, without the spring: a straight accelerating lift. */
 .palette.closing, .dialog.closing { animation: sheet-drop-out var(--dur-exit) var(--ease-emphasized-accel) forwards; }
