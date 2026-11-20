@@ -197,7 +197,7 @@ pub fn apply_op(
 ) -> Result<SessionDocument, ReduceFailure> {
     let mut session_id = doc.session_id.clone();
     let mut next = match op {
-        SessionOp::Replace { document } => {
+        SessionOp::Replace { document, .. } => {
             if doc_is_trivial(doc) {
                 session_id = document.session_id.clone();
             }

@@ -3780,7 +3780,13 @@ impl Engine {
                 let doc = self.doc.clone();
                 self.confirmed = self.doc.clone();
                 let base = room_rev;
-                self.submit_at(SessionOp::Replace { document: doc }, base);
+                self.submit_at(
+                    SessionOp::Replace {
+                        document: doc,
+                        start_position_ms: 0,
+                    },
+                    base,
+                );
             } else if let Some(rd) = &room_doc {
                 self.adopt(rd.clone(), DocChange::Sync);
             }
@@ -3811,7 +3817,13 @@ impl Engine {
                     let doc = self.doc.clone();
                     self.confirmed = rd.clone();
                     self.doc = rd.clone();
-                    self.submit_at(SessionOp::Replace { document: doc }, rd.revision);
+                    self.submit_at(
+                        SessionOp::Replace {
+                            document: doc,
+                            start_position_ms: 0,
+                        },
+                        rd.revision,
+                    );
                 } else {
                     let ops: Vec<PendingOp> = std::mem::take(&mut self.unsynced);
                     self.confirmed = rd.clone();
@@ -4979,6 +4991,17 @@ impl Engine {
             .owner
             .clone()
             .filter(|o| *o != self.cfg.device.id)
+    }
+
+    /// Where another device has the current item now: its last stamp for that
+    /// item, extrapolated. `None` when the last stamp was for another item
+    /// (the player moved on and hasn't reported yet).
+    pub(crate) fn remote_position_for_current(&self) -> Option<Ms> {
+        let stamp = self.last_remote_stamp.as_ref()?;
+        let current = self.doc.current.as_ref()?;
+        (stamp.device_id != self.cfg.device.id
+            && stamp.key.as_deref() == Some(current.key.as_str()))
+        .then(|| resume_position(&stamp.position, self.now_session_ms()))
     }
 
     /// What taking over the play another device last reported would start
@@ -6391,6 +6414,7 @@ mod tests {
                 msg: WireMessage::new(Msg::OpCommitted {
                     op: SessionOp::Replace {
                         document: theirs.clone(),
+                        start_position_ms: 0,
                     },
                     revision: 1,
                     device_id: "c".into(),
@@ -9056,7 +9080,7 @@ mod tests {
             m,
             Msg::Op {
                 base_revision: 2,
-                op: SessionOp::Replace { document },
+                op: SessionOp::Replace { document, start_position_ms: 0 },
                 ..
             } if document.current.is_some()
         )));

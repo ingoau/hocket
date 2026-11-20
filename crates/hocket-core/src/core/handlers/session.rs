@@ -282,7 +282,10 @@ impl Actor {
         }
         self.pending_effects = Some(effects.into_iter().filter(|e| keep(e)).collect());
         self.engine_input(Input::LocalOp {
-            op: SessionOp::Replace { document },
+            op: SessionOp::Replace {
+                document,
+                start_position_ms: 0,
+            },
         });
         self.pending_effects = None;
         true
@@ -364,6 +367,28 @@ impl Actor {
         self.undoable_op(op, &label, command_kind(&cmd));
     }
 
+    /// The current item's position, for an undo snapshot. While another device
+    /// plays, this one has nothing loaded and its own position is stale: use
+    /// that device's last report for this item, or the start when it hasn't
+    /// reported one (it just moved on) or it ran past the end (a lapsed player).
+    /// Otherwise the local one, which also holds a dormant resume point.
+    fn position_for_undo(&self) -> Ms {
+        if let Some(e) = self
+            .engine
+            .as_ref()
+            .filter(|e| !e.owns_transport() && e.remote_owner().is_some())
+        {
+            let pos = e.remote_position_for_current().unwrap_or(0);
+            let duration = self.playback.duration_ms();
+            return if duration > 0 && pos >= duration {
+                0
+            } else {
+                pos
+            };
+        }
+        self.playback.position_now(self.now())
+    }
+
     pub(crate) fn undoable_op(&mut self, op: SessionOp, label: &str, kind: &str) {
         let Some(before) = self.doc().cloned() else {
             self.toast("Add a server first", None);
@@ -372,7 +397,7 @@ impl Actor {
         let mut before_snapshot = before.clone();
         // Undo of an accidental replacement lands on the outgoing track at
         // the position it was at.
-        before_snapshot.transport.position.position_ms = self.playback.position_now(self.now());
+        before_snapshot.transport.position.position_ms = self.position_for_undo();
         if matches!(
             op,
             SessionOp::PlayContext { .. }
@@ -1250,15 +1275,27 @@ impl Actor {
         match result.action {
             UndoAction::RestoreDocument(doc) => {
                 let mut doc = *doc;
-                if let Some(cur) = &doc.current {
-                    self.playback.restore_position =
-                        Some((cur.key.clone(), doc.transport.position.position_ms));
+                // An undo's snapshot holds the outgoing track's position
+                // (`undoable_op`). It travels on the op too, so the device that
+                // plays (maybe not this one) resumes there. A redo's snapshot
+                // holds no position of its own (the document's transport is
+                // whatever it last adopted), so the redone track starts fresh.
+                let start_position_ms = if redo {
+                    0
+                } else {
+                    doc.transport.position.position_ms
+                };
+                if let (Some(cur), false) = (&doc.current, redo) {
+                    self.playback.restore_position = Some((cur.key.clone(), start_position_ms));
                 }
                 if let Some(live) = self.doc() {
                     doc.transport = live.transport.clone();
                 }
                 self.playback.want_playing = self.playback.playing;
-                self.local_op(SessionOp::Replace { document: doc });
+                self.local_op(SessionOp::Replace {
+                    document: doc,
+                    start_position_ms,
+                });
                 // A snapshot taken offline carries offline marks.
                 self.clear_offline_skips();
             }

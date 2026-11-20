@@ -558,6 +558,11 @@ pub enum SessionOp {
     /// and `scope` of the target are kept.
     Replace {
         document: SessionDocument,
+        /// Where the restored current item starts if it differs from the one
+        /// playing: an undo carries the outgoing track's position so the device
+        /// that plays resumes there. 0 for every other replacement.
+        #[serde(default)]
+        start_position_ms: Ms,
     },
 }
 
@@ -775,10 +780,14 @@ impl SessionOp {
         )
     }
 
-    /// Where a `PlayTracks` should start. Other ops start at the beginning.
+    /// Where a `PlayTracks` or an undo's `Replace` should start. Other ops
+    /// start at the beginning.
     pub fn start_position_ms(&self) -> Ms {
         match self {
             SessionOp::PlayTracks {
+                start_position_ms, ..
+            }
+            | SessionOp::Replace {
                 start_position_ms, ..
             } => *start_position_ms,
             _ => 0,
@@ -2046,7 +2055,10 @@ mod tests {
 
     #[test]
     fn session_op_round_trips_with_document() {
-        let op = SessionOp::Replace { document: doc() };
+        let op = SessionOp::Replace {
+            document: doc(),
+            start_position_ms: 0,
+        };
         let text = serde_json::to_string(&Msg::Op {
             base_revision: 3,
             op,
