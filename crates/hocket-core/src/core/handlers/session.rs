@@ -368,18 +368,23 @@ impl Actor {
     }
 
     /// The current item's position, for an undo snapshot. While another device
-    /// plays, this one has nothing loaded and its own position is stale: use the
-    /// room's (never past the track end). Otherwise the local one, which also
-    /// holds a dormant resume point.
+    /// plays, this one has nothing loaded and its own position is stale: use
+    /// that device's last report for this item, or the start when it hasn't
+    /// reported one (it just moved on) or it ran past the end (a lapsed player).
+    /// Otherwise the local one, which also holds a dormant resume point.
     fn position_for_undo(&self) -> Ms {
         if let Some(e) = self
             .engine
             .as_ref()
             .filter(|e| !e.owns_transport() && e.remote_owner().is_some())
         {
-            let pos = e.position_ms();
+            let pos = e.remote_position_for_current().unwrap_or(0);
             let duration = self.playback.duration_ms();
-            return if duration > 0 { pos.min(duration) } else { pos };
+            return if duration > 0 && pos >= duration {
+                0
+            } else {
+                pos
+            };
         }
         self.playback.position_now(self.now())
     }
@@ -1270,10 +1275,17 @@ impl Actor {
         match result.action {
             UndoAction::RestoreDocument(doc) => {
                 let mut doc = *doc;
-                // The snapshot's position travels on the op too, so the device
-                // that plays (maybe not this one) resumes the outgoing track there.
-                let start_position_ms = doc.transport.position.position_ms;
-                if let Some(cur) = &doc.current {
+                // An undo's snapshot holds the outgoing track's position
+                // (`undoable_op`). It travels on the op too, so the device that
+                // plays (maybe not this one) resumes there. A redo's snapshot
+                // holds no position of its own (the document's transport is
+                // whatever it last adopted), so the redone track starts fresh.
+                let start_position_ms = if redo {
+                    0
+                } else {
+                    doc.transport.position.position_ms
+                };
+                if let (Some(cur), false) = (&doc.current, redo) {
                     self.playback.restore_position = Some((cur.key.clone(), start_position_ms));
                 }
                 if let Some(live) = self.doc() {

@@ -4993,6 +4993,17 @@ impl Engine {
             .filter(|o| *o != self.cfg.device.id)
     }
 
+    /// Where another device has the current item now: its last stamp for that
+    /// item, extrapolated. `None` when the last stamp was for another item
+    /// (the player moved on and hasn't reported yet).
+    pub(crate) fn remote_position_for_current(&self) -> Option<Ms> {
+        let stamp = self.last_remote_stamp.as_ref()?;
+        let current = self.doc.current.as_ref()?;
+        (stamp.device_id != self.cfg.device.id
+            && stamp.key.as_deref() == Some(current.key.as_str()))
+        .then(|| resume_position(&stamp.position, self.now_session_ms()))
+    }
+
     /// What taking over the play another device last reported would start
     /// from: its last stamp for the current item, extrapolated to now.
     fn take_from_last_stamp(&self) -> Option<TakeInfo> {

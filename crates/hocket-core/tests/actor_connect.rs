@@ -446,6 +446,56 @@ async fn undo_from_a_remote_control_resumes_the_outgoing_track_where_it_was() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn redo_from_a_remote_control_starts_the_redone_track_fresh() {
+    // b joins while a is two minutes into t0: b's copy of the document holds
+    // that stale position, which a redo must not hand to a.
+    let server = seeded_server(6, 200.0);
+    let net = MemoryNet::new();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let a = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    TestCore::run_all_for(&[&a], 8_000.0).await;
+    a.run(Command::PlayTracks {
+        tracks: TrackRef::list(&a.server_id, ["t0", "t1"]),
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[&a], 120_000.0).await;
+    assert!(a.backend.is_playing());
+    let b = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+    TestCore::run_all_for(&[&a, &b], 8_000.0).await;
+    assert!(b.snapshot().await.connection.connected);
+    assert_eq!(b.current_track_id().await.as_deref(), Some("t0"));
+
+    b.run(Command::PlayTracks {
+        tracks: TrackRef::list(&b.server_id, ["t2", "t3"]),
+        start_index: 0,
+        label: "Other".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    b.run(Command::Undo).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t0"));
+    let (_, pos) = a.backend.current().unwrap();
+    assert!(
+        (128_000..140_000).contains(&pos),
+        "t0 resumed at {pos} ms, not where it was"
+    );
+
+    b.run(Command::Redo).await;
+    TestCore::run_all_for(&[&a, &b], 2_000.0).await;
+    assert_eq!(a.current_track_id().await.as_deref(), Some("t2"));
+    let (key, pos) = a.backend.current().unwrap();
+    assert_eq!(key, a.queue().await.current.unwrap().item.key);
+    assert!(pos < 5_000, "the redone t2 started at {pos} ms");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn claiming_after_another_device_moved_on_starts_the_new_track_fresh() {
     let (a, b) = pair().await;
     a.run(Command::PlayTracks {
