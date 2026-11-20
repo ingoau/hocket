@@ -33,6 +33,8 @@ export interface PickEvent {
   first?: { label: string; kind: string };
   /** The action that ran: "open", "run", "play", or a menu action's key. */
   action: string;
+  /** For a command row, its action id. */
+  command?: string;
   via: PickVia;
   rows: number;
   arrowPresses: number;
@@ -118,6 +120,8 @@ export function noteUndo(source: UndoSource, now = Date.now()): void {
   if (ms < 0 || ms > UNDO_WINDOW_MS) return;
   // Back undoes a pick only when the pick navigated somewhere.
   if (source === "back" && pick.action !== "open") return;
+  // Running Undo from the palette is the pick itself, not taking one back.
+  if (pick.command === "undo") return;
   lastPick = undefined;
   const { query, label, kind, position, action, via } = pick;
   recordPaletteEvent({ type: "undo", at: now, source, msSincePick: ms, pick: { query, label, kind, position, action, via } });

@@ -52,6 +52,13 @@ describe("palette telemetry", () => {
     expect(telemetryEvents().filter((e) => e.type === "undo")).toHaveLength(1);
   });
 
+  it("doesn't count running Undo from the palette as undoing that pick", () => {
+    setTelemetryEnabled(true);
+    recordPaletteEvent(pick({ kind: "action", action: "run", command: "undo", label: "Undo" }));
+    noteUndo("undo", 1_001);
+    expect(telemetryEvents().filter((e) => e.type === "undo")).toEqual([]);
+  });
+
   it("summarises picks, positions, dismissals and issues", () => {
     const sum = summarise([
       pick(),

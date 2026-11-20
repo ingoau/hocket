@@ -65,6 +65,8 @@ export function CommandPalette() {
   const keymap = useKeymap();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | undefined>(undefined);
+  /** The query whose search failed: it has no answer coming. */
+  const [failedQuery, setFailedQuery] = useState<string | undefined>(undefined);
   const [descriptors, setDescriptors] = useState<ActionDescriptor[]>([]);
   const [recents, setRecents] = useState<PaletteEntry[]>([]);
   const [active, setActive] = useState(0);
@@ -139,9 +141,14 @@ export function CommandPalette() {
       void bridge().query({ type: "search", data: { server_id: "", query, limit: 8, include_server: false, request_id: id } }).then((r) => {
         const ms = Math.round(performance.now() - started);
         if (ms > SLOW_SEARCH_MS) recordPaletteEvent({ type: "error", at: Date.now(), where: "slowSearch", message: `${ms} ms`, query: query.trim(), ms });
-        if (r.type !== "search") recordPaletteEvent({ type: "error", at: Date.now(), where: "search", message: `unexpected ${r.type}`, query: query.trim() });
-        else if (mine === seq.current) setResults(r.data);
-      }, (e: unknown) => recordPaletteEvent({ type: "error", at: Date.now(), where: "search", message: errorMessage(e), query: query.trim() }));
+        if (r.type !== "search") {
+          recordPaletteEvent({ type: "error", at: Date.now(), where: "search", message: `unexpected ${r.type}`, query: query.trim() });
+          if (mine === seq.current) setFailedQuery(query);
+        } else if (mine === seq.current) setResults(r.data);
+      }, (e: unknown) => {
+        recordPaletteEvent({ type: "error", at: Date.now(), where: "search", message: errorMessage(e), query: query.trim() });
+        if (mine === seq.current) setFailedQuery(query);
+      });
     }, 40);
     return () => clearTimeout(h);
   }, [open, query, serverId, dialogOpen]);
@@ -169,7 +176,7 @@ export function CommandPalette() {
   }, [query, recents, commands, results]);
   const rows = useMemo(() => flatRows(groups), [groups]);
   const current = rows[active]?.item;
-  const resultsPending = !!query.trim() && !!serverId && results?.query.trim().toLowerCase() !== query.trim().toLowerCase();
+  const resultsPending = !!query.trim() && !!serverId && failedQuery !== query && results?.query.trim().toLowerCase() !== query.trim().toLowerCase();
   latest.current = { query, rows: rows.length };
 
   // A query whose answer came back empty: logged once per opening.
@@ -243,7 +250,7 @@ export function CommandPalette() {
       type: "pick", at: Date.now(), query: query.trim(), label: entry.label, kind: entry.kind, position,
       group: group?.id ?? "", groupPosition: group ? group.rows.findIndex((r) => r.item.id === entry.id) : -1,
       first: position !== 0 && first ? { label: first.label, kind: first.kind } : undefined,
-      action, via: via.current, rows: rows.length, arrowPresses: s.arrowPresses, msOpen: Date.now() - s.openedAt,
+      action, command: entry.kind === "action" ? canonicalActionId(rawId(entry)) : undefined, via: via.current, rows: rows.length, arrowPresses: s.arrowPresses, msOpen: Date.now() - s.openedAt,
       emptyQueries: s.emptyQueries, resultsPending,
     });
   };
