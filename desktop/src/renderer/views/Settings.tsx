@@ -22,6 +22,7 @@ import { DEFAULT_ACCENT, SK } from "@shared/settings-keys";
 import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useLyricsSize, type LyricsSize } from "../lib/lyrics-size";
 import { setIdleHide, useIdleHide } from "../lib/idle-hide";
 import { setGesturePrefs, useGesturePrefs, type GesturePrefs } from "../lib/gesture-prefs";
+import { clearTelemetry, setTelemetryEnabled, summarise, telemetryEvents, useTelemetryEnabled, useTelemetryVersion } from "../lib/palette-telemetry";
 import { SWIPE_DEFAULTS, SWIPE_KEYS, SWIPE_LIST_ACTIONS, SWIPE_QUEUE_ACTIONS, swipeChoiceLabel } from "../lib/swipe-actions";
 import { Select, Slider, Switch } from "../components/controls";
 import { warnChoices } from "../lib/storage-warn";
@@ -882,6 +883,32 @@ function Diagnostics() {
       <Row anchor="copyDiagnostics" title={t("settings.copyDiagnostics")} settingKey="diagnostics"><button type="button" className="btn" onClick={() => void executeAction("ui.copyDiagnostics")} data-testid="copy-diagnostics">{t("settings.copyDiagnostics")}</button></Row>
       <Row title={meta?.mediaSession === "attached" ? t("settings.mediaSessionState.attached") : t("settings.mediaSessionState.unavailable")} settingKey="diagnostics"><span className={`badge ${meta?.mediaSession === "attached" ? "ok" : "warn"}`}>{meta?.mediaSession}</span></Row>
       <textarea className="textarea" readOnly value={data ?? ""} rows={16} style={{ width: "100%", marginTop: 12 }} aria-label={t("settings.section.diagnostics")} />
+      <PaletteTelemetry />
+    </>
+  );
+}
+
+/** Opt-in, device-local telemetry for the command palette (lib/palette-telemetry): a summary, copy as JSON, clear. */
+function PaletteTelemetry() {
+  const on = useTelemetryEnabled();
+  useTelemetryVersion();
+  const events = telemetryEvents();
+  const sum = summarise(events);
+  const pct = (n: number) => (sum.picks ? `${Math.round((n / sum.picks) * 100)}%` : "–");
+  const positions = ["0", "1", "2", "3", "4", "5+"].map((k) => `${k === "5+" ? k : Number(k) + 1}: ${sum.byPosition[k] ?? 0}`).join(" · ");
+  return (
+    <>
+      <Row anchor="paletteTelemetry" title={t("settings.paletteTelemetry")} desc={t("settings.paletteTelemetryDesc")} local>
+        <Switch checked={on} onChange={setTelemetryEnabled} aria-label={t("settings.paletteTelemetry")} data-testid="setting-palette-telemetry" />
+      </Row>
+      {on || events.length ? (
+        <Row title={t("settings.paletteTelemetry.summary", { picks: sum.picks, notFirst: sum.notFirst, notFirstPct: pct(sum.notFirst), undos: sum.undos, dismissed: sum.dismissed })} desc={t("settings.paletteTelemetry.detail", { positions, mean: (sum.meanPosition + 1).toFixed(2), empty: sum.emptySearches, pending: sum.pendingPicks, errors: sum.errors, slow: sum.slowSearches })} stacked>
+          <div className="row" style={{ gap: 8 }} data-testid="palette-telemetry-summary">
+            <button type="button" className="btn" disabled={!events.length} onClick={() => bridge().clipboard.writeText(JSON.stringify(events, null, 2))} data-testid="palette-telemetry-copy">{t("settings.paletteTelemetry.copy")}</button>
+            <button type="button" className="btn" disabled={!events.length} onClick={clearTelemetry} data-testid="palette-telemetry-clear">{t("settings.paletteTelemetry.clear")}</button>
+          </div>
+        </Row>
+      ) : null}
     </>
   );
 }

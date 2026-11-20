@@ -102,6 +102,75 @@ test.describe("command palette", () => {
     await expect(palette).toHaveCount(0);
   });
 
+  test("the palette opens at once, and the arrows keep the actions menu's active row in view", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await page.getByTestId("content").click();
+    await page.keyboard.press("Control+k");
+    const palette = page.getByTestId("palette");
+    await expect(palette).toBeVisible();
+    // No entrance animation on the sheet or its scrim.
+    expect(await palette.evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
+    expect(await palette.evaluate((el) => getComputedStyle(el.parentElement!).animationName)).toBe("none");
+    await page.getByTestId("palette-input").fill("s");
+    await expect(palette.getByTestId("palette-group-track").getByTestId("palette-item").first()).toBeVisible();
+    await page.keyboard.press("Control+k");
+    const actions = page.getByTestId("palette-action");
+    await expect(actions.first()).toBeVisible();
+    const count = await actions.count();
+    for (let i = 1; i < count; i++) await page.keyboard.press("ArrowDown");
+    const last = actions.nth(count - 1);
+    await expect(last).toHaveAttribute("aria-selected", "true");
+    // Wholly inside the scrolled list (the list scrolled, so it overflows).
+    const list = page.locator("#palette-actions-list");
+    expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    const inView = (row: typeof last) => async () => {
+      const l = (await list.boundingBox())!;
+      const r = (await row.boundingBox())!;
+      return r.y >= l.y - 2 && r.y + r.height <= l.y + l.height + 2;
+    };
+    await expect.poll(inView(last)).toBe(true);
+    // And back up to the first.
+    for (let i = 1; i < count; i++) await page.keyboard.press("ArrowUp");
+    await expect(actions.first()).toHaveAttribute("aria-selected", "true");
+    await expect.poll(inView(actions.first())).toBe(true);
+  });
+
+  test("opt-in telemetry logs a pick that wasn't the first row and an undo right after it", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await page.getByTestId("content").click();
+    await page.keyboard.press("Control+k");
+    await page.getByTestId("palette-input").fill("settings");
+    await page.keyboard.press("Enter");
+    await page.getByTestId("settings-nav-diagnostics").click();
+    const toggle = page.getByTestId("setting-palette-telemetry");
+    // Off by default, with nothing logged.
+    await expect(toggle).not.toBeChecked();
+    await expect(page.getByTestId("palette-telemetry-summary")).toHaveCount(0);
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    // Pick the second song, then undo straight away.
+    await page.getByTestId("content").click();
+    await page.keyboard.press("Control+k");
+    const palette = page.getByTestId("palette");
+    await page.getByTestId("palette-input").fill("s");
+    await expect(palette.getByTestId("palette-group-track").getByTestId("palette-item").nth(1)).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(palette).toHaveCount(0);
+    await page.getByTestId("content").click();
+    await page.keyboard.press("Control+z");
+    const row = page.locator("#setting-paletteTelemetry + .setting-row");
+    await expect(row).toContainText("1 picks, 1 not the first row (100%), 1 undone");
+    // A palette closed without a pick counts too.
+    await page.keyboard.press("Control+k");
+    await page.keyboard.press("Escape");
+    await expect(row).toContainText("1 closed without a pick");
+    await page.getByTestId("palette-telemetry-clear").click();
+    await expect(row).toContainText("0 picks");
+  });
+
   test("the menu's chords work from the search field: Play next on a song, Add to playlist on an album, Enter opens an album", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

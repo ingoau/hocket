@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Command } from "@core/api";
 import { useApp } from "../store/app";
-import { bridge } from "../core/bridge";
 import { usePresenceList } from "../lib/presence";
 import { type BusyToast, UI_UNDO, runUiUndo } from "../lib/ui-toast";
 import { Icon } from "./Icon";
@@ -33,7 +32,7 @@ export function Toasts() {
               onClick={() => {
                 try {
                   if (t.actionCommand === UI_UNDO) runUiUndo(t.id);
-                  else bridge().dispatch(JSON.parse(t.actionCommand as string) as Command);
+                  else useApp.getState().dispatch(JSON.parse(t.actionCommand as string) as Command);
                 } catch (err) {
                   console.error("bad toast command", err);
                 }

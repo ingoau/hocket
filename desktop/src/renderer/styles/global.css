@@ -748,7 +748,8 @@ button.qrow { width: 100%; }
 @keyframes scrim-out { to { background: transparent; } }
 /* The palette: an extra-rounded tonal sheet with a pill search field. */
 .palette { width: 620px; max-width: 90vw; background: var(--surface-tonal); border: 1px solid var(--border); border-radius: var(--shape-xl); box-shadow: var(--shadow); overflow: hidden; padding: 8px; transform-origin: top center; }
-.palette.fade-in { animation: sheet-in var(--dur-spring-long) var(--spring-fast); }
+/* It opens at once, scrim and all: a keyboard tool shouldn't make you wait. Its exit still plays. */
+.palette.fade-in, .overlay.palette-overlay:not(.closing) { animation: none; }
 .palette .input { width: 100%; height: 44px; font-size: var(--fs-lg); border: 1px solid transparent; border-radius: var(--shape-full); background: var(--bg-sunken); box-shadow: none; padding: 0 18px; }
 .palette .input:hover { box-shadow: none; }
 .palette .input:focus { box-shadow: none; border-color: transparent; }

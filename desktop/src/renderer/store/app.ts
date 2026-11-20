@@ -8,6 +8,7 @@ import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { loadLocal, saveLocal } from "../lib/local-settings";
+import { noteUndo } from "../lib/palette-telemetry";
 import { type CoreState, dismissToast, initialCoreState, reduce, saverHas, settingValue } from "./reducer";
 import { EMPTY_SELECTION, type Selection } from "./selection";
 import { ticker } from "./position";
@@ -236,6 +237,7 @@ export const useApp = create<AppStore>((set, get) => ({
   librarySource: "",
 
   dispatch(command) {
+    if (command.type === "undo" || command.type === "undoEntry") noteUndo(command.type);
     bridge().dispatch(command);
   },
   // Typed at the call sites via `queryAs`; kept loose here.
@@ -259,6 +261,7 @@ export const useApp = create<AppStore>((set, get) => ({
     const { history, route } = get();
     const prev = history[history.length - 1];
     if (!prev) return;
+    noteUndo("back");
     set((s) => ({ route: prev, history: history.slice(0, -1), future: [route, ...s.future].slice(0, 50), selection: EMPTY_SELECTION }));
   },
   forward() {
@@ -359,6 +362,7 @@ export const useApp = create<AppStore>((set, get) => ({
     bridge().dispatch({ type: "setSetting", data: { key, value: JSON.stringify(value) } });
   },
   runAction(actionId, target = { type: "none" }) {
+    if (actionId === "undo") noteUndo("undo");
     bridge().dispatch({ type: "runAction", data: { action_id: actionId, target } });
   },
 }));
