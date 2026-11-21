@@ -28,6 +28,7 @@ import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
 import { fmtTime } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/media";
+import { SPRING_EFFECTS, spring } from "../lib/spring";
 import { GROUP_END, addToQueue, dropSlot, endLibraryDrag, isLibraryDrag, libraryDragTarget, placeBlock, previewMoves, queueDragLayout, sameOrder, stepMove, type QueueMove } from "../lib/queue-drag";
 import { entryByKey, queueSections, rangeChunks, restLabel, rowMarker, upcomingEntries, wantedRange, windowEnd, mergePages, pagedFits, type QueueRowKind } from "../lib/queue-view";
 import { EmptyState } from "./EmptyState";
@@ -95,6 +96,10 @@ async function historyKeys(q: QueueView): Promise<string[]> {
   const rs = await Promise.all(rangeChunks(0, q.historyCount).map((c) => bridge().query({ type: "queueRange", data: c })));
   return rs.flatMap((r) => (r.type === "queue" ? r.data.entries : [])).slice(0, q.historyCount).map((e) => e.item.key);
 }
+
+/** Queue rows sliding to a new place (the FLIP in QueuePanel), and the id their animations carry. */
+const ROW_SPRING = spring(500, 0.85);
+const QMOVE = "qmove";
 
 /** How long sent moves are shown ahead of the core if no queue update answers them. */
 const PENDING_MS = 2000;
@@ -266,7 +271,9 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     // Where dnd-kit leaves the dragged row decides the place and, by the side of the
     // "Next from" heading it ends up on, whether it is in the group. A selection lands
     // together there, in queue order.
-    sendMoves(placeBlock(order, arrayMove(order, from, to), key, blockFor(key), currentKey, noHeadingInGroup));
+    const moves = placeBlock(order, arrayMove(order, from, to), key, blockFor(key), currentKey, noHeadingInGroup);
+    if (moves.length) skipMotion.current = true;
+    sendMoves(moves);
   };
 
   // Rest with the current item at the top; follow it when it changes, unless
@@ -274,7 +281,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   const reducedMotion = usePrefersReducedMotion();
 
   // Two-finger swipes on a row run the swipe.queue.* settings' actions on it (remove by default,
-  // which slides the row out). The same actions are in the row's menu and on Delete.
+  // which slides the row out; the rows below then close the gap). The same actions are in the row's menu and on Delete.
   const swipeTuning = useSurfaceTuning("queue");
   const settle = useSettle(swipeTuning, reducedMotion);
   const swipeStart = useSetting<string>(SWIPE_KEYS.queue.startToEnd, SWIPE_DEFAULTS.queue.startToEnd);
@@ -289,7 +296,7 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     const of = (id: string) => (current && id === "removeFromQueue" ? null : rowSwipeAction(id, facts));
     return { right: of(rtl ? swipeEnd : swipeStart), left: of(rtl ? swipeStart : swipeEnd) };
   };
-  /** A row swiped away: it slides out, then its slot collapses while the core removes it. */
+  /** A row swiped away: it slides out, then the core removes it and the rows below slide up into its place. */
   const [leaving, setLeaving] = useState<{ key: string; side: Side } | undefined>(undefined);
   const swipe = useSwipe<string>(scrollRef, {
     tuning: swipeTuning,
@@ -321,6 +328,50 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
     const reveal = swipe.side === 0 ? null : swipe.side > 0 ? swipeActions(e).right : swipeActions(e).left;
     return { offset: swipe.stage === "tracking" ? swipe.offset : 0, tracking: swipe.stage === "tracking", armed: swipe.armed !== 0, side: swipe.side, reveal, leaving: 0, settle };
   };
+  // Queue changes move rows rather than jump them (FLIP): each row slides from where it was to
+  // where the change put it, so a moved row travels to its new place and the rows around a
+  // removed one close the gap; rows that weren't there fade in. While the current item stays,
+  // positions count from its heading, so rows paged in above it don't look like moves. A
+  // pointer drop skips one change: dnd-kit already shows the row where it lands.
+  const rowTops = useRef<{ current: string | undefined; head: number; tops: Map<string, number> } | undefined>(undefined);
+  const skipMotion = useRef(false);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const view = scrollRef.current?.getBoundingClientRect();
+    const prev = rowTops.current;
+    rowTops.current = undefined;
+    if (!list || !view) return;
+    const animate = !!prev && !reducedMotion && !dragBlock && !skipMotion.current;
+    skipMotion.current = false;
+    const slots = [...list.querySelectorAll<HTMLElement>(".qrow[data-key]")].map((row) => ({ key: row.dataset.key!, el: row.parentElement! }));
+    // A slot still sliding from an earlier change starts from where it is now, partway there.
+    const offset = new Map<HTMLElement, number>();
+    for (const { el } of slots) {
+      const running = el.getAnimations().filter((x) => x.id === QMOVE);
+      if (!running.length) continue;
+      offset.set(el, new DOMMatrix(getComputedStyle(el).transform).m42);
+      for (const x of running) x.cancel();
+    }
+    const listTop = list.getBoundingClientRect().top;
+    const headEl = list.querySelector<HTMLElement>('[data-group="current"]');
+    const head = headEl ? headEl.getBoundingClientRect().top - listTop : 0;
+    const shift = prev && headEl && prev.current === currentKey ? head - prev.head : 0;
+    const tops = new Map<string, number>();
+    for (const { key, el } of slots) {
+      const now = el.getBoundingClientRect().top;
+      tops.set(key, now - listTop);
+      if (!animate) continue;
+      const was = prev.tops.get(key);
+      const from = was === undefined ? undefined : was + shift + listTop + (offset.get(el) ?? 0);
+      // Only what can be seen, before or after the change.
+      const seen = (y: number) => y + el.offsetHeight > view.top && y < view.bottom;
+      if (!seen(now) && (from === undefined || !seen(from))) continue;
+      if (from === undefined) el.animate([{ opacity: 0 }, { opacity: 1 }], { id: QMOVE, duration: SPRING_EFFECTS.duration, easing: SPRING_EFFECTS.easing });
+      else if (Math.abs(from - now) > 0.5) el.animate([{ transform: `translateY(${from - now}px)` }, { transform: "none" }], { id: QMOVE, duration: ROW_SPRING.duration, easing: ROW_SPRING.easing });
+    }
+    rowTops.current = { current: currentKey, head, tops };
+  }, [queue, currentKey, reducedMotion, dragBlock]);
+
   const lastTouch = useRef(0);
   const programmatic = useRef(false);
   const touched = useCallback(() => {
