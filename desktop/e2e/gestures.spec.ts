@@ -97,4 +97,40 @@ test.describe("trackpad swipes", () => {
     await swipeOver(page, page.getByTestId("view-albums").locator(".view-header"), width * 0.3);
     await expect(page.getByTestId("view-albums")).toBeVisible();
   });
+
+  test("a sideways scroll over Home's Spotlight moves between slides, not back; the header scrolls away", async ({ hocket }) => {
+    const { page } = hocket;
+    // An album to resume and another playing: a Spotlight with more than one slide, and history to go back to.
+    await playFirstAlbum(page);
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId("library-albums").click();
+    const tiles = page.getByTestId("grid-tile");
+    await tiles.nth(1).dblclick();
+    await page.getByTestId("album-play").click();
+    await page.evaluate(() => window.hocket.dispatch({ type: "pause" }));
+    await page.getByTestId("nav-home").click();
+    const home = page.getByTestId("view-home");
+    const spotlight = home.getByTestId("home-spotlight");
+    await expect(spotlight).toBeVisible();
+    const dots = spotlight.locator(".spot-dot");
+    expect(await dots.count()).toBeGreaterThan(1);
+    await expect(dots.first()).toHaveClass(/on/);
+
+    // Fingers to the left: the track scrolls on to the next slide, and Home stays.
+    const { width } = await pointAt(page, spotlight);
+    await swipeOver(page, spotlight, -width * 0.6);
+    await expect(dots.nth(1)).toHaveClass(/on/);
+    await expect(home).toBeVisible();
+    // The arrows scroll the track too.
+    await spotlight.getByTestId("spotlight-prev").click();
+    await expect(dots.first()).toHaveClass(/on/);
+    await expect.poll(() => spotlight.locator(".spot-track").evaluate((el) => el.scrollLeft)).toBe(0);
+
+    // The header with the logo is not pinned: scrolling down takes it off the top.
+    const header = home.locator(".view-header");
+    expect(await home.locator(".home-main").evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(150);
+    const top = (await header.boundingBox())!.y;
+    await home.locator(".home-main").evaluate((el) => { el.scrollTop = 200; });
+    await expect.poll(async () => (await header.boundingBox())!.y).toBeLessThan(top - 100);
+  });
 });
