@@ -97,6 +97,8 @@ test.describe("dragging onto the queue", () => {
     const queued = await playNextSong(page, 4);
     const rest = await titles(page, "rest");
     const drag = async (from: Locator, to: Locator, dy: number) => {
+      // Rows slide to their new places after a queue change: aim once they are there.
+      await page.waitForFunction(() => !document.querySelector('[data-testid="queue-timeline"]')?.getAnimations({ subtree: true }).some((a) => a.id === "qmove"));
       const a = (await from.locator(".text").boundingBox())!;
       const b = (await to.boundingBox())!;
       await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);

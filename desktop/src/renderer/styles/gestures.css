@@ -28,15 +28,15 @@
 .tr.swipe-flash { animation: swipe-flash 450ms ease; }
 @keyframes swipe-flash { 30% { background-color: var(--state-selected, var(--bg-active)); } }
 
-/* Queue rows sit in a slot that holds the reveal; one that is swiped away collapses after. */
-.qrow-slot { position: relative; interpolate-size: allow-keywords; }
+/* Queue rows sit in a slot that holds the reveal. One swiped away slides out; once the core drops it
+   the rows below slide up into its place (QueuePanel's FLIP). */
+.qrow-slot { position: relative; }
 .qrow-slot > .swipe-reveal { inset: 0 4px; }
 .right-panel .qrow-slot > .swipe-reveal { inset: 0 8px; border-radius: var(--shape-md); }
 .np .qrow-slot > .swipe-reveal { inset: 0 0 2px; border-radius: var(--shape-lg); }
 .np { --swipe-surface: color-mix(in srgb, #000 55%, transparent); }
 .np .qrow.swiping { backdrop-filter: blur(24px); }
-.qrow-slot.leaving { animation: swipe-collapse 200ms 160ms ease forwards; overflow: hidden; }
-@keyframes swipe-collapse { to { height: 0; opacity: 0; } }
+.qrow-slot.leaving { overflow: hidden; }
 
 /* The artwork: follows the fingers, then slides out the way it went while the next song comes in. */
 .cover-swipe { touch-action: pan-y; }
@@ -49,7 +49,6 @@
 .page-arrow.armed { background: var(--accent); color: var(--accent-fg); }
 
 @media (prefers-reduced-motion: reduce) {
-  .qrow-slot.leaving { animation-duration: 1ms; animation-delay: 0ms; }
   .tr.swipe-flash { animation: none; }
   .swipe-reveal svg { transition: none; }
 }

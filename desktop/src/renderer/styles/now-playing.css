@@ -8,7 +8,8 @@
 .queue-section { display: flex; align-items: center; gap: 8px; min-height: 30px; }
 .queue-section-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .queue-section-sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--fg-muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.queue-scroll { position: relative; }
+/* QueuePanel keeps the list in place itself when rows come or go above (its FLIP), so the browser mustn't too. */
+.queue-scroll { position: relative; overflow-anchor: none; }
 /* Clear buttons sit outside the listbox, anchored onto their section's sticky header. */
 .queue-clear { position: absolute; z-index: 2; top: anchor(center); right: anchor(right); translate: -8px -50%; text-transform: none; letter-spacing: 0; height: 22px; border-radius: 11px; font-weight: 500; }
 /* A section's buttons (Stash, Clear), anchored onto its sticky heading. */
