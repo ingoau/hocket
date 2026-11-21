@@ -100,6 +100,8 @@ async function historyKeys(q: QueueView): Promise<string[]> {
 /** Queue rows sliding to a new place (the FLIP in QueuePanel), and the id their animations carry. */
 const ROW_SPRING = spring(500, 0.85);
 const QMOVE = "qmove";
+/** A row that wasn't there fading in (left running when a later change moves rows). */
+const QFADE = "qfade";
 
 /** How long sent moves are shown ahead of the core if no queue update answers them. */
 const PENDING_MS = 2000;
@@ -330,52 +332,83 @@ export function QueuePanel({ large = false }: { large?: boolean }) {
   };
   // Queue changes move rows rather than jump them (FLIP): each row slides from where it was to
   // where the change put it, so a moved row travels to its new place and the rows around a
-  // removed one close the gap; rows that weren't there fade in. While the current item stays,
-  // positions count from its heading, so rows paged in above it don't look like moves. A
-  // pointer drop skips one change: dnd-kit already shows the row where it lands.
+  // removed one close the gap; rows that weren't there fade in. The list keeps its own place
+  // when rows come or go above (the browser's scroll anchoring is off, global.css): while the
+  // current item stays, the Now playing heading stays where it was on screen; when it changes,
+  // the first row still shown does, and nothing animates (the list follows the new item).
+  // A pointer drag skips it (dnd-kit moves the rows itself, and shows a drop where it lands).
   const rowTops = useRef<{ current: string | undefined; head: number; tops: Map<string, number> } | undefined>(undefined);
   const skipMotion = useRef(false);
+  /** Scrolling this effect does to keep the list in place, which isn't the user's. */
+  const ownScroll = useRef(false);
   useLayoutEffect(() => {
     const list = listRef.current;
-    const view = scrollRef.current?.getBoundingClientRect();
+    const scroller = scrollRef.current;
     const prev = rowTops.current;
     rowTops.current = undefined;
-    if (!list || !view) return;
-    const animate = !!prev && !reducedMotion && !dragBlock && !skipMotion.current;
+    if (!list || !scroller) return;
+    const sameCurrent = prev?.current === currentKey;
+    const animate = !!prev && sameCurrent && !reducedMotion && !rowDrag.current && !skipMotion.current;
     skipMotion.current = false;
-    const slots = [...list.querySelectorAll<HTMLElement>(".qrow[data-key]")].map((row) => ({ key: row.dataset.key!, el: row.parentElement! }));
     // A slot still sliding from an earlier change starts from where it is now, partway there.
-    const offset = new Map<HTMLElement, number>();
-    for (const { el } of slots) {
-      const running = el.getAnimations().filter((x) => x.id === QMOVE);
-      if (!running.length) continue;
+    const offset = new Map<Element, number>();
+    for (const x of list.getAnimations({ subtree: true })) {
+      const el = (x.effect as KeyframeEffect | null)?.target;
+      if (x.id !== QMOVE || !el) continue;
       offset.set(el, new DOMMatrix(getComputedStyle(el).transform).m42);
-      for (const x of running) x.cancel();
+      x.cancel();
     }
-    const listTop = list.getBoundingClientRect().top;
+    const slots = [...list.querySelectorAll<HTMLElement>(".qrow-slot")].flatMap((el) => {
+      const key = el.querySelector<HTMLElement>(".qrow[data-key]")?.dataset.key;
+      return key ? [{ key, el }] : [];
+    });
+    const view = scroller.getBoundingClientRect();
+    let listTop = list.getBoundingClientRect().top;
     const headEl = list.querySelector<HTMLElement>('[data-group="current"]');
     const head = headEl ? headEl.getBoundingClientRect().top - listTop : 0;
-    const shift = prev && headEl && prev.current === currentKey ? head - prev.head : 0;
-    const tops = new Map<string, number>();
-    for (const { key, el } of slots) {
-      const now = el.getBoundingClientRect().top;
-      tops.set(key, now - listTop);
-      if (!animate) continue;
-      const was = prev.tops.get(key);
-      const from = was === undefined ? undefined : was + shift + listTop + (offset.get(el) ?? 0);
-      // Only what can be seen, before or after the change.
-      const seen = (y: number) => y + el.offsetHeight > view.top && y < view.bottom;
-      if (!seen(now) && (from === undefined || !seen(from))) continue;
-      if (from === undefined) el.animate([{ opacity: 0 }, { opacity: 1 }], { id: QMOVE, duration: SPRING_EFFECTS.duration, easing: SPRING_EFFECTS.easing });
-      else if (Math.abs(from - now) > 0.5) el.animate([{ transform: `translateY(${from - now}px)` }, { transform: "none" }], { id: QMOVE, duration: ROW_SPRING.duration, easing: ROW_SPRING.easing });
+    const tops = new Map(slots.map(({ key, el }) => [key, el.getBoundingClientRect().top - listTop]));
+    // How far to scroll to keep the list in place: the heading's move, or the first row on screen's.
+    let keep = 0;
+    if (prev && sameCurrent && headEl) keep = head - prev.head;
+    else if (prev) {
+      const anchor = slots.find(({ key }) => {
+        const was = prev.tops.get(key);
+        return was !== undefined && was + listTop >= view.top;
+      });
+      if (anchor) keep = tops.get(anchor.key)! - prev.tops.get(anchor.key)!;
+    }
+    // What the scroll actually moved (it stops at the ends): rows were that much further down before.
+    let scrolled = 0;
+    if (Math.abs(keep) > 0.5) {
+      const before = scroller.scrollTop;
+      scroller.scrollTop = before + keep;
+      scrolled = scroller.scrollTop - before;
+      if (scrolled) {
+        ownScroll.current = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => { ownScroll.current = false; }));
+        listTop = list.getBoundingClientRect().top;
+      }
+    }
+    if (animate) {
+      const seen = (y: number, h: number) => y + h > view.top && y < view.bottom;
+      for (const { key, el } of slots) {
+        const now = tops.get(key)! + listTop;
+        const was = prev.tops.get(key);
+        const from = was === undefined ? undefined : was + listTop + scrolled + (offset.get(el) ?? 0);
+        // Only what can be seen, before or after the change.
+        const h = el.offsetHeight;
+        if (!seen(now, h) && (from === undefined || !seen(from, h))) continue;
+        if (from === undefined) el.animate([{ opacity: 0 }, { opacity: 1 }], { id: QFADE, duration: SPRING_EFFECTS.duration, easing: SPRING_EFFECTS.easing });
+        else if (Math.abs(from - now) > 0.5) el.animate([{ transform: `translateY(${from - now}px)` }, { transform: "none" }], { id: QMOVE, duration: ROW_SPRING.duration, easing: ROW_SPRING.easing });
+      }
     }
     rowTops.current = { current: currentKey, head, tops };
-  }, [queue, currentKey, reducedMotion, dragBlock]);
+  }, [queue, currentKey, reducedMotion]);
 
   const lastTouch = useRef(0);
   const programmatic = useRef(false);
   const touched = useCallback(() => {
-    if (programmatic.current) return;
+    if (programmatic.current || ownScroll.current) return;
     lastTouch.current = Date.now();
   }, []);
   const settled = useRef(false);
@@ -558,7 +591,7 @@ interface RowSwipe {
   armed: boolean;
   side: Side | 0;
   reveal: RowSwipeAction | null;
-  /** Swiped away towards this side: it slides out and its slot collapses. */
+  /** Swiped away towards this side: it slides out, and the rows below close the gap once the core drops it. */
   leaving: Side | 0;
   /** The settle transition (`useSettle`). */
   settle: string;
