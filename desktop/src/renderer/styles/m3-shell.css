@@ -258,6 +258,10 @@
    the lines below that floor too. */
 .amll-host.compact :is([class*="_lyricBgLine"], [class*="_lyricSubLine"]) { opacity: 1; }
 .amll-host.compact [class*="_lyricMainLine"] { opacity: 1 !important; }
+/* Line-synced lines (no word spans, so no masks) are dimmed by AMLL through the group's inline
+   opacity instead, 0.2 around the current line: the same floor applies, the current one whole. */
+.amll-host.compact [class*="_lyricLineWrapper"]:not(:has([class*="_lyricMainLine"] > span)) { opacity: var(--lyrics-dim) !important; }
+.amll-host.compact [class*="_lyricLineWrapper"]:not(:has([class*="_lyricMainLine"] > span)):has([class*="_lyricLine"][class*="_active"]) { opacity: 1 !important; }
 .right-panel .lyrics-static { padding: 8px 20px 16px; }
 /* The queue view: the selector and Autoplay over the timeline. */
 .right-panel .queue-header { padding: 4px 12px 8px 8px; }

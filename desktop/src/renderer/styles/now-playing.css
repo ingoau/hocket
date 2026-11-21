@@ -155,8 +155,6 @@
 
 /* Views */
 .np .empty { color: var(--fg-muted); }
-.np-pane-lyrics .lyrics-pane, .np-pane-lyrics .amll-host { height: 100%; }
-.np-pane-lyrics .lyrics-static { font-size: 22px; }
 .np .queue-wrap { height: 100%; }
 .np .queue-header.large { padding: 0 0 14px; }
 .np .qs-button { color: var(--fg); }

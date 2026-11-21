@@ -114,15 +114,23 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     else p.pause();
   }, [stamp, clockOffset, duration]);
 
-  // Frame loop: explicit stop when hidden or paused; ~24 fps in the background; the battery fps cap with lighter lyrics.
+  // Frame loop: explicit stop when hidden; ~24 fps in the background; the battery fps cap with lighter lyrics.
   // On the shared position ticker, so the lyrics, the seek bar and the background paint in the
-  // same frames instead of each loop adding frames of its own.
+  // same frames instead of each loop adding frames of its own. With springs AMLL only moves lines
+  // in update() with a time step, so while paused the loop still runs for a moment after a seek, a
+  // pause, new lines or the player loading, to let the lines glide to their places, then stops.
+  const settleKey = stamp.isPlaying ? undefined : stamp;
   useEffect(() => {
-    if (!animated || perf === "stopped" || !stamp.isPlaying) return;
+    if (!animated || perf === "stopped") return;
     const fps = perf === "background" ? Math.min(24, fpsCap) : lighter ? Math.min(batteryFps, fpsCap) : fpsCap;
     let last = performance.now();
-    return ticker.subscribe(() => {
+    const until = stampRef.current.isPlaying ? Number.POSITIVE_INFINITY : last + SETTLE_MS;
+    const unsubscribe = ticker.subscribe(() => {
       const now = ticker.now;
+      if (now > until) {
+        unsubscribe();
+        return;
+      }
       const step = now - last;
       if (!frameDue(step, fps)) return;
       last = now;
@@ -131,7 +139,8 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
       p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration));
       p.update(step);
     });
-  }, [animated, perf, lighter, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying]);
+    return unsubscribe;
+  }, [animated, perf, lighter, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying, settleKey, mapped, loaded]);
 
   return (
     <div className="lyrics-pane" data-testid="lyrics-view" data-tier={lyrics.tier} data-mode={animated ? "animated" : "plain"}>
@@ -192,6 +201,8 @@ function LyricsList({ lines, synced, visuallyHidden = false, variant, size }: { 
 }
 
 const NO_LINES: AmllLine[] = [];
+/** How long the lines keep moving after a change while paused (AMLL's springs settle well within it). */
+const SETTLE_MS = 2000;
 
 /** Small / medium / large, device-local; shared by every lyrics view in this window. */
 export function LyricsSizeControl() {
