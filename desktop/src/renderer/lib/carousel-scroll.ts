@@ -37,17 +37,23 @@ export function useCarouselScroll(track: RefObject<HTMLElement | null>, index: n
     if (!el || count < 1) return;
     let from: number | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let giveUp: ReturnType<typeof setTimeout> | undefined;
+    // A slide's width as laid out: clientWidth is rounded, and the rounding adds up across slides.
+    const width = () => el.getBoundingClientRect().width || 1;
     // Right to left, scrollLeft runs from 0 down.
     const sign = () => (getComputedStyle(el).direction === "rtl" ? -1 : 1);
-    const pos = () => Math.abs(el.scrollLeft) / (el.clientWidth || 1);
+    const pos = () => Math.abs(el.scrollLeft) / width();
     scrollTo.current = (i) => {
-      const left = sign() * i * el.clientWidth;
+      const left = sign() * i * width();
+      clearTimeout(giveUp);
       if (Math.abs(el.scrollLeft - left) < 1) {
         heading.current = undefined;
         return;
       }
       heading.current = i;
       el.scrollTo({ left, behavior: reducedMotion ? "instant" : "smooth" });
+      // A scroll that never ends (it couldn't move, or scrollend never came) doesn't hold the track.
+      giveUp = setTimeout(() => { heading.current = undefined; }, 1500);
     };
     const settle = () => {
       const start = from ?? indexRef.current;
@@ -66,8 +72,14 @@ export function useCarouselScroll(track: RefObject<HTMLElement | null>, index: n
     const onWheel = (e: WheelEvent) => {
       if (heading.current !== undefined && Math.abs(e.deltaX) > Math.abs(e.deltaY)) heading.current = undefined;
     };
+    // Ours ended, where it was going or cut short by something else (a diagonal swipe): settle
+    // on a slide from wherever it stopped.
     const onEnd = () => {
-      if (heading.current !== undefined && Math.round(pos()) === heading.current) heading.current = undefined;
+      if (heading.current === undefined) return;
+      heading.current = undefined;
+      clearTimeout(giveUp);
+      const p = pos();
+      if (Math.abs(p - Math.round(p)) > 0.01) settle();
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("wheel", onWheel, { passive: true });
@@ -76,12 +88,13 @@ export function useCarouselScroll(track: RefObject<HTMLElement | null>, index: n
     const ro = new ResizeObserver(() => {
       if (from === undefined) {
         heading.current = undefined;
-        el.scrollTo({ left: sign() * indexRef.current * el.clientWidth, behavior: "instant" });
+        el.scrollTo({ left: sign() * indexRef.current * width(), behavior: "instant" });
       }
     });
     ro.observe(el);
     return () => {
       clearTimeout(timer);
+      clearTimeout(giveUp);
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("scrollend", onEnd);

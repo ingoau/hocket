@@ -102,7 +102,12 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
   useEffect(() => onEmpty(slides !== undefined && slides.length === 0), [slides]); // eslint-disable-line react-hooks/exhaustive-deps
   // The track scrolls sideways (a trackpad, Shift + wheel) and comes to rest on a slide; the
   // arrows, dots and keys scroll it to theirs.
-  useCarouselScroll(track, at, list.length, setIndex, reducedMotion);
+  useCarouselScroll(track, at, list.length, (i) => {
+    // Focus on the slide scrolled away from follows to the same control on the new one (the old one is hidden).
+    const role = document.activeElement instanceof HTMLElement && document.activeElement.closest(".spot-slide") && section.current?.contains(document.activeElement) ? document.activeElement.dataset.spot : undefined;
+    setIndex(i);
+    if (role) requestAnimationFrame(() => section.current?.querySelector<HTMLElement>(`.spot-slide.active [data-spot="${role}"]`)?.focus({ preventScroll: true }));
+  }, reducedMotion);
   if (!slides || !list.length) return null;
   const go = (i: number) => setIndex((i + list.length) % list.length);
   const onKey = (e: React.KeyboardEvent) => {
@@ -112,7 +117,7 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
     // Focus on a slide's control follows to the same control on the next slide (the old one is hidden).
     const role = e.target instanceof HTMLElement && e.target.closest(".spot-slide") ? e.target.dataset.spot : undefined;
     go(at + (e.key === "ArrowRight" ? 1 : -1));
-    if (role) requestAnimationFrame(() => section.current?.querySelector<HTMLElement>(`.spot-slide.active [data-spot="${role}"]`)?.focus());
+    if (role) requestAnimationFrame(() => section.current?.querySelector<HTMLElement>(`.spot-slide.active [data-spot="${role}"]`)?.focus({ preventScroll: true }));
   };
   const open = (s: SpotlightSlide) => {
     if (s.album) navigate({ view: "album", id: s.album.id });

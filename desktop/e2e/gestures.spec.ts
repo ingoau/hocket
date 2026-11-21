@@ -128,6 +128,7 @@ test.describe("trackpad swipes", () => {
 
     // The header with the logo is not pinned: scrolling down takes it off the top.
     const header = home.locator(".view-header");
+    expect(await home.locator(".home-main").evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(150);
     const top = (await header.boundingBox())!.y;
     await home.locator(".home-main").evaluate((el) => { el.scrollTop = 200; });
     await expect.poll(async () => (await header.boundingBox())!.y).toBeLessThan(top - 100);
