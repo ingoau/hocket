@@ -52,6 +52,14 @@
 //! ([`StreamReader::pump`]): the player reads it back from disk, so the
 //! radio sleeps for the rest of the track instead of waking for each of the
 //! player's buffer refills.
+//!
+//! A playback read does not wait out a dead connection: when the server
+//! has sent nothing for [`STALL_WAIT`] (or the body fails or ends short)
+//! the fetch is dropped and asked again from the read position, until the
+//! read has gone [`UPSTREAM_WAIT`] without a byte; then it fails with a
+//! network error the player reports. A fetch that can't be opened at all
+//! fails the read at once: the player retries. [`StreamReader::reconnect_stalled`] asks again at once
+//! (play pressed on a starved track). Background reads keep the long wait.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -94,6 +102,41 @@ pub const MAX_READ: usize = 256 * 1024;
 /// reading for minutes (Media3 loads in bursts) must not find the stream
 /// timed out behind its back, which the HTTP client's own read timeout did.
 pub const UPSTREAM_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+/// A playback read whose fetch has sent nothing for this long drops it and
+/// asks the server again from the read position (a stalled connection
+/// would otherwise sit out the whole [`UPSTREAM_WAIT`]).
+pub const STALL_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
+/// How long a playback read waits for the server to answer a fetch.
+pub const RESPONSE_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+/// Before asking again after a playback read's fetch failed at once.
+const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_secs(1);
+/// [`StreamReader::reconnect_stalled`] leaves reads that only just started
+/// waiting alone.
+const KICK_MIN_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The reader's timeouts (shortened in tests).
+#[derive(Debug, Clone, Copy)]
+pub struct Waits {
+    /// [`UPSTREAM_WAIT`].
+    pub give_up: std::time::Duration,
+    /// [`STALL_WAIT`].
+    pub stall: std::time::Duration,
+    /// [`RESPONSE_WAIT`].
+    pub response: std::time::Duration,
+    /// [`RETRY_PAUSE`].
+    pub retry: std::time::Duration,
+}
+
+impl Default for Waits {
+    fn default() -> Self {
+        Waits {
+            give_up: UPSTREAM_WAIT,
+            stall: STALL_WAIT,
+            response: RESPONSE_WAIT,
+            retry: RETRY_PAUSE,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StreamError {
@@ -342,6 +385,9 @@ struct Shared {
     tokens: Mutex<HashMap<String, Token>>,
     handles: Mutex<Handles>,
     stopped: CancellationToken,
+    waits: RwLock<Waits>,
+    /// [`StreamReader::reconnect_stalled`] wakes reads waiting on the server.
+    kick: tokio::sync::Notify,
 }
 
 /// Handle to the reader. Cheap to clone.
@@ -367,8 +413,23 @@ impl StreamReader {
                 tokens: Mutex::new(HashMap::new()),
                 handles: Mutex::new(Handles::default()),
                 stopped: CancellationToken::new(),
+                waits: RwLock::new(Waits::default()),
+                kick: tokio::sync::Notify::new(),
             }),
         }
+    }
+
+    /// Replace the timeouts (tests).
+    pub fn set_waits(&self, waits: Waits) {
+        *self.shared.waits.write() = waits;
+    }
+
+    /// Playback reads that have been waiting on the server for more than a
+    /// moment drop their fetch and ask again from where they are now,
+    /// instead of waiting for [`STALL_WAIT`]: the listener pressed play on
+    /// a track that is starved, so the connection is probably dead.
+    pub fn reconnect_stalled(&self) {
+        self.shared.kick.notify_waiters();
     }
 
     /// The providers upstream fetches use, by source. Tokens minted for a
@@ -455,6 +516,9 @@ impl StreamReader {
             tracing::info!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open refused");
             return Err(e);
         }
+        // Counted against the bound until it settles, however it ends: an
+        // open given up on (its future dropped) frees its slot too.
+        let mut reserved = Reserved(Some(sh.as_ref()));
         let cancel = CancellationToken::new();
         let opened = self
             .open_source(&token, offset, length, background, &cancel)
@@ -466,6 +530,7 @@ impl StreamReader {
                 tracing::info!(target: "hocket::stream", track = %token.track_id, offset, error = %e, "stream open failed");
             }
         }
+        reserved.0 = None;
         let mut handles = sh.handles.lock();
         handles.opening = handles.opening.saturating_sub(1);
         let (source, info) = opened?;
@@ -599,7 +664,9 @@ impl StreamReader {
                     // disk meanwhile, and none of them aborts it.
                     let track = c.token.track_id.clone();
                     drop(src);
-                    let up = fetch_upstream(&self.shared, open.request, &h.cancel, &track).await;
+                    let wait = self.shared.waits.read().give_up;
+                    let up =
+                        fetch_upstream(&self.shared, open.request, &h.cancel, &track, wait).await;
                     let mut src = tokio::select! {
                         _ = h.cancel.cancelled() => break,
                         s = h.state.lock() => s,
@@ -1021,6 +1088,27 @@ impl Segment {
     }
 }
 
+/// An open in progress, released from [`Handles::opening`] when dropped
+/// unsettled (the open's future was dropped).
+struct Reserved<'a>(Option<&'a Shared>);
+
+impl Drop for Reserved<'_> {
+    fn drop(&mut self) {
+        if let Some(sh) = self.0 {
+            let mut h = sh.handles.lock();
+            h.opening = h.opening.saturating_sub(1);
+        }
+    }
+}
+
+/// How waiting for a segment's next chunk ended.
+enum Wait {
+    Chunk(Option<Result<Bytes, String>>),
+    Closed,
+    /// Nothing for too long, or a reconnect was asked for.
+    Stalled(&'static str),
+}
+
 /// What one [`CacheSource::pump_step`] did.
 enum PumpStep {
     /// Fetched (or settled) something; go on.
@@ -1095,6 +1183,11 @@ struct CacheSource {
     /// What this handle fetched and wrote: read back from disk, it saved
     /// no data.
     fetched_here: SpanSet,
+    /// Since when a playback read has had no byte from the server (it
+    /// gives up at [`Waits::give_up`]).
+    starved_since: Option<tokio::time::Instant>,
+    /// The last fetch failed at once: wait [`Waits::retry`] before the next.
+    retry_due: bool,
 }
 
 impl CacheSource {
@@ -1132,6 +1225,8 @@ impl CacheSource {
             failed: None,
             served: 0,
             fetched_here: SpanSet::new(),
+            starved_since: None,
+            retry_due: false,
         }
     }
 
@@ -1217,7 +1312,11 @@ impl CacheSource {
                 }
                 if let Some(e) = seg.error.take() {
                     self.persist();
-                    self.failed = Some(StreamError::Network(e));
+                    if self.retry_after(&e) {
+                        self.retry_due = true;
+                    } else {
+                        self.failed = Some(StreamError::Network(e));
+                    }
                     continue;
                 }
                 if seg.eof {
@@ -1235,7 +1334,11 @@ impl CacheSource {
                     if short {
                         tracing::info!(target: "hocket::stream", track = %self.token.track_id, at = ended_at, expected = ?seg.stop.or(self.total), "the server's stream ended early");
                         self.persist();
-                        self.failed = Some(StreamError::Network("stream ended early".into()));
+                        if self.retry_after("stream ended early") {
+                            self.retry_due = true;
+                        } else {
+                            self.failed = Some(StreamError::Network("stream ended early".into()));
+                        }
                         continue;
                     }
                     if seg.stop.is_none() && self.total.is_none() {
@@ -1246,20 +1349,35 @@ impl CacheSource {
                     self.persist();
                     continue;
                 }
-                let next = tokio::select! {
-                    _ = cancel.cancelled() => {
+                let next = match self.next_chunk(&mut seg, cancel).await {
+                    Wait::Chunk(c) => c,
+                    Wait::Closed => {
                         self.seg = Some(seg);
                         return Err(StreamError::Closed);
                     }
-                    c = tokio::time::timeout(UPSTREAM_WAIT, seg.body.next()) => match c {
-                        Ok(c) => c,
-                        Err(_) => Some(Err("no data from the server for 60s".into())),
-                    },
+                    Wait::Stalled(why) => {
+                        // Dropped (what it wrote stays cached): the loop
+                        // reads on from disk or asks the server again.
+                        tracing::info!(target: "hocket::stream", track = %self.token.track_id, at = seg.next_abs, pos = self.pos, why, "the server's stream stalled; asking again");
+                        drop(seg);
+                        self.persist();
+                        if !self.retry_after(why) {
+                            self.failed = Some(StreamError::Network(format!(
+                                "the server's stream stalled ({why})"
+                            )));
+                        }
+                        continue;
+                    }
                 };
                 match next {
                     Some(Ok(chunk)) => {
                         let at = seg.next_abs;
                         seg.next_abs += chunk.len() as u64;
+                        if at + chunk.len() as u64 > self.pos {
+                            // Progress where the player is (not a 200's
+                            // re-sent prefix before it).
+                            self.starved_since = None;
+                        }
                         let t = self.sh.downloads.traffic();
                         let counter = if self.background {
                             &t.fetched_background
@@ -1284,7 +1402,11 @@ impl CacheSource {
                     Some(Err(e)) => {
                         tracing::info!(target: "hocket::stream", track = %self.token.track_id, at = seg.next_abs, error = %e, "the server's stream failed");
                         self.persist();
-                        self.failed = Some(StreamError::Network(e));
+                        if self.retry_after(&e) {
+                            self.retry_due = true;
+                        } else {
+                            self.failed = Some(StreamError::Network(e));
+                        }
                     }
                     None => {
                         seg.eof = true;
@@ -1304,8 +1426,77 @@ impl CacheSource {
                     }
                 }
             }
+            if std::mem::take(&mut self.retry_due) {
+                // The last fetch failed at once: not again straight away
+                // (at once when asked to reconnect).
+                let pause = self.sh.waits.read().retry;
+                let kick = self.sh.kick.notified();
+                tokio::select! {
+                    _ = cancel.cancelled() => return Err(StreamError::Closed),
+                    _ = tokio::time::sleep(pause) => {}
+                    _ = kick => {}
+                }
+            }
+            // A fetch that can't be opened fails the read: the player's own
+            // retry (the native downloader, Media3's error handling) takes
+            // over, and a blocked read would hold up its seeks and skips.
             if let Err(e) = self.open_segment(self.pos, cancel).await {
                 self.failed = Some(e);
+            }
+        }
+    }
+
+    /// A playback read's fetch stalled or failed (`why`): whether to ask
+    /// the server again, which it does until it has gone
+    /// [`Waits::give_up`] without a byte. Background reads don't.
+    fn retry_after(&mut self, why: &str) -> bool {
+        if self.background || self.sh.stopped.is_cancelled() || self.api.is_none() {
+            return false;
+        }
+        let now = tokio::time::Instant::now();
+        let since = *self.starved_since.get_or_insert(now);
+        let give_up = self.sh.waits.read().give_up;
+        if now.duration_since(since) >= give_up {
+            tracing::info!(target: "hocket::stream", track = %self.token.track_id, pos = self.pos, why, "no data from the server; giving up");
+            self.starved_since = None;
+            return false;
+        }
+        true
+    }
+
+    /// The segment's next chunk, waiting at most [`Waits::stall`] for it in
+    /// a playback read ([`Waits::give_up`] in a background one).
+    async fn next_chunk(&mut self, seg: &mut Segment, cancel: &CancellationToken) -> Wait {
+        let waits = *self.sh.waits.read();
+        let wait = if self.background {
+            waits.give_up
+        } else {
+            waits.stall
+        };
+        let started = tokio::time::Instant::now();
+        // Silence counts from the first wait (a retry resumes the count).
+        let since = self.starved_since.unwrap_or(started);
+        let deadline = started + wait;
+        let next = seg.body.next();
+        tokio::pin!(next);
+        loop {
+            let kick = self.sh.kick.notified();
+            tokio::select! {
+                _ = cancel.cancelled() => return Wait::Closed,
+                c = &mut next => return Wait::Chunk(c),
+                _ = tokio::time::sleep_until(deadline) => {
+                    if self.background {
+                        return Wait::Chunk(Some(Err(format!("no data from the server for {}s", wait.as_secs()))));
+                    }
+                    self.starved_since = Some(since);
+                    return Wait::Stalled("no data");
+                }
+                _ = kick, if !self.background => {
+                    if started.elapsed() >= KICK_MIN_WAIT {
+                        self.starved_since = Some(since);
+                        return Wait::Stalled("asked to reconnect");
+                    }
+                }
             }
         }
     }
@@ -1427,6 +1618,7 @@ impl CacheSource {
             self.persist();
             return PumpStep::More;
         }
+        let give_up = self.sh.waits.read().give_up;
         let next = tokio::select! {
             _ = cancel.cancelled() => {
                 self.seg = Some(seg);
@@ -1436,9 +1628,9 @@ impl CacheSource {
                 self.seg = Some(seg);
                 return PumpStep::Yield;
             }
-            c = tokio::time::timeout(UPSTREAM_WAIT, seg.body.next()) => match c {
+            c = tokio::time::timeout(give_up, seg.body.next()) => match c {
                 Ok(c) => c,
-                Err(_) => Some(Err("no data from the server for 60s".into())),
+                Err(_) => Some(Err(format!("no data from the server for {}s", give_up.as_secs()))),
             },
         };
         match next {
@@ -1572,13 +1764,19 @@ impl CacheSource {
         pos: u64,
         cancel: &CancellationToken,
     ) -> Result<(), StreamError> {
+        let waits = *self.sh.waits.read();
+        let wait = if self.background {
+            waits.give_up
+        } else {
+            waits.response
+        };
         let (request, gap_end) = self.segment_request(pos).await?;
-        let mut up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
+        let mut up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id, wait).await?;
         let mut gap_end = gap_end;
         if self.forget_refused_url(up.status, pos) {
             let (request, end) = self.segment_request(pos).await?;
             gap_end = end;
-            up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id).await?;
+            up = fetch_upstream(&self.sh, request, cancel, &self.token.track_id, wait).await?;
         }
         self.attach_segment(pos, gap_end, up)
     }
@@ -2006,18 +2204,19 @@ impl Drop for CacheSource {
     }
 }
 
-/// Send a gap fetch and wait (at most [`UPSTREAM_WAIT`]) for the answer.
+/// Send a gap fetch and wait (at most `wait`) for the answer.
 async fn fetch_upstream(
     sh: &Shared,
     request: UpstreamRequest,
     cancel: &CancellationToken,
     track: &str,
+    wait: std::time::Duration,
 ) -> Result<UpstreamResponse, StreamError> {
     let fetch = sh.upstream.fetch(request);
     tokio::select! {
         _ = cancel.cancelled() => Err(StreamError::Closed),
-        r = tokio::time::timeout(UPSTREAM_WAIT, fetch) => r
-            .unwrap_or_else(|_| Err("no response from the server for 60s".into()))
+        r = tokio::time::timeout(wait, fetch) => r
+            .unwrap_or_else(|_| Err(format!("no response from the server for {}s", wait.as_secs())))
             .map_err(|e| {
                 tracing::warn!(target: "hocket_core", error = %e, track = %track, "stream upstream");
                 StreamError::Network(e)
@@ -2272,6 +2471,159 @@ mod tests {
             StreamError::ShutDown
         );
         assert!(r.mint(target()).is_none());
+    }
+
+    fn quick_waits(stall_ms: u64, give_up_ms: u64) -> Waits {
+        Waits {
+            give_up: std::time::Duration::from_millis(give_up_ms),
+            stall: std::time::Duration::from_millis(stall_ms),
+            response: std::time::Duration::from_millis(give_up_ms),
+            retry: std::time::Duration::from_millis(50),
+        }
+    }
+
+    async fn read_all(r: &StreamReader, handle: u64) -> Result<Vec<u8>, StreamError> {
+        let mut out = vec![];
+        loop {
+            let b = r.read(handle, MAX_READ).await?;
+            if b.is_empty() {
+                return Ok(out);
+            }
+            out.extend_from_slice(&b);
+        }
+    }
+
+    /// Issue #215: a playback read whose connection stalls asks the server
+    /// again from where it is after the stall wait, not the long one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_playback_read_asks_again_from_where_it_is() {
+        use crate::core::test_support::UpstreamBehaviour;
+        let (_dir, _dl, r, upstream) = reader();
+        r.set_waits(quick_waits(200, 30_000));
+        let media: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        upstream.set_media("t0", media.clone(), "audio/flac");
+        upstream.set_behaviour("t0", UpstreamBehaviour::StallOnceAfter(40_000));
+        let url = r.mint(target()).unwrap();
+        let started = std::time::Instant::now();
+        let h = r.open(&url, 0, None).await.unwrap().handle;
+        assert_eq!(read_all(&r, h).await.unwrap(), media);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        let calls = upstream.calls();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[1].range.as_deref(), Some("bytes=40000-"));
+        r.close(h);
+    }
+
+    /// [`StreamReader::reconnect_stalled`] (play pressed on a starved
+    /// track) asks again at once, long before the stall wait.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reconnect_stalled_asks_again_at_once() {
+        use crate::core::test_support::UpstreamBehaviour;
+        let (_dir, _dl, r, upstream) = reader();
+        r.set_waits(quick_waits(60_000, 120_000));
+        let media: Vec<u8> = (0..100_000u32).map(|i| (i % 249) as u8).collect();
+        upstream.set_media("t0", media.clone(), "audio/flac");
+        upstream.set_behaviour("t0", UpstreamBehaviour::StallOnceAfter(30_000));
+        let url = r.mint(target()).unwrap();
+        let h = r.open(&url, 0, None).await.unwrap().handle;
+        let r2 = r.clone();
+        let rest = tokio::spawn(async move { read_all(&r2, h).await });
+        tokio::time::sleep(KICK_MIN_WAIT).await;
+        assert!(!rest.is_finished());
+        // Kicked until it reconnects (a read only just waiting is left be).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !rest.is_finished() {
+            assert!(std::time::Instant::now() < deadline, "the kick reconnects");
+            r.reconnect_stalled();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let got = rest.await.unwrap().unwrap();
+        assert_eq!(got, media);
+        assert_eq!(upstream.calls()[1].range.as_deref(), Some("bytes=30000-"));
+        r.close(h);
+    }
+
+    /// A stalled read whose server can no longer be reached fails as soon
+    /// as asking again fails (the player retries), not after the long wait.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreachable_server_fails_a_starved_read_in_bounded_time() {
+        use crate::core::test_support::UpstreamBehaviour;
+        let (_dir, _dl, r, upstream) = reader();
+        r.set_waits(quick_waits(100, 30_000));
+        let media: Vec<u8> = (0..100_000u32).map(|i| (i % 247) as u8).collect();
+        upstream.set_media("t0", media, "audio/flac");
+        upstream.set_behaviour("t0", UpstreamBehaviour::StallAfter(20_000));
+        let url = r.mint(target()).unwrap();
+        let h = r.open(&url, 0, None).await.unwrap().handle;
+        let mut got = 0;
+        while got < 20_000 {
+            got += r.read(h, MAX_READ).await.unwrap().len();
+        }
+        upstream.set_behaviour("t0", UpstreamBehaviour::Unreachable);
+        let started = std::time::Instant::now();
+        let err = r.read(h, MAX_READ).await.unwrap_err();
+        assert!(matches!(err, StreamError::Network(_)), "{err:?}");
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+        assert_eq!(upstream.calls().len(), 2, "asked again once");
+        // Opening it again fails within the response wait too.
+        let err = r.open(&url, 20_000, None).await.unwrap_err();
+        assert!(matches!(err, StreamError::Network(_)), "{err:?}");
+        r.close(h);
+    }
+
+    /// A server that answers but never sends fails a starved read once it
+    /// has gone the give-up time without a byte, and asking it again is
+    /// paced, not a hot loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_server_that_keeps_failing_fails_the_read_in_bounded_time() {
+        use crate::core::test_support::UpstreamBehaviour;
+        let (_dir, _dl, r, upstream) = reader();
+        let mut waits = quick_waits(100, 1_000);
+        waits.retry = std::time::Duration::from_millis(200);
+        r.set_waits(waits);
+        let media: Vec<u8> = (0..100_000u32).map(|i| (i % 241) as u8).collect();
+        upstream.set_media("t0", media, "audio/flac");
+        upstream.set_behaviour("t0", UpstreamBehaviour::StallAfter(20_000));
+        let url = r.mint(target()).unwrap();
+        let h = r.open(&url, 0, None).await.unwrap().handle;
+        let mut got = 0;
+        while got < 20_000 {
+            got += r.read(h, MAX_READ).await.unwrap().len();
+        }
+        // From here every answer fails before its first byte.
+        upstream.set_behaviour("t0", UpstreamBehaviour::FailAfter(0));
+        let started = std::time::Instant::now();
+        let err = r.read(h, MAX_READ).await.unwrap_err();
+        assert!(matches!(err, StreamError::Network(_)), "{err:?}");
+        let took = started.elapsed();
+        assert!(
+            took >= std::time::Duration::from_millis(900)
+                && took < std::time::Duration::from_secs(4),
+            "{took:?}"
+        );
+        let calls = upstream.calls().len();
+        assert!((3..=10).contains(&calls), "paced, not a hot loop: {calls}");
+        r.close(h);
+    }
+
+    /// An open given up on (its future dropped, as the native downloader
+    /// does on a reconnect) frees its slot.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_open_frees_its_slot() {
+        let (_dir, _dl, r, upstream) = reader();
+        upstream.hold_responses("t0");
+        let url = r.mint(target()).unwrap();
+        for _ in 0..MAX_HANDLES + 2 {
+            let open = r.open(&url, 5, None);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(20), open)
+                    .await
+                    .is_err()
+            );
+        }
+        upstream.release_responses("t0");
+        r.open(&url, 5, None).await.unwrap();
     }
 
     #[test]

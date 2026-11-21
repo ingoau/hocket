@@ -942,6 +942,12 @@ impl Actor {
     }
 
     fn ensure_loaded_then_play(&mut self) {
+        // Play on a starved track: a stalled connection is asked again now
+        // rather than after the reader's stall wait (Media3 has no way to
+        // restart a read that is blocked).
+        if let Some(r) = &self.stream_reader {
+            r.reconnect_stalled();
+        }
         if self.playback.loaded {
             if self.refresh_remote_on_resume() {
                 return;
