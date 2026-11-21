@@ -749,6 +749,11 @@ pub enum UpstreamBehaviour {
     Serve,
     /// This many bytes, then nothing ever again (a stalled connection).
     StallAfter(usize),
+    /// Once, [`StallAfter`](Self::StallAfter); then [`Serve`](Self::Serve)
+    /// (a connection that died while the server stayed up).
+    StallOnceAfter(usize),
+    /// Every request fails to connect (the server can't be reached).
+    Unreachable,
     /// This many bytes, then a connection error.
     FailAfter(usize),
     /// HTTP 200 with a Subsonic JSON error envelope.
@@ -906,7 +911,9 @@ impl StreamUpstream for FakeUpstream {
                 .unwrap_or(UpstreamBehaviour::Serve);
             if matches!(
                 b,
-                UpstreamBehaviour::EstimatedOnce(_) | UpstreamBehaviour::RefuseOnce
+                UpstreamBehaviour::EstimatedOnce(_)
+                    | UpstreamBehaviour::RefuseOnce
+                    | UpstreamBehaviour::StallOnceAfter(_)
             ) {
                 st.behaviour
                     .insert(track_id.clone(), UpstreamBehaviour::Serve);
@@ -923,7 +930,10 @@ impl StreamUpstream for FakeUpstream {
             if let Some(mut rx) = response_gate {
                 let _ = rx.wait_for(|open| *open).await;
             }
-            if behaviour == UpstreamBehaviour::RefuseOnce {
+            if matches!(
+                behaviour,
+                UpstreamBehaviour::RefuseOnce | UpstreamBehaviour::Unreachable
+            ) {
                 return Err("connection refused".to_string());
             }
             if behaviour == UpstreamBehaviour::UnknownLength {
@@ -1000,7 +1010,7 @@ impl StreamUpstream for FakeUpstream {
                 .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
                 .collect();
             let body = match behaviour {
-                UpstreamBehaviour::StallAfter(n) => {
+                UpstreamBehaviour::StallAfter(n) | UpstreamBehaviour::StallOnceAfter(n) => {
                     let head: Vec<_> = split_at_bytes(chunks, n);
                     futures::stream::iter(head)
                         .chain(futures::stream::pending())

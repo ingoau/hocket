@@ -155,7 +155,7 @@ async fn a_stream_too_big_for_the_cache_is_not_fetched_ahead() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_connection_the_pump_lost_fails_the_read_where_it_dropped() {
+async fn a_connection_the_pump_lost_is_asked_again_where_it_dropped() {
     let t = started("burst-drop", 2).await;
     let media: Vec<u8> = (0..300_000u32).map(|i| (i % 233) as u8).collect();
     t.upstream.set_media("t0", media.clone(), "audio/flac");
@@ -172,29 +172,23 @@ async fn a_connection_the_pump_lost_fails_the_read_where_it_dropped() {
     t.clock.advance(PUMP_DELAY_MS);
     out.extend_from_slice(&t.core.stream_read(info.handle, 1024).await.unwrap());
     wait_rows(&t, "what arrived before the drop", |rows| {
-        rows.iter().any(|r| r.spans == "0-120000")
+        rows.iter()
+            .any(|r| r.spans.starts_with("0-") && r.spans != "0-2048")
     })
     .await;
-    // The player gets every byte that arrived, then the error.
-    let err = loop {
-        match t.core.stream_read(info.handle, 64 * 1024).await {
-            Ok(b) => {
-                assert!(!b.is_empty(), "end of input before the error");
-                out.extend_from_slice(&b);
-            }
-            Err(e) => break e,
+    // The player gets every byte: where the connection dropped, the read
+    // asks the server again.
+    loop {
+        let b = t.core.stream_read(info.handle, 64 * 1024).await.unwrap();
+        if b.is_empty() {
+            break;
         }
-    };
-    assert!(
-        matches!(
-            err,
-            hocket_core::core::stream_reader::StreamError::Network(_)
-        ),
-        "{err:?}"
-    );
-    assert_eq!(out, &media[..120_000]);
+        out.extend_from_slice(&b);
+    }
+    assert_eq!(out, media);
     t.core.stream_close(info.handle);
-    assert_eq!(t.upstream.stream_requests("t0"), 1);
+    let ranges: Vec<_> = t.upstream.calls().into_iter().map(|c| c.range).collect();
+    assert!(ranges.contains(&Some("bytes=120000-".into())), "{ranges:?}");
     t.core.shutdown().await;
 }
 

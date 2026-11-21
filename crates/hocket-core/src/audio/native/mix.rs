@@ -156,7 +156,8 @@ fn render(job: TailJob) -> Result<Vec<f32>, String> {
         job.runtime,
         "tail",
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?
+    .0;
     let spec = handle.spec;
     let rate = u64::from(spec.sample_rate);
     let preroll = u64::from(plan.tail_start_ms) * rate / 1000 - u64::from(start_ms) * rate / 1000;

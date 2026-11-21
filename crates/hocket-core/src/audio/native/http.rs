@@ -13,6 +13,12 @@
 //!
 //! The whole file is held in memory for the life of the source; the stream
 //! cache module is responsible for persisting anything across plays.
+//!
+//! A stalled server is not waited on forever: [`HttpReconnect`] drops the
+//! response in flight and asks again from where the reader is (the engine
+//! does that when play is pressed on a starved track), and a read that has
+//! had no bytes for [`READ_GIVE_UP`] fails, so the player reports an error
+//! instead of buffering without end.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Seek, SeekFrom};
@@ -207,6 +213,11 @@ impl RangeFetcher for MemoryFetcher {
 /// willing to abandon a response for a seek elsewhere.
 const READAHEAD_TOLERANCE: u64 = 512 * 1024;
 
+/// A read that has waited this long without a byte at its position fails
+/// (the decoder reports an error, the player retries or skips) instead of
+/// waiting through the downloader's retries for ever.
+pub const READ_GIVE_UP: Duration = Duration::from_secs(60);
+
 #[derive(Default)]
 struct State {
     /// Non-overlapping, non-adjacent-merged segments keyed by start offset.
@@ -221,6 +232,9 @@ struct State {
     closed: bool,
     /// Downloader finished with nothing left to fetch.
     complete: bool,
+    /// Drop the response in flight and fetch again from `want`
+    /// ([`HttpReconnect`]).
+    reconnect: bool,
 }
 
 impl State {
@@ -307,7 +321,37 @@ struct Shared {
 pub struct HttpSource {
     shared: Arc<Shared>,
     pos: u64,
+    give_up: Duration,
     _task: tokio::task::JoinHandle<()>,
+}
+
+/// Restarts a source's download where its reader is: the connection in
+/// flight may be dead (a stalled server) and a fresh one is cheap. Cheap to
+/// clone; outlives the source harmlessly.
+#[derive(Clone)]
+pub struct HttpReconnect(std::sync::Weak<Shared>);
+
+impl HttpReconnect {
+    /// Drop the response in flight, unless the reader has the bytes it
+    /// wants next, and fetch again from there.
+    pub fn reconnect(&self) {
+        let Some(shared) = self.0.upgrade() else {
+            return;
+        };
+        let mut st = shared.state.lock();
+        if st.closed || st.complete || st.has(st.want) {
+            return;
+        }
+        st.reconnect = true;
+        drop(st);
+        shared.wake_downloader.notify_one();
+    }
+}
+
+impl std::fmt::Debug for HttpReconnect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HttpReconnect")
+    }
 }
 
 impl HttpSource {
@@ -349,8 +393,20 @@ impl HttpSource {
         Ok(HttpSource {
             shared,
             pos: 0,
+            give_up: READ_GIVE_UP,
             _task: task,
         })
+    }
+
+    /// How long a read waits without a byte before it fails (tests).
+    pub fn with_give_up(mut self, d: Duration) -> Self {
+        self.give_up = d;
+        self
+    }
+
+    /// A handle that restarts this source's download.
+    pub fn reconnector(&self) -> HttpReconnect {
+        HttpReconnect(Arc::downgrade(&self.shared))
     }
 
     pub fn total_len(&self) -> Option<u64> {
@@ -439,12 +495,16 @@ fn record_headers(shared: &Shared, resp: &FetchResponse) {
     shared.data_ready.notify_all();
 }
 
-/// Whether the reader has moved somewhere this response won't reach soon.
-/// `None` when the source was closed.
+/// Whether the reader has moved somewhere this response won't reach soon,
+/// or a reconnect was asked for. `None` when the source was closed.
 fn should_abandon(shared: &Shared, pos: u64) -> Option<bool> {
-    let st = shared.state.lock();
+    let mut st = shared.state.lock();
     if st.closed {
         return None;
+    }
+    if std::mem::take(&mut st.reconnect) {
+        tracing::info!(target: "hocket::audio::http", at = pos, want = st.want, "dropping the server's response and asking again");
+        return Some(true);
     }
     let want = st.want;
     let ranges_ok = st.supports_ranges.unwrap_or(true);
@@ -507,7 +567,39 @@ async fn downloader(
             Next::Fetch(s) => s,
             Next::Done | Next::Closed => return,
         };
-        let mut resp = match fetcher.fetch(url.clone(), headers.clone(), start).await {
+        shared.state.lock().reconnect = false;
+        // A reconnect asked for while the fetch is still opening starts it
+        // over too (the old one may never answer).
+        let fetched = {
+            let fetch = fetcher.fetch(url.clone(), headers.clone(), start);
+            tokio::pin!(fetch);
+            let mut woken = false;
+            let r = loop {
+                tokio::select! {
+                    r = &mut fetch => break Some(r),
+                    _ = shared.wake_downloader.notified() => {
+                        let mut st = shared.state.lock();
+                        if st.closed {
+                            return;
+                        }
+                        if std::mem::take(&mut st.reconnect) {
+                            break None;
+                        }
+                        woken = true;
+                    }
+                }
+            };
+            if woken {
+                // A seek meanwhile: the body loop below weighs it.
+                shared.wake_downloader.notify_one();
+            }
+            r
+        };
+        let Some(fetched) = fetched else {
+            tracing::info!(target: "hocket::audio::http", at = start, "the server has not answered; asking again");
+            continue;
+        };
+        let mut resp = match fetched {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(target: "hocket::audio::http", error = %e, "fetch failed");
@@ -569,6 +661,7 @@ impl Read for HttpSource {
             return Ok(0);
         }
         let mut st = self.shared.state.lock();
+        let since = std::time::Instant::now();
         loop {
             if let Some((start, data)) = st.segment_at(self.pos) {
                 let off = (self.pos - start) as usize;
@@ -603,6 +696,19 @@ impl Read for HttpSource {
                 // Transient errors are being retried; only surface after the
                 // downloader gives up (it sets `closed`). Keep waiting.
                 tracing::debug!(target: "hocket::audio::http", error = %e, "waiting through fetch error");
+            }
+            if since.elapsed() >= self.give_up {
+                // The server stopped sending and the retries got nothing:
+                // fail visibly rather than buffer for ever.
+                let error = st.error.as_ref().map(|e| e.to_string());
+                tracing::info!(target: "hocket::audio::http", at = self.pos, ?error, "no data from the server; giving up");
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    match error {
+                        Some(e) => format!("no data from the server ({e})"),
+                        None => "no data from the server".to_string(),
+                    },
+                ));
             }
             self.shared
                 .data_ready
@@ -900,6 +1006,75 @@ mod tests {
             err.to_string().contains("source closed"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Issue #215: a read the server has stopped feeding fails after the
+    /// give-up time instead of waiting for ever.
+    #[test]
+    fn a_starved_read_gives_up() {
+        let rt = runtime();
+        let fetcher = StallFetcher {
+            data: Arc::new(data(100_000)),
+            chunk: 4096,
+        };
+        let mut src = HttpSource::open(
+            Arc::new(fetcher),
+            rt.handle().clone(),
+            "http://x/a".into(),
+            HashMap::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .with_give_up(Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        let mut out = Vec::new();
+        let err = src.read_to_end(&mut out).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
+        assert_eq!(out.len(), 4096);
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// A reconnect drops the stalled response and asks again from the
+    /// reader's position.
+    #[test]
+    fn reconnect_asks_again_from_the_read_position() {
+        let rt = runtime();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        struct Recording {
+            inner: StallFetcher,
+            calls: Arc<Mutex<Vec<u64>>>,
+        }
+        impl RangeFetcher for Recording {
+            fn fetch(&self, url: String, h: HashMap<String, String>, start: u64) -> FetchFuture {
+                self.calls.lock().push(start);
+                self.inner.fetch(url, h, start)
+            }
+        }
+        let fetcher = Recording {
+            inner: StallFetcher {
+                data: Arc::new(data(100_000)),
+                chunk: 4096,
+            },
+            calls: calls.clone(),
+        };
+        let mut src = HttpSource::open(
+            Arc::new(fetcher),
+            rt.handle().clone(),
+            "http://x/a".into(),
+            HashMap::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let mut buf = vec![0u8; 4096];
+        src.read_exact(&mut buf).unwrap();
+        let kick = src.reconnector();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            kick.reconnect();
+        });
+        // Each reconnected response brings another 4 KiB.
+        src.read_exact(&mut buf).unwrap();
+        assert_eq!(&*calls.lock(), &[0, 4096]);
     }
 
     #[test]

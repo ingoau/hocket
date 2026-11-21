@@ -25,7 +25,7 @@ use crate::api::{AudioSettings, BackendReport, MediaSource, OutputDevice, QueueK
 use crate::audio::backend::{clamp_volume, BackendError, PlaybackBackend, ReportSink};
 use crate::audio::decoder::{open_file, open_media_source, DecodeError, DecodeHandle, Spec};
 use crate::audio::dsp::{DspChain, DspSettings, SmoothGain, SoftLimiter};
-use crate::audio::native::http::{HttpSource, RangeFetcher};
+use crate::audio::native::http::{HttpReconnect, HttpSource, RangeFetcher};
 use crate::audio::native::mix::{
     render_tail_job, RenderedTail, TailJob, TailState, Transition, SWITCH_XFADE_MS, TAIL_LEAD_MS,
 };
@@ -72,6 +72,7 @@ enum Role {
 struct Loaded {
     media: MediaSource,
     handle: DecodeHandle,
+    reconnect: Option<HttpReconnect>,
 }
 
 /// Engine commands. `Load` carries whole `MediaSource`s and dwarfs the unit
@@ -117,6 +118,8 @@ enum Cmd {
 pub(super) struct Source {
     media: MediaSource,
     handle: DecodeHandle,
+    /// Restarts a streamed source's download (play on a starved track).
+    reconnect: Option<HttpReconnect>,
     spec: Spec,
     duration_ms: Option<u32>,
     resampler: Option<Resampler>,
@@ -145,6 +148,7 @@ impl Source {
         Self {
             media: l.media,
             handle: l.handle,
+            reconnect: l.reconnect,
             spec,
             duration_ms,
             resampler: None,
@@ -488,10 +492,11 @@ impl Engine {
                     runtime,
                     &name,
                 )
-                .map(|handle| {
+                .map(|(handle, reconnect)| {
                     Box::new(Loaded {
                         media: source,
                         handle,
+                        reconnect,
                     })
                 });
                 let _ = tx.send(Cmd::Loaded {
@@ -707,6 +712,19 @@ impl Engine {
             Cmd::SetNext(next) => self.set_next(next),
             Cmd::Play => {
                 self.ensure_output();
+                let starved = self.current.as_ref().is_some_and(|c| c.buffering);
+                if starved {
+                    // The connection feeding it may be dead: ask again
+                    // rather than wait for it.
+                    for s in [self.current.as_ref(), self.next.as_ref()]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(r) = &s.reconnect {
+                            r.reconnect();
+                        }
+                    }
+                }
                 if self.playing && !self.fading_out {
                     return true;
                 }
@@ -719,9 +737,18 @@ impl Engine {
                 }
                 if let Some((key, pos)) = self.now_playing() {
                     self.report(BackendReport::Playing {
-                        key,
+                        key: key.clone(),
                         position_ms: pos,
                     });
+                    if starved {
+                        // Playing, but no audio yet: still buffering (the
+                        // report above clears it), and its end is reported
+                        // when audio comes back.
+                        self.report(BackendReport::Buffering {
+                            key,
+                            buffering: true,
+                        });
+                    }
                 }
             }
             Cmd::Pause => {
@@ -730,6 +757,24 @@ impl Engine {
                 }
                 if self.current.is_none() {
                     self.playing = false;
+                    return true;
+                }
+                if self.fading_out {
+                    return true;
+                }
+                let starved = self.current.as_ref().is_some_and(|c| c.buffering)
+                    && self.pending_out.is_empty();
+                if starved {
+                    // Nothing is playing to fade out (the fade only moves
+                    // with audio): pause now.
+                    self.playing = false;
+                    self.volume.snap(0.0);
+                    if let Some((key, pos)) = self.now_playing() {
+                        self.report(BackendReport::Paused {
+                            key,
+                            position_ms: pos,
+                        });
+                    }
                     return true;
                 }
                 self.fading_out = true;
@@ -1644,8 +1689,9 @@ pub(super) fn load_source(
     fetcher: Arc<dyn RangeFetcher>,
     runtime: tokio::runtime::Handle,
     name: &str,
-) -> Result<DecodeHandle, DecodeError> {
+) -> Result<(DecodeHandle, Option<HttpReconnect>), DecodeError> {
     let url = source.url.trim();
+    let mut reconnect = None;
     let opened = if let Some(path) = local_path(url) {
         if gapless {
             open_file(&path)?
@@ -1670,6 +1716,7 @@ pub(super) fn load_source(
             source.headers.clone(),
             OPEN_TIMEOUT,
         )?;
+        reconnect = Some(http.reconnector());
         let ext = url_extension(url);
         open_media_source(
             Box::new(http),
@@ -1680,7 +1727,8 @@ pub(super) fn load_source(
     };
     let start_frame = u64::from(position_ms) * u64::from(opened.spec.sample_rate) / 1000;
     let capacity = (opened.spec.sample_rate * queue_seconds) as usize;
-    DecodeHandle::spawn(opened, start_frame, capacity, name)
+    let handle = DecodeHandle::spawn(opened, start_frame, capacity, name)?;
+    Ok((handle, reconnect))
 }
 
 /// `file://` URLs and bare paths → a filesystem path.
@@ -2423,6 +2471,126 @@ mod tests {
                 key: "h".into(),
                 position_ms: 100
             }
+        );
+        assert!(
+            !reports
+                .iter()
+                .any(|r| matches!(r, BackendReport::Error { .. })),
+            "{reports:?}"
+        );
+    }
+
+    /// The first response sends `stall_after` bytes and then nothing ever
+    /// again (a dead connection); every later one serves to the end.
+    struct StallOnceFetcher {
+        data: Arc<Vec<u8>>,
+        stall_after: usize,
+        fetches: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl RangeFetcher for StallOnceFetcher {
+        fn fetch(
+            &self,
+            _url: String,
+            _headers: std::collections::HashMap<String, String>,
+            start: u64,
+        ) -> crate::audio::native::http::FetchFuture {
+            use futures::StreamExt;
+            let data = self.data.clone();
+            let first = self.fetches.fetch_add(1, Ordering::SeqCst) == 0;
+            let stall_after = self.stall_after;
+            Box::pin(async move {
+                let start = start as usize;
+                let end = if first {
+                    (start + stall_after).min(data.len())
+                } else {
+                    data.len()
+                };
+                let chunks: Vec<Result<bytes::Bytes, crate::audio::native::http::FetchError>> =
+                    data[start..end]
+                        .chunks(4096)
+                        .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+                        .collect();
+                let body = futures::stream::iter(chunks);
+                let body = if first {
+                    body.chain(futures::stream::pending()).boxed()
+                } else {
+                    body.boxed()
+                };
+                Ok(crate::audio::native::http::FetchResponse {
+                    range_start: start as u64,
+                    total_len: Some(data.len() as u64),
+                    supports_ranges: true,
+                    body,
+                })
+            })
+        }
+    }
+
+    /// Issue #215: a stream that stalls mid-track. Pausing while starved
+    /// pauses at once (no fade to wait on), play reports it is still
+    /// buffering and asks the server again, and buffering ends when the
+    /// audio does come back.
+    #[test]
+    fn pause_and_play_on_a_starved_stream_reconnect_and_report_buffering() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.wav");
+        write_test_wav(&p, 48_000, 48_000 * 2);
+        let bytes = std::fs::read(&p).unwrap();
+        let fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rig = rig_with(Arc::new(StallOnceFetcher {
+            stall_after: bytes.len() / 4,
+            data: Arc::new(bytes),
+            fetches: fetches.clone(),
+        }));
+        let src = MediaSource {
+            key: "s".into(),
+            track: TrackSummary {
+                id: "s".into(),
+                duration_ms: 2000,
+                ..Default::default()
+            },
+            url: "https://navidrome.example/rest/stream?id=s&format=wav".into(),
+            headers: Default::default(),
+            mime_type: Some("audio/wav".into()),
+            gain_db: 0.0,
+            transcoded: false,
+            local: false,
+            artwork_url: None,
+            mix_in: None,
+            mix_out_ms: None,
+        };
+        rig.backend.load(src, None, 0, true).unwrap();
+        let starved = |r: &BackendReport| matches!(r, BackendReport::Buffering { key, buffering: true } if key == "s");
+        rig.wait_for(Duration::from_secs(10), starved);
+        rig.take();
+        rig.backend.pause().unwrap();
+        rig.wait_for(
+            Duration::from_millis(500),
+            |r| matches!(r, BackendReport::Paused { key, .. } if key == "s"),
+        );
+        assert_eq!(fetches.load(Ordering::SeqCst), 1, "no reconnect yet");
+        rig.take();
+        rig.backend.play().unwrap();
+        let reports = rig.wait_for(
+            Duration::from_secs(10),
+            |r| matches!(r, BackendReport::Ended { key } if key == "s"),
+        );
+        let playing = pos_of(&reports, |r| matches!(r, BackendReport::Playing { .. }));
+        let still = pos_of(&reports, starved);
+        let back = pos_of(&reports, |r| {
+            matches!(
+                r,
+                BackendReport::Buffering {
+                    buffering: false,
+                    ..
+                }
+            )
+        });
+        assert!(playing < still && still < back, "{reports:?}");
+        assert!(
+            fetches.load(Ordering::SeqCst) >= 2,
+            "play asked the server again"
         );
         assert!(
             !reports

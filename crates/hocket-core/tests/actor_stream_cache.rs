@@ -174,16 +174,32 @@ async fn aborted_reads_and_dropped_connections_keep_their_bytes_and_resume_with_
     assert_eq!(calls[1].range.as_deref(), Some("bytes=40000-"));
     wait_offline(&t, "t0", OfflineState::Cached).await;
 
-    // The server drops the connection mid-body: what arrived stays.
+    // The server drops the connection mid-body (every 50 KB): the read
+    // asks again from where it got to each time and gets the whole stream.
     t.upstream.set_media("t1", vec![9u8; 200_000], "audio/flac");
     t.upstream
         .set_behaviour("t1", UpstreamBehaviour::FailAfter(50_000));
     let s = source(&t, "t1").await;
-    let err = read_from(&t, &s.url, 0).await.unwrap_err();
-    assert!(matches!(err, StreamError::Network(_)), "{err:?}");
+    let (_, bytes) = read_from(&t, &s.url, 0).await.unwrap();
+    assert_eq!(bytes, vec![9u8; 200_000]);
+    let ranges: Vec<_> = t
+        .upstream
+        .calls()
+        .into_iter()
+        .filter(|c| c.track_id == "t1")
+        .map(|c| c.range)
+        .collect();
+    assert_eq!(
+        ranges,
+        [
+            None,
+            Some("bytes=50000-".into()),
+            Some("bytes=100000-".into()),
+            Some("bytes=150000-".into())
+        ]
+    );
     wait_handles_closed(&t).await;
-    assert_eq!(row_of(&t, "t1").spans, "0-50000");
-    assert_eq!(offline(&t, "t1").await, OfflineState::None);
+    wait_offline(&t, "t1", OfflineState::Cached).await;
 
     // Closed after one read (the server stalls before the end, so the pump
     // fetching ahead cannot finish it): what arrived stays.
@@ -201,7 +217,7 @@ async fn aborted_reads_and_dropped_connections_keep_their_bytes_and_resume_with_
     // Partial bytes count against the budget.
     match t.query(Query::Storage).await {
         QueryResult::Storage(s) => {
-            assert_eq!(s.cache_bytes, 200_000.0 + 50_000.0 + row.bytes, "{s:?}")
+            assert_eq!(s.cache_bytes, 200_000.0 + 200_000.0 + row.bytes, "{s:?}")
         }
         other => panic!("{other:?}"),
     }
@@ -246,17 +262,19 @@ async fn past_the_real_end_of_an_overestimated_transcode_is_the_end_of_input() {
     let s = source(&t, "t0").await;
     let info = t.core.stream_open(&s.url, 0, None).await.unwrap();
     assert_eq!(info.length, Some(104_000));
+    // The body ends short of the estimate: the read asks again from there,
+    // the server's 416 says that is the real end, and it is end of input.
     let mut got = vec![];
-    let err = loop {
-        match t.core.stream_read(info.handle, 64 * 1024).await {
-            Ok(b) => got.extend_from_slice(&b),
-            Err(e) => break e,
+    loop {
+        let b = t.core.stream_read(info.handle, 64 * 1024).await.unwrap();
+        if b.is_empty() {
+            break;
         }
-    };
+        got.extend_from_slice(&b);
+    }
     t.core.stream_close(info.handle);
     assert_eq!(got, media);
-    assert!(matches!(err, StreamError::Network(_)), "{err:?}");
-    // The player's retry at the real end: end of input.
+    // A player resuming at the real end: end of input too.
     let (info, rest) = read_from(&t, &s.url, 100_000).await.unwrap();
     assert!(rest.is_empty());
     assert_eq!((info.total_length, info.length), (Some(100_000), Some(0)));
@@ -291,13 +309,22 @@ async fn a_second_handle_with_the_estimate_keeps_the_entry_another_completed() {
     t.upstream
         .set_behaviour("t0", UpstreamBehaviour::EstimatedOnce(4_000));
     let s = source(&t, "t0").await;
-    read_from(&t, &s.url, 0).await.unwrap_err();
+    // A plays every byte there is and is closed before reaching the
+    // estimated end.
+    let a = t.core.stream_open(&s.url, 0, None).await.unwrap();
+    let mut got_a = vec![];
+    while got_a.len() < media.len() {
+        let chunk = t.core.stream_read(a.handle, 64 * 1024).await.unwrap();
+        got_a.extend_from_slice(&chunk);
+    }
+    t.core.stream_close(a.handle);
+    assert_eq!(got_a, media);
     wait_handles_closed(&t).await;
     // B starts a replay from disk, still told the estimate.
     let b = t.core.stream_open(&s.url, 0, None).await.unwrap();
     assert_eq!(b.length, Some(104_000));
     let mut got = t.core.stream_read(b.handle, 1024).await.unwrap().to_vec();
-    // A, the retry at the real end, completes the entry.
+    // A retry at the real end completes the entry.
     let (_, rest) = read_from(&t, &s.url, 100_000).await.unwrap();
     assert!(rest.is_empty());
     wait_offline(&t, "t0", OfflineState::Cached).await;
@@ -333,11 +360,10 @@ async fn an_unseekable_transcode_that_ends_where_it_was_asked_to_start_has_ended
     t.upstream
         .set_behaviour("t0", UpstreamBehaviour::Estimated(4_000));
     let s = source(&t, "t0").await;
-    let err = read_from(&t, &s.url, 0).await.unwrap_err();
-    assert!(matches!(err, StreamError::Network(_)), "{err:?}");
-    let (info, rest) = read_from(&t, &s.url, 100_000).await.unwrap();
-    assert!(rest.is_empty());
-    assert_eq!(info.length, Some(104_000 - 100_000), "told before the body");
+    // The body ends short of the estimate: the read asks again from there
+    // and gets the whole stream once more, ending where it asked to start.
+    let (_, first) = read_from(&t, &s.url, 0).await.unwrap();
+    assert_eq!(first, media);
     let calls = t.upstream.calls();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[1].range.as_deref(), Some("bytes=100000-"));
@@ -350,13 +376,14 @@ async fn an_unseekable_transcode_that_ends_where_it_was_asked_to_start_has_ended
     let (_, rest) = read_from(&t, &s.url, 102_000).await.unwrap();
     assert!(rest.is_empty());
     assert_eq!(t.upstream.calls().len(), 2);
-    // A connection that drops anywhere else is still an error.
+    // A body that ends short anywhere else is asked again from there, and
+    // that answer ends where it was asked to start: the end.
     t.upstream.set_media("t1", vec![3u8; 100_000], "audio/ogg");
     t.upstream
         .set_behaviour("t1", UpstreamBehaviour::Estimated(4_000));
     let s = source(&t, "t1").await;
-    let err = read_from(&t, &s.url, 50_000).await.unwrap_err();
-    assert!(matches!(err, StreamError::Network(_)), "{err:?}");
+    let (_, rest) = read_from(&t, &s.url, 50_000).await.unwrap();
+    assert_eq!(rest, vec![3u8; 50_000]);
     t.core.shutdown().await;
 }
 
