@@ -270,7 +270,10 @@ test.describe("motion, contrast and zoom", () => {
           if (el.closest("[inert]")) continue;
           const cs = getComputedStyle(el);
           if (cs.display === "none" || cs.visibility === "hidden") continue;
-          if ((cs.overflowX === "auto" || cs.overflowX === "scroll") && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) out.push(`scrolls sideways: ${name(el)} (${el.scrollWidth} > ${el.clientWidth})`);
+          // A carousel's track (Home's Spotlight) scrolls sideways a whole slide at a time: that is how
+          // it pages, and each slide is the carousel's full width, so nothing is cut off.
+          const pages = !!el.closest('[aria-roledescription="carousel"]');
+          if (!pages && (cs.overflowX === "auto" || cs.overflowX === "scroll") && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) out.push(`scrolls sideways: ${name(el)} (${el.scrollWidth} > ${el.clientWidth})`);
         }
         // Keyboard controls: everything in the Tab order plus the current stop of each roving widget.
         // (tabindex=-1 links and buttons inside rows and tiles are pointer shortcuts to what the row's
