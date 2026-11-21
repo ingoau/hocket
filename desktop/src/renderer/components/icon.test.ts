@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // Every icon the action registry can emit (Material Symbols names in
 // crates/hocket-core/src/actions/defs.rs) must map to a renderer glyph (Phosphor), and the
 // renderer's own names must all resolve; nothing falls through to the
