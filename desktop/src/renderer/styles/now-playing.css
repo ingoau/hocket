@@ -156,7 +156,6 @@
 /* Views */
 .np .empty { color: var(--fg-muted); }
 .np-pane-lyrics .lyrics-pane, .np-pane-lyrics .amll-host { height: 100%; }
-.np-pane-lyrics .amll-host.large { mask-image: linear-gradient(to bottom, transparent 0, #000 40px, #000 calc(100% - 48px), transparent 100%); }
 .np-pane-lyrics .lyrics-static { font-size: 22px; }
 .np .queue-wrap { height: 100%; }
 .np .queue-header.large { padding: 0 0 14px; }

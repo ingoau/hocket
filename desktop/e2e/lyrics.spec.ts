@@ -115,4 +115,67 @@ test.describe("lyrics", () => {
     await expect(fs).toBeVisible();
     expect(await fs.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThan(medium * 1.5);
   });
+
+  test("the side panel's lyrics behave like the fullscreen player's, dimmed for the theme's pane", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playShowcase(page);
+    const side = page.getByTestId("right-panel").getByTestId("amll-host");
+    await expect(side.locator('[class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"])').first()).toBeVisible({ timeout: 10_000 });
+
+    /** How a lyrics view is set up: springs, blurred distant lines, and where the current line sits in the pane (0 top, 1 bottom). */
+    const setup = (host: import("@playwright/test").Locator) => host.evaluate((root) => {
+      const player = root.querySelector<HTMLElement>(".amll-lyric-player")!;
+      const lines = Array.from(root.querySelectorAll<HTMLElement>('[class*="_lyricLine"]:not([class*="_lyricBgLine"])'));
+      const active = lines.find((l) => /_active\b/.test(l.className) && l.textContent?.trim());
+      const box = root.getBoundingClientRect();
+      const a = active?.getBoundingClientRect();
+      return {
+        spring: !Array.from(player.classList).some((c) => c.endsWith("_disableSpring")),
+        blurred: lines.some((l) => /blur\(/.test(l.style.filter)),
+        position: a ? (a.top - box.top + a.height / 2) / box.height : -1,
+      };
+    });
+    // The current line settles in the middle of the pane (between lines there is none, so poll).
+    const centred = (host: import("@playwright/test").Locator) => expect.poll(async () => Math.abs((await setup(host)).position - 0.5), { timeout: 15_000 }).toBeLessThan(0.08);
+    await centred(side);
+    const sideSetup = await setup(side);
+    expect(sideSetup.spring).toBe(true);
+    expect(sideSetup.blurred).toBe(true);
+
+    // The words' mask alphas, evaluated: AMLL's levels, mapped onto --lyrics-dim..1 on the pane.
+    const alphas = (host: import("@playwright/test").Locator) => host.evaluate((root) => {
+      const probe = document.createElement("div");
+      document.body.append(probe);
+      const resolve = (v: string) => { probe.style.opacity = v.trim(); return Number(getComputedStyle(probe).opacity); };
+      const lines = Array.from(root.querySelectorAll<HTMLElement>('[class*="_lyricLine"]:not([class*="_lyricBgLine"])')).filter((l) => l.textContent?.trim());
+      const word = (l: HTMLElement) => l.querySelector<HTMLElement>('[class*="_lyricMainLine"] > span')!;
+      const inactive = lines.filter((l) => !/_active\b/.test(l.className)).map((l) => resolve(getComputedStyle(word(l)).getPropertyValue("--dark-mask-alpha")));
+      const out = { inactive: Math.min(...inactive), dim: Number(getComputedStyle(root).getPropertyValue("--lyrics-dim")) };
+      probe.remove();
+      return out;
+    });
+    const sideAlpha = await alphas(side);
+    expect(sideAlpha.dim).toBeGreaterThan(0.4);
+    // Never fainter than the 4.5:1 floor (AMLL's own 0.2 would be nearly invisible on the pane).
+    expect(sideAlpha.inactive).toBeGreaterThanOrEqual(sideAlpha.dim - 0.01);
+    expect(sideAlpha.inactive).toBeLessThan(1);
+
+    // Click-to-seek: a later line seeks the player there.
+    const target = side.locator('[class*="_lyricLine"]:not([class*="_active"]):not([class*="_lyricBgLine"])').filter({ hasText: "You want to love me" }).first();
+    await target.click();
+    await expect.poll(() => page.getByTestId("right-panel").getByTestId("lyrics-sr-list").locator('li[aria-current="true"]').textContent(), { timeout: 10_000 }).toContain("You want to love me");
+
+    // Fullscreen: the same setup, over its blur with AMLL's own levels.
+    await page.getByTestId("content").click();
+    await page.keyboard.press("f");
+    await page.keyboard.press("l");
+    const fs = page.getByTestId("fullscreen-player").getByTestId("amll-host");
+    await expect(fs.locator('[class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"])').first()).toBeVisible({ timeout: 10_000 });
+    await centred(fs);
+    const fsSetup = await setup(fs);
+    expect(fsSetup.spring).toBe(true);
+    expect(fsSetup.blurred).toBe(true);
+    expect((await alphas(fs)).inactive).toBeLessThan(0.45);
+  });
 });

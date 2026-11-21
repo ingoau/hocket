@@ -236,18 +236,27 @@
 .side-drill-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .side-drill-body > .empty { margin: auto 0; }
 .side-drill-lyrics .lyrics-pane { flex: 1 1 auto; min-height: 0; }
-/* The lyrics view has the whole pane: larger, bolder lines than the old half-height pane. */
-.side-drill-lyrics .amll-host.compact { --amll-lp-font-size: calc(clamp(16px, 1.3vh + 0.55vw, 24px) * var(--lyrics-scale)); font-weight: 700; }
-.side-drill-lyrics .lyrics-static { font-size: 17px; font-weight: 600; }
-/* AMLL dims lines with a word mask tuned for white text on a dark blur (20% for the lines around
-   the current one), which on the theme's surface reads as nearly invisible grey. In the side panel
-   the lines are unmasked --lyrics-muted (lighter than muted text, still 4.5:1 on the pane)
-   and the current one is the on-surface colour, whole; the word sweep stays in the fullscreen
-   player, which keeps AMLL's own look over its blur. */
-.amll-host.compact [class*="_lyricLine"] { --bright-mask-alpha: 1 !important; --dark-mask-alpha: 1 !important; color: var(--lyrics-muted); }
-.amll-host.compact [class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"]) { color: var(--fg); }
+/* The lyrics view has the whole pane: larger lines than the old half-height pane. */
+.side-drill-lyrics .amll-host.compact { --amll-lp-font-size: calc(clamp(16px, 1.3vh + 0.55vw, 24px) * var(--lyrics-scale)); }
+.side-drill-lyrics .lyrics-static { font-size: 17px; }
+/* The side panel's lyrics behave and look like the fullscreen player's (the same springs, blur,
+   scale and word sweep; see LyricsView), on the theme's pane instead of a dark blur. AMLL dims a
+   word through its mask: 0.2 for the lines around the current one, 0.4 for the current line's
+   words still to come, 1 once sung, easing between them as a line becomes current. On the pane
+   0.2 reads as nearly invisible grey, so here the same levels are mapped linearly onto
+   --lyrics-dim..1, where --lyrics-dim is the lowest alpha of --fg that still reaches 4.5:1 on the
+   pane (global.css, checked in contrast.test.ts). AMLL sets its alphas inline on the line, so the
+   remap is taken one level down (the main line reads them, the words redefine them), which keeps
+   AMLL's own easing. */
+.amll-host.compact [class*="_lyricMainLine"] { --amll-bright: var(--bright-mask-alpha, 1); --amll-dark: var(--dark-mask-alpha, 1); }
+.amll-host.compact [class*="_lyricMainLine"] > span {
+  --bright-mask-alpha: clamp(0, calc(var(--lyrics-dim) + (1 - var(--lyrics-dim)) * (var(--amll-bright) - 0.2) / 0.8), 1);
+  --dark-mask-alpha: clamp(0, calc(var(--lyrics-dim) + (1 - var(--lyrics-dim)) * (var(--amll-dark) - 0.2) / 0.8), 1);
+}
+/* Background vocals are already smaller: they keep the dimmed level instead of AMLL's extra 40%
+   opacity, and AMLL's own fades by distance or once the song has ended (inline opacity) would take
+   the lines below that floor too. */
 .amll-host.compact :is([class*="_lyricBgLine"], [class*="_lyricSubLine"]) { opacity: 1; }
-/* AMLL also fades lines by distance and once the song has ended (inline opacity): never here. */
 .amll-host.compact [class*="_lyricMainLine"] { opacity: 1 !important; }
 .right-panel .lyrics-static { padding: 8px 20px 16px; }
 /* The queue view: the selector and Autoplay over the timeline. */
