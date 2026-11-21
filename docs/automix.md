@@ -28,12 +28,16 @@ src/automix/
   record.rs     AnalysisRecord and friends (serde, versioned)
   rules.rs      no-mix rules: should_mix(a, b, ctx) -> MixDecision
   plan.rs       the planner: plan_transition(..) -> TransitionPlan
+  key.rs        Camelot codes and the Harmony of two keys (pure)
+  order.rs      mixability score and pick for AutoMix's order (pure)
   render.rs     pure DSP: render_tail(..), IncomingShaper, fade curves, shelving EQ automation
   stretch.rs    time-stretch wrapper used by render_tail
   loudness.rs   loudness envelope + silence edges from PCM (pure, no decoding)
   analysis/     feature "automix-analysis": decode + Beat This! + loudness -> AnalysisRecord
     mod.rs      Analyser (analyse_file / analyse_pcm), streaming accumulator
     grid.rs     bpm and beat_confidence from the tracker's beats/downbeats
+    key.rs      chroma key estimator (streaming, track + head + tail)
+    vocals.rs   musicnn singing-voice detector
     model.rs    the embedded ONNX models run by rten
     models/     mel_spectrogram.onnx + beat_this_small.onnx (see NOTICE)
     NOTICE      provenance and MIT notices of Beat This! and beat-this-rs
@@ -81,6 +85,9 @@ struct AnalysisRecord {
     tail: LoudnessCurve,          // short-term loudness of the last ~60 s
     head_vocals: VocalCurve,      // voice probability of the first ~36 s (empty: not analysed)
     tail_vocals: VocalCurve,      // voice probability of the last ~36 s
+    key: Option<MusicalKey>,      // the whole track's key (None: loudness-only)
+    head_key: Option<MusicalKey>, // the first ~60 s
+    tail_key: Option<MusicalKey>, // the last ~60 s
     bpm: Option<f32>,             // None when no beat analysis or not trustworthy
     beats_ms: Vec<u32>,           // empty for loudness-only records
     downbeats_ms: Vec<u32>,       // subset of beats_ms
@@ -90,6 +97,7 @@ struct AnalysisRecord {
 struct SourceFingerprint { duration_ms: u32, size_bytes: Option<f64>, suffix: Option<String>, transcoded: bool }
 struct LoudnessCurve { start_ms: u32, hop_ms: u32, lufs: Vec<f32> }
 struct VocalCurve { start_ms: u32, hop_ms: u32, voice: Vec<f32> }
+struct MusicalKey { tonic: u32 /* 0 = C .. 11 = B */, minor: bool, strength: f32 /* profile correlation */ }
 ```
 
 `size_bytes` is `f64` like `Track::size_bytes` (no 64-bit integers cross the
@@ -109,7 +117,10 @@ records have them.
   fade.
 - `automix::record::compact` tidies a record before storing or sending it
   (sorted beats, downbeats ⊂ beats, curve values to 0.1 LU, voice
-  probabilities to 0.01).
+  probabilities and key strengths to 0.01, keys with a tonic out of range
+  dropped).
+- Version 3 added the keys; version-2 records are ignored, so the worker
+  re-analyses the library after a coordinator update.
 
 ### TransitionPlan
 
@@ -235,6 +246,47 @@ struct ShelfMove { freq_hz: f32, from_db: f32, to_db: f32, start_ms: u32, len_ms
   overlap). A skip away from A before its tail is not logged (debug only).
   A replan of the same pair (a record arrived) is not an outcome.
 
+## Order (order.rs, core/handlers/mix_order.rs)
+
+With AutoMix on, when the order is Hocket's to choose, the device that owns
+playback biases what plays toward pairs that blend. Decisions (issue #256):
+
+- **Whose order**: entries that are not in the "Next in queue" group, not
+  added by the user (`QueueItem.added`) and either autoplay's (radio and
+  "continue playing" are autoplay providers: similar songs, sonic
+  similarity, top songs, random) or a shuffled context's (`doc.shuffle`).
+  An album, playlist or selection played in order, anything the user
+  queued or added, and everything after the first entry that isn't ours
+  are never moved. Repeat One and Repeat All turn it off, as do the context
+  rules that stop mixing (sleep end-of-track, Cast, exclusive output).
+- **What is chosen**: the entry *after* the next one. The current track's
+  tail start was committed against the next track when it was preloaded
+  (`mix_out_ms`), so the next track is already fixed; the one after it
+  decides the next track's own tail start. Once per next entry, when the
+  next track's record is known (and no record fetch is in flight), on
+  every document change, ownership gain and record arrival. The pick is a
+  synced `SessionOp::PromoteForMix { key, after }`: the entry moves to
+  directly after `after`, past unqueued entries only, keeping its flags
+  and ordinal, so turning shuffle off still restores the context's order.
+  The preloaded next source is then replanned against its new follow-up.
+- **How much randomness**: the candidates are the next `ORDER_WINDOW` = 6
+  entries in shuffle (or autoplay) order, which stays the source of
+  randomness. Each is scored by `order::mix_score` from its plan with the
+  next track: beat-matched blends 0.6–0.8 (longer better, stretch costs up
+  to 0.1), beat-aligned fades 0.3, other fades 0.15, not mixed 0; voices
+  apart +0.1 or shaped clash −0.35 (about a beat-aligned fade's worth); Camelot compatible +0.1, unknown +0.03,
+  near 0, clash −0.15 (halved for fades). A candidate without a record
+  counts 0.3 (a typical random pair), so unanalysed tracks are neither
+  preferred nor pushed back. The entry shuffle put first keeps its place
+  unless another scores at least 0.15 more (`PROMOTE_MARGIN`); an entry
+  passed over 3 times (`MAX_PASSES`, per session in memory) plays next
+  regardless, so a track that mixes with nothing is delayed, never
+  starved. A pick moves at most 5 places.
+- **Records ahead**: phones only read records, so the actor fetches the
+  next eight entries' records (the window plus the next two) in its one
+  batched `AnalysisFetch`; a planner run per candidate is microseconds, and
+  records are a few KB each.
+
 ## Planner (plan.rs)
 
 Inputs: both records (optional, already checked usable), both tracks'
@@ -276,6 +328,14 @@ nothing. Every overlap is limited to half of each track's audible span.
      1 bar before).
    - With `fixed_tail_start_ms`, the overlap (or the ramp) starts at the first
      downbeat at or after it; A plays unaltered up to there.
+   - **Keys** (`key::harmony`, both records with a key of strength ≥ 0.7;
+     A's tail key and B's head key when trusted, else the track's): on the
+     Camelot wheel, *compatible* is the same key, ±1 (a fifth) or the
+     relative major/minor; *near* is ±2 or a diagonal (±1 and the other
+     mode); anything else *clashes*. Compatible or unknown keys plan as
+     above. Near keys never take 16 bars. Clashing keys blend over 4 bars
+     (2 if 4 don't fit) and take the shortest beat-aligned fade (whole bars
+     of at least 4 s). The voice rules below then work within that.
    - **Voices** (both records have voice curves; otherwise all of the above
      unchanged): one voice at a time. A point is voiced at probability
      ≥ 0.5; over a candidate's overlap (output time; A through the tempo
@@ -284,9 +344,18 @@ nothing. Every overlap is limited to half of each track's audible span.
      (a) the usual 8/16 bars when apart, the handover moved, if the midpoint
      isn't between the voices, to B's downbeat between them nearest the
      midpoint (so B's voice comes in on or after it; bass swap over the bar
-     before it, never before B enters; high cut from it); (b) else the first
-     of 4 and 2 bars that keeps them apart (same handover rule); (c) else
-     the fewest bars lasting ≥ 4 s, with the bass swap from B's entry over
+     before it, never before B enters; high cut from it). With no voice of
+     A in the overlap the handover stays mid-overlap: B may sing over A's
+     instrumental. (b) Else the first of 4 and 2 bars that keeps them apart
+     (same handover rule). (b′) Without a fixed tail start, the same bar
+     counts placed 1, 2, … whole bars earlier in A, fewest bars back first,
+     as long as at most 20 s of audible A is cut and A's voice curve covers
+     the whole overlap (outside it "no voice" proves nothing): the handover
+     then lands in an instrumental break before A's last vocal, usually its
+     final chorus. (c) Else the fewest bars lasting ≥ 4 s, placed where
+     both voices sound together least (at the end unless a placement up to
+     20 s back saves at least 1 s of it), with the bass swap from B's entry
+     over
      half the way to the handover and A's high shelf moved down to 2 kHz
      (−12 dB) from B's entry to the handover. Beat-aligned fades drop bars
      (down to the 4 s minimum) until the voices are apart, else take the
@@ -345,7 +414,7 @@ The planner is deterministic: same inputs → same plan on every device.
   `integrated_lufs` of a full record is the whole track's. `source` is the
   file's (decoded duration, size, extension, `transcoded: false`); callers
   replace it with the library's fingerprint when they analysed a
-  transcode. `analyser` is `"beat-this-small/1.1.0+musicnn-mtt"`.
+  transcode. `analyser` is `"beat-this-small/1.1.0+musicnn-mtt+kk-chroma"`.
 - **Voice detector** (`vocals.rs`): musicnn's MagnaTagATune model
   (`MTT_musicnn`, Pons & Serra, MTG-UPF; ISC licence, code and checkpoint),
   converted to ONNX by `scripts/musicnn-to-onnx.py` (3.2 MB, embedded, run
@@ -356,7 +425,9 @@ The planner is deterministic: same inputs → same plan on every device.
   against librosa and TensorFlow to 1e-3 by `parity_with_reference`
   (ignored; needs the script's reference files). It runs on non-overlapping
   3 s patches (187 frames) of the first and last 35.9 s (12 patches each:
-  blends are at most 32 s); a patch's voice probability is the strongest of
+  blends are at most 32 s, and an 8-bar blend moved back by the planner's
+  20 s cut limit still fits at 120 BPM; a 60 s tail was tried, see *Voices
+  on the corpus*); a patch's voice probability is the strongest of
   the vocal tags (vocal, vocals, singing, voice, male/female …, choir,
   opera) over that plus the strongest no-vocal tag (`v / (v + n)`), held
   over the patch's 3 s in the 100 ms `VocalCurve`. Candidates considered:
@@ -366,6 +437,22 @@ The planner is deterministic: same inputs → same plan on every device.
   10 s windows (YAMNet not at all); Essentia's voice/instrumental models are
   CC BY-NC-SA; the dedicated SVD research models publish no weights or no
   licence; Demucs-class separation is too slow on the worker.
+- **Key** (`key.rs`): streaming over the same mono downmix the tracker
+  gets, at the source rate. A 2^n-point Hann FFT (~0.37 s; 16 384 points at
+  44.1/48 kHz) every half frame; frames below −60 dBFS RMS skipped. Each
+  spectral peak between C2 and C7 (65–2093 Hz, at least −50 dB below the
+  frame's strongest, frequency refined by a parabola through the log
+  magnitudes) adds `ln(1 + 100·m/max)` to a 120-bin (10-cent) pitch
+  histogram, and `0.9^(h−1)` of that to the bins of the notes it could be
+  the 2nd–6th harmonic of. Each frame's histogram is normalised and summed
+  into 2 s blocks. At the end the track's tuning is the weighted circular
+  mean of the sub-semitone position over all blocks; the blocks of the
+  whole track, the first 60 s and the last 60 s are folded onto 12 pitch
+  classes around it (cos² weights) and correlated (Pearson) with the 24
+  rotations of Krumhansl & Kessler's major and minor profiles. The best is
+  the key, its correlation the `strength`. Cost: ~1 ms of CPU per second of
+  audio (~0.25 s for a 4-minute track, ~1 % of a full analysis), a few
+  hundred KB of block histograms for an hour of audio.
 - **Grid** (`grid.rs`). The tracker's "minimal" output (peaks on 50 fps
   frames) is tidied before it goes in the record:
   1. each peak is refined to sub-frame time by a parabola through the
@@ -413,6 +500,31 @@ The planner is deterministic: same inputs → same plan on every device.
   32.8 s → 25.9 s. Beat-aligned fades changed in 20 pairs. Smart and rescue
   fades (3–12 s, no grid) don't read voices: their voices overlap in 199 of
   460 pairs either way.
+- **Keys, voices and order on the corpus** (version 3, 289 tracks: the 100
+  above plus random library songs; `stats --pairs 5000 --seed 1`, `order
+  --sessions 20`; numbers from November 2026, issues #256–#258):
+  - Keys against Essentia's `KeyExtractor` (profiles bgate / edma, which
+    agree with each other on 82 %): same key 63 % / 59 %, Camelot-compatible
+    (same, a fifth, relative) 85 %. Strength ≥ 0.7 on 89 % of tracks, 89 %
+    of those compatible with edma; 55 % of the weaker ones. Without the
+    harmonic folding 46 % same, 76 % compatible, a quarter a fifth off. The
+    last minute's key differs from the track's on 58 tracks, incompatibly on
+    15 (5 %): modulations, the reason for head and tail keys.
+  - Random pairs: compatible keys 16 %, near 14 %, clashing 55 %, unknown
+    16 % (random keys would clash on 2/3). Blends between clashing keys are
+    capped at 4 bars: tempo-blend overlap p90 16.0 s → 11.7 s.
+  - Voices: of beat-matched blends with voices on both sides, `main`'s
+    planner shaped 155 of 412 (38 %) as clashes; moving blends back into a
+    break and placing the rest where voices overlap least: 129 of 441 (29 %),
+    and 29 pairs more get a blend at all. In the shaped ones both voices
+    sound together for a median 3.0 s (p90 5.9 s) of a 5 s overlap. A 60 s
+    tail voice curve changed none of the 5000 plans; letting blends cut up to
+    40 s of A as well saved only 15 more (118 → 103), so the curve stays at
+    36 s and the cut at 20 s.
+  - Order (shuffled sessions through all 289): beat-matched blends 8.5 % of
+    transitions → 19.8 %, clean of voice clashes 6.1 % → 16.7 %, compatible
+    keys 15.5 % → 20.3 %, clashing 55.5 % → 48.9 %. Tracks end up a median
+    3 places from their shuffled position, never more than 5.
 
 ## Platforms
 
@@ -675,9 +787,10 @@ Client (`core/handlers/analysis_share.rs`):
 
 - With the store advertised for the current server and the mode on
   AutoMix, every 2 s (and when the store appears or an answer arrives) the
-  actor asks for the current track and the next four that need a record
-  (none usable, or only a phone's loudness-only one): one `AnalysisFetch`
-  at a time, given up after 15 s. Each track asked is not asked again for
+  actor asks for the current track and, of the next eight (two plus
+  AutoMix's order window, see *Order*), those that need a record (none
+  usable, or only a phone's loudness-only one): one `AnalysisFetch` at a
+  time, given up after 15 s. Each track asked is not asked again for
   30 minutes, answered or not (an unanswered fetch's tracks are freed).
   A miss on the coordinator worker's server gets that track analysed next,
   so the re-ask half an hour later usually finds it.
