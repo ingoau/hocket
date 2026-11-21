@@ -120,6 +120,10 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
             after: after.clone(),
             in_group: *in_group,
         },
+        SessionOp::PromoteForMix { key, after } => QueueOp::PromoteForMix {
+            key: key.clone(),
+            after: after.clone(),
+        },
         SessionOp::ClearQueue => QueueOp::ClearQueue,
         SessionOp::ClearQueueGroup => QueueOp::ClearQueueGroup,
         SessionOp::SetShuffle { enabled } => QueueOp::SetShuffle { enabled: *enabled },
@@ -332,6 +336,10 @@ mod tests {
     fn every_wire_op_maps() {
         use crate::api::RepeatMode;
         let ops = vec![
+            SessionOp::PromoteForMix {
+                key: "k".into(),
+                after: "c".into(),
+            },
             SessionOp::PlayNext {
                 track_ids: vec![],
                 keys: vec![],

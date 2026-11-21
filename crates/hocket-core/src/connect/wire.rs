@@ -503,6 +503,11 @@ pub enum SessionOp {
         after: QueueKey,
         in_group: bool,
     },
+    /// AutoMix's order: see `QueueOp::PromoteForMix`.
+    PromoteForMix {
+        key: QueueKey,
+        after: QueueKey,
+    },
     ClearQueue,
     ClearQueueGroup,
     SetShuffle {
@@ -811,6 +816,7 @@ impl SessionOp {
             SessionOp::RemoveQueueItems { keys } => format!("removeQueueItems {}", keys.join(" ")),
             SessionOp::JumpToQueueItem { key } => format!("jumpToQueueItem {key}"),
             SessionOp::SkipUnavailable { key } => format!("skipUnavailable {key}"),
+            SessionOp::PromoteForMix { key, after } => format!("promoteForMix {key} after {after}"),
             SessionOp::PlayNext {
                 track_ids, keys, ..
             } => {

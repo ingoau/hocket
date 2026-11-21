@@ -726,6 +726,8 @@ impl Actor {
             self.prefetch_tick(self.now());
         }
         if owns {
+            // The new owner decides AutoMix's order from here on.
+            self.order_for_mix();
             // A preview started while someone else held the transport must
             // not keep playing once this device takes it over.
             if self.preview.as_ref().is_some_and(|p| p.hold.is_none()) {

@@ -18,6 +18,7 @@
 pub mod analysis;
 pub mod key;
 pub mod loudness;
+pub mod order;
 pub mod plan;
 pub mod record;
 pub mod render;

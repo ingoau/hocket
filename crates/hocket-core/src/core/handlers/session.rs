@@ -216,8 +216,20 @@ impl Actor {
     /// Submit a local op. Effects the reducer reports are acted on when the
     /// engine hands back the changed document.
     pub(crate) fn local_op(&mut self, op: SessionOp) -> bool {
+        self.local_op_with(op, true)
+    }
+
+    /// [`Self::local_op`] for an op the core made up itself: one that no
+    /// longer applies is dropped without telling the user.
+    pub(crate) fn local_op_quiet(&mut self, op: SessionOp) -> bool {
+        self.local_op_with(op, false)
+    }
+
+    fn local_op_with(&mut self, op: SessionOp, toast: bool) -> bool {
         let Some(engine) = &self.engine else {
-            self.toast("Add a server first", None);
+            if toast {
+                self.toast("Add a server first", None);
+            }
             return false;
         };
         let before = engine.document().clone();
@@ -238,7 +250,9 @@ impl Actor {
             }
         });
         if effects.is_none() && !matches!(op, SessionOp::Replace { .. }) {
-            self.toast("That doesn't apply right now", None);
+            if toast {
+                self.toast("That doesn't apply right now", None);
+            }
             return false;
         }
         let album_ended = effects.as_ref().is_some_and(|fx| {
@@ -876,6 +890,7 @@ impl Actor {
         if let Some(tracks) = resolve_tracks {
             self.local_op(SessionOp::SetContextTracks { tracks });
         }
+        self.order_for_mix();
         if self.cache.links_present {
             let _ = self.tx.send(crate::core::ActorMsg::Internal(
                 crate::core::Internal::OfferAlternates,

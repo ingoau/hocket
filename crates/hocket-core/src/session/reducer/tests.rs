@@ -786,6 +786,64 @@ fn shuffle_reorders_only_after_the_group_and_off_restores() {
 }
 
 #[test]
+fn promote_for_mix_moves_within_the_tail_and_shuffle_off_still_restores() {
+    let e = DeterministicEntropy::new(7);
+    let d = play(&fresh(), &e, album("a", 8), Some(0), true);
+    let up = upcoming(&d);
+    let current = d.current.as_ref().unwrap().key.clone();
+    let next = key_of(&d, &up[0]);
+    let fourth = key_of(&d, &up[3]);
+    // The fourth entry after the next one: it plays second.
+    let p = doc_of(
+        QueueOp::PromoteForMix {
+            key: fourth.clone(),
+            after: next.clone(),
+        },
+        &d,
+        &e,
+    );
+    let mut want = up.clone();
+    let moved = want.remove(3);
+    want.insert(1, moved);
+    assert_eq!(upcoming(&p), want);
+    let o = doc_of(QueueOp::SetShuffle { enabled: false }, &p, &e);
+    assert_eq!(
+        upcoming(&o),
+        ids(&["a1", "a2", "a3", "a4", "a5", "a6", "a7"])
+    );
+    // Never into or past the group, never backwards, never above the pointer.
+    let g = doc_of(play_next(&["n"], vec![], true), &d, &e);
+    let n = key_of(&g, "n");
+    let bad = |doc: &SessionDocument, key: &QueueKey, after: &QueueKey| {
+        err(
+            doc,
+            &e,
+            QueueOp::PromoteForMix {
+                key: key.clone(),
+                after: after.clone(),
+            },
+        )
+    };
+    assert_eq!(bad(&g, &fourth, &current), ReduceError::BadMove);
+    assert_eq!(bad(&g, &n, &current), ReduceError::BadMove);
+    assert_eq!(bad(&d, &next, &fourth), ReduceError::BadMove);
+    assert!(matches!(
+        bad(&d, &"zz".to_string(), &next),
+        ReduceError::UnknownKey(_)
+    ));
+    // After the group's last entry is fine.
+    let p = doc_of(
+        QueueOp::PromoteForMix {
+            key: fourth.clone(),
+            after: n,
+        },
+        &g,
+        &e,
+    );
+    assert_eq!(upcoming(&p)[..2], [ids(&["n"])[0].clone(), up[3].clone()]);
+}
+
+#[test]
 fn shuffle_off_puts_added_entries_back_where_they_were_added() {
     let e = DeterministicEntropy::new(3);
     let d = play(&fresh(), &e, album("a", 6), Some(0), true);

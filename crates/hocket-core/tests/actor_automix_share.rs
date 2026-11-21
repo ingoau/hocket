@@ -185,7 +185,7 @@ async fn the_window_is_fetched_once_and_own_records_are_uploaded() {
     let clock = SimTime::new(1_700_000_000_000.0);
     let t = TestCore::start_on(
         "share",
-        seeded_server(8, 200.0),
+        seeded_server(12, 200.0),
         Some(net.clone()),
         1,
         clock.clone(),
@@ -232,7 +232,7 @@ async fn the_window_is_fetched_once_and_own_records_are_uploaded() {
     })
     .await;
     t.run(Command::PlayTracks {
-        tracks: TrackRef::list(&t.server_id, (0..8).map(|i| format!("t{i}"))),
+        tracks: TrackRef::list(&t.server_id, (0..12).map(|i| format!("t{i}"))),
         start_index: 0,
         label: "Sel".into(),
         shuffle: false,
@@ -243,10 +243,14 @@ async fn the_window_is_fetched_once_and_own_records_are_uploaded() {
         .await;
     t.run_for(3_000.0).await;
 
-    // One batch: the current track and the four after it.
+    // One batch: the current track and the eight after it (t6's
+    // loudness-only record from a phone still wants a better one).
     let fetches = fake.lock().fetches.clone();
     assert_eq!(fetches.len(), 1, "{fetches:?}");
-    assert_eq!(fetches[0], vec!["t0", "t1", "t2", "t3", "t4"]);
+    assert_eq!(
+        fetches[0],
+        vec!["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"]
+    );
     // The answer landed in the local store.
     let got = stored(&t, "t1").await.expect("fetched record stored");
     assert_eq!(got.produced_by, AnalysisProducer::Worker);
@@ -275,7 +279,7 @@ async fn the_window_is_fetched_once_and_own_records_are_uploaded() {
     t.run_for(3_000.0).await;
     let fetches = fake.lock().fetches.clone();
     assert_eq!(fetches.len(), 2, "{fetches:?}");
-    assert_eq!(fetches[1], vec!["t5"]);
+    assert_eq!(fetches[1], vec!["t9"]);
     t.run_for(10_000.0).await;
     assert_eq!(fake.lock().fetches.len(), 2, "misses are remembered");
 }

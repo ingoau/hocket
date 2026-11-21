@@ -175,6 +175,15 @@ pub enum QueueOp {
         after: QueueKey,
         in_group: bool,
     },
+    /// AutoMix's order (`automix::order`): move an unqueued entry ahead of
+    /// the pointer to directly after `after` (the current entry or one
+    /// ahead of it, not inside the group), past unqueued entries only.
+    /// Unlike a drag the entry keeps its ordinal and flags, so turning
+    /// shuffle off still restores the context's order.
+    PromoteForMix {
+        key: QueueKey,
+        after: QueueKey,
+    },
     ClearQueue,
     /// Remove the "Next in queue" group's entries.
     ClearQueueGroup,
@@ -941,6 +950,7 @@ impl Reducer<'_, '_> {
                 after,
                 in_group,
             } => self.move_item(&key, &after, in_group),
+            QueueOp::PromoteForMix { key, after } => self.promote_for_mix(&key, &after),
             QueueOp::ClearQueue => {
                 self.clear_queue();
                 Ok(())
@@ -1702,6 +1712,28 @@ impl Reducer<'_, '_> {
         if self.doc.shuffle {
             self.q.ordinals_after_previous(at, 1);
         }
+        Ok(())
+    }
+
+    fn promote_for_mix(&mut self, key: &str, after: &str) -> Result<(), ReduceError> {
+        let i = self
+            .q
+            .index_of(key)
+            .ok_or_else(|| ReduceError::UnknownKey(key.into()))?;
+        let a = self
+            .q
+            .index_of(after)
+            .ok_or_else(|| ReduceError::UnknownKey(after.into()))?;
+        if !self.q.has_current()
+            || a < self.q.ptr
+            || i <= a
+            || a + 1 < self.q.group_end()
+            || self.q.list[a + 1..=i].iter().any(|e| e.queued)
+        {
+            return Err(ReduceError::BadMove);
+        }
+        let item = self.q.list.remove(i);
+        self.q.list.insert(a + 1, item);
         Ok(())
     }
 }
