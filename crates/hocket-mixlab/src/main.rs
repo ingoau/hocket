@@ -49,8 +49,8 @@ struct Cli {
     /// Plan without the records' keys (as before key detection).
     #[arg(long, global = true)]
     no_keys: bool,
-    /// Keep only the last N seconds of each tail voice curve (36 is the
-    /// window before analysis version 3).
+    /// Keep only the last N seconds of each tail voice curve (records hold
+    /// 35.9 s; for trying shorter windows).
     #[arg(long, global = true)]
     tail_voice_s: Option<u32>,
     #[command(subcommand)]
@@ -860,13 +860,14 @@ impl Lab {
         let show = |name: &str, t: &Tally| {
             let pct = |x: usize| 100.0 * x as f64 / t.pairs.max(1) as f64;
             println!(
-                "{name:<9} transitions {}: beat-matched blends {:.1}%, mean score {:.3}, keys compatible {:.1}% / clashing {:.1}%, shaped voice clashes {:.1}%",
+                "{name:<9} transitions {}: beat-matched blends {:.1}%, mean score {:.3}, keys compatible {:.1}% / clashing {:.1}%, shaped voice clashes {:.1}% (blends without one {:.1}%)",
                 t.pairs,
                 pct(t.blends),
                 t.score / t.pairs.max(1) as f64,
                 pct(t.compatible_keys),
                 pct(t.clash_keys),
                 pct(t.shaped),
+                pct(t.blends - t.shaped),
             );
         };
         println!("{sessions} shuffled sessions through {n} tracks:");

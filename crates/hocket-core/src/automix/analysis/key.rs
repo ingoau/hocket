@@ -88,10 +88,9 @@ impl KeyEstimator {
     }
 
     pub fn with_params(rate: u32, params: KeyParams) -> Self {
-        // ~0.37 s frames (2.7 Hz bins at 44.1 kHz: a semitone at C2 is 3.9 Hz).
-        let n = ((f64::from(rate) * 0.37) as usize)
-            .next_power_of_two()
-            .max(1024);
+        // The largest power of two within 0.4 s: 16 384 points at 44.1 and
+        // 48 kHz (0.37 / 0.34 s, 2.7 / 2.9 Hz bins; a semitone at C2 is 3.9 Hz).
+        let n = (((f64::from(rate) * 0.4) as usize).max(2048) + 1).next_power_of_two() / 2;
         let fft = RealFftPlanner::<f32>::new().plan_fft_forward(n);
         let window = (0..n)
             .map(|i| (0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos()) as f32)
@@ -148,6 +147,10 @@ impl KeyEstimator {
         let res = f64::from(self.rate) / self.n as f64;
         let lo = ((F_LO / res).ceil() as usize).max(1);
         let hi = ((F_HI / res).floor() as usize).min(self.mag.len() - 2);
+        if lo > hi {
+            // A rate too low to hold C2.
+            return;
+        }
         let max = self.mag[lo..=hi].iter().copied().fold(0.0f32, f32::max);
         if max <= 0.0 {
             return;
@@ -286,7 +289,7 @@ pub fn estimate(chroma: &[f64; 12]) -> Option<MusicalKey> {
             }
         }
     }
-    let (r, tonic, minor) = best?;
+    let (r, tonic, minor) = best.filter(|&(r, _, _)| r > 0.0)?;
     Some(MusicalKey {
         tonic,
         minor,
@@ -390,6 +393,22 @@ mod tests {
         let (_, head, tail) = run(&pcm);
         assert_eq!(head.unwrap().tonic, 0);
         assert_eq!(tail.unwrap().tonic, 1);
+    }
+
+    #[test]
+    fn other_rates() {
+        // 48 kHz uses the same 16k frame as 44.1 kHz.
+        assert_eq!(KeyEstimator::new(48_000).n, 16_384);
+        assert_eq!(KeyEstimator::new(44_100).n, 16_384);
+        let mut k = KeyEstimator::new(48_000);
+        let pcm = chords(12, C_MAJOR, 0.0);
+        // Resampled by index: 44.1 kHz chords read at 48 kHz are ~1.47 semitones sharp,
+        // so only check that a key comes out; a tiny rate must not panic.
+        k.push(&pcm);
+        assert!(k.finish(12_000).0.is_some());
+        let mut tiny = KeyEstimator::new(100);
+        tiny.push(&vec![0.5; 5_000]);
+        let _ = tiny.finish(50_000);
     }
 
     #[test]

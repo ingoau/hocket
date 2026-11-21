@@ -515,9 +515,9 @@ pub const SHORT_BLEND_BARS: &[usize] = &[4, 2];
 /// With voices all the way through, the blend is the fewest bars at least
 /// this long.
 pub const CLASH_MIN_OVERLAP_MS: f64 = 4_000.0;
-/// A shaped clash moves further back in A only when that leaves both voices
-/// sounding together at least this much less.
-pub const CLASH_MOVE_GAIN_MS: Ms = 1_000;
+/// A shaped clash moves back in A only when each bar further back leaves
+/// both voices sounding together at least this much less.
+pub const CLASH_MOVE_GAIN_MS: Ms = 500;
 /// High-shelf cut on A when voices can't be kept apart: low enough to take
 /// the presence out of A's voice.
 pub const CLASH_HIGH_CUT_HZ: f32 = 2_000.0;
@@ -666,8 +666,10 @@ fn covers_a(plan: &TransitionPlan, curve: &VocalCurve) -> bool {
 /// [`MAX_CUT_MS`] and A's voice curve) so the handover lands in an
 /// instrumental break before A's last vocal; else the shortest blend of at
 /// least [`CLASH_MIN_OVERLAP_MS`], shaped by [`shape_clash`], where the
-/// voices overlap least (at the end unless further back saves at least
-/// [`CLASH_MOVE_GAIN_MS`] of both voices at once).
+/// voices overlap least (at the end unless each bar further back saves
+/// [`CLASH_MOVE_GAIN_MS`] of both voices at once). Every clean placement
+/// needs A's voice curve to cover its overlap: outside it, "no voice"
+/// proves nothing.
 fn vocal_blend(
     options: &[usize],
     bar_ms: f64,
@@ -692,7 +694,7 @@ fn vocal_blend(
             let Some(mut plan) = blend_at(bars, back) else {
                 continue;
             };
-            if back > 0 && !covers_a(&plan, voices.a) {
+            if !covers_a(&plan, voices.a) {
                 continue;
             }
             let span = voice_span(&plan, voices);
@@ -703,12 +705,14 @@ fn vocal_blend(
             }
         }
     }
+    let longest = options.iter().copied().max().unwrap_or(8);
     let mut bars = 2;
-    while (bars as f64) * bar_ms < CLASH_MIN_OVERLAP_MS && bars < shortest {
+    while (bars as f64) * bar_ms < CLASH_MIN_OVERLAP_MS && bars < longest {
         bars += 1;
     }
-    // Where the voices overlap least; further back only for a clear gain.
-    let mut best: Option<(Ms, TransitionPlan)> = None;
+    // Where the voices overlap least, each bar further back in A costing
+    // CLASH_MOVE_GAIN_MS of both voices.
+    let mut best: Option<(u64, TransitionPlan)> = None;
     for back in 0..=max_back {
         let Some(plan) = blend_at(bars, back) else {
             continue;
@@ -716,12 +720,10 @@ fn vocal_blend(
         if back > 0 && !covers_a(&plan, voices.a) {
             continue;
         }
-        let both = both_voiced_ms(&plan, voices);
-        if best
-            .as_ref()
-            .is_none_or(|(b, _)| both.saturating_add(CLASH_MOVE_GAIN_MS) <= *b)
-        {
-            best = Some((both, plan));
+        let cost =
+            u64::from(both_voiced_ms(&plan, voices)) + back as u64 * u64::from(CLASH_MOVE_GAIN_MS);
+        if best.as_ref().is_none_or(|(b, _)| cost < *b) {
+            best = Some((cost, plan));
         }
     }
     let (_, mut plan) = best?;
@@ -818,6 +820,9 @@ pub fn beat_plan(
             && both_low_energy(ra, a_end, rb, b_start)
             && 16.0 * ga.bar_ms <= MAX_LONG_BLEND_MS;
         let options: &[usize] = match keys {
+            // A tail start committed without these keys may leave too much
+            // of A for a short blend: 8 bars rather than no beat plan.
+            Harmony::Clash if fixed.is_some() => &[4, 2, 8],
             Harmony::Clash => CLASH_BLEND_BARS,
             _ if long => &[16, 8],
             _ => &[8],
@@ -841,7 +846,7 @@ pub fn beat_plan(
         } else {
             4
         };
-        if keys == Harmony::Clash {
+        if keys == Harmony::Clash && fixed.is_none() {
             bars = 1;
         }
         while (bars as f64) * ga.bar_ms < MIN_ALIGNED_FADE_MS {
@@ -1741,6 +1746,35 @@ mod tests {
         let p = plan(&input(&s, Some(&a), Some(&b), None));
         let bars = (p.tail_len_ms - p.incoming_at_ms) as f64 / (4.0 * 60_000.0 / 170.0);
         assert!((bars - 3.0).abs() < 0.01, "{bars}");
+    }
+
+    #[test]
+    fn clashing_keys_and_voices_still_blend_at_least_four_seconds() {
+        let s = settings(TransitionMode::AutoMix);
+        // At 170 BPM two bars are 2.8 s: three.
+        let mut a = beats(DUR, 170.0, 4, 250.0);
+        let mut b = beats(DUR, 170.0, 4, 1_000.0);
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, DUR)]);
+        b.head_vocals = voice(0, 36_000, &[(0, DUR)]);
+        keyed(&mut a, 0, false);
+        keyed(&mut b, 6, false);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        let bars = (p.tail_len_ms - p.incoming_at_ms) as f64 / (4.0 * 60_000.0 / 170.0);
+        assert!((bars - 3.0).abs() < 0.01, "{bars}");
+        assert_eq!(p.high_cut.unwrap().freq_hz, CLASH_HIGH_CUT_HZ);
+    }
+
+    #[test]
+    fn clashing_keys_after_a_committed_tail_start_keep_a_beat_plan() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 120.0, 4, 1_000.0);
+        keyed(&mut a, 0, false);
+        keyed(&mut b, 6, false);
+        // 30 s of A left: 4 or 2 bars would cut more than 20 s of it.
+        let p = plan(&input(&s, Some(&a), Some(&b), Some(208_250)));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!(p.tail_len_ms, 16_000);
     }
 
     #[test]

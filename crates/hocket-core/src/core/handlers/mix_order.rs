@@ -44,6 +44,13 @@ fn orderable(doc: &SessionDocument, item: &QueueItem) -> bool {
 }
 
 impl Actor {
+    /// Run [`Self::order_for_mix`] once the current reaction is over.
+    pub(crate) fn post_order_for_mix(&mut self) {
+        let _ = self.tx.send(crate::core::ActorMsg::Internal(
+            crate::core::Internal::OrderForMix,
+        ));
+    }
+
     /// Decide the follow-up of the next entry, if it is ours to decide and
     /// not decided yet. Called whenever the document changes and when
     /// records arrive.
@@ -65,6 +72,11 @@ impl Actor {
             // Offline, the next playable entry isn't always the document's next.
             || self.is_offline()
             || self.share.in_flight.is_some()
+            // Too late to replan the next track's tail start against a new
+            // follow-up (a committed plan, a mix running, a load pending).
+            || self.locked_tail_start().is_some()
+            || self.playback.transition.is_some()
+            || self.playback.pending_load.is_some()
         {
             return;
         }
@@ -80,7 +92,7 @@ impl Actor {
             .take(ORDER_WINDOW)
             .collect();
         if run.len() < 2 {
-            self.mix_order.decided_after = Some(anchor.key.clone());
+            // Nothing to choose from (yet: shuffle may turn on, autoplay append).
             return;
         }
         let Some(a) = self.track_for_item(anchor).map(|t| self.mix_facts(&t)) else {

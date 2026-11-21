@@ -7,7 +7,9 @@
 use hocket_core::api::*;
 use hocket_core::automix::store::fingerprint_of;
 use hocket_core::automix::ANALYSIS_VERSION;
+use hocket_core::core::io::memory::MemoryNet;
 use hocket_core::core::test_support::{seeded_server, TestCore};
+use hocket_core::sim::SimTime;
 
 async fn synced_core(name: &str) -> TestCore {
     let t = TestCore::start(name, seeded_server(8, 200.0)).await;
@@ -79,6 +81,11 @@ async fn start(t: &TestCore, shuffle: bool) {
     })
     .await;
     store_records(t).await;
+    play_all(t, shuffle).await;
+    t.run_for(500.0).await;
+}
+
+async fn play_all(t: &TestCore, shuffle: bool) {
     t.run(Command::PlayTracks {
         tracks: TrackRef::list(&t.server_id, (0..8).map(|n| format!("t{n}"))),
         start_index: 0,
@@ -87,7 +94,6 @@ async fn start(t: &TestCore, shuffle: bool) {
         start_position_ms: 0,
     })
     .await;
-    t.run_for(500.0).await;
 }
 
 async fn upcoming(t: &TestCore) -> Vec<String> {
@@ -151,4 +157,46 @@ async fn the_users_group_is_never_reordered() {
     t.run_for(500.0).await;
     let up = upcoming(&t).await;
     assert_eq!(up[..2], [a, b], "{up:?}");
+}
+
+/// Over a room: the promotion follows the op that changed the next entry, so
+/// the room takes both, every peer sees the same order and the skips stand.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promotions_reach_the_room_after_the_skip_that_asked_for_them() {
+    let server = seeded_server(8, 200.0);
+    let net = MemoryNet::new();
+    let clock = SimTime::new(1_700_000_000_000.0);
+    let room = TestCore::start_on("a", server.clone(), Some(net.clone()), 1, clock.clone()).await;
+    let a = TestCore::start_on("b", server.clone(), Some(net.clone()), 2, clock.clone()).await;
+    TestCore::run_all_for(&[&room, &a], 8_000.0).await;
+    assert!(a.snapshot().await.connection.connected);
+    a.run(Command::SetAutoplay { enabled: false }).await;
+    a.run(Command::SetTransitionSettings {
+        settings: TransitionSettings {
+            mode: TransitionMode::AutoMix,
+            crossfade_seconds: 6.0,
+        },
+    })
+    .await;
+    store_records(&a).await;
+    play_all(&a, true).await;
+    TestCore::run_all_for(&[&room, &a], 2_000.0).await;
+    for _ in 0..3 {
+        let before = upcoming(&a).await;
+        a.run(Command::Next).await;
+        TestCore::run_all_for(&[&room, &a], 2_000.0).await;
+        let cur = a.current_track_id().await.expect("playing");
+        assert_eq!(cur, before[0], "the skip stood");
+        let up = upcoming(&a).await;
+        if up.len() >= 3 && up[1..].iter().any(|t| bpm_of(t) == bpm_of(&up[0])) {
+            assert_eq!(bpm_of(&up[0]), bpm_of(&up[1]), "{up:?}");
+        }
+        assert_eq!(
+            upcoming(&room).await,
+            up,
+            "the room's peer has the same order"
+        );
+    }
+    a.core.shutdown().await;
+    room.core.shutdown().await;
 }

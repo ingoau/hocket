@@ -159,7 +159,7 @@ impl Actor {
             self.store_analysis_record(e.track_id, e.record, "coordinator");
         }
         self.fetch_analysis_records(self.now());
-        self.order_for_mix();
+        self.post_order_for_mix();
     }
 
     /// Queue a record this device produced for the coordinator.

@@ -781,7 +781,9 @@ impl SessionOp {
     pub fn replays_after_conflict(&self) -> bool {
         matches!(
             self,
-            SessionOp::MoveQueueItem { .. } | SessionOp::RemoveQueueItems { .. }
+            SessionOp::MoveQueueItem { .. }
+                | SessionOp::RemoveQueueItems { .. }
+                | SessionOp::PromoteForMix { .. }
         )
     }
 
@@ -856,7 +858,9 @@ impl SessionOp {
     pub fn is_owner_op(&self) -> bool {
         matches!(
             self,
-            SessionOp::TrackEnded | SessionOp::SkipUnavailable { .. }
+            SessionOp::TrackEnded
+                | SessionOp::SkipUnavailable { .. }
+                | SessionOp::PromoteForMix { .. }
         )
     }
 }

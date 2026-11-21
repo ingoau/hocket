@@ -347,14 +347,15 @@ nothing. Every overlap is limited to half of each track's audible span.
      before it, never before B enters; high cut from it). With no voice of
      A in the overlap the handover stays mid-overlap: B may sing over A's
      instrumental. (b) Else the first of 4 and 2 bars that keeps them apart
-     (same handover rule). (b′) Without a fixed tail start, the same bar
-     counts placed 1, 2, … whole bars earlier in A, fewest bars back first,
-     as long as at most 20 s of audible A is cut and A's voice curve covers
-     the whole overlap (outside it "no voice" proves nothing): the handover
+     (same handover rule). (b′) Without a fixed tail start, the bar
+     counts of (a) and (b) placed 1, 2, … whole bars earlier in A, fewest bars back first,
+     as long as at most 20 s of audible A is cut (A's voice curve must cover
+     the overlap for any placement to count as apart: outside it "no
+     voice" proves nothing): the handover
      then lands in an instrumental break before A's last vocal, usually its
      final chorus. (c) Else the fewest bars lasting ≥ 4 s, placed where
-     both voices sound together least (at the end unless a placement up to
-     20 s back saves at least 1 s of it), with the bass swap from B's entry
+     both voices sound together least (each bar further back, up to 20 s,
+     has to save 0.5 s of it), with the bass swap from B's entry
      over
      half the way to the handover and A's high shelf moved down to 2 kHz
      (−12 dB) from B's entry to the handover. Beat-aligned fades drop bars
@@ -515,16 +516,17 @@ The planner is deterministic: same inputs → same plan on every device.
     capped at 4 bars: tempo-blend overlap p90 16.0 s → 11.7 s.
   - Voices: of beat-matched blends with voices on both sides, `main`'s
     planner shaped 155 of 412 (38 %) as clashes; moving blends back into a
-    break and placing the rest where voices overlap least: 129 of 441 (29 %),
+    break and placing the rest where voices overlap least: 128 of 441 (29 %),
     and 29 pairs more get a blend at all. In the shaped ones both voices
     sound together for a median 3.0 s (p90 5.9 s) of a 5 s overlap. A 60 s
     tail voice curve changed none of the 5000 plans; letting blends cut up to
     40 s of A as well saved only 15 more (118 → 103), so the curve stays at
     36 s and the cut at 20 s.
-  - Order (shuffled sessions through all 289): beat-matched blends 8.5 % of
-    transitions → 19.8 %, clean of voice clashes 6.1 % → 16.7 %, compatible
-    keys 15.5 % → 20.3 %, clashing 55.5 % → 48.9 %. Tracks end up a median
-    3 places from their shuffled position, never more than 5.
+  - Order (shuffled sessions through all 289): beat-matched blends 8.4 % of
+    transitions → 19.8 %, blends without a shaped voice clash 6.0 % →
+    16.6 %, compatible keys 15.5 % → 20.3 %, clashing 55.5 % → 49.0 %. Tracks end up a median
+    3 places from their shuffled position (a pick moves at most 5 forward;
+    a track passed over can drift further back, the most seen was 5).
 
 ## Platforms
 

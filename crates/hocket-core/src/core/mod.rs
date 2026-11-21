@@ -230,6 +230,10 @@ pub enum Internal {
     /// Record other copies of queue items' songs on the document (posted
     /// after a document change, so it never runs inside that reaction).
     OfferAlternates,
+    /// Decide AutoMix's order (`handlers::mix_order`). Posted, never run
+    /// inside a document or lease reaction: its op must reach the room
+    /// after the op that changed the document.
+    OrderForMix,
     /// Run a refused offline-skip clear once more (see `CacheState::offline_clear_sent`).
     RetryOfflineClear,
     /// An album-primer fetch ended.

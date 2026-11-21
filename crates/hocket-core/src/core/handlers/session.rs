@@ -890,7 +890,7 @@ impl Actor {
         if let Some(tracks) = resolve_tracks {
             self.local_op(SessionOp::SetContextTracks { tracks });
         }
-        self.order_for_mix();
+        self.post_order_for_mix();
         if self.cache.links_present {
             let _ = self.tx.send(crate::core::ActorMsg::Internal(
                 crate::core::Internal::OfferAlternates,
