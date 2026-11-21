@@ -100,8 +100,8 @@
   --fg: #1b1730;
   --fg-muted: #4e4867;
   --fg-faint: #57516f;
-  /* The side panel's lyrics around the current line: lighter than muted text, still 4.5:1 on the pane. */
-  --lyrics-muted: #6c6684;
+  /* The side panel's dimmed lyrics: the alpha of --fg that still reaches 4.5:1 on the pane. */
+  --lyrics-dim: 0.6;
   --border: rgba(0, 0, 0, 0.11);
   --border-strong: rgba(0, 0, 0, 0.22);
   --danger: #a1231c;
@@ -129,7 +129,7 @@
   --fg: #ece9ff;
   --fg-muted: #b5aed8;
   --fg-faint: #aaa3cf;
-  --lyrics-muted: #958eb9;
+  --lyrics-dim: 0.54;
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.2);
   --danger: #ff8f8f;
@@ -708,8 +708,9 @@ button.qrow { width: 100%; }
    for a side pane). The in-window view scales with the viewport and the
    device-local small/medium/large preference (--lyrics-scale); fullscreen stays large. */
 .amll-host { height: 100%; width: 100%; --amll-lp-color: var(--fg); --lyrics-scale: 1; }
-/* Lines fade in and out at the pane edges instead of being cut by the pane header. */
-.amll-host.compact { mask-image: linear-gradient(to bottom, transparent 0, #000 28px, #000 calc(100% - 36px), transparent 100%); }
+/* Lines fade in and out at the pane edges instead of being cut by the pane header, the same in
+   the side panel and fullscreen. */
+.amll-host { mask-image: linear-gradient(to bottom, transparent 0, #000 40px, #000 calc(100% - 48px), transparent 100%); }
 .amll-host.compact { --amll-lp-font-size: calc(clamp(13px, 1.1vh + 0.45vw, 19px) * var(--lyrics-scale)); }
 .amll-host.large { --amll-lp-font-size: calc(clamp(20px, 2.8vh + 0.6vw, 40px) * var(--lyrics-scale)); }
 .amll-host > * { height: 100%; }

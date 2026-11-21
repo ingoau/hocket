@@ -1,8 +1,11 @@
 // AMLL lyric renderer wrapper. Drives currentTime from the extrapolated
 // position each frame, honours the performance budget (stopped when hidden,
 // reduced rate unfocused, 30 fps cap in battery saver), tap-to-seek and the
-// per-track offset. The same component renders compact (right panel) and
-// large (fullscreen).
+// per-track offset. The same component, with the same behaviour (springs,
+// blur, the word sweep, alignment, click-to-seek), renders the side panel's
+// lyrics view and the fullscreen player's: the variant only picks the type size
+// (compact for the side panel, large for fullscreen), and the side panel's
+// colours come from the theme (styles/m3-shell.css).
 //
 // Accessibility: the AMLL canvas of word spans is decorative (aria-hidden);
 // screen readers get a labelled list of whole lines with the active line
@@ -67,12 +70,7 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     loadAmll().then((amll) => {
       if (!alive) return;
       p = new amll.DomLyricPlayer();
-      p.setEnableBlur(variant === "large" && !lighter);
-      p.setEnableSpring(variant === "large" && !lighter);
-      p.setEnableScale(true);
-      // The current line sits around the middle: the side panel's lyrics view has the pane's whole height.
-      p.setAlignPosition(variant === "large" ? 0.5 : 0.45);
-      p.setWordFadeWidth(0.5);
+      configurePlayer(p, lighter);
       el.replaceChildren(p.getElement());
       player.current = p;
       p.addEventListener("line-click", onClick);
@@ -85,13 +83,14 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
       p.dispose();
       player.current = undefined;
     };
-  }, [animated, variant]);
+    // `lighter` is applied by the effect below without recreating the player.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animated]);
 
   useEffect(() => {
     const p = player.current;
     if (!p || !animated) return;
-    p.setEnableSpring(variant === "large" && !lighter);
-    p.setEnableBlur(variant === "large" && !lighter);
+    configurePlayer(p, lighter);
     p.setLyricLines(mapped.lines as never, extrapolate(stampRef.current, Date.now(), clockOffset, duration));
     p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration), true);
     p.update(0);
@@ -115,15 +114,23 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
     else p.pause();
   }, [stamp, clockOffset, duration]);
 
-  // Frame loop: explicit stop when hidden or paused; ~24 fps in the background; the battery fps cap with lighter lyrics.
+  // Frame loop: explicit stop when hidden; ~24 fps in the background; the battery fps cap with lighter lyrics.
   // On the shared position ticker, so the lyrics, the seek bar and the background paint in the
-  // same frames instead of each loop adding frames of its own.
+  // same frames instead of each loop adding frames of its own. With springs AMLL only moves lines
+  // in update() with a time step, so while paused the loop still runs for a moment after a seek, a
+  // pause, new lines or the player loading, to let the lines glide to their places, then stops.
+  const settleKey = stamp.isPlaying ? undefined : stamp;
   useEffect(() => {
-    if (!animated || perf === "stopped" || !stamp.isPlaying) return;
+    if (!animated || perf === "stopped") return;
     const fps = perf === "background" ? Math.min(24, fpsCap) : lighter ? Math.min(batteryFps, fpsCap) : fpsCap;
     let last = performance.now();
-    return ticker.subscribe(() => {
+    const until = stampRef.current.isPlaying ? Number.POSITIVE_INFINITY : last + SETTLE_MS;
+    const unsubscribe = ticker.subscribe(() => {
       const now = ticker.now;
+      if (now > until) {
+        unsubscribe();
+        return;
+      }
       const step = now - last;
       if (!frameDue(step, fps)) return;
       last = now;
@@ -132,7 +139,8 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
       p.setCurrentTime(extrapolate(stampRef.current, Date.now(), clockOffset, duration));
       p.update(step);
     });
-  }, [animated, perf, lighter, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying]);
+    return unsubscribe;
+  }, [animated, perf, lighter, fpsCap, batteryFps, clockOffset, duration, stamp.isPlaying, settleKey, mapped, loaded]);
 
   return (
     <div className="lyrics-pane" data-testid="lyrics-view" data-tier={lyrics.tier} data-mode={animated ? "animated" : "plain"}>
@@ -146,6 +154,19 @@ export function LyricsView({ lyrics, variant }: { lyrics: Lyrics; variant: "comp
       )}
     </div>
   );
+}
+
+/**
+ * One look for every lyrics view: spring-driven scrolling, distant lines
+ * blurred, the current line scaled up and held in the middle, a soft word
+ * sweep. Battery saver's lighter lyrics drop the springs and blur.
+ */
+function configurePlayer(p: DomLyricPlayer, lighter: boolean): void {
+  p.setEnableSpring(!lighter);
+  p.setEnableBlur(!lighter);
+  p.setEnableScale(true);
+  p.setAlignPosition(0.5);
+  p.setWordFadeWidth(0.5);
 }
 
 /**
@@ -180,6 +201,8 @@ function LyricsList({ lines, synced, visuallyHidden = false, variant, size }: { 
 }
 
 const NO_LINES: AmllLine[] = [];
+/** How long the lines keep moving after a change while paused (AMLL's springs settle well within it). */
+const SETTLE_MS = 2000;
 
 /** Small / medium / large, device-local; shared by every lyrics view in this window. */
 export function LyricsSizeControl() {

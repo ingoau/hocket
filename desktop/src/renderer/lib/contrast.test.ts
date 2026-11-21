@@ -71,9 +71,12 @@ describe("theme tokens in global.css", () => {
       }
     });
 
-    it(`${theme}: the side panel's lyrics (--lyrics-muted) reach 4.5:1 on the pane and stay lighter than muted text`, () => {
-      const lyrics = P(c["lyrics-muted"] as string);
+    it(`${theme}: the side panel's dimmed lyrics (--fg at --lyrics-dim) reach 4.5:1 on the pane and stay lighter than muted text`, () => {
+      const dim = Number(c["lyrics-dim"]);
+      expect(dim).toBeGreaterThan(0);
+      expect(dim).toBeLessThan(1);
       const pane = P(c["bg-elev"] as string);
+      const lyrics = composite(P(c.fg as string), dim, pane);
       expect(contrast(lyrics, pane)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(lyrics, pane)).toBeLessThan(contrast(P(c["fg-muted"] as string), pane));
     });
