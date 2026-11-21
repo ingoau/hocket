@@ -7,6 +7,8 @@ import { openContextMenu } from "../components/ContextMenu";
 import { resolveArtwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
 import { extractAccent } from "../lib/accent";
+import { usePrefersReducedMotion } from "../lib/media";
+import { useCarouselScroll } from "../lib/carousel-scroll";
 import { accentTokens, type ThemeName } from "../lib/contrast";
 import { loadSpotlight, slideCover, slideKey, slideTitle, spotlightSeed, type SpotlightSlide } from "../lib/spotlight";
 
@@ -64,6 +66,8 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
   const [slides, setSlides] = useState<SpotlightSlide[] | undefined>(undefined);
   const [index, setIndex] = useState(0);
   const section = useRef<HTMLElement>(null);
+  const track = useRef<HTMLDivElement>(null);
+  const reducedMotion = usePrefersReducedMotion();
   const slidesRef = useRef(slides);
   slidesRef.current = slides;
   const shownKey = useRef<string | undefined>(undefined);
@@ -96,6 +100,9 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
   const currentAccent = current ? accents[slideCover(current) ?? ""] : undefined;
   useEffect(() => onAccent(currentAccent), [currentAccent]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => onEmpty(slides !== undefined && slides.length === 0), [slides]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The track scrolls sideways (a trackpad, Shift + wheel) and comes to rest on a slide; the
+  // arrows, dots and keys scroll it to theirs.
+  useCarouselScroll(track, at, list.length, setIndex, reducedMotion);
   if (!slides || !list.length) return null;
   const go = (i: number) => setIndex((i + list.length) % list.length);
   const onKey = (e: React.KeyboardEvent) => {
@@ -114,7 +121,7 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
   };
   return (
     <section ref={section} className="home-spotlight" aria-roledescription="carousel" aria-label={t("spotlight.label")} data-testid="home-spotlight" onKeyDown={onKey}>
-      <div className="spot-track" style={{ transform: `translateX(${-at * 100}%)` }}>
+      <div ref={track} className="spot-track">
         {list.map((s, i) => (
           <Slide key={slideKey(s)} slide={s.resume ? { ...s, resume: latestResume.get(s.resume.albumId) ?? s.resume } : s} active={i === at} position={t("spotlight.goTo", { n: i + 1, total: list.length })} accent={accents[slideCover(s) ?? ""]} theme={theme} serverId={serverId} onOpen={() => open(s)} />
         ))}
