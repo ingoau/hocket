@@ -80,15 +80,16 @@ test.describe("now playing", () => {
     await expect(panel).toHaveAttribute("data-view", "lyrics");
     await expect(panel.getByTestId("lyrics-view")).toBeVisible();
     await expect(page.getByTestId("toggle-lyrics")).toHaveAttribute("aria-pressed", "true");
-    // In both themes the current line is the on-surface colour and the others a muted one, each
-    // at 4.5:1 on the pane (not AMLL's faint mask for dark backdrops), the current line mid-view.
+    // In both themes the lines are the on-surface colour under AMLL's word masks, as in fullscreen,
+    // with the masks' dimmed level held at 4.5:1 on the pane (not AMLL's faint 0.2 for dark
+    // backdrops); the current line's sung words are brighter still, and it sits mid-view.
     for (const theme of ["light", "dark"] as const) {
       await page.evaluate((v) => window.hocket.dispatch({ type: "setSetting", data: { key: "display.theme", value: JSON.stringify(v) } }), theme);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       const active = panel.locator('[class*="_lyricLine"][class*="_active"]:not([class*="_lyricBgLine"])').first();
       await expect(active).toBeVisible({ timeout: 10_000 });
       await page.waitForTimeout(600);
-      const look = await panel.evaluate((root) => {
+      const read = () => panel.evaluate((root) => {
         // rgb(r, g, b), or color(srgb r g b) for a color-mix().
         const rgb = (c: string) => {
           const srgb = /color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)/.exec(c);
@@ -103,13 +104,22 @@ test.describe("now playing", () => {
         const other = Array.from(root.querySelectorAll('[class*="_lyricLine"]:not([class*="_active"]):not([class*="_lyricLineWrapper"]):not([class*="_bottomLine"])'))[0]!;
         const r = cur.getBoundingClientRect();
         const cs = getComputedStyle(cur);
-        return { current: ratio(cs.color, bg), other: ratio(getComputedStyle(other).color, bg), mask: Number(cs.getPropertyValue("--bright-mask-alpha")), otherMask: Number(getComputedStyle(other).getPropertyValue("--dark-mask-alpha")), at: (r.top + r.height / 2 - host.top) / host.height, differs: cs.color !== getComputedStyle(other).color };
+        // The words' effective mask alphas (a calc() over AMLL's inline levels), resolved through a probe.
+        const probe = document.createElement("div");
+        document.body.append(probe);
+        const alpha = (line: Element, prop: string) => { probe.style.opacity = getComputedStyle(line.querySelector('[class*="_lyricMainLine"] > span')!).getPropertyValue(prop).trim(); return Number(getComputedStyle(probe).opacity); };
+        const [mask, otherMask] = [alpha(cur, "--bright-mask-alpha"), alpha(other, "--dark-mask-alpha")];
+        probe.remove();
+        /** The text colour at `a` over the pane, as an rgb() string. */
+        const over = (c: string, a: number) => { const [f, b] = [rgb(c), rgb(bg)]; return `rgb(${f.map((v, i) => v * a + b[i]! * (1 - a)).join(", ")})`; };
+        return { current: ratio(over(cs.color, mask), bg), other: ratio(over(getComputedStyle(other).color, otherMask), bg), mask, otherMask, at: (r.top + r.height / 2 - host.top) / host.height };
       });
+      // AMLL eases a line's mask alphas as it becomes current (and the previous one's as it ends).
+      await expect.poll(async () => { const l = await read(); return l.mask - l.otherMask; }, { message: `${theme}: current line stands out`, timeout: 10_000 }).toBeGreaterThan(0.2);
+      const look = await read();
       expect(look.current, `${theme}: current line`).toBeGreaterThanOrEqual(4.5);
       expect(look.other, `${theme}: other lines`).toBeGreaterThanOrEqual(4.5);
-      expect(look.differs, `${theme}: current line stands out`).toBe(true);
-      expect(look.mask).toBe(1);
-      expect(look.otherMask).toBe(1);
+      expect(look.otherMask, `${theme}: other lines dimmed`).toBeLessThan(1);
       expect(look.at, `${theme}: current line near the middle`).toBeGreaterThan(0.3);
       expect(look.at, `${theme}: current line near the middle`).toBeLessThan(0.7);
     }
