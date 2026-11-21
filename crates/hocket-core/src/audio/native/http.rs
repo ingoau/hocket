@@ -235,6 +235,11 @@ struct State {
     /// Drop the response in flight and fetch again from `want`
     /// ([`HttpReconnect`]).
     reconnect: bool,
+    /// Bytes stored so far: a read waiting while they grow is not starved
+    /// (a sequential download on its way to a seek).
+    received: u64,
+    /// The player is paused: a read waiting meanwhile doesn't give up.
+    held: bool,
 }
 
 impl State {
@@ -345,6 +350,14 @@ impl HttpReconnect {
         st.reconnect = true;
         drop(st);
         shared.wake_downloader.notify_one();
+    }
+
+    /// The player is paused (`true`) or plays again: a read left waiting
+    /// while paused doesn't give up (the listener may come back to it).
+    pub fn hold(&self, held: bool) {
+        if let Some(shared) = self.0.upgrade() {
+            shared.state.lock().held = held;
+        }
     }
 }
 
@@ -519,6 +532,7 @@ fn store_chunk(shared: &Shared, pos: u64, bytes: &[u8]) -> bool {
         return false;
     }
     st.append(pos, bytes);
+    st.received += bytes.len() as u64;
     shared.data_ready.notify_all();
     true
 }
@@ -661,7 +675,8 @@ impl Read for HttpSource {
             return Ok(0);
         }
         let mut st = self.shared.state.lock();
-        let since = std::time::Instant::now();
+        let mut since = std::time::Instant::now();
+        let mut received = st.received;
         loop {
             if let Some((start, data)) = st.segment_at(self.pos) {
                 let off = (self.pos - start) as usize;
@@ -696,6 +711,11 @@ impl Read for HttpSource {
                 // Transient errors are being retried; only surface after the
                 // downloader gives up (it sets `closed`). Keep waiting.
                 tracing::debug!(target: "hocket::audio::http", error = %e, "waiting through fetch error");
+            }
+            if st.received != received || st.held {
+                // Bytes are arriving (elsewhere), or nobody is listening.
+                received = st.received;
+                since = std::time::Instant::now();
             }
             if since.elapsed() >= self.give_up {
                 // The server stopped sending and the retries got nothing:
@@ -1026,12 +1046,24 @@ mod tests {
         )
         .unwrap()
         .with_give_up(Duration::from_millis(300));
+        // Held (paused), it waits on.
+        let hold = src.reconnector();
+        hold.hold(true);
+        let mut buf = vec![0u8; 4096];
+        src.read_exact(&mut buf).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let _ = tx.send((src.read_to_end(&mut out), out.len()));
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(700)).is_err());
+        hold.hold(false);
         let started = std::time::Instant::now();
-        let mut out = Vec::new();
-        let err = src.read_to_end(&mut out).unwrap_err();
+        let (res, n) = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let err = res.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
-        assert_eq!(out.len(), 4096);
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(n, 0);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     /// A reconnect drops the stalled response and asks again from the
@@ -1068,8 +1100,13 @@ mod tests {
         let mut buf = vec![0u8; 4096];
         src.read_exact(&mut buf).unwrap();
         let kick = src.reconnector();
+        let shared = src.shared.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(100));
+            // Once the reader waits at 4096 (a reconnect before that, with
+            // what it wants buffered, does nothing).
+            while shared.state.lock().want != 4096 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
             kick.reconnect();
         });
         // Each reconnected response brings another 4 KiB.

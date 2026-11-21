@@ -567,7 +567,11 @@ impl Engine {
                 }
                 match result {
                     Ok(l) => {
-                        self.next = Some(Source::new(l));
+                        let next = Source::new(l);
+                        if let Some(r) = &next.reconnect {
+                            r.hold(!self.playing);
+                        }
+                        self.next = Some(next);
                         if self.awaiting_next {
                             self.awaiting_next = false;
                             self.promote_next();
@@ -611,11 +615,27 @@ impl Engine {
         }
     }
 
+    /// Whether a starved read of the current and next sources may give up
+    /// (not while paused: see [`HttpReconnect::hold`]).
+    fn hold_streams(&self, held: bool) {
+        for s in [self.current.as_ref(), self.next.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(r) = &s.reconnect {
+                r.hold(held);
+            }
+        }
+    }
+
     /// Install `src` as current: DSP format and gain, exclusive rate.
     fn begin_source(&mut self, src: Source) {
         self.dsp
             .set_format(f64::from(src.spec.sample_rate), src.spec.channels);
         self.dsp.begin_track_gain_db(src.media.gain_db);
+        if let Some(r) = &src.reconnect {
+            r.hold(!self.playing);
+        }
         self.current = Some(src);
         self.maybe_switch_rate();
         // Fade in from silence so a hard start never clicks.
@@ -725,6 +745,7 @@ impl Engine {
                         }
                     }
                 }
+                self.hold_streams(false);
                 if self.playing && !self.fading_out {
                     return true;
                 }
@@ -759,12 +780,15 @@ impl Engine {
                     self.playing = false;
                     return true;
                 }
-                if self.fading_out {
-                    return true;
-                }
+                self.hold_streams(true);
                 let starved = self.current.as_ref().is_some_and(|c| c.buffering)
                     && self.pending_out.is_empty();
+                if !starved && self.fading_out {
+                    return true;
+                }
                 if starved {
+                    // The fade may have begun and stalled with the audio.
+                    self.fading_out = false;
                     // Nothing is playing to fade out (the fade only moves
                     // with audio): pause now.
                     self.playing = false;
@@ -2562,7 +2586,25 @@ mod tests {
         };
         rig.backend.load(src, None, 0, true).unwrap();
         let starved = |r: &BackendReport| matches!(r, BackendReport::Buffering { key, buffering: true } if key == "s");
-        rig.wait_for(Duration::from_secs(10), starved);
+        // The stall itself (past the quarter served), not a slow start.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            {
+                let r = rig.reports.lock();
+                let past = r.iter().any(|r| {
+                    matches!(r, BackendReport::Position { position_ms, .. } if *position_ms >= 400)
+                });
+                let last = r
+                    .iter()
+                    .rev()
+                    .find(|r| matches!(r, BackendReport::Buffering { .. }));
+                if past && last.is_some_and(starved) {
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "{:?}", rig.reports.lock());
+            thread::sleep(Duration::from_millis(5));
+        }
         rig.take();
         rig.backend.pause().unwrap();
         rig.wait_for(
