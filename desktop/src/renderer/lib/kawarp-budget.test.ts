@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { BACKGROUND_FPS, FOCUSED_FPS, perfForWindow, startKawarpBudget, type FrameClock, type KawarpDriver } from "./kawarp-budget";
 
-function mockKawarp(): KawarpDriver & { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; renderFrame: ReturnType<typeof vi.fn> } {
+function mockKawarp(): KawarpDriver & { start: Mock<KawarpDriver["start"]>; stop: Mock<KawarpDriver["stop"]>; renderFrame: Mock<KawarpDriver["renderFrame"]> } {
   return {
-    start: vi.fn(),
-    stop: vi.fn(),
-    renderFrame: vi.fn(),
+    start: vi.fn<KawarpDriver["start"]>(),
+    stop: vi.fn<KawarpDriver["stop"]>(),
+    renderFrame: vi.fn<KawarpDriver["renderFrame"]>(),
   };
 }
 
