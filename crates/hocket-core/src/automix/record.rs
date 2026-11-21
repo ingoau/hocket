@@ -6,9 +6,10 @@ use std::cmp::Ordering;
 use crate::api::{AnalysisProducer, AnalysisRecord, SourceFingerprint};
 
 /// Version of every analysis algorithm (beats, loudness curve, silence
-/// edges, voice). Bump on any change that would change a record's contents;
-/// records of any other version are ignored, never migrated.
-pub const ANALYSIS_VERSION: u32 = 2;
+/// edges, voice, key; 3 added keys). Bump on any change that would change a
+/// record's contents; records of any other version are ignored, never
+/// migrated.
+pub const ANALYSIS_VERSION: u32 = 3;
 
 /// Duration tolerance between a record's source and the track.
 pub const FINGERPRINT_DURATION_TOLERANCE_MS: u32 = 1_000;
@@ -126,6 +127,14 @@ pub fn compact(mut r: AnalysisRecord) -> AnalysisRecord {
                 0.0
             };
         }
+    }
+    for key in [&mut r.key, &mut r.head_key, &mut r.tail_key] {
+        *key = key
+            .filter(|k| k.tonic < 12 && k.strength.is_finite())
+            .map(|mut k| {
+                k.strength = (k.strength.clamp(-1.0, 1.0) * 100.0).round() / 100.0;
+                k
+            });
     }
     r.integrated_lufs = r
         .integrated_lufs
@@ -265,7 +274,17 @@ mod tests {
             hop_ms: 0,
             voice: vec![0.5],
         };
+        let key = |tonic, strength| crate::api::MusicalKey {
+            tonic,
+            minor: false,
+            strength,
+        };
+        r.key = Some(key(3, 0.678));
+        r.head_key = Some(key(12, 0.9));
+        r.tail_key = Some(key(1, f32::NAN));
         let c = compact(r);
+        assert_eq!(c.key, Some(key(3, 0.68)));
+        assert_eq!((c.head_key, c.tail_key), (None, None));
         assert_eq!(c.head_vocals.voice, vec![0.12, 0.0, 1.0, 0.0]);
         assert!(c.tail_vocals.voice.is_empty());
         assert_eq!(c.beats_ms, vec![0, 500, 1000]);

@@ -42,7 +42,10 @@ pub const PATCH_HOP_FRAMES: usize = PATCH_FRAMES;
 pub const PATCH_MS: Ms = 2_992;
 /// How much of each end of a track is analysed: 12 patches. Blends are at
 /// most 32 s, so B's first and A's last 36 s hold every overlap the planner
-/// makes.
+/// makes, and an 8-bar blend moved back by up to `plan::MAX_CUT_MS` at
+/// 120 BPM. A longer tail curve was tried (60 s, and letting blends cut up
+/// to 40 s of A): it rescued almost no voice clashes on the corpus, so it
+/// isn't worth the patches (`docs/automix.md` → *Voices on the corpus*).
 pub const VOCAL_REGION_MS: Ms = 12 * PATCH_MS;
 /// Point spacing of a [`VocalCurve`].
 pub const VOCAL_HOP_MS: Ms = 100;

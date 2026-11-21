@@ -1,15 +1,30 @@
 {
-  "kind": "fade",
-  "tailStartMs": 203933,
-  "tailSourceMs": 6000,
-  "tailLenMs": 6000,
-  "incomingAtMs": 0,
-  "incomingFromMs": 0,
-  "handoverMs": 3000,
+  "kind": "tempoBlend",
+  "tailStartMs": 190368,
+  "tailSourceMs": 13730,
+  "tailLenMs": 14118,
+  "incomingAtMs": 9316,
+  "incomingFromMs": 17,
+  "handoverMs": 11717,
   "outCurve": "equalPower",
   "inCurve": "equalPower",
-  "tempo": null,
-  "bassSwap": null,
-  "highCut": null,
+  "tempo": {
+    "ratioEnd": 0.95897543,
+    "rampMs": 9316
+  },
+  "bassSwap": {
+    "freqHz": 100.0,
+    "fromDb": 0.0,
+    "toDb": -26.0,
+    "startMs": 9316,
+    "lenMs": 1200
+  },
+  "highCut": {
+    "freqHz": 2000.0,
+    "fromDb": 0.0,
+    "toDb": -12.0,
+    "startMs": 9316,
+    "lenMs": 2401
+  },
   "incomingGainDb": 0.0
 }

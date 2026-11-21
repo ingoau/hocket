@@ -503,6 +503,11 @@ pub enum SessionOp {
         after: QueueKey,
         in_group: bool,
     },
+    /// AutoMix's order: see `QueueOp::PromoteForMix`.
+    PromoteForMix {
+        key: QueueKey,
+        after: QueueKey,
+    },
     ClearQueue,
     ClearQueueGroup,
     SetShuffle {
@@ -776,7 +781,9 @@ impl SessionOp {
     pub fn replays_after_conflict(&self) -> bool {
         matches!(
             self,
-            SessionOp::MoveQueueItem { .. } | SessionOp::RemoveQueueItems { .. }
+            SessionOp::MoveQueueItem { .. }
+                | SessionOp::RemoveQueueItems { .. }
+                | SessionOp::PromoteForMix { .. }
         )
     }
 
@@ -811,6 +818,7 @@ impl SessionOp {
             SessionOp::RemoveQueueItems { keys } => format!("removeQueueItems {}", keys.join(" ")),
             SessionOp::JumpToQueueItem { key } => format!("jumpToQueueItem {key}"),
             SessionOp::SkipUnavailable { key } => format!("skipUnavailable {key}"),
+            SessionOp::PromoteForMix { key, after } => format!("promoteForMix {key} after {after}"),
             SessionOp::PlayNext {
                 track_ids, keys, ..
             } => {
@@ -850,7 +858,9 @@ impl SessionOp {
     pub fn is_owner_op(&self) -> bool {
         matches!(
             self,
-            SessionOp::TrackEnded | SessionOp::SkipUnavailable { .. }
+            SessionOp::TrackEnded
+                | SessionOp::SkipUnavailable { .. }
+                | SessionOp::PromoteForMix { .. }
         )
     }
 }

@@ -21,7 +21,7 @@ use crate::connect::wire::{
 use crate::core::actor::Actor;
 
 /// Tracks after the current one that are fetched ahead.
-const FETCH_AHEAD: usize = 4;
+const FETCH_AHEAD: usize = 2 + crate::automix::order::ORDER_WINDOW;
 /// An unanswered fetch is given up after this long (its tracks may be asked again).
 const FETCH_TIMEOUT_MS: f64 = 15_000.0;
 /// A track asked for is not asked again for this long, answered or not.
@@ -34,7 +34,7 @@ pub(crate) struct ShareState {
     /// The coordinator keeps records.
     available: bool,
     /// The fetch waiting for an answer: when it went out and what it asked.
-    in_flight: Option<(f64, Vec<TrackRef>)>,
+    pub(crate) in_flight: Option<(f64, Vec<TrackRef>)>,
     /// Tracks asked for, until when they are not asked again.
     asked: HashMap<TrackRef, f64>,
     uploads: Vec<AnalysisEntry>,
@@ -159,6 +159,7 @@ impl Actor {
             self.store_analysis_record(e.track_id, e.record, "coordinator");
         }
         self.fetch_analysis_records(self.now());
+        self.post_order_for_mix();
     }
 
     /// Queue a record this device produced for the coordinator.

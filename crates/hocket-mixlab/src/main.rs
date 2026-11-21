@@ -10,6 +10,9 @@
 //!   tail and print its curves (one digit per second, 0–9).
 //! - `stats <dir>`: plan random pairs and print the distribution of kinds,
 //!   overlaps and cuts; `--check` also renders each one and checks levels.
+//! - `keys <dir>`: the key estimates of a directory's tracks as TSV.
+//! - `order <dir>`: simulate shuffled sessions with and without AutoMix's
+//!   order and compare how their transitions plan.
 
 mod render;
 
@@ -24,7 +27,11 @@ use rand::SeedableRng;
 
 use hocket_core::api::{AnalysisProducer, AnalysisRecord, TransitionKind, TransitionMode};
 use hocket_core::automix::analysis::{apply_grid, Analyser, RawBeats};
-use hocket_core::automix::plan::{voice_span, Grid, Region, VoiceSpan, Voices};
+use hocket_core::automix::key::{harmony, Harmony};
+use hocket_core::automix::order::{choose, mix_score, ORDER_WINDOW};
+use hocket_core::automix::plan::{
+    both_voiced_ms, voice_span, Grid, Region, VoiceSpan, Voices, CLASH_HIGH_CUT_HZ,
+};
 use hocket_core::automix::{
     plan_transition, PlanInput, PlanTrack, TransitionPlan, TransitionSettings, ANALYSIS_VERSION,
 };
@@ -39,6 +46,13 @@ struct Cli {
     /// renders differ from the default only in the planner.
     #[arg(long, global = true)]
     no_vocals: bool,
+    /// Plan without the records' keys (as before key detection).
+    #[arg(long, global = true)]
+    no_keys: bool,
+    /// Keep only the last N seconds of each tail voice curve (records hold
+    /// 35.9 s; for trying shorter windows).
+    #[arg(long, global = true)]
+    tail_voice_s: Option<u32>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -125,6 +139,26 @@ enum Cmd {
         #[arg(long)]
         list: bool,
     },
+    /// Decode files and print the key estimator's result with other settings
+    /// (file, key, strength per setting), for comparing against a reference.
+    Keytest {
+        files: Vec<PathBuf>,
+        /// Settings as `harmonics:decay`, e.g. `1:0.6 6:0.9` (after the files).
+        #[arg(long, num_args = 1.., default_values_t = vec!["6:0.9".to_string()])]
+        params: Vec<String>,
+    },
+    /// Key estimates of a directory's tracks (from the record cache) as TSV:
+    /// file, key, strength, head key, head strength, tail key, tail strength.
+    Keys { dir: PathBuf },
+    /// Shuffled sessions through a directory's tracks, with and without
+    /// AutoMix's order: transition kinds, keys, voices and how far picks move.
+    Order {
+        dir: PathBuf,
+        #[arg(long, default_value_t = 50)]
+        sessions: usize,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+    },
 }
 
 fn main() -> Result<()> {
@@ -133,6 +167,8 @@ fn main() -> Result<()> {
         threads: cli.threads,
         analyser: None,
         no_vocals: cli.no_vocals,
+        no_keys: cli.no_keys,
+        tail_voice_ms: cli.tail_voice_s.map(|s| s * 1000),
     };
     match cli.cmd {
         Cmd::Analyse {
@@ -221,6 +257,13 @@ fn main() -> Result<()> {
             check,
             list,
         } => lab.stats(&dir, pairs, seed, &mode.settings(6.0), check, list)?,
+        Cmd::Keys { dir } => lab.keys(&dir)?,
+        Cmd::Keytest { files, params } => keytest(&files, &params)?,
+        Cmd::Order {
+            dir,
+            sessions,
+            seed,
+        } => lab.order(&dir, sessions, seed)?,
     }
     Ok(())
 }
@@ -276,6 +319,10 @@ struct Lab {
     analyser: Option<Analyser>,
     /// Strip voice curves from records before planning.
     no_vocals: bool,
+    /// Strip keys from records before planning.
+    no_keys: bool,
+    /// Cut tail voice curves to their last this-many ms.
+    tail_voice_ms: Option<u32>,
 }
 
 impl Lab {
@@ -295,6 +342,17 @@ impl Lab {
         if self.no_vocals {
             r.head_vocals = Default::default();
             r.tail_vocals = Default::default();
+        }
+        if self.no_keys {
+            (r.key, r.head_key, r.tail_key) = (None, None, None);
+        }
+        if let Some(keep) = self.tail_voice_ms {
+            let c = &mut r.tail_vocals;
+            if let Some(points) = keep.checked_div(c.hop_ms) {
+                let drop = c.voice.len().saturating_sub(points as usize);
+                c.voice.drain(..drop);
+                c.start_ms += drop as u32 * c.hop_ms;
+            }
         }
         Ok(r)
     }
@@ -449,6 +507,11 @@ impl Lab {
         let mut checks = render::CheckTotals::default();
         // Pairs with voice curves: (clash today, clash now, plan changed, overlap today, overlap now).
         let mut voiced: Vec<(bool, bool, bool, f64, f64)> = Vec::new();
+        // Beat-matched blends by the keys' harmony.
+        let mut harmonies: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        // Shaped clashes: (overlap s, both voices s); clean voiced blends: A cut s.
+        let mut shaped: Vec<(f64, f64)> = Vec::new();
+        let mut clean_cuts: Vec<f64> = Vec::new();
         for _ in 0..n {
             idx.shuffle(&mut rng);
             let (i, j) = (idx[0], idx[1]);
@@ -475,6 +538,26 @@ impl Lab {
             let skip_b = plan.incoming_from_ms.saturating_sub(rb.audible_start_ms) as f64 / 1000.0;
             let ratio = plan.tempo.map(|t| t.ratio_end as f64).unwrap_or(1.0);
             let kind = format!("{:?}", plan.kind);
+            let blend = plan.kind != TransitionKind::Fade;
+            let h = harmonies
+                .entry(format!("{:?}", harmony(ra, rb)))
+                .or_default();
+            h.0 += 1;
+            if blend {
+                h.1 += 1;
+            }
+            if let (true, Some(v)) = (blend, Voices::of(ra, rb)) {
+                if plan
+                    .high_cut
+                    .is_some_and(|c| c.freq_hz == CLASH_HIGH_CUT_HZ)
+                {
+                    shaped.push((overlap, both_voiced_ms(&plan, &v) as f64 / 1000.0));
+                } else if voice_span(&plan, &v).a_last.is_some()
+                    || voice_span(&plan, &v).b_first.is_some()
+                {
+                    clean_cuts.push(cut_a);
+                }
+            }
             let mut voice_note = String::new();
             if let Some(v) = Voices::of(ra, rb) {
                 let deaf = |r: &AnalysisRecord| AnalysisRecord {
@@ -615,11 +698,248 @@ impl Lab {
                 med(|x| x.4),
             );
         }
+        println!("\nkeys (A's tail into B's head): pairs / beat-matched blends");
+        for (k, (all, blends)) in &harmonies {
+            println!("  {k}: {all} / {blends}");
+        }
+        if !shaped.is_empty() || !clean_cuts.is_empty() {
+            let q = |mut c: Vec<f64>, p: f64| {
+                c.sort_by(f64::total_cmp);
+                c.get(((c.len().max(1) - 1) as f64 * p).round() as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            let ov: Vec<f64> = shaped.iter().map(|x| x.0).collect();
+            let both: Vec<f64> = shaped.iter().map(|x| x.1).collect();
+            println!(
+                "\nvoiced blends: shaped clashes {} (overlap med {:.1} s, both voices med {:.1} / p90 {:.1} s); clean {} (A cut med {:.1} s, p90 {:.1} s, over 4 s: {})",
+                shaped.len(),
+                q(ov, 0.5),
+                q(both.clone(), 0.5),
+                q(both, 0.9),
+                clean_cuts.len(),
+                q(clean_cuts.clone(), 0.5),
+                q(clean_cuts.clone(), 0.9),
+                clean_cuts.iter().filter(|&&c| c > 4.0).count(),
+            );
+        }
         if check {
             println!("\n{}", checks.summary());
         }
         Ok(())
     }
+
+    /// The directory's audio files (sorted) and their records.
+    fn load_dir(&mut self, dir: &Path) -> Result<(Vec<PathBuf>, Vec<AnalysisRecord>)> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| is_audio(p))
+            .collect();
+        files.sort();
+        let mut records = Vec::new();
+        for f in &files {
+            records.push(self.record(f)?);
+        }
+        Ok((files, records))
+    }
+
+    /// Keys of the tracks already analysed (never analyses).
+    fn keys(&mut self, dir: &Path) -> Result<()> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| is_audio(p))
+            .filter(|p| {
+                std::fs::read_to_string(cache_path(p))
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<Cached>(&t).ok())
+                    .is_some_and(|c| c.record.version == ANALYSIS_VERSION)
+            })
+            .collect();
+        files.sort();
+        let records = files
+            .iter()
+            .map(|f| self.record(f))
+            .collect::<Result<Vec<_>>>()?;
+        let k = |k: &Option<hocket_core::api::MusicalKey>| match k {
+            Some(k) => format!("{}\t{:.2}", k.name(), k.strength),
+            None => "-\t-".into(),
+        };
+        for (f, r) in files.iter().zip(&records) {
+            println!(
+                "{}\t{}\t{}\t{}",
+                f.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+                k(&r.key),
+                k(&r.head_key),
+                k(&r.tail_key)
+            );
+        }
+        Ok(())
+    }
+
+    fn order(&mut self, dir: &Path, sessions: usize, seed: u64) -> Result<()> {
+        let (_, records) = self.load_dir(dir)?;
+        let n = records.len();
+        if n < ORDER_WINDOW + 2 {
+            bail!("need more tracks");
+        }
+        let settings = Mode::Automix.settings(6.0);
+        let plan = |a: usize, b: usize| {
+            plan_transition(&PlanInput {
+                settings: &settings,
+                a: PlanTrack {
+                    duration_ms: records[a].duration_ms,
+                    record: Some(&records[a]),
+                },
+                b: PlanTrack {
+                    duration_ms: records[b].duration_ms,
+                    record: Some(&records[b]),
+                },
+                fixed_tail_start_ms: None,
+            })
+        };
+        let score = |a: usize, b: usize| {
+            mix_score(plan(a, b).as_ref(), Some(&records[a]), Some(&records[b]))
+        };
+        #[derive(Default)]
+        struct Tally {
+            pairs: usize,
+            blends: usize,
+            score: f64,
+            clash_keys: usize,
+            compatible_keys: usize,
+            shaped: usize,
+            moved: Vec<usize>,
+        }
+        let tally = |order: &[usize], t: &mut Tally| {
+            for w in order.windows(2) {
+                let p = plan(w[0], w[1]).expect("automix plans");
+                let (ra, rb) = (&records[w[0]], &records[w[1]]);
+                t.pairs += 1;
+                t.score += score(w[0], w[1]);
+                if p.kind != TransitionKind::Fade {
+                    t.blends += 1;
+                }
+                match harmony(ra, rb) {
+                    Harmony::Clash => t.clash_keys += 1,
+                    Harmony::Compatible => t.compatible_keys += 1,
+                    _ => {}
+                }
+                if p.high_cut.is_some_and(|c| c.freq_hz == CLASH_HIGH_CUT_HZ) {
+                    t.shaped += 1;
+                }
+            }
+        };
+        let (mut base, mut ordered) = (Tally::default(), Tally::default());
+        for s in 0..sessions {
+            let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed * 1_000_003 + s as u64);
+            let mut q: Vec<usize> = (0..n).collect();
+            q.shuffle(&mut rng);
+            tally(&q, &mut base);
+            // The actor's rule: once per next entry, its follow-up from the window after it.
+            let shuffled = q.clone();
+            let mut passes = vec![0u8; n];
+            for i in 1..n.saturating_sub(1) {
+                let window: Vec<usize> = q[i + 1..].iter().copied().take(ORDER_WINDOW).collect();
+                let scores: Vec<Option<f64>> =
+                    window.iter().map(|&c| Some(score(q[i], c))).collect();
+                let pick = choose(&scores, passes[window[0]]);
+                if pick > 0 {
+                    for &skipped in &window[..pick] {
+                        passes[skipped] += 1;
+                    }
+                    let item = q.remove(i + 1 + pick);
+                    q.insert(i + 1, item);
+                }
+            }
+            tally(&q, &mut ordered);
+            for (pos, t) in q.iter().enumerate() {
+                let was = shuffled.iter().position(|x| x == t).expect("same tracks");
+                ordered.moved.push(was.abs_diff(pos));
+            }
+        }
+        let show = |name: &str, t: &Tally| {
+            let pct = |x: usize| 100.0 * x as f64 / t.pairs.max(1) as f64;
+            println!(
+                "{name:<9} transitions {}: beat-matched blends {:.1}%, mean score {:.3}, keys compatible {:.1}% / clashing {:.1}%, shaped voice clashes {:.1}% (blends without one {:.1}%)",
+                t.pairs,
+                pct(t.blends),
+                t.score / t.pairs.max(1) as f64,
+                pct(t.compatible_keys),
+                pct(t.clash_keys),
+                pct(t.shaped),
+                pct(t.blends - t.shaped),
+            );
+        };
+        println!("{sessions} shuffled sessions through {n} tracks:");
+        show("shuffle", &base);
+        show("ordered", &ordered);
+        let mut moved = ordered.moved.clone();
+        moved.sort_unstable();
+        let q = |p: f64| moved[((moved.len() - 1) as f64 * p).round() as usize];
+        println!(
+            "places a track moved from its shuffled position: median {}, p90 {}, p99 {}, max {}; unmoved {:.1}%",
+            q(0.5),
+            q(0.9),
+            q(0.99),
+            moved[moved.len() - 1],
+            100.0 * moved.iter().filter(|&&m| m == 0).count() as f64 / moved.len() as f64
+        );
+        Ok(())
+    }
+}
+
+fn keytest(files: &[PathBuf], params: &[String]) -> Result<()> {
+    use hocket_core::automix::analysis::key::{KeyEstimator, KeyParams};
+    let params: Vec<KeyParams> = params
+        .iter()
+        .map(|p| {
+            let f: Vec<&str> = p.split(':').collect();
+            Ok(KeyParams {
+                harmonics: f.first().unwrap_or(&"6").parse()?,
+                decay: f.get(1).unwrap_or(&"0.9").parse()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    for file in files {
+        let mut est: Vec<KeyEstimator> = vec![];
+        let mut frames = 0u64;
+        let mut rate = 0;
+        let mut mono = vec![];
+        hocket_core::audio::decoder::decode_file(file, |spec, pcm| {
+            if est.is_empty() {
+                rate = spec.sample_rate;
+                est = params
+                    .iter()
+                    .map(|&p| KeyEstimator::with_params(rate, p))
+                    .collect();
+            }
+            let ch = spec.channels.max(1);
+            mono.clear();
+            mono.extend(
+                pcm.chunks_exact(ch)
+                    .map(|f| f.iter().sum::<f32>() / ch as f32),
+            );
+            frames += mono.len() as u64;
+            for e in &mut est {
+                e.push(&mono);
+            }
+        })
+        .with_context(|| file.display().to_string())?;
+        let ms = (frames * 1000 / u64::from(rate.max(1))) as u32;
+        let mut row = vec![file
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string()];
+        for e in est {
+            match e.finish(ms).0 {
+                Some(k) => row.push(format!("{}\t{:.2}", k.name(), k.strength)),
+                None => row.push("-\t-".into()),
+            }
+        }
+        println!("{}", row.join("\t"));
+    }
+    Ok(())
 }
 
 fn describe(plan: &TransitionPlan, ra: &AnalysisRecord, rb: &AnalysisRecord) -> String {

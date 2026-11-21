@@ -1,7 +1,7 @@
 //! Full AutoMix analysis (feature `automix-analysis`): decode a file (or take
 //! PCM), track beats and downbeats with Beat This!, find the singing voice in
-//! the head and tail with musicnn ([`vocals`]) and measure loudness, and build
-//! an [`AnalysisRecord`].
+//! the head and tail with musicnn ([`vocals`]), estimate the key ([`key`])
+//! and measure loudness, and build an [`AnalysisRecord`].
 //!
 //! - [`Analyser`] holds the embedded models (load once, reuse; loading
 //!   takes ~100 ms). It is `Send` but not `Sync`: one per worker thread.
@@ -19,6 +19,7 @@
 //! See `NOTICE` for the models' provenance and licences.
 
 mod grid;
+pub mod key;
 mod model;
 pub mod vocals;
 
@@ -35,12 +36,13 @@ use crate::audio::dsp::loudness::LoudnessMeter;
 
 use super::loudness::{loudness_record, HeadTail, HEAD_TAIL_MS};
 use super::record::compact;
+use key::KeyEstimator;
 pub use model::pool as inference_pool;
 use model::EmbeddedModel;
 use vocals::VoiceDetector;
 
 /// `AnalysisRecord::analyser` of full records.
-pub const ANALYSER: &str = "beat-this-small/1.1.0+musicnn-mtt";
+pub const ANALYSER: &str = "beat-this-small/1.1.0+musicnn-mtt+kk-chroma";
 
 #[derive(Debug, thiserror::Error)]
 pub enum AnalysisError {
@@ -192,6 +194,7 @@ struct Accumulator<'a> {
     edge_samples: usize,
     frames: u64,
     mono: Vec<f32>,
+    key: KeyEstimator,
 }
 
 impl<'a> Accumulator<'a> {
@@ -214,6 +217,7 @@ impl<'a> Accumulator<'a> {
             edge_samples,
             frames: 0,
             mono: Vec::new(),
+            key: KeyEstimator::new(rate),
         })
     }
 
@@ -232,6 +236,7 @@ impl<'a> Accumulator<'a> {
         let scale = 1.0 / ch as f32;
         self.mono
             .extend(pcm.chunks_exact(ch).map(|f| f.iter().sum::<f32>() * scale));
+        self.key.push(&self.mono);
         self.beats.push(&self.mono).map_err(model_err)
     }
 
@@ -267,6 +272,7 @@ impl<'a> Accumulator<'a> {
         (record.head_vocals, record.tail_vocals) = voice
             .head_tail(&self.head, &tail, self.channels, self.rate, duration_ms)
             .map_err(model_err)?;
+        (record.key, record.head_key, record.tail_key) = self.key.finish(duration_ms);
 
         let beats = self.beats.finish().map_err(model_err)?;
         let refined = |t: &[f32], logits: &[f32]| -> Vec<f64> {

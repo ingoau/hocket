@@ -153,6 +153,8 @@ pub(crate) struct Actor {
     pub(crate) analysis: super::handlers::analysis::AnalysisState,
     /// AutoMix records fetched from and uploaded to the coordinator.
     pub(crate) share: super::handlers::analysis_share::ShareState,
+    /// AutoMix's choice of what follows the next track (shuffle, autoplay).
+    pub(crate) mix_order: super::handlers::mix_order::MixOrderState,
     /// One log line per planned AutoMix transition, once its outcome is known.
     pub(crate) mix_log: super::handlers::mix_log::MixLog,
     /// The album primer (first seconds of a track the user is about to play).
@@ -517,6 +519,7 @@ impl Actor {
             prefetch: Default::default(),
             analysis: Default::default(),
             share: Default::default(),
+            mix_order: Default::default(),
             mix_log: Default::default(),
             prime: Default::default(),
             cache: Default::default(),
@@ -803,6 +806,7 @@ impl Actor {
             Internal::SkipOffline { key } => self.on_skip_offline(key),
             Internal::ClearOfflineSkips => self.clear_offline_skips(),
             Internal::OfferAlternates => self.offer_alternates(),
+            Internal::OrderForMix => self.order_for_mix(),
             Internal::RetryOfflineClear => self.run_offline_clear(false),
             Internal::PrimeDone { generation } => self.on_prime_done(generation),
             Internal::ReportUpload(msg) => self.on_report_upload(msg),

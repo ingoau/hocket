@@ -94,6 +94,10 @@ impl Actor {
                 if near {
                     self.replan_next();
                 }
+                // The next track's record may be what AutoMix's order waited for.
+                if via != "coordinator" {
+                    self.post_order_for_mix();
+                }
                 true
             }
             Ok(false) => false,
