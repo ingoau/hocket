@@ -2082,6 +2082,18 @@ pub struct VocalCurve {
     pub voice: Vec<f32>,
 }
 
+/// A musical key estimated from a track's chroma (`automix::key`).
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicalKey {
+    /// Pitch class of the tonic: 0 = C, 1 = C♯/D♭ … 11 = B.
+    pub tonic: u32,
+    pub minor: bool,
+    /// Correlation of the chroma with the key's profile, −1..1; the planner trusts 0.7 and up.
+    pub strength: f32,
+}
+
 /// One track's analysis: loudness envelope of head and tail, silence edges and (when a beat
 /// tracker ran) beats and downbeats. JSON, a few KB. Positions are milliseconds into the track.
 #[typeshare]
@@ -2110,6 +2122,15 @@ pub struct AnalysisRecord {
     /// Voice in the last ~36 s (empty for loudness-only records).
     #[serde(default)]
     pub tail_vocals: VocalCurve,
+    /// Key of the whole track (`None` for loudness-only records).
+    #[serde(default)]
+    pub key: Option<MusicalKey>,
+    /// Key of the first ~60 s.
+    #[serde(default)]
+    pub head_key: Option<MusicalKey>,
+    /// Key of the last ~60 s.
+    #[serde(default)]
+    pub tail_key: Option<MusicalKey>,
     /// `None` without beat analysis or when it isn't trustworthy.
     pub bpm: Option<f32>,
     /// Empty for loudness-only records.

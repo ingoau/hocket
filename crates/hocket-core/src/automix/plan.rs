@@ -12,7 +12,10 @@
 //!    level ([`smart_fade`]).
 //! 3. AutoMix with a trustworthy beat grid on both: `Blend`/`TempoBlend`
 //!    over 8 or 16 bars with a bass swap when both are 4/4 within 8 %, else a
-//!    beat-aligned `Fade` of 4/2/1 bars ([`beat_plan`]). With voice curves
+//!    beat-aligned `Fade` of 4/2/1 bars ([`beat_plan`]). Keys shorten it
+//!    ([`Harmony`]): compatible or unknown keys keep the usual lengths, near
+//!    keys never take 16 bars, clashing keys blend over 4 (or 2) bars and
+//!    fade over the shortest aligned fade. With voice curves
 //!    on both, one voice at a time ([`vocal_blend`], [`vocal_fade`]): the
 //!    usual length with the handover between A's last voice and B's first,
 //!    else a blend short enough for the instrumental gap, else a short blend
@@ -27,6 +30,7 @@ use crate::api::{
     TransitionMode, TransitionPlan, TransitionSettings, VocalCurve,
 };
 
+use super::key::{harmony, Harmony};
 use super::record::{has_beats, LUFS_FLOOR};
 use super::stretch::source_ms;
 use super::AUTOMIX_DEFAULT_FADE_MS;
@@ -66,6 +70,9 @@ pub const MAX_LONG_BLEND_MS: f64 = 32_000.0;
 /// Beat-aligned fades are at least this long (whole bars of A added until
 /// they are): a 1-bar fade at 128 BPM is under 2 s, a near-cut.
 pub const MIN_ALIGNED_FADE_MS: f64 = 4_000.0;
+/// Bar counts of a blend between clashing keys ([`Harmony::Clash`]): short
+/// enough that both keys are loud together for only a few seconds.
+pub const CLASH_BLEND_BARS: &[usize] = &[4, 2];
 /// Late-edit fades are at least this long.
 pub const LATE_EDIT_MIN_MS: u32 = 2_000;
 /// A [`late_fade_at`] takes at most this much of the planned overlap: its
@@ -508,6 +515,9 @@ pub const SHORT_BLEND_BARS: &[usize] = &[4, 2];
 /// With voices all the way through, the blend is the fewest bars at least
 /// this long.
 pub const CLASH_MIN_OVERLAP_MS: f64 = 4_000.0;
+/// A shaped clash moves further back in A only when that leaves both voices
+/// sounding together at least this much less.
+pub const CLASH_MOVE_GAIN_MS: Ms = 1_000;
 /// High-shelf cut on A when voices can't be kept apart: low enough to take
 /// the presence out of A's voice.
 pub const CLASH_HIGH_CUT_HZ: f32 = 2_000.0;
@@ -582,6 +592,8 @@ pub fn voice_span(plan: &TransitionPlan, voices: &Voices<'_>) -> VoiceSpan {
 /// The handover of a clean blend: mid-overlap when that falls between A's
 /// last voice and B's first, else B's downbeat in that window nearest the
 /// middle (so B's voice comes in at or after it), else the window's edge.
+/// With no voice of A in the overlap B may sing before the handover (over
+/// A's instrumental, A's bass still in): only A's voice needs to be gone.
 fn clean_handover(plan: &TransitionPlan, span: VoiceSpan, db: &[Ms]) -> Ms {
     let lo = span
         .a_last
@@ -589,6 +601,7 @@ fn clean_handover(plan: &TransitionPlan, span: VoiceSpan, db: &[Ms]) -> Ms {
         .max(plan.incoming_at_ms);
     let hi = span
         .b_first
+        .filter(|_| span.a_last.is_some())
         .unwrap_or(plan.tail_len_ms)
         .min(plan.tail_len_ms);
     let mid = plan.handover_ms;
@@ -635,40 +648,100 @@ fn shape_clash(plan: &mut TransitionPlan) {
     }
 }
 
+/// Whether A's voice curve covers every position of A in `plan`'s overlap
+/// (outside it, [`voiced`] says no voice, which proves nothing).
+fn covers_a(plan: &TransitionPlan, curve: &VocalCurve) -> bool {
+    let from = plan.tail_start_ms
+        + source_ms(plan.tempo.as_ref(), plan.incoming_at_ms as f64).round() as Ms;
+    let end = curve
+        .start_ms
+        .saturating_add((curve.voice.len() as Ms).saturating_mul(curve.hop_ms));
+    from >= curve.start_ms && plan.tail_start_ms + plan.tail_source_ms <= end
+}
+
 /// The blend with voices known, in order of preference: the usual length
 /// when its voices don't overlap (handover between them); a shorter blend
-/// that fits the instrumental gap; else the shortest blend of at least
-/// [`CLASH_MIN_OVERLAP_MS`], shaped by [`shape_clash`].
+/// that fits the instrumental gap; the same, placed whole bars earlier in A
+/// (`may_move`: no fixed tail start; fewest bars back first, within
+/// [`MAX_CUT_MS`] and A's voice curve) so the handover lands in an
+/// instrumental break before A's last vocal; else the shortest blend of at
+/// least [`CLASH_MIN_OVERLAP_MS`], shaped by [`shape_clash`], where the
+/// voices overlap least (at the end unless further back saves at least
+/// [`CLASH_MOVE_GAIN_MS`] of both voices at once).
 fn vocal_blend(
     options: &[usize],
     bar_ms: f64,
     db: &[Ms],
     voices: &Voices<'_>,
-    blend_at: impl Fn(usize) -> Option<TransitionPlan>,
+    may_move: bool,
+    blend_at: impl Fn(usize, usize) -> Option<TransitionPlan>,
 ) -> Option<TransitionPlan> {
     let shortest = options.iter().copied().min().unwrap_or(8);
-    let tries = options
+    let tries: Vec<usize> = options
         .iter()
         .copied()
-        .chain(SHORT_BLEND_BARS.iter().copied().filter(|&b| b < shortest));
-    for bars in tries {
-        let Some(mut plan) = blend_at(bars) else {
-            continue;
-        };
-        let span = voice_span(&plan, voices);
-        if span.is_clean() {
-            let h = clean_handover(&plan, span, db);
-            move_handover(&mut plan, h);
-            return Some(plan);
+        .chain(SHORT_BLEND_BARS.iter().copied().filter(|&b| b < shortest))
+        .collect();
+    let max_back = if may_move {
+        (f64::from(MAX_CUT_MS) / bar_ms) as usize
+    } else {
+        0
+    };
+    for back in 0..=max_back {
+        for &bars in &tries {
+            let Some(mut plan) = blend_at(bars, back) else {
+                continue;
+            };
+            if back > 0 && !covers_a(&plan, voices.a) {
+                continue;
+            }
+            let span = voice_span(&plan, voices);
+            if span.is_clean() {
+                let h = clean_handover(&plan, span, db);
+                move_handover(&mut plan, h);
+                return Some(plan);
+            }
         }
     }
     let mut bars = 2;
     while (bars as f64) * bar_ms < CLASH_MIN_OVERLAP_MS && bars < shortest {
         bars += 1;
     }
-    let mut plan = blend_at(bars)?;
+    // Where the voices overlap least; further back only for a clear gain.
+    let mut best: Option<(Ms, TransitionPlan)> = None;
+    for back in 0..=max_back {
+        let Some(plan) = blend_at(bars, back) else {
+            continue;
+        };
+        if back > 0 && !covers_a(&plan, voices.a) {
+            continue;
+        }
+        let both = both_voiced_ms(&plan, voices);
+        if best
+            .as_ref()
+            .is_none_or(|(b, _)| both.saturating_add(CLASH_MOVE_GAIN_MS) <= *b)
+        {
+            best = Some((both, plan));
+        }
+    }
+    let (_, mut plan) = best?;
     shape_clash(&mut plan);
     Some(plan)
+}
+
+/// How long (output time) both voices sound in `plan`'s overlap.
+pub fn both_voiced_ms(plan: &TransitionPlan, voices: &Voices<'_>) -> Ms {
+    let step = voices.a.hop_ms.min(voices.b.hop_ms).max(1);
+    let mut both = 0;
+    let mut t = plan.incoming_at_ms;
+    while t < plan.tail_len_ms {
+        let a_pos = plan.tail_start_ms + source_ms(plan.tempo.as_ref(), t as f64).round() as Ms;
+        if voiced(voices.a, a_pos) && voiced(voices.b, plan.incoming_position_at(t)) {
+            both += step;
+        }
+        t += step;
+    }
+    both
 }
 
 /// The beat-aligned fade with voices known: `bars` when its voices don't
@@ -698,13 +771,20 @@ fn vocal_fade(
 /// Where an overlap of `bars` bars sits in A: the index of its first
 /// downbeat, keeping `pre` bars before it (the ramp) and ending at or before
 /// A's audible end. With a fixed tail start, the first downbeat at or after
-/// it plus `pre`; otherwise the latest that fits.
-fn place_in_a(da: &[Ms], fixed: Option<Ms>, end: Ms, bars: usize, pre: usize) -> Option<usize> {
+/// it plus `pre`; otherwise the latest that fits, moved `back` bars earlier.
+fn place_in_a(
+    da: &[Ms],
+    fixed: Option<Ms>,
+    end: Ms,
+    bars: usize,
+    pre: usize,
+    back: usize,
+) -> Option<usize> {
     let o = match fixed {
         Some(f) => downbeat_at_or_after(da, f)? + pre,
         None => {
             let last_end = da.partition_point(|&d| d <= end).checked_sub(1)?;
-            let o = last_end.checked_sub(bars)?;
+            let o = last_end.checked_sub(bars + back)?;
             if o < pre {
                 return None;
             }
@@ -729,16 +809,26 @@ pub fn beat_plan(
     let k = downbeat_at_or_after(db, b_start)?;
     let gap = (gb.bpm / ga.bpm - 1.0).abs();
     let fixed = input.fixed_tail_start_ms;
+    let keys = harmony(ra, rb);
 
     let plan = if ga.is_four_four() && gb.is_four_four() && gap <= MAX_STRETCH_GAP {
         // 16 bars only while they stay within 32 s (≥ 120 BPM in 4/4): at
         // 90 BPM they are 43 s, plus the ramp a minute of A.
-        let long = both_low_energy(ra, a_end, rb, b_start) && 16.0 * ga.bar_ms <= MAX_LONG_BLEND_MS;
-        let options: &[usize] = if long { &[16, 8] } else { &[8] };
-        let blend_at = |bars| blend(input, da, db, k, bars, fixed, a_end);
+        let long = keys.allows_long_blend()
+            && both_low_energy(ra, a_end, rb, b_start)
+            && 16.0 * ga.bar_ms <= MAX_LONG_BLEND_MS;
+        let options: &[usize] = match keys {
+            Harmony::Clash => CLASH_BLEND_BARS,
+            _ if long => &[16, 8],
+            _ => &[8],
+        };
+        let blend_at = |bars, back| {
+            blend(input, da, db, k, bars, back, fixed, a_end)
+                .filter(|p| cut_from_a(p, a_end) <= MAX_CUT_MS)
+        };
         match Voices::of(ra, rb) {
-            Some(v) => vocal_blend(options, ga.bar_ms, db, &v, blend_at),
-            None => options.iter().find_map(|&bars| blend_at(bars)),
+            Some(v) => vocal_blend(options, ga.bar_ms, db, &v, fixed.is_none(), blend_at),
+            None => options.iter().find_map(|&bars| blend_at(bars, 0)),
         }
     } else {
         // Half or double time lines up on every beat of the slower track, so
@@ -751,6 +841,9 @@ pub fn beat_plan(
         } else {
             4
         };
+        if keys == Harmony::Clash {
+            bars = 1;
+        }
         while (bars as f64) * ga.bar_ms < MIN_ALIGNED_FADE_MS {
             bars += 1;
         }
@@ -761,17 +854,24 @@ pub fn beat_plan(
         }
     }?;
     // Never skip more than MAX_CUT_MS of audible A.
-    let overlap_end_in_a = plan.tail_start_ms + plan.tail_source_ms;
-    (a_end.saturating_sub(overlap_end_in_a) <= MAX_CUT_MS).then_some(plan)
+    (cut_from_a(&plan, a_end) <= MAX_CUT_MS).then_some(plan)
 }
 
-/// `Blend` or `TempoBlend` over `bars` bars.
+/// Audible A after `plan`'s overlap, skipped.
+fn cut_from_a(plan: &TransitionPlan, a_end: Ms) -> Ms {
+    a_end.saturating_sub(plan.tail_start_ms + plan.tail_source_ms)
+}
+
+/// `Blend` or `TempoBlend` over `bars` bars, `back` bars earlier in A than
+/// the latest placement.
+#[allow(clippy::too_many_arguments)]
 fn blend(
     input: &PlanInput<'_>,
     da: &[Ms],
     db: &[Ms],
     k: usize,
     bars: usize,
+    back: usize,
     fixed: Option<Ms>,
     a_end: Ms,
 ) -> Option<TransitionPlan> {
@@ -780,13 +880,13 @@ fn blend(
     }
     let b_bar = (db[k + bars] - db[k]) as f64 / bars as f64;
     // Decide stretch or not from an unramped placement first.
-    let o0 = place_in_a(da, fixed, a_end, bars, 0)?;
+    let o0 = place_in_a(da, fixed, a_end, bars, 0, back)?;
     let a_bar0 = (da[o0 + bars] - da[o0]) as f64 / bars as f64;
     let drift = (a_bar0 - b_bar).abs() * bars as f64;
     let stretched = drift > MAX_UNSTRETCHED_DRIFT_MS;
     let pre = if stretched { RAMP_BARS } else { 0 };
     let o = if stretched {
-        place_in_a(da, fixed, a_end, bars, pre)?
+        place_in_a(da, fixed, a_end, bars, pre, back)?
     } else {
         o0
     };
@@ -864,7 +964,7 @@ fn aligned_fade(
     fixed: Option<Ms>,
     a_end: Ms,
 ) -> Option<TransitionPlan> {
-    let o = place_in_a(da, fixed, a_end, bars, 0)?;
+    let o = place_in_a(da, fixed, a_end, bars, 0, 0)?;
     let tail_start = fixed.unwrap_or(da[o]);
     let incoming_at = da[o] - tail_start;
     let overlap = da[o + bars] - da[o];
@@ -1161,6 +1261,55 @@ mod tests {
         let p = plan(&input(&s, Some(&a), Some(&b), None));
         assert_eq!(p.kind, TransitionKind::Blend);
         assert_eq!(p.tail_len_ms, 32_000);
+    }
+
+    fn keyed(r: &mut AnalysisRecord, tonic: u32, minor: bool) {
+        r.key = Some(crate::api::MusicalKey {
+            tonic,
+            minor,
+            strength: 0.8,
+        });
+    }
+
+    #[test]
+    fn keys_shorten_blends() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 120.0, 4, 1_000.0);
+        a.integrated_lufs = Some(-4.0);
+        b.integrated_lufs = Some(-4.0);
+        keyed(&mut a, 0, false); // C
+                                 // (B's key, overlap): Am is relative (16 bars), D two fifths up (8),
+                                 // Db a semitone (4); a weak Db estimate counts as unknown (16).
+        for (tonic, minor, strength, overlap) in [
+            (9, true, 0.8, 32_000),
+            (2, false, 0.8, 16_000),
+            (1, false, 0.8, 8_000),
+            (1, false, 0.3, 32_000),
+        ] {
+            keyed(&mut b, tonic, minor);
+            b.key.as_mut().unwrap().strength = strength;
+            let p = plan(&input(&s, Some(&a), Some(&b), None));
+            assert_eq!(p.kind, TransitionKind::Blend, "{tonic}");
+            assert_eq!(p.tail_len_ms, overlap, "{tonic} {strength}");
+            assert!(p.bass_swap.is_some());
+        }
+    }
+
+    #[test]
+    fn clashing_keys_take_the_shortest_aligned_fade() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 132.0, 4, 600.0);
+        assert_eq!(
+            plan(&input(&s, Some(&a), Some(&b), None)).tail_len_ms,
+            8_000
+        );
+        keyed(&mut a, 0, false);
+        keyed(&mut b, 6, false);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Fade);
+        assert_eq!(p.tail_len_ms, 4_000);
     }
 
     #[test]
@@ -1592,6 +1741,48 @@ mod tests {
         let p = plan(&input(&s, Some(&a), Some(&b), None));
         let bars = (p.tail_len_ms - p.incoming_at_ms) as f64 / (4.0 * 60_000.0 / 170.0);
         assert!((bars - 3.0).abs() < 0.01, "{bars}");
+    }
+
+    #[test]
+    fn b_may_sing_over_an_instrumental_a() {
+        let s = settings(TransitionMode::AutoMix);
+        // A's voice ends well before the overlap; B sings from its first beat.
+        let (a, b) = sung(210_000, 0);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!(p.tail_len_ms, 16_000);
+        assert_eq!(p.handover_ms, 8_000, "the midpoint, not B's entry");
+        let swap = p.bass_swap.unwrap();
+        assert_eq!((swap.start_ms, swap.len_ms), (6_000, 2_000));
+    }
+
+    #[test]
+    fn blends_move_back_into_an_instrumental_break() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 120.0, 4, 1_000.0);
+        // A: a break from 200 s to 225 s, then a last chorus; B sings from the start.
+        a.tail_vocals = voice(DUR - 60_000, 60_000, &[(0, 200_000), (225_000, DUR)]);
+        b.head_vocals = voice(0, 36_000, &[(0, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        // 8 bars ending on the last downbeat before the chorus, 7 bars back.
+        assert_eq!((p.tail_start_ms, p.tail_len_ms), (208_250, 16_000));
+        assert!(span(&p, &a, &b).is_clean());
+        assert_eq!(p.high_cut.unwrap().freq_hz, HIGH_CUT_HZ);
+        // A curve that stops short of the break proves nothing: shaped at the end.
+        a.tail_vocals = voice(DUR - 17_000, 17_000, &[(225_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.tail_len_ms, 4_000);
+        assert_eq!(p.high_cut.unwrap().freq_hz, CLASH_HIGH_CUT_HZ);
+        // Further back than MAX_CUT_MS allows: shaped at the end.
+        a.tail_vocals = voice(DUR - 60_000, 60_000, &[(0, 195_000), (215_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.tail_len_ms, 4_000, "{p:?}");
+        // A fixed tail start never moves.
+        a.tail_vocals = voice(DUR - 60_000, 60_000, &[(0, 200_000), (225_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), Some(222_250)));
+        assert_eq!(p.tail_start_ms, 222_250);
     }
 
     /// A tempo blend reads A's voice through the ramp's stretch.

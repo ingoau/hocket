@@ -5,7 +5,7 @@
   "tailLenMs": 11973,
   "incomingAtMs": 0,
   "incomingFromMs": 997,
-  "handoverMs": 0,
+  "handoverMs": 5986,
   "outCurve": "equalPower",
   "inCurve": "equalPower",
   "tempo": null,
@@ -13,15 +13,15 @@
     "freqHz": 100.0,
     "fromDb": 0.0,
     "toDb": -26.0,
-    "startMs": 0,
-    "lenMs": 0
+    "startMs": 2993,
+    "lenMs": 2993
   },
   "highCut": {
     "freqHz": 5000.0,
     "fromDb": 0.0,
     "toDb": -12.0,
-    "startMs": 0,
-    "lenMs": 11973
+    "startMs": 5986,
+    "lenMs": 5987
   },
   "incomingGainDb": 0.0
 }

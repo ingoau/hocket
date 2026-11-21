@@ -16,6 +16,7 @@
 
 #[cfg(feature = "automix-analysis")]
 pub mod analysis;
+pub mod key;
 pub mod loudness;
 pub mod plan;
 pub mod record;
@@ -25,8 +26,9 @@ pub mod store;
 pub mod stretch;
 
 pub use crate::api::{
-    AnalysisProducer, AnalysisRecord, FadeCurve, LoudnessCurve, ShelfMove, SourceFingerprint,
-    TempoRamp, TransitionKind, TransitionMode, TransitionPlan, TransitionSettings,
+    AnalysisProducer, AnalysisRecord, FadeCurve, LoudnessCurve, MusicalKey, ShelfMove,
+    SourceFingerprint, TempoRamp, TransitionKind, TransitionMode, TransitionPlan,
+    TransitionSettings,
 };
 pub use plan::{late_edit_fade, late_fade_at, plan_transition, PlanInput, PlanTrack};
 pub use record::{fingerprint_matches, is_usable, pick_best, unusable, Unusable, ANALYSIS_VERSION};
