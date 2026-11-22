@@ -4296,6 +4296,16 @@ impl Engine {
                 }
                 SessionOp::RemoveQueueItems { keys }
             }
+            // Someone cleared or ended the session meanwhile: queueing onto
+            // nothing would start playback they just stopped.
+            SessionOp::PlayNext { .. }
+            | SessionOp::AddToQueue { .. }
+            | SessionOp::PlayLater { .. }
+            | SessionOp::InsertTracks { .. }
+                if self.doc.current.is_none() && self.doc.upcoming.is_empty() =>
+            {
+                return;
+            }
             SessionOp::PlayNext {
                 track_ids,
                 keys,
@@ -4335,6 +4345,16 @@ impl Engine {
                 if track_ids.is_empty() && keys.is_empty() {
                     return;
                 }
+                // The row it was dropped after has played (or gone) since: it
+                // goes right after what plays now instead.
+                let after = match self.doc.current.as_ref() {
+                    Some(c)
+                        if c.key != after && !self.doc.upcoming.iter().any(|i| i.key == after) =>
+                    {
+                        c.key.clone()
+                    }
+                    _ => after,
+                };
                 SessionOp::InsertTracks {
                     track_ids,
                     keys,
@@ -7066,6 +7086,61 @@ mod tests {
             "not replayed"
         );
         assert_eq!(upcoming_tracks(&e), ["t3", "t4", "t5"]);
+    }
+
+    /// Dropped right after the playing row, which then played out: the
+    /// replay goes after what plays now rather than failing on history.
+    #[test]
+    fn an_insert_after_a_row_that_played_out_goes_after_the_current_one() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let after = e.document().current.as_ref().unwrap().key.clone();
+        let first = sent_queue_ops(&e.handle(Input::LocalOp {
+            op: SessionOp::InsertTracks {
+                track_ids: vec!["q".into()],
+                keys: vec![],
+                after,
+                in_group: false,
+            },
+        }));
+        assert_eq!(first.len(), 1);
+        commit_from_b(&mut e, SessionOp::TrackEnded, 3);
+        let again = sent_queue_ops(&reject(&mut e, &first[0].1, 3));
+        assert_eq!(again.len(), 1, "sent again");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
+        assert_eq!(upcoming_tracks(&e)[0], "q");
+    }
+
+    /// Someone cleared the session first: a refused add doesn't start a
+    /// new queue playing behind their back.
+    #[test]
+    fn a_queued_song_is_not_replayed_onto_a_cleared_session() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let first = sent_queue_ops(&e.handle(Input::LocalOp {
+            op: SessionOp::AddToQueue {
+                track_ids: vec!["q".into()],
+                keys: vec![],
+            },
+        }));
+        assert_eq!(first.len(), 1);
+        // b ends the session: the room now holds an empty document.
+        let mut empty = crate::session::new_document("scope", "s".into(), 0.0);
+        empty.session_id = e.document().session_id.clone();
+        commit_from_b(
+            &mut e,
+            SessionOp::Replace {
+                document: empty,
+                start_position_ms: 0,
+            },
+            3,
+        );
+        assert!(e.document().current.is_none() && e.document().upcoming.is_empty());
+        assert!(
+            sent_queue_ops(&reject(&mut e, &first[0].1, 3)).is_empty(),
+            "not replayed"
+        );
+        assert!(e.document().current.is_none());
     }
 
     #[test]
