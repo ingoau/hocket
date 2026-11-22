@@ -4256,8 +4256,9 @@ impl Engine {
     /// [`SessionOp::replays_after_conflict`]) again, on the document as it now
     /// stands, under a fresh id. Only edits still meaning what they did go: a
     /// removal keeps the keys that are still to come (one that became current
-    /// meanwhile is not skipped), and an edit goes at most [`MAX_REPLAYS`]
-    /// times.
+    /// meanwhile is not skipped), a queueing op drops rows that became current
+    /// (the song is playing already, so it is not queued again), and an edit
+    /// goes at most [`MAX_REPLAYS`] times.
     fn replay(&mut self, p: PendingOp) {
         if !p.op.replays_after_conflict() {
             return;
@@ -4295,6 +4296,52 @@ impl Engine {
                 }
                 SessionOp::RemoveQueueItems { keys }
             }
+            SessionOp::PlayNext {
+                track_ids,
+                keys,
+                queued,
+            } => {
+                let keys = self.not_current(keys);
+                if track_ids.is_empty() && keys.is_empty() {
+                    return;
+                }
+                SessionOp::PlayNext {
+                    track_ids,
+                    keys,
+                    queued,
+                }
+            }
+            SessionOp::AddToQueue { track_ids, keys } => {
+                let keys = self.not_current(keys);
+                if track_ids.is_empty() && keys.is_empty() {
+                    return;
+                }
+                SessionOp::AddToQueue { track_ids, keys }
+            }
+            SessionOp::PlayLater { track_ids, keys } => {
+                let keys = self.not_current(keys);
+                if track_ids.is_empty() && keys.is_empty() {
+                    return;
+                }
+                SessionOp::PlayLater { track_ids, keys }
+            }
+            SessionOp::InsertTracks {
+                track_ids,
+                keys,
+                after,
+                in_group,
+            } => {
+                let keys = self.not_current(keys);
+                if track_ids.is_empty() && keys.is_empty() {
+                    return;
+                }
+                SessionOp::InsertTracks {
+                    track_ids,
+                    keys,
+                    after,
+                    in_group,
+                }
+            }
             op => op,
         };
         let before = self.pending.len();
@@ -4307,6 +4354,14 @@ impl Engine {
                 self.replays.insert(new.op_id.clone(), attempt);
             }
         }
+    }
+
+    /// `keys` without the one now playing.
+    fn not_current(&self, keys: Vec<QueueKey>) -> Vec<QueueKey> {
+        let current = self.doc.current.as_ref().map(|i| i.key.as_str());
+        keys.into_iter()
+            .filter(|k| Some(k.as_str()) != current)
+            .collect()
     }
 
     fn on_op_committed(
@@ -6938,6 +6993,79 @@ mod tests {
             "not replayed"
         );
         assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
+    }
+
+    fn sent_queue_ops(outs: &[Output]) -> Vec<(u32, String, SessionOp)> {
+        wire_outs(outs)
+            .into_iter()
+            .filter_map(|(_, m)| match m {
+                Msg::Op {
+                    base_revision,
+                    op:
+                        op @ (SessionOp::PlayNext { .. }
+                        | SessionOp::AddToQueue { .. }
+                        | SessionOp::PlayLater { .. }
+                        | SessionOp::InsertTracks { .. }),
+                    op_id,
+                    ..
+                } => Some((base_revision, op_id, op)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// R-20261122-0tmz: a song queued on one device while the playing device
+    /// auto-advanced was refused as stale and silently lost. It goes again on
+    /// the room's document instead, once.
+    #[test]
+    fn a_song_queued_while_another_device_advances_is_not_lost() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let first = sent_queue_ops(&e.handle(Input::LocalOp {
+            op: SessionOp::PlayNext {
+                track_ids: vec!["q".into()],
+                keys: vec![],
+                queued: true,
+            },
+        }));
+        assert_eq!(first.len(), 1);
+        assert_eq!(upcoming_tracks(&e)[0], "q");
+        // The playing device's track ends first: ours is rolled back ...
+        commit_from_b(&mut e, SessionOp::TrackEnded, 3);
+        // ... refused as stale, and sent again on top of the advance.
+        let again = sent_queue_ops(&reject(&mut e, &first[0].1, 3));
+        assert_eq!(again.len(), 1, "the queued song is sent again");
+        assert_eq!(again[0].0, 3, "on the room's new revision");
+        assert_ne!(again[0].1, first[0].1, "under a fresh id");
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
+        assert_eq!(upcoming_tracks(&e), ["q", "t3", "t4", "t5"]);
+        let outs = ack(&mut e, &again[0].1, 4);
+        assert!(sent_queue_ops(&outs).is_empty(), "no second copy");
+        assert!(e.pending.is_empty());
+        assert_eq!(e.confirmed.revision, 4);
+        assert_eq!(upcoming_tracks(&e), ["q", "t3", "t4", "t5"]);
+    }
+
+    #[test]
+    fn a_row_queued_next_that_became_current_is_not_queued_again() {
+        let (mut e, _) = engine("a");
+        joined_with_five(&mut e);
+        let next = e.document().upcoming[0].key.clone();
+        let first = sent_queue_ops(&e.handle(Input::LocalOp {
+            op: SessionOp::PlayNext {
+                track_ids: vec![],
+                keys: vec![next],
+                queued: true,
+            },
+        }));
+        assert_eq!(first.len(), 1);
+        commit_from_b(&mut e, SessionOp::Next, 3);
+        assert_eq!(e.document().current.as_ref().unwrap().track, "t2");
+        assert!(
+            sent_queue_ops(&reject(&mut e, &first[0].1, 3)).is_empty(),
+            "not replayed"
+        );
+        assert_eq!(upcoming_tracks(&e), ["t3", "t4", "t5"]);
     }
 
     #[test]

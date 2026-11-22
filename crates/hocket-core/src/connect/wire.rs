@@ -774,16 +774,21 @@ impl SessionOp {
         )
     }
 
-    /// Edits addressed by queue key whose intent survives someone else's op
-    /// committing first, and which are harmless if the room also took the
-    /// original: they are replayed after a conflict instead of dropped, so a
-    /// reorder on one device is not lost to a skip on another.
+    /// Queue edits whose intent survives someone else's op committing first:
+    /// they are replayed after a conflict instead of dropped, so a reorder or
+    /// a song queued on one device is not lost to a skip or an auto-advance
+    /// on another. (A refused op never reached the session, so replaying an
+    /// addition cannot queue it twice.)
     pub fn replays_after_conflict(&self) -> bool {
         matches!(
             self,
             SessionOp::MoveQueueItem { .. }
                 | SessionOp::RemoveQueueItems { .. }
                 | SessionOp::PromoteForMix { .. }
+                | SessionOp::PlayNext { .. }
+                | SessionOp::AddToQueue { .. }
+                | SessionOp::PlayLater { .. }
+                | SessionOp::InsertTracks { .. }
         )
     }
 
