@@ -226,6 +226,7 @@ export class Windows {
    * closed to the tray (or minimized) nothing would appear. A main window still loading shows itself.
    */
   revealOnActivate(): void {
+    if (this.quitting) return;
     const onScreen = (w: BrowserWindow | undefined) => !!w && !w.isDestroyed() && w.isVisible() && !w.isMinimized();
     if (onScreen(this.main) || onScreen(this.mini)) return;
     if (this.main && !this.main.isDestroyed() && !this.mainReady) return;
