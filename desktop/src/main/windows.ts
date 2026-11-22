@@ -45,6 +45,8 @@ export class Windows {
 
   /** The fullscreen player is open over the main window. */
   private playerOpen = false;
+  /** The main window has painted once (ready-to-show); before that it shows itself. */
+  private mainReady = false;
 
   constructor(private readonly opts: WindowsOptions) {
     this.preload = join(opts.appRoot, "out", "preload", "index.cjs");
@@ -157,8 +159,12 @@ export class Windows {
       webPreferences: this.baseWebPreferences(),
     });
     this.main = win;
+    this.mainReady = false;
     if (bounds.maximized) win.maximize();
-    win.once("ready-to-show", () => win.show());
+    win.once("ready-to-show", () => {
+      if (this.main === win) this.mainReady = true;
+      win.show();
+    });
     const persist = () => {
       if (win.isDestroyed()) return;
       const b = win.getNormalBounds();
@@ -204,8 +210,26 @@ export class Windows {
   showMain(): void {
     const win = this.main && !this.main.isDestroyed() ? this.main : this.createMain();
     if (win.isMinimized()) win.restore();
+    if (process.platform === "darwin") {
+      // Unhide the app (⌘H) and make it active: from the tray or a deep link it isn't, and
+      // win.focus() alone orders the window front without activating the app.
+      app.show();
+      app.focus({ steal: true });
+    }
     win.show();
     win.focus();
+  }
+
+  /**
+   * macOS: the app became active with no window of ours on screen. The Now Playing widget, Spotlight
+   * and ⌘Tab activate the app without the reopen event behind `activate`, so with the main window
+   * closed to the tray (or minimized) nothing would appear. A main window still loading shows itself.
+   */
+  revealOnActivate(): void {
+    const onScreen = (w: BrowserWindow | undefined) => !!w && !w.isDestroyed() && w.isVisible() && !w.isMinimized();
+    if (onScreen(this.main) || onScreen(this.mini)) return;
+    if (this.main && !this.main.isDestroyed() && !this.mainReady) return;
+    this.showMain();
   }
 
   openMini(): BrowserWindow {
