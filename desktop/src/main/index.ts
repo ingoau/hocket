@@ -361,6 +361,8 @@ async function main(): Promise<void> {
     broadcastDeepLink(url);
   });
   app.on("activate", () => windows.showMain());
+  // The Now Playing widget activates the app without a reopen event, so `activate` never fires.
+  if (process.platform === "darwin") app.on("did-become-active", () => windows.revealOnActivate());
   app.on("window-all-closed", () => {
     // Close-to-tray keeps the process alive; explicit quit comes from the tray/menu.
     if (!(store.get("closeToTray") ?? true)) shutdown();
