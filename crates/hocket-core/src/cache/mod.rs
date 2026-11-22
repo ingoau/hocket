@@ -47,6 +47,9 @@ pub fn download_cover_sizes(platform: crate::api::Platform) -> &'static [u32] {
         Platform::Coordinator => &[],
     }
 }
+/// How long [`Caches::enforce_image_budget`] trusts its last count of kept
+/// covers' bytes.
+const KEPT_BYTES_STALE_MS: f64 = 60_000.0;
 /// Default LRU budget for images.
 pub const DEFAULT_IMAGE_BUDGET: f64 = 512.0 * 1024.0 * 1024.0;
 /// Negative lyrics entries are retried after this long.
@@ -151,8 +154,14 @@ struct Inner {
     /// Weak: a fetch whose callers have all left is dropped (cancelled).
     image_inflight:
         parking_lot::Mutex<std::collections::HashMap<(String, String, u32), WeakShared<ArtFetch>>>,
-    /// Accounts whose download covers are being fetched ([`Caches::keep_download_covers`]).
-    keeping_covers: parking_lot::Mutex<std::collections::HashSet<String>>,
+    /// Accounts whose download covers are being fetched
+    /// ([`Caches::keep_download_covers`]), each with whether another pass
+    /// was asked for meanwhile.
+    keeping_covers: parking_lot::Mutex<std::collections::HashMap<String, bool>>,
+    /// Bytes of kept covers as the last eviction found them, and when: until
+    /// it is stale, a fetch under budget once those are set aside skips the
+    /// eviction scan.
+    kept_bytes: parking_lot::Mutex<Option<(f64, f64)>>,
 }
 
 type ArtFetch = futures::future::BoxFuture<'static, Result<Option<PathBuf>, Arc<CacheError>>>;
@@ -174,6 +183,7 @@ impl Caches {
                 image_missing: Default::default(),
                 image_inflight: Default::default(),
                 keeping_covers: Default::default(),
+                kept_bytes: Default::default(),
             }),
         }
     }
@@ -359,13 +369,19 @@ impl Caches {
     }
 
     /// Covers of what is downloaded ((account, image id)): of each finished
-    /// track and of each pin. The image budget never evicts them.
+    /// track, its album (album views ask for the album's cover, which can
+    /// differ from the song's) and each pin. The image budget never evicts them.
     pub fn kept_covers(&self) -> DbResult<std::collections::HashSet<(String, String)>> {
         self.inner.db.with_conn(|c| {
             let mut st = c.prepare_cached(
                 "SELECT DISTINCT t.server_id, t.cover_art FROM pin_tracks pt
                    JOIN tracks t ON t.server_id = pt.server_id AND t.id = pt.track_id
                   WHERE pt.state = 'done' AND t.cover_art IS NOT NULL
+                 UNION
+                 SELECT a.server_id, a.cover_art FROM pin_tracks pt
+                   JOIN tracks t ON t.server_id = pt.server_id AND t.id = pt.track_id
+                   JOIN albums a ON a.server_id = t.server_id AND a.id = t.album_id
+                  WHERE pt.state = 'done' AND a.cover_art IS NOT NULL
                  UNION
                  SELECT server_id, cover_art FROM pins WHERE cover_art IS NOT NULL",
             )?;
@@ -376,12 +392,22 @@ impl Caches {
 
     /// Fetches the covers of [provider]'s downloads at each of [sizes] that
     /// is not cached yet, one at a time, so downloaded music shows its art
-    /// offline. Returns how many were fetched; a failure skips that one. A
-    /// call while another runs for the same account returns 0 at once.
+    /// offline. Returns how many were fetched. A missing image is skipped;
+    /// any other failure (the server gone) ends the pass, to be picked up by
+    /// the next one. A call while a pass runs for the same account returns 0
+    /// at once, and that pass looks again for what is missing once done.
     pub async fn keep_download_covers(&self, provider: Arc<dyn Provider>, sizes: &[u32]) -> usize {
         let source = provider.source().to_string();
-        if sizes.is_empty() || !self.inner.keeping_covers.lock().insert(source.clone()) {
+        if sizes.is_empty() {
             return 0;
+        }
+        {
+            let mut running = self.inner.keeping_covers.lock();
+            if let Some(again) = running.get_mut(&source) {
+                *again = true;
+                return 0;
+            }
+            running.insert(source.clone(), false);
         }
         struct Running<'a>(&'a Caches, String);
         impl Drop for Running<'_> {
@@ -390,48 +416,57 @@ impl Caches {
             }
         }
         let _running = Running(self, source.clone());
-        let wanted = (|| -> DbResult<Vec<(String, u32)>> {
-            let ids: Vec<String> = self
-                .kept_covers()?
-                .into_iter()
-                .filter(|(s, _)| *s == source)
-                .map(|(_, id)| id)
-                .collect();
-            let have: std::collections::HashSet<(String, u32)> = self.inner.db.with_conn(|c| {
-                let mut st = c.prepare_cached(
-                    "SELECT image_id, size FROM image_cache WHERE server_id = ?1",
-                )?;
-                let rows = st.query_map(params![source], |r| Ok((r.get(0)?, r.get(1)?)))?;
-                Ok(rows.collect::<Result<_, _>>()?)
-            })?;
-            let missing = self.inner.image_missing.lock().clone();
-            Ok(ids
-                .into_iter()
-                .flat_map(|id| sizes.iter().map(move |s| (id.clone(), snap_size(*s))))
-                .filter(|(id, s)| {
-                    !have.contains(&(id.clone(), *s))
-                        && !missing.contains(&(source.clone(), id.clone(), *s))
-                })
-                .collect())
-        })();
-        let wanted = match wanted {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::warn!(error = %e, "listing download covers");
-                return 0;
-            }
-        };
         let mut fetched = 0;
-        for (id, size) in wanted {
-            match self.artwork_path(provider.clone(), &id, size).await {
-                Ok(Some(_)) => fetched += 1,
-                Ok(None) => {}
+        loop {
+            let wanted = match self.missing_download_covers(&source, sizes) {
+                Ok(w) => w,
                 Err(e) => {
-                    tracing::debug!(target: "hocket_core", id = %id, size, error = %e, "download cover fetch failed");
+                    tracing::warn!(error = %e, "listing download covers");
+                    return fetched;
+                }
+            };
+            for (id, size) in wanted {
+                match self.artwork_path(provider.clone(), &id, size).await {
+                    Ok(Some(_)) => fetched += 1,
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::debug!(target: "hocket_core", id = %id, size, error = %e, "download cover fetch failed; stopping");
+                        return fetched;
+                    }
                 }
             }
+            let mut running = self.inner.keeping_covers.lock();
+            match running.get_mut(&source) {
+                Some(again) if *again => *again = false,
+                _ => return fetched,
+            }
         }
-        fetched
+    }
+
+    /// (image id, size) pairs of [source]'s download covers not cached yet
+    /// (nor known missing on the server).
+    fn missing_download_covers(&self, source: &str, sizes: &[u32]) -> DbResult<Vec<(String, u32)>> {
+        let ids: Vec<String> = self
+            .kept_covers()?
+            .into_iter()
+            .filter(|(s, _)| s == source)
+            .map(|(_, id)| id)
+            .collect();
+        let have: std::collections::HashSet<(String, u32)> = self.inner.db.with_conn(|c| {
+            let mut st =
+                c.prepare_cached("SELECT image_id, size FROM image_cache WHERE server_id = ?1")?;
+            let rows = st.query_map(params![source], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<Result<_, _>>()?)
+        })?;
+        let missing = self.inner.image_missing.lock().clone();
+        Ok(ids
+            .into_iter()
+            .flat_map(|id| sizes.iter().map(move |s| (id.clone(), snap_size(*s))))
+            .filter(|(id, s)| {
+                !have.contains(&(id.clone(), *s))
+                    && !missing.contains(&(source.to_string(), id.clone(), *s))
+            })
+            .collect())
     }
 
     pub fn images_bytes(&self) -> DbResult<f64> {
@@ -449,8 +484,15 @@ impl Caches {
     /// they belong to the downloads, as the audio does.
     pub fn enforce_image_budget(&self) -> DbResult<usize> {
         let budget = *self.inner.image_budget.read();
-        if self.images_bytes()? <= budget {
+        let total = self.images_bytes()?;
+        if total <= budget {
             return Ok(0);
+        }
+        let now = self.now();
+        if let Some((kept_bytes, at)) = *self.inner.kept_bytes.lock() {
+            if now - at < KEPT_BYTES_STALE_MS && total - kept_bytes <= budget {
+                return Ok(0);
+            }
         }
         let kept = self.kept_covers()?;
         let victims: Vec<(String, String, i64, String, f64)> = self.inner.db.with_conn(|c| {
@@ -458,10 +500,10 @@ impl Caches {
             let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })?;
-        let victims: Vec<_> = victims
+        let (kept_rows, victims): (Vec<_>, Vec<_>) = victims
             .into_iter()
-            .filter(|(sid, iid, ..)| !kept.contains(&(sid.clone(), iid.clone())))
-            .collect();
+            .partition(|(sid, iid, ..)| kept.contains(&(sid.clone(), iid.clone())));
+        *self.inner.kept_bytes.lock() = Some((kept_rows.iter().map(|v| v.4).sum(), now));
         let mut total: f64 = victims.iter().map(|v| v.4).sum();
         let mut removed = 0;
         for (sid, iid, size, path, bytes) in victims {
@@ -1102,6 +1144,48 @@ mod tests {
         // Clearing the image cache leaves them too.
         assert_eq!(caches.clear_images().unwrap(), 1);
         assert!(caches.artwork_cached("srv", "kept", 64).unwrap().is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cover_pass_asked_for_meanwhile_runs_again() {
+        let (_dir, db, caches, _clock, server) = fixture();
+        download_with_cover(&db);
+        server.set_media("kept", vec![0u8; 10]);
+        server.set_media("k2", vec![0u8; 10]);
+        server.set_download_delay(Some(std::time::Duration::from_secs(1)));
+        let p: Arc<dyn Provider> = Arc::new(server.provider());
+        let first = caches.keep_download_covers(p.clone(), &[64]);
+        let later = async {
+            // While the first pass fetches `kept`, another download lands.
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            db.with_conn(|c| {
+                c.execute_batch(
+                    "INSERT INTO tracks(id, server_id, title, cover_art) VALUES ('t2', 'srv', 'T2', 'k2');
+                     INSERT INTO pin_tracks(server_id, target_kind, target_id, track_id, state) VALUES ('srv', 'track', 't', 't2', 'done');",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            caches.keep_download_covers(p.clone(), &[64]).await
+        };
+        let (a, b) = tokio::join!(first, later);
+        assert_eq!((a, b), (2, 0), "the running pass picks up the new cover");
+        assert!(caches.artwork_cached("srv", "k2", 64).unwrap().is_some());
+        assert!(caches.inner.keeping_covers.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_cover_pass_stops_when_the_server_fails() {
+        let (_dir, db, caches, _clock, server) = fixture();
+        download_with_cover(&db);
+        server.set_offline(true);
+        let p: Arc<dyn Provider> = Arc::new(server.provider());
+        assert_eq!(caches.keep_download_covers(p, &[64, 320, 640]).await, 0);
+        assert_eq!(
+            server.calls_to("getCoverArt"),
+            1,
+            "one failure ends the pass"
+        );
     }
 
     fn lyrics(track: &str, source: LyricsSource) -> Lyrics {

@@ -2268,9 +2268,13 @@ impl JobRunner for DownloadRunner {
                 }
                 ctx.set_progress(done, Some(total));
             }
+            // Covers after, off the job: the job's slot is for tracks.
             if let Some((caches, sizes)) = covers {
                 if done > 0 {
-                    caches.keep_download_covers(provider.clone(), sizes).await;
+                    let provider = provider.clone();
+                    tokio::spawn(async move {
+                        caches.keep_download_covers(provider, sizes).await;
+                    });
                 }
             }
             Ok(())

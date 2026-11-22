@@ -857,6 +857,19 @@ async fn downloads_keep_their_covers_for_offline() {
         })
     })
     .await;
+    // The covers follow the job, off its slot: 64, 320 and 1280 on Linux.
+    for _ in 0..500 {
+        if t.server.calls_to("getCoverArt") >= 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        t.server.calls_to("getCoverArt"),
+        3,
+        "{:?}",
+        t.server.calls()
+    );
     t.server.set_offline(true);
     t.run(Command::SetNetworkState {
         state: NetworkState {

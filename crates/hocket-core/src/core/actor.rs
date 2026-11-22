@@ -278,6 +278,8 @@ pub(crate) struct Actor {
     /// Track the last lyrics fetch was announced for (now-playing changes).
     pub lyrics_for: Option<TrackId>,
     pub media_art_pending: Option<(String, u32)>,
+    /// When an artwork ask last re-probed an unreachable account (ms).
+    pub art_probe_at: f64,
     pub log_ring: VecDeque<String>,
     /// `Query::RoomDiagnostics` waiting for the room's answers.
     pub diagnostics_collections: Vec<(
@@ -596,6 +598,7 @@ impl Actor {
             media_art: None,
             lyrics_for: None,
             media_art_pending: None,
+            art_probe_at: f64::NEG_INFINITY,
             log_ring: VecDeque::new(),
             diagnostics_collections: vec![],
             last_room_diagnostics: None,

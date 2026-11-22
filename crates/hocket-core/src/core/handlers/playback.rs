@@ -2085,6 +2085,7 @@ impl Actor {
                     .ok()
                     .flatten()
                     .map(|p| p.to_string_lossy().into_owned());
+                self.media_art = Some((cover, size, path.clone()));
                 path
             }
             _ => {

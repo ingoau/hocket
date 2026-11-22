@@ -467,6 +467,17 @@ impl Actor {
         }
         let accounts = self.account_infos();
         self.emit(Event::AccountsChanged { accounts });
+        if self
+            .accounts
+            .get(&account_id)
+            .is_some_and(|s| s.info.reachable)
+        {
+            // Art answered from the cache while the server was away is
+            // asked for again now.
+            self.media_art = None;
+            self.emit_media_session();
+            self.keep_download_covers();
+        }
     }
 
     fn probe_failed(&mut self, account_id: &str, kind: ErrorKind, detail: String) {
@@ -918,6 +929,10 @@ impl Actor {
             );
         }
         self.downloads.set_network(Some(state.clone()));
+        if self.network.as_ref().map(|n| n.kind) != Some(state.kind) {
+            // A cover answered from the cache offline is asked for again.
+            self.media_art = None;
+        }
         self.network = Some(state.clone());
         if changed {
             self.emit(Event::NetworkChanged {

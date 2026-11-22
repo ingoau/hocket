@@ -73,11 +73,15 @@ fun Artwork(
     val startedWithCachedPath = remember(cacheKey) { cacheKey?.let { ArtworkPathCache.get(it) } != null }
     val state = remember(cacheKey) { mutableStateOf(cacheKey?.let { ArtworkPathCache.get(it) }?.let { Resolved(it) }) }
     val network by client.network.collectAsStateWithLifecycleCompat()
-    // A fresh run of retries on each network change (the link may take a moment to carry traffic).
-    var attempt by remember(cacheKey, network) { mutableIntStateOf(0) }
-    LaunchedEffect(cacheKey, attempt, network) {
+    val accounts by client.accounts.collectAsStateWithLifecycleCompat()
+    // Which accounts answer: a server coming back on the same network changes it.
+    val reachable = accounts.count { it.reachable }
+    // A fresh run of retries on each network change (the link may take a moment to carry traffic)
+    // and each time a server comes back or goes away.
+    var attempt by remember(cacheKey, network, reachable) { mutableIntStateOf(0) }
+    LaunchedEffect(cacheKey, attempt, network, reachable) {
         // A stand-in size (the core answers with what it has when the server can't be reached) is
-        // asked for again on a network change, and never remembered as this size's file.
+        // asked for again on a network or server change, and never remembered as this size's file.
         if (state.value?.let { it.path != null && isExactArtwork(it.path, requested) } == true) return@LaunchedEffect
         val path = client.artworkPath(coverArt, requested)
         if (cacheKey != null && path != null && isExactArtwork(path, requested)) ArtworkPathCache.put(cacheKey, path)

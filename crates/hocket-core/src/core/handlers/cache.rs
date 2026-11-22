@@ -38,6 +38,9 @@ pub(crate) struct CacheState {
     pub last_check: f64,
 }
 
+/// How often an artwork ask may re-probe an unreachable account.
+const ART_REPROBE_MS: f64 = 30_000.0;
+
 impl Actor {
     pub(crate) fn is_offline(&self) -> bool {
         self.network
@@ -49,12 +52,27 @@ impl Actor {
     /// is offline, or the server didn't answer its last probe. An artwork
     /// ask then answers from what is cached instead of waiting out a
     /// connect timeout.
-    pub(crate) fn artwork_unreachable(&self, source: &str) -> bool {
-        self.is_offline()
-            || self
-                .accounts
-                .for_source(source)
-                .is_some_and(|a| !a.info.reachable && !a.probing)
+    ///
+    /// Only a probe marks an account reachable again, so an ask that finds
+    /// it unreachable probes it (at most every [`ART_REPROBE_MS`]): art comes
+    /// back with the server rather than with the next network change.
+    pub(crate) fn artwork_unreachable(&mut self, source: &str) -> bool {
+        if self.is_offline() {
+            return true;
+        }
+        let Some(a) = self.accounts.for_source(source) else {
+            return false;
+        };
+        if a.info.reachable || a.probing {
+            return false;
+        }
+        let id = a.info.id.clone();
+        let now = self.now();
+        if now - self.art_probe_at >= ART_REPROBE_MS {
+            self.art_probe_at = now;
+            self.probe_account(&id);
+        }
+        true
     }
 
     /// Fetch, in the background, the covers of every account's downloads
@@ -66,6 +84,13 @@ impl Actor {
         }
         let sizes = crate::cache::download_cover_sizes(self.cfg.platform);
         for sid in self.accounts.ids() {
+            if self
+                .accounts
+                .for_source(&sid)
+                .is_some_and(|a| !a.info.reachable && !a.probing)
+            {
+                continue; // its probe's success starts it
+            }
             let Some(provider) = self.provider_for(&sid) else {
                 continue;
             };

@@ -61,8 +61,6 @@ pub fn check_download_dest(dest: &Path, root: Option<&Path>) -> std::io::Result<
     Ok(())
 }
 
-/// A unique sibling temp name for `dest` (`<name>.<random>.part`), so two
-/// writers for the same destination never share a temp file.
 /// A download's part file, removed on drop unless taken (renamed into place).
 struct PartFile(Option<PathBuf>);
 
@@ -74,6 +72,8 @@ impl Drop for PartFile {
     }
 }
 
+/// A unique sibling temp name for `dest` (`<name>.<random>.part`), so two
+/// writers for the same destination never share a temp file.
 pub fn part_path(dest: &Path) -> PathBuf {
     let name = dest
         .file_name()
