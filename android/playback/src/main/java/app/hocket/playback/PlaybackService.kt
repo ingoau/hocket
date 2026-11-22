@@ -50,7 +50,9 @@ import kotlinx.coroutines.launch
  *   controls, and no foreground promotion, so a backgrounded process could be killed mid-song.
  *   When nothing has played for
  *   [IDLE_TIMEOUT_MS] and no UI client is bound, it stops itself; a player that is still buffering
- *   or recovering from a network error ([ExoBackend.isBusy]) keeps it, whatever the session says.
+ *   or recovering from a network error ([ExoBackend.isBusy]) keeps it, whatever the session says,
+ *   and so do running downloads and syncs ([BackgroundJobs]), which the app's `JobsService` keeps
+ *   in the foreground (`dataSync`, bound here) once the app leaves the screen.
  * - Started by a media key (playback resumption from a stopped service), holds the foreground until
  *   Media3's playback notification takes over or it is clear nothing will play ([ForegroundHold]).
  * - Keeps the home-screen [NowPlayingWidget] in step with the session and the playing Connect device.
@@ -106,6 +108,8 @@ class PlaybackService : MediaLibraryService() {
     private var routeDiscovery: Any? = null
     private var serverId: String? = null
     private var libraryNotify: Job? = null
+    /** Downloads, syncs or imports running ([BackgroundJobs]): the core is busy even with nothing playing. */
+    @Volatile private var jobsActive = false
     private val foregroundHold = ForegroundHold(this, scope) { isPlaybackOngoing }
     private val audioRoutes = AudioRouteLog(this)
     private var cast: CastController? = null
@@ -133,7 +137,16 @@ class PlaybackService : MediaLibraryService() {
         scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
             val gate = ServiceEventGate()
             // Posted before onDestroy cancelled [scope] but run after: the bridge and backend are released.
-            core.events.collect { event -> if (gate.admit(event)) main.post { if (scope.isActive) onEvent(event) } }
+            core.events.collect { event ->
+                // Read by the idle stop only, so job progress never needs the main thread.
+                when (event) {
+                    is Event.JobsChanged -> jobsActive = BackgroundJobs.active(event.data.jobs).isNotEmpty()
+                    is Event.Started -> jobsActive = BackgroundJobs.active(event.data.snapshot.jobs).isNotEmpty()
+                    is Event.Snapshot -> jobsActive = BackgroundJobs.active(event.data.snapshot.jobs).isNotEmpty()
+                    else -> Unit
+                }
+                if (gate.admit(event)) main.post { if (scope.isActive) onEvent(event) }
+            }
         }
         network.start()
         battery.start()
@@ -283,7 +296,7 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    private fun isBusy(): Boolean = backend.isBusy() || (casting != null && cast?.backend?.isBusy() == true)
+    private fun isBusy(): Boolean = jobsActive || backend.isBusy() || (casting != null && cast?.backend?.isBusy() == true)
 
     private fun scheduleIdleStop() {
         idleJob?.cancel()
@@ -293,7 +306,7 @@ class PlaybackService : MediaLibraryService() {
                 PlaybackLog.i("idle for ${IDLE_TIMEOUT_MS / 1000}s with no clients; stopping")
                 pauseAllPlayersAndStopSelf()
             } else if (boundClients == 0) {
-                // Still playing, buffering or recovering: look again later.
+                // Still playing, buffering, recovering or running jobs: look again later.
                 scheduleIdleStop()
             }
         }

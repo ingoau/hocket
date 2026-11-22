@@ -524,6 +524,12 @@
     <string name="jobs_state_cancelled">Cancelled</string>
     <string name="jobs_pause">Pause</string>
     <string name="jobs_resume">Resume</string>
+    <string name="jobs_notification_channel">Downloads and sync</string>
+    <string name="jobs_notification_starting">Downloading and syncing…</string>
+    <plurals name="jobs_notification_many">
+        <item quantity="one">%1$d task running</item>
+        <item quantity="other">%1$d tasks running</item>
+    </plurals>
     <string name="problems_title">Problems</string>
     <string name="problems_dismiss_all">Dismiss all</string>
     <string name="problems_none">No problems</string>

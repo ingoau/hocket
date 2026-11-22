@@ -78,6 +78,21 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
         })
         scope.launch(Dispatchers.Default) { prefs.shortcuts.distinctUntilChanged().collect { AppShortcuts.publish(this@HocketApp, it) } }
         followReportUploads()
+        followJobs()
+    }
+
+    /**
+     * A download, sync or import running ([app.hocket.playback.BackgroundJobs]) gets
+     * [app.hocket.jobs.JobsService] (foreground, progress notification), which stops itself once none is.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun followJobs() {
+        scope.launch {
+            client.flatMapLatest { it?.jobs ?: flowOf(emptyList()) }
+                .map { app.hocket.playback.BackgroundJobs.active(it).isNotEmpty() }
+                .distinctUntilChanged()
+                .collect { active -> if (active) app.hocket.jobs.JobsService.start(this@HocketApp) }
+        }
     }
 
     /**
