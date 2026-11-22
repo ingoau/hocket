@@ -36,7 +36,8 @@ use crate::util::{now_ms, Clock};
 /// links, ISRCs and Mixed playlists' per-song sources; 13 the live catalogue.
 ///
 /// Changes since are forward migrations on top, so a version-13 database
-/// keeps its listening history: 14 shares play history between devices.
+/// keeps its listening history: 14 shares play history between devices; 15
+/// indexes bare ids.
 pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (13, "0013_catalogue", include_str!("schema.sql")),
     (
@@ -44,10 +45,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0014_shared_play_history",
         include_str!("migrations/0014_shared_play_history.sql"),
     ),
+    (
+        15,
+        "0015_id_indexes",
+        include_str!("migrations/0015_id_indexes.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 14;
+pub const SCHEMA_VERSION: u32 = 15;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -792,5 +798,44 @@ mod tests {
         });
         assert!(r.is_err());
         assert_eq!(db.saved_state_get_raw("a").unwrap(), None);
+    }
+
+    /// The plan SQLite picks for `sql` (one detail line per step).
+    fn plan(db: &Db, sql: &str) -> Vec<String> {
+        db.with_conn(|c| {
+            let mut st = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let rows = st.query_map([], |r| r.get::<_, String>(3))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn lookups_by_bare_id_use_an_index() {
+        use queries::{PRIORITY, TRACK_COLUMNS};
+        let db = Db::open_in_memory().unwrap();
+        // As `Db::track`: by id across accounts, highest priority first.
+        let track = plan(
+            &db,
+            &format!(
+                "SELECT {TRACK_COLUMNS} FROM tracks WHERE id = 'x' ORDER BY {PRIORITY} LIMIT 1"
+            ),
+        );
+        assert!(
+            track
+                .iter()
+                .any(|l| l.contains("USING INDEX idx_tracks_id")),
+            "{track:?}"
+        );
+        // As albums_by_ids / artists_by_ids, set_loved / set_rating and the outbox.
+        for (table, index) in [
+            ("tracks", "idx_tracks_id"),
+            ("albums", "idx_albums_id"),
+            ("artists", "idx_artists_id"),
+        ] {
+            let p = plan(&db, &format!("SELECT * FROM {table} WHERE id = 'x'"));
+            assert!(p.iter().any(|l| l.contains(index)), "{table}: {p:?}");
+            assert!(!p.iter().any(|l| l.starts_with("SCAN")), "{table}: {p:?}");
+        }
     }
 }

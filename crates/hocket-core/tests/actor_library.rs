@@ -1379,3 +1379,151 @@ async fn setup_settings_carry_changed_synced_settings_to_a_new_device() {
     .await;
     assert_eq!(setting_of(&b, "queue.savedCap").await.value, "5");
 }
+
+/// Every batch a search with `request_id` produced, local first.
+async fn search_batches(
+    t: &TestCore,
+    query: &str,
+    limit: u32,
+    include_server: bool,
+    request_id: &str,
+) -> Vec<SearchResults> {
+    t.query(Query::Search {
+        server_id: t.server_id.clone(),
+        query: query.into(),
+        limit,
+        include_server,
+        request_id: request_id.into(),
+    })
+    .await;
+    t.core.settle().await;
+    t.events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::SearchResults { results } if results.request_id == request_id => Some(results),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_asking_the_server_always_gets_one_server_batch() {
+    let t = synced("search-once", seeded_server(4, 180.0)).await;
+    let only_server = |b: &[SearchResults]| -> Vec<SearchResults> {
+        b.iter().filter(|b| b.from_server).cloned().collect()
+    };
+
+    // Not asked: no server batch.
+    let b = search_batches(&t, "Track", 20, false, "no-server").await;
+    assert_eq!(b.len(), 1);
+    assert!(!b[0].from_server);
+
+    // Local results already fill the page: an empty server batch.
+    let b = search_batches(&t, "Track", 2, true, "full").await;
+    let server = only_server(&b);
+    assert_eq!(server.len(), 1, "{b:?}");
+    assert!(server[0].tracks.is_empty() && server[0].albums.is_empty());
+    assert_eq!(server[0].query, "Track");
+
+    // Every provider failed: an empty server batch.
+    t.server.set_offline(true);
+    let b = search_batches(&t, "Track", 20, true, "failed").await;
+    let server = only_server(&b);
+    assert_eq!(server.len(), 1, "{b:?}");
+    assert!(server[0].tracks.is_empty());
+    t.server.set_offline(false);
+
+    // Offline: an empty server batch.
+    t.run(Command::SetNetworkState {
+        state: NetworkState {
+            kind: NetworkKind::Offline,
+            metered: false,
+            network_id: None,
+        },
+    })
+    .await;
+    let b = search_batches(&t, "Track", 20, true, "offline").await;
+    assert_eq!(only_server(&b).len(), 1, "{b:?}");
+    t.run(Command::SetNetworkState {
+        state: NetworkState {
+            kind: NetworkKind::Wifi,
+            metered: false,
+            network_id: None,
+        },
+    })
+    .await;
+
+    // Server search turned off: an empty server batch.
+    t.run(Command::SetSetting {
+        key: "search.includeServer".into(),
+        value: "false".into(),
+    })
+    .await;
+    let b = search_batches(&t, "Track", 20, true, "off").await;
+    let server = only_server(&b);
+    assert_eq!(server.len(), 1, "{b:?}");
+    assert!(server[0].tracks.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_finished_download_refreshes_pins_once_not_on_every_jobs_change() {
+    use hocket_core::core::Internal;
+    use hocket_core::jobs::QueueEvent;
+    let t = synced("dl-refresh", seeded_server(2, 180.0)).await;
+    let job = |id: &str, state: JobState| Job {
+        id: id.into(),
+        kind: JobKind::Download,
+        label: "Download".into(),
+        state,
+        done: 1,
+        total: Some(1),
+        failed: 0,
+        created_at: 0.0,
+        updated_at: 0.0,
+        cancellable: false,
+    };
+    let post = |jobs: Vec<Job>| {
+        t.core
+            .post_internal(Internal::Jobs(QueueEvent::JobsChanged(jobs)))
+            .unwrap();
+    };
+    let pins_changed = || {
+        t.events
+            .all()
+            .iter()
+            .filter(|e| matches!(e, Event::PinsChanged { .. }))
+            .count()
+    };
+    t.core.settle().await;
+    t.events.clear();
+
+    post(vec![job("d1", JobState::Running)]);
+    t.core.settle().await;
+    assert_eq!(pins_changed(), 0, "still running");
+
+    post(vec![job("d1", JobState::Done)]);
+    t.core.settle().await;
+    assert_eq!(pins_changed(), 1, "newly finished");
+
+    // The queue keeps the finished job and re-sends it on every change.
+    post(vec![
+        job("d1", JobState::Done),
+        job("s1", JobState::Running),
+    ]);
+    post(vec![job("d1", JobState::Done)]);
+    t.core.settle().await;
+    assert_eq!(pins_changed(), 1, "same finished job: no refresh");
+    let library_changed = t
+        .events
+        .all()
+        .iter()
+        .filter(|e| matches!(e, Event::LibraryChanged { .. }))
+        .count();
+    assert_eq!(library_changed, 1);
+
+    // Another download finishing refreshes again, a failed one too.
+    post(vec![job("d1", JobState::Done), job("d2", JobState::Failed)]);
+    t.core.settle().await;
+    assert_eq!(pins_changed(), 2);
+}
