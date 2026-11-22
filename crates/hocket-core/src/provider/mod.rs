@@ -250,6 +250,30 @@ pub trait Provider: Send + Sync + 'static {
         stream: &ResolvedStream,
         dest: &'a Path,
     ) -> ProviderFuture<'a, DownloadOutcome>;
+    /// Fetch a cover ([`cover_art_url`](Self::cover_art_url)) to a file.
+    /// Providers that pool requests keep covers apart from track downloads.
+    fn download_image_to_file<'a>(
+        &'a self,
+        url: Url,
+        dest: &'a Path,
+    ) -> ProviderFuture<'a, DownloadOutcome> {
+        Box::pin(async move {
+            let stream = ResolvedStream {
+                url,
+                headers: Default::default(),
+                expires_at: None,
+                container: None,
+                codec: None,
+                gain_db: None,
+                range_capable: false,
+                transcoded: false,
+                max_range: None,
+                content_length: None,
+                variant: String::new(),
+            };
+            self.download_to_file(&stream, dest).await
+        })
+    }
 
     // -- writes and reports --------------------------------------------------
     fn write(&self, write: ProviderWrite) -> ProviderFuture<'_, WriteOutcome>;

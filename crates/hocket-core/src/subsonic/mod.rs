@@ -269,6 +269,15 @@ pub trait SubsonicApi: Send + Sync + 'static {
     fn download_url(&self, id: &str) -> Url;
     /// Fetch a URL (cover art, stream, download) to a file. Returns bytes written.
     fn download_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, transport::DownloadOutcome>;
+    /// [`download_to_file`](Self::download_to_file) for cover art: the
+    /// client gives covers a concurrency pool of their own, apart from tracks.
+    fn download_image_to_file(
+        &self,
+        url: Url,
+        dest: &Path,
+    ) -> ApiFuture<'_, transport::DownloadOutcome> {
+        self.download_to_file(url, dest)
+    }
 
     // -- Navidrome native API (behind `capabilities().native_api`) --------
     /// Read a playlist including smart-playlist `rules`.

@@ -467,6 +467,17 @@ impl Actor {
         }
         let accounts = self.account_infos();
         self.emit(Event::AccountsChanged { accounts });
+        if self
+            .accounts
+            .get(&account_id)
+            .is_some_and(|s| s.info.reachable)
+        {
+            // Art answered from the cache while the server was away is
+            // asked for again now.
+            self.media_art = None;
+            self.emit_media_session();
+            self.keep_download_covers();
+        }
     }
 
     fn probe_failed(&mut self, account_id: &str, kind: ErrorKind, detail: String) {
@@ -529,8 +540,14 @@ impl Actor {
         self.jobs.register(
             JobKind::Download,
             2,
-            Arc::new(DownloadRunner::new(self.downloads.clone(), providers)),
+            Arc::new(
+                DownloadRunner::new(self.downloads.clone(), providers).with_covers(
+                    self.caches.clone(),
+                    crate::cache::download_cover_sizes(self.cfg.platform),
+                ),
+            ),
         );
+        self.keep_download_covers();
     }
 
     pub(crate) fn job_op(&mut self, op: &str, id: &str) {
@@ -912,6 +929,10 @@ impl Actor {
             );
         }
         self.downloads.set_network(Some(state.clone()));
+        if self.network.as_ref().map(|n| n.kind) != Some(state.kind) {
+            // A cover answered from the cache offline is asked for again.
+            self.media_art = None;
+        }
         self.network = Some(state.clone());
         if changed {
             self.emit(Event::NetworkChanged {
@@ -936,6 +957,8 @@ impl Actor {
             for id in stale {
                 self.probe_account(&id);
             }
+            // Downloads whose covers were never kept (or failed) get them now.
+            self.keep_download_covers();
         }
         // The stream URL may change with the network's transcoding profile.
         if self.playback.loaded && self.owns_transport() {

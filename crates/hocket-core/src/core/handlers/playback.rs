@@ -2075,6 +2075,19 @@ impl Actor {
                 self.media_art = Some((cover, size, Some(path.clone())));
                 Some(path)
             }
+            _ if self.artwork_unreachable(&server_id) => {
+                // Whatever size is kept (a download's cover), not a fetch
+                // that can only time out. Asked again when the track or
+                // network changes.
+                let path = self
+                    .caches
+                    .artwork_cached_any(&server_id, &cover, size)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.to_string_lossy().into_owned());
+                self.media_art = Some((cover, size, path.clone()));
+                path
+            }
             _ => {
                 self.fetch_artwork(&server_id, cover, size);
                 None
@@ -2094,7 +2107,7 @@ impl Actor {
         let tx = self.tx.clone();
         self.spawn(async move {
             let path = caches
-                .artwork_path(api.as_ref(), &id, size)
+                .artwork_path(api, &id, size)
                 .await
                 .ok()
                 .flatten()
@@ -2128,10 +2141,12 @@ impl Actor {
         let Some(server_id) = self.playback.track.as_ref().map(|t| t.server_id.clone()) else {
             return;
         };
-        if matches!(
-            self.caches.artwork_cached(&server_id, &cover, size),
-            Ok(Some(_))
-        ) {
+        if self.artwork_unreachable(&server_id)
+            || matches!(
+                self.caches.artwork_cached(&server_id, &cover, size),
+                Ok(Some(_))
+            )
+        {
             return;
         }
         self.fetch_artwork(&server_id, cover, size);
