@@ -1066,17 +1066,36 @@ impl Downloads {
             let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })?;
+        // A downloads folder that is missing altogether (storage not mounted
+        // yet, say) is not every file deleted: leave its rows for next time.
+        let mut roots: HashMap<String, bool> = HashMap::new();
         let lost: Vec<(String, String, Option<String>)> = done
             .into_iter()
+            .filter(|(sid, _, _, _)| {
+                *roots
+                    .entry(sid.clone())
+                    .or_insert_with(|| self.downloads_dir(sid).is_dir())
+            })
             .filter(|(_, _, path, bytes)| !path.as_deref().is_some_and(|p| file_intact(p, *bytes)))
             .map(|(sid, tid, path, _)| (sid, tid, path))
             .collect();
         if lost.is_empty() {
             return Ok((vec![], vec![]));
         }
-        let targets: Vec<(String, String, String, bool)> = self.inner.db.with_tx(|tx| {
-            let mut targets = vec![];
-            for (sid, tid, path) in &lost {
+        let (targets, lost) = self.inner.db.with_tx(|tx| {
+            let mut targets: Vec<(String, String, String, bool)> = vec![];
+            let mut reset = vec![];
+            for (sid, tid, path) in lost {
+                // Another pin is fetching the track already: its file will
+                // serve this row too, and a second fetch would race it.
+                let busy: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pin_tracks WHERE server_id = ?1 AND track_id = ?2 AND state = 'downloading')",
+                    params![sid, tid],
+                    |r| r.get(0),
+                )?;
+                if busy {
+                    continue;
+                }
                 let mut st = tx.prepare_cached(
                     "SELECT t.target_kind, t.target_id, COALESCE(p.transcoded, 0) FROM pin_tracks t
                      LEFT JOIN pins p ON p.server_id = t.server_id AND p.target_kind = t.target_kind AND p.target_id = t.target_id
@@ -1097,12 +1116,20 @@ impl Downloads {
                      WHERE server_id = ?1 AND track_id = ?2 AND state = 'done' AND path IS ?3",
                     params![sid, tid, path],
                 )?;
+                reset.push((sid, tid, path));
             }
-            Ok(targets)
+            Ok((targets, reset))
         })?;
         let mut changed: Vec<TrackKey> = vec![];
         for (sid, tid, path) in lost {
-            tracing::warn!(track = %tid, path = ?path, "downloaded file missing; fetching it again");
+            tracing::warn!(track = %tid, path = ?path, "downloaded file missing or damaged; fetching it again");
+            // A truncated file is no longer anyone's: remove it now rather
+            // than leave it if the pin goes before the fetch.
+            if let Some(p) = &path {
+                if let Err(e) = remove_if_exists(p) {
+                    tracing::warn!(error = %e, path = %p, "removing damaged download");
+                }
+            }
             self.refresh_offline(&sid, &tid)?;
             changed.push((sid, tid));
         }
@@ -2848,6 +2875,22 @@ mod tests {
             .unwrap()
             .is_none());
         // album pins are fixed: changing album contents doesn't matter (no reconcile API for them)
+    }
+
+    #[tokio::test]
+    async fn a_missing_downloads_folder_is_left_alone() {
+        let f = fixture();
+        let album = PinTarget::Album { id: "al0".into() };
+        run_job(&f, f.dl.pin("srv", &album, false).unwrap().unwrap()).await;
+        let dir = f.dl.downloads_dir("srv");
+        let moved = dir.with_extension("away");
+        std::fs::rename(&dir, &moved).unwrap();
+        // Storage not mounted yet: nothing is reset or fetched again.
+        let (lost, specs) = f.dl.reconcile_downloads().unwrap();
+        assert!(lost.is_empty() && specs.is_empty());
+        std::fs::rename(&moved, &dir).unwrap();
+        assert_eq!(f.dl.pins("srv").unwrap()[0].downloaded_count, 3);
+        assert!(f.dl.downloaded_path("srv", "t1").unwrap().is_some());
     }
 
     /// Files deleted (or truncated) outside the app stop counting as

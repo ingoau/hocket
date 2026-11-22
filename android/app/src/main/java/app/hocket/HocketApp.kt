@@ -84,14 +84,21 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
     /**
      * A download, sync or import running ([app.hocket.playback.BackgroundJobs]) gets
      * [app.hocket.jobs.JobsService] (foreground, progress notification), which stops itself once none is.
+     * Android refuses the start while the app is in the background, so it is asked again each time the
+     * app comes to the foreground with jobs still running (starting it twice is harmless).
      */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun followJobs() {
+        val visible = ProcessLifecycleOwner.get().lifecycle.currentStateFlow
+            .map { it.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) }
+            .distinctUntilChanged()
         scope.launch {
             client.flatMapLatest { it?.jobs ?: flowOf(emptyList()) }
                 .map { app.hocket.playback.BackgroundJobs.active(it).isNotEmpty() }
                 .distinctUntilChanged()
-                .collect { active -> if (active) app.hocket.jobs.JobsService.start(this@HocketApp) }
+                .combine(visible) { active, shown -> active to shown }
+                .distinctUntilChanged()
+                .collect { (active, _) -> if (active) app.hocket.jobs.JobsService.start(this@HocketApp) }
         }
     }
 

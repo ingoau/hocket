@@ -90,7 +90,9 @@ function SearchBox() {
       void bridge().query({ type: "search", data: { server_id: "", query: q, limit: 6, include_server: true, request_id: id } }).then((r) => {
         if (reqId.current !== id || r.type !== "search") return;
         setLocal(r.data);
-        setServer(undefined);
+        // Drop the previous query's server batch, but not this request's: an
+        // empty one (server search skipped) can arrive before this reply.
+        setServer((prev) => (prev?.requestId === id ? prev : undefined));
       });
     }, 80);
     return () => clearTimeout(h);

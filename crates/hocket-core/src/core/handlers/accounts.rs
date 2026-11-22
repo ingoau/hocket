@@ -575,6 +575,22 @@ impl Actor {
         new
     }
 
+    /// Whether a running download job finished another track since the last
+    /// call: the pins' downloaded counts come from the DB, so they need a
+    /// fresh `PinsChanged` to move.
+    fn downloads_progressed(&mut self, jobs: &[Job]) -> bool {
+        let running: HashMap<JobId, u32> = jobs
+            .iter()
+            .filter(|j| j.kind == JobKind::Download && j.state == JobState::Running)
+            .map(|j| (j.id.clone(), j.done))
+            .collect();
+        let moved = running
+            .iter()
+            .any(|(id, done)| self.download_progress.get(id).is_some_and(|d| d != done));
+        self.download_progress = running;
+        moved
+    }
+
     pub(crate) fn on_jobs_changed(&mut self, jobs: &[Job]) {
         // A finished sync frees its account for the next; a finished
         // download updates the pins.
@@ -596,6 +612,7 @@ impl Actor {
             // Accounts waiting behind it (syncs run one at a time).
             self.maybe_start_sync(false, false);
         }
+        let progressed = self.downloads_progressed(jobs);
         if self.downloads_newly_finished(jobs) {
             let pins = self.pins();
             self.emit(Event::PinsChanged { pins });
@@ -608,6 +625,9 @@ impl Actor {
                     ids: vec![],
                 });
             }
+        } else if progressed {
+            let pins = self.pins();
+            self.emit(Event::PinsChanged { pins });
         }
     }
 

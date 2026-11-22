@@ -129,6 +129,9 @@ pub(crate) struct Actor {
     /// Download jobs last seen Done/Failed, so only a newly finished one
     /// refreshes pins and storage (the queue keeps finished jobs for a day).
     pub finished_downloads: HashSet<JobId>,
+    /// Running download jobs' last seen `done`, so the pins' counts follow a
+    /// download as each track lands.
+    pub download_progress: HashMap<JobId, u32>,
     pub registry: ActionRegistry,
     pub undo: UndoStack,
     pub jobs: JobQueue,
@@ -510,6 +513,7 @@ impl Actor {
             settings_store,
             settings_corrupt,
             finished_downloads: Default::default(),
+            download_progress: Default::default(),
             registry,
             undo: UndoStack::new("", crate::undo::DEFAULT_MAX_BYTES),
             jobs,

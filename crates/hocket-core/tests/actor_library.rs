@@ -1527,3 +1527,53 @@ async fn a_finished_download_refreshes_pins_once_not_on_every_jobs_change() {
     t.core.settle().await;
     assert_eq!(pins_changed(), 2);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_running_download_refreshes_pins_as_each_track_lands() {
+    use hocket_core::core::Internal;
+    use hocket_core::jobs::QueueEvent;
+    let t = synced("dl-progress", seeded_server(2, 180.0)).await;
+    let job = |done: u32| Job {
+        id: "d1".into(),
+        kind: JobKind::Download,
+        label: "Download".into(),
+        state: JobState::Running,
+        done,
+        total: Some(3),
+        failed: 0,
+        created_at: 0.0,
+        updated_at: 0.0,
+        cancellable: false,
+    };
+    let post = |jobs: Vec<Job>| {
+        t.core
+            .post_internal(Internal::Jobs(QueueEvent::JobsChanged(jobs)))
+            .unwrap();
+    };
+    let count = |f: fn(&Event) -> bool| t.events.all().iter().filter(|e| f(e)).count();
+    t.core.settle().await;
+    t.events.clear();
+
+    post(vec![job(0)]);
+    t.core.settle().await;
+    assert_eq!(
+        count(|e| matches!(e, Event::PinsChanged { .. })),
+        0,
+        "started"
+    );
+
+    post(vec![job(1)]);
+    t.core.settle().await;
+    assert_eq!(
+        count(|e| matches!(e, Event::PinsChanged { .. })),
+        1,
+        "a track landed"
+    );
+
+    // A tick without progress (another job's change) doesn't refresh.
+    post(vec![job(1)]);
+    t.core.settle().await;
+    assert_eq!(count(|e| matches!(e, Event::PinsChanged { .. })), 1);
+    // Progress refreshes pins only; the library and storage wait for the end.
+    assert_eq!(count(|e| matches!(e, Event::LibraryChanged { .. })), 0);
+}

@@ -260,7 +260,7 @@ impl ReqwestTransport {
                 }
                 partial
             }
-            (_, 416) => {
+            (Some(_), 416) => {
                 discard(partial).await;
                 return Err((
                     TransportError::Network("range not satisfiable".into()),
@@ -435,7 +435,9 @@ fn parse_content_range(v: &str) -> Option<(u64, u64)> {
         end.trim().parse::<u64>().ok()?,
         total.trim().parse::<u64>().ok()?,
     );
-    (start <= end && end < total).then_some((start, total))
+    // Only a range that runs to the end resumes the file: a server or proxy
+    // that caps the range would otherwise leave it short but "complete".
+    (start <= end && end + 1 == total).then_some((start, total))
 }
 
 /// reqwest errors print their URL (with the auth query) in `Display`;
@@ -748,4 +750,18 @@ pub fn headers_map(request: &HttpRequest) -> HashMap<String, String> {
         .iter()
         .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_content_range;
+
+    #[test]
+    fn content_range_must_run_to_the_end() {
+        assert_eq!(parse_content_range("bytes 100-999/1000"), Some((100, 1000)));
+        // A capped range would leave the file short.
+        assert_eq!(parse_content_range("bytes 100-499/1000"), None);
+        assert_eq!(parse_content_range("bytes 100-1000/1000"), None);
+        assert_eq!(parse_content_range("bytes */1000"), None);
+    }
 }
