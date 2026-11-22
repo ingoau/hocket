@@ -143,24 +143,40 @@ pub struct DownloadOutcome {
 /// Production transport over reqwest + rustls. Never follows redirects: a
 /// redirect would otherwise carry the token+salt query, the native-API JWT
 /// header or a login body to another host or down to `http://`.
+///
+/// API calls run under a total timeout. Media downloads can't (a 10 MB file
+/// on a slow link takes minutes), so they get their own client with only a
+/// connect timeout and a read timeout (that long without a byte), retry
+/// transient failures in place, and keep a failed attempt's partial file to
+/// resume with a `Range` request next time.
 pub struct ReqwestTransport {
     client: reqwest::Client,
+    download_client: reqwest::Client,
     download_root: Option<PathBuf>,
+    download_retries: u32,
+    retry_backoff: std::time::Duration,
 }
 
 impl ReqwestTransport {
+    /// `timeout` bounds a whole API call, and how long a download may go
+    /// without receiving a byte.
     pub fn new(user_agent: &str, timeout: std::time::Duration) -> Result<Self, TransportError> {
-        let client = reqwest::Client::builder()
-            .user_agent(user_agent)
-            .timeout(timeout)
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::none())
-            .use_rustls_tls()
-            .build()
-            .map_err(|e| TransportError::Network(e.without_url().to_string()))?;
+        let base = || {
+            reqwest::Client::builder()
+                .user_agent(user_agent)
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .redirect(reqwest::redirect::Policy::none())
+                .use_rustls_tls()
+        };
+        let build_err = |e: reqwest::Error| TransportError::Network(e.without_url().to_string());
+        let client = base().timeout(timeout).build().map_err(build_err)?;
+        let download_client = base().read_timeout(timeout).build().map_err(build_err)?;
         Ok(ReqwestTransport {
             client,
+            download_client,
             download_root: None,
+            download_retries: 3,
+            retry_backoff: std::time::Duration::from_secs(1),
         })
     }
 
@@ -168,6 +184,14 @@ impl ReqwestTransport {
     /// (the app's data + cache directories' common parent, typically).
     pub fn with_download_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.download_root = Some(root.into());
+        self
+    }
+
+    /// In-place retries of a download after a network error or timeout, the
+    /// first after `backoff`, doubling after that.
+    pub fn with_download_retries(mut self, retries: u32, backoff: std::time::Duration) -> Self {
+        self.download_retries = retries;
+        self.retry_backoff = backoff;
         self
     }
 
@@ -186,6 +210,232 @@ impl ReqwestTransport {
         }
         b
     }
+
+    /// One GET of `url` into a temp file, resuming `partial` when the server
+    /// answers its range request with the matching `206`. On a failure
+    /// mid-body, the partial file comes back with the error (when it can be
+    /// resumed); otherwise every temp file is removed.
+    async fn download_once(
+        &self,
+        url: &Url,
+        dest: &Path,
+        partial: Option<Partial>,
+        progress: Option<&ProgressFn>,
+    ) -> Result<DownloadOutcome, (TransportError, Option<Partial>)> {
+        use futures::StreamExt;
+        use reqwest::header;
+        use tokio::io::AsyncWriteExt;
+        let mut req = self.download_client.get(url.clone());
+        if let Some(p) = &partial {
+            req = req.header(header::RANGE, format!("bytes={}-", p.len));
+            if let Some(v) = &p.validator {
+                req = req.header(header::IF_RANGE, v);
+            }
+        }
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => return Err((map_reqwest(e), partial)),
+        };
+        let status = resp.status().as_u16();
+        let headers = resp.headers();
+        let text = |name: header::HeaderName| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(String::from)
+        };
+        let content_type = text(header::CONTENT_TYPE);
+        let validator = text(header::ETAG).or_else(|| text(header::LAST_MODIFIED));
+        let content_range = text(header::CONTENT_RANGE);
+        let resumed = match (&partial, status) {
+            (Some(p), 206) => {
+                if content_range.as_deref().and_then(parse_content_range) != Some((p.len, p.total))
+                {
+                    // Not the bytes we asked for: start over.
+                    discard(partial).await;
+                    return Err((
+                        TransportError::Network("unexpected partial response".into()),
+                        None,
+                    ));
+                }
+                partial
+            }
+            (_, 416) => {
+                discard(partial).await;
+                return Err((
+                    TransportError::Network("range not satisfiable".into()),
+                    None,
+                ));
+            }
+            (None, 206) => {
+                return Err((
+                    TransportError::Network("unexpected partial response".into()),
+                    None,
+                ));
+            }
+            (_, s) if !(200..300).contains(&s) => {
+                // The caller judges the status; a partial waits for a later
+                // attempt (an expired token, a server restarting).
+                if let Some(p) = partial {
+                    stash_partial(dest, p).await;
+                }
+                return Ok(DownloadOutcome {
+                    status,
+                    content_type,
+                    bytes: 0,
+                });
+            }
+            _ => {
+                // A full body (the server ignored or refused the range).
+                discard(partial).await;
+                None
+            }
+        };
+        let (tmp, base, total, validator) = match resumed {
+            Some(p) => (p.tmp, p.len, Some(p.total), p.validator),
+            None => (part_path(dest), 0, resp.content_length(), validator),
+        };
+        let file = if base > 0 {
+            tokio::fs::OpenOptions::new().append(true).open(&tmp).await
+        } else {
+            tokio::fs::File::create(&tmp).await
+        };
+        let mut file = match file {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err((e.into(), None));
+            }
+        };
+        let mut written = base;
+        let result: Result<(), TransportError> = async {
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(map_reqwest)?;
+                file.write_all(&chunk).await?;
+                written += chunk.len() as u64;
+                if let Some(p) = progress {
+                    p(written, total);
+                }
+            }
+            file.flush().await?;
+            Ok(())
+        }
+        .await;
+        drop(file);
+        if let Err(e) = result {
+            let resumable = matches!(e, TransportError::Network(_) | TransportError::Timeout)
+                && written > 0
+                && total.is_some_and(|t| written < t);
+            if resumable {
+                let p = Partial {
+                    tmp,
+                    len: written,
+                    total: total.unwrap_or(0),
+                    validator,
+                };
+                return Err((e, Some(p)));
+            }
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err((e, None));
+        }
+        if let Err(e) = tokio::fs::rename(&tmp, dest).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err((e.into(), None));
+        }
+        Ok(DownloadOutcome {
+            status: if base > 0 { 200 } else { status },
+            content_type,
+            bytes: written,
+        })
+    }
+}
+
+/// The bytes of an interrupted download, owned by one caller: a temp file
+/// holding the first `len` of `total` bytes, and the response's `ETag` (or
+/// `Last-Modified`) to send as `If-Range` so a changed file restarts.
+struct Partial {
+    tmp: PathBuf,
+    len: u64,
+    total: u64,
+    validator: Option<String>,
+}
+
+async fn discard(partial: Option<Partial>) {
+    if let Some(p) = partial {
+        let _ = tokio::fs::remove_file(&p.tmp).await;
+    }
+}
+
+/// Where an interrupted download of `dest` waits to be resumed (its total
+/// size and validator sit beside it in `<that>.meta`).
+pub fn resume_path(dest: &Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    dest.with_file_name(format!("{name}.resume"))
+}
+
+fn resume_meta_path(dest: &Path) -> PathBuf {
+    let mut p = resume_path(dest).into_os_string();
+    p.push(".meta");
+    PathBuf::from(p)
+}
+
+/// Park a partial download next to `dest` for a later call to resume.
+async fn stash_partial(dest: &Path, p: Partial) {
+    let meta = format!("{}\n{}", p.total, p.validator.unwrap_or_default());
+    let parked = async {
+        tokio::fs::write(resume_meta_path(dest), meta).await?;
+        tokio::fs::rename(&p.tmp, resume_path(dest)).await
+    }
+    .await;
+    if parked.is_err() {
+        let _ = tokio::fs::remove_file(&p.tmp).await;
+        let _ = tokio::fs::remove_file(resume_meta_path(dest)).await;
+    }
+}
+
+/// Take ownership of a parked partial download of `dest`, if any: renamed
+/// to a unique temp name first, so two callers never both append to it.
+async fn claim_partial(dest: &Path) -> Option<Partial> {
+    let tmp = part_path(dest);
+    tokio::fs::rename(resume_path(dest), &tmp).await.ok()?;
+    let meta = tokio::fs::read_to_string(resume_meta_path(dest))
+        .await
+        .unwrap_or_default();
+    let _ = tokio::fs::remove_file(resume_meta_path(dest)).await;
+    let len = tokio::fs::metadata(&tmp)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let (total, validator) = meta.split_once('\n').unwrap_or(("", ""));
+    match total.parse::<u64>() {
+        Ok(total) if len > 0 && len < total => Some(Partial {
+            tmp,
+            len,
+            total,
+            validator: (!validator.is_empty()).then(|| validator.to_string()),
+        }),
+        _ => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            None
+        }
+    }
+}
+
+/// `bytes <start>-<end>/<total>` → `(start, total)`.
+fn parse_content_range(v: &str) -> Option<(u64, u64)> {
+    let rest = v.trim().strip_prefix("bytes ")?;
+    let (range, total) = rest.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let (start, end, total) = (
+        start.trim().parse::<u64>().ok()?,
+        end.trim().parse::<u64>().ok()?,
+        total.trim().parse::<u64>().ok()?,
+    );
+    (start <= end && end < total).then_some((start, total))
 }
 
 /// reqwest errors print their URL (with the auth query) in `Display`;
@@ -243,63 +493,34 @@ impl HttpTransport for ReqwestTransport {
     ) -> BoxFuture<'_, Result<DownloadOutcome, TransportError>> {
         let dest = dest.to_path_buf();
         Box::pin(async move {
-            use futures::StreamExt;
-            use tokio::io::AsyncWriteExt;
             check_download_dest(&dest, self.download_root.as_deref())?;
-            let resp = self.client.get(url).send().await.map_err(map_reqwest)?;
-            let status = resp.status().as_u16();
-            let content_type = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(String::from);
-            if !(200..300).contains(&status) {
-                return Ok(DownloadOutcome {
-                    status,
-                    content_type,
-                    bytes: 0,
-                });
-            }
-            let total = resp.content_length();
             if let Some(parent) = dest.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            // Unique temp name: concurrent writers for the same dest never
-            // share it, and `dest` only ever appears by a completed rename.
-            let tmp = part_path(&dest);
-            let mut file = tokio::fs::File::create(&tmp).await?;
-            let written: Result<u64, TransportError> = async {
-                let mut stream = resp.bytes_stream();
-                let mut written: u64 = 0;
-                while let Some(chunk) = stream.next().await {
-                    let chunk = chunk.map_err(map_reqwest)?;
-                    file.write_all(&chunk).await?;
-                    written += chunk.len() as u64;
-                    if let Some(p) = &progress {
-                        p(written, total);
+            let mut partial = claim_partial(&dest).await;
+            let mut attempt = 0;
+            loop {
+                match self
+                    .download_once(&url, &dest, partial.take(), progress.as_ref())
+                    .await
+                {
+                    Ok(out) => return Ok(out),
+                    Err((e, p)) => {
+                        let transient =
+                            matches!(e, TransportError::Network(_) | TransportError::Timeout);
+                        if transient && attempt < self.download_retries {
+                            tokio::time::sleep(self.retry_backoff * 2u32.pow(attempt)).await;
+                            attempt += 1;
+                            partial = p;
+                            continue;
+                        }
+                        if let Some(p) = p {
+                            stash_partial(&dest, p).await;
+                        }
+                        return Err(e);
                     }
                 }
-                file.flush().await?;
-                Ok(written)
             }
-            .await;
-            drop(file);
-            let written = match written {
-                Ok(n) => n,
-                Err(e) => {
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                    return Err(e);
-                }
-            };
-            if let Err(e) = tokio::fs::rename(&tmp, &dest).await {
-                let _ = tokio::fs::remove_file(&tmp).await;
-                return Err(e.into());
-            }
-            Ok(DownloadOutcome {
-                status,
-                content_type,
-                bytes: written,
-            })
         })
     }
 }

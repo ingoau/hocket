@@ -836,20 +836,27 @@ impl Db {
         })
     }
 
-    pub fn set_track_offline(&self, id: &str, state: OfflineState) -> DbResult<bool> {
+    /// Set one account's copy of a track (track ids are only unique per
+    /// server; the key is `(server_id, id)`).
+    pub fn set_track_offline(
+        &self,
+        server_id: &str,
+        id: &str,
+        state: OfflineState,
+    ) -> DbResult<bool> {
         self.with_conn(|c| {
             Ok(c.execute(
-                "UPDATE tracks SET offline = ?2 WHERE id = ?1",
-                params![id, offline_to_i64(state)],
+                "UPDATE tracks SET offline = ?3 WHERE server_id = ?1 AND id = ?2",
+                params![server_id, id, offline_to_i64(state)],
             )? > 0)
         })
     }
 
-    pub fn set_track_has_lyrics(&self, id: &str, has: bool) -> DbResult<bool> {
+    pub fn set_track_has_lyrics(&self, server_id: &str, id: &str, has: bool) -> DbResult<bool> {
         self.with_conn(|c| {
             Ok(c.execute(
-                "UPDATE tracks SET has_lyrics = ?2 WHERE id = ?1",
-                params![id, has as i64],
+                "UPDATE tracks SET has_lyrics = ?3 WHERE server_id = ?1 AND id = ?2",
+                params![server_id, id, has as i64],
             )? > 0)
         })
     }
@@ -2252,9 +2259,42 @@ mod tests {
         );
         assert_eq!(offline("none"), OfflineState::None);
         // An update leaves the column to the downloads layer.
-        db.set_track_offline("none", OfflineState::Cached).unwrap();
+        db.set_track_offline("s", "none", OfflineState::Cached)
+            .unwrap();
         db.upsert_tracks(&tracks, &[], 2).unwrap();
         assert_eq!(offline("none"), OfflineState::Cached);
+    }
+
+    /// Track ids are only unique per server: offline and lyrics flags are
+    /// written to one account's row, never to another account's song that
+    /// happens to share the id.
+    #[test]
+    fn offline_and_lyrics_flags_are_per_account() {
+        let db = Db::open_in_memory().unwrap();
+        let a = t("same", "Song", "A", "B");
+        let mut b = a.clone();
+        b.server_id = "other".into();
+        db.upsert_tracks(&[a], &[], 1).unwrap();
+        db.upsert_tracks(&[b], &[], 1).unwrap();
+        assert!(db
+            .set_track_offline("s", "same", OfflineState::Downloaded)
+            .unwrap());
+        assert!(db.set_track_has_lyrics("other", "same", true).unwrap());
+        assert!(!db
+            .set_track_offline("nobody", "same", OfflineState::Cached)
+            .unwrap());
+        let row = |sid: &str| -> (i64, i64) {
+            db.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT offline, has_lyrics FROM tracks WHERE server_id = ?1 AND id = 'same'",
+                    [sid],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap()
+        };
+        assert_eq!(row("s"), (offline_to_i64(OfflineState::Downloaded), 0));
+        assert_eq!(row("other"), (offline_to_i64(OfflineState::None), 1));
     }
 
     #[test]
@@ -2617,7 +2657,8 @@ mod tests {
         let back = db.track("x").unwrap().unwrap();
         assert_eq!(back, full);
         // local columns survive a re-upsert
-        db.set_track_offline("x", OfflineState::Downloaded).unwrap();
+        db.set_track_offline("s", "x", OfflineState::Downloaded)
+            .unwrap();
         db.set_track_sonic(
             "x",
             &api::SonicAttributes {
@@ -2820,7 +2861,8 @@ mod tests {
         let g0 = db.tracks_generation();
         db.saved_state_set_raw("k", "{}", &WallClock).unwrap();
         assert_eq!(db.tracks_generation(), g0, "other tables do not count");
-        db.set_track_offline("1", OfflineState::Downloaded).unwrap();
+        db.set_track_offline("s", "1", OfflineState::Downloaded)
+            .unwrap();
         let g1 = db.tracks_generation();
         assert!(g1 > g0);
         db.with_conn(|c| Ok(c.execute("DELETE FROM tracks WHERE id = '2'", [])?))

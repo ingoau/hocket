@@ -425,7 +425,9 @@ impl Caches {
                 lyrics,
             )
         })?;
-        self.inner.db.set_track_has_lyrics(track_id, true)?;
+        self.inner
+            .db
+            .set_track_has_lyrics(server_id, track_id, true)?;
         self.enforce_lyrics_budget()?;
         Ok(())
     }

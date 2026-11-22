@@ -285,6 +285,9 @@ struct Inner {
 /// `(server_id, track_id)`: a track whose offline state may have changed.
 pub type TrackKey = (String, String);
 
+/// A parked partial download nobody resumed in this long is swept at startup.
+const RESUME_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(7 * 86_400);
+
 /// Which stream-cache files are in use right now, and which removals wait
 /// for them. A file is in use while a reader (the loopback proxy serving
 /// it) holds it open, or while its track is loaded or preloaded in the
@@ -366,6 +369,7 @@ impl Downloads {
         }
         .spawn_gain_worker(gain_rx)
         .sweep_stream_cache()
+        .sweep_download_temps()
         .reconcile_at_start()
     }
 
@@ -506,6 +510,44 @@ impl Downloads {
                 if p.is_file() && (part || orphan) {
                     if let Err(e) = std::fs::remove_file(&p) {
                         tracing::warn!(error = %e, "removing stale stream-cache file");
+                    }
+                }
+            }
+        }
+        self
+    }
+
+    /// Startup: temp files in the downloads directories nothing will
+    /// finish: `.part` files of a process that died mid-download, and
+    /// partials parked for resuming ([`resume_path`]) that no fetch picked
+    /// up within [`RESUME_MAX_AGE`] (their pin went, or the file changed).
+    ///
+    /// [`resume_path`]: crate::subsonic::transport::resume_path
+    fn sweep_download_temps(self) -> Self {
+        let Ok(servers) = std::fs::read_dir(self.inner.data_dir.join("downloads")) else {
+            return self;
+        };
+        let now = std::time::SystemTime::now();
+        for dir in servers.flatten().filter(|e| e.path().is_dir()) {
+            let Ok(files) = std::fs::read_dir(dir.path()) else {
+                continue;
+            };
+            for f in files.flatten() {
+                let name = f.file_name().to_string_lossy().into_owned();
+                let stale = if name.ends_with(".part") {
+                    true
+                } else if name.ends_with(".resume") || name.ends_with(".resume.meta") {
+                    f.metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| now.duration_since(t).ok())
+                        .is_some_and(|age| age > RESUME_MAX_AGE)
+                } else {
+                    false
+                };
+                if stale && f.path().is_file() {
+                    if let Err(e) = std::fs::remove_file(f.path()) {
+                        tracing::warn!(error = %e, "removing a stale download temp file");
                     }
                 }
             }
@@ -805,7 +847,7 @@ impl Downloads {
         for m in &missing {
             self.inner
                 .db
-                .set_track_offline(m, OfflineState::Downloading)?;
+                .set_track_offline(server_id, m, OfflineState::Downloading)?;
         }
         let (label, _) = self.describe(target)?;
         let payload = serde_json::to_string(&DownloadJobPayload {
@@ -876,6 +918,12 @@ impl Downloads {
             id: playlist_id.into(),
         };
         if !self.is_pinned(server_id, &target)? {
+            return Ok(None);
+        }
+        // A playlist deleted (or unshared) on the server leaves the mirror,
+        // and with it all its members. That is not "every song was removed":
+        // keep the pin and its files, so what was downloaded stays playable.
+        if self.inner.db.playlist(playlist_id)?.is_none() {
             return Ok(None);
         }
         let members = self.member_ids(server_id, &target)?;
@@ -1004,6 +1052,69 @@ impl Downloads {
         Ok(p.map(PathBuf::from).filter(|p| p.exists()))
     }
 
+    /// Finished downloads whose file is gone (deleted outside the app, a
+    /// cleared data directory) or no longer the size we stored go back to
+    /// `wanted`, so the track stops showing as downloaded and is fetched
+    /// again. Returns the tracks whose offline state changed and the fetch
+    /// jobs for the pins that lost files. Run at startup and from hourly
+    /// housekeeping.
+    pub fn reconcile_downloads(&self) -> Result<(Vec<TrackKey>, Vec<JobSpec>), DownloadError> {
+        let done: Vec<(String, String, Option<String>, f64)> = self.inner.db.with_conn(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT DISTINCT server_id, track_id, path, bytes FROM pin_tracks WHERE state = 'done'",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })?;
+        let lost: Vec<(String, String, Option<String>)> = done
+            .into_iter()
+            .filter(|(_, _, path, bytes)| !path.as_deref().is_some_and(|p| file_intact(p, *bytes)))
+            .map(|(sid, tid, path, _)| (sid, tid, path))
+            .collect();
+        if lost.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+        let targets: Vec<(String, String, String, bool)> = self.inner.db.with_tx(|tx| {
+            let mut targets = vec![];
+            for (sid, tid, path) in &lost {
+                let mut st = tx.prepare_cached(
+                    "SELECT t.target_kind, t.target_id, COALESCE(p.transcoded, 0) FROM pin_tracks t
+                     LEFT JOIN pins p ON p.server_id = t.server_id AND p.target_kind = t.target_kind AND p.target_id = t.target_id
+                     WHERE t.server_id = ?1 AND t.track_id = ?2 AND t.state = 'done' AND t.path IS ?3",
+                )?;
+                let rows = st.query_map(params![sid, tid, path], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? != 0))
+                })?;
+                for row in rows {
+                    let (kind, id, transcoded) = row?;
+                    let t = (sid.clone(), kind, id, transcoded);
+                    if !targets.contains(&t) {
+                        targets.push(t);
+                    }
+                }
+                tx.execute(
+                    "UPDATE pin_tracks SET state = 'wanted', path = NULL, bytes = 0, downloaded_at = NULL, error = NULL
+                     WHERE server_id = ?1 AND track_id = ?2 AND state = 'done' AND path IS ?3",
+                    params![sid, tid, path],
+                )?;
+            }
+            Ok(targets)
+        })?;
+        let mut changed: Vec<TrackKey> = vec![];
+        for (sid, tid, path) in lost {
+            tracing::warn!(track = %tid, path = ?path, "downloaded file missing; fetching it again");
+            self.refresh_offline(&sid, &tid)?;
+            changed.push((sid, tid));
+        }
+        let mut specs = vec![];
+        for (sid, kind, id, transcoded) in targets {
+            if let Some(spec) = self.plan(&sid, &target_from(&kind, &id), transcoded)? {
+                specs.push(spec);
+            }
+        }
+        Ok((changed, specs))
+    }
+
     /// Recompute `tracks.offline` from pins and cache.
     pub fn refresh_offline(&self, server_id: &str, track_id: &str) -> DbResult<()> {
         let state = self.inner.db.with_conn(|c| {
@@ -1018,7 +1129,9 @@ impl Downloads {
             let cached: i64 = c.query_row("SELECT count(*) FROM cache_entries WHERE server_id = ?1 AND track_id = ?2 AND complete = 1", params![server_id, track_id], |r| r.get(0))?;
             Ok(if cached > 0 { OfflineState::Cached } else { OfflineState::None })
         })?;
-        self.inner.db.set_track_offline(track_id, state)?;
+        self.inner
+            .db
+            .set_track_offline(server_id, track_id, state)?;
         Ok(())
     }
 
@@ -2120,22 +2233,56 @@ pub(crate) fn profile_key(p: Option<&TranscodingProfile>) -> String {
 }
 
 /// Copy the finished file of one pin onto the `wanted` rows of others for
-/// the same track (all of the server's targets, or just one).
+/// the same track (all of the server's targets, or just one). Only a file
+/// still on disk at its stored size is shared: a dead path stays `wanted`
+/// and is fetched again.
 fn satisfy_wanted_from_done(
     tx: &rusqlite::Connection,
     server_id: &str,
     target: Option<(&str, &str)>,
 ) -> DbResult<()> {
     let (kind, id) = target.unwrap_or(("", ""));
-    tx.execute(
-        "UPDATE pin_tracks SET state = 'done', path = (SELECT o.path FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' AND o.path IS NOT NULL LIMIT 1),
-                bytes = (SELECT o.bytes FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' LIMIT 1),
-                gain_db = (SELECT o.gain_db FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done' LIMIT 1)
-         WHERE server_id = ?1 AND (?4 = 0 OR (target_kind = ?2 AND target_id = ?3)) AND state = 'wanted'
-           AND EXISTS (SELECT 1 FROM pin_tracks o WHERE o.server_id = pin_tracks.server_id AND o.track_id = pin_tracks.track_id AND o.state = 'done')",
-        params![server_id, kind, id, target.is_some() as i64],
-    )?;
+    let scoped = target.is_some() as i64;
+    let tracks: Vec<String> = {
+        let mut st = tx.prepare_cached(
+            "SELECT DISTINCT w.track_id FROM pin_tracks w
+             WHERE w.server_id = ?1 AND (?4 = 0 OR (w.target_kind = ?2 AND w.target_id = ?3)) AND w.state = 'wanted'
+               AND EXISTS (SELECT 1 FROM pin_tracks o WHERE o.server_id = w.server_id AND o.track_id = w.track_id AND o.state = 'done' AND o.path IS NOT NULL)",
+        )?;
+        let rows = st.query_map(params![server_id, kind, id, scoped], |r| r.get(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for track_id in tracks {
+        let sources: Vec<(String, f64, Option<f64>, Option<f64>)> = {
+            let mut st = tx.prepare_cached(
+                "SELECT path, bytes, gain_db, peak FROM pin_tracks WHERE server_id = ?1 AND track_id = ?2 AND state = 'done' AND path IS NOT NULL",
+            )?;
+            let rows = st.query_map(params![server_id, track_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let Some((path, bytes, gain_db, peak)) =
+            sources.into_iter().find(|(p, b, _, _)| file_intact(p, *b))
+        else {
+            continue;
+        };
+        tx.execute(
+            "UPDATE pin_tracks SET state = 'done', path = ?5, bytes = ?6, gain_db = COALESCE(gain_db, ?7), peak = COALESCE(peak, ?8)
+             WHERE server_id = ?1 AND track_id = ?9 AND (?4 = 0 OR (target_kind = ?2 AND target_id = ?3)) AND state = 'wanted'",
+            params![server_id, kind, id, scoped, path, bytes, gain_db, peak, track_id],
+        )?;
+    }
     Ok(())
+}
+
+/// A finished download is still usable: the file exists and, when a size
+/// was stored, has that size.
+fn file_intact(path: &str, bytes: f64) -> bool {
+    match std::fs::metadata(path) {
+        Ok(m) => m.is_file() && (bytes <= 0.0 || m.len() as f64 == bytes),
+        Err(_) => false,
+    }
 }
 
 /// `remove_file` that treats "already gone" as success. `Ok(true)` when a
@@ -2701,6 +2848,129 @@ mod tests {
             .unwrap()
             .is_none());
         // album pins are fixed: changing album contents doesn't matter (no reconcile API for them)
+    }
+
+    /// Files deleted (or truncated) outside the app stop counting as
+    /// downloaded and are fetched again.
+    #[tokio::test]
+    async fn missing_download_files_go_back_to_wanted_and_refetch() {
+        let f = fixture();
+        let album = PinTarget::Album { id: "al0".into() };
+        run_job(&f, f.dl.pin("srv", &album, false).unwrap().unwrap()).await;
+        let (lost, specs) = f.dl.reconcile_downloads().unwrap();
+        assert!(lost.is_empty() && specs.is_empty());
+        let t1 = f.dl.downloaded_path("srv", "t1").unwrap().unwrap();
+        let t2 = f.dl.downloaded_path("srv", "t2").unwrap().unwrap();
+        std::fs::remove_file(&t1).unwrap();
+        std::fs::write(&t2, b"short").unwrap();
+
+        let (lost, specs) = f.dl.reconcile_downloads().unwrap();
+        let mut lost_ids: Vec<_> = lost.iter().map(|(_, t)| t.as_str()).collect();
+        lost_ids.sort();
+        assert_eq!(lost_ids, vec!["t1", "t2"]);
+        assert_eq!(specs.len(), 1, "one job for the album pin");
+        let mut items = specs[0].items.clone();
+        items.sort();
+        assert_eq!(items, vec!["t1", "t2"]);
+        assert!(f.dl.downloaded_path("srv", "t1").unwrap().is_none());
+        assert_eq!(
+            f.db.track("t1").unwrap().unwrap().offline,
+            OfflineState::Downloading
+        );
+        assert_eq!(
+            f.db.track("t0").unwrap().unwrap().offline,
+            OfflineState::Downloaded
+        );
+        let pin = f.dl.pins("srv").unwrap().remove(0);
+        assert_eq!(pin.downloaded_count, 1);
+        // Nothing more to do until the job runs; then it's whole again.
+        assert_eq!(f.dl.reconcile_downloads().unwrap().0, vec![]);
+        run_job(&f, specs.into_iter().next().unwrap()).await;
+        assert!(f.dl.downloaded_path("srv", "t1").unwrap().is_some());
+        assert_eq!(std::fs::read(&t2).unwrap().len(), 1000);
+        assert_eq!(f.dl.pins("srv").unwrap()[0].downloaded_count, 3);
+    }
+
+    /// Startup drops crash-leftover `.part` files and resume partials nobody
+    /// picked up for a week; fresh partials and finished files stay.
+    #[test]
+    fn startup_sweeps_stale_download_temps() {
+        let f = fixture();
+        let d = f.dl.downloads_dir("srv");
+        std::fs::create_dir_all(&d).unwrap();
+        for n in [
+            "a.flac",
+            "b.flac.x1.part",
+            "c.flac.resume",
+            "c.flac.resume.meta",
+            "o.flac.resume",
+        ] {
+            std::fs::write(d.join(n), b"x").unwrap();
+        }
+        let old = std::time::SystemTime::now() - RESUME_MAX_AGE * 2;
+        std::fs::File::options()
+            .write(true)
+            .open(d.join("o.flac.resume"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let _again = Downloads::new(
+            f.db.clone(),
+            Arc::new(WallClock),
+            f.storage.clone(),
+            &f.dir.path().join("data"),
+            &f.dir.path().join("cache"),
+            Platform::Linux,
+        );
+        let mut left: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, vec!["a.flac", "c.flac.resume", "c.flac.resume.meta"]);
+    }
+
+    /// A second pin never inherits another pin's dead file: it fetches it.
+    #[tokio::test]
+    async fn a_new_pin_does_not_inherit_a_missing_file() {
+        let f = fixture();
+        let album = PinTarget::Album { id: "al0".into() };
+        run_job(&f, f.dl.pin("srv", &album, false).unwrap().unwrap()).await;
+        std::fs::remove_file(f.dl.downloaded_path("srv", "t0").unwrap().unwrap()).unwrap();
+        let song = PinTarget::Track { id: "t0".into() };
+        let spec = f.dl.pin("srv", &song, false).unwrap().expect("fetches t0");
+        assert_eq!(spec.items, vec!["t0"]);
+        // A live file is still shared.
+        let t1 = PinTarget::Track { id: "t1".into() };
+        assert!(f.dl.pin("srv", &t1, false).unwrap().is_none());
+        run_job(&f, spec).await;
+        assert!(f.dl.downloaded_path("srv", "t0").unwrap().is_some());
+    }
+
+    /// A pinned playlist that disappears from the server (deleted, or no
+    /// longer shared) is swept from the mirror with all its members. That
+    /// must not read as "every song removed": the pin and its files stay.
+    #[tokio::test]
+    async fn playlist_gone_from_server_keeps_its_downloads() {
+        let f = fixture();
+        let pl = PinTarget::Playlist { id: "pl".into() };
+        run_job(&f, f.dl.pin("srv", &pl, false).unwrap().unwrap()).await;
+        let t0 = f.dl.downloaded_path("srv", "t0").unwrap().unwrap();
+        // A sync whose getPlaylists no longer lists it.
+        f.db.with_tx(|tx| crate::db::queries::sweep(tx, "playlists", "srv", 99).map(|_| ()))
+            .unwrap();
+        assert!(f.db.playlist("pl").unwrap().is_none());
+        assert!(f.dl.reconcile_playlist("srv", "pl").unwrap().is_none());
+        assert!(t0.exists(), "file kept");
+        assert!(f.dl.downloaded_path("srv", "t4").unwrap().is_some());
+        assert!(f.dl.is_pinned("srv", &pl).unwrap());
+        let pin = f.dl.pins("srv").unwrap().remove(0);
+        assert_eq!((pin.track_count, pin.downloaded_count), (2, 2));
+        assert_eq!(
+            f.db.track("t0").unwrap().unwrap().offline,
+            OfflineState::Downloaded
+        );
     }
 
     #[tokio::test]

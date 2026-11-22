@@ -1143,7 +1143,7 @@ mod tests {
         let s = server();
         let sync = sync_for(&db, &s, Arc::new(Mutex::new(vec![])));
         sync.run(true, &NoopObserver).await.unwrap();
-        db.set_track_offline("s03", api::OfflineState::Downloaded)
+        db.set_track_offline("srv", "s03", api::OfflineState::Downloaded)
             .unwrap();
         {
             let mut st = s.state.lock();
