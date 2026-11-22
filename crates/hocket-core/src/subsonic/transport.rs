@@ -63,6 +63,17 @@ pub fn check_download_dest(dest: &Path, root: Option<&Path>) -> std::io::Result<
 
 /// A unique sibling temp name for `dest` (`<name>.<random>.part`), so two
 /// writers for the same destination never share a temp file.
+/// A download's part file, removed on drop unless taken (renamed into place).
+struct PartFile(Option<PathBuf>);
+
+impl Drop for PartFile {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 pub fn part_path(dest: &Path) -> PathBuf {
     let name = dest
         .file_name()
@@ -267,6 +278,9 @@ impl HttpTransport for ReqwestTransport {
             // Unique temp name: concurrent writers for the same dest never
             // share it, and `dest` only ever appears by a completed rename.
             let tmp = part_path(&dest);
+            // Removes the part file if this future is dropped mid-transfer
+            // (a cover nobody waits for any more is cancelled).
+            let mut part = PartFile(Some(tmp.clone()));
             let mut file = tokio::fs::File::create(&tmp).await?;
             let written: Result<u64, TransportError> = async {
                 let mut stream = resp.bytes_stream();
@@ -295,6 +309,7 @@ impl HttpTransport for ReqwestTransport {
                 let _ = tokio::fs::remove_file(&tmp).await;
                 return Err(e.into());
             }
+            part.0 = None;
             Ok(DownloadOutcome {
                 status,
                 content_type,

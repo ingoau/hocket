@@ -554,20 +554,41 @@ impl Actor {
             let _ = reply.send(QueryResult::Path(Some(p.to_string_lossy().into_owned())));
             return;
         }
+        // No server to ask: the nearest size cached (a download's cover is
+        // kept at a few), or nothing, at once rather than after a timeout.
+        // The shell asks again on a network change.
+        if self.artwork_unreachable(&sid) {
+            let p = self
+                .caches
+                .artwork_cached_any(&sid, &id, size)
+                .ok()
+                .flatten();
+            let _ = reply.send(QueryResult::Path(
+                p.map(|p| p.to_string_lossy().into_owned()),
+            ));
+            return;
+        }
         let Some(api) = self.provider_for(&sid) else {
             let _ = reply.send(QueryResult::Path(None));
             return;
         };
         let caches = self.caches.clone();
+        let mut reply = reply;
         self.spawn(async move {
             // A failed fetch answers "no file" like a missing image; the
-            // shell asks again (a later attempt, a network change).
-            let path = match caches.artwork_path(api.as_ref(), &id, size).await {
-                Ok(p) => p.map(|p| p.to_string_lossy().into_owned()),
-                Err(e) => {
-                    tracing::debug!(target: "hocket_core", id = %id, size, error = %e, "artwork fetch failed");
-                    None
-                }
+            // shell asks again (a later attempt, a network change). An asker
+            // that leaves (a row scrolled away) drops its share of the fetch,
+            // which stops once no one waits for it.
+            let fetch = caches.artwork_path(api, &id, size);
+            let path = tokio::select! {
+                r = fetch => match r {
+                    Ok(p) => p.map(|p| p.to_string_lossy().into_owned()),
+                    Err(e) => {
+                        tracing::debug!(target: "hocket_core", id = %id, size, error = %e, "artwork fetch failed");
+                        None
+                    }
+                },
+                _ = reply.closed() => return,
             };
             let _ = reply.send(QueryResult::Path(path));
         });

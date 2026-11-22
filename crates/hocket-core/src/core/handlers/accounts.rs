@@ -529,8 +529,14 @@ impl Actor {
         self.jobs.register(
             JobKind::Download,
             2,
-            Arc::new(DownloadRunner::new(self.downloads.clone(), providers)),
+            Arc::new(
+                DownloadRunner::new(self.downloads.clone(), providers).with_covers(
+                    self.caches.clone(),
+                    crate::cache::download_cover_sizes(self.cfg.platform),
+                ),
+            ),
         );
+        self.keep_download_covers();
     }
 
     pub(crate) fn job_op(&mut self, op: &str, id: &str) {
@@ -936,6 +942,8 @@ impl Actor {
             for id in stale {
                 self.probe_account(&id);
             }
+            // Downloads whose covers were never kept (or failed) get them now.
+            self.keep_download_covers();
         }
         // The stream URL may change with the network's transcoding profile.
         if self.playback.loaded && self.owns_transport() {

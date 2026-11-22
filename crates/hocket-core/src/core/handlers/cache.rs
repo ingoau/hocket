@@ -45,6 +45,37 @@ impl Actor {
             .is_some_and(|n| n.kind == NetworkKind::Offline)
     }
 
+    /// Artwork for this account can't come from the server now: the device
+    /// is offline, or the server didn't answer its last probe. An artwork
+    /// ask then answers from what is cached instead of waiting out a
+    /// connect timeout.
+    pub(crate) fn artwork_unreachable(&self, source: &str) -> bool {
+        self.is_offline()
+            || self
+                .accounts
+                .for_source(source)
+                .is_some_and(|a| !a.info.reachable && !a.probing)
+    }
+
+    /// Fetch, in the background, the covers of every account's downloads
+    /// that are not cached yet (downloads from before covers were kept, or
+    /// whose covers failed).
+    pub(crate) fn keep_download_covers(&mut self) {
+        if self.is_offline() {
+            return;
+        }
+        let sizes = crate::cache::download_cover_sizes(self.cfg.platform);
+        for sid in self.accounts.ids() {
+            let Some(provider) = self.provider_for(&sid) else {
+                continue;
+            };
+            let caches = self.caches.clone();
+            self.spawn(async move {
+                caches.keep_download_covers(provider, sizes).await;
+            });
+        }
+    }
+
     /// Playable with no network: downloaded, or complete in the stream
     /// cache (in the profile playback asks for, the original, or another
     /// complete variant).

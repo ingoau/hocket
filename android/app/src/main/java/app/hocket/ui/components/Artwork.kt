@@ -76,9 +76,11 @@ fun Artwork(
     // A fresh run of retries on each network change (the link may take a moment to carry traffic).
     var attempt by remember(cacheKey, network) { mutableIntStateOf(0) }
     LaunchedEffect(cacheKey, attempt, network) {
-        if (state.value?.path != null) return@LaunchedEffect
+        // A stand-in size (the core answers with what it has when the server can't be reached) is
+        // asked for again on a network change, and never remembered as this size's file.
+        if (state.value?.let { it.path != null && isExactArtwork(it.path, requested) } == true) return@LaunchedEffect
         val path = client.artworkPath(coverArt, requested)
-        if (cacheKey != null && path != null) ArtworkPathCache.put(cacheKey, path)
+        if (cacheKey != null && path != null && isExactArtwork(path, requested)) ArtworkPathCache.put(cacheKey, path)
         state.value = Resolved(path)
         if (path == null && coverArt != null && attempt < ARTWORK_RETRIES) {
             delay(ARTWORK_RETRY_MS shl attempt)
@@ -144,6 +146,19 @@ fun Artwork(
 }
 
 private class Resolved(val path: String?)
+
+/** The core's cache sizes ("<id>_<size>.img"); a request snaps up to the nearest. */
+private val CORE_ARTWORK_SIZES = intArrayOf(64, 160, 320, 640, 1280)
+
+/**
+ * Whether [path] is the core's file for [size] itself rather than another size standing in for it
+ * (offline, the core answers with whichever size it kept). Paths of another shape count as exact.
+ */
+internal fun isExactArtwork(path: String, size: Int): Boolean {
+    val m = Regex("_(\\d+)\\.img$").find(path) ?: return true
+    val snapped = CORE_ARTWORK_SIZES.firstOrNull { it >= size } ?: CORE_ARTWORK_SIZES.last()
+    return m.groupValues[1].toIntOrNull() == snapped
+}
 
 private const val ARTWORK_CROSSFADE_MS = 120
 /** Asks after a failed one, 2 s, 4 s, 8 s then 16 s apart (and on each network change after). */

@@ -17,10 +17,16 @@ export function resolveArtwork(id: string | undefined, size: number): Promise<st
     cache.set(key, p);
     return p;
   }
-  p = bridge()
+  const asked: Promise<string | undefined> = bridge()
     .query({ type: "artwork", data: { id, size } })
     .then((r) => (r.type === "path" ? artworkUrl(r.data) : undefined))
-    .catch(() => undefined);
+    .catch(() => undefined)
+    .then((u) => {
+      // "No file" (offline, a failed fetch) is not remembered: the next view asks again.
+      if (u === undefined && cache.get(key) === asked) cache.delete(key);
+      return u;
+    });
+  p = asked;
   cache.set(key, p);
   while (cache.size > ARTWORK_CACHE_CAP) {
     const oldest = cache.keys().next().value as string | undefined;
