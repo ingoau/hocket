@@ -67,6 +67,10 @@ pub struct ClientConfig {
     pub retry: RetryPolicy,
     /// Maximum in-flight requests to this server.
     pub max_concurrent: usize,
+    /// Maximum in-flight cover art fetches, a pool of their own: a cover is
+    /// small and on screen now, so it never queues behind a track download
+    /// or a sync page holding the general slots.
+    pub max_concurrent_images: usize,
 }
 
 impl ClientConfig {
@@ -77,6 +81,7 @@ impl ClientConfig {
             auth,
             retry: RetryPolicy::default(),
             max_concurrent: 4,
+            max_concurrent_images: 4,
         }
     }
 }
@@ -167,6 +172,7 @@ pub struct Client {
     auth: RwLock<AuthMode>,
     transport: Arc<dyn HttpTransport>,
     limiter: Arc<Semaphore>,
+    image_limiter: Arc<Semaphore>,
     caps: RwLock<ServerCapabilities>,
     pub(super) native: NativeSession,
 }
@@ -185,18 +191,52 @@ impl Client {
 
     pub fn new(config: ClientConfig, transport: Arc<dyn HttpTransport>) -> Self {
         let limiter = Arc::new(Semaphore::new(config.max_concurrent.max(1)));
+        let image_limiter = Arc::new(Semaphore::new(config.max_concurrent_images.max(1)));
         Client {
             auth: RwLock::new(config.auth.clone()),
             native: NativeSession::default(),
             config,
             transport,
             limiter,
+            image_limiter,
             caps: RwLock::new(ServerCapabilities::default()),
         }
     }
 
     pub fn config(&self) -> &ClientConfig {
         &self.config
+    }
+
+    /// A file download holding a slot of [`limiter`](Self::limiter) (tracks)
+    /// or [`image_limiter`](Self::image_limiter) (covers) throughout.
+    async fn download_limited(
+        &self,
+        limiter: &Semaphore,
+        url: Url,
+        dest: &Path,
+    ) -> SubsonicResult<DownloadOutcome> {
+        let _permit = limiter
+            .acquire()
+            .await
+            .map_err(|_| SubsonicError::Network("closed".into()))?;
+        let out = self.transport.download(url, dest, None).await?;
+        match out.status {
+            200..=299 => {
+                // Subsonic reports protocol errors (bad token, unknown
+                // id) as HTTP 200 + JSON; never keep that as media.
+                if let Some(e) = media_download_error(&out, dest).await {
+                    let _ = tokio::fs::remove_file(dest).await;
+                    return Err(e);
+                }
+                Ok(out)
+            }
+            401 | 403 => Err(SubsonicError::Auth(format!("http {}", out.status))),
+            404 => Err(SubsonicError::NotFound("http 404".into())),
+            s => Err(SubsonicError::Server {
+                code: s as u32,
+                message: format!("http {s}"),
+            }),
+        }
     }
 
     pub fn base_url(&self) -> &Url {
@@ -865,31 +905,12 @@ impl SubsonicApi for Client {
 
     fn download_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, DownloadOutcome> {
         let dest = dest.to_path_buf();
-        Box::pin(async move {
-            let _permit = self
-                .limiter
-                .acquire()
-                .await
-                .map_err(|_| SubsonicError::Network("closed".into()))?;
-            let out = self.transport.download(url, &dest, None).await?;
-            match out.status {
-                200..=299 => {
-                    // Subsonic reports protocol errors (bad token, unknown
-                    // id) as HTTP 200 + JSON; never keep that as media.
-                    if let Some(e) = media_download_error(&out, &dest).await {
-                        let _ = tokio::fs::remove_file(&dest).await;
-                        return Err(e);
-                    }
-                    Ok(out)
-                }
-                401 | 403 => Err(SubsonicError::Auth(format!("http {}", out.status))),
-                404 => Err(SubsonicError::NotFound("http 404".into())),
-                s => Err(SubsonicError::Server {
-                    code: s as u32,
-                    message: format!("http {s}"),
-                }),
-            }
-        })
+        Box::pin(async move { self.download_limited(&self.limiter, url, &dest).await })
+    }
+
+    fn download_image_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, DownloadOutcome> {
+        let dest = dest.to_path_buf();
+        Box::pin(async move { self.download_limited(&self.image_limiter, url, &dest).await })
     }
 
     fn native_playlist(&self, id: &str) -> ApiFuture<'_, NativePlaylist> {

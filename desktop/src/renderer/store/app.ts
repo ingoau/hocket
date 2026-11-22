@@ -7,6 +7,7 @@ import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting, Tr
 import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/bridge-types";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
+import { forgetArtwork } from "../components/Artwork";
 import { loadLocal, saveLocal } from "../lib/local-settings";
 import { noteUndo } from "../lib/palette-telemetry";
 import { type CoreState, dismissToast, initialCoreState, reduce, saverHas, settingValue } from "./reducer";
@@ -463,6 +464,7 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
   let reportEventSeen = false;
   const offEvent = b.onEvent((e) => {
     if (e.type === "reportUploadChanged") reportEventSeen = true;
+    if (e.type === "networkChanged" || e.type === "accountsChanged") forgetArtwork();
     useApp.getState().applyEvent(e);
     const snapshot = snapshotOf(e);
     if (snapshot) requestLyrics(snapshot.queue.current?.track.id);

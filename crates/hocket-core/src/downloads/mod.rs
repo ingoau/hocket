@@ -2361,6 +2361,8 @@ pub fn file_url(p: &Path) -> String {
 pub struct DownloadRunner {
     downloads: Downloads,
     providers: ProviderSet,
+    /// Where a finished job keeps its covers, and at which sizes.
+    covers: Option<(crate::cache::Caches, &'static [u32])>,
 }
 
 impl DownloadRunner {
@@ -2368,7 +2370,15 @@ impl DownloadRunner {
         DownloadRunner {
             downloads,
             providers,
+            covers: None,
         }
+    }
+
+    /// After each job, fetch the covers of what is downloaded at [sizes], so
+    /// downloaded music shows its art offline.
+    pub fn with_covers(mut self, caches: crate::cache::Caches, sizes: &'static [u32]) -> Self {
+        self.covers = Some((caches, sizes));
+        self
     }
 }
 
@@ -2376,6 +2386,7 @@ impl JobRunner for DownloadRunner {
     fn run(&self, ctx: JobContext) -> BoxFuture<'static, JobResult<()>> {
         let dl = self.downloads.clone();
         let providers = self.providers.clone();
+        let covers = self.covers.clone();
         Box::pin(async move {
             let payload: DownloadJobPayload = serde_json::from_str(&ctx.payload)
                 .map_err(|e| JobError::Failed(format!("bad payload: {e}")))?;
@@ -2430,6 +2441,15 @@ impl JobRunner for DownloadRunner {
                     }
                 }
                 ctx.set_progress(done, Some(total));
+            }
+            // Covers after, off the job: the job's slot is for tracks.
+            if let Some((caches, sizes)) = covers {
+                if done > 0 {
+                    let provider = provider.clone();
+                    tokio::spawn(async move {
+                        caches.keep_download_covers(provider, sizes).await;
+                    });
+                }
             }
             Ok(())
         })

@@ -227,6 +227,14 @@ impl Provider for NavidromeProvider {
         self.api.download_to_file(stream.url.clone(), dest)
     }
 
+    fn download_image_to_file<'a>(
+        &'a self,
+        url: Url,
+        dest: &'a Path,
+    ) -> ProviderFuture<'a, DownloadOutcome> {
+        self.api.download_image_to_file(url, dest)
+    }
+
     fn write(&self, write: ProviderWrite) -> ProviderFuture<'_, WriteOutcome> {
         Box::pin(async move {
             let done = match write {

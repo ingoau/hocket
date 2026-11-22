@@ -61,6 +61,17 @@ pub fn check_download_dest(dest: &Path, root: Option<&Path>) -> std::io::Result<
     Ok(())
 }
 
+/// A download's part file, removed on drop unless taken (renamed into place).
+struct PartFile(Option<PathBuf>);
+
+impl Drop for PartFile {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 /// A unique sibling temp name for `dest` (`<name>.<random>.part`), so two
 /// writers for the same destination never share a temp file.
 pub fn part_path(dest: &Path) -> PathBuf {
@@ -295,6 +306,9 @@ impl ReqwestTransport {
             Some(p) => (p.tmp, p.len, Some(p.total), p.validator),
             None => (part_path(dest), 0, resp.content_length(), validator),
         };
+        // Removes the part file if this future is dropped mid-transfer (a
+        // cover nobody waits for any more is cancelled).
+        let mut part = PartFile(Some(tmp.clone()));
         let file = if base > 0 {
             tokio::fs::OpenOptions::new().append(true).open(&tmp).await
         } else {
@@ -334,6 +348,7 @@ impl ReqwestTransport {
                     total: total.unwrap_or(0),
                     validator,
                 };
+                part.0 = None;
                 return Err((e, Some(p)));
             }
             let _ = tokio::fs::remove_file(&tmp).await;
@@ -343,6 +358,7 @@ impl ReqwestTransport {
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err((e.into(), None));
         }
+        part.0 = None;
         Ok(DownloadOutcome {
             status: if base > 0 { 200 } else { status },
             content_type,

@@ -52,6 +52,8 @@ pub struct FakeState {
     queued_failures: VecDeque<SubsonicError>,
     offline: bool,
     next_id: u32,
+    /// How long each file download takes (tests of in-flight fetches).
+    download_delay: Option<std::time::Duration>,
 }
 
 /// The fake server. Cheap to clone (shared state).
@@ -241,6 +243,11 @@ impl FakeServer {
 
     pub fn set_offline(&self, offline: bool) {
         self.state.lock().offline = offline;
+    }
+
+    /// Make each file download take [delay] (after it is counted).
+    pub fn set_download_delay(&self, delay: Option<std::time::Duration>) {
+        self.state.lock().download_delay = delay;
     }
 
     pub fn calls(&self) -> Vec<String> {
@@ -1027,38 +1034,12 @@ impl SubsonicApi for FakeServer {
     }
 
     fn download_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, DownloadOutcome> {
-        let dest = dest.to_path_buf();
-        Box::pin(async move {
-            self.gate("download")?;
-            let id = url
-                .query_pairs()
-                .find(|(k, _)| k == "id")
-                .map(|(_, v)| v.into_owned())
-                .unwrap_or_default();
-            let (bytes, content_type) = {
-                let st = self.state.lock();
-                let bytes = st
-                    .media
-                    .get(&id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("audio:{id}").into_bytes());
-                let ct = st.songs.get(&id).and_then(|s| s.content_type.clone());
-                (bytes, ct)
-            };
-            if let Some(parent) = dest.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| SubsonicError::Io(e.to_string()))?;
-            }
-            tokio::fs::write(&dest, &bytes)
-                .await
-                .map_err(|e| SubsonicError::Io(e.to_string()))?;
-            Ok(DownloadOutcome {
-                status: 200,
-                content_type,
-                bytes: bytes.len() as u64,
-            })
-        })
+        self.fetch_file("download", url, dest)
+    }
+
+    /// Counted as `getCoverArt`, apart from track downloads.
+    fn download_image_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, DownloadOutcome> {
+        self.fetch_file("getCoverArt", url, dest)
     }
 
     fn native_playlist(&self, id: &str) -> ApiFuture<'_, NativePlaylist> {
@@ -1180,4 +1161,50 @@ pub fn iso_from_ms(ms: f64) -> String {
         rem / 1_000 % 60,
         rem % 1_000
     )
+}
+
+impl FakeServer {
+    fn fetch_file<'a>(
+        &'a self,
+        endpoint: &'static str,
+        url: Url,
+        dest: &Path,
+    ) -> ApiFuture<'a, DownloadOutcome> {
+        let dest = dest.to_path_buf();
+        Box::pin(async move {
+            self.gate(endpoint)?;
+            let delay = self.state.lock().download_delay;
+            if let Some(d) = delay {
+                tokio::time::sleep(d).await;
+            }
+            let id = url
+                .query_pairs()
+                .find(|(k, _)| k == "id")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            let (bytes, content_type) = {
+                let st = self.state.lock();
+                let bytes = st
+                    .media
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("audio:{id}").into_bytes());
+                let ct = st.songs.get(&id).and_then(|s| s.content_type.clone());
+                (bytes, ct)
+            };
+            if let Some(parent) = dest.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| SubsonicError::Io(e.to_string()))?;
+            }
+            tokio::fs::write(&dest, &bytes)
+                .await
+                .map_err(|e| SubsonicError::Io(e.to_string()))?;
+            Ok(DownloadOutcome {
+                status: 200,
+                content_type,
+                bytes: bytes.len() as u64,
+            })
+        })
+    }
 }

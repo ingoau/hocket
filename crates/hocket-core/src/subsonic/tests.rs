@@ -1474,3 +1474,67 @@ async fn reqwest_download_has_no_total_timeout() {
         .unwrap_err();
     assert!(matches!(e, TransportError::Timeout), "{e}");
 }
+
+/// Covers have their own pool: a track download holding every general slot
+/// never holds up a cover.
+#[tokio::test(start_paused = true)]
+async fn covers_do_not_queue_behind_track_downloads() {
+    struct SlowTracks;
+    impl super::transport::HttpTransport for SlowTracks {
+        fn execute(
+            &self,
+            _r: super::transport::HttpRequest,
+        ) -> futures::future::BoxFuture<
+            '_,
+            Result<super::transport::HttpResponse, super::transport::TransportError>,
+        > {
+            Box::pin(async { Err(super::transport::TransportError::Timeout) })
+        }
+        fn download(
+            &self,
+            u: Url,
+            _d: &std::path::Path,
+            _p: Option<super::transport::ProgressFn>,
+        ) -> futures::future::BoxFuture<
+            '_,
+            Result<super::transport::DownloadOutcome, super::transport::TransportError>,
+        > {
+            Box::pin(async move {
+                if !u.path().contains("getCoverArt") {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                }
+                Ok(super::transport::DownloadOutcome {
+                    status: 404,
+                    content_type: None,
+                    bytes: 0,
+                })
+            })
+        }
+    }
+    let mut cfg = ClientConfig::new(
+        "s",
+        Url::parse("https://x.example").unwrap(),
+        AuthMode::ApiKey {
+            api_key: Credential::new("k"),
+        },
+    );
+    cfg.max_concurrent = 1;
+    let c = Arc::new(Client::new(cfg, Arc::new(SlowTracks)));
+    let dir = tempfile::tempdir().unwrap();
+    let track = {
+        let (c, dest) = (c.clone(), dir.path().join("t"));
+        tokio::spawn(async move { c.download_to_file(c.download_url("t"), &dest).await })
+    };
+    tokio::task::yield_now().await;
+    let started = tokio::time::Instant::now();
+    let cover = c
+        .download_image_to_file(c.cover_art_url("al", Some(320)), &dir.path().join("c"))
+        .await;
+    assert!(matches!(cover, Err(SubsonicError::NotFound(_))));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "the cover waited for the track"
+    );
+    assert!(!track.is_finished());
+    track.abort();
+}

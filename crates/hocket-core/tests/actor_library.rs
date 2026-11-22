@@ -835,6 +835,81 @@ async fn pins_download_through_the_job_queue() {
     }
 }
 
+/// A download keeps its covers, so offline the album still has art: asked at
+/// a kept size or any other, answered from disk at once, the server never
+/// asked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn downloads_keep_their_covers_for_offline() {
+    let server = seeded_server(2, 180.0);
+    for i in 0..2 {
+        server.set_media(&format!("t{i}"), vec![0u8; 4096]);
+    }
+    server.set_media("al-al0", vec![7u8; 64]);
+    let t = synced("pin-covers", server).await;
+    t.run(Command::Pin {
+        target: PinTarget::Album { id: "al0".into() },
+        transcode: false,
+    })
+    .await;
+    t.wait_until(20_000.0, |t| {
+        t.events.all().iter().any(|e| {
+            matches!(e, Event::JobsChanged { jobs } if jobs.iter().any(|j| j.kind == JobKind::Download && j.state == JobState::Done))
+        })
+    })
+    .await;
+    // The covers follow the job, off its slot: 64, 320 and 1280 on Linux.
+    for _ in 0..500 {
+        if t.server.calls_to("getCoverArt") >= 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        t.server.calls_to("getCoverArt"),
+        3,
+        "{:?}",
+        t.server.calls()
+    );
+    t.server.set_offline(true);
+    t.run(Command::SetNetworkState {
+        state: NetworkState {
+            kind: NetworkKind::Offline,
+            metered: false,
+            network_id: None,
+        },
+    })
+    .await;
+    let calls = t.server.calls_to("getCoverArt") + t.server.calls_to("download");
+    // Linux keeps 64, 320 and 1280: 320 exactly, 160 from the next size up.
+    for size in [320, 160] {
+        match t
+            .query(Query::Artwork {
+                id: "al-al0".into(),
+                size,
+            })
+            .await
+        {
+            QueryResult::Path(Some(p)) => assert!(p.ends_with("al-al0_320.img"), "{size}: {p}"),
+            other => panic!("{size}: {other:?}"),
+        }
+    }
+    match t
+        .query(Query::Artwork {
+            id: "al-al0".into(),
+            size: 1280,
+        })
+        .await
+    {
+        QueryResult::Path(Some(p)) => assert!(p.ends_with("al-al0_1280.img"), "{p}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        t.server.calls_to("getCoverArt") + t.server.calls_to("download"),
+        calls,
+        "offline never asks the server"
+    );
+}
+
 async fn mirror_playlist(t: &TestCore, id: &str) -> Vec<String> {
     match t
         .query(Query::PlaylistTracks {
