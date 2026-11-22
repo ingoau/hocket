@@ -208,7 +208,7 @@ function SearchBox() {
           {!showRecent && local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
           {!showRecent && localRows.some((r) => r.lyric) ? <div className="search-divider" role="presentation">{t("search.lyricsScope")}</div> : null}
           {!showRecent && localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
-          {!showRecent && local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
+          {!showRecent && local && (!server || serverRows.length) ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
           {!showRecent && serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
         </div>
       ) : null}
