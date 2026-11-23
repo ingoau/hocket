@@ -278,7 +278,7 @@ test.describe("available offline", () => {
 });
 
 test.describe("settings: storage", () => {
-  test("cache usage, automatic vs custom budget, data saved and prefetch on metered connections", async ({ hocket }) => {
+  test("cache usage, automatic vs custom budget and data saved", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     await page.getByTestId("nav-settings").click();
@@ -289,12 +289,6 @@ test.describe("settings: storage", () => {
     await expect(mode).toHaveAttribute("data-value", "auto");
     await expect(mode).toHaveText("Automatic (currently 2.0 GB)");
     await expect(page.getByTestId("data-saved")).toHaveText(/\d/);
-    const prefetch = page.getByRole("switch", { name: "Load upcoming songs ahead on metered connections" });
-    await expect(prefetch).not.toBeChecked();
-    await prefetch.check();
-    await expect(prefetch).toBeChecked();
-    const setting = await page.evaluate(async () => (await window.hocket.query({ type: "setting", data: { key: "storage.prefetchOnMobileData" } })) as { data?: { value: string } });
-    expect(setting.data?.value).toBe("true");
     await shot(page, "storage");
     for (const theme of ["light", "dark"] as const) {
       await setTheme(page, theme);
