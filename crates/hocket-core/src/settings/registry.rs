@@ -65,7 +65,6 @@ pub mod keys {
     pub const LYRICS_EXTERNAL_ENABLED: &str = "lyrics.external.enabled";
     pub const LYRICS_EXTERNAL_PROVIDER: &str = "lyrics.external.provider";
     pub const LYRICS_DEFAULT_OFFSET_MS: &str = "lyrics.defaultOffsetMs";
-    pub const LYRICS_SHOW_TRANSLATIONS: &str = "lyrics.showTranslations";
     pub const RATINGS_LOVE_BRIDGE_ENABLED: &str = "ratings.loveBridge.enabled";
     pub const RATINGS_LOVE_BRIDGE_THRESHOLD: &str = "ratings.loveBridge.threshold";
     pub const BATTERY_AUTO_ENGAGE: &str = "battery.autoEngage";
@@ -154,8 +153,6 @@ pub mod keys {
     pub const STORAGE_PREFETCH_ON_MOBILE_DATA: &str = "storage.prefetchOnMobileData";
     pub const DOWNLOADS_TRANSCODE: &str = "downloads.transcode";
     pub const DOWNLOADS_WIFI_ONLY: &str = "downloads.wifiOnly";
-    pub const SLEEP_DEFAULT_MINUTES: &str = "sleep.defaultMinutes";
-    pub const SLEEP_STOP_AT_END_OF_TRACK: &str = "sleep.stopAtEndOfTrack";
     pub const SCROBBLE_ENABLED: &str = "scrobble.enabled";
     pub const SCROBBLE_NOW_PLAYING: &str = "scrobble.nowPlaying";
     pub const LIBRARY_SYNC_INTERVAL_MINUTES: &str = "library.syncIntervalMinutes";
@@ -555,9 +552,6 @@ pub static REGISTRY: &[SettingDef] = &[
         },
         || json!(0),
     ),
-    def(LYRICS_SHOW_TRANSLATIONS, Synced, SettingKind::Bool, || {
-        json!(true)
-    }),
     def(
         RATINGS_LOVE_BRIDGE_ENABLED,
         Synced,
@@ -818,18 +812,6 @@ pub static REGISTRY: &[SettingDef] = &[
     def(DOWNLOADS_WIFI_ONLY, Local, SettingKind::Bool, || {
         json!(true)
     }),
-    def(
-        SLEEP_DEFAULT_MINUTES,
-        Synced,
-        SettingKind::Int { min: 1, max: 720 },
-        || json!(30),
-    ),
-    def(
-        SLEEP_STOP_AT_END_OF_TRACK,
-        Synced,
-        SettingKind::Bool,
-        || json!(true),
-    ),
     def(SCROBBLE_ENABLED, Synced, SettingKind::Bool, || json!(true)),
     def(SCROBBLE_NOW_PLAYING, Synced, SettingKind::Bool, || {
         json!(true)

@@ -218,8 +218,6 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
     val queue by client.queue.collectAsStateWithLifecycle()
     val savedCap = setting(SettingKeys.QUEUE_SAVED_CAP)
     val section = setting(SettingKeys.QUEUE_SECTION)
-    val sleepMinutes = setting(SettingKeys.SLEEP_DEFAULT_MINUTES)
-    val sleepEnd = setting(SettingKeys.SLEEP_STOP_AT_END_OF_TRACK)
     val externalControl = setting(SettingKeys.MEDIA_EXTERNAL_CONTROL)
     SubScreen(nav, stringResource(R.string.settings_category_playback)) {
         SwitchRow(stringResource(R.string.settings_queue_section), section.bool ?: true, { section.setBool(it) },
@@ -241,12 +239,6 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         val resumeAlbums = setting(SettingKeys.PLAYBACK_RESUME_ALBUMS)
         SwitchRow(stringResource(R.string.settings_resume_albums), resumeAlbums.bool ?: true, { resumeAlbums.setBool(it) },
             subtitle = stringResource(R.string.settings_resume_albums_body), scope = resumeAlbums.scope, tag = "playback.resumeAlbums")
-        val minutes = sleepMinutes.int ?: 30
-        SettingRow(stringResource(R.string.settings_sleep_default), stringResource(R.string.sleep_minutes, minutes), sleepMinutes.scope, tag = "sleep.defaultMinutes")
-        val minuteResources = androidx.compose.ui.platform.LocalResources.current
-        ChoiceRow(listOf(15, 30, 45, 60, 90).map { it to it.toString() }, isSelected = { minutes == it }, onSelect = { sleepMinutes.setInt(it) }, modifier = Modifier.padding(horizontal = 16.dp),
-            describe = { m -> minuteResources.getQuantityString(R.plurals.a11y_minutes, m, m) })
-        SwitchRow(stringResource(R.string.sleep_end_of_track), sleepEnd.bool ?: true, { sleepEnd.setBool(it) }, scope = sleepEnd.scope, tag = "sleep.stopAtEndOfTrack")
         SwitchRow(stringResource(R.string.settings_external_control), externalControl.bool ?: false, { externalControl.setBool(it) },
             subtitle = stringResource(R.string.settings_external_control_summary), scope = externalControl.scope, tag = "media.externalControl")
         HomeScreenSection()
@@ -360,7 +352,6 @@ fun LyricsSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val externalLyrics = setting(SettingKeys.LYRICS_EXTERNAL_ENABLED)
     val offset = setting(SettingKeys.LYRICS_DEFAULT_OFFSET_MS)
-    val translations = setting(SettingKeys.LYRICS_SHOW_TRANSLATIONS)
     SubScreen(nav, stringResource(R.string.settings_section_lyrics)) {
         SwitchRow(stringResource(R.string.settings_external_lyrics), externalLyrics.bool ?: false, { client.dispatch(Commands.setExternalLyricsEnabled(it)) }, stringResource(R.string.settings_external_lyrics_privacy), externalLyrics.scope, tag = "lyrics.external")
         val ms = offset.int ?: 0
@@ -369,7 +360,6 @@ fun LyricsSettingsScreen(nav: NavHostController) {
         val later = stringResource(R.string.lyrics_offset_later)
         SettingRow(stringResource(R.string.settings_lyrics_default_offset), stringResource(R.string.lyrics_offset_value, ms), offset.scope, tag = "lyrics.defaultOffsetMs")
         ActionRow(listOf(earlier to { offset.setInt((ms - 100).coerceAtLeast(-10_000)) }, reset to { offset.setInt(0) }, later to { offset.setInt((ms + 100).coerceAtMost(10_000)) }), modifier = Modifier.padding(horizontal = 16.dp))
-        SwitchRow(stringResource(R.string.settings_lyrics_translations), translations.bool ?: true, { translations.setBool(it) }, scope = translations.scope, tag = "lyrics.showTranslations")
     }
 }
 

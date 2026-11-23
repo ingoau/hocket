@@ -687,7 +687,6 @@
     <string name="settings_search_kw_artwork">album art cover fullscreen player</string>
     <string name="settings_search_kw_queue">play next add to queue insert order history autoplay</string>
     <string name="settings_search_kw_resume">continue pick up where I left off half played</string>
-    <string name="settings_search_kw_sleep">sleep timer bedtime stop</string>
     <string name="settings_search_kw_media">bluetooth car headset media buttons notification lock screen</string>
     <string name="settings_search_kw_widget">widget launcher home screen shortcuts</string>
     <string name="settings_search_kw_volume">volume loudness gain normalise normalize</string>
@@ -952,9 +951,7 @@
     <string name="report_upload_failed_server">Couldn\'t save the report: the coordinator answered with an error</string>
     <string name="report_upload_channel">Report uploads</string>
     <string name="report_upload_notification_text">Saving your report on the coordinator</string>
-    <string name="settings_sleep_default">Default sleep timer</string>
     <string name="settings_lyrics_default_offset">Default timing offset</string>
-    <string name="settings_lyrics_translations">Show translations</string>
     <string name="settings_downloads_wifi_only">Download on Wi‑Fi only</string>
     <string name="settings_downloads_wifi_only_body">Downloads wait on metered connections, like mobile data or a hotspot, and continue by themselves once off them.</string>
     <string name="settings_section_connection">Connection</string>

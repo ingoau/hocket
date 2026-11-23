@@ -47,7 +47,7 @@ export function Sidebar() {
   }, [dragging, setPanels]);
 
   const fallback = ["navigateHome", "navigateLibrary"];
-  const fallbackIcon: Record<string, string> = { navigateHome: "home", navigateLibrary: "library", navigateAlbums: "album", navigateArtists: "artist", navigatePlaylists: "playlist", navigateTracks: "song", navigateGenres: "genre", navigateDownloads: "download", navigateFilters: "filter", navigateStats: "stats", navigateRecent: "restore", navigateSettings: "settings" };
+  const fallbackIcon: Record<string, string> = { navigateHome: "home", navigateLibrary: "library", navigateAlbums: "album", navigateArtists: "artist", navigatePlaylists: "playlist", navigateTracks: "song", navigateGenres: "genre", navigateDownloads: "download", navigateFilters: "filter", navigateStats: "stats", navigateRecent: "restore" };
   const items = sidebarPlaces(navActions.length ? navActions.map((a) => ({ id: a.id, label: a.label, icon: a.icon })) : fallback.map((id) => ({ id, label: t(`nav.${NAV_VIEWS[id] ?? "home"}` as never), icon: fallbackIcon[id] ?? "music" })))
     .map((it) => ({ ...it, view: it.view as ViewName | undefined }));
   const rail = narrow || panels.sidebarCollapsed;
