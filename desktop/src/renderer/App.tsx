@@ -51,7 +51,8 @@ export function App() {
   // A modal (dialog, palette, fullscreen player) makes the rest of the window inert:
   // no focus, no pointer, hidden from assistive tech.
   const fullscreen = useApp((s) => s.fullscreen);
-  const modal = useApp((s) => !!s.dialog || s.paletteOpen || s.fullscreen);
+  // A palette stepped aside for a drag out of it (paletteHidden) leaves the window live for the drop.
+  const modal = useApp((s) => !!s.dialog || (s.paletteOpen && !s.paletteHidden) || s.fullscreen);
   const narrow = useMediaQuery(NARROW);
   const loadedFs = useFullscreenChunk(ready, fullscreen);
   useLyricPlayerPreload();
