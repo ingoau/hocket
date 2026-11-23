@@ -264,10 +264,10 @@ export const useApp = create<AppStore>((set, get) => ({
     const cur = get().route;
     // Going where you already are still takes the palette (and any menu) away.
     if (cur.view === route.view && cur.id === route.id && cur.param === route.param) {
-      if (get().paletteOpen) set({ paletteOpen: false, paletteHidden: false, contextMenu: undefined, playlistPicker: undefined });
+      if (get().paletteOpen) set({ paletteOpen: false, contextMenu: undefined, playlistPicker: undefined });
       return;
     }
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, selectionRefs: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false, paletteHidden: false }));
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, selectionRefs: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false }));
   },
   back() {
     const { history, route } = get();
@@ -291,7 +291,8 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ fullscreen: on, contextMenu: undefined, playlistPicker: undefined });
   },
   setPaletteOpen(open) {
-    set({ paletteOpen: open, paletteHidden: false, contextMenu: undefined, playlistPicker: undefined });
+    // Hidden for a drag stays hidden through the exit (no flash back before it leaves); the next opening shows it.
+    set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined, ...(open ? { paletteHidden: false } : null) });
   },
   setPaletteHidden(hidden) {
     if (get().paletteOpen || !hidden) set({ paletteHidden: hidden });

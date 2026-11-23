@@ -325,6 +325,15 @@ test.describe("command palette", () => {
     await page.keyboard.press("Escape");
     await expect(actions).toHaveCount(0);
     await expect(input).toBeFocused();
+
+    // Ctrl+K on the page closes the menu, as it does from the actions.
+    await page.keyboard.press("Control+k");
+    await page.keyboard.press("Control+p");
+    await expect(sub).toBeVisible();
+    await expect(search).toBeFocused();
+    await page.keyboard.press("Control+k");
+    await expect(actions).toHaveCount(0);
+    await expect(input).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(palette).toHaveCount(0);
   });

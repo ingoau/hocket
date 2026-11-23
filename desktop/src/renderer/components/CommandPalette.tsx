@@ -267,7 +267,9 @@ export function CommandPalette() {
   // Back from the playlist page: the actions' filter takes the keyboard again.
   const paged = !!sub?.tracks;
   useEffect(() => {
-    if (!paged && menu) filterInput.current?.focus({ preventScroll: true });
+    if (paged || !menu) return;
+    filterInput.current?.focus({ preventScroll: true });
+    document.getElementById(`pa-opt-${menu.active}`)?.scrollIntoView({ block: "nearest" });
   }, [paged]); // eslint-disable-line react-hooks/exhaustive-deps -- on the way back only
 
   if (!shown) return null;
@@ -387,7 +389,7 @@ export function CommandPalette() {
     const s = session.current;
     setSub({ n });
     const settle = (tracks: TrackRef[]) => {
-      if (s !== session.current) return;
+      if (s !== session.current || !useApp.getState().paletteOpen) return;
       setSub((cur) => (cur?.n !== n ? cur : tracks.length ? { n, tracks } : null));
     };
     void resolveTrackRefs(target).then(settle, (e: unknown) => {
@@ -405,7 +407,8 @@ export function CommandPalette() {
   const startDrag = (e: React.DragEvent) => {
     const from = { x: e.clientX, y: e.clientY };
     const box = exitProps.ref.current?.getBoundingClientRect();
-    let dropped = false;
+    /** The drop, if any: it counts once a zone took it (preventDefault), read at dragend once its handlers have run. */
+    let dropEvent: DragEvent | undefined;
     const over = (ev: DragEvent) => {
       if (useApp.getState().paletteHidden) return;
       const far = Math.hypot(ev.clientX - from.x, ev.clientY - from.y) > DRAG_ASIDE_PX;
@@ -415,7 +418,7 @@ export function CommandPalette() {
       setSub(null);
       useApp.getState().setPaletteHidden(true);
     };
-    const drop = () => { dropped = true; };
+    const drop = (ev: DragEvent) => { dropEvent = ev; };
     const end = () => {
       window.removeEventListener("dragover", over, true);
       window.removeEventListener("drop", drop, true);
@@ -423,7 +426,7 @@ export function CommandPalette() {
       stopDrag.current = undefined;
       const app = useApp.getState();
       if (!app.paletteOpen || !app.paletteHidden) return;
-      if (dropped) return setOpen(false);
+      if (dropEvent?.defaultPrevented) return setOpen(false);
       app.setPaletteHidden(false);
       input.current?.focus({ preventScroll: true });
     };
@@ -436,12 +439,14 @@ export function CommandPalette() {
   const menuShown = menu?.groups ? filterActions(menu.groups, menu.filter) : [];
   const menuFlat = menuShown.flat();
 
+  /** Ctrl/Cmd+K (or the palette's own chord): opens the actions menu, and closes it again. */
+  const isToggle = (chord: Chord | undefined) => !!chord && (keymap.lookup(chord).includes("openCommandPalette") || (chord.mod && !chord.alt && !chord.shift && chord.key === "K"));
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     e.stopPropagation();
     // A pick this key makes is a menu chord unless Enter says otherwise below.
     via.current = "chord";
     const chord = chordFromEvent(e, platform);
-    const toggle = !!chord && (keymap.lookup(chord).includes("openCommandPalette") || (chord.mod && !chord.alt && !chord.shift && chord.key === "K"));
+    const toggle = isToggle(chord);
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
     // Enter and Space on a focused button press it (the footer's Actions, Play).
     if ((e.key === "Enter" || e.key === " ") && (e.target as HTMLElement).tagName === "BUTTON") return;
@@ -525,7 +530,16 @@ export function CommandPalette() {
           </button>
         </div>
         {menu ? (
-          <div ref={popover} className="palette-actions" role="dialog" aria-label={t("palette.actionsFor", { name: menu.entry.label })} data-testid="palette-actions" onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault(); }}>
+          <div ref={popover} className="palette-actions" role="dialog" aria-label={t("palette.actionsFor", { name: menu.entry.label })} data-testid="palette-actions"
+            onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault(); }}
+            // The playlist page's field keeps its keys to itself; the menu's toggle still closes the menu from there.
+            onKeyDownCapture={(e) => {
+              if (!sub?.tracks || !isToggle(chordFromEvent(e, platform))) return;
+              e.preventDefault();
+              e.stopPropagation();
+              closeMenu();
+            }}
+          >
             {sub?.tracks ? (
               <PlaylistSubmenu
                 key={sub.n}

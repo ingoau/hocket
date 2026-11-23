@@ -116,7 +116,7 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
   }, [page, ready, pos, anchor, layout, query, membership]);
 
   // Focused once placed (a hidden field can't take focus).
-  const placed = page ? ready : !!pos;
+  const placed = page || !!pos;
   useEffect(() => {
     if (placed) input.current?.focus({ preventScroll: true });
   }, [placed]);
@@ -127,7 +127,8 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
     document.getElementById(`pp-row-${active}`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
-  if (!ready) return null;
+  // A page draws its title and field at once (focus stays with it, Escape still goes back), its rows once in.
+  if (!ready && !page) return null;
 
   const add = (p: Playlist, refs: TrackRef[], again: boolean) =>
     toastUndoable(t(again ? "toast.addedAgain" : "toast.addedToPlaylist", { playlist: p.name }), () => dispatch({ type: "playlistAdd", data: { playlist_id: p.id, tracks: refs, at_index: undefined } }));
@@ -189,6 +190,7 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
 
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     e.stopPropagation();
+    if (!ready && e.key !== "Escape" && e.key !== "ArrowLeft") return;
     if (asking && askFor) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -244,7 +246,7 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
     }
   };
 
-  const noMatches = !!typed && !groups.length;
+  const noMatches = ready && !!typed && !groups.length;
   let at = 0;
   const field = (
     <input
@@ -288,11 +290,13 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
         </label>
       )}
       <div className="cm-sub-list" role="menu" id="pp-list" aria-label={t("menu.addToPlaylist")}>
-        <div id={`pp-row-${at++}`} role="menuitem" className={`${page ? "pa-item" : "mi"} cm-new ${active === 0 ? "active" : ""}`} onMouseMove={(e) => { if (e.movementX || e.movementY) { setActive(0); setAsking(null); } }} onClick={createNew} data-testid="playlist-new">
-          <Icon name="plus" size={16} />
-          <span className="grow truncate">{typed ? t("picker.newNamed", { query: typed }) : t("picker.new")}</span>
-        </div>
-        {groups.map((g) => (
+        {ready ? (
+          <div id={`pp-row-${at++}`} role="menuitem" className={`${page ? "pa-item" : "mi"} cm-new ${active === 0 ? "active" : ""}`} onMouseMove={(e) => { if (e.movementX || e.movementY) { setActive(0); setAsking(null); } }} onClick={createNew} data-testid="playlist-new">
+            <Icon name="plus" size={16} />
+            <span className="grow truncate">{typed ? t("picker.newNamed", { query: typed }) : t("picker.new")}</span>
+          </div>
+        ) : null}
+        {(ready ? groups : []).map((g) => (
           <div key={g.id} role="group" aria-labelledby={`pp-group-${g.id}`}>
             <div className="sep" role="separator" />
             <div className="cm-group-label" id={`pp-group-${g.id}`}>
