@@ -78,7 +78,14 @@ impl ReqwestFetcher {
 
 impl Default for ReqwestFetcher {
     fn default() -> Self {
-        Self::new(reqwest::Client::new())
+        // Audio bytes as the server has them: ranges count those.
+        Self::new(
+            reqwest::Client::builder()
+                .no_gzip()
+                .no_brotli()
+                .build()
+                .unwrap_or_default(),
+        )
     }
 }
 

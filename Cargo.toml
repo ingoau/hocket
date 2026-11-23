@@ -28,7 +28,7 @@ futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 rusqlite = { version = "0.34", features = ["bundled", "hooks", "serde_json"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "gzip", "brotli"] }
 rand = "0.9"
 rand_chacha = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }

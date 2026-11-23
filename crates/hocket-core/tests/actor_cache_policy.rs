@@ -27,6 +27,7 @@ async fn started(name: &str, n: usize) -> TestCore {
     let t = TestCore::start(name, seeded_server(n, 100.0)).await;
     core_stream(&t).await;
     // Metered: no background prefetch, only the reads the test makes.
+    metered_only_stops_prefetch(&t).await;
     t.run(network(NetworkKind::Wifi, true)).await;
     t
 }
@@ -293,14 +294,15 @@ async fn pinning_a_fully_cached_track_keeps_the_cached_file() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fully_cached_original_serves_a_transcoded_request() {
     let t = started("original", 3).await;
-    // Cellular transcodes to 96k Opus.
+    // Metered transcodes to 96k Opus.
     t.run(Command::SetSetting {
         key: "transcoding.profiles".into(),
-        value: r#"{"cellular":{"format":"opus","maxBitRate":96,"cannotDecode":[]}}"#.into(),
+        value: r#"{"metered":{"format":"opus","maxBitRate":96,"cannotDecode":[]}}"#.into(),
     })
     .await;
     let media: Vec<u8> = (0..150_000u32).map(|i| (i % 199) as u8).collect();
     t.upstream.set_media("t0", media.clone(), "audio/flac");
+    t.run(network(NetworkKind::Wifi, false)).await;
     read_whole(&t, "t0").await;
     t.run(network(NetworkKind::Cellular, true)).await;
     let s = source(&t, "t0").await;
@@ -319,7 +321,7 @@ async fn a_fully_cached_original_serves_a_transcoded_request() {
     wait_offline(&t, "t1", OfflineState::Cached).await;
     assert_eq!(row_of(&t, "t1").profile, "opus-96");
     // The original arriving later makes the transcode redundant.
-    t.run(network(NetworkKind::Wifi, true)).await;
+    t.run(network(NetworkKind::Wifi, false)).await;
     let o1 = source(&t, "t1").await;
     assert!(!o1.transcoded);
     read_from(&t, &o1.url, 0).await.unwrap();

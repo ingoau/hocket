@@ -180,8 +180,16 @@ impl ReqwestTransport {
                 .use_rustls_tls()
         };
         let build_err = |e: reqwest::Error| TransportError::Network(e.without_url().to_string());
+        // API answers (JSON) come compressed when the server can: a sync's
+        // pages shrink several times over. Downloads stay byte-exact: their
+        // lengths, ranges and resumes count the file's own bytes.
         let client = base().timeout(timeout).build().map_err(build_err)?;
-        let download_client = base().read_timeout(timeout).build().map_err(build_err)?;
+        let download_client = base()
+            .read_timeout(timeout)
+            .no_gzip()
+            .no_brotli()
+            .build()
+            .map_err(build_err)?;
         Ok(ReqwestTransport {
             client,
             download_client,

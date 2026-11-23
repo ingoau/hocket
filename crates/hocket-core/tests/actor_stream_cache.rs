@@ -20,6 +20,7 @@ use stream_common::*;
 /// A metered network turns background prefetch off, so these tests see
 /// only the reads they make (no transcoding profile applies to it).
 async fn no_prefetch(t: &TestCore) {
+    metered_only_stops_prefetch(t).await;
     t.run(Command::SetNetworkState {
         state: NetworkState {
             kind: NetworkKind::Wifi,

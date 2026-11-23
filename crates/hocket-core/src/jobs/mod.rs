@@ -19,6 +19,12 @@
 //!   `JobState::Failed` ("finished with problems") and one retryable
 //!   [`api::Problem`] is filed. [`classify_failure`] says whether a failure
 //!   deserves a toast (only an immediate failure of a user action does).
+//! - [`JobQueue::set_hold`] holds a kind back while the network does not
+//!   allow it (offline, or metered for downloads): its queued jobs wait (shown
+//!   with [`api::Job::waiting`]), a running one stops at its next
+//!   `checkpoint()` and goes back to queued, and one that fails while its
+//!   kind is held is requeued (its failed items pending again) rather than
+//!   filed as a problem. Releasing the hold starts them again.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{watch, Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::api::{Job, JobId, JobKind, JobState, Problem};
+use crate::api::{Job, JobId, JobKind, JobState, JobWait, Problem};
 use crate::db::{Db, DbError, DbResult};
 use crate::util::{new_id, Clock};
 
@@ -38,6 +44,10 @@ use crate::util::{new_id, Clock};
 pub enum JobError {
     #[error("cancelled")]
     Cancelled,
+    /// The job's kind is held ([`JobQueue::set_hold`]): back to queued, to
+    /// resume when the hold is released.
+    #[error("waiting for the network")]
+    Deferred,
     /// The whole job failed (as opposed to individual items). Filed as a problem.
     #[error("{0}")]
     Failed(String),
@@ -173,6 +183,8 @@ struct Inner {
     finished: Notify,
     /// Terminal jobs older than this are pruned from the list (ms).
     retention_ms: f64,
+    /// Kinds held back, and why ([`JobQueue::set_hold`]).
+    holds: RwLock<HashMap<&'static str, JobWait>>,
 }
 
 #[derive(Clone)]
@@ -244,6 +256,7 @@ fn job_from_row(r: &rusqlite::Row) -> rusqlite::Result<Job> {
         created_at: r.get(7)?,
         cancellable: r.get::<_, i64>(8)? != 0,
         updated_at: r.get(9)?,
+        waiting: None,
     })
 }
 
@@ -259,6 +272,7 @@ impl JobQueue {
                 notify: Notify::new(),
                 finished: Notify::new(),
                 retention_ms: 24.0 * 3600.0 * 1000.0,
+                holds: RwLock::new(HashMap::new()),
             }),
         }
     }
@@ -352,17 +366,58 @@ impl JobQueue {
             let rows = st.query_map([cutoff], job_from_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
+        .map(|jobs| jobs.into_iter().map(|j| self.with_waiting(j)).collect())
+    }
+
+    fn with_waiting(&self, mut job: Job) -> Job {
+        if job.state == JobState::Queued {
+            job.waiting = self.hold(job.kind);
+        }
+        job
+    }
+
+    /// Hold `kind` back (`Some`) or let it run again (`None`). Held, its
+    /// queued jobs wait and a running one stops at its next checkpoint, back
+    /// to queued; see the module docs.
+    pub fn set_hold(&self, kind: JobKind, wait: Option<JobWait>) {
+        let name = kind_name(kind);
+        let changed = {
+            let mut holds = self.inner.holds.write();
+            let before = holds.get(name).copied();
+            match wait {
+                Some(w) => {
+                    holds.insert(name, w);
+                }
+                None => {
+                    holds.remove(name);
+                }
+            }
+            before != wait
+        };
+        if changed {
+            tracing::info!(kind = name, wait = ?wait, "job hold");
+            self.inner.notify.notify_one();
+            self.emit_jobs();
+        }
+    }
+
+    /// Why `kind` is held back, if it is.
+    pub fn hold(&self, kind: JobKind) -> Option<JobWait> {
+        self.inner.holds.read().get(kind_name(kind)).copied()
     }
 
     pub fn job(&self, id: &str) -> DbResult<Option<Job>> {
-        self.inner.db.with_conn(|c| {
-            Ok(c.query_row(
-                &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = ?1"),
-                [id],
-                job_from_row,
-            )
-            .optional()?)
-        })
+        self.inner
+            .db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = ?1"),
+                    [id],
+                    job_from_row,
+                )
+                .optional()?)
+            })
+            .map(|j| j.map(|j| self.with_waiting(j)))
     }
 
     pub fn payload(&self, id: &str) -> DbResult<Option<String>> {
@@ -483,7 +538,19 @@ impl JobQueue {
             Some(r) => Some(serde_json::to_string(r)?),
             None => None,
         };
-        self.inner.db.with_conn(|c| {
+        self.inner.db.with_tx(|c| {
+            // The same problem again from the same work (a sync failing on
+            // every retry while the server is down, one pin failing again)
+            // replaces the earlier entry instead of piling up. Another job's
+            // problem with the same words (two albums of one title) stays.
+            c.execute(
+                "DELETE FROM problems WHERE summary = ?1 AND dismissed = 0 AND (
+                    (?2 IS NULL AND job_id IS NULL)
+                    OR job_id = ?2
+                    OR job_id IN (SELECT o.id FROM jobs o JOIN jobs n ON n.id = ?2
+                                   WHERE o.kind = n.kind AND o.payload = n.payload))",
+                params![summary, job_id],
+            )?;
             c.execute(
                 "INSERT INTO problems(id, job_id, summary, detail, created_at, retryable, retry, dismissed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
                 params![id, job_id, summary, detail, now, retry.is_some() as i64, retry_json],
@@ -595,11 +662,13 @@ impl JobQueue {
             self.schedule_once()?;
             let running = self.inner.running.lock().len();
             let queued_runnable: i64 = self.inner.db.with_conn(|c| {
+                let holds = self.inner.holds.read();
                 let kinds: Vec<String> = self
                     .inner
                     .runners
                     .read()
                     .keys()
+                    .filter(|k| !holds.contains_key(*k))
                     .map(|k| k.to_string())
                     .collect();
                 let mut n = 0;
@@ -640,6 +709,9 @@ impl JobQueue {
             let Some(kind) = kind_from_name(&kind_s) else {
                 continue;
             };
+            if self.hold(kind).is_some() {
+                continue;
+            }
             if self.inner.running.lock().contains_key(&id) {
                 continue;
             }
@@ -720,12 +792,39 @@ impl JobQueue {
         self.inner.running.lock().remove(id);
         let now = self.inner.clock.now_ms();
         let outcome = self.inner.db.with_tx(|tx| {
-            let (state, label, failed): (String, String, i64) = tx.query_row(
-                "SELECT state, label, failed FROM jobs WHERE id = ?1",
+            let (state, label, failed, kind): (String, String, i64, String) = tx.query_row(
+                "SELECT state, label, failed, kind FROM jobs WHERE id = ?1",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )?;
             let cancelled = state == "cancelled" || matches!(result, Err(JobError::Cancelled));
+            // Deferred, or failed while its kind is held (the network went
+            // away under it): queued again, its failed items pending again,
+            // no problem filed.
+            // A job that finished cleanly is done, held or not.
+            let held = kind_from_name(&kind).is_some_and(|k| self.hold(k).is_some());
+            let unfinished = result.is_err() || failed > 0 || {
+                let n: i64 = tx.query_row(
+                    "SELECT count(*) FROM job_items WHERE job_id = ?1 AND state = 'failed'",
+                    [id],
+                    |r| r.get(0),
+                )?;
+                n > 0
+            };
+            if !cancelled
+                && (matches!(result, Err(JobError::Deferred)) || (held && unfinished))
+            {
+                tx.execute(
+                    "UPDATE job_items SET state = 'pending', error = NULL WHERE job_id = ?1 AND state = 'failed'",
+                    [id],
+                )?;
+                // A job the user paused stays paused.
+                tx.execute(
+                    "UPDATE jobs SET state = CASE WHEN state = 'paused' THEN 'paused' ELSE 'queued' END, failed = 0, updated_at = ?2 WHERE id = ?1",
+                    params![id, now],
+                )?;
+                return Ok(("queued".to_string(), label, 0, Vec::new()));
+            }
             let item_failed: i64 =
                 tx.query_row("SELECT count(*) FROM job_items WHERE job_id = ?1 AND state = 'failed'", [id], |r| r.get(0))?;
             let failed = failed.max(item_failed);
@@ -861,14 +960,19 @@ impl JobContext {
         *self.pause.borrow()
     }
 
-    /// Wait while paused; error out when cancelled. Call between units of work.
+    /// Wait while paused; error out when cancelled, or with
+    /// [`JobError::Deferred`] when the kind is held. Call between units of work.
     pub async fn checkpoint(&self) -> JobResult<()> {
         let mut pause = self.pause.clone();
         loop {
             if self.cancel.is_cancelled() {
                 return Err(JobError::Cancelled);
             }
+            // Paused first: a paused job stays paused through a hold.
             if !*pause.borrow_and_update() {
+                if self.queue.hold(self.kind).is_some() {
+                    return Err(JobError::Deferred);
+                }
                 return Ok(());
             }
             tokio::select! {
@@ -999,6 +1103,181 @@ mod tests {
                 })
             },
         )
+    }
+
+    #[tokio::test]
+    async fn a_held_kind_waits_queued_and_runs_once_released() {
+        let q = queue();
+        q.register(JobKind::Download, 2, item_runner(0));
+        q.set_hold(JobKind::Download, Some(JobWait::Metered));
+        let id = q
+            .submit(JobSpec::new(JobKind::Download, "Album").items(vec!["a".into()]))
+            .unwrap();
+        q.run_until_idle().await.unwrap();
+        let j = q.job(&id).unwrap().unwrap();
+        assert_eq!(j.state, JobState::Queued);
+        assert_eq!(j.waiting, Some(JobWait::Metered));
+        assert_eq!(q.jobs().unwrap()[0].waiting, Some(JobWait::Metered));
+        // Other kinds are not held.
+        q.register(JobKind::BulkLove, 1, item_runner(0));
+        let other = q
+            .submit(JobSpec::new(JobKind::BulkLove, "Love").items(vec!["a".into()]))
+            .unwrap();
+        q.run_until_idle().await.unwrap();
+        assert_eq!(q.job(&other).unwrap().unwrap().state, JobState::Done);
+        q.set_hold(JobKind::Download, None);
+        q.run_until_idle().await.unwrap();
+        let j = q.job(&id).unwrap().unwrap();
+        assert_eq!(j.state, JobState::Done);
+        assert_eq!(j.waiting, None);
+    }
+
+    #[tokio::test]
+    async fn a_job_whose_kind_is_held_mid_run_goes_back_to_queued_and_retries_its_failures() {
+        let q = queue();
+        // "flaky" fails on its first try and the network goes away with it.
+        let runner: Arc<dyn JobRunner> = Arc::new(
+            move |ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
+                Box::pin(async move {
+                    for it in ctx.pending_items()? {
+                        ctx.checkpoint().await?;
+                        if it.item == "flaky" && it.attempts == 0 {
+                            ctx.item_failed(it.seq, "network down")?;
+                            ctx.queue().set_hold(ctx.kind, Some(JobWait::Offline));
+                        } else {
+                            ctx.item_done(it.seq)?;
+                        }
+                    }
+                    Ok(())
+                })
+            },
+        );
+        q.register(JobKind::Download, 1, runner);
+        let id = q
+            .submit(JobSpec::new(JobKind::Download, "Album").items(vec![
+                "a".into(),
+                "flaky".into(),
+                "c".into(),
+            ]))
+            .unwrap();
+        q.run_until_idle().await.unwrap();
+        let j = q.job(&id).unwrap().unwrap();
+        assert_eq!(j.state, JobState::Queued, "deferred, not failed");
+        assert_eq!(j.waiting, Some(JobWait::Offline));
+        assert_eq!(j.failed, 0);
+        assert_eq!(j.done, 1);
+        assert!(q.problems().unwrap().is_empty(), "no problem filed");
+        q.set_hold(JobKind::Download, None);
+        q.run_until_idle().await.unwrap();
+        let j = q.job(&id).unwrap().unwrap();
+        assert_eq!(j.state, JobState::Done);
+        assert_eq!(j.done, 3);
+        assert!(q.problems().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failure_while_held_is_requeued_without_a_problem() {
+        let q = queue();
+        let runner: Arc<dyn JobRunner> = Arc::new(
+            move |ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
+                Box::pin(async move {
+                    ctx.queue().set_hold(ctx.kind, Some(JobWait::Offline));
+                    Err(JobError::Failed("connection refused".into()))
+                })
+            },
+        );
+        q.register(JobKind::LibrarySync, 1, runner);
+        let id = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "Library sync"))
+            .unwrap();
+        q.run_until_idle().await.unwrap();
+        assert_eq!(q.job(&id).unwrap().unwrap().state, JobState::Queued);
+        assert!(q.problems().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_same_problem_again_replaces_the_earlier_one() {
+        let q = queue();
+        q.add_problem(None, "Library sync failed", Some("refused"), None)
+            .unwrap();
+        q.add_problem(None, "Library sync failed", Some("timed out"), None)
+            .unwrap();
+        q.add_problem(None, "Album: 1 item failed", None, None)
+            .unwrap();
+        let p = q.problems().unwrap();
+        assert_eq!(p.len(), 2);
+        let sync = p
+            .iter()
+            .find(|p| p.summary == "Library sync failed")
+            .unwrap();
+        assert_eq!(sync.detail.as_deref(), Some("timed out"));
+        // Two pins whose albums share a title keep a problem each; the same
+        // pin failing again replaces its own.
+        let a = q
+            .submit(JobSpec::new(JobKind::Download, "Hits").payload(r#"{"pin":"a"}"#))
+            .unwrap();
+        let b = q
+            .submit(JobSpec::new(JobKind::Download, "Hits").payload(r#"{"pin":"b"}"#))
+            .unwrap();
+        let a2 = q
+            .submit(JobSpec::new(JobKind::Download, "Hits").payload(r#"{"pin":"a"}"#))
+            .unwrap();
+        q.add_problem(Some(&a), "Hits: 1 item failed", None, None)
+            .unwrap();
+        q.add_problem(Some(&b), "Hits: 1 item failed", None, None)
+            .unwrap();
+        q.add_problem(Some(&a2), "Hits: 1 item failed", None, None)
+            .unwrap();
+        let hits: Vec<_> = q
+            .problems()
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.summary == "Hits: 1 item failed")
+            .filter_map(|p| p.job_id)
+            .collect();
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert!(hits.contains(&b) && hits.contains(&a2), "{hits:?}");
+    }
+
+    #[tokio::test]
+    async fn a_paused_job_stays_paused_through_a_hold() {
+        let q = queue();
+        q.register(JobKind::Download, 1, item_runner(30));
+        let id = q
+            .submit(JobSpec::new(JobKind::Download, "Album").items(vec![
+                "a".into(),
+                "b".into(),
+                "c".into(),
+            ]))
+            .unwrap();
+        q.schedule_once().unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        q.pause(&id).unwrap();
+        q.set_hold(JobKind::Download, Some(JobWait::Offline));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(q.job(&id).unwrap().unwrap().state, JobState::Paused);
+        q.set_hold(JobKind::Download, None);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(q.job(&id).unwrap().unwrap().state, JobState::Paused);
+    }
+
+    #[tokio::test]
+    async fn a_job_that_finishes_cleanly_is_done_even_if_held_meanwhile() {
+        let q = queue();
+        let runner: Arc<dyn JobRunner> = Arc::new(
+            move |ctx: JobContext| -> BoxFuture<'static, JobResult<()>> {
+                Box::pin(async move {
+                    ctx.queue().set_hold(ctx.kind, Some(JobWait::Offline));
+                    Ok(())
+                })
+            },
+        );
+        q.register(JobKind::LibrarySync, 1, runner);
+        let id = q
+            .submit(JobSpec::new(JobKind::LibrarySync, "Library sync"))
+            .unwrap();
+        q.run_until_idle().await.unwrap();
+        assert_eq!(q.job(&id).unwrap().unwrap().state, JobState::Done);
     }
 
     #[tokio::test]

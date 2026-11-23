@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::api::*;
+use crate::connect::engine::Input;
 use crate::connect::wire::scope_key;
 use crate::core::actor::Actor;
 use crate::core::state::AccountState;
@@ -16,6 +17,29 @@ use crate::outbox::OutboxFlushRunner;
 use crate::provider::{NavidromeProvider, Provider};
 use crate::subsonic::auth::AuthMode;
 use crate::subsonic::{Client, ClientConfig, ReqwestTransport, SubsonicApi};
+
+/// A launch refreshes the library when the last refresh is at least this old.
+pub(crate) const LAUNCH_SYNC_AFTER_MS: f64 = 15.0 * 60_000.0;
+/// The wait after a failed sync; it doubles per failure in a row, up to the
+/// refresh interval.
+pub(crate) const SYNC_RETRY_BASE_MS: f64 = 60_000.0;
+
+/// How long to wait before syncing again after `failures` failed syncs in a row.
+pub(crate) fn sync_retry_delay_ms(failures: u32, interval_ms: f64) -> f64 {
+    let pow = 2f64.powi(failures.saturating_sub(1).min(16) as i32);
+    (SYNC_RETRY_BASE_MS * pow).min(interval_ms.max(SYNC_RETRY_BASE_MS))
+}
+
+/// Job kinds that need the server (or another host): held while offline.
+const NETWORK_JOB_KINDS: [JobKind; 7] = [
+    JobKind::LibrarySync,
+    JobKind::BulkRating,
+    JobKind::BulkLove,
+    JobKind::PlaylistImport,
+    JobKind::OutboxFlush,
+    JobKind::ArtworkPrefetch,
+    JobKind::LyricsPrefetch,
+];
 
 /// Deterministic server id from the identity the device authenticated with.
 pub fn server_id_for(url: &str, username: &str) -> String {
@@ -257,6 +281,7 @@ impl Actor {
             .accounts
             .take(&info.id)
             .unwrap_or_else(|| AccountState::new(info.clone()));
+        let account_id = info.id.clone();
         state.info = info;
         state.info.reachable = reachable;
         state.provider = Some(provider);
@@ -291,7 +316,14 @@ impl Actor {
         self.emit(Event::AccountsChanged { accounts });
         if self.started {
             self.register_job_runners();
-            self.maybe_start_sync(false, true);
+            if reachable {
+                // Just signed in (or verified): its library now.
+                self.maybe_start_sync_for(&account_id, false, true);
+            } else {
+                // Reinstalled from its saved row (every launch replays the
+                // credentials): a launch refresh, unless it is recent.
+                self.start_sync_if_due(&account_id, false, false, Some(LAUNCH_SYNC_AFTER_MS));
+            }
             self.schedule_flush();
             if !self.playback.loaded && self.playback.want_playing {
                 self.ensure_current_loaded();
@@ -396,6 +428,17 @@ impl Actor {
             return;
         }
         let Some(client) = s.client.clone() else {
+            return;
+        };
+        if self
+            .network
+            .as_ref()
+            .is_some_and(|n| n.kind == NetworkKind::Offline)
+        {
+            // Probed again when the network (or offline mode) lets it.
+            return;
+        }
+        let Some(s) = self.accounts.get_mut(account_id) else {
             return;
         };
         s.probing = true;
@@ -612,9 +655,27 @@ impl Actor {
         // A finished sync frees its account for the next; a finished
         // download updates the pins.
         let mut sync_finished = false;
+        let now = self.now();
+        let interval_ms = self.sync_interval_ms();
         for s in self.accounts.iter_mut() {
             if let Some(id) = s.sync_job.clone() {
                 if let Some(j) = jobs.iter().find(|j| j.id == id) {
+                    match j.state {
+                        JobState::Done => {
+                            s.sync_failures = 0;
+                            s.sync_retry_at = 0.0;
+                        }
+                        JobState::Failed => {
+                            // The server is down or unreachable from here:
+                            // wait before trying again, longer each time, so
+                            // a sync that cannot succeed is not retried back
+                            // to back.
+                            s.sync_failures += 1;
+                            s.sync_retry_at =
+                                now + sync_retry_delay_ms(s.sync_failures, interval_ms);
+                        }
+                        _ => {}
+                    }
                     if matches!(
                         j.state,
                         JobState::Done | JobState::Failed | JobState::Cancelled
@@ -658,7 +719,33 @@ impl Actor {
         }
     }
 
+    /// On launch: refresh the library unless it was refreshed in the last
+    /// [`LAUNCH_SYNC_AFTER_MS`] (or the refresh interval, if shorter).
+    pub(crate) fn maybe_start_sync_on_launch(&mut self) {
+        for id in self.accounts.ids() {
+            self.start_sync_if_due(&id, false, false, Some(LAUNCH_SYNC_AFTER_MS));
+        }
+    }
+
+    /// `force`: asked for by the user (or a new account), so it runs now
+    /// whatever the timers say.
     pub(crate) fn maybe_start_sync_for(&mut self, account_id: &str, full: bool, force: bool) {
+        self.start_sync_if_due(account_id, full, force, None);
+    }
+
+    pub(crate) fn sync_interval_ms(&self) -> f64 {
+        self.settings
+            .get_i64(crate::settings::keys::LIBRARY_SYNC_INTERVAL_MINUTES) as f64
+            * 60_000.0
+    }
+
+    fn start_sync_if_due(
+        &mut self,
+        account_id: &str,
+        full: bool,
+        force: bool,
+        interval_cap_ms: Option<f64>,
+    ) {
         let Some(s) = self.accounts.get(account_id) else {
             return;
         };
@@ -672,16 +759,19 @@ impl Actor {
             return;
         }
         let now = self.now();
+        if !force && now < s.sync_retry_at {
+            return;
+        }
         let cursor: SyncCursor = self
             .db
             .saved_state_get(&SyncCursor::key(account_id))
             .ok()
             .flatten()
             .unwrap_or_default();
-        let interval_ms =
-            self.settings
-                .get_i64(crate::settings::keys::LIBRARY_SYNC_INTERVAL_MINUTES) as f64
-                * 60_000.0;
+        let mut interval_ms = self.sync_interval_ms();
+        if let Some(cap) = interval_cap_ms {
+            interval_ms = interval_ms.min(cap);
+        }
         let reconcile_ms =
             self.settings
                 .get_i64(crate::settings::keys::LIBRARY_FULL_RECONCILE_DAYS) as f64
@@ -690,10 +780,13 @@ impl Actor {
             .last_incremental_at
             .or(cursor.last_full_at)
             .unwrap_or(0.0);
-        let full_due = cursor
-            .last_full_at
-            .map(|t| now - t >= reconcile_ms)
-            .unwrap_or(true);
+        // A reconcile re-reads the whole library: with data saver on a
+        // metered connection, a due one waits for an unmetered connection
+        // (the first sync, which has no mirror yet, does not wait).
+        let full_due = match cursor.last_full_at {
+            None => true,
+            Some(t) => now - t >= reconcile_ms && !self.data_saver_active(),
+        };
         let due = force || cursor.in_progress() || now - last >= interval_ms || full_due;
         if !due {
             return;
@@ -724,7 +817,6 @@ impl Actor {
             Ok(id) => {
                 if let Some(s) = self.accounts.get_mut(account_id) {
                     s.sync_job = Some(id);
-                    s.last_sync_started = Some(now);
                 }
             }
             Err(e) => self.error(ErrorKind::Storage, "start sync", Some(e.to_string())),
@@ -943,67 +1035,157 @@ impl Actor {
         }
     }
 
+    /// The platform reports the device's network.
     pub(crate) fn set_network_state(&mut self, state: NetworkState) {
-        let was_offline = self
-            .network
-            .as_ref()
-            .is_some_and(|n| n.kind == NetworkKind::Offline);
-        let changed = self.network.as_ref() != Some(&state);
-        // Only what playback cares about: the kind, and whether it is metered.
+        self.device_network = Some(state);
+        self.apply_network();
+    }
+
+    /// The network the core acts on: the device's, or none at all while
+    /// offline mode is on.
+    pub(crate) fn effective_network(&self) -> Option<NetworkState> {
         if self
-            .network
-            .as_ref()
-            .is_none_or(|n| n.kind != state.kind || n.metered != state.metered)
+            .settings
+            .get_bool(crate::settings::keys::NETWORK_OFFLINE_MODE)
         {
-            let from = self.network.as_ref().map(|n| format!("{:?}", n.kind));
-            self.log(
-                "info",
-                format!(
-                    "network: {} -> {:?}{}",
-                    from.as_deref().unwrap_or("unknown"),
-                    state.kind,
-                    if state.metered { " (metered)" } else { "" }
-                ),
-            );
+            return Some(NetworkState {
+                kind: NetworkKind::Offline,
+                metered: false,
+                network_id: None,
+            });
         }
+        self.device_network.clone()
+    }
+
+    /// Data saver is in force: the connection is metered and
+    /// `network.dataSaver` is on.
+    pub(crate) fn data_saver_active(&self) -> bool {
+        self.network
+            .as_ref()
+            .is_some_and(|n| n.metered && n.kind != NetworkKind::Offline)
+            && self
+                .settings
+                .get_bool(crate::settings::keys::NETWORK_DATA_SAVER)
+    }
+
+    /// Hold back the jobs the network does not allow now: everything that
+    /// needs the server while offline, and downloads on a metered connection
+    /// with `downloads.wifiOnly`. They wait queued and start by themselves
+    /// once allowed.
+    pub(crate) fn apply_job_holds(&mut self) {
+        let offline = self.is_offline().then_some(JobWait::Offline);
+        for kind in NETWORK_JOB_KINDS {
+            self.jobs.set_hold(kind, offline);
+        }
+        let metered = self.network.as_ref().is_some_and(|n| n.metered)
+            && self
+                .settings
+                .get_bool(crate::settings::keys::DOWNLOADS_WIFI_ONLY);
+        let was_held = self.jobs.hold(JobKind::Download).is_some();
+        self.jobs.set_hold(
+            JobKind::Download,
+            offline.or(metered.then_some(JobWait::Metered)),
+        );
+        if was_held && self.jobs.hold(JobKind::Download).is_none() {
+            // Covers wait with the downloads they belong to.
+            self.keep_download_covers();
+        }
+    }
+
+    /// Act on a change of [`Self::effective_network`]: the device's network
+    /// moved, or offline mode was switched. Nothing happens when it is the
+    /// same as before (a platform may report the same state again).
+    pub(crate) fn apply_network(&mut self) {
+        let next = self.effective_network();
+        if self.network == next {
+            self.apply_job_holds();
+            return;
+        }
+        let Some(state) = next else {
+            // Offline mode off before the platform reported any network:
+            // back to "unknown", which the core treats as online.
+            self.network = None;
+            self.downloads.set_network(None);
+            self.emit(Event::NetworkChanged { network: None });
+            self.engine_input(Input::SetNetwork { online: true });
+            self.apply_job_holds();
+            self.on_network_usable();
+            self.refresh_next_for_network();
+            return;
+        };
+        let from = self.network.as_ref().map(|n| format!("{:?}", n.kind));
+        self.log(
+            "info",
+            format!(
+                "network: {} -> {:?}{}{}",
+                from.as_deref().unwrap_or("unknown"),
+                state.kind,
+                if state.metered { " (metered)" } else { "" },
+                if self
+                    .device_network
+                    .as_ref()
+                    .is_some_and(|d| d.kind != state.kind)
+                {
+                    " (offline mode)"
+                } else {
+                    ""
+                }
+            ),
+        );
         self.downloads.set_network(Some(state.clone()));
         if self.network.as_ref().map(|n| n.kind) != Some(state.kind) {
             // A cover answered from the cache offline is asked for again.
             self.media_art = None;
         }
         self.network = Some(state.clone());
-        if changed {
-            self.emit(Event::NetworkChanged {
-                network: self.network.clone(),
-            });
+        self.emit(Event::NetworkChanged {
+            network: self.network.clone(),
+        });
+        let online = state.kind != NetworkKind::Offline;
+        self.engine_input(Input::SetNetwork { online });
+        self.apply_job_holds();
+        if online {
+            self.on_network_usable();
+        } else {
+            self.mark_prefetch_check();
         }
+        self.refresh_next_for_network();
+    }
+
+    /// A network to use (another one, or back from offline): what failed or
+    /// waited for one runs now.
+    fn on_network_usable(&mut self) {
         self.mark_prefetch_check();
-        if state.kind != NetworkKind::Offline && (was_offline || self.network.is_some()) {
-            // Prefetches that failed on the old network are due now.
-            self.prefetch_retry_now();
-            self.last_outbox_retry = self.now();
-            self.schedule_flush();
-            self.maybe_start_sync(false, false);
-            // A server installed offline (or whose last probe failed) is
-            // verified again now that there is a network.
-            let stale: Vec<AccountId> = self
-                .accounts
-                .iter()
-                .filter(|s| !s.info.reachable && !s.probing && s.client.is_some())
-                .map(|s| s.info.id.clone())
-                .collect();
-            for id in stale {
-                self.probe_account(&id);
-            }
-            // Downloads whose covers were never kept (or failed) get them now.
-            self.keep_download_covers();
+        // Prefetches that failed on the old network are due now.
+        self.prefetch_retry_now();
+        self.last_outbox_retry = self.now();
+        self.schedule_flush();
+        // A sync that failed on the old network may work on this one.
+        for s in self.accounts.iter_mut() {
+            s.sync_retry_at = 0.0;
         }
-        // The stream URL may change with the network's transcoding profile.
+        self.maybe_start_sync(false, false);
+        // A server installed offline (or whose last probe failed) is
+        // verified again now that there is a network.
+        let stale: Vec<AccountId> = self
+            .accounts
+            .iter()
+            .filter(|s| !s.info.reachable && !s.probing && s.client.is_some())
+            .map(|s| s.info.id.clone())
+            .collect();
+        for id in stale {
+            self.probe_account(&id);
+        }
+        // Downloads whose covers were never kept (or failed) get them now.
+        self.keep_download_covers();
+        self.clear_offline_skips();
+    }
+
+    /// The stream URL may change with the network's transcoding profile,
+    /// and offline or data saver change what is loaded ahead.
+    fn refresh_next_for_network(&mut self) {
         if self.playback.loaded && self.owns_transport() {
             self.refresh_next();
-        }
-        if state.kind != NetworkKind::Offline {
-            self.clear_offline_skips();
         }
     }
 }

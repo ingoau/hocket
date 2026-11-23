@@ -1722,6 +1722,10 @@ impl Actor {
         self.lyrics_for = current.clone();
         let Some(id) = current else { return };
         self.fetch_lyrics(id, false);
+        // Data saver: only what plays (the next may never be heard).
+        if self.data_saver_active() {
+            return;
+        }
         if let Some(next) = queue.upcoming().find(|e| !e.item.unavailable) {
             let next_id = next.track.id.clone();
             self.prefetch_lyrics(next_id);
@@ -1745,6 +1749,16 @@ impl Actor {
                 }
                 return;
             }
+        }
+        if self.is_offline() {
+            // Nothing to ask; the view says there are none for now.
+            if announce {
+                self.emit(Event::LyricsChanged {
+                    track_id,
+                    lyrics: None,
+                });
+            }
+            return;
         }
         let external_enabled = self
             .settings
@@ -1898,10 +1912,10 @@ impl Actor {
                 .get_bool(crate::settings::keys::SEARCH_INCLUDE_SERVER)
             && !query.trim().is_empty()
             && thin
-            && !self
-                .network
-                .as_ref()
-                .is_some_and(|n| n.kind == NetworkKind::Offline);
+            && !self.is_offline()
+            // The library is mirrored here; on a metered connection with
+            // data saver the local results do.
+            && !self.data_saver_active();
         let empty_server_batch = || SearchResults {
             request_id: request_id.clone(),
             query: query.clone(),

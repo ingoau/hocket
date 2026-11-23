@@ -15,6 +15,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -37,6 +38,7 @@ import app.hocket.core.api.OfflineState
 import app.hocket.core.api.PlayerNoticeCode
 import app.hocket.core.toSummary
 import app.hocket.ui.components.TrackRow
+import app.hocket.ui.components.playsOffline
 import app.hocket.ui.nav.AppRoot
 import app.hocket.ui.queue.QueuePanel
 import app.hocket.ui.screens.detail.AlbumDetailScreen
@@ -45,6 +47,7 @@ import app.hocket.ui.screens.settings.DownloadsSettingsScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -236,6 +239,54 @@ class CacheUiTest {
 
         compose.onNodeWithTag("library.availableOffline").performClick() // back to all songs
         compose.waitUntil(5_000) { songRows().size > offlineRows().size }
+    }
+
+    @Test
+    fun offlineModeFromTheAccountSheetMarksSongsThatNeedTheNetwork() {
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { AppRoot(core.client) }
+        core.start()
+        awaitTag("navBar.library")
+        compose.onNodeWithTag("navBar.library").performClick()
+        compose.onNodeWithText("Songs").performClick()
+        compose.waitUntil(5_000) { songRows().size > offlineRows().size }
+        assertTrue("online: nothing marked", songRows().none { "not available offline" in (it.state() ?: "") })
+
+        // Offline mode is one tap away in the account sheet; the core then reports offline.
+        compose.onAllNodesWithTag("account.button").onFirst().performSemanticsAction(SemanticsActions.OnClick)
+        awaitTag("account.offlineMode")
+        compose.onNodeWithTag("account.offlineMode").performClick()
+        compose.waitUntil(5_000) { core.client.network.value?.kind == NetworkKind.Offline }
+        assertEquals("true", core.client.settings.value[SettingKeys.NETWORK_OFFLINE_MODE]?.value)
+        awaitTag("offline.indicator")
+
+        // Songs that need the network say so; the rest play as before. (The rows behind the sheet
+        // are read and acted on through semantics.)
+        compose.waitUntil(5_000) { songRows().any { "not available offline" in (it.state() ?: "") } }
+        val unavailable = songRows().filter { "not available offline" in (it.state() ?: "") }
+        assertEquals(songRows().size - offlineRows().size, unavailable.size)
+        // A tap on one doesn't start it.
+        val before = core.client.queue.value.current?.track?.id
+        compose.onNode(SemanticsMatcher("an unavailable row") { it.id == unavailable.first().id }).performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertEquals(before, core.client.queue.value.current?.track?.id)
+
+        // While another device plays, this one is a remote control: the tap goes to that device
+        // over the LAN, so nothing is marked.
+        core.client.dispatch(Commands.handoffTo("laptop"))
+        compose.waitUntil(5_000) { songRows().none { "not available offline" in (it.state() ?: "") } }
+
+        core.client.dispatch(Commands.setSetting(SettingKeys.NETWORK_OFFLINE_MODE, "false"))
+        compose.waitUntil(5_000) { songRows().none { "not available offline" in (it.state() ?: "") } }
+    }
+
+    @Test
+    fun onlySongsNeitherDownloadedNorCachedNeedTheNetwork() {
+        // A pending download may be fully cached already, and the core plays it offline.
+        assertTrue(playsOffline(OfflineState.Downloading))
+        assertTrue(playsOffline(OfflineState.Downloaded))
+        assertTrue(playsOffline(OfflineState.Cached))
+        assertFalse(playsOffline(OfflineState.None))
     }
 
     @Test

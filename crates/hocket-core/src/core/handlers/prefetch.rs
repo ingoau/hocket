@@ -160,7 +160,7 @@ impl Actor {
         match &self.network {
             None => true,
             Some(n) if n.kind == NetworkKind::Offline => false,
-            Some(n) if n.metered || n.kind == NetworkKind::Cellular => self
+            Some(n) if n.metered => self
                 .settings
                 .get_bool(keys::STORAGE_PREFETCH_ON_MOBILE_DATA),
             Some(_) => true,

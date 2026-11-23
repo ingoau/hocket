@@ -11,10 +11,17 @@ import { Menu, app, type MenuItemConstructorOptions } from "electron";
 export interface AppMenuHandlers {
   showMain(): void;
   openSettings(): void;
+  /** Turn offline mode (network.offlineMode) on or off. */
+  setOfflineMode(on: boolean): void;
   quit(): void;
 }
 
-export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorOptions[] {
+/** What the menu reflects from the core: offline mode's checkbox. */
+export interface AppMenuState {
+  offlineMode: boolean;
+}
+
+export function appMenuTemplate(handlers: AppMenuHandlers, state: AppMenuState = { offlineMode: false }): MenuItemConstructorOptions[] {
   return [
     {
       label: app.name,
@@ -22,6 +29,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         { role: "about" },
         { type: "separator" },
         { label: "Settings…", accelerator: "Cmd+,", click: () => handlers.openSettings() },
+        { label: "Offline Mode", type: "checkbox", checked: state.offlineMode, click: (item) => handlers.setOfflineMode(item.checked) },
         { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },
@@ -51,10 +59,18 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
   ];
 }
 
-export function installAppMenu(handlers: AppMenuHandlers): void {
+/** Installs the menu (macOS; elsewhere none) and returns how to update what it reflects. */
+export function installAppMenu(handlers: AppMenuHandlers): (state: AppMenuState) => void {
   if (process.platform !== "darwin") {
     Menu.setApplicationMenu(null);
-    return;
+    return () => {};
   }
-  Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(handlers)));
+  let current: AppMenuState = { offlineMode: false };
+  const build = () => Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(handlers, current)));
+  build();
+  return (state) => {
+    if (state.offlineMode === current.offlineMode) return;
+    current = state;
+    build();
+  };
 }

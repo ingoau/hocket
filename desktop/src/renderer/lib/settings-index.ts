@@ -19,6 +19,11 @@ export interface SettingEntry {
 
 export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "servers", section: "general", label: "settings.servers", keywords: "settingsSearch.kw.servers" },
+  // No description: it names the coordinator, which would then turn up for "coordinator".
+  { id: "offlineMode", section: "general", label: "settings.offlineMode", keywords: "settingsSearch.kw.offlineMode" },
+  { id: "syncInterval", section: "general", label: "settings.syncInterval", desc: "settings.syncIntervalDesc", keywords: "settingsSearch.kw.syncInterval" },
+  { id: "fullReconcile", section: "general", label: "settings.fullReconcile", desc: "settings.fullReconcileDesc", keywords: "settingsSearch.kw.fullReconcile" },
+  { id: "searchServer", section: "general", label: "settings.searchServer", desc: "settings.searchServerDesc", keywords: "settingsSearch.kw.searchServer" },
   { id: "closeToTray", section: "general", label: "settings.closeToTray", keywords: "settingsSearch.kw.closeToTray" },
   { id: "settingsSync", section: "general", label: "settings.settingsSync", keywords: "settingsSearch.kw.settingsSync" },
   { id: "savedQueueCap", section: "general", label: "settingsSearch.savedQueueCap", keywords: "settingsSearch.kw.savedQueueCap" },

@@ -108,6 +108,8 @@ class FakeCore(
     private var transitions = TransitionSettings(TransitionMode.Off, 6.0)
     private var sleepTimer: SleepTimer? = null
     private var network: NetworkState? = null
+    /** What the platform last reported (`SetNetworkState`); [network] is it unless offline mode is on. */
+    private var platformNetwork: NetworkState? = null
     private var powerSave = false
     private var batterySaver = Saver.OFF
     private var started = false
@@ -159,7 +161,7 @@ class FakeCore(
         fun def(key: String, value: String, scope: SettingScope) { settings[key] = Setting(key, value, scope, now()) }
         def(SettingKeys.QUEUE_SECTION, "true", SettingScope.AccountSynced)
         def(SettingKeys.QUEUE_SAVED_CAP, "10", SettingScope.AccountSynced)
-        def(SettingKeys.TRANSCODING_PROFILES, "{\"default\":{\"format\":null,\"maxBitRate\":null,\"cannotDecode\":[]},\"cellular\":{\"format\":\"opus\",\"maxBitRate\":128,\"cannotDecode\":[]}}", SettingScope.DeviceLocal)
+        def(SettingKeys.TRANSCODING_PROFILES, "{\"default\":{\"format\":null,\"maxBitRate\":null,\"cannotDecode\":[]},\"metered\":{\"format\":\"opus\",\"maxBitRate\":128,\"cannotDecode\":[]}}", SettingScope.DeviceLocal)
         def(SettingKeys.LYRICS_EXTERNAL_ENABLED, "false", SettingScope.AccountSynced)
         def(SettingKeys.LYRICS_EXTERNAL_PROVIDER, "\"lrclib\"", SettingScope.AccountSynced)
         def(SettingKeys.LYRICS_DEFAULT_OFFSET_MS, "0", SettingScope.DeviceLocal)
@@ -207,6 +209,8 @@ class FakeCore(
         def(SettingKeys.LIBRARY_SYNC_INTERVAL_MINUTES, "60", SettingScope.DeviceLocal)
         def(SettingKeys.LIBRARY_FULL_RECONCILE_DAYS, "7", SettingScope.DeviceLocal)
         def(SettingKeys.SEARCH_INCLUDE_SERVER, "true", SettingScope.AccountSynced)
+        def(SettingKeys.NETWORK_OFFLINE_MODE, "false", SettingScope.DeviceLocal)
+        def(SettingKeys.NETWORK_DATA_SAVER, "true", SettingScope.DeviceLocal)
         SwipeOptions.DEFAULTS.forEach { (key, id) -> def(key, "\"$id\"", SettingScope.AccountSynced) }
         settings.forEach { (k, v) -> defaults[k] = v.value }
         filters += Filter("f-loved", "Loved, not played lately", FilterNode.All(listOf(
@@ -821,26 +825,8 @@ class FakeCore(
             }
             Command.Shutdown -> advanceJob?.cancel()
             is Command.SetNetworkState -> {
-                val wasOffline = network?.kind == NetworkKind.Offline
-                val changed = network != c.data.state
-                network = c.data.state
-                // Like the core: every change is announced (and replayed on attach).
-                if (changed) emit(Event.NetworkChanged(EventNetworkChangedInner(network)))
-                val offline = c.data.state.kind == NetworkKind.Offline
-                // Like the core: offline, only downloads and complete cache entries play; say so.
-                if (offline && !wasOffline && current != null) {
-                    val queued = (listOfNotNull(current) + upcoming).mapNotNull { library.track(it.trackId) }
-                    val playable = queued.count { it.offline == OfflineState.Downloaded || it.offline == OfflineState.Cached }
-                    playerNotice = when {
-                        playable == 0 -> EventPlayerNoticeInner(OFFLINE_NOTHING, PlayerNoticeCode.NothingAvailableOffline)
-                        playable < queued.size -> EventPlayerNoticeInner(OFFLINE_SKIPPING, PlayerNoticeCode.OfflineSkipping)
-                        else -> null
-                    }
-                    playerNotice?.let { emit(Event.PlayerNotice(it)) }
-                } else if (!offline && wasOffline && playerNotice != null) {
-                    playerNotice = null
-                    emit(Event.PlayerNotice(EventPlayerNoticeInner()))
-                }
+                platformNetwork = c.data.state
+                applyNetwork()
             }
             is Command.SetVisibility -> Unit
             is Command.SetPowerSave -> if (powerSave != c.data.enabled) { powerSave = c.data.enabled; refreshBatterySaver() }
@@ -1073,10 +1059,11 @@ class FakeCore(
             is Command.RetryJob -> {
                 updateJob(c.data.id) { it.copy(state = JobState.Running, failed = 0u) }
                 if (problems.removeAll { it.jobId == c.data.id }) emitProblems()
+                applyHolds()
                 progressJob(c.data.id)
             }
             is Command.PauseJob -> updateJob(c.data.id) { it.copy(state = JobState.Paused) }
-            is Command.ResumeJob -> { updateJob(c.data.id) { it.copy(state = JobState.Running) }; progressJob(c.data.id) }
+            is Command.ResumeJob -> { updateJob(c.data.id) { it.copy(state = JobState.Running) }; applyHolds(); progressJob(c.data.id) }
             is Command.RetryProblem -> { problems.removeAll { it.id == c.data.id }; emitProblems(); toast("Retrying") }
             is Command.DismissProblem -> { problems.removeAll { it.id == c.data.id }; emitProblems() }
             Command.DismissAllProblems -> { problems.clear(); emitProblems() }
@@ -1438,6 +1425,8 @@ class FakeCore(
             var done = 0
             while (done < count) {
                 delay(400)
+                // Held back (offline, metered with Wi-Fi only): nothing downloads meanwhile.
+                if (jobs.firstOrNull { it.id == jobId }?.waiting != null) continue
                 done++
                 val i = pins.indexOfFirst { it.target == target }
                 if (i < 0) { updateJob(jobId) { it.copy(state = JobState.Cancelled) }; return@launch }
@@ -1451,10 +1440,41 @@ class FakeCore(
 
     private fun startJob(kind: JobKind, label: String, total: Int): JobId {
         val id = newId("job")
-        jobs.add(0, Job(id, kind, label, JobState.Running, 0u, total.toUInt(), 0u, now(), now(), true))
+        val hold = holdFor(kind)
+        jobs.add(0, Job(id, kind, label, if (hold != null) JobState.Queued else JobState.Running, 0u, total.toUInt(), 0u, now(), now(), true, hold))
         emitJobs()
-        progressJob(id)
+        if (hold == null) progressJob(id)
         return id
+    }
+
+    /**
+     * Like the core: what holds a job of [kind] back right now. Downloads and library syncs wait
+     * while offline (offline mode included); downloads also wait on a metered connection with
+     * `downloads.wifiOnly` on.
+     */
+    private fun holdFor(kind: JobKind): JobWait? = when {
+        kind != JobKind.Download && kind != JobKind.LibrarySync -> null
+        network?.kind == NetworkKind.Offline -> JobWait.Offline
+        kind == JobKind.Download && network?.metered == true && settings[SettingKeys.DOWNLOADS_WIFI_ONLY]?.value?.trim() == "true" -> JobWait.Metered
+        else -> null
+    }
+
+    /**
+     * Like the core: after a change of network or of `downloads.wifiOnly`, running and queued jobs
+     * are held back ([Job.waiting], queued, not advancing) or released (running again).
+     */
+    private fun applyHolds() {
+        var changed = false
+        for (i in jobs.indices) {
+            val j = jobs[i]
+            if (j.state != JobState.Running && j.state != JobState.Queued) continue
+            val hold = holdFor(j.kind)
+            when {
+                hold != null && (j.state != JobState.Queued || j.waiting != hold) -> { jobs[i] = j.copy(state = JobState.Queued, waiting = hold, updatedAt = now()); changed = true }
+                hold == null && j.waiting != null -> { jobs[i] = j.copy(state = JobState.Running, waiting = null, updatedAt = now()); changed = true; progressJob(j.id) }
+            }
+        }
+        if (changed) emitJobs()
     }
 
     private fun updateJob(id: JobId, f: (Job) -> Job) {
@@ -1532,7 +1552,7 @@ class FakeCore(
         val id = startJob(JobKind.LibrarySync, if (full) "Full library sync" else "Library refresh", total)
         syncProgress = SyncProgress(serverId, "artists", 0u, total.toUInt(), emptyList(), false)
         emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
-        if (!timers) {
+        if (!timers && jobs.firstOrNull { it.id == id }?.waiting == null) {
             updateJob(id) { it.copy(state = JobState.Done, done = total.toUInt()) }
             syncProgress = syncProgress!!.copy(done = total.toUInt(), finished = true, readyTables = listOf("artists", "albums", "tracks"))
             emit(Event.SyncProgress(EventSyncProgressInner(syncProgress!!)))
@@ -1554,6 +1574,37 @@ class FakeCore(
         emit(Event.BatterySaverChanged(EventBatterySaverChangedInner(saver)))
     }
 
+    /**
+     * Like the core: the network it acts on is the platform's report, or offline while offline mode
+     * (`network.offlineMode`) is on. With offline mode off and no platform report yet it is null
+     * (unknown, treated as online). Every change is announced (and replayed on attach), and jobs
+     * are held back or released to match ([applyHolds]).
+     */
+    private fun applyNetwork() {
+        val next = if (settings[SettingKeys.NETWORK_OFFLINE_MODE]?.value?.trim() == "true") NetworkState(NetworkKind.Offline, false, null) else platformNetwork
+        val wasOffline = network?.kind == NetworkKind.Offline
+        val changed = network != next
+        network = next
+        if (changed) emit(Event.NetworkChanged(EventNetworkChangedInner(network)))
+        val offline = next?.kind == NetworkKind.Offline
+        // Like the core: offline, only downloads and complete cache entries play; say so.
+        if (offline && !wasOffline && current != null) {
+            val queued = (listOfNotNull(current) + upcoming).mapNotNull { library.track(it.trackId) }
+            // A pending download may be fully cached already: only None needs the network.
+            val playable = queued.count { it.offline != OfflineState.None }
+            playerNotice = when {
+                playable == 0 -> EventPlayerNoticeInner(OFFLINE_NOTHING, PlayerNoticeCode.NothingAvailableOffline)
+                playable < queued.size -> EventPlayerNoticeInner(OFFLINE_SKIPPING, PlayerNoticeCode.OfflineSkipping)
+                else -> null
+            }
+            playerNotice?.let { emit(Event.PlayerNotice(it)) }
+        } else if (!offline && wasOffline && playerNotice != null) {
+            playerNotice = null
+            emit(Event.PlayerNotice(EventPlayerNoticeInner()))
+        }
+        if (changed) applyHolds()
+    }
+
     /** Like the core: unknown keys are refused (an Error event), known ones keep their registry scope. */
     private fun setSetting(key: String, value: String) {
         val existing = settings[key]
@@ -1564,6 +1615,8 @@ class FakeCore(
         settings[key] = Setting(key, value, existing.scope, now())
         emit(Event.SettingChanged(EventSettingChangedInner(settings[key]!!)))
         if (key.startsWith("battery.")) refreshBatterySaver()
+        if (key == SettingKeys.NETWORK_OFFLINE_MODE) applyNetwork()
+        if (key == SettingKeys.DOWNLOADS_WIFI_ONLY) applyHolds()
         if (key == SettingKeys.QUEUE_SAVED_CAP) value.toIntOrNull()?.let { savedQueueCap = it }
         if (key == SettingKeys.QUEUE_SECTION) {
             queueSection = value.trim() != "false"

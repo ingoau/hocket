@@ -21,7 +21,10 @@ pub(crate) struct AccountState {
     pub sync: Option<Arc<LibrarySync>>,
     pub probing: bool,
     pub sync_job: Option<JobId>,
-    pub last_sync_started: Option<f64>,
+    /// Syncs that failed in a row; each waits longer before the next try.
+    pub sync_failures: u32,
+    /// No sync starts on its own before this (after a failure).
+    pub sync_retry_at: f64,
     pub ready_tables: Vec<String>,
 }
 
@@ -35,7 +38,8 @@ impl AccountState {
             sync: None,
             probing: false,
             sync_job: None,
-            last_sync_started: None,
+            sync_failures: 0,
+            sync_retry_at: 0.0,
             ready_tables: vec![],
         }
     }

@@ -95,7 +95,7 @@ impl Actor {
             let _ = reply.send(a);
             return;
         }
-        let Some(provider) = self.catalogue_provider(&id) else {
+        let Some(provider) = self.catalogue_provider(&id).filter(|_| !self.is_offline()) else {
             let _ = reply.send(Self::catalogue_empty(want));
             return;
         };

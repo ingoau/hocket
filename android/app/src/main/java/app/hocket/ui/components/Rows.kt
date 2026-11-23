@@ -69,6 +69,7 @@ import app.hocket.ui.nav.sharedArtworkDestination
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Genre
+import app.hocket.core.api.NetworkKind
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.TrackSummary
@@ -158,6 +159,35 @@ fun offlineStateText(state: OfflineState): String? = when (state) {
 }
 
 /**
+ * Whether an item in [state] plays without the network: anything but [OfflineState.None]. A
+ * download still in progress counts, since the core reports a fully cached song whose download is
+ * pending as downloading and plays it offline all the same.
+ */
+fun playsOffline(state: OfflineState): Boolean = state != OfflineState.None
+
+/**
+ * Offline as the core reports it (no network, or offline mode): rows that need the network are
+ * dimmed then, and say so instead of playing.
+ */
+@Composable
+fun effectivelyOffline(): Boolean = LocalCoreClient.current.network.collectAsStateWithLifecycle().value?.kind == NetworkKind.Offline
+
+/**
+ * Whether a tap that plays [state] is refused here: offline, the song needs the network, and the
+ * tap would play on this device. While another device plays (this one is a remote control) the
+ * core forwards the tap over the LAN to a device that may well have it, so nothing is refused;
+ * with the owner unknown (nobody playing, identity not loaded yet) the tap plays here.
+ */
+@Composable
+fun unavailableOffline(state: OfflineState): Boolean {
+    if (!effectivelyOffline() || playsOffline(state)) return false
+    val client = LocalCoreClient.current
+    val owner = client.transport.collectAsStateWithLifecycle().value.lease.owner
+    val self = client.identity.collectAsStateWithLifecycle().value.deviceId
+    return !(owner != null && self.isNotEmpty() && owner != self)
+}
+
+/**
  * The row menu as accessibility actions: play next, add to queue (with the Queue section setting
  * on, as the registry offers it), play later, go to album / artist (when a
  * [LocalDetailNavigator] is present), download or remove the download, rate (a dialog), and the full
@@ -226,6 +256,11 @@ fun TrackRow(
     nowPlayingMark: Boolean = true,
     /** A rank drawn over the artwork (an artist's top songs). */
     rank: Int? = null,
+    /**
+     * The tap plays the song, so offline a song that needs the network is dimmed and its tap refused
+     * ([unavailableOffline]). False for rows whose tap does something else (opens the album, nothing).
+     */
+    offlineGate: Boolean = true,
 ) {
     val artist = track.artist ?: stringResource(R.string.unknown_artist)
     val label = trackLabel(track)
@@ -233,6 +268,12 @@ fun TrackRow(
     var playlistPicker by remember { mutableStateOf(false) }
     val target = actionTarget ?: Commands.tracks(listOf(track.ref))
     val faded = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackRef.id == track.id }
+    // Offline, a song that isn't downloaded or cached can't play here: dimmed, and a tap says why
+    // rather than starting a queue that skips it. Only for rows whose tap plays ([offlineGate]).
+    val unavailable = offlineGate && unavailableOffline(track.offline)
+    val snackbar = LocalAppSnackbar.current
+    val unavailableText = stringResource(R.string.row_unavailable_offline)
+    val click: () -> Unit = if (unavailable) ({ snackbar?.showOnce(unavailableText) }) else onClick
     // Rows with a menu offer it as actions; read-only rows (stats, filter previews) offer none.
     val actions = if (onMore != null) trackRowActions(track, target, onRate = { rating = true }, onMore = onMore, extra = extraActions) else extraActions
     val (startId, endId) = if (swipe != null) swipeActionIds(swipe) else SwipeOptions.NONE to SwipeOptions.NONE
@@ -242,11 +283,14 @@ fun TrackRow(
     // The row (and the caller's modifier) stays the one merged accessibility item; only its content
     // slides under the swipe.
     SelectableRow(
-        selected, selectionActive, onClick, onToggleSelect, label,
+        selected, selectionActive, click, onToggleSelect, label,
         modifier = modifier,
         // "playing, downloaded": the row's state, merged with its label into one item.
-        state = listOfNotNull(if (nowPlaying) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline))
-            .joinToString(", ").ifEmpty { null },
+        state = listOfNotNull(
+            if (nowPlaying) stringResource(R.string.row_state_playing) else null,
+            offlineStateText(track.offline),
+            if (unavailable) stringResource(R.string.row_state_unavailable_offline) else null,
+        ).joinToString(", ").ifEmpty { null },
         actions = actions,
         clickLabel = stringResource(R.string.action_play),
         shape = shape,
@@ -262,7 +306,7 @@ fun TrackRow(
             swipeSurface = color,
             swipeShape = shape,
         ) {
-            Row(Modifier.alpha(if (faded) 0.45f else 1f).heightIn(min = if (showSubtitle) 64.dp else 56.dp).padding(start = if (segment == null) 16.dp else 8.dp, end = if (segment == null) 16.dp else 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.alpha(if (faded || unavailable) 0.45f else 1f).heightIn(min = if (showSubtitle) 64.dp else 56.dp).padding(start = if (segment == null) 16.dp else 8.dp, end = if (segment == null) 16.dp else 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke()
                 if (showArtwork) {
                     Box(Modifier.size(48.dp)) {

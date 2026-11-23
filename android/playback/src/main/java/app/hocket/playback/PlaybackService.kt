@@ -108,8 +108,8 @@ class PlaybackService : MediaLibraryService() {
     private var routeDiscovery: Any? = null
     private var serverId: String? = null
     private var libraryNotify: Job? = null
-    /** Downloads, syncs or imports running ([BackgroundJobs]): the core is busy even with nothing playing. */
-    @Volatile private var jobsActive = false
+    /** The core's jobs as last reported: while [BackgroundJobs.active] has any, the core is busy even with nothing playing. */
+    @Volatile private var jobs: List<app.hocket.core.api.Job> = emptyList()
     private val foregroundHold = ForegroundHold(this, scope) { isPlaybackOngoing }
     private val audioRoutes = AudioRouteLog(this)
     private var cast: CastController? = null
@@ -140,9 +140,9 @@ class PlaybackService : MediaLibraryService() {
             core.events.collect { event ->
                 // Read by the idle stop only, so job progress never needs the main thread.
                 when (event) {
-                    is Event.JobsChanged -> jobsActive = BackgroundJobs.active(event.data.jobs).isNotEmpty()
-                    is Event.Started -> jobsActive = BackgroundJobs.active(event.data.snapshot.jobs).isNotEmpty()
-                    is Event.Snapshot -> jobsActive = BackgroundJobs.active(event.data.snapshot.jobs).isNotEmpty()
+                    is Event.JobsChanged -> jobs = event.data.jobs
+                    is Event.Started -> jobs = event.data.snapshot.jobs
+                    is Event.Snapshot -> jobs = event.data.snapshot.jobs
                     else -> Unit
                 }
                 if (gate.admit(event)) main.post { if (scope.isActive) onEvent(event) }
@@ -296,7 +296,8 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    private fun isBusy(): Boolean = jobsActive || backend.isBusy() || (casting != null && cast?.backend?.isBusy() == true)
+    /** Checked at each idle check, not when the jobs last changed: a waiting job's grace runs out with the clock. */
+    private fun isBusy(): Boolean = BackgroundJobs.active(jobs).isNotEmpty() || backend.isBusy() || (casting != null && cast?.backend?.isBusy() == true)
 
     private fun scheduleIdleStop() {
         idleJob?.cancel()

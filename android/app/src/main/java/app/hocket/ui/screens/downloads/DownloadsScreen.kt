@@ -43,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -73,6 +74,8 @@ import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
+import app.hocket.core.api.JobKind
+import app.hocket.core.api.JobState
 import app.hocket.core.api.Pin
 import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.components.Artwork
@@ -80,6 +83,7 @@ import app.hocket.ui.components.Badge
 import app.hocket.ui.components.ConfirmDialog
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.formatBytes
+import app.hocket.ui.components.waitingText
 
 /** Pins with sizes and progress, the storage summary and its warn threshold. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -88,6 +92,12 @@ fun DownloadsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val pins by client.pins.collectAsStateWithLifecycle()
     val storage by client.storage.collectAsStateWithLifecycle()
+    val jobs by client.jobs.collectAsStateWithLifecycle()
+    // Downloads held back by the network (Wi-Fi only on a metered connection, or offline): the
+    // unfinished pins say so instead of looking busy. None while another download runs.
+    val downloads = jobs.filter { it.kind == JobKind.Download }
+    val waiting = if (downloads.any { it.state == JobState.Running }) null
+        else downloads.firstNotNullOfOrNull { it.waiting?.takeIf { _ -> it.state == JobState.Queued } }
     var removing by remember { mutableStateOf<Pin?>(null) }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val warn = storage.warnThresholdBytes
@@ -140,7 +150,14 @@ fun DownloadsScreen(nav: NavHostController) {
                                     Badge(stringResource(if (pin.transcoded) R.string.downloads_transcoded else R.string.downloads_original), container = MaterialTheme.colorScheme.surfaceContainerHigh)
                                 }
                                 if (pin.downloadedCount < pin.trackCount) {
-                                    LinearWavyProgressIndicator(progress = { pin.downloadedCount.toFloat() / pin.trackCount.toFloat().coerceAtLeast(1f) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp))
+                                    val fraction = pin.downloadedCount.toFloat() / pin.trackCount.toFloat().coerceAtLeast(1f)
+                                    if (waiting == null) {
+                                        LinearWavyProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp))
+                                    } else {
+                                        Text(waitingText(waiting),
+                                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("downloads.waiting"))
+                                        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp, end = 8.dp), drawStopIndicator = {})
+                                    }
                                 }
                             }
                             IconButton(onClick = { removing = pin }, shapes = IconButtonDefaults.shapes()) { Icon(HocketIcons.Outlined.Delete, stringResource(R.string.action_remove_download)) }

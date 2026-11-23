@@ -1557,6 +1557,7 @@ async fn a_finished_download_refreshes_pins_once_not_on_every_jobs_change() {
         created_at: 0.0,
         updated_at: 0.0,
         cancellable: false,
+        waiting: None,
     };
     let post = |jobs: Vec<Job>| {
         t.core
@@ -1619,6 +1620,7 @@ async fn a_running_download_refreshes_pins_as_each_track_lands() {
         created_at: 0.0,
         updated_at: 0.0,
         cancellable: false,
+        waiting: None,
     };
     let post = |jobs: Vec<Job>| {
         t.core

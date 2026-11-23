@@ -5,7 +5,8 @@ import type { Command } from "@core/api";
 import { parseDeepLink } from "@shared/deep-link";
 import { t } from "@shared/strings";
 import { showToast } from "./lib/ui-toast";
-import { SIDEBAR_RAIL, useApp } from "./store/app";
+import { SIDEBAR_RAIL, useApp, useOfflineReason } from "./store/app";
+import { SK } from "@shared/settings-keys";
 import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
 import { Sidebar } from "./components/Sidebar";
@@ -45,7 +46,6 @@ export function App() {
   const hasServer = useApp((s) => s.accounts.length > 0);
   const setupSummary = useSetupSummary();
   const coreKind = useApp((s) => s.meta?.coreKind);
-  const network = useApp((s) => s.network);
   const panels = useApp((s) => s.panels);
   const queueDropReveal = useApp((s) => s.queueDropReveal);
   // A modal (dialog, palette, fullscreen player) makes the rest of the window inert:
@@ -95,7 +95,7 @@ export function App() {
       <header className="app-header" inert={modal}>
         <a href="#main" className="skip-link" onClick={skip} data-testid="skip-link">{t("a11y.skipToContent")}</a>
         {coreKind === "fake" ? <div className="dev-banner" data-testid="dev-banner">{t("app.devBanner")}</div> : null}
-        <OfflineBanner offline={network?.kind === "offline"} />
+        <OfflineBanner />
         <ReportUploadBar />
         <TopBar />
       </header>
@@ -138,20 +138,24 @@ function useWindowChrome(playerOpen: boolean): void {
 
 /**
  * Offline: the core skips what isn't downloaded or fully cached and says so
- * with a PlayerNotice; show it (or plain "Offline") with the way to the list
- * of what plays. The live region stays mounted so a new notice is announced.
+ * with a PlayerNotice; show it (or why it's offline: offline mode, or no
+ * connection) with the way to the list of what plays, and in offline mode the
+ * way out. The live region stays mounted so a new notice is announced.
  */
-function OfflineBanner({ offline }: { offline: boolean }) {
+function OfflineBanner() {
+  const reason = useOfflineReason();
   const notice = useApp((s) => (isOfflineNotice(s.playerNotice) ? noticeText(s.playerNotice) : undefined));
   const navigate = useApp((s) => s.navigate);
-  const show = offline || !!notice;
+  const setSetting = useApp((s) => s.setSetting);
+  const show = !!reason || !!notice;
   return (
     <div role="status" className="offline-live" data-testid="offline-live">
       {show ? (
-        <div className="offline-banner" data-testid="offline-banner">
+        <div className="offline-banner" data-testid="offline-banner" data-reason={reason}>
           <Icon name="offline" size={12} />
-          <span data-testid="offline-banner-text">{notice ?? t("misc.offline")}</span>
+          <span data-testid="offline-banner-text">{notice ?? t(reason === "offlineMode" ? "misc.offlineMode" : "misc.noConnection")}</span>
           <button type="button" className="link-button" onClick={() => navigate({ view: "downloads", param: "offline" })} data-testid="offline-banner-show">{t("misc.offlineShow")}</button>
+          {reason === "offlineMode" ? <button type="button" className="link-button" onClick={() => setSetting(SK.networkOfflineMode, false)} data-testid="offline-mode-off">{t("misc.offlineModeOff")}</button> : null}
         </div>
       ) : null}
     </div>

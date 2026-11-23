@@ -16,6 +16,7 @@ import { ticker } from "./position";
 import { BACKGROUND_FPS, perfForWindow } from "../lib/kawarp-budget";
 import { SK } from "@shared/settings-keys";
 import type { MenuFacts } from "../lib/menu-model";
+import { LEAVE_OFFLINE_MODE_GRACE_MS, leavingOfflineMode, offlineReason, ownsPlayback, type OfflineReason } from "../lib/offline";
 
 export type ViewName = "home" | "library" | "albums" | "artists" | "playlists" | "songs" | "genres" | "downloads" | "filters" | "stats" | "settings" | "developer" | "album" | "artist" | "playlist" | "genre" | "filter" | "search" | "snoozed";
 
@@ -142,6 +143,11 @@ export interface UiState {
    * when the drag ends.
    */
   queueDropReveal: boolean;
+  /**
+   * Offline mode was just turned off and the core's NetworkChanged hasn't come yet (or the grace
+   * ran out): an offline network is offline mode's, not "no connection" (`lib/offline`).
+   */
+  leavingOfflineMode: boolean;
   /** The source filter chip: the account the library, search and playlists show ("" = all, `hocket` = Mixed playlists). */
   librarySource: string;
   setLibrarySource(source: string): void;
@@ -235,6 +241,7 @@ export const useApp = create<AppStore>((set, get) => ({
   editingPins: false,
   editPinsFrom: undefined,
   queueDropReveal: false,
+  leavingOfflineMode: false,
   librarySource: "",
 
   dispatch(command) {
@@ -358,8 +365,10 @@ export const useApp = create<AppStore>((set, get) => ({
   setSetting(key, value) {
     // Optimistic mirror so controls don't flicker; the core confirms with SettingChanged.
     const prev = get().settings[key];
+    const wasOfflineMode = offlineModeOn(get());
     const setting: Setting = { key, value: JSON.stringify(value), scope: prev?.scope ?? "deviceLocal", updatedAt: Date.now() };
     set((s) => ({ settings: { ...s.settings, [key]: setting } }));
+    noteOfflineMode(wasOfflineMode);
     bridge().dispatch({ type: "setSetting", data: { key, value: JSON.stringify(value) } });
   },
   runAction(actionId, target = { type: "none" }) {
@@ -465,7 +474,10 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
   const offEvent = b.onEvent((e) => {
     if (e.type === "reportUploadChanged") reportEventSeen = true;
     if (e.type === "networkChanged" || e.type === "accountsChanged") forgetArtwork();
+    const wasOfflineMode = offlineModeOn(useApp.getState());
     useApp.getState().applyEvent(e);
+    if (e.type === "networkChanged") endLeavingOfflineMode();
+    else noteOfflineMode(wasOfflineMode);
     const snapshot = snapshotOf(e);
     if (snapshot) requestLyrics(snapshot.queue.current?.track.id);
     if (e.type === "settingChanged" && e.data.setting.key.endsWith("lyricsFps")) recomputePerf();
@@ -505,6 +517,57 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
 
 export function useSetting<T>(key: string, fallback: T): T {
   return useApp((s) => settingValue(s, key, fallback));
+}
+
+function offlineModeOn(s: CoreState): boolean {
+  return settingValue<boolean>(s, SK.networkOfflineMode, false) === true;
+}
+
+let leavingTimer: ReturnType<typeof setTimeout> | undefined;
+
+function endLeavingOfflineMode(): void {
+  if (leavingTimer) clearTimeout(leavingTimer);
+  leavingTimer = undefined;
+  if (useApp.getState().leavingOfflineMode) useApp.setState({ leavingOfflineMode: false });
+}
+
+/**
+ * After a settings change (ours, optimistic, or the core's SettingChanged): offline mode going off
+ * holds "no connection" back until the core's NetworkChanged, or the grace runs out.
+ */
+function noteOfflineMode(was: boolean): void {
+  const now = offlineModeOn(useApp.getState());
+  if (was === now) return;
+  if (now) {
+    endLeavingOfflineMode();
+    return;
+  }
+  if (leavingTimer) clearTimeout(leavingTimer);
+  leavingTimer = setTimeout(endLeavingOfflineMode, LEAVE_OFFLINE_MODE_GRACE_MS);
+  useApp.setState({ leavingOfflineMode: true });
+}
+
+/** Offline mode, or no connection (`lib/offline`); undefined while online. */
+export function selectOfflineReason(s: AppStore): OfflineReason | undefined {
+  const browserOnline = typeof navigator === "undefined" || navigator.onLine !== false;
+  return offlineReason(s.network, offlineModeOn(s), leavingOfflineMode(s.leavingOfflineMode, browserOnline));
+}
+
+export function useOfflineReason(): OfflineReason | undefined {
+  return useApp(selectOfflineReason);
+}
+
+/** This device's id, as the transport lease names it. */
+export function selfDeviceId(s: CoreState): string | undefined {
+  return s.identity.deviceId || s.devices.find((d) => d.isSelf)?.id;
+}
+
+/**
+ * Rows to dim as not playable offline: offline, and this device owns playback (controlling another
+ * device over LAN Connect, the core doesn't skip for this one's lack of network).
+ */
+export function useOfflineDimming(): boolean {
+  return useApp((s) => !!selectOfflineReason(s) && ownsPlayback(s.transport.lease.owner, selfDeviceId(s)));
 }
 
 /**

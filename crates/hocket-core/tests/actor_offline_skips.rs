@@ -27,6 +27,7 @@ fn network(kind: NetworkKind) -> Command {
 async fn started(name: &str) -> TestCore {
     let t = TestCore::start(name, seeded_server(6, 100.0)).await;
     core_stream(&t).await;
+    metered_only_stops_prefetch(&t).await;
     t.run(network(NetworkKind::Wifi)).await;
     t.run(Command::SetAutoplay { enabled: false }).await;
     t

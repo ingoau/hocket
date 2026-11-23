@@ -75,11 +75,11 @@ impl Actor {
         true
     }
 
-    /// Fetch, in the background, the covers of every account's downloads
-    /// that are not cached yet (downloads from before covers were kept, or
-    /// whose covers failed).
+    /// Covers and lyrics of every account's downloads that are not kept
+    /// yet, in the background. They wait with the downloads (offline, or on
+    /// a metered connection with `downloads.wifiOnly`).
     pub(crate) fn keep_download_covers(&mut self) {
-        if self.is_offline() {
+        if self.jobs.hold(JobKind::Download).is_some() {
             return;
         }
         let sizes = crate::cache::download_cover_sizes(self.cfg.platform);
@@ -96,7 +96,8 @@ impl Actor {
             };
             let caches = self.caches.clone();
             self.spawn(async move {
-                caches.keep_download_covers(provider, sizes).await;
+                caches.keep_download_covers(provider.clone(), sizes).await;
+                caches.keep_download_lyrics(provider).await;
             });
         }
     }

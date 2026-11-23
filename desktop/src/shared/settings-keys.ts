@@ -43,6 +43,12 @@ export const SK = {
   sleepDefaultMinutes: "sleep.defaultMinutes",
   scrobbleEnabled: "scrobble.enabled",
   searchIncludeServer: "search.includeServer",
+  /** Minutes between library refreshes (5–1440, default 60). Device-local. */
+  librarySyncIntervalMinutes: "library.syncIntervalMinutes",
+  /** Days between full reconciles (1–90, default 7). Device-local. */
+  libraryFullReconcileDays: "library.fullReconcileDays",
+  /** Behave as if there were no network: the core reports it offline. Device-local; default false. */
+  networkOfflineMode: "network.offlineMode",
   /** Off / Crossfade / AutoMix and the crossfade length, a TransitionSettings. Synced; read with Query transitions, set with SetTransitionSettings. */
   playbackTransitions: "playback.transitions",
 } as const;

@@ -130,6 +130,12 @@ impl Actor {
     fn next_source(&self, upcoming: &[QueueItem], locked: Option<Ms>) -> Option<MediaSource> {
         let item = upcoming.first()?;
         let track = self.track_for_item(item)?;
+        // Data saver: a follow-up that would stream is not loaded ahead (a
+        // stream opened early fetches it whole, heard or not); it loads when
+        // its turn comes. One on the device still plays gaplessly.
+        if self.renderer.is_none() && self.data_saver_active() && !self.available_offline(&track) {
+            return None;
+        }
         let source = self.media_source_for(&item.key, &track)?;
         let following = upcoming.get(1).and_then(|i| self.track_for_item(i));
         Some(self.with_mix(source, &track, following.as_ref(), locked))

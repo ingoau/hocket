@@ -9,8 +9,8 @@
 //! starred state, play counts and last plays of recently played albums
 //! (`getAlbumList2 type=recent` until we reach what we know: every device
 //! and client that scrobbles moves them), playlists whose `changed` moved.
-//! A full reconcile runs
-//! when the last one is older than [`FULL_RECONCILE_INTERVAL_MS`].
+//! A full reconcile runs when the caller asks for one (the actor does every
+//! `library.fullReconcileDays`) and on the first sync.
 //!
 //! The cursor lives in `saved_state` under `sync:<serverId>` so a crash
 //! resumes at the same page. Progress is reported per phase with the tables
@@ -44,8 +44,6 @@ use super::{Db, DbError};
 pub const PAGE_SIZE: u32 = 500;
 /// Recently played albums an incremental sync looks at, at most.
 pub const RECENT_PLAYS_PAGE: u32 = 50;
-/// Full reconcile cadence: once a day.
-pub const FULL_RECONCILE_INTERVAL_MS: f64 = 24.0 * 3600.0 * 1000.0;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -142,6 +140,9 @@ pub struct SyncStats {
 pub enum SyncError {
     #[error("cancelled")]
     Cancelled,
+    /// Held back for the network ([`JobError::Deferred`]).
+    #[error("waiting for the network")]
+    Deferred,
     #[error(transparent)]
     Db(#[from] DbError),
     #[error(transparent)]
@@ -152,6 +153,7 @@ impl From<SyncError> for JobError {
     fn from(e: SyncError) -> Self {
         match e {
             SyncError::Cancelled => JobError::Cancelled,
+            SyncError::Deferred => JobError::Deferred,
             SyncError::Db(d) => JobError::Db(d),
             SyncError::Server(s) => JobError::Failed(s.to_string()),
         }
@@ -162,6 +164,7 @@ impl From<JobError> for SyncError {
     fn from(e: JobError) -> Self {
         match e {
             JobError::Cancelled => SyncError::Cancelled,
+            JobError::Deferred => SyncError::Deferred,
             JobError::Db(d) => SyncError::Db(d),
             other => SyncError::Db(DbError::Other(other.to_string())),
         }
@@ -299,8 +302,8 @@ impl LibrarySync {
         obs.progress(p);
     }
 
-    /// Run a sync. `full` forces a reconcile; otherwise it is incremental
-    /// unless a full one is due or never happened. Resumes an interrupted run.
+    /// Run a sync. `full` asks for a reconcile; otherwise it is incremental
+    /// unless none ever completed. Resumes an interrupted run.
     pub async fn run(&self, full: bool, obs: &dyn SyncObserver) -> Result<SyncStats, SyncError> {
         if let Some(p) = self.provider.clone() {
             return self.run_provider(p.as_ref(), obs).await;
@@ -311,10 +314,9 @@ impl LibrarySync {
         if c.in_progress() {
             tracing::info!(server = self.server_id(), phase = ?c.phase, offset = c.offset, "resuming interrupted sync");
         } else {
-            let due = c
-                .last_full_at
-                .is_none_or(|t| now - t >= FULL_RECONCILE_INTERVAL_MS);
-            c.full = full || due;
+            // When a full reconcile is due is the caller's call
+            // (`library.fullReconcileDays`); the first sync is always full.
+            c.full = full || c.last_full_at.is_none();
             c.gen += 1;
             c.phase = if c.full {
                 Phase::Artists

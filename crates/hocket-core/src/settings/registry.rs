@@ -161,6 +161,15 @@ pub mod keys {
     pub const LIBRARY_SYNC_INTERVAL_MINUTES: &str = "library.syncIntervalMinutes";
     pub const LIBRARY_FULL_RECONCILE_DAYS: &str = "library.fullReconcileDays";
     pub const SEARCH_INCLUDE_SERVER: &str = "search.includeServer";
+    /// Offline mode: behave as if there were no network (only downloaded
+    /// and cached music plays; nothing is sent to the server or the
+    /// coordinator until it is turned off).
+    pub const NETWORK_OFFLINE_MODE: &str = "network.offlineMode";
+    /// Data saver on metered connections: no early load of the next track
+    /// unless it is on the device, no full reconciles, no server search,
+    /// lyrics only for what plays, and cached covers at a larger size used
+    /// instead of fetching.
+    pub const NETWORK_DATA_SAVER: &str = "network.dataSaver";
 
     /// `actions.order.<surface>` for a customisable surface.
     pub fn action_order(surface: &str) -> String {
@@ -269,7 +278,7 @@ fn overrides_valid(v: &Value) -> Result<(), String> {
 }
 
 fn profiles_valid(v: &Value) -> Result<(), String> {
-    // {"<networkId>|default": TranscodingProfile}
+    // {"<networkId>|default|metered|wifi|wired": TranscodingProfile}
     let obj = v.as_object().ok_or("expected an object")?;
     for (k, p) in obj {
         if k.is_empty() {
@@ -522,7 +531,7 @@ pub static REGISTRY: &[SettingDef] = &[
     json_def(
         TRANSCODING_PROFILES,
         Local,
-        || json!({ "default": { "format": null, "maxBitRate": null, "cannotDecode": [] }, "cellular": { "format": "opus", "maxBitRate": 128, "cannotDecode": [] } }),
+        || json!({ "default": { "format": null, "maxBitRate": null, "cannotDecode": [] }, "metered": { "format": "opus", "maxBitRate": 128, "cannotDecode": [] } }),
         profiles_valid,
     ),
     // Device-local on purpose: fetching external lyrics reveals what you
@@ -840,6 +849,10 @@ pub static REGISTRY: &[SettingDef] = &[
     def(SEARCH_INCLUDE_SERVER, Synced, SettingKind::Bool, || {
         json!(true)
     }),
+    def(NETWORK_OFFLINE_MODE, Local, SettingKind::Bool, || {
+        json!(false)
+    }),
+    def(NETWORK_DATA_SAVER, Local, SettingKind::Bool, || json!(true)),
 ];
 
 /// Registry row for a key.

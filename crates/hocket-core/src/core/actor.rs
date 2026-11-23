@@ -268,7 +268,11 @@ pub(crate) struct Actor {
     pub skip_op: bool,
     /// The settle deadline the pending-load timer was armed for.
     pub pending_load_timer: Option<f64>,
+    /// The network the core acts on: the device's, or offline while offline
+    /// mode is on (`Actor::effective_network`).
     pub network: Option<NetworkState>,
+    /// The network as the platform last reported it (`SetNetworkState`).
+    pub device_network: Option<NetworkState>,
     pub visible: bool,
     pub focused: bool,
     /// The device's own power-save state (`SetPowerSave`).
@@ -594,6 +598,7 @@ impl Actor {
             skip_op: false,
             pending_load_timer: None,
             network: None,
+            device_network: None,
             visible: true,
             focused: true,
             power_save: false,
@@ -628,6 +633,8 @@ impl Actor {
         actor.undo = UndoStack::new(actor.cfg.device_id.clone(), crate::undo::DEFAULT_MAX_BYTES);
         actor.apply_storage_settings();
         actor.apply_transcoding_settings();
+        // Offline mode left on is in force before the platform reports a network.
+        actor.apply_network();
         // A level chosen earlier is in force from the start (no event yet: nothing listens).
         actor.battery_saver = crate::saver::resolve(
             crate::saver::parse_level(&actor.settings.get(crate::settings::keys::BATTERY_LEVEL))
@@ -841,8 +848,10 @@ impl Actor {
         self.jobs
             .jobs()
             .map(|j| {
-                j.iter()
-                    .any(|j| matches!(j.state, JobState::Running | JobState::Queued))
+                j.iter().any(|j| {
+                    j.state == JobState::Running
+                        || (j.state == JobState::Queued && j.waiting.is_none())
+                })
             })
             .unwrap_or(false)
     }
@@ -925,7 +934,7 @@ impl Actor {
         // Kick the connect tier selection, library sync and the outbox.
         self.engine_input(Input::Tick);
         self.last_engine_tick = self.now();
-        self.maybe_start_sync(false, true);
+        self.maybe_start_sync_on_launch();
         self.schedule_flush();
     }
 

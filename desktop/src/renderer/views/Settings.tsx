@@ -26,6 +26,9 @@ import { clearTelemetry, setTelemetryEnabled, summarise, telemetryEvents, useTel
 import { SWIPE_DEFAULTS, SWIPE_KEYS, SWIPE_LIST_ACTIONS, SWIPE_QUEUE_ACTIONS, swipeChoiceLabel } from "../lib/swipe-actions";
 import { Select, Slider, Switch } from "../components/controls";
 import { warnChoices } from "../lib/storage-warn";
+import { isWaiting, jobStateLabel } from "../lib/jobs";
+import { useUnreachableIds } from "../lib/unreachable";
+import { reconcileChoices, reconcileLabel, syncIntervalChoices, syncIntervalLabel } from "../lib/sync-interval";
 import { SettingsSearch, useSettingsJump } from "../components/SettingsSearch";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../lib/settings-index";
 import { startAddAccount } from "./Setup";
@@ -94,7 +97,10 @@ function AccountCard() {
   const server = accounts[0];
   const navigate = useApp((s) => s.navigate);
   const openDialog = useApp((s) => s.openDialog);
-  const syncing = useApp((s) => s.jobs.some((j) => j.kind === "librarySync" && (j.state === "running" || j.state === "queued")));
+  const syncJob = useApp((s) => s.jobs.find((j) => j.kind === "librarySync" && (j.state === "running" || j.state === "queued")));
+  // A sync held for the network says what it waits for instead of spinning.
+  const held = syncJob && isWaiting(syncJob) ? syncJob : undefined;
+  const syncing = !!syncJob && !held;
   if (!server) return null;
   const host = server.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const last = server.lastSync ? t("settings.account.synced", { when: fmtRelative(server.lastSync) }) : t("settings.account.notSynced");
@@ -107,9 +113,9 @@ function AccountCard() {
           <span className="truncate settings-account-sub">{server.name && server.name !== host ? t("settings.account.on", { server: server.name, host }) : host}</span>
         </span>
       </div>
-      <button type="button" className="btn primary settings-account-sync" disabled={syncing} onClick={() => { for (const a of accounts) bridge().dispatch({ type: "syncLibrary", data: { account_id: a.id, full: false } }); }} data-testid="settings-account-sync">
+      <button type="button" className="btn primary settings-account-sync" disabled={!!syncJob} onClick={() => { for (const a of accounts) bridge().dispatch({ type: "syncLibrary", data: { account_id: a.id, full: false } }); }} data-testid="settings-account-sync">
         <Icon name="sync" size={18} className={syncing ? "spin" : undefined} />
-        <span className="truncate">{syncing ? t("settings.account.syncing") : t("settings.account.syncNow", { last })}</span>
+        <span className="truncate">{held ? t(jobStateLabel(held)) : syncing ? t("settings.account.syncing") : t("settings.account.syncNow", { last })}</span>
       </button>
       <div className="settings-account-links">
         <button type="button" className="btn settings-account-link" onClick={() => navigate({ view: "stats" })} data-testid="settings-account-stats"><Icon name="stats" size={18} />{t("settings.account.stats")}</button>
@@ -168,6 +174,10 @@ function General() {
   const threshold = useSetting(SK.ratingsLoveBridgeThreshold, 4);
   const prefs = useApp((s) => s.prefs);
   const setPrefs = useApp((s) => s.setPrefs);
+  const syncMinutes = useSetting(SK.librarySyncIntervalMinutes, 60);
+  const reconcileDays = useSetting(SK.libraryFullReconcileDays, 7);
+  // Out of reach with the network up for a while, not just still being checked (lib/unreachable).
+  const unreachableIds = useUnreachableIds();
   return (
     <>
       <h2 className="section-title" id="setting-servers" tabIndex={-1}>{t("settings.servers")}</h2>
@@ -177,7 +187,7 @@ function General() {
         <div key={s.id} className="setting-row" data-testid="server-row">
           <div className="label">
             <div className="title">{s.name} <span className="muted small" data-testid="server-row-kind">{[t(ACCOUNT_KIND_LABEL[s.kind]), s.url, s.username].filter(Boolean).join(" · ")}</span></div>
-            <div className="desc">{s.capabilities.serverVersion ? t("settings.serverVersion", { version: s.capabilities.serverVersion }) : ""}{!s.capabilities.meetsFloor ? ` · ${t("settings.serverBelowFloor")}` : ""}{!s.reachable ? ` · ${t("settings.serverUnreachable")}` : ""}{s.lastSync ? ` · ${t("sync.done")} ${fmtRelative(s.lastSync)}` : ""}</div>
+            <div className="desc">{s.capabilities.serverVersion ? t("settings.serverVersion", { version: s.capabilities.serverVersion }) : ""}{!s.capabilities.meetsFloor ? ` · ${t("settings.serverBelowFloor")}` : ""}{unreachableIds.includes(s.id) ? ` · ${t("settings.serverUnreachable")}` : ""}{s.lastSync ? ` · ${t("sync.done")} ${fmtRelative(s.lastSync)}` : ""}</div>
           </div>
           <div className="control">
             {servers.length > 1 ? (
@@ -198,6 +208,18 @@ function General() {
           <button type="button" className="btn tonal sm" onClick={startAddAccount} data-testid="account-add"><Icon name="plus" size={16} />{t("settings.accounts.add")}</button>
         </div>
       </div>
+      <Toggle anchor="offlineMode" settingKey={SK.networkOfflineMode} title={t("settings.offlineMode")} desc={t("settings.offlineModeDesc")} />
+      <Row anchor="syncInterval" title={t("settings.syncInterval")} desc={t("settings.syncIntervalDesc")} settingKey={SK.librarySyncIntervalMinutes}>
+        <Select value={syncMinutes} aria-label={t("settings.syncInterval")} onChange={(e) => set(SK.librarySyncIntervalMinutes, Number(e.target.value))} data-testid="setting-syncInterval">
+          {syncIntervalChoices(syncMinutes).map((m) => <option key={m} value={m}>{syncIntervalLabel(m)}</option>)}
+        </Select>
+      </Row>
+      <Row anchor="fullReconcile" title={t("settings.fullReconcile")} desc={t("settings.fullReconcileDesc")} settingKey={SK.libraryFullReconcileDays}>
+        <Select value={reconcileDays} aria-label={t("settings.fullReconcile")} onChange={(e) => set(SK.libraryFullReconcileDays, Number(e.target.value))} data-testid="setting-fullReconcile">
+          {reconcileChoices(reconcileDays).map((d) => <option key={d} value={d}>{reconcileLabel(d)}</option>)}
+        </Select>
+      </Row>
+      <Toggle anchor="searchServer" settingKey={SK.searchIncludeServer} title={t("settings.searchServer")} desc={t("settings.searchServerDesc")} fallback />
       <Row anchor="closeToTray" title={t("settings.closeToTray")} desc={t("settings.scope.local")}>
         <Switch checked={prefs.closeToTray} onChange={(checked) => setPrefs({ closeToTray: checked })} aria-label={t("settings.closeToTray")} data-testid="pref-closeToTray" />
       </Row>

@@ -30,7 +30,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -81,7 +80,7 @@ class JobsService : Service() {
     private fun follow(): kotlinx.coroutines.Job? {
         val app = application as? HocketApp ?: run { finish(); return null }
         return scope.launch {
-            app.client.flatMapLatest { it?.jobs ?: flowOf(emptyList()) }.map(BackgroundJobs::active).conflate().collect { active ->
+            BackgroundJobs.activeFlow(app.client.flatMapLatest { it?.jobs ?: flowOf(emptyList()) }).conflate().collect { active ->
                 if (active.isEmpty()) {
                     finish()
                     return@collect

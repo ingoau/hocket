@@ -13,12 +13,16 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.hocket.core.Commands
+import app.hocket.core.SettingKeys
 import app.hocket.core.api.Job
 import app.hocket.core.api.JobKind
 import app.hocket.core.api.JobState
+import app.hocket.core.api.JobWait
 import app.hocket.core.api.Problem
 import app.hocket.core.api.SyncProgress
 import app.hocket.ui.components.JobsSheet
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,8 +46,8 @@ class JobsSheetScreenshotTest {
 
     private val now = System.currentTimeMillis().toDouble()
 
-    private fun syncJob(state: JobState, done: UInt, createdAt: Double, updatedAt: Double = createdAt) =
-        Job("job-sync", JobKind.LibrarySync, "Library sync", state, done, 4357u, 0u, createdAt, updatedAt, true)
+    private fun syncJob(state: JobState, done: UInt, createdAt: Double, updatedAt: Double = createdAt, waiting: JobWait? = null) =
+        Job("job-sync", JobKind.LibrarySync, "Library sync", state, done, 4357u, 0u, createdAt, updatedAt, true, waiting)
 
     @Test
     fun lastSyncSummary() {
@@ -115,6 +119,33 @@ class JobsSheetScreenshotTest {
         compose.waitForIdle()
         compose.onNodeWithText("Waiting to sync").assertExists()
         compose.onNodeWithText("900 of 4357").assertDoesNotExist()
+    }
+
+    @Test
+    fun jobsHeldBackByTheNetworkSaySo() {
+        val core = show()
+        core.fake.stageSync(jobs = listOf(
+            syncJob(JobState.Queued, 0u, now - 1_000.0, waiting = JobWait.Offline),
+            Job("job-dl", JobKind.Download, "Download Abbey Road", JobState.Queued, 3u, 17u, 0u, now - 2_000.0, now - 2_000.0, true, JobWait.Metered),
+        ))
+        compose.waitForIdle()
+        compose.onNodeWithText("Waiting for a connection").assertExists()
+        compose.onNodeWithText("Waiting for Wi‑Fi", substring = true).assertExists()
+        // It starts by itself: no resume button, and the spinner doesn't count it.
+        compose.onNodeWithContentDescription("Resume").assertDoesNotExist()
+        assertTrue(core.client.activeJobs.value.isEmpty())
+        shot("android-dark-activity-waiting")
+    }
+
+    @Test
+    fun offlineModeSaysItHoldsTheJobs() {
+        val core = show()
+        core.client.dispatch(Commands.setSetting(SettingKeys.NETWORK_OFFLINE_MODE, "true"))
+        core.fake.stageSync(jobs = listOf(syncJob(JobState.Queued, 0u, now - 1_000.0, waiting = JobWait.Offline)))
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.NETWORK_OFFLINE_MODE]?.value == "true" }
+        compose.waitForIdle()
+        compose.onNodeWithText("Paused by offline mode").assertExists()
+        compose.onNodeWithText("Waiting for a connection").assertDoesNotExist()
     }
 
     @Test

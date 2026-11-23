@@ -8,6 +8,8 @@ export interface TrayHandlers {
   togglePlay(): void;
   next(): void;
   previous(): void;
+  /** Turn offline mode (network.offlineMode) on or off. */
+  setOfflineMode(on: boolean): void;
   quit(): void;
 }
 
@@ -15,6 +17,7 @@ export class AppTray {
   private tray: Tray | undefined;
   private nowPlaying: string | undefined;
   private playing = false;
+  private offlineMode = false;
 
   constructor(private readonly handlers: TrayHandlers) {}
 
@@ -38,6 +41,13 @@ export class AppTray {
     this.rebuild();
   }
 
+  /** Offline mode as the core has it (the setting), for the menu's checkbox. */
+  setOfflineMode(on: boolean): void {
+    if (on === this.offlineMode) return;
+    this.offlineMode = on;
+    this.rebuild();
+  }
+
   private rebuild(): void {
     if (!this.tray) return;
     this.tray.setToolTip(this.nowPlaying ? `Hocket · ${this.nowPlaying}` : "Hocket");
@@ -48,6 +58,8 @@ export class AppTray {
         { label: this.playing ? "Pause" : "Play", click: () => this.handlers.togglePlay(), enabled: !!this.nowPlaying },
         { label: "Next", click: () => this.handlers.next(), enabled: !!this.nowPlaying },
         { label: "Previous", click: () => this.handlers.previous(), enabled: !!this.nowPlaying },
+        { type: "separator" },
+        { label: "Offline mode", type: "checkbox", checked: this.offlineMode, click: (item) => this.handlers.setOfflineMode(item.checked) },
         { type: "separator" },
         { label: "Show Hocket", click: () => this.handlers.show() },
         { label: "Quit", click: () => this.handlers.quit() },

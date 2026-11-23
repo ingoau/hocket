@@ -1625,6 +1625,21 @@ pub struct Job {
     /// Last state or progress change; for a finished job, when it finished.
     pub updated_at: EpochMs,
     pub cancellable: bool,
+    /// A queued job held back until the network allows it (see
+    /// [`JobWait`]); it starts by itself once it does.
+    pub waiting: Option<JobWait>,
+}
+
+/// Why a queued job is waiting instead of running.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum JobWait {
+    /// No network, or offline mode is on.
+    Offline,
+    /// The connection is metered and the job waits for an unmetered one
+    /// (`downloads.wifiOnly`).
+    Metered,
 }
 
 #[typeshare]

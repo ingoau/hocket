@@ -88,6 +88,13 @@ async fn a_cached_follow_up_is_analysed_in_automix_mode_only() {
         },
     })
     .await;
+    // Original files on this metered connection too (the default metered
+    // profile transcodes, and the analysis reads the cached original).
+    t.run(Command::SetSetting {
+        key: "transcoding.profiles".into(),
+        value: r#"{"default":{"format":null,"maxBitRate":null,"cannotDecode":[]}}"#.into(),
+    })
+    .await;
     t.upstream.set_media("t1", click_wav(), "audio/wav");
     let s = source(&t, "t1").await;
     read_from(&t, &s.url, 0).await.unwrap();

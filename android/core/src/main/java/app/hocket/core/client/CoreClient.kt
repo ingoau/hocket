@@ -247,8 +247,8 @@ class CoreClient(
     /** Buffering only: the mini player should not recompose on every transport stamp. */
     val buffering: StateFlow<Boolean> = _transport.mapState(scope) { it.buffering }
     val ownsTransport: StateFlow<Boolean> = _mediaSession.mapState(scope) { it.ownsTransport }
-    /** Jobs that are still doing something. */
-    val activeJobs: StateFlow<List<Job>> = _jobs.mapState(scope) { jobs -> jobs.filter { it.state == JobState.Queued || it.state == JobState.Running || it.state == JobState.Paused } }
+    /** Jobs that are still doing something: not finished, and not held back until the network allows them ([Job.waiting]). */
+    val activeJobs: StateFlow<List<Job>> = _jobs.mapState(scope) { jobs -> jobs.filter { (it.state == JobState.Queued && it.waiting == null) || it.state == JobState.Running || it.state == JobState.Paused } }
     /** "Finished with problems" for the indicator. */
     val finishedWithProblems: StateFlow<Boolean> = _jobs.mapState(scope) { jobs -> jobs.any { it.state == JobState.Failed } }
 

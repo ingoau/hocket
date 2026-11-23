@@ -101,6 +101,7 @@ import app.hocket.ui.components.trackSwipeAction
 import app.hocket.ui.components.RatingDialog
 import app.hocket.ui.components.SelectionToolbar
 import app.hocket.ui.components.offlineStateText
+import app.hocket.ui.components.unavailableOffline
 import app.hocket.ui.components.trackLabel
 import app.hocket.ui.components.trackRowActions
 import app.hocket.core.ActionIds
@@ -618,7 +619,12 @@ private fun QueueRow(
         RowMarker.Autoplay -> stringResource(R.string.queue_row_autoplay)
         RowMarker.None -> null
     }
-    val state = listOfNotNull(if (current) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline), markerText).joinToString(", ").ifEmpty { null }
+    // Offline, a song that isn't downloaded or cached is skipped here: dimmed, and a tap says why.
+    val unavailable = unavailableOffline(track.offline)
+    val snackbar = LocalAppSnackbar.current
+    val unavailableText = stringResource(R.string.row_unavailable_offline)
+    val unavailableState = if (unavailable) stringResource(R.string.row_state_unavailable_offline) else null
+    val state = listOfNotNull(if (current) stringResource(R.string.row_state_playing) else null, offlineStateText(track.offline), unavailableState, markerText).joinToString(", ").ifEmpty { null }
     val label = trackLabel(track)
     val selectLabel = stringResource(R.string.a11y_select)
     val deselectLabel = stringResource(R.string.a11y_deselect)
@@ -626,7 +632,7 @@ private fun QueueRow(
     val content = LocalContentColor.current
     val wash by animateColorAsState(if (selected) content.copy(alpha = 0.14f) else Color.Transparent, label = "queueRowSelected")
     val snoozed = LocalCoreClient.current.snoozes.collectAsStateWithLifecycle().value.any { it.trackRef.id == track.id }
-    val dim = (if (section == Section.History) 0.7f else 1f) * (if (snoozed) 0.45f else 1f)
+    val dim = (if (section == Section.History) 0.7f else 1f) * (if (snoozed || unavailable) 0.45f else 1f)
     Column(
         modifier
             .fillMaxWidth()
@@ -634,7 +640,13 @@ private fun QueueRow(
             .combinedClickable(
                 indication = ripple(),
                 interactionSource = null,
-                onClick = { if (selecting) onToggleSelect() else onClick() },
+                onClick = {
+                    when {
+                        selecting -> onToggleSelect()
+                        unavailable -> snackbar?.showOnce(unavailableText)
+                        else -> onClick()
+                    }
+                },
                 onClickLabel = if (!selecting) playLabel else if (selected) deselectLabel else selectLabel,
                 onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onToggleSelect() },
                 onLongClickLabel = if (selected) deselectLabel else selectLabel,
