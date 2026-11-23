@@ -1,7 +1,7 @@
 //! Accounts (the registry, credentials, the capability probe, priority
 //! order), library sync scheduling, job runners and the outbox flusher.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::api::*;
@@ -572,6 +572,42 @@ impl Actor {
         }
     }
 
+    /// Whether a download job reached Done/Failed since the last call. The
+    /// queue keeps finished jobs for a day and every progress tick re-sends
+    /// them, so "any finished" would refresh pins and storage on each tick.
+    fn downloads_newly_finished(&mut self, jobs: &[Job]) -> bool {
+        let finished: HashSet<JobId> = jobs
+            .iter()
+            .filter(|j| {
+                j.kind == JobKind::Download && matches!(j.state, JobState::Done | JobState::Failed)
+            })
+            .map(|j| j.id.clone())
+            .collect();
+        let new = finished
+            .iter()
+            .any(|id| !self.finished_downloads.contains(id));
+        // Forget jobs that left the list or were retried, so a retried job
+        // that finishes again counts again.
+        self.finished_downloads = finished;
+        new
+    }
+
+    /// Whether a running download job finished another track since the last
+    /// call: the pins' downloaded counts come from the DB, so they need a
+    /// fresh `PinsChanged` to move.
+    fn downloads_progressed(&mut self, jobs: &[Job]) -> bool {
+        let running: HashMap<JobId, u32> = jobs
+            .iter()
+            .filter(|j| j.kind == JobKind::Download && j.state == JobState::Running)
+            .map(|j| (j.id.clone(), j.done))
+            .collect();
+        let moved = running
+            .iter()
+            .any(|(id, done)| self.download_progress.get(id).is_some_and(|d| d != done));
+        self.download_progress = running;
+        moved
+    }
+
     pub(crate) fn on_jobs_changed(&mut self, jobs: &[Job]) {
         // A finished sync frees its account for the next; a finished
         // download updates the pins.
@@ -593,9 +629,8 @@ impl Actor {
             // Accounts waiting behind it (syncs run one at a time).
             self.maybe_start_sync(false, false);
         }
-        if jobs.iter().any(|j| {
-            j.kind == JobKind::Download && matches!(j.state, JobState::Done | JobState::Failed)
-        }) {
+        let progressed = self.downloads_progressed(jobs);
+        if self.downloads_newly_finished(jobs) {
             let pins = self.pins();
             self.emit(Event::PinsChanged { pins });
             let storage = self.storage_summary();
@@ -607,6 +642,9 @@ impl Actor {
                     ids: vec![],
                 });
             }
+        } else if progressed {
+            let pins = self.pins();
+            self.emit(Event::PinsChanged { pins });
         }
     }
 

@@ -1252,6 +1252,7 @@ async fn reqwest_transport_does_not_follow_redirects_or_leak_urls() {
         !msg.contains("secrettoken") && !msg.contains("127.0.0.1"),
         "{msg}"
     );
+    let tr = tr.with_download_retries(0, std::time::Duration::ZERO);
     let e = tr.download(dead, &dest, None).await.unwrap_err();
     assert!(!e.to_string().contains("secrettoken"));
 }
@@ -1271,7 +1272,8 @@ async fn reqwest_transport_caps_response_bodies() {
     assert!(matches!(SubsonicError::from(e), SubsonicError::Protocol(_)));
 }
 
-/// M8/H3 (transport half): a failed stream leaves no `.part` behind and a
+/// M8/H3 (transport half): a failed stream never leaves `dest` or a stray
+/// `.part` behind (only the parked partial it can resume from), and a
 /// successful one leaves only `dest`; temp names are unique per call.
 #[tokio::test]
 async fn reqwest_download_cleans_up_temp_files() {
@@ -1292,18 +1294,32 @@ async fn reqwest_download_cleans_up_temp_files() {
         "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nContent-Length: 100\r\nConnection: close\r\n\r\nFLAC",
     )
     .await;
-    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_secs(5)).unwrap();
+    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_secs(5))
+        .unwrap()
+        .with_download_retries(0, std::time::Duration::ZERO);
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("dl/t.flac");
     let url = Url::parse(&format!("{base}/rest/download?id=1")).unwrap();
     assert!(tr.download(url, &dest, None).await.is_err());
-    let left: Vec<_> = std::fs::read_dir(dir.path().join("dl"))
-        .unwrap()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    assert!(left.is_empty(), "no temp or dest left behind: {left:?}");
+    let list = || {
+        let mut v: Vec<_> = std::fs::read_dir(dir.path().join("dl"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(
+        list(),
+        vec![
+            "t.flac.resume".to_string(),
+            "t.flac.resume.meta".to_string()
+        ],
+        "only the parked partial"
+    );
 
+    // The next server ignores the range: a full 200 body replaces it.
     let (base, _) = one_shot_http(
         "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nContent-Length: 4\r\nConnection: close\r\n\r\nFLAC",
     )
@@ -1311,12 +1327,152 @@ async fn reqwest_download_cleans_up_temp_files() {
     let url = Url::parse(&format!("{base}/rest/download?id=1")).unwrap();
     let out = tr.download(url, &dest, None).await.unwrap();
     assert_eq!(out.bytes, 4);
-    let left: Vec<_> = std::fs::read_dir(dir.path().join("dl"))
+    assert_eq!(list(), vec!["t.flac".to_string()]);
+}
+
+/// A local HTTP server answering successive connections with successive
+/// canned responses (the last one repeats), recording each request head.
+async fn scripted_http(
+    responses: Vec<&'static str>,
+) -> (String, Arc<parking_lot::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let seen2 = seen.clone();
+    tokio::spawn(async move {
+        let mut i = 0;
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let response = responses[i.min(responses.len() - 1)];
+            i += 1;
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            seen2
+                .lock()
+                .push(String::from_utf8_lossy(&buf[..n]).to_lowercase());
+            let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    (format!("http://{addr}"), seen)
+}
+
+const SHORT_200: &str = "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nETag: \"v1\"\r\nContent-Length: 10\r\nConnection: close\r\n\r\nFLAC";
+const REST_206: &str = "HTTP/1.1 206 Partial Content\r\nContent-Type: audio/flac\r\nContent-Range: bytes 4-9/10\r\nContent-Length: 6\r\nConnection: close\r\n\r\nABCDEF";
+
+/// A download cut off mid-body is retried in place and resumes with a
+/// `Range` request (plus `If-Range`) when the server answers `206`.
+#[tokio::test]
+async fn reqwest_download_retries_and_resumes_with_range() {
+    use super::transport::{HttpTransport, ReqwestTransport};
+    let (base, seen) = scripted_http(vec![SHORT_200, REST_206]).await;
+    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_secs(5))
+        .unwrap()
+        .with_download_retries(2, std::time::Duration::ZERO);
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("t.flac");
+    let url = Url::parse(&format!("{base}/rest/download?id=1")).unwrap();
+    let out = tr.download(url, &dest, None).await.unwrap();
+    assert_eq!(out.bytes, 10);
+    assert_eq!(std::fs::read(&dest).unwrap(), b"FLACABCDEF");
+    let seen = seen.lock();
+    assert_eq!(seen.len(), 2);
+    assert!(!seen[0].contains("range:"));
+    assert!(seen[1].contains("range: bytes=4-"), "{}", seen[1]);
+    assert!(seen[1].contains("if-range: \"v1\""), "{}", seen[1]);
+    let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().flatten().collect();
+    assert_eq!(left.len(), 1, "only dest");
+}
+
+/// Without in-place retries the partial survives the failed call and the
+/// next call resumes it; a `206` for other bytes (or a `200`) restarts.
+#[tokio::test]
+async fn reqwest_download_resumes_across_calls_and_restarts_on_mismatch() {
+    use super::transport::{HttpTransport, ReqwestTransport};
+    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_secs(5))
+        .unwrap()
+        .with_download_retries(0, std::time::Duration::ZERO);
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("t.flac");
+
+    let (base, seen) = scripted_http(vec![SHORT_200, REST_206]).await;
+    let url = Url::parse(&format!("{base}/rest/download?id=1")).unwrap();
+    assert!(tr.download(url.clone(), &dest, None).await.is_err());
+    assert!(!dest.exists());
+    let out = tr.download(url, &dest, None).await.unwrap();
+    assert_eq!(out.bytes, 10);
+    assert_eq!(std::fs::read(&dest).unwrap(), b"FLACABCDEF");
+    assert!(seen.lock()[1].contains("range: bytes=4-"));
+
+    // Wrong range back: the partial is dropped, the next attempt is fresh.
+    let dest = dir.path().join("u.flac");
+    let (base, seen) = scripted_http(vec![
+        SHORT_200,
+        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-9/10\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789",
+        "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789",
+    ])
+    .await;
+    let url = Url::parse(&format!("{base}/rest/download?id=1")).unwrap();
+    assert!(tr.download(url.clone(), &dest, None).await.is_err());
+    assert!(tr.download(url.clone(), &dest, None).await.is_err());
+    let out = tr.download(url, &dest, None).await.unwrap();
+    assert_eq!(out.bytes, 10);
+    assert_eq!(std::fs::read(&dest).unwrap(), b"0123456789");
+    assert!(!seen.lock()[2].contains("range:"), "fresh request");
+    let mut left: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(left, vec!["t.flac".to_string()]);
+    left.sort();
+    assert_eq!(left, vec!["t.flac".to_string(), "u.flac".to_string()]);
+}
+
+/// Downloads have no total timeout: a body that keeps trickling in past
+/// the API timeout still completes (only a silent connection times out).
+#[tokio::test]
+async fn reqwest_download_has_no_total_timeout() {
+    use super::transport::{HttpTransport, ReqwestTransport, TransportError};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut first = true;
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
+                .await;
+            for _ in 0..8 {
+                let _ = sock.write_all(b"x").await;
+                let _ = sock.flush().await;
+                // The first connection trickles (each gap under the read
+                // timeout); later ones stall for longer than it.
+                let gap = if first { 150 } else { 1500 };
+                tokio::time::sleep(std::time::Duration::from_millis(gap)).await;
+            }
+            first = false;
+        }
+    });
+    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_millis(500))
+        .unwrap()
+        .with_download_retries(0, std::time::Duration::ZERO);
+    let dir = tempfile::tempdir().unwrap();
+    let url = Url::parse(&format!("http://{addr}/rest/download?id=1")).unwrap();
+    let out = tr
+        .download(url.clone(), &dir.path().join("a.mp3"), None)
+        .await
+        .unwrap();
+    assert_eq!(out.bytes, 8, "1.2 s total, past the 0.5 s timeout");
+    let e = tr
+        .download(url, &dir.path().join("b.mp3"), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, TransportError::Timeout), "{e}");
 }
 
 /// Covers have their own pool: a track download holding every general slot

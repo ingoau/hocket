@@ -126,6 +126,12 @@ pub(crate) struct Actor {
     /// Why the stored settings document could not be used (defaults are in
     /// effect and synced settings are not broadcast).
     pub settings_corrupt: Option<String>,
+    /// Download jobs last seen Done/Failed, so only a newly finished one
+    /// refreshes pins and storage (the queue keeps finished jobs for a day).
+    pub finished_downloads: HashSet<JobId>,
+    /// Running download jobs' last seen `done`, so the pins' counts follow a
+    /// download as each track lands.
+    pub download_progress: HashMap<JobId, u32>,
     pub registry: ActionRegistry,
     pub undo: UndoStack,
     pub jobs: JobQueue,
@@ -508,6 +514,8 @@ impl Actor {
             settings,
             settings_store,
             settings_corrupt,
+            finished_downloads: Default::default(),
+            download_progress: Default::default(),
             registry,
             undo: UndoStack::new("", crate::undo::DEFAULT_MAX_BYTES),
             jobs,
@@ -912,6 +920,8 @@ impl Actor {
         self.output_devices = self.backend.output_devices();
         self.restore_report_upload();
         self.emit_everything(true);
+        // Downloads deleted behind our back while the app was closed.
+        self.reconcile_downloads();
         // Kick the connect tier selection, library sync and the outbox.
         self.engine_input(Input::Tick);
         self.last_engine_tick = self.now();
@@ -1152,8 +1162,33 @@ impl Actor {
             Ok(_) => {}
             Err(e) => self.log("warn", format!("stream cache reconcile: {e}")),
         }
+        // ...and downloaded files too: they go back to wanted and are fetched again.
+        self.reconcile_downloads();
         self.downloads.save_traffic();
         self.prune_snoozes();
+    }
+
+    /// Pinned files missing from disk: mark them wanted again, queue their
+    /// fetch and tell the UI they are no longer downloaded.
+    pub(crate) fn reconcile_downloads(&mut self) {
+        match self.downloads.reconcile_downloads() {
+            Ok((lost, specs)) if !lost.is_empty() => {
+                self.log(
+                    "warn",
+                    format!("{} downloaded file(s) missing; fetching again", lost.len()),
+                );
+                for spec in specs {
+                    if let Err(e) = self.jobs.submit(spec) {
+                        self.error(ErrorKind::Storage, "download job", Some(e.to_string()));
+                    }
+                }
+                self.on_stream_cache_changed(lost);
+                let pins = self.pins();
+                self.emit(Event::PinsChanged { pins });
+            }
+            Ok(_) => {}
+            Err(e) => self.log("warn", format!("downloads reconcile: {e}")),
+        }
     }
 
     // -- persistence ----------------------------------------------------------

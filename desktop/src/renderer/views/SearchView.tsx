@@ -28,7 +28,7 @@ export function SearchView({ query }: { query: string }) {
   const local = useQuery(() => ({ type: "search", data: { server_id: source, query, limit: 100, include_server: true, request_id: reqId } }), "search", [query, source], { static: true });
   const [server, setServer] = useState<SearchResults | undefined>(undefined);
   useEffect(() => { setKind("all"); setServer(undefined); }, [query]);
-  useEffect(() => { if (serverBatch?.requestId === reqId) setServer(serverBatch); }, [serverBatch, reqId]);
+  useEffect(() => { if (serverBatch?.requestId === reqId && serverBatch.fromServer) setServer(serverBatch); }, [serverBatch, reqId]);
   const found = local.data;
   const refs = [...(found?.tracks ?? []), ...(server?.tracks ?? [])].map(refOf);
   const tracks = useQuery(() => (refs.length ? { type: "tracksByIds", data: { tracks: refs } } : null), "trackList", [refs.map(refKey).join(",")], { static: true });

@@ -1856,8 +1856,11 @@ impl Actor {
 
     // -- search ------------------------------------------------------------------------------
 
-    /// Local batch now; the server batch follows as an event when wanted
-    /// and the local results are thin.
+    /// Local batch now; when `include_server` is set, exactly one server
+    /// batch (`from_server`) follows as an event. It is empty when the
+    /// server was not asked (offline, setting off, local results already
+    /// full, no provider) or every provider failed, so the caller can stop
+    /// waiting.
     pub(crate) fn search(
         &mut self,
         server_id: ServerId,
@@ -1899,6 +1902,12 @@ impl Actor {
                 .network
                 .as_ref()
                 .is_some_and(|n| n.kind == NetworkKind::Offline);
+        let empty_server_batch = || SearchResults {
+            request_id: request_id.clone(),
+            query: query.clone(),
+            from_server: true,
+            ..Default::default()
+        };
         if wanted {
             // Every account's provider (one, when the search names one).
             let providers: Vec<Arc<dyn crate::provider::Provider>> = self
@@ -1907,7 +1916,11 @@ impl Actor {
                 .filter(|p| server_id.is_empty() || p.source() == server_id)
                 .cloned()
                 .collect();
-            if !providers.is_empty() {
+            if providers.is_empty() {
+                self.emit(Event::SearchResults {
+                    results: empty_server_batch(),
+                });
+            } else {
                 let tx = self.tx.clone();
                 let db = self.db.clone();
                 let now = self.now();
@@ -1922,12 +1935,10 @@ impl Actor {
                         from_server: true,
                         lyrics: vec![],
                     };
-                    let mut any = false;
                     for p in providers {
                         let Ok(r) = p.search(&query, limit.clamp(1, 100)).await else {
                             continue;
                         };
-                        any = true;
                         // A live catalogue's results outlive the search:
                         // a song played from them shows without the network.
                         if p.source() == crate::ytm::SOURCE {
@@ -1938,11 +1949,15 @@ impl Actor {
                         results.albums.extend(r.albums);
                         results.artists.extend(r.artists);
                     }
-                    if any {
-                        let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { results }));
-                    }
+                    // Sent even when every provider failed: the caller is
+                    // waiting for exactly one server batch.
+                    let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { results }));
                 });
             }
+        } else if include_server {
+            self.emit(Event::SearchResults {
+                results: empty_server_batch(),
+            });
         }
         local
     }

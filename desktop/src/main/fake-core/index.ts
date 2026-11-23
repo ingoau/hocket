@@ -3057,7 +3057,7 @@ export class FakeCore implements CoreHandle {
         return { type: "membership", data };
       }
       case "search":
-        return { type: "search", data: lib ? this.search(q.data.query, q.data.limit, q.data.request_id, q.data.include_server) : ({ query: q.data.query, tracks: [], albums: [], artists: [], playlists: [], lyrics: [], requestId: q.data.request_id, fromServer: false } satisfies SearchResults) };
+        return { type: "search", data: this.search(lib, q.data.query, q.data.limit, q.data.request_id, q.data.include_server) };
       case "queue":
         return { type: "queue", data: this.queueView() };
       case "queueRange":
@@ -3239,11 +3239,15 @@ export class FakeCore implements CoreHandle {
     ];
   }
 
-  private search(query: string, limit: number, requestId: string, includeServer: boolean): SearchResults {
+  /** `lib` is undefined when the search names another account. */
+  private search(lib: FakeLibrary | undefined, query: string, limit: number, requestId: string, includeServer: boolean): SearchResults {
     const q = query.trim().toLowerCase();
-    const lib = this.lib;
     const empty: SearchResults = { requestId, query, tracks: [], albums: [], artists: [], playlists: [], fromServer: false, lyrics: [] };
-    if (!q || !lib) return empty;
+    if (!q || !lib) {
+      // Like the core: a search that asked the server always gets one server batch, empty when skipped.
+      if (includeServer) this.later(0, () => this.emit({ type: "searchResults", data: { results: { ...empty, fromServer: true } } }));
+      return empty;
+    }
     const tracks = lib.tracks.filter((t) => t.title.toLowerCase().includes(q) || t.artist?.toLowerCase().includes(q) || t.album?.toLowerCase().includes(q));
     const albums = lib.albums.filter((a) => a.name.toLowerCase().includes(q) || a.artist?.toLowerCase().includes(q));
     const artists = lib.artists.filter((a) => a.name.toLowerCase().includes(q));

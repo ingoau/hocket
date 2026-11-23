@@ -90,7 +90,9 @@ function SearchBox() {
       void bridge().query({ type: "search", data: { server_id: "", query: q, limit: 6, include_server: true, request_id: id } }).then((r) => {
         if (reqId.current !== id || r.type !== "search") return;
         setLocal(r.data);
-        setServer(undefined);
+        // Drop the previous query's server batch, but not this request's: an
+        // empty one (server search skipped) can arrive before this reply.
+        setServer((prev) => (prev?.requestId === id ? prev : undefined));
       });
     }, 80);
     return () => clearTimeout(h);
@@ -208,7 +210,7 @@ function SearchBox() {
           {!showRecent && local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
           {!showRecent && localRows.some((r) => r.lyric) ? <div className="search-divider" role="presentation">{t("search.lyricsScope")}</div> : null}
           {!showRecent && localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
-          {!showRecent && local ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
+          {!showRecent && local && (!server || serverRows.length) ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
           {!showRecent && serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
         </div>
       ) : null}

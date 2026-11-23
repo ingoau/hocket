@@ -78,6 +78,8 @@ import app.hocket.core.Commands
 import app.hocket.core.ref
 import app.hocket.core.Queries
 import app.hocket.core.api.QueryResult
+import app.hocket.core.api.NetworkKind
+import app.hocket.core.SettingKeys
 import app.hocket.core.api.LyricHit
 import app.hocket.core.api.SearchResults
 import app.hocket.core.ArtworkSizes
@@ -113,7 +115,8 @@ fun SearchScreen(nav: NavHostController) {
     var local by rememberCachedState<SearchResults?>(listOf("search.local", serverId)) { null }
     var remote by rememberCachedState<SearchResults?>(listOf("search.remote", serverId)) { null }
     var pendingRemote by remember { mutableStateOf(false) }
-    var requestCounter by remember { mutableIntStateOf(0) }
+    // The request whose server batch is awaited: the core sends exactly one (maybe empty) per request.
+    var remoteRequest by remember { mutableStateOf<String?>(null) }
     var minHeightPx by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -128,18 +131,24 @@ fun SearchScreen(nav: NavHostController) {
         var restored = local != null
         snapshotFlow { query }.debounce(120).collect { q ->
             val text = q.trim()
-            if (text.isEmpty()) { local = null; remote = null; pendingRemote = false; minHeightPx = 0; return@collect }
+            if (text.isEmpty()) { local = null; remote = null; pendingRemote = false; remoteRequest = null; minHeightPx = 0; return@collect }
             // Back on the tab with the results still showing for this query: keep them, no re-search.
             if (restored) { restored = false; if (local?.query == text) return@collect }
-            val id = "s${requestCounter++}"
+            // Unique across screen instances: a late batch for an earlier visit never matches.
+            val id = "search-" + java.util.UUID.randomUUID()
+            // Set before the query: its server batch can arrive while the query is still answering
+            // (an empty one is sent at once when the server is not asked).
+            remoteRequest = id
+            remote = null
+            // No spinner when the core will not ask the server (offline, or the setting is off).
+            pendingRemote = client.network.value?.kind != NetworkKind.Offline &&
+                client.settings.value[SettingKeys.SEARCH_INCLUDE_SERVER]?.value?.trim() != "false"
             val res = (client.query(Queries.search(client.librarySource.value.let { s -> SourceFilter.current(s, SourceFilter.options(client.accounts.value, false)) }, text, 25, includeServer = true, requestId = id)) as? QueryResult.Search)?.data
             local = res
-            remote = null
-            pendingRemote = true
         }
     }
     LaunchedEffect(Unit) {
-        client.searchResults.collect { r -> if (r.fromServer && r.query == query.trim()) { remote = r; pendingRemote = false } }
+        client.searchResults.collect { r -> if (r.fromServer && r.requestId == remoteRequest) { remote = r; pendingRemote = false } }
     }
     // Results are a one-off answer, not a refetching list: a rating or love set anywhere (a menu here,
     // another signed-in device) is patched into them so the rows show it at once.
