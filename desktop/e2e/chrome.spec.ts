@@ -163,6 +163,8 @@ test.describe("window chrome", () => {
     await page.getByTestId("nav-settings").click();
     await page.getByTestId("settings-nav-customisation").click();
     const list = page.getByTestId("order-sidebar");
+    // Settings is always in the sidebar's footer, so it isn't offered here.
+    await expect(list.getByRole("switch", { name: "Settings" })).toHaveCount(0);
     const genres = list.getByRole("switch", { name: "Genres" });
     // Off by default: the Library holds it.
     await expect(genres).not.toBeChecked();

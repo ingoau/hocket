@@ -14,7 +14,7 @@ import { Icon } from "../components/Icon";
 import { fmtBytes, fmtRelative } from "../lib/format";
 import { chordFromEvent, chordToString, formatChord, parseChord } from "../store/shortcuts";
 import { useKeymap } from "../store/keyboard";
-import { CUSTOMISABLE } from "@shared/action-orders";
+import { CUSTOMISABLE, NOT_LISTED } from "@shared/action-orders";
 import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
@@ -777,9 +777,11 @@ function OrderList({ surface, anchor, title }: { surface: string; anchor: string
   const [dragIdx, setDragIdx] = useState<number | undefined>(undefined);
   useEffect(() => {
     if (!chosen.data || !palette.data) return;
-    const on = new Set(chosen.data.map((a) => a.id));
+    const hidden = new Set(NOT_LISTED[surface] ?? []);
+    const shown = chosen.data.filter((a) => !hidden.has(a.id));
+    const on = new Set(shown.map((a) => a.id));
     const off = (CUSTOMISABLE[surface] ?? []).filter((id) => !on.has(id)).flatMap((id) => palette.data?.filter((a) => a.id === id) ?? []);
-    setItems([...chosen.data.map((a) => ({ a, on: true })), ...off.map((a) => ({ a, on: false }))]);
+    setItems([...shown.map((a) => ({ a, on: true })), ...off.map((a) => ({ a, on: false }))]);
   }, [chosen.data, palette.data, surface]);
   const commit = (next: typeof items) => {
     setItems(next);
