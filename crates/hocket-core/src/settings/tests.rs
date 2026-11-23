@@ -257,8 +257,8 @@ fn lww_merge_is_pure_and_scoped() {
             250.0,
         ), // older → loses
         setting(
-            keys::SLEEP_DEFAULT_MINUTES,
-            "45",
+            keys::SCROBBLE_NOW_PLAYING,
+            "false",
             SettingScope::AccountSynced,
             50.0,
         ), // new key → added
@@ -285,13 +285,13 @@ fn lww_merge_is_pure_and_scoped() {
     let (merged, changed) = merge(&local, &remote);
     assert_eq!(
         changed,
-        vec![keys::QUEUE_SAVED_CAP, keys::SLEEP_DEFAULT_MINUTES]
+        vec![keys::QUEUE_SAVED_CAP, keys::SCROBBLE_NOW_PLAYING]
     );
     assert_eq!(merged.len(), 3);
     assert_eq!(merged[0].value, "20");
     assert_eq!(merged[0].updated_at, 200.0);
     assert_eq!(merged[1].value, "true");
-    assert_eq!(merged[2].key, keys::SLEEP_DEFAULT_MINUTES);
+    assert_eq!(merged[2].key, keys::SCROBBLE_NOW_PLAYING);
     // Merge is idempotent.
     let (again, changed2) = merge(&merged, &remote);
     assert!(changed2.is_empty());

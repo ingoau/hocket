@@ -47,7 +47,6 @@ describe("settings search", () => {
     expect(ids("refresh")).toContain("syncInterval");
     expect(ids("reconcile")).toContain("fullReconcile");
     expect(ids("search server")).toContain("searchServer");
-    expect(ids("mobile data")).toContain("prefetchMobile");
   });
 
   it("needs every word to match", () => {

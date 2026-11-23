@@ -227,4 +227,42 @@ test.describe("library lists", () => {
       expect(await font(`view-${place}`), place).toContain("Unbounded");
     }
   });
+
+  test("a track table's header stays opaque over the rows scrolled under it", async ({ hocket }) => {
+    const { app, page } = hocket;
+    await completeSetup(page);
+    // A short window, so an album's page scrolls its rows up under the stuck header.
+    await resizeWindow(app, page, 1100, 560);
+    await openPlace(page, "albums");
+    await page.getByTestId("grid-tile").first().dblclick();
+    const view = page.getByTestId("view-album");
+    await expect(view.getByTestId("track-row").nth(2)).toBeVisible();
+    // Scroll the page until the header has passed two rows' worth of the top.
+    await view.evaluate((scroller) => {
+      const head = scroller.querySelector(".table-head")!;
+      scroller.scrollTop += head.getBoundingClientRect().top - scroller.getBoundingClientRect().top + 100;
+    });
+    await expect(async () => {
+      const result = await view.evaluate((scroller) => {
+        const head = scroller.querySelector<HTMLElement>(".table-head")!;
+        const box = head.getBoundingClientRect();
+        const under = Array.from(scroller.querySelectorAll("[data-testid=track-row]")).some((r) => { const b = r.getBoundingClientRect(); return b.top < box.bottom && b.bottom > box.top; });
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return { stuck: Math.abs(box.top - scroller.getBoundingClientRect().top) < 1, under, covered: head.contains(hit), background: getComputedStyle(head).backgroundColor, content: getComputedStyle(document.querySelector(".content")!).backgroundColor };
+      });
+      expect(result).toMatchObject({ stuck: true, under: true, covered: true });
+      // It is filled with the content pane's own surface: the rows pass under it, not through it.
+      expect(result.background).toBe(result.content);
+      expect(result.background).not.toMatch(/rgba\(.*, 0\)|transparent/);
+    }).toPass();
+    // Moving up by keys to a row scrolled away brings it out below the header, not under it.
+    const rows = view.getByTestId("track-row");
+    await rows.nth(3).evaluate((el: HTMLElement) => el.focus({ preventScroll: true }));
+    for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowUp");
+    await expect(rows.first()).toBeFocused();
+    await expect(async () => {
+      const [headBottom, rowTop] = await view.evaluate((scroller) => [scroller.querySelector(".table-head")!.getBoundingClientRect().bottom, scroller.querySelector("[data-testid=track-row]")!.getBoundingClientRect().top]);
+      expect(rowTop).toBeGreaterThanOrEqual(headBottom - 1);
+    }).toPass();
+  });
 });

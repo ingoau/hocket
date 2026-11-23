@@ -369,7 +369,8 @@ function CustomisePanel({ prefs, save, onClose }: { prefs: SectionPref[]; save: 
                 const after = e.clientY > r.top + r.height / 2;
                 if (over?.id !== p.id || over.after !== after) setOver({ id: p.id, after });
               }}
-              onDrop={(e) => { e.preventDefault(); if (dragId) save(moveBefore(prefs, dragId, p.id, over?.id === p.id && over.after)); endDrag(); }}
+              // Only its own rows' drags: a library drag from elsewhere isn't taken (and isn't claimed as dropped).
+              onDrop={(e) => { if (dragId) { e.preventDefault(); save(moveBefore(prefs, dragId, p.id, over?.id === p.id && over.after)); } endDrag(); }}
               onDragEnd={endDrag}
               data-testid={`customise-${p.id}`}
             >

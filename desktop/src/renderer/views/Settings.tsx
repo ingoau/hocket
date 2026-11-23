@@ -14,7 +14,7 @@ import { Icon } from "../components/Icon";
 import { fmtBytes, fmtRelative } from "../lib/format";
 import { chordFromEvent, chordToString, formatChord, parseChord } from "../store/shortcuts";
 import { useKeymap } from "../store/keyboard";
-import { CUSTOMISABLE } from "@shared/action-orders";
+import { CUSTOMISABLE, NOT_LISTED } from "@shared/action-orders";
 import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
@@ -515,7 +515,6 @@ function Storage() {
           <span className="muted small">{t("settings.dataSavedDetail", { served: fmtBytes(s?.servedFromDiskBytes ?? 0), fetched: fmtBytes(s?.fetchedBytes ?? 0) })}</span>
         </div>
       </Row>
-      <Toggle anchor="prefetchMobile" settingKey={SK.storagePrefetchOnMobileData} title={t("settings.prefetchMobile")} desc={t("settings.prefetchMobileDesc")} />
       <Row anchor="storageWarn" title={t("settings.storageWarn")} settingKey={SK.storageWarnThresholdBytes}>
         <Select value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
           <option value={0}>–</option>
@@ -599,7 +598,7 @@ function BatterySaverRows() {
       <Toggle anchor="batterySaverAuto" settingKey={SK.batteryAutoEngage} title={t("settings.batterySaverAuto")} fallback />
       <Row anchor="batterySaverAutoLevel" title={t("settings.batterySaverAutoLevel")} settingKey={SK.batteryAutoLevel}>
         <Select value={autoLevel} disabled={!autoEngage} aria-label={t("settings.batterySaverAutoLevel")} onChange={(e) => set(SK.batteryAutoLevel, e.target.value)} data-testid="setting-battery-auto-level">
-          {[...SAVER_PRESETS, "custom"].map((l) => <option key={l} value={l}>{label(l)}</option>)}
+          {[...SAVER_PRESETS, ...(autoLevel === "custom" ? ["custom"] : [])].map((l) => <option key={l} value={l}>{label(l)}</option>)}
         </Select>
       </Row>
     </>
@@ -777,9 +776,11 @@ function OrderList({ surface, anchor, title }: { surface: string; anchor: string
   const [dragIdx, setDragIdx] = useState<number | undefined>(undefined);
   useEffect(() => {
     if (!chosen.data || !palette.data) return;
-    const on = new Set(chosen.data.map((a) => a.id));
+    const hidden = new Set(NOT_LISTED[surface] ?? []);
+    const shown = chosen.data.filter((a) => !hidden.has(a.id));
+    const on = new Set(shown.map((a) => a.id));
     const off = (CUSTOMISABLE[surface] ?? []).filter((id) => !on.has(id)).flatMap((id) => palette.data?.filter((a) => a.id === id) ?? []);
-    setItems([...chosen.data.map((a) => ({ a, on: true })), ...off.map((a) => ({ a, on: false }))]);
+    setItems([...shown.map((a) => ({ a, on: true })), ...off.map((a) => ({ a, on: false }))]);
   }, [chosen.data, palette.data, surface]);
   const commit = (next: typeof items) => {
     setItems(next);

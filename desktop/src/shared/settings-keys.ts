@@ -39,8 +39,6 @@ export const SK = {
   storageWarnThresholdBytes: "storage.warnThresholdBytes",
   /** Unset (or at its default) = automatic budget, min(2 GiB, 10% of the cache volume). */
   storageCacheMaxBytes: "storage.cacheMaxBytes",
-  storagePrefetchOnMobileData: "storage.prefetchOnMobileData",
-  sleepDefaultMinutes: "sleep.defaultMinutes",
   scrobbleEnabled: "scrobble.enabled",
   searchIncludeServer: "search.includeServer",
   /** Minutes between library refreshes (5–1440, default 60). Device-local. */

@@ -1,8 +1,23 @@
 // The command palette (Ctrl/Cmd+K): grouped library results and commands, Enter running the row's
 // primary action, recent picks as Suggestions, and the actions menu (Ctrl/Cmd+K again) with its
 // keycaps, filter and Escape order; the menu's chords also work straight from the search field.
+// Add to playlist opens the playlist submenu off the actions menu, and a library row drags out of
+// the palette onto the window under it.
+import type { Page } from "@playwright/test";
 import { expectNoViolations } from "./a11y-helpers";
-import { completeSetup, expect, playFirstAlbum, test } from "./fixtures";
+import { completeSetup, expect, html5DragEnd, html5DragOver, html5DragStart, html5Drop, openPlace, playFirstAlbum, test } from "./fixtures";
+
+/** Opens a playlist from the Playlists page by name. */
+async function openPlaylist(page: Page, name: string): Promise<void> {
+  await openPlace(page, "playlists");
+  await page.getByTestId("playlists-grid").getByTestId("grid-tile").filter({ hasText: name }).first().dblclick();
+  await expect(page.getByTestId("view-playlist")).toBeVisible();
+}
+
+async function playlistTrackIds(page: Page, id: string): Promise<string[]> {
+  const r = (await page.evaluate((pid) => window.hocket.query({ type: "playlistTracks", data: { id: pid, page: { offset: 0, limit: 10_000 } } }), id)) as { data: { items: { id: string }[] } };
+  return r.data.items.map((x) => x.id);
+}
 
 test.describe("command palette", () => {
   test("groups results by kind, runs a command on Enter and suggests it next time", async ({ hocket }) => {
@@ -202,12 +217,17 @@ test.describe("command palette", () => {
     // Pointing at a row makes it the active one, as ↑↓ would.
     await album.hover({ position: { x: 40, y: 10 } });
     await expect(input).toHaveAttribute("aria-activedescendant", (await album.getAttribute("id")) ?? "");
+    // It opens the actions menu on its playlist page; Escape steps back out, one at a time.
     await page.keyboard.press("Control+p");
-    await expect(palette).toHaveCount(0);
     const picker = page.getByTestId("playlist-submenu");
     await expect(picker).toBeVisible();
+    await expect(page.getByTestId("palette-actions")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(picker).toHaveCount(0);
+    await expect(page.getByTestId("palette-actions")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(palette).toHaveCount(0);
 
     // Enter on an album opens it.
     await page.getByTestId("content").click();
@@ -257,5 +277,100 @@ test.describe("command palette", () => {
     await palette.locator('[data-testid="palette-item"]', { has: page.locator(".art") }).first().click({ button: "right" });
     await menu.getByRole("menuitem", { name: where ?? "", exact: true }).click();
     await expect(palette).toHaveCount(0);
+  });
+
+  test("Add to playlist is a page of the actions menu, starting on the open playlist; Escape goes back to the actions as they were", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await openPlaylist(page, "Late drive");
+    const palette = page.getByTestId("palette");
+    const input = page.getByTestId("palette-input");
+    await page.keyboard.press("Control+k");
+    await input.fill("s");
+    const song = palette.getByTestId("palette-group-track").getByTestId("palette-item").first();
+    await expect(song).toBeVisible();
+    await page.keyboard.press("Control+k");
+    const actions = page.getByTestId("palette-actions");
+    const filter = page.getByTestId("palette-actions-filter");
+    await filter.fill("pl");
+    await actions.getByTestId("palette-action").filter({ hasText: "Add to playlist" }).click();
+
+    // In the menu's place (its actions gone), on the open playlist's row.
+    const sub = actions.getByTestId("playlist-submenu");
+    await expect(sub).toBeVisible();
+    await expect(sub.locator(".pa-title")).toHaveText("Add to playlist");
+    await expect(actions.getByTestId("palette-action")).toHaveCount(0);
+    await expect(palette).toBeVisible();
+    const late = sub.getByTestId("playlist-row").filter({ hasText: "Late drive" }).first();
+    const search = sub.getByTestId("playlist-search");
+    await expect(search).toBeFocused();
+    await expect(search).toHaveAttribute("aria-activedescendant", (await late.getAttribute("id")) ?? "");
+    const id = (await late.getAttribute("data-playlist")) ?? "";
+    const before = await playlistTrackIds(page, id);
+
+    // Enter adds the song there; the submenu stays for more.
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("toast").filter({ hasText: "Late drive" })).toBeVisible();
+    await expect.poll(async () => (await playlistTrackIds(page, id)).length).toBe(before.length + 1);
+    await expect(late).toHaveAttribute("aria-checked", "true");
+
+    // Escape: back to the actions, their filter (focused) and Add to playlist as they were; then the
+    // menu closes, then the palette.
+    await page.keyboard.press("Escape");
+    await expect(sub).toHaveCount(0);
+    await expect(actions).toBeVisible();
+    await expect(filter).toBeFocused();
+    await expect(filter).toHaveValue("pl");
+    await expect(actions.locator(".pa-item.active")).toHaveText(/Add to playlist/);
+    await page.keyboard.press("Escape");
+    await expect(actions).toHaveCount(0);
+    await expect(input).toBeFocused();
+
+    // Ctrl+K on the page closes the menu, as it does from the actions.
+    await page.keyboard.press("Control+k");
+    await page.keyboard.press("Control+p");
+    await expect(sub).toBeVisible();
+    await expect(search).toBeFocused();
+    await page.keyboard.press("Control+k");
+    await expect(actions).toHaveCount(0);
+    await expect(input).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(palette).toHaveCount(0);
+  });
+
+  test("a song dragged out of the palette steps it aside for the drop; a drag with no drop brings it back", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "library.pins", value: JSON.stringify([{ kind: "playlist", id: "pl-1", tap: "open" }]) } }));
+    const pin = page.locator('[data-testid="sidebar-pin"][data-pin="playlist:pl-1"]');
+    await expect(pin).toBeVisible();
+    const palette = page.getByTestId("palette");
+    const overlay = page.locator(".palette-overlay");
+    const input = page.getByTestId("palette-input");
+    const before = await playlistTrackIds(page, "pl-1");
+
+    // No drop: the palette comes back as it was.
+    await page.keyboard.press("Control+k");
+    await input.fill("s");
+    const song = palette.getByTestId("palette-group-track").getByTestId("palette-item").first();
+    await expect(song).toBeVisible();
+    await expect(song).toHaveAttribute("draggable", "true");
+    await html5DragStart(page, song);
+    await html5DragOver(page, pin);
+    await expect(overlay).toHaveClass(/drag-aside/);
+    await expect(page.getByTestId("app-body")).not.toHaveAttribute("inert", "");
+    await html5DragEnd(page);
+    await expect(overlay).not.toHaveClass(/drag-aside/);
+    await expect(input).toHaveValue("s");
+    await expect(input).toBeFocused();
+
+    // Dropped on a playlist's pin: added there, and the palette closes.
+    await html5DragStart(page, song);
+    await html5DragOver(page, pin);
+    await expect(overlay).toHaveClass(/drag-aside/);
+    await html5Drop(page, pin);
+    await expect(palette).toHaveCount(0);
+    await expect(page.getByTestId("toast").filter({ hasText: "Added to Morning coffee" })).toBeVisible();
+    await expect.poll(async () => (await playlistTrackIds(page, "pl-1")).length).toBe(before.length + 1);
   });
 });

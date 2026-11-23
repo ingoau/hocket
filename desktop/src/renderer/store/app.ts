@@ -108,6 +108,8 @@ export interface UiState {
   panels: PanelState;
   fullscreen: boolean;
   paletteOpen: boolean;
+  /** A row is being dragged out of the open palette: it steps aside (see-through, the window live) until the drag ends. */
+  paletteHidden: boolean;
   /** The stash popover in the top bar. */
   stashOpen: boolean;
   contextMenu: ContextMenuState | undefined;
@@ -164,6 +166,7 @@ export interface AppStore extends CoreState, UiState {
   setPanels(patch: Partial<PanelState>): void;
   setFullscreen(on: boolean): void;
   setPaletteOpen(open: boolean): void;
+  setPaletteHidden(hidden: boolean): void;
   setStashOpen(open: boolean): void;
   openContextMenu(menu: ContextMenuState): void;
   closeContextMenu(): void;
@@ -221,6 +224,7 @@ export const useApp = create<AppStore>((set, get) => ({
   panels: loadPanels(),
   fullscreen: false,
   paletteOpen: false,
+  paletteHidden: false,
   stashOpen: false,
   contextMenu: undefined,
   playlistPicker: undefined,
@@ -287,7 +291,11 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ fullscreen: on, contextMenu: undefined, playlistPicker: undefined });
   },
   setPaletteOpen(open) {
-    set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined });
+    // Hidden for a drag stays hidden through the exit (no flash back before it leaves); the next opening shows it.
+    set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined, ...(open ? { paletteHidden: false } : null) });
+  },
+  setPaletteHidden(hidden) {
+    if (get().paletteOpen || !hidden) set({ paletteHidden: hidden });
   },
   setStashOpen(open) {
     set({ stashOpen: open });
