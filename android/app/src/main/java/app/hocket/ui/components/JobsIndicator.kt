@@ -35,6 +35,9 @@ import app.hocket.core.Commands
 import app.hocket.core.api.Job
 import app.hocket.core.api.JobKind
 import app.hocket.core.api.JobState
+import app.hocket.core.api.JobWait
+import app.hocket.core.SettingKeys
+import app.hocket.ui.screens.settings.setting
 import app.hocket.core.api.AccountInfo
 import app.hocket.core.api.SyncProgress
 import app.hocket.ui.LocalCoreClient
@@ -117,7 +120,7 @@ private fun JobRow(job: Job) {
             Column(Modifier.weight(1f)) {
                 Text(job.label, style = MaterialTheme.typography.bodyLarge)
                 val state = when (job.state) {
-                    JobState.Queued -> stringResource(R.string.jobs_state_queued)
+                    JobState.Queued -> job.waiting?.let { waitingText(it) } ?: stringResource(R.string.jobs_state_queued)
                     JobState.Running -> stringResource(R.string.jobs_state_running)
                     JobState.Paused -> stringResource(R.string.jobs_state_paused)
                     JobState.Done -> stringResource(R.string.jobs_state_done)
@@ -135,7 +138,8 @@ private fun JobRow(job: Job) {
                     if (job.cancellable) IconButton(onClick = { client.dispatch(Commands.cancelJob(job.id)) }) { Icon(HocketIcons.Filled.Cancel, stringResource(R.string.action_cancel)) }
                 }
                 JobState.Paused, JobState.Queued -> {
-                    IconButton(onClick = { client.dispatch(Commands.resumeJob(job.id)) }) { Icon(HocketIcons.Filled.PlayArrow, stringResource(R.string.jobs_resume)) }
+                    // A job waiting for the network starts by itself; there is nothing to resume.
+                    if (job.waiting == null) IconButton(onClick = { client.dispatch(Commands.resumeJob(job.id)) }) { Icon(HocketIcons.Filled.PlayArrow, stringResource(R.string.jobs_resume)) }
                     if (job.cancellable) IconButton(onClick = { client.dispatch(Commands.cancelJob(job.id)) }) { Icon(HocketIcons.Filled.Cancel, stringResource(R.string.action_cancel)) }
                 }
                 JobState.Failed, JobState.Cancelled -> IconButton(onClick = { client.dispatch(Commands.retryJob(job.id)) }) { Icon(HocketIcons.Filled.Refresh, stringResource(R.string.action_retry)) }
@@ -168,6 +172,7 @@ private fun SyncRow(server: AccountInfo, job: Job?, progress: SyncProgress?) {
     val error = MaterialTheme.colorScheme.error
     val headline = when {
         active?.state == JobState.Paused -> stringResource(R.string.sync_paused)
+        active?.waiting != null -> waitingText(active.waiting!!)
         active != null && live != null -> stringResource(R.string.sync_phase, live.phase)
         active != null -> stringResource(R.string.sync_waiting)
         unsuccessful?.state == JobState.Failed -> stringResource(R.string.sync_failed_when, formatAgoPhrase(unsuccessful.updatedAt))
@@ -198,7 +203,8 @@ private fun SyncRow(server: AccountInfo, job: Job?, progress: SyncProgress?) {
                 active.cancellable -> TextButton(onClick = { client.dispatch(Commands.cancelJob(active.id)) }) { Text(stringResource(R.string.action_cancel), color = error) }
             }
         }
-        if (active != null) {
+        // Nothing moves while the run waits for the network, so no progress line then.
+        if (active != null && active.waiting == null) {
             // Other phases report against the track total too (albums by album offset), so only tracks get a fraction.
             val fraction = if (live != null && total != null && live.phase == "tracks") (live.done.toFloat() / total.toFloat()).coerceIn(0f, 1f) else null
             val line = Modifier.fillMaxWidth().padding(bottom = 8.dp).height(3.dp)
@@ -211,3 +217,14 @@ private fun SyncRow(server: AccountInfo, job: Job?, progress: SyncProgress?) {
     }
 }
 
+/**
+ * What a job held back by the core ([Job.waiting]) waits for: Wi-Fi, a connection, or (offline only
+ * because offline mode is on) the user turning offline mode off.
+ */
+@Composable
+fun waitingText(wait: JobWait): String = when (wait) {
+    JobWait.Metered -> stringResource(R.string.jobs_waiting_wifi)
+    JobWait.Offline ->
+        if (setting(SettingKeys.NETWORK_OFFLINE_MODE).bool == true) stringResource(R.string.jobs_waiting_offline_mode)
+        else stringResource(R.string.jobs_waiting_connection)
+}

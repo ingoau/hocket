@@ -176,10 +176,16 @@ pub const MIN_AUTO_CACHE_BUDGET: f64 = 64.0 * 1024.0 * 1024.0;
 pub const AUTO_CACHE_BUDGET_SHARE: f64 = 0.10;
 
 /// Per-network transcoding choice. `None` profile = original.
+///
+/// Picked in order: the profile for this exact network, the metered one on
+/// a metered connection (mobile data, a hotspot, metered Wi-Fi), the one for
+/// the network's kind, the default.
 #[derive(Debug, Clone, Default)]
 pub struct TranscodingPolicy {
-    /// Keyed by `NetworkState.network_id`; `None` key is the default for the kind.
+    /// Keyed by `NetworkState.network_id`.
     pub by_network_id: HashMap<String, TranscodingProfile>,
+    /// For any metered connection.
+    pub metered: Option<TranscodingProfile>,
     pub by_kind: HashMap<NetworkKind, TranscodingProfile>,
     pub default: Option<TranscodingProfile>,
 }
@@ -189,6 +195,11 @@ impl TranscodingPolicy {
         if let Some(n) = network {
             if let Some(id) = &n.network_id {
                 if let Some(p) = self.by_network_id.get(id) {
+                    return Some(p.clone());
+                }
+            }
+            if n.metered {
+                if let Some(p) = &self.metered {
                     return Some(p.clone());
                 }
             }
@@ -635,15 +646,15 @@ impl Downloads {
         *self.inner.prefetch_on_mobile_data.write() = on;
     }
 
-    /// On a metered or cellular network without `storage.prefetchOnMobileData`:
-    /// fetch only a little ahead of what plays (the rest may never be heard).
+    /// On a metered network without `storage.prefetchOnMobileData`, or
+    /// offline (offline mode switched on under an open stream): fetch only a
+    /// little ahead of what plays (the rest may never be heard).
     pub fn fetch_ahead_limited(&self) -> bool {
-        self.inner
-            .network
-            .read()
-            .as_ref()
-            .is_some_and(|n| n.metered || n.kind == api::NetworkKind::Cellular)
-            && !*self.inner.prefetch_on_mobile_data.read()
+        match self.inner.network.read().as_ref() {
+            Some(n) if n.kind == api::NetworkKind::Offline => true,
+            Some(n) if n.metered => !*self.inner.prefetch_on_mobile_data.read(),
+            _ => false,
+        }
     }
 
     fn now(&self) -> f64 {
@@ -2437,6 +2448,12 @@ impl JobRunner for DownloadRunner {
                         return Err(JobError::Failed("out of space".into()));
                     }
                     Err(e) => {
+                        // The network going away usually fails the request
+                        // before the platform says so: if it has by now, the
+                        // track waits with the job instead of failing.
+                        if matches!(e, DownloadError::Server(SubsonicError::Network(_))) {
+                            ctx.checkpoint().await?;
+                        }
                         ctx.item_failed(it.seq, &e.to_string())?;
                     }
                 }
@@ -2447,7 +2464,8 @@ impl JobRunner for DownloadRunner {
                 if done > 0 {
                     let provider = provider.clone();
                     tokio::spawn(async move {
-                        caches.keep_download_covers(provider, sizes).await;
+                        caches.keep_download_covers(provider.clone(), sizes).await;
+                        caches.keep_download_lyrics(provider).await;
                     });
                 }
             }
@@ -3384,7 +3402,7 @@ mod tests {
         assert_eq!(s.mime_type.as_deref(), Some("audio/flac"));
         assert_eq!(s.key, "k1");
         assert_eq!(s.track.id, "t0");
-        // cellular profile → transcode
+        // metered profile → transcode
         f.dl.set_transcoding_profile(
             None,
             TranscodingProfile {
@@ -3393,15 +3411,14 @@ mod tests {
                 cannot_decode: vec![],
             },
         );
-        let mut policy = TranscodingPolicy::default();
-        policy.by_kind.insert(
-            NetworkKind::Cellular,
-            TranscodingProfile {
+        let policy = TranscodingPolicy {
+            metered: Some(TranscodingProfile {
                 format: Some("opus".into()),
                 max_bit_rate: Some(96),
                 cannot_decode: vec![],
-            },
-        );
+            }),
+            ..Default::default()
+        };
         f.dl.set_transcoding_policy(policy);
         f.dl.set_network(Some(api::NetworkState {
             kind: NetworkKind::Cellular,
@@ -3411,6 +3428,14 @@ mod tests {
         let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
         assert!(s.transcoded && s.url.contains("format=opus") && s.url.contains("maxBitRate=96"));
         assert_eq!(s.mime_type.as_deref(), Some("audio/ogg"));
+        // A metered Wi-Fi (a phone hotspot) is metered too.
+        f.dl.set_network(Some(api::NetworkState {
+            kind: NetworkKind::Wifi,
+            metered: true,
+            network_id: None,
+        }));
+        let s = f.dl.resolve(&f.server.provider(), "k1", &track).unwrap();
+        assert!(s.transcoded && s.url.contains("format=opus"));
         // wifi with no profile → original
         f.dl.set_network(Some(api::NetworkState {
             kind: NetworkKind::Wifi,

@@ -122,9 +122,7 @@ impl Actor {
         }
         match &self.network {
             None => true,
-            Some(n) => {
-                n.kind != NetworkKind::Offline && n.kind != NetworkKind::Cellular && !n.metered
-            }
+            Some(n) => n.kind != NetworkKind::Offline && !n.metered,
         }
     }
 

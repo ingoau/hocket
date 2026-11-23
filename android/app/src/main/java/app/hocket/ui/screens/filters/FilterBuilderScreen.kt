@@ -367,7 +367,7 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
                 preview?.sample?.takeIf { it.isNotEmpty() }?.let { sample ->
                     item(key = "h.sample") { Text(stringResource(R.string.filter_sample), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 8.dp).semantics { heading() }) }
                     itemsIndexed(sample, key = { _, t -> t.id }) { i, t ->
-                        TrackRow(t, onClick = {}, segment = i to sample.size, showDuration = false, subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
+                        TrackRow(t, onClick = {}, offlineGate = false, segment = i to sample.size, showDuration = false, subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
                             modifier = Modifier.padding(top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp))
                     }
                 }

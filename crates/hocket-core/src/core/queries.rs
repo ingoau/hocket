@@ -550,7 +550,13 @@ impl Actor {
             let _ = reply.send(QueryResult::Path(None));
             return;
         };
-        if let Ok(Some(p)) = self.caches.artwork_cached(&sid, &id, size) {
+        let cached = if self.data_saver_active() {
+            // Data saver: a larger copy already here does instead of a fetch.
+            self.caches.artwork_cached_larger(&sid, &id, size)
+        } else {
+            self.caches.artwork_cached(&sid, &id, size)
+        };
+        if let Ok(Some(p)) = cached {
             let _ = reply.send(QueryResult::Path(Some(p.to_string_lossy().into_owned())));
             return;
         }

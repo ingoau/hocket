@@ -261,9 +261,25 @@ A device going quiet might have died or might have lost network and kept playing
 
 ### The mirror
 
-Local SQLite is the source of truth for the UI. Sync by paging `search3` with an empty query, which returns the whole library and is now flat at every offset rather than degrading with depth — it was optimised for exactly this. Incremental refresh on launch and on a timer, with a periodic full reconcile because Subsonic's delta signals miss deletions.
+Local SQLite is the source of truth for the UI. Sync by paging `search3` with an empty query, which returns the whole library and is now flat at every offset rather than degrading with depth — it was optimised for exactly this. Incremental refresh on launch (unless the last one was under 15 minutes ago) and on a timer (`library.syncIntervalMinutes`), with a full reconcile every `library.fullReconcileDays` because Subsonic's delta signals miss deletions. A failed sync waits before the next try, doubling from a minute up to the refresh interval, and a new network retries it at once. API answers are fetched gzip/brotli-compressed; audio is fetched byte-exact.
 
 The app is usable immediately while the mirror builds, browsing server-backed, with views switching over as tables complete and progress shown in the job queue. Blocking first run behind a sync is a first impression you don't get twice.
+
+
+### Offline mode and data use
+
+The core acts on an *effective* network: the one the platform reports, or none at all while **offline mode** (`network.offlineMode`) is on. Offline, effective or real, only downloaded and fully cached music plays, the rest is skipped and dimmed in lists, and nothing goes to the server or the coordinator (the LAN tier stays up). Every job that needs the server waits queued (`Job.waiting = offline`) and starts by itself when the network allows; a job that fails because the network went away mid-run goes back to the queue instead of the problems list.
+
+Everything that costs data is decided by whether the connection is **metered**, never by its kind, so a phone hotspot counts like mobile data:
+
+| Metered connection | Behaviour |
+|---|---|
+| Downloads | Wait for an unmetered connection with `downloads.wifiOnly` (default on), with their covers and lyrics (`Job.waiting = metered`). |
+| Streaming | The `metered` transcoding profile (Opus 128 by default). |
+| Prefetch | Off, and read-ahead limited, unless `storage.prefetchOnMobileData`. |
+| Data saver (`network.dataSaver`, default on) | No early load of a next track that would stream (one on the device still plays gaplessly), no full reconciles, no server search, lyrics only for what plays, and a larger cached cover reused rather than fetching another size. |
+
+A download keeps its covers and the server's lyrics, so playing it offline needs nothing else. Desktop has no metered signal and reports only online/offline.
 
 
 ### One outbox

@@ -66,6 +66,11 @@ export class FakeStreamCache {
     return t.offline === "downloaded" || t.offline === "cached";
   }
 
+  /** Complete in the cache, whatever the track reports (a pending download reports `downloading`). */
+  isComplete(id: string): boolean {
+    return this.complete.includes(id);
+  }
+
   /** PrimeAlbum / PrimeTrack on the device that owns playback (this one, in the fake). */
   prime(kind: "album" | "track", id: string, track: CacheTrack | undefined, gate: PrimeGate, now: number): PrimeRecord {
     const rec: PrimeRecord = { kind, id, trackId: track?.id, at: now, outcome: "declined" };

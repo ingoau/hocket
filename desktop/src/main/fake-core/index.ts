@@ -12,7 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync,
 import { join } from "node:path";
 import type {
   TrackRef, IdentityInfo, CoordinatorInviteInfo, HomeShelf,
-  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
+  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, OfflineState, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { accountIdFor } from "../account-id";
@@ -158,7 +158,10 @@ export class FakeCore implements CoreHandle {
   private batterySaver: BatterySaver = { level: "off", automatic: false, features: [] };
   /** The device's power-save state (SetPowerSave): on battery, for a laptop. */
   private powerSave = false;
+  /** The effective network: what the app reported, or offline while offline mode is on. */
   private network: Snapshot["network"] = { kind: "wifi", metered: false, networkId: "home" };
+  /** What the app last reported (SetNetworkState). */
+  private reportedNetwork: Snapshot["network"] = { kind: "wifi", metered: false, networkId: "home" };
   private resumeOffer: ResumeOffer | undefined;
   private sleepTimer: SleepTimer | undefined;
   /** The report upload (Save to Coordinator), as the native core's `Query::ReportUpload`. */
@@ -271,18 +274,10 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "networkChanged", data: { network: this.network } });
         this.emit({ type: "batterySaverChanged", data: { saver: this.batterySaver } });
         return;
-      case "setNetworkState": {
-        const wasOffline = this.isOffline();
-        const changed = JSON.stringify(this.network) !== JSON.stringify(cmd.data.state);
-        this.network = cmd.data.state;
-        // Like the core: every change is announced (and replayed on attach).
-        if (changed) this.emit({ type: "networkChanged", data: { network: this.network } });
-        if (wasOffline && !this.isOffline()) {
-          this.offlineSkips = 0;
-          if (this.playerNotice && OFFLINE_NOTICE_CODES.includes(this.playerNotice)) this.setNotice(undefined);
-        }
+      case "setNetworkState":
+        this.reportedNetwork = cmd.data.state;
+        this.applyNetwork();
         return;
-      }
       case "setVisibility":
         return;
       case "setPowerSave":
@@ -687,10 +682,12 @@ export class FakeCore implements CoreHandle {
       case "setSetting":
         this.setSettingValue(cmd.data.key, cmd.data.value);
         if (cmd.data.key === "storage.cacheMaxBytes") this.applyCacheBudget();
+        if (cmd.data.key === "network.offlineMode") this.applyNetwork();
         return;
       case "resetSetting":
         this.seedSettings(cmd.data.key);
         if (cmd.data.key === "storage.cacheMaxBytes") this.applyCacheBudget();
+        if (cmd.data.key === "network.offlineMode") this.applyNetwork();
         return;
       case "setSettingsSync":
         this.setSettingValue("sync.enabled", JSON.stringify(cmd.data.enabled));
@@ -1221,14 +1218,14 @@ export class FakeCore implements CoreHandle {
     const server = this.servers[0];
     if (!server || !this.lib) return;
     const total = this.lib.tracks.length;
-    const job: Job = { id: newId("job"), kind: "librarySync", label: full ? `Full library sync · ${server.name}` : `Library refresh · ${server.name}`, state: "running", done: 0, total, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
+    const job: Job = { id: newId("job"), kind: "librarySync", label: full ? `Full library sync · ${server.name}` : `Library refresh · ${server.name}`, ...this.jobStart(this.serverWait()), done: 0, total, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
     this.jobs.unshift(job);
     this.emitJobs();
     const phases = ["artists", "albums", "tracks", "playlists"];
     let phaseIdx = 0;
     const step = () => {
       if (job.state === "cancelled") return;
-      if (job.state === "paused") {
+      if (job.state === "paused" || this.hold(job, this.serverWait())) {
         this.later(300, step);
         return;
       }
@@ -1428,9 +1425,9 @@ export class FakeCore implements CoreHandle {
     const offline = this.isOffline();
     const played = new Set(s.list.slice(0, s.ptr + 1).map((h) => h.track.id));
     const fresh = (id: string) => !played.has(id);
-    let pick = this.related(seedTrack?.id ?? "", 5).find((r) => fresh(r.track.id) && (!offline || FakeStreamCache.availableOffline(r.track)));
+    let pick = this.related(seedTrack?.id ?? "", 5).find((r) => fresh(r.track.id) && (!offline || this.playsOffline(r.track)));
     if (!pick && offline) {
-      const t = this.lib.tracks.find((x) => FakeStreamCache.availableOffline(x) && fresh(x.id));
+      const t = this.lib.tracks.find((x) => this.playsOffline(x) && fresh(x.id));
       if (t) pick = { track: summary(t), provider: "random", reason: "Available offline", score: undefined };
     }
     return pick;
@@ -1548,7 +1545,7 @@ export class FakeCore implements CoreHandle {
       return false;
     }
     const t = this.lib?.tracksById.get(cur.track.id);
-    if (!this.isOffline() || !t || FakeStreamCache.availableOffline(t)) {
+    if (!this.isOffline() || !t || this.playsOffline(t)) {
       this.offlineSkips = 0;
       return false;
     }
@@ -2043,12 +2040,12 @@ export class FakeCore implements CoreHandle {
   }
 
   private runBulkJob(kind: Job["kind"], label: string, total: number): void {
-    const job: Job = { id: newId("job"), kind, label, state: "running", done: 0, total, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
+    const job: Job = { id: newId("job"), kind, label, ...this.jobStart(this.serverWait()), done: 0, total, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
     this.jobs.unshift(job);
     this.emitJobs();
     const step = () => {
       if (job.state === "cancelled") return;
-      if (job.state === "paused") {
+      if (job.state === "paused" || this.hold(job, this.serverWait())) {
         this.later(300, step);
         return;
       }
@@ -2160,12 +2157,18 @@ export class FakeCore implements CoreHandle {
     const pin: Pin = { target, label, coverArt: this.lib.tracksById.get(ids[0] ?? "")?.coverArt, trackCount: ids.length, downloadedCount: 0, bytes: 0, createdAt: Date.now(), transcoded: transcode };
     this.pins.push(pin);
     this.emit({ type: "pinsChanged", data: { pins: this.pins } });
-    const job: Job = { id: newId("job"), kind: "download", label: `Download ${label}`, state: "running", done: 0, total: ids.length, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
+    // Like the core: a pinned track reports downloading at once (over cached, which still plays).
+    for (const id of ids) {
+      const t = this.lib.tracksById.get(id);
+      if (t && t.offline !== "downloaded") t.offline = "downloading";
+    }
+    this.libraryChanged("tracks", ids);
+    const job: Job = { id: newId("job"), kind: "download", label: `Download ${label}`, ...this.jobStart(this.downloadWait()), done: 0, total: ids.length, failed: 0, createdAt: Date.now(), updatedAt: Date.now(), cancellable: true };
     this.jobs.unshift(job);
     this.emitJobs();
     const step = () => {
       if (job.state === "cancelled") return;
-      if (job.state === "paused") {
+      if (job.state === "paused" || this.hold(job, this.downloadWait())) {
         this.later(300, step);
         return;
       }
@@ -2198,7 +2201,7 @@ export class FakeCore implements CoreHandle {
     this.pins = this.pins.filter((p) => JSON.stringify(p.target) !== key);
     for (const id of ids) {
       const t = this.lib?.tracksById.get(id);
-      if (t && t.offline === "downloaded") t.offline = "none";
+      if (t && (t.offline === "downloaded" || t.offline === "downloading")) t.offline = this.cache.isComplete(t.id) ? "cached" : "none";
     }
     this.emit({ type: "pinsChanged", data: { pins: this.pins } });
     this.emit({ type: "storageChanged", data: { storage: this.storage() } });
@@ -2254,6 +2257,67 @@ export class FakeCore implements CoreHandle {
   // ---- Stream cache (see stream-cache.ts) -------------------------------
   private isOffline(): boolean {
     return this.network?.kind === "offline";
+  }
+
+  /**
+   * Like the core: offline mode makes the network offline whatever was reported, and only a
+   * change of the effective network is announced (and replayed on attach).
+   */
+  private applyNetwork(): void {
+    const wasOffline = this.isOffline();
+    const next: Snapshot["network"] = this.setting<boolean>("network.offlineMode", false) ? { kind: "offline", metered: false, networkId: undefined } : this.reportedNetwork;
+    const changed = JSON.stringify(this.network) !== JSON.stringify(next);
+    this.network = next;
+    if (changed) this.emit({ type: "networkChanged", data: { network: this.network } });
+    if (wasOffline && !this.isOffline()) {
+      this.offlineSkips = 0;
+      if (this.playerNotice && OFFLINE_NOTICE_CODES.includes(this.playerNotice)) this.setNotice(undefined);
+    }
+  }
+
+  /** Why a server job (sync, bulk rating, …) can't run now, as the core's JobWait: it holds them all offline. */
+  private serverWait(): Job["waiting"] {
+    return this.isOffline() ? "offline" : undefined;
+  }
+
+  /** A new job's state: held as Queued with what it waits for, or running. */
+  private jobStart(wait: Job["waiting"]): Pick<Job, "state" | "waiting"> {
+    return wait ? { state: "queued", waiting: wait } : { state: "running", waiting: undefined };
+  }
+
+  /**
+   * Like the core: a job that can't run now is held as Queued with what it waits for, and goes on
+   * by itself once it can. True while it's held.
+   */
+  private hold(job: Job, wait: Job["waiting"]): boolean {
+    if (wait) {
+      if (job.state !== "queued" || job.waiting !== wait) {
+        job.state = "queued";
+        job.waiting = wait;
+        job.updatedAt = Date.now();
+        this.emitJobs();
+      }
+      return true;
+    }
+    if (job.waiting || job.state === "queued") {
+      job.state = "running";
+      job.waiting = undefined;
+      job.updatedAt = Date.now();
+      this.emitJobs();
+    }
+    return false;
+  }
+
+  /** Plays with no network: downloaded or cached, or complete in the cache while its download is pending. */
+  private playsOffline(t: { id: string; offline: OfflineState }): boolean {
+    return FakeStreamCache.availableOffline(t) || (t.offline === "downloading" && this.cache.isComplete(t.id));
+  }
+
+  /** Why a download can't run now (offline, or metered with downloads.wifiOnly), as the core's JobWait. */
+  private downloadWait(): Job["waiting"] {
+    if (this.isOffline()) return "offline";
+    if (this.network?.metered && this.setting<boolean>("downloads.wifiOnly", true)) return "metered";
+    return undefined;
   }
 
   private cacheBudget(): { bytes: number; auto: boolean } {
@@ -2376,7 +2440,9 @@ export class FakeCore implements CoreHandle {
       ["scrobble.nowPlaying", true, "accountSynced"],
       ["library.syncIntervalMinutes", 60, "deviceLocal"],
       ["library.fullReconcileDays", 7, "deviceLocal"],
-      ["search.includeServer", true, "deviceLocal"],
+      ["search.includeServer", true, "accountSynced"],
+      ["network.offlineMode", false, "deviceLocal"],
+      ["network.dataSaver", true, "deviceLocal"],
     ];
     for (const [key, value, scope] of defaults) {
       if (onlyKey && key !== onlyKey) continue;
@@ -2494,12 +2560,18 @@ export class FakeCore implements CoreHandle {
   private importConfig(document: string): void {
     try {
       const doc = JSON.parse(document) as ConfigDocument;
-      for (const s of doc.settings ?? []) this.settings.set(s.key, s);
+      // Like the core: each setting the document changes is announced.
+      for (const s of doc.settings ?? []) {
+        const prev = this.settings.get(s.key);
+        this.settings.set(s.key, s);
+        if (prev?.value !== s.value || prev?.scope !== s.scope) this.emit({ type: "settingChanged", data: { setting: s } });
+      }
       if (doc.filters) this.filters = doc.filters;
       for (const s of doc.shortcuts ?? []) this.shortcutOverrides.set(s.actionId, s.shortcut);
       if (doc.audio) this.audio = doc.audio;
       if (doc.autoplay) this.autoplaySettings = doc.autoplay;
       this.refreshSaver();
+      this.applyNetwork();
       this.emitSnapshot();
       this.emit({ type: "filtersChanged", data: { filters: this.filters } });
       this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });

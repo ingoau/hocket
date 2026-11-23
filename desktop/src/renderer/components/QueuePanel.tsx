@@ -19,13 +19,14 @@ import { CSS } from "@dnd-kit/utilities";
 import type { QueueEntry, QueueView } from "@core/api";
 import { SK } from "@shared/settings-keys";
 import { t } from "@shared/strings";
-import { useApp, useSetting } from "../store/app";
+import { useApp, useOfflineDimming, useSetting } from "../store/app";
 import { bridge } from "../core/bridge";
 import { EMPTY_SELECTION, isSelected, selectOnly, selectRange, toggle } from "../store/selection";
 import { openContextMenu } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
+import { unavailableOffline } from "../lib/offline";
 import { fmtTime } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/media";
 import { SPRING_EFFECTS, spring } from "../lib/spring";
@@ -607,14 +608,18 @@ function swipeStyle(swipe: RowSwipe | undefined, dndTransition: string | undefin
 const QueueRow = memo(function QueueRow({ id, entry, swipe, kind, large, selected, focused, sortable, carried, dropAt, onLibraryOver, onClick, onDoubleClick, onContextMenu }: { id: string; entry: QueueEntry; swipe?: RowSwipe; kind: QueueRowKind; large: boolean; selected: boolean; focused: boolean; sortable: boolean; carried: boolean; dropAt?: "before" | "after"; onLibraryOver: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.item.key, disabled: !sortable });
   const snoozed = useApp((s) => s.snoozes.some((x) => x.trackRef.id === entry.track.id));
+  // Offline, a song that isn't on this device is skipped when this device plays (the core marks what
+  // it can't play at all as unavailable).
+  const offline = useOfflineDimming();
+  const away = unavailableOffline(offline, entry.track.offline) && !entry.item.unavailable && kind !== "current";
   const src = entry.item.source;
   const sub = src.type === "autoplay" ? t("queue.autoplayFrom", { reason: src.data.reason }) : entry.track.artist ?? "";
   const marker = rowMarker(entry, kind);
   return (
     <div className={`qrow-slot${swipe?.leaving ? " leaving" : ""}`}>
     {swipe?.reveal && swipe.side !== 0 ? <SwipeReveal action={swipe.reveal} side={swipe.side} armed={swipe.armed} /> : null}
-    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), ...swipeStyle(swipe, transition) }} className={`qrow ${kind} ${swipe ? "swiping" : ""} ${selected ? "selected" : ""} ${isDragging || carried ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""} ${snoozed ? "snoozed" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
-      onClick={onClick} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} onDragOver={onLibraryOver} title={entry.item.unavailable ? t("queue.unavailable") : undefined}
+    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), ...swipeStyle(swipe, transition) }} className={`qrow ${kind} ${swipe ? "swiping" : ""} ${selected ? "selected" : ""} ${isDragging || carried ? "dragging" : ""} ${dropAt ? `drop-${dropAt}` : ""} ${entry.item.unavailable ? "unavailable" : ""} ${snoozed ? "snoozed" : ""} ${away ? "offline-unavailable" : ""}`} id={id} role="option" aria-selected={selected} aria-current={kind === "current" ? "true" : undefined} aria-disabled={entry.item.unavailable || undefined} aria-description={away ? t("misc.notAvailableOffline") : undefined} data-key={entry.item.key} data-drop={dropAt} data-testid={`queue-row-${kind}`}
+      onClick={onClick} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} onDragOver={onLibraryOver} title={entry.item.unavailable ? t("queue.unavailable") : away ? t("misc.notAvailableOffline") : undefined}
       // Rows that can't move (history, the current song) still drag, as their songs: onto a playlist, or the queue to hear again.
       {...(sortable ? listeners : dragSource({ target: { type: "queueItems", data: { keys: [entry.item.key] } }, label: entry.track.title }))}
       {...(focused ? { "data-focused": true } : {})}>

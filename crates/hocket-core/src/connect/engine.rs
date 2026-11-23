@@ -173,6 +173,10 @@ pub struct EngineConfig {
     /// [`SLOW_SYNC_CADENCE_MS`] even with other devices around
     /// ([`Input::SetSlowSync`]).
     pub slow_sync: bool,
+    /// The device has a network the core may use ([`Input::SetNetwork`]):
+    /// false while offline or in offline mode, when the coordinator is not
+    /// dialled at all (the LAN tier stays up).
+    pub network_online: bool,
 }
 
 impl EngineConfig {
@@ -192,6 +196,7 @@ impl EngineConfig {
             identity: None,
             allow_insecure_coordinator: false,
             slow_sync: false,
+            network_online: true,
         }
     }
 
@@ -246,6 +251,12 @@ pub enum Input {
     /// Battery saver `SlowSync`: ping and heartbeat every
     /// [`SLOW_SYNC_CADENCE_MS`] even with other devices around.
     SetSlowSync(bool),
+    /// The device's network changed. Offline (or in offline mode) the
+    /// coordinator is dropped and not redialled; on any network, an upstream
+    /// waiting out its reconnect backoff tries again at once.
+    SetNetwork {
+        online: bool,
+    },
 
     // -- I/O reports -------------------------------------------------------
     /// The upstream socket requested by `Output::Connect` is open.
@@ -1440,6 +1451,22 @@ impl Engine {
                 self.cfg.slow_sync = on;
                 self.sync_cadence();
             }
+            Input::SetNetwork { online } => {
+                self.cfg.network_online = online;
+                if online {
+                    let now = self.now_local_ms();
+                    self.coordinator_retry_at = now;
+                    if let Some(r) = &mut self.remote {
+                        if let RemoteState::Backoff { .. } = r.state {
+                            r.state = RemoteState::Backoff {
+                                until: now,
+                                attempt: 0,
+                            };
+                        }
+                    }
+                }
+                self.reevaluate();
+            }
             Input::Connected { peer, url } => self.on_connected(peer, url),
             Input::ConnectFailed { error } => self.on_upstream_lost(Some(error)),
             Input::Disconnected { peer } => self.on_disconnected(peer),
@@ -2062,7 +2089,7 @@ impl Engine {
     /// (`wss://`, or `ws://` on loopback, or a private host with the
     /// insecure override).
     fn coordinator_target(&self) -> Option<String> {
-        if !self.cfg.coordinator_enabled {
+        if !self.cfg.coordinator_enabled || !self.cfg.network_online {
             return None;
         }
         let url = self.cfg.coordinator_url.clone()?;

@@ -237,12 +237,17 @@ fun TranscodingSettingsScreen(nav: NavHostController) {
     SubScreen(nav, stringResource(R.string.settings_category_streaming)) {
         Text(stringResource(R.string.settings_transcoding_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
         ProfileEditor(stringResource(R.string.settings_transcoding_wifi), "default")
-        ProfileEditor(stringResource(R.string.settings_transcoding_cellular), "cellular")
-        network?.networkId?.takeIf { it != "default" && it != "cellular" }?.let { id -> ProfileEditor(stringResource(R.string.settings_transcoding_current), id) }
+        ProfileEditor(stringResource(R.string.settings_transcoding_metered), "metered")
+        // This network's own profile (a Wi-Fi network's SSID hash, or wired), which wins over the
+        // metered one; never one of the keys the editors above own.
+        network?.networkId?.takeIf { it != "default" && it != "metered" }?.let { id -> ProfileEditor(stringResource(R.string.settings_transcoding_current), id) }
     }
 }
 
-/** One entry of the `transcoding.profiles` map (keys: `default`, `cellular`, `<networkId>`). */
+/**
+ * One entry of the `transcoding.profiles` map. Keys: `default`; `metered` (any metered connection);
+ * `wifi` / `wired` (by kind); any other is a `NetworkState.networkId`.
+ */
 @Composable
 private fun ProfileEditor(title: String, networkId: String) {
     val client = LocalCoreClient.current

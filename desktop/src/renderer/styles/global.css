@@ -459,6 +459,9 @@ h3 { font-size: var(--fs-lg); }
 .table:focus-within .tr.focused { box-shadow: inset 0 0 0 2px var(--accent-ring); }
 .tr.playing .td.title { color: var(--accent-text); font-weight: 500; }
 .tr.snoozed { opacity: 0.45; }
+/* Offline and not on this device: muted text (still AA, the row stays usable) and faded artwork. */
+.tr.offline-unavailable .td, .qrow.offline-unavailable .t1 { color: var(--fg-muted); }
+.tr.offline-unavailable .art, .qrow.offline-unavailable .art { opacity: 0.4; }
 .snoozed-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .snoozed-row { position: relative; left: auto; right: auto; width: 100%; display: flex; gap: 12px; align-items: center; text-align: start; background: transparent; border: 0; color: inherit; }
 .snoozed-row .grow { display: flex; flex-direction: column; min-width: 0; }

@@ -158,6 +158,10 @@ struct Inner {
     /// ([`Caches::keep_download_covers`]), each with whether another pass
     /// was asked for meanwhile.
     keeping_covers: parking_lot::Mutex<std::collections::HashMap<String, bool>>,
+    /// Accounts whose download lyrics are being fetched
+    /// ([`Caches::keep_download_lyrics`]), each with whether another pass
+    /// was asked for meanwhile.
+    keeping_lyrics: parking_lot::Mutex<std::collections::HashMap<String, bool>>,
     /// Bytes of kept covers as the last eviction found them, and when: until
     /// it is stale, a fetch under budget once those are set aside skips the
     /// eviction scan.
@@ -183,6 +187,7 @@ impl Caches {
                 image_missing: Default::default(),
                 image_inflight: Default::default(),
                 keeping_covers: Default::default(),
+                keeping_lyrics: Default::default(),
                 kept_bytes: Default::default(),
             }),
         }
@@ -347,6 +352,24 @@ impl Caches {
         Ok(Some(dest))
     }
 
+    /// Data saver: the cached file for [image_id] at the smallest size at
+    /// least [size] (it scales down cleanly), so a cover already on the
+    /// device is not fetched again at another size.
+    pub fn artwork_cached_larger(
+        &self,
+        server_id: &str,
+        image_id: &str,
+        size: u32,
+    ) -> DbResult<Option<PathBuf>> {
+        let size = snap_size(size);
+        for s in IMAGE_SIZES.iter().copied().filter(|s| *s >= size) {
+            if let Some(p) = self.artwork_cached(server_id, image_id, s)? {
+                return Ok(Some(p));
+            }
+        }
+        Ok(None)
+    }
+
     /// Offline: the cached file for [image_id] at the size closest to
     /// [size], the next larger first (it scales down cleanly), else the
     /// largest smaller one. Online asks go through [`Self::artwork_path`],
@@ -441,6 +464,89 @@ impl Caches {
                 _ => return fetched,
             }
         }
+    }
+
+    /// Fetches the server's lyrics of [provider]'s downloaded tracks that
+    /// have no lyrics entry yet (positive or "none"), one at a time, so
+    /// downloaded music shows lyrics offline and playing it asks nothing.
+    /// Kept lyrics are never evicted while the download lasts. Any failure
+    /// ends the pass, to be picked up by the next one. Returns how many
+    /// tracks got an entry.
+    pub async fn keep_download_lyrics(&self, provider: Arc<dyn Provider>) -> usize {
+        let source = provider.source().to_string();
+        {
+            let mut running = self.inner.keeping_lyrics.lock();
+            if let Some(again) = running.get_mut(&source) {
+                *again = true;
+                return 0;
+            }
+            running.insert(source.clone(), false);
+        }
+        struct Running<'a>(&'a Caches, String);
+        impl Drop for Running<'_> {
+            fn drop(&mut self) {
+                self.0.inner.keeping_lyrics.lock().remove(&self.1);
+            }
+        }
+        let _running = Running(self, source.clone());
+        let mut kept = 0;
+        loop {
+            let wanted = match self.missing_download_lyrics(&source) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!(error = %e, "listing download lyrics");
+                    return kept;
+                }
+            };
+            for id in wanted {
+                let entries = match provider.lyrics(&id).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::debug!(target: "hocket_core", id = %id, error = %e, "download lyrics fetch failed; stopping");
+                        return kept;
+                    }
+                };
+                let raw: Result<Vec<crate::lyrics::raw::StructuredLyrics>, _> =
+                    serde_json::to_value(&entries).and_then(serde_json::from_value);
+                let stored = match raw {
+                    Ok(raw) => match crate::lyrics::adapt_list(&id, &raw, LyricsSource::Server) {
+                        Some(l) => self.lyrics_put(&source, &id, &l),
+                        None => self.lyrics_put_none(&source, &id, LyricsSource::Server),
+                    },
+                    Err(e) => {
+                        tracing::warn!(target: "hocket_core", error = %e, "server lyrics could not be adapted");
+                        continue;
+                    }
+                };
+                match stored {
+                    Ok(()) => kept += 1,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "keeping download lyrics");
+                        return kept;
+                    }
+                }
+            }
+            let mut running = self.inner.keeping_lyrics.lock();
+            match running.get_mut(&source) {
+                Some(again) if *again => *again = false,
+                _ => return kept,
+            }
+        }
+    }
+
+    /// Downloaded tracks of [source] with no lyrics entry at all.
+    fn missing_download_lyrics(&self, source: &str) -> DbResult<Vec<String>> {
+        self.inner.db.with_conn(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT pt.track_id FROM pin_tracks pt
+                  WHERE pt.server_id = ?1 AND pt.state = 'done'
+                    AND NOT EXISTS (SELECT 1 FROM lyrics_cache l
+                                     WHERE l.server_id = pt.server_id AND l.track_id = pt.track_id)
+                  GROUP BY pt.track_id",
+            )?;
+            let rows = st.query_map(params![source], |r| r.get(0))?;
+            Ok(rows.collect::<Result<Vec<String>, _>>()?)
+        })
     }
 
     /// (image id, size) pairs of [source]'s download covers not cached yet
@@ -678,16 +784,23 @@ impl Caches {
         })
     }
 
-    /// Keep at most `lyrics_max` positive entries (LRU).
+    /// Keep at most `lyrics_max` positive entries (LRU). Lyrics of
+    /// downloaded tracks are kept with the download and not counted.
     pub fn enforce_lyrics_budget(&self) -> DbResult<usize> {
         let max = *self.inner.lyrics_max.read() as i64;
+        const EVICTABLE: &str = "json != '' AND NOT EXISTS (SELECT 1 FROM pin_tracks pt
+            WHERE pt.server_id = lyrics_cache.server_id AND pt.track_id = lyrics_cache.track_id AND pt.state = 'done')";
         self.inner.db.with_conn(|c| {
-            let n: i64 = c.query_row("SELECT count(*) FROM lyrics_cache WHERE json != ''", [], |r| r.get(0))?;
+            let n: i64 = c.query_row(
+                &format!("SELECT count(*) FROM lyrics_cache WHERE {EVICTABLE}"),
+                [],
+                |r| r.get(0),
+            )?;
             if n <= max {
                 return Ok(0);
             }
             Ok(c.execute(
-                "DELETE FROM lyrics_cache WHERE rowid IN (SELECT rowid FROM lyrics_cache WHERE json != '' ORDER BY last_used_at ASC LIMIT ?1)",
+                &format!("DELETE FROM lyrics_cache WHERE rowid IN (SELECT rowid FROM lyrics_cache WHERE {EVICTABLE} ORDER BY last_used_at ASC LIMIT ?1)"),
                 [n - max],
             )?)
         })

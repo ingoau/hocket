@@ -41,6 +41,15 @@ describe("settings search", () => {
     expect(SETTINGS_INDEX.find((e) => e.id === "coordinator")?.section).toBe("connect");
   });
 
+  it("finds offline mode, the sync intervals and server search", () => {
+    expect(ids("offline mode")[0]).toBe("offlineMode");
+    expect(ids("airplane")).toContain("offlineMode");
+    expect(ids("refresh")).toContain("syncInterval");
+    expect(ids("reconcile")).toContain("fullReconcile");
+    expect(ids("search server")).toContain("searchServer");
+    expect(ids("mobile data")).toContain("prefetchMobile");
+  });
+
   it("needs every word to match", () => {
     expect(ids("gapless bass")).toEqual([]);
     expect(ids("zzzz")).toEqual([]);

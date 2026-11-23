@@ -267,7 +267,8 @@ test.describe("available offline", () => {
     await page.getByTestId("available-offline-table").getByTestId("track-row").first().locator(".td.title").dblclick();
     await showSideView(page, "queue");
     await expect(page.getByTestId("queue-row-current")).toBeVisible();
-    await expect(page.getByTestId("offline-banner-text")).toHaveText("Offline");
+    await expect(page.getByTestId("offline-banner-text")).toHaveText("No connection");
+    await expect(page.getByTestId("offline-banner")).toHaveAttribute("data-reason", "noConnection");
     // Back online: the core's NetworkChanged takes the banner away.
     await page.context().setOffline(false).catch(async () => {
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.session.enableNetworkEmulation({ offline: false }));
@@ -277,7 +278,7 @@ test.describe("available offline", () => {
 });
 
 test.describe("settings: storage", () => {
-  test("cache usage, automatic vs custom budget, data saved and prefetch on mobile data", async ({ hocket }) => {
+  test("cache usage, automatic vs custom budget, data saved and prefetch on metered connections", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     await page.getByTestId("nav-settings").click();
@@ -288,7 +289,7 @@ test.describe("settings: storage", () => {
     await expect(mode).toHaveAttribute("data-value", "auto");
     await expect(mode).toHaveText("Automatic (currently 2.0 GB)");
     await expect(page.getByTestId("data-saved")).toHaveText(/\d/);
-    const prefetch = page.getByRole("switch", { name: "Load upcoming songs ahead on mobile data" });
+    const prefetch = page.getByRole("switch", { name: "Load upcoming songs ahead on metered connections" });
     await expect(prefetch).not.toBeChecked();
     await prefetch.check();
     await expect(prefetch).toBeChecked();

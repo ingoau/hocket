@@ -78,9 +78,18 @@ object SettingKeys {
     const val STORAGE_WARN_THRESHOLD_BYTES = "storage.warnThresholdBytes"
     /** Unset (or at its default) = automatic: min(2 GiB, 10% of the cache volume). */
     const val STORAGE_CACHE_MAX_BYTES = "storage.cacheMaxBytes"
+    /** Prefetch the next queue items on metered connections too (mobile data, hotspots, metered Wi-Fi). */
     const val STORAGE_PREFETCH_ON_MOBILE_DATA = "storage.prefetchOnMobileData"
     const val DOWNLOADS_TRANSCODE = "downloads.transcode"
+    /** Downloads wait (`Job.waiting = Metered`) while the connection is metered. */
     const val DOWNLOADS_WIFI_ONLY = "downloads.wifiOnly"
+    /**
+     * Offline mode (device-local, off by default): the core treats the network as offline whatever
+     * the platform reports, so `NetworkChanged` says offline and only downloads and cache play.
+     */
+    const val NETWORK_OFFLINE_MODE = "network.offlineMode"
+    /** On metered connections, skip what the core can do without (device-local, on by default). */
+    const val NETWORK_DATA_SAVER = "network.dataSaver"
     const val SLEEP_DEFAULT_MINUTES = "sleep.defaultMinutes"
     const val SLEEP_STOP_AT_END_OF_TRACK = "sleep.stopAtEndOfTrack"
     const val SCROBBLE_ENABLED = "scrobble.enabled"

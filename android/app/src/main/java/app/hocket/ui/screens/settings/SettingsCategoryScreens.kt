@@ -297,8 +297,9 @@ internal val CACHE_BUDGET_CHOICES = listOf(0.5e9, 1e9, 2e9, 4e9, 8e9, 16e9)
 private fun budgetChoiceLabel(bytes: Double): String = if (bytes < 1e9) "${(bytes / 1e6).toInt()} MB" else "${(bytes / 1e9).toInt()} GB"
 
 /**
- * Downloads & storage: the downloads screen, the stream cache (usage, budget, prefetch on mobile
- * data, data saved), Wi-Fi only and the storage warning.
+ * Downloads & storage: the downloads screen and the storage warning; the connection (offline mode,
+ * data saver, Wi-Fi only downloads, prefetch on metered connections); the stream cache (usage,
+ * budget, data saved).
  */
 @Composable
 fun DownloadsSettingsScreen(nav: NavHostController) {
@@ -307,15 +308,23 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
     val wifiOnly = setting(SettingKeys.DOWNLOADS_WIFI_ONLY)
     val cacheMax = setting(SettingKeys.STORAGE_CACHE_MAX_BYTES)
     val prefetchMobile = setting(SettingKeys.STORAGE_PREFETCH_ON_MOBILE_DATA)
+    val offlineMode = setting(SettingKeys.NETWORK_OFFLINE_MODE)
+    val dataSaver = setting(SettingKeys.NETWORK_DATA_SAVER)
     val dot = stringResource(R.string.dot_separator)
     SubScreen(nav, stringResource(R.string.settings_category_downloads)) {
         SettingRow(stringResource(R.string.nav_downloads), formatBytes(storage.downloadsBytes) + dot + stringResource(R.string.settings_cache_images, formatBytes(storage.imagesBytes)), onClick = { nav.navigate(Route.Downloads) }, tag = "open.downloads") { Chevron() }
-        SwitchRow(stringResource(R.string.settings_downloads_wifi_only), wifiOnly.bool ?: true, { wifiOnly.setBool(it) }, stringResource(R.string.settings_downloads_wifi_only_body), wifiOnly.scope, tag = "downloads.wifiOnly")
         val warn = storage.warnThresholdBytes
         SettingRow(stringResource(R.string.downloads_threshold), warn?.let { formatBytes(it) } ?: stringResource(R.string.downloads_threshold_none), tag = "storage.warnThreshold")
         val noLimit = stringResource(R.string.downloads_threshold_none)
         ChoiceRow(listOf(null, 2.0, 4.0, 8.0, 16.0).map { gb -> gb to (gb?.let { "${it.toInt()} GB" } ?: noLimit) }, isSelected = { gb -> (gb?.let { it * 1e9 }) == warn },
             onSelect = { gb -> client.dispatch(Commands.setStorageWarnThreshold(gb?.let { it * 1e9 })) }, modifier = Modifier.padding(horizontal = 16.dp))
+
+        // Metered = mobile data, a hotspot or metered Wi-Fi, as the system reports it.
+        SettingsSection(stringResource(R.string.settings_section_connection))
+        SwitchRow(stringResource(R.string.settings_offline_mode), offlineMode.bool ?: false, { offlineMode.setBool(it) }, stringResource(R.string.settings_offline_mode_body), offlineMode.scope, tag = "network.offlineMode")
+        SwitchRow(stringResource(R.string.settings_data_saver), dataSaver.bool ?: true, { dataSaver.setBool(it) }, stringResource(R.string.settings_data_saver_body), dataSaver.scope, tag = "network.dataSaver")
+        SwitchRow(stringResource(R.string.settings_downloads_wifi_only), wifiOnly.bool ?: true, { wifiOnly.setBool(it) }, stringResource(R.string.settings_downloads_wifi_only_body), wifiOnly.scope, tag = "downloads.wifiOnly")
+        SwitchRow(stringResource(R.string.settings_prefetch_mobile), prefetchMobile.bool ?: false, { prefetchMobile.setBool(it) }, stringResource(R.string.settings_prefetch_mobile_body), prefetchMobile.scope, tag = "storage.prefetchOnMobileData")
 
         SettingsSection(stringResource(R.string.settings_cache_usage))
         // Usage: complete entries play offline; partial ones (seeks, skips, primed starts) do not.
@@ -338,7 +347,6 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
             modifier = Modifier.padding(horizontal = 16.dp).testTag("storage.cacheMaxBytes.choices"),
         )
         Text(stringResource(R.string.settings_cache_budget_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        SwitchRow(stringResource(R.string.settings_prefetch_mobile), prefetchMobile.bool ?: false, { prefetchMobile.setBool(it) }, stringResource(R.string.settings_prefetch_mobile_body), prefetchMobile.scope, tag = "storage.prefetchOnMobileData")
         SettingRow(stringResource(R.string.settings_data_saved), stringResource(R.string.settings_data_saved_body, formatBytes(storage.servedFromDiskBytes ?: 0.0), formatBytes(storage.fetchedBytes ?: 0.0)), tag = "storage.dataSaved") {
             Text(formatBytes(storage.dataSavedBytes ?: 0.0), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }
@@ -365,25 +373,53 @@ fun LyricsSettingsScreen(nav: NavHostController) {
     }
 }
 
-/** Library & ratings: the love bridge, smart filters, listening stats. */
+/**
+ * Library & ratings: the love bridge, smart filters, listening stats; then library sync (how often
+ * to check the server for changes, how often to run the full check that catches deletions) and
+ * whether search asks the server too.
+ */
 @Composable
 fun LibrarySettingsScreen(nav: NavHostController) {
     val loveBridge = setting(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED)
     val loveThreshold = setting(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD)
+    val syncInterval = setting(SettingKeys.LIBRARY_SYNC_INTERVAL_MINUTES)
+    val reconcileDays = setting(SettingKeys.LIBRARY_FULL_RECONCILE_DAYS)
+    val searchServer = setting(SettingKeys.SEARCH_INCLUDE_SERVER)
+    val resources = androidx.compose.ui.platform.LocalResources.current
     SubScreen(nav, stringResource(R.string.settings_category_library)) {
         // ratings.loveBridge.enabled + threshold (1..5): "off" is the bridge disabled.
         val bridgeOn = loveBridge.bool ?: false
         val threshold = loveThreshold.int ?: 4
         SettingRow(stringResource(R.string.settings_love_threshold), if (!bridgeOn) stringResource(R.string.settings_love_threshold_off) else stringResource(R.string.rating_set, threshold), loveThreshold.scope, tag = "ratings.loveThreshold")
         val offLabel = stringResource(R.string.settings_love_threshold_off)
-        val resources = androidx.compose.ui.platform.LocalResources.current
         ChoiceRow(listOf<Pair<Int?, String>>(null to offLabel) + (1..5).map { it to "$it★" }, isSelected = { n -> if (n == null) !bridgeOn else bridgeOn && threshold == n },
             onSelect = { n -> if (n == null) loveBridge.setBool(false) else { loveThreshold.setInt(n); loveBridge.setBool(true) } },
             describe = { n -> n?.let { resources.getQuantityString(R.plurals.a11y_stars, it, it) } }, modifier = Modifier.padding(horizontal = 16.dp))
         SettingRow(stringResource(R.string.nav_filters), onClick = { nav.navigate(Route.Filters) }, tag = "open.filters") { Chevron() }
         SettingRow(stringResource(R.string.nav_stats), onClick = { nav.navigate(Route.Stats) }, tag = "open.stats") { Chevron() }
+
+        SettingsSection(stringResource(R.string.settings_section_library_sync))
+        // library.syncIntervalMinutes (5..1440, default 60) and library.fullReconcileDays (1..90, default 7).
+        val minutes = syncInterval.int ?: 60
+        SettingRow(stringResource(R.string.settings_sync_interval), stringResource(R.string.settings_sync_interval_value, intervalLabel(minutes)), syncInterval.scope, tag = "library.syncIntervalMinutes")
+        ChoiceRow(SYNC_INTERVAL_CHOICES.map { it to intervalLabel(it) }, isSelected = { minutes == it }, onSelect = { syncInterval.setInt(it) },
+            describe = { m -> if (m < 60) resources.getQuantityString(R.plurals.a11y_minutes, m, m) else resources.getQuantityString(R.plurals.a11y_hours, m / 60, m / 60) },
+            modifier = Modifier.padding(horizontal = 16.dp))
+        val days = reconcileDays.int ?: 7
+        SettingRow(stringResource(R.string.settings_full_reconcile), pluralStringResource(R.plurals.settings_full_reconcile_value, days, days), reconcileDays.scope, tag = "library.fullReconcileDays")
+        ChoiceRow(RECONCILE_DAY_CHOICES.map { it to stringResource(R.string.time_days, it) }, isSelected = { days == it }, onSelect = { reconcileDays.setInt(it) },
+            describe = { d -> resources.getQuantityString(R.plurals.a11y_days, d, d) }, modifier = Modifier.padding(horizontal = 16.dp))
+        SwitchRow(stringResource(R.string.settings_search_include_server), searchServer.bool ?: true, { searchServer.setBool(it) }, stringResource(R.string.settings_search_include_server_body), searchServer.scope, tag = "search.includeServer")
     }
 }
+
+private val SYNC_INTERVAL_CHOICES = listOf(15, 30, 60, 180, 360, 1440)
+private val RECONCILE_DAY_CHOICES = listOf(1, 3, 7, 14, 30)
+
+/** "15 min", "1 h", "24 h". */
+@Composable
+private fun intervalLabel(minutes: Int): String =
+    if (minutes < 60 || minutes % 60 != 0) stringResource(R.string.sleep_minutes, minutes) else stringResource(R.string.duration_hours, minutes / 60)
 
 /**
  * Battery: the saver level (a four-stop slider, Off to Max), the switches it stands for (editing

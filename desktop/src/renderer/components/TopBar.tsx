@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Job, SearchResults, AccountInfo, SyncProgress, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
-import { useApp } from "../store/app";
+import { useApp, useOfflineReason, useSetting } from "../store/app";
 import { bridge } from "../core/bridge";
 import { clearSearches, forgetSearch, recentSearches, rememberSearch } from "../lib/recent-searches";
 import { Artwork } from "./Artwork";
@@ -15,6 +15,10 @@ import { fmtRelative } from "../lib/format";
 import { usePresence } from "../lib/presence";
 import { NARROW, useMediaQuery } from "../lib/media";
 import { refOf } from "../lib/track-ref";
+import { isActive, isPending, isWaiting, jobStateLabel } from "../lib/jobs";
+import { useUnreachableIds } from "../lib/unreachable";
+import { SK } from "@shared/settings-keys";
+import { Switch } from "./controls";
 
 export function TopBar() {
   const platform = useApp((s) => s.meta?.platform ?? "linux");
@@ -228,8 +232,15 @@ function JobsIndicator() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
-  const running = jobs.filter((j) => j.state === "running" || j.state === "queued" || j.state === "paused");
+  const running = jobs.filter(isActive);
+  const waiting = jobs.filter(isWaiting);
   const failed = jobs.some((j) => j.state === "failed") || problems.length > 0;
+  const offline = useOfflineReason();
+  const offlineMode = useSetting(SK.networkOfflineMode, false);
+  const setSetting = useApp((s) => s.setSetting);
+  // Out of reach with the network up for a while: a quiet mark on the icon, the server's row says which.
+  const unreachableIds = useUnreachableIds();
+  const unreachable = servers.find((a) => unreachableIds.includes(a.id));
   const popover = usePresence<true, HTMLDivElement>(open || undefined);
   useEffect(() => {
     if (!open) return;
@@ -238,30 +249,39 @@ function JobsIndicator() {
     return () => window.removeEventListener("mousedown", onDown);
   }, [open]);
   const cmd = (type: "cancelJob" | "retryJob" | "pauseJob" | "resumeJob", id: string) => bridge().dispatch({ type, data: { id } } as never);
-  const label = problems.length ? t("jobs.problems", { count: problems.length }) : running.length ? t("jobs.running", { count: running.length }) : t("jobs.idle");
+  const label = problems.length ? t("jobs.problems", { count: problems.length })
+    : running.length ? t("jobs.running", { count: running.length })
+    : waiting.length ? t("jobs.waiting", { count: waiting.length })
+    : offline ? t(offline === "offlineMode" ? "misc.offlineMode" : "misc.noConnection")
+    : unreachable ? t("misc.serverUnreachable", { server: unreachable.name })
+    : t("jobs.idle");
   return (
     <div ref={ref} style={{ position: "relative" }} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
       <button ref={button} type="button" className="btn icon jobs-btn" aria-label={`${t("jobs.title")}: ${label}`} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="jobs-button">
-        <Icon name={running.length ? "spinner" : failed ? "warn" : "cloud"} className={running.length ? "spin" : ""} />
-        {running.length || failed ? <span className={`dot ${failed ? "problem" : ""}`} /> : null}
+        <Icon name={running.length ? "spinner" : failed ? "warn" : offline ? "offline" : "cloud"} className={running.length ? "spin" : ""} />
+        {running.length || failed || unreachable ? <span className={`dot ${failed || unreachable ? "problem" : ""}`} /> : null}
       </button>
       {popover.value ? (
         <div {...popover.exitProps} className={`popover ${popover.motion}`} role="dialog" aria-label={t("jobs.title")} data-testid="jobs-popover">
-          {servers.map((server) => <SyncRow key={server.id} server={server} job={jobs.filter((j) => j.kind === "librarySync").sort((a, b) => b.createdAt - a.createdAt)[0]} sync={sync} />)}
+          <div className="item row" data-testid="offline-mode-row">
+            <span className="grow">{t("settings.offlineMode")}</span>
+            <Switch checked={offlineMode} onChange={(checked) => setSetting(SK.networkOfflineMode, checked)} aria-label={t("settings.offlineMode")} data-testid="jobs-offline-mode" />
+          </div>
+          {servers.map((server) => <SyncRow key={server.id} server={server} job={jobs.filter((j) => j.kind === "librarySync").sort((a, b) => b.createdAt - a.createdAt)[0]} sync={sync} unreachable={unreachableIds.includes(server.id)} />)}
           {!servers.length && !others.length && !problems.length ? <div className="item muted">{t("jobs.idle")}</div> : null}
           {others.length ? <div className="section-title">{t("jobs.jobsHeading")}</div> : null}
           {others.slice(0, 20).map((j: Job) => (
             <div key={j.id} className="item" data-testid="job-row">
               <div className="row">
                 <span className="grow truncate">{j.label}</span>
-                <span className={`badge ${j.state === "failed" ? "warn" : j.state === "done" ? "ok" : ""}`}>{t(`job.state.${j.state}` as never)}</span>
+                <span className={`badge ${j.state === "failed" ? "warn" : j.state === "done" ? "ok" : ""}`} data-testid="job-state">{t(jobStateLabel(j))}</span>
               </div>
               <div className={`progress ${j.state === "failed" ? "failed" : ""}`}><div style={{ width: j.total ? `${Math.min(100, (j.done / j.total) * 100)}%` : j.state === "done" ? "100%" : "30%" }} /></div>
               <div className="row small muted">
                 <span className="grow">{j.total ? t("jobs.progress", { done: j.done, total: j.total }) : t("jobs.progressUnknown", { done: j.done })}{j.failed ? ` · ${t("jobs.failedCount", { failed: j.failed })}` : ""}</span>
                 {j.state === "running" && j.cancellable ? <button type="button" className="btn sm" onClick={() => cmd("pauseJob", j.id)}>{t("jobs.pause")}</button> : null}
                 {j.state === "paused" ? <button type="button" className="btn sm" onClick={() => cmd("resumeJob", j.id)}>{t("jobs.resume")}</button> : null}
-                {(j.state === "running" || j.state === "queued" || j.state === "paused") && j.cancellable ? <button type="button" className="btn sm" onClick={() => cmd("cancelJob", j.id)}>{t("jobs.cancel")}</button> : null}
+                {isPending(j) && j.cancellable ? <button type="button" className="btn sm" onClick={() => cmd("cancelJob", j.id)}>{t("jobs.cancel")}</button> : null}
                 {j.state === "failed" || j.state === "cancelled" ? <button type="button" className="btn sm" onClick={() => cmd("retryJob", j.id)}>{t("jobs.retry")}</button> : null}
               </div>
             </div>
@@ -289,8 +309,9 @@ function JobsIndicator() {
 }
 
 /** The server's sync as one row: what it is doing or when it last finished, the library size or live count, one action. */
-function SyncRow({ server, job, sync }: { server: AccountInfo; job: Job | undefined; sync: SyncProgress | undefined | null }) {
-  const active = job && (job.state === "running" || job.state === "queued" || job.state === "paused") ? job : undefined;
+function SyncRow({ server, job, sync, unreachable }: { server: AccountInfo; job: Job | undefined; sync: SyncProgress | undefined | null; unreachable: boolean }) {
+  const active = job && isPending(job) ? job : undefined;
+  const held = !!active && isWaiting(active);
   // lastSync is only stamped on success, so a failed or cancelled run newer than it is the latest word.
   const unsuccessful = job && (job.state === "failed" || job.state === "cancelled") && job.updatedAt > (server.lastSync ?? 0) ? job : undefined;
   // A failed or cancelled run never reports finished, so its last progress lingers: only a job that
@@ -302,6 +323,7 @@ function SyncRow({ server, job, sync }: { server: AccountInfo; job: Job | undefi
   const failed = unsuccessful?.state === "failed";
   const headline = active?.state === "paused" ? t("sync.paused")
     : active && live ? t("sync.phase", { phase: live.phase })
+    : active && held ? t(jobStateLabel(active))
     : active ? t("sync.waiting")
     : unsuccessful ? t(failed ? "sync.failedWhen" : "sync.cancelledWhen", { when: fmtRelative(unsuccessful.updatedAt) })
     : server.lastSync ? t("sync.syncedWhen", { when: fmtRelative(server.lastSync) })
@@ -318,7 +340,7 @@ function SyncRow({ server, job, sync }: { server: AccountInfo; job: Job | undefi
       <div className="row">
         <div className="grow" style={{ minWidth: 0 }}>
           <div className="truncate" style={{ fontWeight: 600, color: failed ? "var(--warn)" : undefined }}>{headline}</div>
-          <div className="small muted truncate">{supporting}</div>
+          <div className="small muted truncate">{supporting}{unreachable ? <span data-testid="server-unreachable" style={{ color: "var(--warn)" }}>{` · ${t("settings.serverUnreachable")}`}</span> : null}</div>
         </div>
         {!active && failed ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "retryJob", data: { id: unsuccessful.id } })}>{t("jobs.retry")}</button>
           : !active ? <button type="button" className="btn icon sm ghost" aria-label={t("sync.now")} title={t("sync.now")} data-testid="sync-now" onClick={() => dispatch({ type: "syncLibrary", data: { account_id: server.id, full: false } })}><Icon name="sync" size={16} /></button>
@@ -326,7 +348,7 @@ function SyncRow({ server, job, sync }: { server: AccountInfo; job: Job | undefi
           : active.cancellable ? <button type="button" className="btn sm ghost" onClick={() => dispatch({ type: "cancelJob", data: { id: active.id } })}>{t("jobs.cancel")}</button>
           : null}
       </div>
-      {active ? <div className="progress"><div style={{ width: fraction != null ? `${fraction * 100}%` : active.state === "paused" ? "0%" : "30%" }} /></div> : null}
+      {active && !held ? <div className="progress"><div style={{ width: fraction != null ? `${fraction * 100}%` : active.state === "paused" ? "0%" : "30%" }} /></div> : null}
     </div>
   );
 }

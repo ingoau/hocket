@@ -109,6 +109,15 @@ impl Actor {
                 self.apply_storage_settings();
                 self.mark_prefetch_check();
             }
+            keys::NETWORK_OFFLINE_MODE => self.apply_network(),
+            keys::DOWNLOADS_WIFI_ONLY => self.apply_job_holds(),
+            keys::NETWORK_DATA_SAVER => {
+                // What is loaded ahead depends on it.
+                if self.playback.loaded && self.owns_transport() {
+                    self.refresh_next();
+                }
+                self.mark_prefetch_check();
+            }
             keys::STORAGE_WARN_THRESHOLD_BYTES | keys::STORAGE_CACHE_MAX_BYTES => {
                 self.apply_storage_settings();
                 self.mark_prefetch_check();
@@ -214,9 +223,7 @@ impl Actor {
                 };
                 match k.as_str() {
                     "default" => policy.default = Some(p),
-                    "cellular" => {
-                        policy.by_kind.insert(NetworkKind::Cellular, p);
-                    }
+                    "metered" => policy.metered = Some(p),
                     "wifi" => {
                         policy.by_kind.insert(NetworkKind::Wifi, p);
                     }

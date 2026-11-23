@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { ActionTarget, SortOrder, Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
-import { useApp, useSetting } from "../store/app";
+import { useApp, useOfflineDimming, useSetting } from "../store/app";
 import { SK } from "@shared/settings-keys";
 import { useSurfaceTuning } from "../lib/gesture-prefs";
 import { useSettle, useSwipe } from "../lib/swipe-hook";
@@ -25,6 +25,7 @@ import type { Primer } from "../lib/use-prime";
 import { evictPages, materializePages } from "../lib/paged-window";
 import { beginDrag, currentDrag, dragFromControl, finishDrag, insertIndex, isAppDrag, onDragEnded, type DragPayload } from "../lib/drag";
 import { primeKey, ratingTarget, refOf } from "../lib/track-ref";
+import { unavailableOffline } from "../lib/offline";
 
 export type ColumnId = "index" | "position" | "art" | "title" | "artist" | "album" | "duration" | "year" | "genre" | "rating" | "love" | "plays" | "added" | "bpm" | "offline";
 
@@ -145,6 +146,8 @@ export function TrackTable(props: TrackTableProps) {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const snoozedIds = useApp((s) => s.snoozes.map((x) => x.trackRef.id).join("\n"));
   const snoozed = useMemo(() => new Set(snoozedIds ? snoozedIds.split("\n") : []), [snoozedIds]);
+  // Offline, what isn't on this device is skipped when this device plays it: dimmed, still selectable.
+  const offline = useOfflineDimming();
   const [focusIdx, setFocusIdx] = useState(0);
   const typeBuf = useRef({ text: "", at: 0 });
   const dragFrom = useRef<number | undefined>(undefined);
@@ -421,6 +424,7 @@ export function TrackTable(props: TrackTableProps) {
             const focused = vi.index === focusIdx;
             const playing = !!tr && tr.id === playingTrackId;
             const faded = !!tr && snoozed.has(tr.id);
+            const away = !!tr && unavailableOffline(offline, tr.offline);
             const swiped = !!tr && swipe.key?.i === vi.index && swipe.key.id === tr.id && (swipe.stage === "tracking" || swipe.settling);
             const tracking = swiped && swipe.stage === "tracking";
             const reveal = swiped && swipe.side !== 0 ? (swipe.side > 0 ? swipeActions(tr).right : swipeActions(tr).left) : null;
@@ -428,11 +432,13 @@ export function TrackTable(props: TrackTableProps) {
               <Fragment key={vi.key}>
               {reveal && swipe.side !== 0 ? <SwipeReveal action={reveal} side={swipe.side} armed={swipe.armed !== 0} style={{ top: 0, left: "var(--table-inset)", right: "var(--table-inset)", height: vi.size, transform: `translateY(${vi.start}px)` }} /> : null}
               <div
-                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}${swiped ? " swiping" : ""}${flash && flash.i === vi.index && flash.id === tr?.id ? " swipe-flash" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
+                className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}${away ? " offline-unavailable" : ""}${swiped ? " swiping" : ""}${flash && flash.i === vi.index && flash.id === tr?.id ? " swipe-flash" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
                 role="row"
                 aria-selected={selected}
                 aria-rowindex={vi.index + 2}
                 aria-current={playing ? "true" : undefined}
+                aria-description={away ? t("misc.notAvailableOffline") : undefined}
+                title={away ? t("misc.notAvailableOffline") : undefined}
                 tabIndex={focused ? 0 : -1}
                 data-index={vi.index}
                 style={{ gridTemplateColumns: template, transform: `translateY(${vi.start}px)`, height: vi.size, ...(swiped ? { translate: `${tracking ? swipe.offset : 0}px 0`, transition: tracking ? "none" : settle } : null) }}

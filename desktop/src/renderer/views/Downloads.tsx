@@ -14,6 +14,7 @@ import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { TrackTable, usePagedTracks } from "../components/TrackTable";
 import { fmtBytes } from "../lib/format";
+import { downloadWait, waitLabel } from "../lib/jobs";
 import { AVAILABLE_OFFLINE_FILTER, AVAILABLE_OFFLINE_NODE } from "../lib/filters";
 import { AVAILABLE_OFFLINE_FILTER_ID } from "@shared/constants";
 
@@ -42,10 +43,14 @@ export function Downloads({ tab }: { tab?: string }) {
 /** Downloads as a table (what, how far along, size, files), with the device's storage beside it. */
 function Pins() {
   const pins = useApp((s) => s.pins);
+  const wait = useApp((s) => downloadWait(s.jobs));
   const navigate = useApp((s) => s.navigate);
   const openDialog = useApp((s) => s.openDialog);
   const fetched = useQuery(() => ({ type: "pins" }), "pins", [], { static: true });
   const list = pins.length ? pins : (fetched.data ?? []);
+  // A held download says what it waits for once, over the list: a pin doesn't say which job is
+  // its own, so an incomplete pin may be waiting or may have failed tracks to retry.
+  const waiting = wait && list.some((p) => p.downloadedCount < p.trackCount) ? wait : undefined;
   const remove = (p: (typeof list)[number]) => openDialog({ kind: "confirm", title: t("downloads.remove"), message: t("dialog.deleteDownload", { name: p.label }), confirmLabel: t("dialog.delete"), destructive: true, onConfirm: () => bridge().dispatch({ type: "unpin", data: { target: p.target } }) });
   const open = (p: (typeof list)[number]) => {
     if (p.target.type === "album") navigate({ view: "album", id: p.target.data.id });
@@ -57,6 +62,7 @@ function Pins() {
         {!list.length ? <EmptyState message={t("downloads.empty")} icon="download" action={<button type="button" className="btn" onClick={() => navigate({ view: "albums" })}>{t("nav.albums")}</button>} /> : (
           <section aria-labelledby="dl-count">
           <h2 className="dl-count" id="dl-count">{t(list.length === 1 ? "downloads.countOne" : "downloads.count", { count: list.length })}</h2>
+          {waiting ? <p className="small muted dl-waiting" data-testid="downloads-waiting"><Icon name={waiting === "offline" ? "offline" : "download"} size={16} />{t(waitLabel(waiting))}</p> : null}
           <table className="dl-table" data-testid="downloads-table">
             <thead><tr><th scope="col">{t("downloads.col.title")}</th><th scope="col">{t("downloads.col.downloaded")}</th><th scope="col" className="num">{t("downloads.col.size")}</th><th scope="col">{t("downloads.col.files")}</th><th scope="col"><span className="sr-only">{t("downloads.remove")}</span></th></tr></thead>
             <tbody>

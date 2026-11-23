@@ -13,6 +13,7 @@ import { IPC } from "@shared/bridge-types";
 import { snapshotOf } from "@shared/core-handle";
 import { formatDeepLink, parseDeepLink } from "@shared/deep-link";
 import { PositionTickFilter } from "@shared/transport";
+import { SK } from "@shared/settings-keys";
 import { ArtworkRegistry } from "./artwork";
 import { createCore, loadNative, NativeCoreUnavailable } from "./core-host";
 import { DevLog } from "./devlog";
@@ -20,7 +21,8 @@ import { ServerCredentialStore } from "./credentials";
 import { deepLinkFromArgv, registerDeepLinks } from "./deep-link";
 import { installIpc } from "./ipc";
 import { MediaSessionHost } from "./media-session";
-import { installAppMenu } from "./menu";
+import { installAppMenu, type AppMenuState } from "./menu";
+import { networkReporter } from "./network";
 import { StoreFile } from "./store-file";
 import { AppTray, appIcon } from "./tray";
 import { installUpdater } from "./updater";
@@ -139,9 +141,20 @@ async function main(): Promise<void> {
     togglePlay: () => core.dispatch({ type: "togglePlay" }),
     next: () => core.dispatch({ type: "next" }),
     previous: () => core.dispatch({ type: "previous" }),
+    setOfflineMode: (on) => setOfflineMode(on),
     quit: () => shutdown(),
   });
   tray.install();
+  // Offline mode's checkbox in the tray and the macOS app menu: set through the core, shown as the
+  // core has it (settingChanged), so the settings page and the banner stay in step with it.
+  let offlineMode = false;
+  let updateAppMenu: (state: AppMenuState) => void = () => {};
+  const setOfflineMode = (on: boolean) => core.dispatch({ type: "setSetting", data: { key: SK.networkOfflineMode, value: JSON.stringify(on) } });
+  const showOfflineMode = (on: boolean) => {
+    offlineMode = on;
+    tray.setOfflineMode(on);
+    updateAppMenu({ offlineMode: on });
+  };
 
   const mediaSession = new MediaSessionHost({
     core,
@@ -273,6 +286,8 @@ async function main(): Promise<void> {
     }
     if (event.type === "nowPlayingChanged") lastNowPlaying = event.data.entry ? `${event.data.entry.track.title} · ${event.data.entry.track.artist ?? ""}` : undefined;
     const snapshot = snapshotOf(event);
+    // Every snapshot (an imported configuration answers with one) is the core's word on offline mode.
+    if (snapshot) showOfflineMode(snapshot.settings.some((s) => s.key === SK.networkOfflineMode && s.value === "true"));
     if (snapshot && !replayed) {
       // Replay stored credentials once per process: the core never persists
       // passwords. Later snapshots (RequestSnapshot from a re-attaching
@@ -307,6 +322,7 @@ async function main(): Promise<void> {
     for (const s of settings) {
       try {
         if (s.key === "developer.mode") devlog.setDetailed(JSON.parse(s.value) === true);
+        if (s.key === SK.networkOfflineMode) showOfflineMode(JSON.parse(s.value) === true);
       } catch {
         /* ignore */
       }
@@ -319,18 +335,19 @@ async function main(): Promise<void> {
   powerMonitor.on("on-battery", applyBattery);
   powerMonitor.on("on-ac", applyBattery);
   powerMonitor.on("suspend", () => core.dispatch({ type: "setVisibility", data: { visible: false, focused: false } }));
-  powerMonitor.on("resume", () => pushVisibility(windows.main?.isFocused() ?? false));
+  powerMonitor.on("resume", () => {
+    pushVisibility(windows.main?.isFocused() ?? false);
+    // The network may have changed while asleep; don't wait for the next poll.
+    pushNetwork(net.isOnline());
+  });
 
-  // Network: the renderer reports online/offline transitions; main polls as a backstop.
-  let lastOnline: boolean | undefined;
-  const pushNetwork = (online: boolean) => {
-    if (lastOnline === online) return;
-    lastOnline = online;
-    core.dispatch({ type: "setNetworkState", data: { state: { kind: online ? "unknown" : "offline", metered: false, networkId: undefined } } });
-  };
+  // Network: the renderer reports online/offline transitions; main polls as a backstop. Only
+  // changes reach the core.
+  const pushNetwork = networkReporter((state) => core.dispatch({ type: "setNetworkState", data: { state } }));
   setInterval(() => pushNetwork(net.isOnline()), 30_000).unref();
 
-  installAppMenu({ showMain: () => windows.showMain(), openSettings: () => sendUiAction("ui.settings"), quit: () => shutdown() });
+  updateAppMenu = installAppMenu({ showMain: () => windows.showMain(), openSettings: () => sendUiAction("ui.settings"), setOfflineMode: (on) => setOfflineMode(on), quit: () => shutdown() });
+  updateAppMenu({ offlineMode });
   installUpdater({ onStatus: (s) => console.log(`[updater] ${s}`) });
 
   const sendUiAction = (id: string) => {

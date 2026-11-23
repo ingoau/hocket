@@ -150,7 +150,7 @@ async fn priming_needs_an_unmetered_network() {
     let t = started("prime-gating", 8).await;
     for (cmd, why) in [
         (network(NetworkKind::Wifi, true), "metered wifi"),
-        (network(NetworkKind::Cellular, false), "cellular"),
+        (network(NetworkKind::Cellular, true), "mobile data"),
         (network(NetworkKind::Offline, false), "offline"),
     ] {
         t.run(cmd).await;

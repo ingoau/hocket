@@ -160,7 +160,7 @@ fun StatsScreen(nav: NavHostController) {
                 if (s.topTracks.isNotEmpty()) {
                     item(key = "h.tracks") { StatsHeading(stringResource(R.string.stats_top_tracks)) }
                     itemsIndexed(s.topTracks, key = { _, t -> t.id }) { i, t ->
-                        TrackRow(t, onClick = { t.albumId?.let { nav.navigate(Route.Album(it)) } }, segment = i to s.topTracks.size, showDuration = false,
+                        TrackRow(t, onClick = { t.albumId?.let { nav.navigate(Route.Album(it)) } }, offlineGate = false, segment = i to s.topTracks.size, showDuration = false,
                             subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
                             leading = { Text((i + 1).toString(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.width(28.dp)); Spacer(Modifier.width(4.dp)) },
                             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp))

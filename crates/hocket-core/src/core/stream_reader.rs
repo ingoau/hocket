@@ -224,6 +224,9 @@ impl ReqwestUpstream {
             .connect_timeout(std::time::Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
             .use_rustls_tls()
+            // Audio bytes as the server has them: lengths and ranges count those.
+            .no_gzip()
+            .no_brotli()
             .build()
             .map_err(|e| e.without_url().to_string())?;
         Ok(ReqwestUpstream { client })

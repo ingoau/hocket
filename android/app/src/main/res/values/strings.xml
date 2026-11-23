@@ -228,6 +228,8 @@
     <string name="row_state_loved">loved</string>
     <string name="row_state_downloaded">downloaded</string>
     <string name="row_state_cached">cached, available offline</string>
+    <string name="row_state_unavailable_offline">not available offline</string>
+    <string name="row_unavailable_offline">Not available offline. Download it, or play it once online.</string>
     <string name="a11y_select">Select</string>
     <string name="a11y_deselect">Deselect</string>
     <string name="a11y_open">Open</string>
@@ -517,6 +519,9 @@
     <string name="jobs_progress">%1$d of %2$d</string>
     <string name="jobs_failed">%1$d failed</string>
     <string name="jobs_state_queued">Queued</string>
+    <string name="jobs_waiting_wifi">Waiting for Wi‑Fi</string>
+    <string name="jobs_waiting_connection">Waiting for a connection</string>
+    <string name="jobs_waiting_offline_mode">Paused by offline mode</string>
     <string name="jobs_state_running">Running</string>
     <string name="jobs_state_paused">Paused</string>
     <string name="jobs_state_done">Done</string>
@@ -693,7 +698,7 @@
     <string name="settings_search_kw_transcoding">transcode quality opus mp3 aac kbps data mobile wifi</string>
     <string name="settings_search_kw_storage">disk space storage size offline downloads</string>
     <string name="settings_search_kw_cache">cache stream disk space offline</string>
-    <string name="settings_search_kw_data">mobile data cellular metered bandwidth wifi</string>
+    <string name="settings_search_kw_data">mobile data cellular metered bandwidth wifi hotspot tethering data saver</string>
     <string name="settings_search_kw_lyrics">lyrics lrclib online privacy timing offset translation</string>
     <string name="settings_search_kw_floating_nav_bar">navigation bar tabs bottom pill floating compact standard</string>
     <string name="settings_search_kw_album_artists">artist album tracks featuring compilation various</string>
@@ -754,8 +759,8 @@
     <string name="settings_eq_reset">Flat</string>
     <string name="settings_db">%1$+.1f dB</string>
     <string name="settings_transcoding_body">Choose a format and quality for each network.</string>
-    <string name="settings_transcoding_wifi">Default (Wi‑Fi and other networks)</string>
-    <string name="settings_transcoding_cellular">On cellular</string>
+    <string name="settings_transcoding_wifi">Default (Wi‑Fi and other unmetered networks)</string>
+    <string name="settings_transcoding_metered">On metered connections (mobile data, hotspots)</string>
     <string name="settings_transcoding_current">On this network</string>
     <string name="settings_format">Format</string>
     <string name="settings_format_original">Original</string>
@@ -951,7 +956,29 @@
     <string name="settings_lyrics_default_offset">Default timing offset</string>
     <string name="settings_lyrics_translations">Show translations</string>
     <string name="settings_downloads_wifi_only">Download on Wi‑Fi only</string>
-    <string name="settings_downloads_wifi_only_body">Downloads wait while the connection is metered.</string>
+    <string name="settings_downloads_wifi_only_body">Downloads wait on metered connections, like mobile data or a hotspot, and continue by themselves once off them.</string>
+    <string name="settings_section_connection">Connection</string>
+    <string name="settings_offline_mode">Offline mode</string>
+    <string name="settings_offline_mode_body">Play only downloaded and cached music, and send nothing to your server or the coordinator. Plays and changes are sent once you turn it off.</string>
+    <string name="settings_data_saver">Data saver on metered connections</string>
+    <string name="settings_data_saver_body">On mobile data or a hotspot, only load the next song early if it\'s on this device, skip full library checks and server search, and reuse covers already saved.</string>
+    <string name="settings_search_kw_offline">offline airplane flight plane no internet disconnect network</string>
+    <string name="settings_section_library_sync">Library sync</string>
+    <string name="settings_sync_interval">Check the server for changes</string>
+    <string name="settings_sync_interval_value">Every %1$s</string>
+    <string name="duration_hours">%1$d h</string>
+    <string name="settings_full_reconcile">Full library check</string>
+    <plurals name="settings_full_reconcile_value">
+        <item quantity="one">Every %1$d day. Catches songs removed from the server.</item>
+        <item quantity="other">Every %1$d days. Catches songs removed from the server.</item>
+    </plurals>
+    <plurals name="a11y_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <string name="settings_search_include_server">Search the server too</string>
+    <string name="settings_search_include_server_body">Ask the server when there are few results on this device.</string>
+    <string name="settings_search_kw_sync">sync refresh interval reconcile deleted removed update server search</string>
     <string name="settings_version">Hocket %1$s</string>
     <string name="settings_licence">Licensed under AGPL-3.0</string>
     <string name="settings_licences_title">Open-source licences</string>
@@ -1025,8 +1052,8 @@
     <string name="settings_cache_budget_body">Automatic uses up to a tenth of the storage space, at most 2 GB.</string>
     <string name="settings_data_saved">Data saved</string>
     <string name="settings_data_saved_body">%1$s played from this device · %2$s fetched from the server</string>
-    <string name="settings_prefetch_mobile">Load upcoming songs ahead on mobile data</string>
-    <string name="settings_prefetch_mobile_body">Saves the next songs in the queue on metered or cellular connections too.</string>
+    <string name="settings_prefetch_mobile">Load upcoming songs ahead on metered connections</string>
+    <string name="settings_prefetch_mobile_body">Also saves the next songs in the queue on mobile data or a hotspot.</string>
     <string name="settings_available_offline_body">Downloads and fully cached songs</string>
     <string name="available_offline">Available offline</string>
     <string name="available_offline_empty_title">Nothing available offline</string>
@@ -1174,6 +1201,8 @@
     <string name="identity_coord_ytm_sign_in_title">Sign the coordinator in to Google</string>
     <string name="account_more_places">More places</string>
     <string name="account_signed_in">%1$s on %2$s</string>
+    <string name="account_server_unreachable">Can\'t reach the server</string>
+    <string name="account_offline_mode_body">Only downloaded and cached music</string>
     <!-- Settings → Pebble watch (the Hocket watchapp, docs/pebble.md). -->
     <string name="settings_category_pebble">Pebble watch</string>
     <string name="pebble_watchapp">Hocket watchapp</string>

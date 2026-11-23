@@ -184,14 +184,24 @@ async fn persisted_server_installs_offline_plays_downloads_and_reprobes_online()
     .await;
     t.run_for(500.0).await;
     assert!(t.backend.is_playing(), "the download plays offline");
-    // The background probe fails (stub is down): an error, but the server
-    // stays installed.
-    wait_for_probe_result(&t, false).await;
+    // Offline, the server is not probed at all (it could only fail): no
+    // error, and the server stays installed.
+    t.run_for(2_000.0).await;
+    assert!(
+        !t.events.all().iter().any(|e| matches!(
+            e,
+            Event::Error {
+                kind: ErrorKind::Network,
+                ..
+            }
+        )),
+        "no probe while offline"
+    );
     let servers = match t.query(Query::Accounts).await {
         QueryResult::Accounts(s) => s,
         other => panic!("{other:?}"),
     };
-    assert_eq!(servers.len(), 1, "a failed probe keeps the server");
+    assert_eq!(servers.len(), 1, "an unverified server stays");
     assert!(!servers[0].reachable);
     assert!(t.backend.is_playing());
 

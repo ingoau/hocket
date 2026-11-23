@@ -116,6 +116,7 @@ impl Actor {
             .get_bool(crate::settings::keys::CONNECT_LAN_DISCOVERY)
             && self.cfg.coordinator_listen.is_none();
         cfg.slow_sync = self.battery_saver.has(crate::api::SaverFeature::SlowSync);
+        cfg.network_online = !self.is_offline();
         let reducer = self
             .reducer_override
             .clone()

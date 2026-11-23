@@ -5,9 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.ConnectivityManager
+import android.net.ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -19,9 +19,12 @@ import app.hocket.core.api.NetworkState
 import java.security.MessageDigest
 
 /**
- * Reports connectivity to the core as [Command.SetNetworkState]: kind, metered flag and an opaque
- * network id so transcoding profiles can vary per network. The id is a hash of the SSID when it is
- * readable (needs location permission on 8.1+), otherwise the transport type.
+ * Reports the default network to the core as [Command.SetNetworkState]: kind, metered flag and an
+ * opaque network id so transcoding profiles can vary per network. The default network is the one
+ * the app's traffic actually uses (a VPN, or Wi-Fi over mobile data), so kind and metered come from
+ * its capabilities as the default-network callback reports them. The id is a hash of the SSID when
+ * it is readable (needs location permission), "wired" on Ethernet, and none otherwise: every
+ * metered connection shares the core's `metered` profile, so mobile data needs no id of its own.
  */
 class NetworkMonitor(
     private val context: Context,
@@ -31,15 +34,55 @@ class NetworkMonitor(
 ) {
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var last: NetworkState? = null
+    /** The default network and its capabilities, as the callback last reported them. */
+    private var default: Network? = null
+    private var caps: NetworkCapabilities? = null
+    /** The system blocks the app's traffic on [default] (background data restriction, data saver): offline to us. */
+    private var blocked = false
+    /** The callback has said something, so the one-time start-up read ([seed]) is stale and unused. */
+    private var heard = false
 
-    private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = publish()
-        override fun onLost(network: Network) = publish()
-        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = publish()
-    }
+    // Capabilities always follow onAvailable (API 26+), so only they, the blocked status and onLost
+    // publish. On 12+ the SSID is redacted from callback capabilities unless the callback asks for
+    // location info.
+    private val callback: ConnectivityManager.NetworkCallback =
+        if (Build.VERSION.SDK_INT >= 31) {
+            object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onAvailable(network: Network) = available(network)
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = changed(network, networkCapabilities)
+                override fun onBlockedStatusChanged(network: Network, blocked: Boolean) = blockedChanged(network, blocked)
+                override fun onLost(network: Network) = lost(network)
+            }
+        } else {
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) = available(network)
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = changed(network, networkCapabilities)
+                // API 29+; never called before that.
+                override fun onBlockedStatusChanged(network: Network, blocked: Boolean) = blockedChanged(network, blocked)
+                override fun onLost(network: Network) = lost(network)
+            }
+        }
 
     fun start() {
-        cm.registerNetworkCallback(NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), callback)
+        // The callback first, so no change between the read below and the registration is missed.
+        cm.registerDefaultNetworkCallback(callback)
+        // With no default network the callback never fires, and this read is the "offline" report the
+        // core needs. (The active network is null while the app's traffic is blocked, so that is
+        // offline too.)
+        val network = cm.activeNetwork
+        seed(network, network?.let { cm.getNetworkCapabilities(it) })
+    }
+
+    /**
+     * The one-time start-up read, used only while the callback hasn't spoken yet: on 12+ this read
+     * has the SSID redacted, and reporting it right before the callback's would publish an id-less
+     * state and then the real one.
+     */
+    @Synchronized
+    internal fun seed(network: Network?, capabilities: NetworkCapabilities?) {
+        if (heard) return
+        default = network
+        caps = capabilities
         publish()
     }
 
@@ -47,8 +90,45 @@ class NetworkMonitor(
         runCatching { cm.unregisterNetworkCallback(callback) }
     }
 
-    fun current(): NetworkState {
-        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+    @Synchronized
+    private fun available(network: Network) {
+        heard = true
+        // The new default's blocked status follows its capabilities.
+        if (network != default) blocked = false
+        default = network
+    }
+
+    @Synchronized
+    private fun changed(network: Network, capabilities: NetworkCapabilities) {
+        heard = true
+        if (network != default) blocked = false
+        default = network
+        caps = capabilities
+        publish()
+    }
+
+    @Synchronized
+    private fun blockedChanged(network: Network, isBlocked: Boolean) {
+        heard = true
+        if (network != default) return
+        blocked = isBlocked
+        publish()
+    }
+
+    @Synchronized
+    private fun lost(network: Network) {
+        heard = true
+        // A default-network callback loses only the last network it made available, and only when
+        // nothing replaces it; the guard is for a late call about one already replaced.
+        if (network != default) return
+        default = null
+        caps = null
+        blocked = false
+        publish()
+    }
+
+    /** The state [caps] stands for. */
+    internal fun stateOf(caps: NetworkCapabilities?): NetworkState {
         val kind = when {
             caps == null -> NetworkKind.Offline
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkKind.Wifi
@@ -56,15 +136,12 @@ class NetworkMonitor(
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> NetworkKind.Wired
             else -> NetworkKind.Unknown
         }
-        val metered = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)?.not() ?: false
         val id = when (kind) {
-            NetworkKind.Wifi -> ssidHash(caps) ?: "wifi"
-            NetworkKind.Cellular -> "cellular"
+            NetworkKind.Wifi -> ssidHash(caps)
             NetworkKind.Wired -> "wired"
-            NetworkKind.Offline -> null
-            NetworkKind.Unknown -> "unknown"
+            else -> null
         }
-        return NetworkState(kind, metered, id)
+        return NetworkState(kind, caps != null && isMetered(caps), id)
     }
 
     @Suppress("DEPRECATION")
@@ -82,13 +159,24 @@ class NetworkMonitor(
     }
 
     private fun publish() {
-        val state = current()
+        val state = stateOf(if (blocked) null else caps)
         val was = last
         if (state != was) {
             last = state
             dispatch(Commands.setNetworkState(state))
             val online = state.kind != NetworkKind.Offline
             if (was == null || (was.kind != NetworkKind.Offline) != online) onConnectivity(online)
+        }
+    }
+
+    internal companion object {
+        /**
+         * Metered unless the network says it isn't. A temporarily unmetered one (a carrier's
+         * unmetered 5G, Android 11+) counts as unmetered while it says so.
+         */
+        fun isMetered(caps: NetworkCapabilities): Boolean {
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) return false
+            return !(Build.VERSION.SDK_INT >= 30 && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED))
         }
     }
 }

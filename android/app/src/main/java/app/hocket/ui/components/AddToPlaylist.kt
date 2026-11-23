@@ -113,6 +113,23 @@ import kotlinx.coroutines.withTimeoutOrNull
 @Stable
 class AppSnackbar(val host: SnackbarHostState, private val scope: CoroutineScope) {
     fun launch(block: suspend CoroutineScope.() -> Unit) { scope.launch(block = block) }
+
+    /** The message [showOnce] has up (or about to be), so a repeat doesn't queue behind it. */
+    private var once: String? = null
+
+    /**
+     * Shows [text] (in a sheet's host while one redirects them) unless it is already showing: a
+     * repeated tap doesn't queue a second copy, and a different message showing makes way for it.
+     */
+    fun showOnce(text: String) {
+        val target = SnackbarRedirect.host ?: host
+        if (once == text || target.currentSnackbarData?.visuals?.message == text) return
+        target.currentSnackbarData?.dismiss()
+        once = text
+        scope.launch {
+            try { target.showSnackbar(text) } finally { if (once == text) once = null }
+        }
+    }
 }
 
 val LocalAppSnackbar = staticCompositionLocalOf<AppSnackbar?> { null }

@@ -463,6 +463,65 @@ class FakeCoreTest {
         assertEquals(offline, replay.await().data.network)
     }
 
+    @Test
+    fun offlineModeReportsOfflineWhateverThePlatformSays() = runTest {
+        val core = core()
+        core.dispatchAndWait(Command.Start)
+        val wifi = NetworkState(NetworkKind.Wifi, false, "ssid:1")
+        core.dispatchAndWait(Commands.setNetworkState(wifi))
+        val offline = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.NetworkChanged>().first() }
+        core.dispatchAndWait(Commands.setSetting(app.hocket.core.SettingKeys.NETWORK_OFFLINE_MODE, "true"))
+        assertEquals(NetworkKind.Offline, offline.await().data.network?.kind)
+        // Platform changes meanwhile are kept, not reported.
+        core.dispatchAndWait(Commands.setNetworkState(NetworkState(NetworkKind.Cellular, true, null)))
+        val back = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.NetworkChanged>().first() }
+        core.dispatchAndWait(Commands.setSetting(app.hocket.core.SettingKeys.NETWORK_OFFLINE_MODE, "false"))
+        assertEquals(NetworkState(NetworkKind.Cellular, true, null), back.await().data.network)
+    }
+
+    @Test
+    fun turningOfflineModeOffWithNoPlatformReportIsUnknown() = runTest {
+        val core = core()
+        core.dispatchAndWait(Command.Start)
+        core.dispatchAndWait(Commands.setSetting(SettingKeys.NETWORK_OFFLINE_MODE, "true"))
+        assertEquals(NetworkKind.Offline, core.snapshot().network?.kind)
+        val back = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { core.events.filterIsInstance<Event.NetworkChanged>().first() }
+        core.dispatchAndWait(Commands.setSetting(SettingKeys.NETWORK_OFFLINE_MODE, "false"))
+        // Like the core: no report from the platform yet is "unknown" (treated as online), not the last state.
+        assertNull(back.await().data.network)
+    }
+
+    @Test
+    fun downloadsAndSyncsWaitForTheNetworkAndResumeByThemselves() = runTest {
+        val core = core()
+        core.dispatchAndWait(Command.Start)
+        suspend fun download() = core.snapshot().jobs.first { it.kind == JobKind.Download }
+        // Offline (here through offline mode): a new download and a new sync are held, queued.
+        core.dispatchAndWait(Commands.setSetting(SettingKeys.NETWORK_OFFLINE_MODE, "true"))
+        core.dispatchAndWait(Commands.pin(Commands.trackPin(core.library.tracks[0].id)))
+        assertEquals(JobState.Queued to JobWait.Offline, download().let { it.state to it.waiting })
+        core.dispatchAndWait(Commands.syncLibrary("fake-server", false))
+        val sync = core.snapshot().jobs.first { it.kind == JobKind.LibrarySync && it.state != JobState.Done }
+        assertEquals(JobState.Queued to JobWait.Offline, sync.state to sync.waiting)
+        // Resuming by hand doesn't get past the hold.
+        core.dispatchAndWait(Commands.resumeJob(download().id))
+        assertEquals(JobWait.Offline, download().waiting)
+
+        // Back on mobile data with Wi-Fi only downloads (the default): the download waits for Wi-Fi,
+        // the sync goes.
+        core.dispatchAndWait(Commands.setNetworkState(NetworkState(NetworkKind.Cellular, true, null)))
+        core.dispatchAndWait(Commands.setSetting(SettingKeys.NETWORK_OFFLINE_MODE, "false"))
+        assertEquals(JobState.Queued to JobWait.Metered, download().let { it.state to it.waiting })
+        assertEquals(JobState.Running to null, core.snapshot().jobs.first { it.id == sync.id }.let { it.state to it.waiting })
+
+        // Wi-Fi only off: the download is released.
+        core.dispatchAndWait(Commands.setSetting(SettingKeys.DOWNLOADS_WIFI_ONLY, "false"))
+        assertEquals(JobState.Running to null, download().let { it.state to it.waiting })
+        // And held again when the network goes.
+        core.dispatchAndWait(Commands.setNetworkState(NetworkState(NetworkKind.Offline, false, null)))
+        assertEquals(JobState.Queued to JobWait.Offline, download().let { it.state to it.waiting })
+    }
+
     /** Artists honour the core's sort and plain direction; the default (no sort) is by name. */
     @Test
     fun artistsSortByTheQuerysOrderAndDirection() = runTest {

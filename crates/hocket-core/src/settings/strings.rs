@@ -80,9 +80,9 @@ pub const TEXTS: &[SettingText] = &[
     t("connect.lanDiscovery", "Find devices on this network", "Announce and discover other Hocket devices on the local network."),
     t("storage.warnThresholdBytes", "Storage warning", "Warn when downloads and cache exceed this size."),
     t("storage.cacheMaxBytes", "Stream cache size", "Maximum size of the evictable stream cache."),
-    t("storage.prefetchOnMobileData", "Prefetch on mobile data", "Also cache the next two queue items in the background on metered or cellular connections."),
+    t("storage.prefetchOnMobileData", "Prefetch on metered connections", "Also cache the next two queue items in the background on metered connections, such as mobile data or a hotspot."),
     t("downloads.transcode", "Transcode downloads", "Download using the transcoding profile instead of the original file."),
-    t("downloads.wifiOnly", "Download on Wi-Fi only", "Pause downloads on metered connections."),
+    t("downloads.wifiOnly", "Download on Wi-Fi only", "Downloads wait while the connection is metered, such as mobile data or a hotspot, and continue on their own once it isn't."),
     t("sleep.defaultMinutes", "Sleep timer default", "Default duration when starting the sleep timer."),
     t("sleep.stopAtEndOfTrack", "Sleep timer finishes the track", "Let the current track finish before stopping."),
     t("scrobble.enabled", "Scrobble plays", "Report plays to the server (which forwards to Last.fm or ListenBrainz if configured)."),
@@ -90,6 +90,8 @@ pub const TEXTS: &[SettingText] = &[
     t("library.syncIntervalMinutes", "Library refresh interval", "How often to check the server for changes."),
     t("library.fullReconcileDays", "Full reconcile interval", "How often to run a full library reconcile that catches deletions."),
     t("search.includeServer", "Search the server too", "Query the server when local results are thin."),
+    t("network.offlineMode", "Offline mode", "Play only downloaded and cached music, and send nothing to your server or the coordinator. Plays and changes are sent once you turn it off."),
+    t("network.dataSaver", "Data saver on metered connections", "On mobile data or a hotspot: don't load the next track early unless it's on this device, skip full library reconciles and server search, and reuse covers already on this device."),
 ];
 
 const fn t(key: &'static str, label: &'static str, description: &'static str) -> SettingText {

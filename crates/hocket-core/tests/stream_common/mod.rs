@@ -191,3 +191,23 @@ pub async fn wait_rows(t: &TestCore, what: &str, mut f: impl FnMut(&[Row]) -> bo
     }
     panic!("{what}: {:?}", cache_rows(t));
 }
+
+/// Tests that use a metered network only to keep background prefetch off
+/// switch off what else a metered connection changes: the metered
+/// transcoding profile, data saver, and downloads waiting for Wi-Fi.
+pub async fn metered_only_stops_prefetch(t: &TestCore) {
+    for (key, value) in [
+        (
+            "transcoding.profiles",
+            r#"{"default":{"format":null,"maxBitRate":null,"cannotDecode":[]}}"#,
+        ),
+        ("network.dataSaver", "false"),
+        ("downloads.wifiOnly", "false"),
+    ] {
+        t.run(Command::SetSetting {
+            key: key.into(),
+            value: value.into(),
+        })
+        .await;
+    }
+}
