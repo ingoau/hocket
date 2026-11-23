@@ -48,7 +48,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "cacheUsage", section: "storage", label: "settings.cacheUsage", keywords: "settingsSearch.kw.cache" },
   { id: "cacheBudget", section: "storage", label: "settings.cacheBudget", desc: "settings.cacheBudgetDesc", keywords: "settingsSearch.kw.cache" },
   { id: "dataSaved", section: "storage", label: "settings.dataSaved", keywords: "settingsSearch.kw.dataSaved" },
-  { id: "prefetchMobile", section: "storage", label: "settings.prefetchMobile", desc: "settings.prefetchMobileDesc", keywords: "settingsSearch.kw.prefetchMobile" },
   { id: "storageWarn", section: "storage", label: "settings.storageWarn", keywords: "settingsSearch.kw.storage" },
   { id: "clearCache", section: "storage", label: "downloads.clearCache", keywords: "settingsSearch.kw.cache" },
   { id: "batterySaver", section: "storage", label: "settings.batterySaver", desc: "settings.batterySaverNow", keywords: "settingsSearch.kw.batterySaver" },

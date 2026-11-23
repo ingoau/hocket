@@ -20,7 +20,6 @@ object SettingKeys {
     const val LYRICS_EXTERNAL_ENABLED = "lyrics.external.enabled"
     const val LYRICS_EXTERNAL_PROVIDER = "lyrics.external.provider"
     const val LYRICS_DEFAULT_OFFSET_MS = "lyrics.defaultOffsetMs"
-    const val LYRICS_SHOW_TRANSLATIONS = "lyrics.showTranslations"
     const val RATINGS_LOVE_BRIDGE_ENABLED = "ratings.loveBridge.enabled"
     const val RATINGS_LOVE_BRIDGE_THRESHOLD = "ratings.loveBridge.threshold"
     const val BATTERY_AUTO_ENGAGE = "battery.autoEngage"
@@ -90,8 +89,6 @@ object SettingKeys {
     const val NETWORK_OFFLINE_MODE = "network.offlineMode"
     /** On metered connections, skip what the core can do without (device-local, on by default). */
     const val NETWORK_DATA_SAVER = "network.dataSaver"
-    const val SLEEP_DEFAULT_MINUTES = "sleep.defaultMinutes"
-    const val SLEEP_STOP_AT_END_OF_TRACK = "sleep.stopAtEndOfTrack"
     const val SCROBBLE_ENABLED = "scrobble.enabled"
     const val SCROBBLE_NOW_PLAYING = "scrobble.nowPlaying"
     const val LIBRARY_SYNC_INTERVAL_MINUTES = "library.syncIntervalMinutes"
@@ -170,8 +167,11 @@ object ActionIds {
     /** Default media-session buttons. Stash is a choice, not part of this set. */
     val MEDIA_SESSION = listOf(PREVIOUS, TOGGLE_PLAY, NEXT, SHUFFLE, REPEAT, LOVE)
 
-    /** Everything the notification-button editor can turn on. Stash is last, and off until chosen. */
-    val MEDIA_SESSION_CHOICES = MEDIA_SESSION + STASH
+    /**
+     * Everything the notification-button editor can turn on. Stash is last, and off until chosen.
+     * Play/pause isn't a choice: the notification always has it.
+     */
+    val MEDIA_SESSION_CHOICES = MEDIA_SESSION.filter { it != TOGGLE_PLAY } + STASH
 
     private val MEDIA_SESSION_TRANSPORT = setOf(PREVIOUS, TOGGLE_PLAY, "play", "pause", NEXT)
 

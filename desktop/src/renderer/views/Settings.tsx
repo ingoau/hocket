@@ -515,7 +515,6 @@ function Storage() {
           <span className="muted small">{t("settings.dataSavedDetail", { served: fmtBytes(s?.servedFromDiskBytes ?? 0), fetched: fmtBytes(s?.fetchedBytes ?? 0) })}</span>
         </div>
       </Row>
-      <Toggle anchor="prefetchMobile" settingKey={SK.storagePrefetchOnMobileData} title={t("settings.prefetchMobile")} desc={t("settings.prefetchMobileDesc")} />
       <Row anchor="storageWarn" title={t("settings.storageWarn")} settingKey={SK.storageWarnThresholdBytes}>
         <Select value={warn ? Math.round(warn / GIB) : 0} aria-label={t("settings.storageWarn")} onChange={(e) => bridge().dispatch({ type: "setStorageWarnThreshold", data: { bytes: Number(e.target.value) ? Number(e.target.value) * GIB : undefined } })}>
           <option value={0}>–</option>
@@ -599,7 +598,7 @@ function BatterySaverRows() {
       <Toggle anchor="batterySaverAuto" settingKey={SK.batteryAutoEngage} title={t("settings.batterySaverAuto")} fallback />
       <Row anchor="batterySaverAutoLevel" title={t("settings.batterySaverAutoLevel")} settingKey={SK.batteryAutoLevel}>
         <Select value={autoLevel} disabled={!autoEngage} aria-label={t("settings.batterySaverAutoLevel")} onChange={(e) => set(SK.batteryAutoLevel, e.target.value)} data-testid="setting-battery-auto-level">
-          {[...SAVER_PRESETS, "custom"].map((l) => <option key={l} value={l}>{label(l)}</option>)}
+          {[...SAVER_PRESETS, ...(autoLevel === "custom" ? ["custom"] : [])].map((l) => <option key={l} value={l}>{label(l)}</option>)}
         </Select>
       </Row>
     </>
