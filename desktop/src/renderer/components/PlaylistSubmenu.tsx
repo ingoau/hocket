@@ -8,6 +8,9 @@
 // Keyboard: focus stays in the search field; ↑↓ move through the rows (aria-activedescendant),
 // Enter (or Space while the field is empty) toggles, Shift+Enter adds another copy, ← at the start
 // of the field, Escape or the mouse's back button go back to the menu, Tab closes both.
+//
+// As a page (the command palette's actions menu), it takes the menu's place instead of opening beside
+// it, Raycast-style: its title, the rows, then its search as the menu's filter field at the foot.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActionTarget, Playlist, TrackRef } from "@core/api";
 import type { ExitProps } from "../lib/presence";
@@ -40,11 +43,16 @@ interface Props {
   onClose: (then?: () => void) => void;
   /** On its own, the picker carries its own presence (lib/presence). */
   exitProps?: ExitProps<HTMLDivElement>;
+  /** The playlist to start on (the one open behind the palette): its row is the active one when the list first draws. */
+  initialPlaylistId?: string;
+  /** "page": in place of the palette's actions menu (no placing; Tab stays put). */
+  variant?: "flyout" | "page";
 }
 
 type Row = { kind: "new" } | { kind: "playlist"; playlist: Playlist; state: RowState };
 
-export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClose, exitProps }: Props) {
+export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClose, exitProps, initialPlaylistId, variant = "flyout" }: Props) {
+  const page = variant === "page";
   const serverId = useApp((s) => s.accounts[0]?.id);
   const several = useApp((s) => s.accounts.length > 1);
   const openDialog = useApp((s) => s.openDialog);
@@ -78,10 +86,19 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
   const ready = !!layout && !!membership;
   const typed = query.trim();
 
+  // Start on the given playlist, once, as the list first draws (before it is placed and shown).
+  const seeded = useRef(false);
+  useLayoutEffect(() => {
+    if (!ready || seeded.current) return;
+    seeded.current = true;
+    const i = initialPlaylistId ? rows.findIndex((r) => r.kind === "playlist" && r.playlist.id === initialPlaylistId) : -1;
+    if (i >= 0) setActive(i);
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps -- once, when the list is in
+
   // Beside the menu, level with the row; on the other side when there's no room. Placed once, when it
   // first draws in full, so filtering (a shorter list) doesn't move it.
   useLayoutEffect(() => {
-    if (!ready || !ref.current) return;
+    if (page || !ready || !ref.current) return;
     const w = ref.current.offsetWidth;
     const h = ref.current.offsetHeight;
     if (!pos && anchor.bottom !== undefined) {
@@ -96,10 +113,10 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
       // Grown past the bottom (the playlists arrived, a search was cleared): lift it, never lower it.
       setPos({ ...pos, y: Math.max(4, window.innerHeight - h - 6) });
     }
-  }, [ready, pos, anchor, layout, query, membership]);
+  }, [page, ready, pos, anchor, layout, query, membership]);
 
   // Focused once placed (a hidden field can't take focus).
-  const placed = !!pos;
+  const placed = page ? ready : !!pos;
   useEffect(() => {
     if (placed) input.current?.focus({ preventScroll: true });
   }, [placed]);
@@ -191,7 +208,8 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
     }
     if (e.key === "Tab") {
       e.preventDefault();
-      onClose();
+      // A page has nowhere else to go: the palette's actions keep the field as their one stop.
+      if (!page) onClose();
       return;
     }
     if (e.key === "Escape") {
@@ -228,11 +246,27 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
 
   const noMatches = !!typed && !groups.length;
   let at = 0;
+  const field = (
+    <input
+      ref={input}
+      type="text"
+      className={page ? "pa-filter" : undefined}
+      value={query}
+      placeholder={t("picker.search")}
+      spellCheck={false}
+      aria-label={page ? t("picker.search") : undefined}
+      aria-controls="pp-list"
+      aria-activedescendant={asking && askFor ? `pp-ask-${asking.active}` : active >= 0 ? `pp-row-${active}` : undefined}
+      onChange={(e) => { setQuery(e.target.value); setActive(-1); setAsking(null); }}
+      onKeyDown={onKey}
+      data-testid="playlist-search"
+    />
+  );
   return (
     <div
       ref={ref}
-      className={`menu cm cm-sub ${motion}`}
-      style={{ left: pos?.x ?? -9999, top: pos?.y ?? 0, visibility: pos ? undefined : "hidden" }}
+      className={page ? "pa-page" : `menu cm cm-sub ${motion}`}
+      style={page ? undefined : { left: pos?.x ?? -9999, top: pos?.y ?? 0, visibility: pos ? undefined : "hidden" }}
       inert={closing || undefined}
       onAnimationEnd={exitProps?.onAnimationEnd}
       role={anchor.bottom !== undefined ? "dialog" : undefined}
@@ -244,24 +278,17 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
       // Clicks on rows keep the focus in the field.
       onMouseDown={(e) => { if (e.target !== input.current) e.preventDefault(); }}
     >
-      <label className="cm-search">
-        <Icon name="search" size={15} />
-        <span className="sr-only">{t("picker.search")}</span>
-        <input
-          ref={input}
-          type="text"
-          value={query}
-          placeholder={t("picker.search")}
-          spellCheck={false}
-          aria-controls="pp-list"
-          aria-activedescendant={asking && askFor ? `pp-ask-${asking.active}` : active >= 0 ? `pp-row-${active}` : undefined}
-          onChange={(e) => { setQuery(e.target.value); setActive(-1); setAsking(null); }}
-          onKeyDown={onKey}
-          data-testid="playlist-search"
-        />
-      </label>
+      {page ? (
+        <div className="pa-title truncate">{t("menu.addToPlaylist")}</div>
+      ) : (
+        <label className="cm-search">
+          <Icon name="search" size={15} />
+          <span className="sr-only">{t("picker.search")}</span>
+          {field}
+        </label>
+      )}
       <div className="cm-sub-list" role="menu" id="pp-list" aria-label={t("menu.addToPlaylist")}>
-        <div id={`pp-row-${at++}`} role="menuitem" className={`mi cm-new ${active === 0 ? "active" : ""}`} onMouseMove={(e) => { if (e.movementX || e.movementY) { setActive(0); setAsking(null); } }} onClick={createNew} data-testid="playlist-new">
+        <div id={`pp-row-${at++}`} role="menuitem" className={`${page ? "pa-item" : "mi"} cm-new ${active === 0 ? "active" : ""}`} onMouseMove={(e) => { if (e.movementX || e.movementY) { setActive(0); setAsking(null); } }} onClick={createNew} data-testid="playlist-new">
           <Icon name="plus" size={16} />
           <span className="grow truncate">{typed ? t("picker.newNamed", { query: typed }) : t("picker.new")}</span>
         </div>
@@ -315,6 +342,7 @@ export function PlaylistSubmenu({ tracks, anchor, closing, motion, onBack, onClo
         </>
       ) : null}
       {askFor ? <AskMenu playlist={askFor.playlist} copies={askFor.state.copies} active={asking?.active ?? 0} rowId={`pp-row-${askRow}`} onPick={(k) => askChoices[k]?.()} /> : null}
+      {page ? field : null}
     </div>
   );
 }

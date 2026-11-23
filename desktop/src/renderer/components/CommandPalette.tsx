@@ -5,14 +5,21 @@
 // the actions menu for the row, anchored bottom-right: the context menu's actions (lib/palette-model
 // over lib/menu-model), each with its chord as keycaps and its own filter field. Those chords also
 // work straight from the search field. Escape closes the menu, then the palette.
+//
+// Add to playlist turns the actions menu into the playlist picker in place, Raycast-style (its title,
+// rows and filter field become the picker's), starting on the playlist open behind the palette;
+// Escape (or ←) goes back to the actions, their filter and row as they were. A library row drags
+// like one anywhere else: once the drag leaves the palette (or goes far enough) the palette steps
+// aside, see-through, so it can drop on a playlist, the queue or the player. A drop closes it; a drag
+// that ends without one brings it back as it was.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ActionDescriptor, SearchResults } from "@core/api";
+import type { ActionDescriptor, SearchResults, TrackRef } from "@core/api";
 import { canonicalActionId } from "@shared/keymap";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { type Ranked } from "../store/palette-rank";
-import { executeAction } from "../store/actions";
+import { executeAction, resolveTrackRefs } from "../store/actions";
 import { fetchActions } from "../store/queries";
 import { useKeymap } from "../store/keyboard";
 import { chordFromEvent, parseChord, type Chord } from "../store/shortcuts";
@@ -26,6 +33,8 @@ import { usePresence } from "../lib/presence";
 import { loadLocal, saveLocal } from "../lib/local-settings";
 import { fetchMenuFacts } from "../lib/menu-facts";
 import { buildMenu } from "../lib/menu-model";
+import { libraryDragProps } from "../lib/queue-drag";
+import { PlaylistSubmenu } from "./PlaylistSubmenu";
 import { SLOW_SEARCH_MS, recordPaletteEvent, telemetryEnabled, type PickVia } from "../lib/palette-telemetry";
 import {
   actionForChord, ariaShortcut, entryId, filterActions, flatRows, groupLabel, isPaletteChord, keycaps, menuActions, paletteActions,
@@ -53,6 +62,19 @@ interface ActionsMenu {
   active: number;
 }
 
+/** The actions menu's Add to playlist page: its songs, once resolved. */
+interface PlaylistsSub {
+  n: number;
+  tracks?: TrackRef[];
+}
+
+/** The picker as a page lays itself out; it takes an anchor only to open on its own. */
+const NO_ANCHOR = { left: 0, right: 0, top: 0 };
+
+const isAddToPlaylist = (a: PaletteAction) => a.run.type === "action" && a.run.id === "addToPlaylist";
+/** How far a row is dragged (or leaving the palette) before the palette steps aside for the drop. */
+const DRAG_ASIDE_PX = 48;
+
 export function CommandPalette() {
   const open = useApp((s) => s.paletteOpen);
   const setOpen = useApp((s) => s.setPaletteOpen);
@@ -62,6 +84,9 @@ export function CommandPalette() {
   const shortcuts = useApp((s) => s.shortcuts);
   const platform = useApp((s) => s.meta?.platform ?? "linux");
   const navigate = useApp((s) => s.navigate);
+  const hidden = useApp((s) => s.paletteHidden);
+  /** The playlist open behind the palette: Add to playlist starts on it. */
+  const openPlaylistId = useApp((s) => (s.route.view === "playlist" ? s.route.id : undefined));
   const keymap = useKeymap();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | undefined>(undefined);
@@ -71,6 +96,10 @@ export function CommandPalette() {
   const [recents, setRecents] = useState<PaletteEntry[]>([]);
   const [active, setActive] = useState(0);
   const [menu, setMenu] = useState<ActionsMenu | null>(null);
+  const [sub, setSub] = useState<PlaylistsSub | null>(null);
+  const subSeq = useRef(0);
+  /** Ends the watch on a drag out of the palette (startDrag). */
+  const stopDrag = useRef<(() => void) | undefined>(undefined);
   const input = useRef<HTMLInputElement>(null);
   const filterInput = useRef<HTMLInputElement>(null);
   const popover = useRef<HTMLDivElement>(null);
@@ -102,6 +131,7 @@ export function CommandPalette() {
       setActive(0);
       setResults(undefined);
       setMenu(null);
+      setSub(null);
     }
   }
 
@@ -234,6 +264,12 @@ export function CommandPalette() {
     if (menu) filterInput.current?.focus();
   }, [menu?.entry.id]); // eslint-disable-line react-hooks/exhaustive-deps -- once per menu
 
+  // Back from the playlist page: the actions' filter takes the keyboard again.
+  const paged = !!sub?.tracks;
+  useEffect(() => {
+    if (!paged && menu) filterInput.current?.focus({ preventScroll: true });
+  }, [paged]); // eslint-disable-line react-hooks/exhaustive-deps -- on the way back only
+
   if (!shown) return null;
 
   const remember = (entry: PaletteEntry, action: string) => {
@@ -263,6 +299,7 @@ export function CommandPalette() {
   };
   /** Close, then run: the palette's return focus yields to a dialog or picker the action opens. */
   const perform = (entry: PaletteEntry, action: PaletteAction) => {
+    if (isAddToPlaylist(action)) return openPlaylists(entry, action);
     remember(entry, action.key);
     setOpen(false);
     const run = action.run;
@@ -325,7 +362,76 @@ export function CommandPalette() {
   };
   const closeMenu = () => {
     setMenu(null);
+    setSub(null);
     input.current?.focus({ preventScroll: true });
+  };
+  /**
+   * Add to playlist: the row's actions menu (opened for it if it isn't) becomes the playlist page,
+   * with Add to playlist made the menu's active row for the way back.
+   */
+  const openPlaylists = (entry: PaletteEntry, action: PaletteAction) => {
+    const target = targetOf(entry);
+    if (!target) return;
+    if (sub && menu?.entry.id === entry.id) return;
+    remember(entry, action.key);
+    const same = menu?.entry.id === entry.id;
+    const groups = same ? menu.groups : loaded.current.get(entry.id);
+    const filter = same ? menu.filter : "";
+    const at = groups ? filterActions(groups, filter).flat().findIndex(isAddToPlaylist) : -1;
+    if (same) setMenu((m) => (m ? { ...m, active: at >= 0 ? at : m.active } : m));
+    else {
+      openMenu(entry);
+      if (at >= 0) setMenu((m) => (m ? { ...m, active: at } : m));
+    }
+    const n = ++subSeq.current;
+    const s = session.current;
+    setSub({ n });
+    const settle = (tracks: TrackRef[]) => {
+      if (s !== session.current) return;
+      setSub((cur) => (cur?.n !== n ? cur : tracks.length ? { n, tracks } : null));
+    };
+    void resolveTrackRefs(target).then(settle, (e: unknown) => {
+      failed(e);
+      settle([]);
+    });
+  };
+  /** Back from the playlist page to the actions menu. */
+  const closePlaylists = () => setSub(null);
+
+  /**
+   * A library row dragged out: past the threshold the palette steps aside (paletteHidden) so the
+   * window under it takes the drop. A drop closes the palette; a drag that ends without one brings it back.
+   */
+  const startDrag = (e: React.DragEvent) => {
+    const from = { x: e.clientX, y: e.clientY };
+    const box = exitProps.ref.current?.getBoundingClientRect();
+    let dropped = false;
+    const over = (ev: DragEvent) => {
+      if (useApp.getState().paletteHidden) return;
+      const far = Math.hypot(ev.clientX - from.x, ev.clientY - from.y) > DRAG_ASIDE_PX;
+      const out = !!box && (ev.clientX < box.left || ev.clientX > box.right || ev.clientY < box.top || ev.clientY > box.bottom);
+      if (!far && !out) return;
+      setMenu(null);
+      setSub(null);
+      useApp.getState().setPaletteHidden(true);
+    };
+    const drop = () => { dropped = true; };
+    const end = () => {
+      window.removeEventListener("dragover", over, true);
+      window.removeEventListener("drop", drop, true);
+      window.removeEventListener("dragend", end, true);
+      stopDrag.current = undefined;
+      const app = useApp.getState();
+      if (!app.paletteOpen || !app.paletteHidden) return;
+      if (dropped) return setOpen(false);
+      app.setPaletteHidden(false);
+      input.current?.focus({ preventScroll: true });
+    };
+    stopDrag.current?.();
+    stopDrag.current = end;
+    window.addEventListener("dragover", over, true);
+    window.addEventListener("drop", drop, true);
+    window.addEventListener("dragend", end, true);
   };
   const menuShown = menu?.groups ? filterActions(menu.groups, menu.filter) : [];
   const menuFlat = menuShown.flat();
@@ -341,8 +447,8 @@ export function CommandPalette() {
     if ((e.key === "Enter" || e.key === " ") && (e.target as HTMLElement).tagName === "BUTTON") return;
     if (menu) {
       if (e.key === "Escape" || toggle) { e.preventDefault(); closeMenu(); }
-      else if (e.key === "ArrowDown") { e.preventDefault(); setMenu({ ...menu, active: Math.min(menuFlat.length - 1, menu.active + 1) }); }
-      else if (e.key === "ArrowUp") { e.preventDefault(); setMenu({ ...menu, active: Math.max(0, menu.active - 1) }); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); setMenu((m) => (m ? { ...m, active: Math.min(menuFlat.length - 1, m.active + 1) } : m)); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); setMenu((m) => (m ? { ...m, active: Math.max(0, m.active - 1) } : m)); }
       else if (e.key === "Enter" && plain) { e.preventDefault(); const a = menuFlat[menu.active]; via.current = "menu"; if (a) perform(menu.entry, a); }
       else if (chord && runChord(menu.entry, chord, e)) { /* ran */ }
       // Tab stays in the menu: its filter is the one stop.
@@ -365,7 +471,7 @@ export function CommandPalette() {
   let index = -1;
   let actionIndex = -1;
   return (
-    <div className={`overlay palette-overlay ${closing ? "closing" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
+    <div className={`overlay palette-overlay ${closing ? "closing" : ""} ${hidden ? "drag-aside" : ""}`} inert={closing} onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
       <div
         {...exitProps}
         className={`palette ${motion}`}
@@ -391,7 +497,10 @@ export function CommandPalette() {
               <div className="group" id={`pal-group-${g.id}`} role="presentation">{groupLabel(g.id)}</div>
               {g.rows.map((r) => {
                 const i = ++index;
-                return <Row key={r.item.id} row={r} index={i} active={i === active} platform={platform} onHover={() => { if (!menu) setActive(i); }} onRun={() => { via.current = "click"; runPrimary(r.item); }} onContextMenu={(e) => {
+                return <Row key={r.item.id} row={r} index={i} active={i === active} platform={platform} onDragStart={startDrag} onRefocus={() => window.setTimeout(() => {
+                  const at = document.activeElement;
+                  if (!at || at === document.body || exitProps.ref.current?.contains(at)) input.current?.focus({ preventScroll: true });
+                })} onHover={() => { if (!menu) setActive(i); }} onRun={() => { via.current = "click"; runPrimary(r.item); }} onContextMenu={(e) => {
                   // The app's own context menu for a library result, as anywhere else.
                   const target = targetOf(r.item);
                   if (!target) return;
@@ -416,7 +525,23 @@ export function CommandPalette() {
           </button>
         </div>
         {menu ? (
-          <div ref={popover} className="palette-actions" role="dialog" aria-label={t("palette.actionsFor", { name: menu.entry.label })} data-testid="palette-actions" onMouseDown={(e) => { if (e.target !== filterInput.current) e.preventDefault(); }}>
+          <div ref={popover} className="palette-actions" role="dialog" aria-label={t("palette.actionsFor", { name: menu.entry.label })} data-testid="palette-actions" onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault(); }}>
+            {sub?.tracks ? (
+              <PlaylistSubmenu
+                key={sub.n}
+                variant="page"
+                tracks={sub.tracks}
+                anchor={NO_ANCHOR}
+                closing={false}
+                motion=""
+                initialPlaylistId={openPlaylistId}
+                onBack={closePlaylists}
+                onClose={(then) => {
+                  setOpen(false);
+                  then?.();
+                }}
+              />
+            ) : <>
             <div className="pa-title truncate">{menu.entry.label}</div>
             {menu.groups && !menuFlat.length ? <div className="pa-empty" role="status">{t("palette.actionsEmpty")}</div> : null}
             <div className="pa-list" id="palette-actions-list" role="listbox" aria-label={t("palette.actionsFor", { name: menu.entry.label })}>
@@ -450,7 +575,8 @@ export function CommandPalette() {
               className="pa-filter"
               placeholder={t("palette.actionsFilter")}
               value={menu.filter}
-              onChange={(e) => setMenu({ ...menu, filter: e.target.value, active: 0 })}
+              // Functional: the row's actions may have arrived since this render (load), and must stay.
+              onChange={(e) => { const filter = e.target.value; setMenu((m) => (m ? { ...m, filter, active: 0 } : m)); }}
               role="combobox"
               aria-label={t("palette.actionsFilter")}
               aria-autocomplete="list"
@@ -459,6 +585,7 @@ export function CommandPalette() {
               aria-activedescendant={menuFlat[menu.active] ? `pa-opt-${menu.active}` : undefined}
               data-testid="palette-actions-filter"
             />
+            </>}
           </div>
         ) : null}
       </div>
@@ -466,8 +593,11 @@ export function CommandPalette() {
   );
 }
 
-function Row({ row, index, active, platform, onHover, onRun, onContextMenu }: { row: Ranked<PaletteEntry>; index: number; active: boolean; platform: Platform; onHover: () => void; onRun: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
+function Row({ row, index, active, platform, onHover, onRun, onContextMenu, onDragStart, onRefocus }: { row: Ranked<PaletteEntry>; index: number; active: boolean; platform: Platform; onHover: () => void; onRun: () => void; onContextMenu: (e: React.MouseEvent) => void; onDragStart: (e: React.DragEvent) => void; onRefocus: () => void }) {
   const it = row.item;
+  // A library result drags as it would from a list (a command has nothing to drop).
+  const target = targetOf(it);
+  const drag = libraryDragProps(target, it.label);
   const command = it.kind === "action";
   const chord = command && it.shortcut ? parseChord(it.shortcut) : undefined;
   return (
@@ -477,10 +607,16 @@ function Row({ row, index, active, platform, onHover, onRun, onContextMenu }: { 
       role="option"
       aria-selected={active}
       onMouseMove={(e) => { if (e.movementX || e.movementY) onHover(); }}
-      // The search field keeps focus (and with it the keyboard).
-      onMouseDown={(e) => e.preventDefault()}
+      // The search field keeps focus (and with it the keyboard). A draggable row can't cancel the press
+      // (that would cancel its drag too): the field takes focus back straight after.
+      onMouseDown={(e) => { if (drag.draggable && e.button === 0) onRefocus(); else e.preventDefault(); }}
       onClick={onRun}
       onContextMenu={onContextMenu}
+      {...drag}
+      onDragStart={drag.onDragStart ? (e) => {
+        drag.onDragStart?.(e);
+        if (!e.defaultPrevented) onDragStart(e);
+      } : undefined}
       data-testid="palette-item"
       data-kind={it.kind}
     >

@@ -647,3 +647,18 @@
 .stash-row:hover .stash-grip, .stash-row:focus-visible .stash-grip { opacity: 1; }
 .stash-remove { opacity: 0; width: 28px !important; height: 28px !important; }
 .stash-row:hover .stash-remove, .stash-row:focus-within .stash-remove { opacity: 1; }
+/* A row dragged out of the palette: it steps aside, see-through to the pointer, so the window under it
+   takes the drop (CommandPalette). The scrim fades with it. */
+.overlay.palette-overlay { transition: opacity var(--dur-short) var(--ease-emphasized); }
+.overlay.palette-overlay.drag-aside { opacity: 0; pointer-events: none; }
+.overlay.palette-overlay.drag-aside * { pointer-events: none; }
+/* Add to playlist as a page of the actions menu, in its place (PlaylistSubmenu variant "page"): the
+   menu's title, rows and filter field, the picker's checkboxes. */
+.palette-actions .pa-page { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; animation: pa-page-in var(--dur-short) var(--ease-emphasized-decel); }
+@keyframes pa-page-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+.palette-actions .pa-page .cm-sub-list .sep { flex: 0 0 auto; height: 1px; margin: 5px 4px; background: var(--border); }
+.palette-actions .pa-item.cm-new { color: var(--accent-text); font-weight: 600; }
+.palette-actions .pa-item.cm-new > svg { color: inherit; }
+@media (prefers-reduced-motion: reduce) { .palette-actions .pa-page { animation: none; } }
+/* It adds at once with an Undo toast: the toasts stay above the palette's scrim. */
+body:has(.palette-actions .pa-page) .toasts { z-index: 101; }

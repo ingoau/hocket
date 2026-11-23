@@ -108,6 +108,8 @@ export interface UiState {
   panels: PanelState;
   fullscreen: boolean;
   paletteOpen: boolean;
+  /** A row is being dragged out of the open palette: it steps aside (see-through, the window live) until the drag ends. */
+  paletteHidden: boolean;
   /** The stash popover in the top bar. */
   stashOpen: boolean;
   contextMenu: ContextMenuState | undefined;
@@ -164,6 +166,7 @@ export interface AppStore extends CoreState, UiState {
   setPanels(patch: Partial<PanelState>): void;
   setFullscreen(on: boolean): void;
   setPaletteOpen(open: boolean): void;
+  setPaletteHidden(hidden: boolean): void;
   setStashOpen(open: boolean): void;
   openContextMenu(menu: ContextMenuState): void;
   closeContextMenu(): void;
@@ -221,6 +224,7 @@ export const useApp = create<AppStore>((set, get) => ({
   panels: loadPanels(),
   fullscreen: false,
   paletteOpen: false,
+  paletteHidden: false,
   stashOpen: false,
   contextMenu: undefined,
   playlistPicker: undefined,
@@ -260,10 +264,10 @@ export const useApp = create<AppStore>((set, get) => ({
     const cur = get().route;
     // Going where you already are still takes the palette (and any menu) away.
     if (cur.view === route.view && cur.id === route.id && cur.param === route.param) {
-      if (get().paletteOpen) set({ paletteOpen: false, contextMenu: undefined, playlistPicker: undefined });
+      if (get().paletteOpen) set({ paletteOpen: false, paletteHidden: false, contextMenu: undefined, playlistPicker: undefined });
       return;
     }
-    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, selectionRefs: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false }));
+    set((s) => ({ route, history: replace ? s.history : [...s.history, s.route].slice(-50), future: [], selection: EMPTY_SELECTION, selectionScope: "", selectionKind: undefined, selectionRefs: undefined, contextMenu: undefined, playlistPicker: undefined, paletteOpen: false, paletteHidden: false }));
   },
   back() {
     const { history, route } = get();
@@ -287,7 +291,10 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ fullscreen: on, contextMenu: undefined, playlistPicker: undefined });
   },
   setPaletteOpen(open) {
-    set({ paletteOpen: open, contextMenu: undefined, playlistPicker: undefined });
+    set({ paletteOpen: open, paletteHidden: false, contextMenu: undefined, playlistPicker: undefined });
+  },
+  setPaletteHidden(hidden) {
+    if (get().paletteOpen || !hidden) set({ paletteHidden: hidden });
   },
   setStashOpen(open) {
     set({ stashOpen: open });
