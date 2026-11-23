@@ -255,5 +255,14 @@ test.describe("library lists", () => {
       expect(result.background).toBe(result.content);
       expect(result.background).not.toMatch(/rgba\(.*, 0\)|transparent/);
     }).toPass();
+    // Moving up by keys to a row scrolled away brings it out below the header, not under it.
+    const rows = view.getByTestId("track-row");
+    await rows.nth(3).evaluate((el: HTMLElement) => el.focus({ preventScroll: true }));
+    for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowUp");
+    await expect(rows.first()).toBeFocused();
+    await expect(async () => {
+      const [headBottom, rowTop] = await view.evaluate((scroller) => [scroller.querySelector(".table-head")!.getBoundingClientRect().bottom, scroller.querySelector("[data-testid=track-row]")!.getBoundingClientRect().top]);
+      expect(rowTop).toBeGreaterThanOrEqual(headBottom - 1);
+    }).toPass();
   });
 });

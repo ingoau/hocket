@@ -224,7 +224,11 @@
 .table-head {
   height: 40px; margin: 0 var(--table-inset) 4px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0;
   background: var(--bg-elev); color: var(--fg-muted); font-size: var(--fs-md); font-weight: 500; letter-spacing: 0.01em;
+  z-index: 2; /* above a row being swiped (z-index 1) as it passes under */
 }
+/* Where the page scrolls rather than the table, a row brought into view by the
+   keyboard stops below the stuck header (its 40px plus 4px gap), not under it. */
+:is(.view.detail-page, .page-search) .tr { scroll-margin-top: 44px; }
 .table-head .th.sortable:hover { background: var(--bg-hover); }
 .table-head .th.sorted { color: var(--fg); }
 .table-head .th.sorted .th-btn { background: var(--state-selected); color: var(--fg); }
