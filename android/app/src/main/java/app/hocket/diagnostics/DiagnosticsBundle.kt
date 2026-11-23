@@ -16,6 +16,7 @@ import androidx.core.content.FileProvider
 import app.hocket.BuildConfig
 import app.hocket.core.DevLog
 import app.hocket.core.NativeCore
+import app.hocket.core.SettingKeys
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.client.CoreClient
@@ -194,6 +195,13 @@ object DiagnosticsBundle {
         fact("process") {
             val up = (SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()) / 1000
             "pid ${Process.myPid()}, up $up s, device up ${SystemClock.elapsedRealtime() / 1000} s"
+        }
+        fact("appearance") {
+            val settings = client.settings.value
+            fun v(key: String) = settings[key]?.value?.trim()?.trim('"') ?: "default"
+            val night = context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
+            "theme ${v(SettingKeys.DISPLAY_THEME)} (system ${if (night) "dark" else "light"}), accent ${v(SettingKeys.DISPLAY_ACCENT)}, " +
+                "colour from artwork ${v(SettingKeys.DISPLAY_DYNAMIC_COLOUR)}, wallpaper colour ${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) "available" else "unavailable"}"
         }
         fact("developer mode") { if (DevLog.detailed()) "on (detailed logging)" else "detailed logging off" }
         fact("log") { "${DevLog.WINDOW_MS / 60_000} min window; ${if (DevLog.usesCore) "core buffer" else "app buffer (no native core)"}" }

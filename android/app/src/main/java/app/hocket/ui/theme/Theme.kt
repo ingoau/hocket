@@ -39,14 +39,16 @@ class ArtworkSeedState { var seed: Color? by mutableStateOf(null) }
 val LocalArtworkSeedState = compositionLocalOf { ArtworkSeedState() }
 
 /**
- * Material 3 Expressive theme: expressive colour scheme (dynamic on Android 12+ unless the accent
- * setting overrides it), expressive motion scheme, and the system font on an expressive type scale.
- * Settings are read straight from the client's settings map (`ui.theme`, `ui.accent`).
+ * Material 3 Expressive theme: expressive colour scheme, expressive motion scheme, and the system
+ * font on an expressive type scale. The colours come from, in order: the playing artwork (while the
+ * now-playing sheet publishes a seed and `display.dynamicColour` is on), a picked accent
+ * (`display.accent`), then the wallpaper on Android 12+. `display.dynamicColour` only gates the
+ * artwork: turning it off falls back to the wallpaper, not the stock scheme.
  */
 @Composable
 fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
     val settings = client?.settings?.collectAsStateWithLifecycle()?.value ?: emptyMap()
-    // Registry keys: display.theme (system|light|dark), display.accent (null or #RRGGBB), display.dynamicColour (bool).
+    // Registry keys: display.theme (system|light|dark), display.accent (null or #RRGGBB), display.dynamicColour (bool: colour from artwork).
     val themeSetting = settings[SettingKeys.DISPLAY_THEME]?.value?.trim()?.trim('"') ?: "system"
     val accentSetting = settings[SettingKeys.DISPLAY_ACCENT]?.value?.trim()?.trim('"')?.takeIf { it.isNotEmpty() && it != "null" }
     val dynamicColour = settings[SettingKeys.DISPLAY_DYNAMIC_COLOUR]?.value?.trim() != "false"
@@ -58,8 +60,8 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
         when {
             artworkSeed != null && dynamicColour -> ArtworkColors.scheme(artworkSeed, dark)
             accentSetting != null -> runCatching { Color(android.graphics.Color.parseColor(if (accentSetting.startsWith("#")) accentSetting else "#$accentSetting")) }.getOrNull()?.let { ArtworkColors.scheme(it, dark) }
-                ?: baseScheme(dark, context, dynamicColour)
-            else -> baseScheme(dark, context, dynamicColour)
+                ?: baseScheme(dark, context)
+            else -> baseScheme(dark, context)
         }
     }
     val reducedMotion = rememberReducedMotion()
@@ -141,8 +143,9 @@ internal fun animatedScheme(target: ColorScheme, reducedMotion: Boolean): ColorS
 /** No bounce; settles in roughly 400 ms. */
 private val ColorSpring = spring<Color>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 200f)
 
-private fun baseScheme(dark: Boolean, context: android.content.Context, dynamic: Boolean): ColorScheme =
-    if (dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+/** The wallpaper's (Material You) scheme on Android 12+, otherwise the stock expressive scheme. */
+private fun baseScheme(dark: Boolean, context: android.content.Context): ColorScheme =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else {
         if (dark) darkColorScheme() else expressiveLightColorScheme()
