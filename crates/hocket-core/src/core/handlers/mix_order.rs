@@ -142,12 +142,12 @@ impl Actor {
             .map(|i| &i.key)
             .collect();
         self.mix_order.decided.retain(|k, _| in_queue.contains(k));
-        self.mix_order
-            .decided
-            .insert(anchor.key.clone(), run[pick].key.clone());
         let keep: HashSet<&QueueKey> = doc.upcoming.iter().map(|i| &i.key).collect();
         self.mix_order.passes.retain(|k, _| keep.contains(k));
         if pick == 0 {
+            self.mix_order
+                .decided
+                .insert(anchor.key.clone(), run[0].key.clone());
             return;
         }
         tracing::debug!(
@@ -158,18 +158,24 @@ impl Actor {
             ?scores,
             "mix order: promoted"
         );
+        let key = run[pick].key.clone();
+        let after = anchor.key.clone();
+        self.mix_order.promoted = Some(key.clone());
+        if !self.local_op_quiet(SessionOp::PromoteForMix {
+            key: key.clone(),
+            after: after.clone(),
+        }) {
+            // Not sent: nothing moved, so nothing is decided or passed over.
+            self.mix_order.promoted = None;
+            return;
+        }
+        self.mix_order.decided.insert(after, key);
         for skipped in &run[..pick] {
             *self
                 .mix_order
                 .passes
                 .entry(skipped.key.clone())
                 .or_default() += 1;
-        }
-        let key = run[pick].key.clone();
-        let after = anchor.key.clone();
-        self.mix_order.promoted = Some(key.clone());
-        if !self.local_op_quiet(SessionOp::PromoteForMix { key, after }) {
-            self.mix_order.promoted = None;
         }
     }
 
@@ -191,8 +197,15 @@ impl Actor {
 
     /// A position report: ask again for a decision that was held back, once
     /// the current track has settled.
+    /// The cheap reasons it is held back are checked here first, so a long
+    /// one (offline) doesn't copy the document on every report.
     pub(crate) fn order_for_mix_at(&mut self, position_ms: Ms) {
-        if self.mix_order.retry && position_ms >= self.settle_position() {
+        if self.mix_order.retry
+            && position_ms >= self.settle_position()
+            && !self.is_offline()
+            && self.share.in_flight.is_none()
+            && self.playback.pending_load.is_none()
+        {
             self.order_for_mix();
         }
     }
