@@ -313,7 +313,8 @@ nothing. Every overlap is limited to half of each track's audible span.
      ≥ 4 LU below their integrated loudness and 16 bars of A last ≤ 32 s;
      phase-3 tuning: at 90 BPM 16 bars were 43 s plus the ramp), tail start on a downbeat that
      leaves the overlap ending at or before A's audible end, B entering on its
-     first downbeat at or after `audible_start_ms`. `TempoBlend` ramps the
+     first downbeat at or after `audible_start_ms` (or a later one of its
+     intro, to keep voices apart: see Voices below). `TempoBlend` ramps the
      ratio over the 4 bars before the overlap (the tail starts 4 bars
      earlier), the ratio being A's bar over B's bar across the overlap.
      Bass swap (low shelf 100 Hz to −26 dB) over the bar before the overlap's
@@ -347,12 +348,14 @@ nothing. Every overlap is limited to half of each track's audible span.
      before it, never before B enters; high cut from it). With no voice of
      A in the overlap the handover stays mid-overlap: B may sing over A's
      instrumental. (b) Else the first of 4 and 2 bars that keeps them apart
-     (same handover rule). (b′) Else the bar counts of (a) and (b) with B
-     entering at a later downbeat of its intro, nearest first: within 20 s
-     of its first downbeat and before its main voice (the first voiced run
-     of ≥ 4 s; shorter runs before it are chops or ad-libs it may skip),
-     with B's voice curve covering the overlap. A fixed tail start still
-     allows this. (b″) Without a fixed tail start, the bar
+     (same handover rule). (b′) Else, when a blend from B's first downbeat
+     fits and only the voices rule it out: the bar counts of (a) and (b),
+     longest first, each with B entering at the nearest later downbeat of
+     its intro that keeps them apart: within 20 s of its first downbeat,
+     before its main voice (the first voiced run of ≥ 4 s; shorter runs
+     before it are chops or ad-libs it may skip), with B's voice curve
+     covering the overlap and the overlap at most half of what's left of B.
+     A fixed tail start still allows this. (b″) Without a fixed tail start, the bar
      counts of (a) and (b) placed 1, 2, … whole bars earlier in A, fewest bars back first,
      as long as at most 20 s of audible A is cut (A's voice curve must cover
      the overlap for any placement to count as apart: outside it "no

@@ -684,15 +684,16 @@ fn main_voice_start(curve: &VocalCurve, from: Ms) -> Ms {
     let mut run: Option<Ms> = None;
     let mut t = from.max(curve.start_ms);
     while t < end {
+        let next = t.saturating_add(curve.hop_ms);
         if voiced(curve, t) {
             let start = *run.get_or_insert(t);
-            if t + curve.hop_ms - start >= MAIN_VOICE_MIN_MS {
+            if next - start >= MAIN_VOICE_MIN_MS {
                 return start;
             }
         } else {
             run = None;
         }
-        t += curve.hop_ms;
+        t = next;
     }
     end
 }
@@ -705,7 +706,7 @@ fn intro_entries(db: &[Ms], k: usize, curve: &VocalCurve) -> Vec<usize> {
     };
     let main = main_voice_start(curve, first);
     (k + 1..db.len())
-        .take_while(|&j| db[j] - first <= MAX_INTRO_SKIP_MS && db[j] < main)
+        .take_while(|&j| db[j].saturating_sub(first) <= MAX_INTRO_SKIP_MS && db[j] < main)
         .collect()
 }
 
@@ -759,8 +760,16 @@ fn vocal_blend(
     if let Some(plan) = tries.iter().find_map(|&bars| clean_at(bars, 0, k)) {
         return Some(plan);
     }
-    // Into B past its intro, before cutting into A.
-    let entries = intro_entries(db, k, voices.b);
+    // Into B past its intro, before cutting into A: only when a blend from
+    // B's start fits and it's the voices that rule it out.
+    let voice_bound = tries
+        .iter()
+        .any(|&bars| blend_at(bars, 0, k).is_some_and(|p| covers_a(&p, voices.a)));
+    let entries = if voice_bound {
+        intro_entries(db, k, voices.b)
+    } else {
+        Vec::new()
+    };
     let skipped = tries
         .iter()
         .find_map(|&bars| entries.iter().find_map(|&e| clean_at(bars, 0, e)));
@@ -897,6 +906,12 @@ pub fn beat_plan(
         let blend_at = |bars, back, entry| {
             blend(input, da, db, entry, bars, back, fixed, a_end)
                 .filter(|p| cut_from_a(p, a_end) <= MAX_CUT_MS)
+                // Past an intro skip, the overlap stays within half of what's left of B.
+                .filter(|p| {
+                    entry == k
+                        || 2 * (p.tail_len_ms - p.incoming_at_ms)
+                            <= input.b.duration_ms.saturating_sub(p.incoming_from_ms)
+                })
         };
         match Voices::of(ra, rb) {
             Some(v) => vocal_blend(options, ga.bar_ms, db, k, &v, fixed.is_none(), blend_at),
@@ -1990,8 +2005,9 @@ mod tests {
         let mut a = beats(DUR, 120.0, 4, 250.0);
         let mut b = beats(DUR, 120.0, 4, 1_000.0);
         a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, DUR)]);
-        // The main voice from 5 s: nothing to skip to, so a shaped clash from B's start.
-        b.head_vocals = voice(0, 36_000, &[(0, 1_500), (5_000, DUR)]);
+        // The main voice from 5 s (then quiet from 11 s): an entry past it
+        // would be clean, but none is allowed, so a shaped clash from B's start.
+        b.head_vocals = voice(0, 36_000, &[(0, 1_500), (5_000, 11_000)]);
         let p = plan(&input(&s, Some(&a), Some(&b), None));
         assert_eq!(p.incoming_from_ms, 1_000);
         assert_eq!(p.high_cut.unwrap().freq_hz, CLASH_HIGH_CUT_HZ);
