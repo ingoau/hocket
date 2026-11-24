@@ -607,7 +607,8 @@ pub enum Output {
     /// Whether the room we are attached to is a coordinator with an
     /// analysis store (sent on every change).
     AnalysisStore(bool),
-    /// The coordinator's answer to [`Input::FetchAnalysis`].
+    /// The coordinator's answer to [`Input::FetchAnalysis`], or one batch
+    /// of it (empty: nothing found).
     AnalysisRecords(Vec<AnalysisEntry>),
     Log {
         level: &'static str,
@@ -3131,7 +3132,9 @@ impl Engine {
                 }
             }
             Msg::AnalysisRecords { records } if !from_loopback => {
-                if self.analysis_store && !records.is_empty() {
+                // Empty too: it answers the fetch (nothing found), which
+                // the actor waits on before asking anything else.
+                if self.analysis_store {
                     self.out.push(Output::AnalysisRecords(records));
                 }
             }
@@ -6318,6 +6321,15 @@ mod tests {
             },
         );
         assert!(outs.contains(&Output::AnalysisRecords(vec![entry])));
+        // Nothing found answers the fetch too.
+        let outs = lan_in(
+            &mut e,
+            Input::WireIn {
+                peer: "up".into(),
+                msg: WireMessage::new(Msg::AnalysisRecords { records: vec![] }),
+            },
+        );
+        assert!(outs.contains(&Output::AnalysisRecords(vec![])));
         // The connection drops: withdrawn, and fetches stop.
         let outs = e.handle(Input::Disconnected { peer: "up".into() });
         assert!(outs.contains(&Output::AnalysisStore(false)));

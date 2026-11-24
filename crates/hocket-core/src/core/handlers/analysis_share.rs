@@ -1,7 +1,8 @@
 //! AutoMix records shared through the hosted coordinator (`docs/automix.md`
 //! → *Sharing records*). When the coordinator we are attached to says it
 //! keeps records (`Welcome.analysis_store`), the tracks around the current
-//! one that lack a full record are fetched in one batch at a time, and the
+//! one that lack a full record are fetched one batch at a time, nearest
+//! first, as far ahead as AutoMix's order decides (`mix_order`), and the
 //! answers land in the local store like any other record (which replans the
 //! follow-up). Records this device produced (desktop analysis, a platform's
 //! loudness-only record) are uploaded; while there is no such coordinator
@@ -20,8 +21,9 @@ use crate::connect::wire::{
 };
 use crate::core::actor::Actor;
 
-/// Tracks after the current one that are fetched ahead.
-const FETCH_AHEAD: usize = 2 + crate::automix::order::ORDER_WINDOW;
+/// Tracks after the current one that are fetched ahead: the entries whose
+/// follow-up the order decides, and their candidates.
+const FETCH_AHEAD: usize = crate::automix::order::ORDER_AHEAD + crate::automix::order::ORDER_WINDOW;
 /// An unanswered fetch is given up after this long (its tracks may be asked again).
 const FETCH_TIMEOUT_MS: f64 = 15_000.0;
 /// A track asked for is not asked again for this long, answered or not.
@@ -138,7 +140,9 @@ impl Actor {
             };
             wants.push(AnalysisWant { track_id, key });
         }
-        wants.truncate(ANALYSIS_FETCH_MAX);
+        // One answer frame per fetch (the coordinator splits an answer into
+        // batches of this many, and the first one ends the fetch here).
+        wants.truncate(ANALYSIS_BATCH_MAX.min(ANALYSIS_FETCH_MAX));
         if wants.is_empty() {
             return;
         }
@@ -150,6 +154,31 @@ impl Actor {
         tracing::debug!(target: "hocket::automix", count = wants.len(), "fetching analysis records");
         self.share.in_flight = Some((now, wants.iter().map(|w| w.track_id.clone()).collect()));
         self.engine_input(Input::FetchAnalysis { wants });
+    }
+
+    /// Whether a record for `track` is being fetched, or will be at the
+    /// next look (it is close enough, the coordinator keeps records, and it
+    /// wasn't asked for lately).
+    pub(crate) fn analysis_fetch_coming(&self, track: &Track, now: f64) -> bool {
+        let r = TrackRef::new(track.server_id.clone(), track.id.clone());
+        if self
+            .share
+            .in_flight
+            .as_ref()
+            .is_some_and(|(_, refs)| refs.contains(&r))
+        {
+            return true;
+        }
+        self.analysis_store_available()
+            && !self.share.asked.get(&r).is_some_and(|until| *until > now)
+            && self
+                .analysis_key(
+                    &track.server_id,
+                    &track.id,
+                    track.size_bytes,
+                    track.suffix.as_deref(),
+                )
+                .is_some()
     }
 
     pub(crate) fn on_analysis_records(&mut self, records: Vec<AnalysisEntry>) {

@@ -18,14 +18,18 @@ use super::plan::{voice_span, Voices};
 
 /// Candidates considered: the next entries in shuffle order.
 pub const ORDER_WINDOW: usize = 6;
+/// Upcoming entries whose follow-up is decided ahead (`core::handlers::
+/// mix_order`): the order near the top of the queue is settled before the
+/// listener gets there, and in steady play a move lands about this far down.
+pub const ORDER_AHEAD: usize = 10;
 /// A candidate replaces the one shuffle put first only when it scores at
 /// least this much higher.
 pub const PROMOTE_MARGIN: f64 = 0.15;
 /// After being passed over this many times an entry is no longer passed over.
 pub const MAX_PASSES: u8 = 3;
-/// How long the current track plays before the follow-up of the next one is
-/// chosen, so a burst of skips never moves anything. Shorter on a track whose
-/// tail locks in sooner (`core::handlers::mix_order`).
+/// How long the track a skip lands on plays before anything more is decided,
+/// so a burst of skips never moves anything. Shorter on a track whose tail
+/// locks in sooner (`core::handlers::mix_order`).
 pub const SETTLE_MS: Ms = 15_000;
 /// Score of a candidate without a usable record: about what a random pair
 /// scores, so unanalysed tracks are neither preferred nor pushed back.

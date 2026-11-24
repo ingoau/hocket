@@ -52,6 +52,22 @@ impl Actor {
         }
     }
 
+    /// Whether `track` is being analysed here, or will be at the next look.
+    pub(crate) fn local_analysis_coming(&self, track: &Track) -> bool {
+        let key = (track.server_id.clone(), track.id.clone());
+        if self.analysis.busy.as_ref() == Some(&key) {
+            return true;
+        }
+        cfg!(feature = "automix-analysis")
+            && self.cfg.coordinator_listen.is_none()
+            && !self.analysis.tried.contains(&key)
+            && self
+                .analysis_candidates()
+                .iter()
+                .any(|t| t.server_id == track.server_id && t.id == track.id)
+            && self.complete_local_file(track).is_some()
+    }
+
     /// The whole file of `track` on disk, and whether it is a transcode.
     pub(crate) fn complete_local_file(&self, track: &Track) -> Option<(std::path::PathBuf, bool)> {
         if let Ok(Some(path)) = self.downloads.downloaded_path(&track.server_id, &track.id) {
