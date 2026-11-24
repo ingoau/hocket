@@ -43,40 +43,38 @@ async fn store_records(t: &TestCore) {
 }
 
 async fn store_record(t: &TestCore, id: &str) {
-    {
-        let track = t.open_db().track(&id).unwrap().unwrap();
-        let beat = 60_000.0 / bpm_of(id);
-        let mut beats = vec![];
-        let mut downbeats = vec![];
-        let mut at = 250.0;
-        let mut i = 0;
-        while at < f64::from(track.duration_ms) - 1_000.0 {
-            beats.push(at.round() as Ms);
-            if i % 4 == 0 {
-                downbeats.push(at.round() as Ms);
-            }
-            at += beat;
-            i += 1;
+    let track = t.open_db().track(id).unwrap().unwrap();
+    let beat = 60_000.0 / bpm_of(id);
+    let mut beats = vec![];
+    let mut downbeats = vec![];
+    let mut at = 250.0;
+    let mut i = 0;
+    while at < f64::from(track.duration_ms) - 1_000.0 {
+        beats.push(at.round() as Ms);
+        if i % 4 == 0 {
+            downbeats.push(at.round() as Ms);
         }
-        let record = AnalysisRecord {
-            version: ANALYSIS_VERSION,
-            analyser: "test".into(),
-            produced_by: AnalysisProducer::Desktop,
-            source: fingerprint_of(&track),
-            duration_ms: track.duration_ms,
-            audible_end_ms: track.duration_ms - 1_000,
-            bpm: Some(bpm_of(id) as f32),
-            beats_ms: beats,
-            downbeats_ms: downbeats,
-            beat_confidence: 0.9,
-            ..Default::default()
-        };
-        t.run(Command::StoreAnalysisRecord {
-            track_id: id.into(),
-            record: Box::new(record),
-        })
-        .await;
+        at += beat;
+        i += 1;
     }
+    let record = AnalysisRecord {
+        version: ANALYSIS_VERSION,
+        analyser: "test".into(),
+        produced_by: AnalysisProducer::Desktop,
+        source: fingerprint_of(&track),
+        duration_ms: track.duration_ms,
+        audible_end_ms: track.duration_ms - 1_000,
+        bpm: Some(bpm_of(id) as f32),
+        beats_ms: beats,
+        downbeats_ms: downbeats,
+        beat_confidence: 0.9,
+        ..Default::default()
+    };
+    t.run(Command::StoreAnalysisRecord {
+        track_id: id.into(),
+        record: Box::new(record),
+    })
+    .await;
 }
 
 async fn start(t: &TestCore, shuffle: bool) {
@@ -140,10 +138,45 @@ async fn nothing_moves_before_the_current_track_settles() {
     .await;
     store_records(&t).await;
     play_all(&t, true).await;
+    // (With this seed, the follow-up of the track after t0 already blends.)
+    t.run(Command::Next).await;
     t.run_for(500.0).await;
     let shuffled = whole_list(&t).await;
     t.run_for(f64::from(SETTLE_MS) - 3_000.0).await;
     assert_eq!(whole_list(&t).await, shuffled, "not before it settles");
+    t.run_for(5_000.0).await;
+    assert_ne!(whole_list(&t).await, shuffled, "once it has");
+}
+
+/// A burst of skips (loads deferred while it lasts) still decides the order
+/// around the track it lands on, once that has settled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_skip_burst_decides_where_it_lands() {
+    let t = synced_core("burst").await;
+    t.run(Command::SetTransitionSettings {
+        settings: TransitionSettings {
+            mode: TransitionMode::AutoMix,
+            crossfade_seconds: 6.0,
+        },
+    })
+    .await;
+    store_records(&t).await;
+    play_all(&t, true).await;
+    t.run_for(500.0).await;
+    let shuffled = whole_list(&t).await;
+    for cmd in [Command::Next, Command::PreviousTrack, Command::Next] {
+        t.run(cmd).await;
+        t.run_for(50.0).await;
+    }
+    t.run_for(1_000.0).await;
+    assert_eq!(t.current_track_id().await.as_ref(), Some(&shuffled[1]));
+    assert_eq!(whole_list(&t).await, shuffled, "nothing moved in the burst");
+    t.run_for(SETTLED).await;
+    // Decided once it settled: a candidate of the next track's tempo follows it.
+    let up = upcoming(&t).await;
+    if up[1..].iter().take(6).any(|t| bpm_of(t) == bpm_of(&up[0])) {
+        assert_eq!(bpm_of(&up[0]), bpm_of(&up[1]), "{up:?}");
+    }
 }
 
 /// Skipping through tracks, forward and back, leaves the list as it was.

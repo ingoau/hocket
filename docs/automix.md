@@ -262,14 +262,17 @@ playback biases what plays toward pairs that blend. Decisions (issue #256):
 - **What is chosen**: the entry *after* the next one. The current track's
   tail start was committed against the next track when it was preloaded
   (`mix_out_ms`), so the next track is already fixed; the one after it
-  decides the next track's own tail start. Once per next entry for as long
-  as it stays in the queue, so Previous and Next again find the order they
-  left (a revisit decides nothing, even with records that arrived since).
+  decides the next track's own tail start. Once per next entry and follow-up,
+  so Previous and Next again find the order they left (a revisit decides
+  nothing, even with records that arrived since; a reshuffle or an edit
+  that gives the entry another follow-up decides again).
   Only once the current track has played `SETTLE_MS` = 15 s (or half the
   way to its tail's lock-in, when that is sooner), so skipping through
   tracks moves nothing; and when the next track's record is known (and no
   record fetch is in flight). Checked on every document change, ownership
-  gain, record arrival and position report. The pick is a
+  gain and record arrival; a decision held back by something that passes
+  (not settled, a load pending, a fetch in flight, offline) is asked again
+  on position reports. The pick is a
   synced `SessionOp::PromoteForMix { key, after }`: the entry moves to
   directly after `after`, past unqueued entries only, keeping its flags
   and ordinal, so turning shuffle off still restores the context's order.
