@@ -518,7 +518,13 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         // Closing the player leaves full screen and hands the main screen back to the page (once it
         // has closed: a drag passing half way, then back up, keeps both).
         LaunchedEffect(state) {
-            snapshotFlow { state.draggable.settledValue }.collect { if (it == SheetValue.Collapsed) { state.fullScreen = false; state.panelPage = null } }
+            snapshotFlow { state.draggable.settledValue }.collect {
+                if (it == SheetValue.Collapsed) {
+                    state.fullScreen = false; state.panelPage = null
+                    // Picked queue entries go with the queue.
+                    if (client.selectionKind.value == app.hocket.core.client.SelectionKind.QueueItems) client.clearSelection()
+                }
+            }
         }
         // What the player shows: always the artwork as the panel (lyrics and the queue go to the main screen).
         val shownMode: () -> PlayerMode = { if (panelMode && !state.fullScreen) PlayerMode.Artwork else state.mode }

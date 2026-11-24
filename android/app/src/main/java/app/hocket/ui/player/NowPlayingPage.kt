@@ -342,7 +342,7 @@ internal fun FullPlayer(
                             .then(if (immersive != null) Modifier.clearAndSetSemantics { } else Modifier),
                     ) { header() }
                 },
-                area = { ModeArea(mode, hero, lyricsVisible, queueModifier = if (folding) Modifier.nestedScroll(collapse.connection) else Modifier) },
+                area = { ModeArea(mode, hero, lyricsVisible, queueModifier = if (folding) Modifier.nestedScroll(collapse.connection) else Modifier, queueDrawer = wide) },
                 title = { Box(pickHidden) { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) } },
                 seek = { Box(pickHidden) { PlayerSeek(position, fold) } },
                 transport = {
@@ -409,7 +409,7 @@ internal fun FullPlayer(
         }
         // Picked queue entries: their drawer rises from the player's bottom over the controls, not
         // inside the queue's panel (a phone's leaves room for only a couple of rows).
-        if (mode == PlayerMode.Queue) app.hocket.ui.components.SelectionDrawer(Modifier.matchParentSize(), kinds = setOf(app.hocket.core.client.SelectionKind.QueueItems),
+        if (folding) app.hocket.ui.components.SelectionDrawer(Modifier.matchParentSize(), kinds = setOf(app.hocket.core.client.SelectionKind.QueueItems),
             onSelectAll = { scope.launch { app.hocket.ui.queue.selectUpcoming(client) }; Unit }, onPeekHeight = { drawerPeekPx = it })
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false; handoffPull?.dismiss(); handoffPull = null }, pull = handoffPull)
@@ -728,7 +728,7 @@ private val HANDLE_AREA = 48.dp
  * bottom edges.
  */
 @Composable
-private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolean, queueModifier: Modifier = Modifier) {
+private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolean, queueModifier: Modifier = Modifier, queueDrawer: Boolean = false) {
     val reduced = LocalReducedMotion.current
     Box(Modifier.fillMaxSize().onGloballyPositioned { hero.area = hero.measure(it) }) {
         AnimatedContent(
@@ -744,7 +744,7 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
                 PlayerMode.Artwork, PlayerMode.About -> Spacer(Modifier.fillMaxSize())
                 // The rows' own 16 dp start padding plus 4 dp: aligned with the page's 20 dp margins.
                 PlayerMode.Queue -> ModeSlot {
-                    QueueList(Modifier.fillMaxSize().then(queueModifier), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp), selectionDrawer = false)
+                    QueueList(Modifier.fillMaxSize().then(queueModifier), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp), selectionDrawer = queueDrawer)
                 }
                 PlayerMode.Lyrics -> ModeSlot { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE_BOTTOM)) }
             }

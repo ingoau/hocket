@@ -348,6 +348,8 @@ fun MenuSheet(
     pull: SheetPull? = null,
     embedded: Boolean = false,
     showPlay: Boolean = true,
+    /** Embedded: a change sends the menu back to its first page (the host has closed it to a peek). */
+    resetKey: Any? = null,
 ) {
     val client = LocalCoreClient.current
     val context = LocalContext.current
@@ -364,8 +366,10 @@ fun MenuSheet(
     val sheetState = rememberPulledSheetState(pull)
     val scope = rememberCoroutineScope()
     /** Hides the sheet, then runs [after] (which may open what follows) and reports it gone. */
+    /** Embedded: how many times the menu has closed itself (each sends it back to its first page). */
+    var closes by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     fun hideThen(after: () -> Unit = {}) {
-        if (embedded) { after(); onDismiss(); return }
+        if (embedded) { after(); closes++; onDismiss(); return }
         scope.launch { sheetState.hide() }.invokeOnCompletion { after(); onDismiss() }
     }
     val layout = remember(actions, subject.kind, subject.count, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null, snoozed) {
@@ -388,6 +392,14 @@ fun MenuSheet(
     val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
     /** The share being fetched (a link, the file): the sheet shows it loading, then hides as the share sheet opens. */
     var sharing by remember { mutableStateOf<ShareChoice?>(null) }
+    if (embedded) {
+        // Closed (by the host, [resetKey], or by itself): back to the first page at once, nothing left loading.
+        val first = remember { booleanArrayOf(true) }
+        LaunchedEffect(resetKey, closes) {
+            if (first[0]) { first[0] = false; return@LaunchedEffect }
+            sharing = null; page = MenuPage.Main; pages.snapTo(MenuPage.Main)
+        }
+    }
     fun share(choice: ShareChoice) {
         // Once: the Share page stays tappable while it slides away.
         if (sharing != null) return

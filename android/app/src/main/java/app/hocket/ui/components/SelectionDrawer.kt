@@ -9,6 +9,10 @@ import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.animation.core.animate
+import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -117,7 +121,8 @@ enum class DrawerValue { Hidden, Peek, Open }
  * back to the peek; swiping the peek away, Clear or back from the peek ends the selection. An action
  * that runs ends it too. [context] names the playlist the songs are listed in;
  * [onRemoveFromContext] (an editable playlist) removes the selected entries from it. [kinds]: two
- * panes side by side each have a drawer, each showing only what its own pane selects.
+ * panes side by side each have a drawer, each showing only what its own pane selects; left out, a
+ * page's drawer shows every selection but queue entries' (the queue has its own).
  *
  * Lay it over the whole page ([Modifier.matchParentSize]): it rises from the page's bottom edge, over
  * the system navigation bar (the shell moves its own bar and the mini player aside meanwhile).
@@ -129,7 +134,7 @@ fun SelectionDrawer(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = 
     val client = LocalCoreClient.current
     val selectionAll by client.selection.collectAsStateWithLifecycleCompat()
     val kind by client.selectionKind.collectAsStateWithLifecycleCompat()
-    val selection = if (kinds == null || kind in kinds) selectionAll else Selection()
+    val selection = if (if (kinds == null) kind != SelectionKind.QueueItems else kind in kinds) selectionAll else Selection()
     // Composed from the selection's start until the drawer has slid away after its end, showing the
     // last selection meanwhile.
     var leaving by remember { mutableStateOf(false) }
@@ -200,6 +205,10 @@ private fun Drawer(
         return ((peek - at) / (peek - open)).coerceIn(0f, 1f)
     }
     val opened by remember { derivedStateOf { openness() > 0f } }
+    // Each time the drawer comes back down to its peek (or below), the songs' menu goes back to its
+    // first page: a sub-page left open (Share, Snooze) would otherwise hold on to back.
+    var menuResets by remember { mutableIntStateOf(0) }
+    LaunchedEffect(state) { snapshotFlow { state.settledValue != DrawerValue.Open }.collect { if (it) menuResets++ } }
     val canOpen by remember { derivedStateOf { state.anchors.hasPositionFor(DrawerValue.Open) } }
     val isOpen by remember { derivedStateOf { state.targetValue == DrawerValue.Open } }
 
@@ -272,11 +281,18 @@ private fun Drawer(
                 if (peek - open > 1f) DrawerValue.Open at open
             }, state.targetValue.takeIf { it != DrawerValue.Open || peek - open > 1f } ?: DrawerValue.Peek)
         }
-        // In as the selection starts, out once it ends (then gone).
+        // In as the selection starts (or starts again while it was leaving), out once it ends (then
+        // gone). Leaving overrides a finger still on the drawer, so it always gets there.
         LaunchedEffect(active, ready) {
             if (!ready) { if (!active) onHidden(); return@LaunchedEffect }
-            if (active) { if (state.targetValue == DrawerValue.Hidden) state.animateTo(DrawerValue.Peek, spec) }
-            else { state.animateTo(DrawerValue.Hidden, spec); onHidden() }
+            if (active) { if (state.targetValue != DrawerValue.Open) state.animateTo(DrawerValue.Peek, spec) }
+            else {
+                state.anchoredDrag(DrawerValue.Hidden, MutatePriority.PreventUserInput) { anchors, target ->
+                    val from = state.offset.takeUnless { it.isNaN() } ?: anchors.positionOf(target)
+                    animate(from, anchors.positionOf(target), animationSpec = spec) { v, velocity -> dragTo(v, velocity) }
+                }
+                onHidden()
+            }
         }
 
         // The scrim behind the open drawer: tapping it brings the drawer back to its peek.
@@ -325,7 +341,7 @@ private fun Drawer(
                         horizontalArrangement = Arrangement.spacedBy(3.dp),
                     ) {
                         quick.forEachIndexed { i, a ->
-                            QuickButton(a, quickShape(i, quick.size), playFace(a.id) ?: (label(a) to icon(a)), Modifier.weight(1f)) {
+                            QuickButton(a, quickShape(i, quick.size), playFace(a.id) ?: (label(a) to icon(a)), Modifier.weight(1f), enabled = active && a.enabled) {
                                 if (songs) { client.dispatch(Commands.runAction(a.id, client.selectionTarget())); client.clearSelection() } else run(a)
                             }
                         }
@@ -336,7 +352,8 @@ private fun Drawer(
                     Modifier
                         .weight(1f, fill = false)
                         .graphicsLayer { alpha = (openness() * 2f).coerceIn(0f, 1f) }
-                        .then(if (opened) Modifier else Modifier.clearAndSetSemantics { })
+                        .then(if (opened) Modifier else Modifier.clearAndSetSemantics { }.focusProperties { onEnter = { cancelFocusChange() } })
+                        .focusGroup()
                         .verticalScroll(rememberScrollState()),
                 ) {
                     if (songs) {
@@ -353,6 +370,7 @@ private fun Drawer(
                                     tag = "selectionMenu",
                                     embedded = true,
                                     showPlay = false,
+                                    resetKey = menuResets,
                                 )
                             }
                         }
@@ -388,11 +406,11 @@ private fun quickShape(index: Int, count: Int): Shape {
 
 /** One quick action: its icon over its short label; Play stands out in the primary colour. */
 @Composable
-private fun QuickButton(a: ActionDescriptor, shape: Shape, face: Pair<String, ImageVector>, modifier: Modifier, onClick: () -> Unit) {
+private fun QuickButton(a: ActionDescriptor, shape: Shape, face: Pair<String, ImageVector>, modifier: Modifier, enabled: Boolean, onClick: () -> Unit) {
     val main = a.id == ActionIds.PLAY
     Surface(
         onClick = onClick,
-        enabled = a.enabled,
+        enabled = enabled,
         shape = shape,
         color = if (main) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
         contentColor = if (main) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,

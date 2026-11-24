@@ -153,6 +153,33 @@ class SelectionDrawerTest {
         assertFalse(core.client.selection.value.contains(q.current!!.item.key))
     }
 
+    /** A sub-page left open (Share) as the drawer closes to its peek no longer holds on to back. */
+    @Test
+    fun closingOnASubPageGoesBackToTheMenuAndBackStillEndsTheSelection() {
+        val core = TestCore(startPlaying = false)
+        selectThree(core)
+        compose.onNodeWithTag("selectionMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertFalse(present("selectionMenu.header") && present("selectionMenu.share"))
+        compose.onNodeWithTag("selection.handle").performSemanticsAction(SemanticsActions.Collapse)
+        compose.waitForIdle()
+        compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(5_000) { !core.client.selection.value.active }
+    }
+
+    /** A page's drawer leaves queue entries to the queue's own. */
+    @Test
+    fun aPagesDrawerIgnoresAQueueSelection() {
+        val core = TestCore(startPlaying = true)
+        compose.setThemedContent(core) { SelectionDrawer() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value && core.client.queue.value.entries.isNotEmpty() }
+        compose.runOnIdle { core.client.toggleSelected(SelectionKind.QueueItems, core.client.queue.value.entries.last().item.key) }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertFalse(present("selection.drawer"))
+    }
+
     private fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
 
     /** R-20261103-hpkz: "1 selected" sat above the close button instead of beside it. */

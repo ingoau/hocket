@@ -582,7 +582,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues, lis
             }
             item(key = "tail") { Spacer(Modifier.height(with(density) { tailPx.toDp() })) }
         }
-        if (selectionDrawer) SelectionDrawer(Modifier.matchParentSize(), onSelectAll = { scope.launch { selectUpcoming(client) } })
+        if (selectionDrawer) SelectionDrawer(Modifier.matchParentSize(), kinds = setOf(SelectionKind.QueueItems), onSelectAll = { scope.launch { selectUpcoming(client) } })
     }
     pickerFor?.let { e -> PlaylistPicker(target = Commands.queueItems(listOf(e.item.key)), onDismiss = { pickerFor = null }) }
     ratingFor?.let { e ->

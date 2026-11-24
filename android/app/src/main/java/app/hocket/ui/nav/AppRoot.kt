@@ -445,6 +445,18 @@ private fun MainShell(snackbar: SnackbarHostState) {
             nav.addOnDestinationChangedListener(listener)
             onDispose { nav.removeOnDestinationChangedListener(listener) }
         }
+        // A selection belongs to the page it was made on: leaving the page ends it (a page without a
+        // drawer would otherwise keep it, and with it the bar and the mini player out of the way).
+        DisposableEffect(nav, client) {
+            var last: Int? = null
+            val listener = NavController.OnDestinationChangedListener { controller, _, _ ->
+                val entry = controller.currentBackStackEntry?.id?.hashCode()
+                if (last != null && entry != last) client.clearSelection()
+                last = entry
+            }
+            nav.addOnDestinationChangedListener(listener)
+            onDispose { nav.removeOnDestinationChangedListener(listener) }
+        }
         // Developer mode: a shake (or Ctrl+Shift+D) opens developer diagnostics.
         val developerMode = setting(SettingKeys.DEVELOPER_MODE).bool ?: false
         DeveloperTriggerEffect(developerMode) {
