@@ -99,7 +99,7 @@ import app.hocket.ui.components.SwipeSurface
 import app.hocket.ui.components.swipeActionIds
 import app.hocket.ui.components.trackSwipeAction
 import app.hocket.ui.components.RatingDialog
-import app.hocket.ui.components.SelectionToolbar
+import app.hocket.ui.components.SelectionDrawer
 import app.hocket.ui.components.offlineStateText
 import app.hocket.ui.components.unavailableOffline
 import app.hocket.ui.components.trackLabel
@@ -140,9 +140,12 @@ fun QueuePanel(modifier: Modifier = Modifier) = QueueList(modifier)
  *
  * The toggles head the list, or with [controlsAtBottom] (the full player's queue, #40) float at its
  * bottom straight on the backdrop, the list fading out before them (nothing is drawn behind them).
+ *
+ * [selectionDrawer]: the selected entries' [SelectionDrawer] over the list; false where the host
+ * draws it over more of the screen (the full player, where the queue's panel is short).
  */
 @Composable
-fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), listModifier: Modifier = Modifier, controlsAtBottom: Boolean = false) {
+fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(), listModifier: Modifier = Modifier, controlsAtBottom: Boolean = false, selectionDrawer: Boolean = true) {
     val dir = LocalLayoutDirection.current
     if (controlsAtBottom) {
         val strip = QUEUE_CONTROLS_STRIP
@@ -157,8 +160,9 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
                     start = contentPadding.calculateStartPadding(dir), end = contentPadding.calculateEndPadding(dir),
                     top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + strip + 44.dp - under,
                 ),
-                // Only the list fades: the selection toolbar floats over it unmasked (R-20261103-hpkz).
+                // Only the list fades: the selection drawer floats over it unmasked (R-20261103-hpkz).
                 listDecoration = Modifier.fadeOut(),
+                selectionDrawer = selectionDrawer,
             )
             QueueToggles(
                 Modifier
@@ -176,7 +180,7 @@ fun QueueList(modifier: Modifier = Modifier, contentPadding: PaddingValues = Pad
             Modifier.fillMaxWidth()
                 .padding(start = 16.dp + contentPadding.calculateStartPadding(dir), end = 16.dp + contentPadding.calculateEndPadding(dir), top = 4.dp, bottom = 8.dp),
         )
-        QueueTimeline(Modifier.fillMaxWidth().weight(1f).then(listModifier), contentPadding)
+        QueueTimeline(Modifier.fillMaxWidth().weight(1f).then(listModifier), contentPadding, selectionDrawer = selectionDrawer)
     }
 }
 
@@ -299,6 +303,22 @@ private fun rememberUndoable(): (String, () -> Unit) -> Unit {
     }
 }
 
+/** Selects every entry after the current one (the view only carries a window: the rest are paged in). */
+internal suspend fun selectUpcoming(client: app.hocket.core.client.CoreClient) {
+    val view = client.queue.value
+    val from = view.currentIndex?.toInt()?.plus(1) ?: view.historyCount.toInt()
+    val count = view.totalUpcoming.toInt()
+    val keys = ArrayList<QueueKey>(count)
+    var start = from
+    while (keys.size < count) {
+        val page = (client.query(Commands.queueRange(start, minOf(Commands.QUEUE_RANGE_MAX, count - keys.size))) as? QueryResult.Queue)?.data ?: break
+        if (page.entries.isEmpty()) break
+        page.entries.take(count - keys.size).forEach { keys += it.item.key }
+        start += page.entries.size
+    }
+    if (keys.isNotEmpty()) client.selectIds(SelectionKind.QueueItems, keys)
+}
+
 /** Every history entry's key, paged in from the core (the view only carries a window of it). */
 private suspend fun allHistoryKeys(client: app.hocket.core.client.CoreClient, view: QueueView): List<QueueKey> {
     val count = view.historyCount.toInt()
@@ -322,7 +342,7 @@ private suspend fun allHistoryKeys(client: app.hocket.core.client.CoreClient, vi
  * (remove by default, with Undo), tap jumps (history too: the pointer moves back).
  */
 @Composable
-private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues, listDecoration: Modifier = Modifier) {
+private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues, listDecoration: Modifier = Modifier, selectionDrawer: Boolean = true) {
     val client = LocalCoreClient.current
     val queue by client.queue.collectAsStateWithLifecycle()
     val selection by client.selection.collectAsStateWithLifecycle()
@@ -562,7 +582,7 @@ private fun QueueTimeline(modifier: Modifier, contentPadding: PaddingValues, lis
             }
             item(key = "tail") { Spacer(Modifier.height(with(density) { tailPx.toDp() })) }
         }
-        SelectionToolbar(Modifier.align(Alignment.BottomCenter))
+        if (selectionDrawer) SelectionDrawer(Modifier.matchParentSize(), onSelectAll = { scope.launch { selectUpcoming(client) } })
     }
     pickerFor?.let { e -> PlaylistPicker(target = Commands.queueItems(listOf(e.item.key)), onDismiss = { pickerFor = null }) }
     ratingFor?.let { e ->

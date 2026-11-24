@@ -103,7 +103,7 @@ import app.hocket.ui.components.contentMaxWidth
 import app.hocket.ui.components.maxWidthListPadding
 import app.hocket.ui.components.RatingStars
 import app.hocket.ui.components.SectionHeader
-import app.hocket.ui.components.SelectionToolbar
+import app.hocket.ui.components.SelectionDrawer
 import app.hocket.ui.components.TrackRow
 import app.hocket.ui.components.ShimmerHost
 import app.hocket.ui.components.SkeletonLine
@@ -167,7 +167,7 @@ private fun DetailScaffold(
     heroActions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     /** A card joined under Play and Shuffle (an album's notes). */
     heroFooter: (@Composable () -> Unit)? = null,
-    overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = { SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), kinds = paneSelectionKinds(embedded)) },
+    overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = { SelectionDrawer(Modifier.matchParentSize(), kinds = paneSelectionKinds(embedded)) },
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -327,6 +327,10 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
             HeroMoreButton(onClick = { albumSheet = true })
         },
         heroFooter = notes?.let { text -> { DetailNotes(text, PaddingValues(horizontal = 18.dp, vertical = 14.dp)) } },
+        overlay = {
+            SelectionDrawer(Modifier.matchParentSize(), kinds = paneSelectionKinds(embedded),
+                onSelectAll = tracks?.takeIf { it.isNotEmpty() }?.let { list -> { client.selectTracks(list.map { it.ref }) } })
+        },
     ) {
         val list = tracks
         item(key = "tracks.top") { Spacer(Modifier.height(16.dp)) }
@@ -763,7 +767,8 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
             HeroMoreButton(onClick = { playlistSheet = true })
         },
         overlay = {
-            SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset), context = p.name, kinds = paneSelectionKinds(embedded),
+            SelectionDrawer(Modifier.matchParentSize(), context = p.name, kinds = paneSelectionKinds(embedded),
+                onSelectAll = entries?.takeIf { it.isNotEmpty() }?.let { list -> { client.selectTracks(list.map { it.track.ref }) } },
                 onRemoveFromContext = if (editable) ({
                     // The selected songs' entries, by position (highest first, so each index stays valid).
                     val sel = client.selection.value
@@ -774,7 +779,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     ) {
         val list = entries
         // No heading over the songs. Choosing them (Select songs, in the menu) shows Cancel here
-        // until the first pick brings up the selection toolbar.
+        // until the first pick brings up the selection drawer.
         item(key = "tracks.top") {
             if (selectMode && !selecting) Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.detail_select), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))

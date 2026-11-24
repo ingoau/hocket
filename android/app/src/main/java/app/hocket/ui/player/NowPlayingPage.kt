@@ -1,5 +1,6 @@
 package app.hocket.ui.player
 
+import kotlinx.coroutines.launch
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -293,6 +294,28 @@ internal fun FullPlayer(
         // Out of the queue (or the upright layout, or with nothing queued: nothing left to scroll
         // back) the controls unfold; straight away where the page changes shape.
         LaunchedEffect(folding, track == null) { if (!folding || track == null) collapse.animateTo(0f, instant = reducedMotion || wide) }
+        // Picking queue entries folds the controls away too: the queue takes their room and the
+        // selection's drawer rises over what is left. They unfold as the selection ends, unless the
+        // queue had already folded them.
+        val pickedAll by client.selection.collectAsStateWithLifecycle()
+        val pickedKind by client.selectionKind.collectAsStateWithLifecycle()
+        val picking = folding && pickedAll.active && pickedKind == app.hocket.core.client.SelectionKind.QueueItems
+        val foldedForPicking = remember { booleanArrayOf(false) }
+        // What the fold leaves of the controls (the title, the seek bar, the transport) fades out
+        // under the drawer meanwhile, rather than peeking half cut above it. Read in draw only.
+        val pickFade = androidx.compose.animation.core.animateFloatAsState(if (picking) 0f else 1f, androidx.compose.animation.core.tween(220), label = "pickFade")
+        val pickHidden = Modifier.graphicsLayer { alpha = pickFade.value }.then(if (picking) Modifier.clearAndSetSemantics { } else Modifier)
+        // And the queue grows down over them to just above the drawer's peek (its height, as the drawer reports it).
+        var drawerPeekPx by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+        LaunchedEffect(picking) {
+            if (picking) {
+                foldedForPicking[0] = collapse.fraction < 1f
+                collapse.animateTo(1f, instant = reducedMotion)
+            } else if (foldedForPicking[0]) {
+                foldedForPicking[0] = false
+                collapse.animateTo(0f, instant = reducedMotion)
+            }
+        }
         // Narrow screens (display size "largest" leaves ~320 dp): a lower transport.
         // (And beside the artwork on a short page: a phone on its side.)
         val transportHeight = if (pageWidth < 360.dp || (wide && viewport < 480.dp)) 68.dp else TRANSPORT_HEIGHT
@@ -305,6 +328,8 @@ internal fun FullPlayer(
                 minHeight = viewport,
                 hero = hero,
                 fold = fold,
+                lift = { 1f - pickFade.value },
+                liftTo = { drawerPeekPx },
                 foldedBottom = navBottom + 12.dp,
                 transportHeight = transportHeight,
                 // The artwork is drawn over the page: under an immersive one (or one sliding in
@@ -318,8 +343,8 @@ internal fun FullPlayer(
                     ) { header() }
                 },
                 area = { ModeArea(mode, hero, lyricsVisible, queueModifier = if (folding) Modifier.nestedScroll(collapse.connection) else Modifier) },
-                title = { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) },
-                seek = { PlayerSeek(position, fold) },
+                title = { Box(pickHidden) { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) } },
+                seek = { Box(pickHidden) { PlayerSeek(position, fold) } },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
                     val buffering by client.buffering.collectAsStateWithLifecycle()
@@ -330,7 +355,7 @@ internal fun FullPlayer(
                         onToggle = { client.dispatch(Command.TogglePlay) },
                         onNext = { client.dispatch(Command.Next) },
                         height = foldedTransport(transportHeight, fold()),
-                        modifier = Modifier.padding(horizontal = PAGE_PADDING),
+                        modifier = pickHidden.padding(horizontal = PAGE_PADDING),
                     )
                 },
                 actions = {
@@ -349,6 +374,7 @@ internal fun FullPlayer(
                 },
             )
         }
+        Box(pickHidden) {
         PlayerArtwork(
             // The scene's cover: it changes with its layout and colours (the sheet's scene).
             coverArt = coverArt,
@@ -365,6 +391,7 @@ internal fun FullPlayer(
             neighbours = neighbours,
             neighbourLayouts = neighbourLayouts,
         )
+        }
         // The handle over the artwork: over an immersive one (its colours following the artwork's
         // top, dark over a light top, not the controls below), and over a card's page while a skip
         // swipe can bring an artwork under it.
@@ -380,6 +407,10 @@ internal fun FullPlayer(
                 ) { header() }
             }
         }
+        // Picked queue entries: their drawer rises from the player's bottom over the controls, not
+        // inside the queue's panel (a phone's leaves room for only a couple of rows).
+        if (mode == PlayerMode.Queue) app.hocket.ui.components.SelectionDrawer(Modifier.matchParentSize(), kinds = setOf(app.hocket.core.client.SelectionKind.QueueItems),
+            onSelectAll = { scope.launch { app.hocket.ui.queue.selectUpcoming(client) }; Unit }, onPeekHeight = { drawerPeekPx = it })
     }
     if (handoff) HandoffSheet(onDismiss = { handoff = false; handoffPull?.dismiss(); handoffPull = null }, pull = handoffPull)
     if (queues) QueuesSheet(onDismiss = { queues = false })
@@ -463,9 +494,11 @@ private fun PlayerLayout(
     seek: @Composable () -> Unit,
     transport: @Composable () -> Unit,
     actions: @Composable () -> Unit,
+    lift: () -> Float = { 0f },
+    liftTo: () -> Int = { 0 },
 ) {
     if (wide) PlayerLayoutWide(minHeight, hero, artAbove, header, area, title, seek, transport, actions)
-    else PlayerLayoutTall(minHeight, hero, fold, foldedBottom, transportHeight, header, area, title, seek, transport, actions)
+    else PlayerLayoutTall(minHeight, hero, fold, foldedBottom, transportHeight, header, area, title, seek, transport, actions, lift, liftTo)
 }
 
 @Composable
@@ -481,6 +514,8 @@ private fun PlayerLayoutTall(
     seek: @Composable () -> Unit,
     transport: @Composable () -> Unit,
     actions: @Composable () -> Unit,
+    lift: () -> Float,
+    liftTo: () -> Int,
 ) {
     Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
         val k = fold().coerceIn(0f, 1f)
@@ -555,17 +590,30 @@ private fun PlayerLayoutTall(
         val controls = seekGap + sh + gapX + share + xh + gapA + share + ah + share
         val controlsK = seekGapK + shNow + gapX + shareK + xhNow + gapAK + shareK + ahK + shareK
         val areaK = areaH + (controls - controlsK).coerceAtLeast(0)
-        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaK + titleFold)) }
+        // Lifted ([lift], picking queue entries with a drawer [liftTo] px tall over the page's bottom):
+        // the area runs on over the (faded) controls to the drawer's top; they stay where they are, under it.
+        val l = lift().coerceIn(0f, 1f)
+        val peek = liftTo()
+        val areaL = if (l > 0f && peek > 0) androidx.compose.ui.util.lerp(areaK, maxOf(areaK, view - peek - hh - titleFold), l) else areaK
+        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaL + titleFold)) }
         val titleTop = hh + areaK + titleFold
         val seekTop = hh + areaK + th + seekGapK
         val transportTop = seekTop + shNow + gapX + shareK
         val actionsTop = transportTop + xhNow + gapAK + shareK
         layout(full, maxOf(actionsTop + ahK + shareK, view)) {
             hp.forEach { it.place(0, 0) }
+            // Lifted, the area goes over the controls it covers (it takes their touches).
+            if (l > 0f) {
+                tp.forEach { it.place(x0, titleTop) }
+                sp.forEach { it.place(x0, seekTop) }
+                xp.forEach { it.place(x0, transportTop) }
+            }
             mp.forEach { it.place(areaX, hh) }
-            tp.forEach { it.place(x0, titleTop) }
-            sp.forEach { it.place(x0, seekTop) }
-            xp.forEach { it.place(x0, transportTop) }
+            if (l <= 0f) {
+                tp.forEach { it.place(x0, titleTop) }
+                sp.forEach { it.place(x0, seekTop) }
+                xp.forEach { it.place(x0, transportTop) }
+            }
             // Folded all the way, the action row is gone (off the page, out of reach).
             if (k < 1f) ap.forEach { it.place(x0, actionsTop) }
         }
@@ -696,7 +744,7 @@ private fun ModeArea(mode: PlayerMode, hero: HeroGeometry, lyricsVisible: Boolea
                 PlayerMode.Artwork, PlayerMode.About -> Spacer(Modifier.fillMaxSize())
                 // The rows' own 16 dp start padding plus 4 dp: aligned with the page's 20 dp margins.
                 PlayerMode.Queue -> ModeSlot {
-                    QueueList(Modifier.fillMaxSize().then(queueModifier), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp))
+                    QueueList(Modifier.fillMaxSize().then(queueModifier), contentPadding = PaddingValues(horizontal = PAGE_PADDING - 16.dp), controlsAtBottom = true, listModifier = Modifier.fadingEdges(top = 32.dp, bottom = 0.dp), selectionDrawer = false)
                 }
                 PlayerMode.Lyrics -> ModeSlot { LyricsPage(visible = lyricsVisible, modifier = Modifier.fillMaxSize(), embedded = true, listModifier = Modifier.fadingEdges(top = LYRICS_FADE, bottom = LYRICS_FADE_BOTTOM)) }
             }

@@ -22,7 +22,7 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * The picker on its own sheet — the add to playlist the swipe gesture, the queue's swipe and the
- * selection toolbar's overflow still open: the playlists load ticked, a tap moves a pending tick to
+ * selection drawer still open: the playlists load ticked, a tap moves a pending tick to
  * the summary line, and Done applies it and closes. (The song menu's picker is covered by
  * [SongMenuTest], on the menu's own sub-page.)
  */

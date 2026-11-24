@@ -326,6 +326,11 @@ fun connectedShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 6.dp):
  * Done bringing the menu back or closing it. [onRan] follows any action that ran (a selection
  * clears). [extraTop] sits under the header (a Library pin's controls). Tags: `[tag]`, `[tag].header`,
  * `[tag].action.<id>`, `[tag].download`, `[tag].pin`, `[tag].info`, `[tag].more`, `rating`.
+ *
+ * [embedded]: the menu without its sheet, laid into a host's own surface (the selection drawer),
+ * which scrolls and drags it: every row shows at once (no More, no Show less), and a row that would
+ * hide the sheet runs straight away and reports [onDismiss]. [showPlay] false leaves the play group
+ * to the host (the drawer keeps it in its peek).
  */
 @Composable
 fun MenuSheet(
@@ -341,6 +346,8 @@ fun MenuSheet(
     extraTop: (@Composable () -> Unit)? = null,
     tag: String = "songMenu",
     pull: SheetPull? = null,
+    embedded: Boolean = false,
+    showPlay: Boolean = true,
 ) {
     val client = LocalCoreClient.current
     val context = LocalContext.current
@@ -358,12 +365,13 @@ fun MenuSheet(
     val scope = rememberCoroutineScope()
     /** Hides the sheet, then runs [after] (which may open what follows) and reports it gone. */
     fun hideThen(after: () -> Unit = {}) {
+        if (embedded) { after(); onDismiss(); return }
         scope.launch { sheetState.hide() }.invokeOnCompletion { after(); onDismiss() }
     }
     val layout = remember(actions, subject.kind, subject.count, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null, snoozed) {
         menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null, count = subject.count, snoozed = snoozed)
     }
-    var expanded by rememberSaveable { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(embedded) }
     // The sub-page in view (Share, Snooze), or the menu itself. Back (the header's arrow, the
     // system's back or its gesture) returns to the menu rather than closing the sheet.
     // Seekable, so a predictive back gesture can scrub the way back to the menu.
@@ -550,13 +558,7 @@ fun MenuSheet(
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        scrimColor = pulledScrim(pull),
-        dragHandle = { MenuHandle(expanded, canExpand) { expanded = !expanded } },
-        modifier = Modifier.pulled(pull).backPulled { backPull.value }.testTag(tag),
-    ) {
+    val body = @Composable {
         // Inside the sheet: its window has its own back dispatcher, and this callback, added after
         // the sheet's own, takes back first while a sub-page shows.
         // The gesture scrubs the first part of the slide back to the menu (the sub-page fading as the
@@ -583,7 +585,7 @@ fun MenuSheet(
         }
         // While a share loads, back does nothing: neither the menu nor closing the sheet.
         BackHandler(enabled = page == MenuPage.Sharing) {}
-        Column(Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
+        Column(if (embedded) Modifier.padding(bottom = 16.dp) else Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
             MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
@@ -618,7 +620,7 @@ fun MenuSheet(
             }
             MenuPage.Main -> Column {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
-            if (layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { runAndClose(it) }
+            if (showPlay && layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { runAndClose(it) }
             if (layout.rating) {
                 RatingRow(rating) { stars ->
                     rating = stars
@@ -652,7 +654,7 @@ fun MenuSheet(
                     if (layout.destructive.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         layout.destructive.forEachIndexed { i, entry -> EntryRow(entry, connectedShape(i, layout.destructive.size)) }
                     }
-                    Box(Modifier.fillMaxWidth().padding(top = 18.dp), contentAlignment = Alignment.Center) {
+                    if (!embedded) Box(Modifier.fillMaxWidth().padding(top = 18.dp), contentAlignment = Alignment.Center) {
                         TextButton(onClick = { expanded = false }, modifier = Modifier.heightIn(min = 48.dp).testTag("$tag.showLess")) {
                             Icon(HocketIcons.Filled.KeyboardArrowDown, null, Modifier.size(20.dp).rotate(180f))
                             Text(stringResource(R.string.menu_show_less), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 8.dp))
@@ -664,6 +666,17 @@ fun MenuSheet(
             }
             }
         }
+    }
+    if (embedded) {
+        Box(Modifier.testTag(tag)) { body() }
+    } else {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            scrimColor = pulledScrim(pull),
+            dragHandle = { MenuHandle(expanded, canExpand) { expanded = !expanded } },
+            modifier = Modifier.pulled(pull).backPulled { backPull.value }.testTag(tag),
+        ) { body() }
     }
     if (snoozeCustom) {
         SnoozeUntilPicker(tag, onDismiss = { snoozeCustom = false }) { until ->
@@ -836,13 +849,7 @@ private fun PlayGroup(play: List<ActionDescriptor>, tag: String, onRun: (ActionD
 private fun PlayGroupButton(a: ActionDescriptor, shape: Shape, tag: String, modifier: Modifier, onRun: (ActionDescriptor) -> Unit) {
     val main = a.id == ActionIds.PLAY
     val start = main || a.id == ActionIds.PLAY_SHUFFLED
-    val (label, icon) = when (a.id) {
-        ActionIds.PLAY -> stringResource(R.string.action_play) to HocketIcons.Filled.PlayArrow
-        ActionIds.PLAY_SHUFFLED -> stringResource(R.string.action_shuffle) to HocketIcons.Filled.Shuffle
-        ActionIds.PLAY_NEXT -> stringResource(R.string.action_play_next) to HocketIcons.Filled.PlaylistPlay
-        ActionIds.ADD_TO_QUEUE -> stringResource(R.string.action_label_add_to_queue) to HocketIcons.Filled.QueueMusic
-        else -> stringResource(R.string.action_play_later) to HocketIcons.Filled.PlaylistAdd
-    }
+    val (label, icon) = playFace(a.id) ?: (stringResource(R.string.action_play_later) to HocketIcons.Filled.PlaylistAdd)
     Surface(
         onClick = { onRun(a) },
         enabled = a.enabled,
@@ -866,6 +873,20 @@ private fun PlayGroupButton(a: ActionDescriptor, shape: Shape, tag: String, modi
         }
     }
 }
+
+/** The play group's short label and icon for a play action (Play, Shuffle, Play next, Add to queue, Play later); null for any other. */
+@Composable
+internal fun playFace(id: String): Pair<String, ImageVector>? = when (id) {
+    ActionIds.PLAY -> stringResource(R.string.action_play) to HocketIcons.Filled.PlayArrow
+    ActionIds.PLAY_SHUFFLED -> stringResource(R.string.action_shuffle) to HocketIcons.Filled.Shuffle
+    ActionIds.PLAY_NEXT -> stringResource(R.string.action_play_next) to HocketIcons.Filled.PlaylistPlay
+    ActionIds.ADD_TO_QUEUE -> stringResource(R.string.action_label_add_to_queue) to HocketIcons.Filled.QueueMusic
+    ActionIds.PLAY_LATER -> stringResource(R.string.action_play_later) to HocketIcons.Filled.PlaylistAdd
+    else -> null
+}
+
+/** The play group's actions, in their fixed order. */
+internal val PlayActionIds: List<String> get() = PLAY_IDS
 
 /** "Rating" and the stars (tap the current star to clear); several songs rated differently read "Mixed". */
 @Composable
@@ -1037,7 +1058,7 @@ private fun MoreRow(hidden: Int, shape: Shape, tag: String, onClick: () -> Unit)
 
 /** One tile of a connected list: icon, label (one line, with an optional second), trailing content. */
 @Composable
-private fun MenuRow(
+internal fun MenuRow(
     label: AnnotatedString,
     icon: ImageVector,
     shape: Shape,

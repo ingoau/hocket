@@ -169,15 +169,15 @@ class MenuScreenshotTest {
         step {
             val ids = lib.playlistTracks.getValue("pl0").take(3)
             compose.runOnIdle { ids.forEach { core.client.toggleSelected(SelectionKind.Tracks, it) } }
-            awaitTag("selection.more")
-            compose.onNodeWithTag("selection.more").performSemanticsAction(SemanticsActions.OnClick)
+            awaitTag("selection.handle")
+            settle()
+            shot(dir, "$prefix-09-multi-select-peek")
+            compose.onNodeWithTag("selection.handle").performSemanticsAction(SemanticsActions.Expand)
             awaitTag("selectionMenu.header")
             settle()
-            shot(dir, "$prefix-09-multi-select-menu")
-            compose.onNodeWithTag("selectionMenu.more").performSemanticsAction(SemanticsActions.OnClick)
+            shot(dir, "$prefix-09b-multi-select-drawer-open")
+            compose.runOnIdle { core.client.clearSelection() }
             settle()
-            shot(dir, "$prefix-09b-multi-select-menu-expanded")
-            dismissSheet()
         }
     }
 
