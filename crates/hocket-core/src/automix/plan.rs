@@ -518,6 +518,11 @@ pub const CLASH_MIN_OVERLAP_MS: f64 = 4_000.0;
 /// A shaped clash moves back in A only when each bar further back leaves
 /// both voices sounding together at least this much less.
 pub const CLASH_MOVE_GAIN_MS: Ms = 500;
+/// Most of B's intro a blend skips to keep the voices apart.
+pub const MAX_INTRO_SKIP_MS: Ms = 20_000;
+/// B's main voice starts with its first voiced run at least this long;
+/// shorter ones before it (chops, ad-libs, a pickup) are intro a blend may skip.
+pub const MAIN_VOICE_MIN_MS: Ms = 4_000;
 /// High-shelf cut on A when voices can't be kept apart: low enough to take
 /// the presence out of A's voice.
 pub const CLASH_HIGH_CUT_HZ: f32 = 2_000.0;
@@ -653,15 +658,64 @@ fn shape_clash(plan: &mut TransitionPlan) {
 fn covers_a(plan: &TransitionPlan, curve: &VocalCurve) -> bool {
     let from = plan.tail_start_ms
         + source_ms(plan.tempo.as_ref(), plan.incoming_at_ms as f64).round() as Ms;
-    let end = curve
+    from >= curve.start_ms && plan.tail_start_ms + plan.tail_source_ms <= curve_end(curve)
+}
+
+/// End of a voice curve (track position).
+fn curve_end(curve: &VocalCurve) -> Ms {
+    curve
         .start_ms
-        .saturating_add((curve.voice.len() as Ms).saturating_mul(curve.hop_ms));
-    from >= curve.start_ms && plan.tail_start_ms + plan.tail_source_ms <= end
+        .saturating_add((curve.voice.len() as Ms).saturating_mul(curve.hop_ms))
+}
+
+/// Whether B's voice curve covers every position of B in `plan`'s overlap.
+fn covers_b(plan: &TransitionPlan, curve: &VocalCurve) -> bool {
+    plan.incoming_from_ms >= curve.start_ms
+        && plan.incoming_position_at(plan.tail_len_ms) <= curve_end(curve)
+}
+
+/// Where B's main voice starts at or after `from`: its first voiced run of
+/// at least [`MAIN_VOICE_MIN_MS`], else the curve's end (past it nothing is known).
+fn main_voice_start(curve: &VocalCurve, from: Ms) -> Ms {
+    let end = curve_end(curve);
+    if curve.hop_ms == 0 {
+        return from;
+    }
+    let mut run: Option<Ms> = None;
+    let mut t = from.max(curve.start_ms);
+    while t < end {
+        let next = t.saturating_add(curve.hop_ms);
+        if voiced(curve, t) {
+            let start = *run.get_or_insert(t);
+            if next - start >= MAIN_VOICE_MIN_MS {
+                return start;
+            }
+        } else {
+            run = None;
+        }
+        t = next;
+    }
+    end
+}
+
+/// B's later downbeats a blend may enter from instead of `db[k]`, nearest
+/// first: within [`MAX_INTRO_SKIP_MS`] of it and before B's main voice.
+fn intro_entries(db: &[Ms], k: usize, curve: &VocalCurve) -> Vec<usize> {
+    let Some(&first) = db.get(k) else {
+        return Vec::new();
+    };
+    let main = main_voice_start(curve, first);
+    (k + 1..db.len())
+        .take_while(|&j| db[j].saturating_sub(first) <= MAX_INTRO_SKIP_MS && db[j] < main)
+        .collect()
 }
 
 /// The blend with voices known, in order of preference: the usual length
 /// when its voices don't overlap (handover between them); a shorter blend
-/// that fits the instrumental gap; the same, placed whole bars earlier in A
+/// that fits the instrumental gap; either, with B entering at a later
+/// downbeat of its intro (nearest first, see [`intro_entries`]: skipping
+/// chops or ad-libs before its main voice, never into it) as long as B's
+/// voice curve covers the overlap; the same, placed whole bars earlier in A
 /// (`may_move`: no fixed tail start; fewest bars back first, within
 /// [`MAX_CUT_MS`] and A's voice curve) so the handover lands in an
 /// instrumental break before A's last vocal; else the shortest blend of at
@@ -670,13 +724,15 @@ fn covers_a(plan: &TransitionPlan, curve: &VocalCurve) -> bool {
 /// [`CLASH_MOVE_GAIN_MS`] of both voices at once). Every clean placement
 /// needs A's voice curve to cover its overlap: outside it, "no voice"
 /// proves nothing.
+#[allow(clippy::too_many_arguments)]
 fn vocal_blend(
     options: &[usize],
     bar_ms: f64,
     db: &[Ms],
+    k: usize,
     voices: &Voices<'_>,
     may_move: bool,
-    blend_at: impl Fn(usize, usize) -> Option<TransitionPlan>,
+    blend_at: impl Fn(usize, usize, usize) -> Option<TransitionPlan>,
 ) -> Option<TransitionPlan> {
     let shortest = options.iter().copied().min().unwrap_or(8);
     let tries: Vec<usize> = options
@@ -689,20 +745,40 @@ fn vocal_blend(
     } else {
         0
     };
-    for back in 0..=max_back {
-        for &bars in &tries {
-            let Some(mut plan) = blend_at(bars, back) else {
-                continue;
-            };
-            if !covers_a(&plan, voices.a) {
-                continue;
-            }
-            let span = voice_span(&plan, voices);
-            if span.is_clean() {
-                let h = clean_handover(&plan, span, db);
-                move_handover(&mut plan, h);
-                return Some(plan);
-            }
+    let clean_at = |bars, back, entry| {
+        let mut plan = blend_at(bars, back, entry)?;
+        if !covers_a(&plan, voices.a) || (entry != k && !covers_b(&plan, voices.b)) {
+            return None;
+        }
+        let span = voice_span(&plan, voices);
+        span.is_clean().then(|| {
+            let h = clean_handover(&plan, span, db);
+            move_handover(&mut plan, h);
+            plan
+        })
+    };
+    if let Some(plan) = tries.iter().find_map(|&bars| clean_at(bars, 0, k)) {
+        return Some(plan);
+    }
+    // Into B past its intro, before cutting into A: only when a blend from
+    // B's start fits and it's the voices that rule it out.
+    let voice_bound = tries
+        .iter()
+        .any(|&bars| blend_at(bars, 0, k).is_some_and(|p| covers_a(&p, voices.a)));
+    let entries = if voice_bound {
+        intro_entries(db, k, voices.b)
+    } else {
+        Vec::new()
+    };
+    let skipped = tries
+        .iter()
+        .find_map(|&bars| entries.iter().find_map(|&e| clean_at(bars, 0, e)));
+    if let Some(plan) = skipped {
+        return Some(plan);
+    }
+    for back in 1..=max_back {
+        if let Some(plan) = tries.iter().find_map(|&bars| clean_at(bars, back, k)) {
+            return Some(plan);
         }
     }
     let longest = options.iter().copied().max().unwrap_or(8);
@@ -714,7 +790,7 @@ fn vocal_blend(
     // CLASH_MOVE_GAIN_MS of both voices.
     let mut best: Option<(u64, TransitionPlan)> = None;
     for back in 0..=max_back {
-        let Some(plan) = blend_at(bars, back) else {
+        let Some(plan) = blend_at(bars, back, k) else {
             continue;
         };
         if back > 0 && !covers_a(&plan, voices.a) {
@@ -827,13 +903,19 @@ pub fn beat_plan(
             _ if long => &[16, 8],
             _ => &[8],
         };
-        let blend_at = |bars, back| {
-            blend(input, da, db, k, bars, back, fixed, a_end)
+        let blend_at = |bars, back, entry| {
+            blend(input, da, db, entry, bars, back, fixed, a_end)
                 .filter(|p| cut_from_a(p, a_end) <= MAX_CUT_MS)
+                // Past an intro skip, the overlap stays within half of what's left of B.
+                .filter(|p| {
+                    entry == k
+                        || 2 * (p.tail_len_ms - p.incoming_at_ms)
+                            <= input.b.duration_ms.saturating_sub(p.incoming_from_ms)
+                })
         };
         match Voices::of(ra, rb) {
-            Some(v) => vocal_blend(options, ga.bar_ms, db, &v, fixed.is_none(), blend_at),
-            None => options.iter().find_map(|&bars| blend_at(bars, 0)),
+            Some(v) => vocal_blend(options, ga.bar_ms, db, k, &v, fixed.is_none(), blend_at),
+            None => options.iter().find_map(|&bars| blend_at(bars, 0, k)),
         }
     } else {
         // Half or double time lines up on every beat of the slower track, so
@@ -1877,5 +1959,76 @@ mod tests {
         let p = plan(&input(&s, Some(&a), Some(&b), Some(222_250)));
         assert_eq!(p.tail_start_ms, 222_250);
         assert_eq!(p.kind, TransitionKind::Blend);
+    }
+
+    #[test]
+    fn main_voice_skips_short_runs() {
+        let c = voice(0, 36_000, &[(0, 2_500), (6_000, 8_000), (21_000, 36_000)]);
+        assert_eq!(main_voice_start(&c, 0), 21_000);
+        assert_eq!(main_voice_start(&c, 25_000), 25_000);
+        let quiet = voice(0, 36_000, &[(0, 2_500)]);
+        assert_eq!(main_voice_start(&quiet, 0), 36_000, "the curve's end");
+        // B's downbeats from 1 s every 2 s: later ones before 21 s, within 20 s.
+        let db: Vec<Ms> = (0..40).map(|i| 1_000 + 2_000 * i).collect();
+        assert_eq!(intro_entries(&db, 0, &c), (1..10).collect::<Vec<_>>());
+        assert_eq!(intro_entries(&db, 0, &quiet), (1..=10).collect::<Vec<_>>());
+    }
+
+    /// A sings to its end and B opens with a vocal chop before an
+    /// instrumental intro: the full blend, B entering after the chop.
+    #[test]
+    fn blends_skip_an_intro_chop_to_keep_voices_apart() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 120.0, 4, 1_000.0);
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, DUR)]);
+        b.head_vocals = voice(0, 36_000, &[(0, 2_500), (21_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.kind, TransitionKind::Blend);
+        assert_eq!((p.tail_start_ms, p.tail_len_ms), (222_250, 16_000));
+        assert_eq!(p.incoming_from_ms, 3_000, "the next downbeat");
+        assert!(span(&p, &a, &b).is_clean());
+        assert_eq!(p.high_cut.unwrap().freq_hz, HIGH_CUT_HZ);
+        // B's curve ends at 10 s: only a blend it covers counts (2 bars, 3–7 s).
+        b.head_vocals = voice(0, 10_000, &[(0, 2_500)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!((p.incoming_from_ms, p.tail_len_ms), (3_000, 4_000));
+        // A committed tail start keeps it; B may still enter later.
+        b.head_vocals = voice(0, 36_000, &[(0, 2_500), (21_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), Some(222_250)));
+        assert_eq!((p.tail_start_ms, p.incoming_from_ms), (222_250, 3_000));
+    }
+
+    #[test]
+    fn intro_skips_stop_at_the_main_voice_and_the_limit() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 120.0, 4, 1_000.0);
+        a.tail_vocals = voice(DUR - 36_000, 36_000, &[(0, DUR)]);
+        // The main voice from 5 s (then quiet from 11 s): an entry past it
+        // would be clean, but none is allowed, so a shaped clash from B's start.
+        b.head_vocals = voice(0, 36_000, &[(0, 1_500), (5_000, 11_000)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.incoming_from_ms, 1_000);
+        assert_eq!(p.high_cut.unwrap().freq_hz, CLASH_HIGH_CUT_HZ);
+        // Chops to 23 s, then quiet: the first clean entry (23 s) is past MAX_INTRO_SKIP_MS.
+        let chops: Vec<(Ms, Ms)> = (0..6).map(|i| (i * 4_000, i * 4_000 + 3_000)).collect();
+        b.head_vocals = voice(0, 36_000, &chops);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!(p.incoming_from_ms, 1_000);
+        assert_eq!(p.high_cut.unwrap().freq_hz, CLASH_HIGH_CUT_HZ);
+    }
+
+    /// Skipping B's intro comes before cutting into A.
+    #[test]
+    fn intro_skips_come_before_moving_back_in_a() {
+        let s = settings(TransitionMode::AutoMix);
+        let mut a = beats(DUR, 120.0, 4, 250.0);
+        let mut b = beats(DUR, 120.0, 4, 1_000.0);
+        a.tail_vocals = voice(DUR - 60_000, 60_000, &[(0, 200_000), (225_000, DUR)]);
+        b.head_vocals = voice(0, 36_000, &[(0, 2_500), (21_000, DUR)]);
+        let p = plan(&input(&s, Some(&a), Some(&b), None));
+        assert_eq!((p.tail_start_ms, p.incoming_from_ms), (222_250, 3_000));
+        assert!(span(&p, &a, &b).is_clean());
     }
 }
