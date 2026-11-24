@@ -347,7 +347,12 @@ nothing. Every overlap is limited to half of each track's audible span.
      before it, never before B enters; high cut from it). With no voice of
      A in the overlap the handover stays mid-overlap: B may sing over A's
      instrumental. (b) Else the first of 4 and 2 bars that keeps them apart
-     (same handover rule). (b′) Without a fixed tail start, the bar
+     (same handover rule). (b′) Else the bar counts of (a) and (b) with B
+     entering at a later downbeat of its intro, nearest first: within 20 s
+     of its first downbeat and before its main voice (the first voiced run
+     of ≥ 4 s; shorter runs before it are chops or ad-libs it may skip),
+     with B's voice curve covering the overlap. A fixed tail start still
+     allows this. (b″) Without a fixed tail start, the bar
      counts of (a) and (b) placed 1, 2, … whole bars earlier in A, fewest bars back first,
      as long as at most 20 s of audible A is cut (A's voice curve must cover
      the overlap for any placement to count as apart: outside it "no
