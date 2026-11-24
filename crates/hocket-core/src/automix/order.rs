@@ -11,7 +11,7 @@
 //! next whatever the scores, so a track that mixes badly with everything is
 //! delayed, never starved.
 
-use crate::api::{AnalysisRecord, TransitionKind, TransitionPlan};
+use crate::api::{AnalysisRecord, Ms, TransitionKind, TransitionPlan};
 
 use super::key::{harmony, Harmony};
 use super::plan::{voice_span, Voices};
@@ -23,6 +23,10 @@ pub const ORDER_WINDOW: usize = 6;
 pub const PROMOTE_MARGIN: f64 = 0.15;
 /// After being passed over this many times an entry is no longer passed over.
 pub const MAX_PASSES: u8 = 3;
+/// How long the current track plays before the follow-up of the next one is
+/// chosen, so a burst of skips never moves anything. Shorter on a track whose
+/// tail locks in sooner (`core::handlers::mix_order`).
+pub const SETTLE_MS: Ms = 15_000;
 /// Score of a candidate without a usable record: about what a random pair
 /// scores, so unanalysed tracks are neither preferred nor pushed back.
 pub const UNKNOWN_SCORE: f64 = 0.3;

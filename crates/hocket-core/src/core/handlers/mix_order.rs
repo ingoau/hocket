@@ -7,24 +7,32 @@
 //! track's tail start was committed against the next track when the current
 //! one was preloaded, so the next track is already fixed, but its own tail
 //! start (its source's `mix_out_ms`) is planned against whatever follows it.
-//! Once per next entry, as soon as its record is known; the move travels as a
-//! [`SessionOp::PromoteForMix`], so every device sees the same order.
+//! Once per entry for as long as it is in the queue, so skipping back and
+//! forward again finds the order it left, and only once the current track
+//! has played a while ([`SETTLE_MS`]), so skipping through tracks moves
+//! nothing. The move travels as a [`SessionOp::PromoteForMix`], so every
+//! device sees the same order.
 //!
 //! Never touched: the "Next in queue" group, anything the user added, an
 //! album or playlist in order (shuffle off), and everything past the first
 //! entry that isn't ours to order.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::*;
-use crate::automix::order::{choose, mix_score, ORDER_WINDOW};
+use crate::automix::order::{choose, mix_score, ORDER_WINDOW, SETTLE_MS};
+use crate::automix::LOCK_IN_MS;
 use crate::connect::wire::SessionOp;
 use crate::core::actor::Actor;
 
 #[derive(Debug, Default)]
 pub(crate) struct MixOrderState {
-    /// The next entry whose follow-up was decided (once per entry).
-    decided_after: Option<QueueKey>,
+    /// Entries whose follow-up was decided (once per entry, kept while the
+    /// entry is in the queue: a revisit after Previous decides nothing).
+    decided: HashSet<QueueKey>,
+    /// The current track's position at which to decide: waiting for it to
+    /// settle ([`SETTLE_MS`]); position reports ask again once there.
+    settle_at: Option<Ms>,
     /// A promotion sent: replan the preloaded follow-up once it shows.
     promoted: Option<QueueKey>,
     /// Times each upcoming entry was passed over.
@@ -83,7 +91,7 @@ impl Actor {
         let Some(anchor) = doc.upcoming.first().filter(|i| !i.unavailable) else {
             return;
         };
-        if self.mix_order.decided_after.as_ref() == Some(&anchor.key) {
+        if self.mix_order.decided.contains(&anchor.key) {
             return;
         }
         let run: Vec<&QueueItem> = doc.upcoming[1..]
@@ -102,6 +110,14 @@ impl Actor {
             // Nothing to judge by yet: decide when its record arrives.
             return;
         }
+        // Not while the user skips through tracks: each skip would move the
+        // entry after the next one, and the queue would shift under them.
+        let settle = self.settle_position();
+        if self.playback.position_now(self.now()) < settle {
+            self.mix_order.settle_at = Some(settle);
+            return;
+        }
+        self.mix_order.settle_at = None;
         let scores: Vec<Option<f64>> = run
             .iter()
             .map(|item| {
@@ -117,8 +133,16 @@ impl Actor {
             .collect();
         let front_passes = self.mix_order.passes.get(&run[0].key).copied().unwrap_or(0);
         let pick = choose(&scores, front_passes);
-        self.mix_order.decided_after = Some(anchor.key.clone());
-        let keep: Vec<QueueKey> = doc.upcoming.iter().map(|i| i.key.clone()).collect();
+        let in_queue: HashSet<&QueueKey> = doc
+            .history
+            .iter()
+            .chain(doc.current.as_ref())
+            .chain(doc.upcoming.iter())
+            .map(|i| &i.key)
+            .collect();
+        self.mix_order.decided.retain(|k| in_queue.contains(k));
+        self.mix_order.decided.insert(anchor.key.clone());
+        let keep: HashSet<&QueueKey> = doc.upcoming.iter().map(|i| &i.key).collect();
         self.mix_order.passes.retain(|k, _| keep.contains(k));
         if pick == 0 {
             return;
@@ -143,6 +167,25 @@ impl Actor {
         self.mix_order.promoted = Some(key.clone());
         if !self.local_op_quiet(SessionOp::PromoteForMix { key, after }) {
             self.mix_order.promoted = None;
+        }
+    }
+
+    /// The current track's position from which the order may be decided:
+    /// [`SETTLE_MS`], or halfway to the point its tail locks in when that
+    /// comes sooner (a short track, or a short planned tail start).
+    fn settle_position(&self) -> Ms {
+        let end = self
+            .playback
+            .mix_out_ms
+            .unwrap_or_else(|| self.playback.duration_ms());
+        SETTLE_MS.min(end.saturating_sub(LOCK_IN_MS) / 2)
+    }
+
+    /// A position report: decide once the current track has settled.
+    pub(crate) fn order_for_mix_at(&mut self, position_ms: Ms) {
+        if self.mix_order.settle_at.is_some_and(|at| position_ms >= at) {
+            self.mix_order.settle_at = None;
+            self.order_for_mix();
         }
     }
 }
