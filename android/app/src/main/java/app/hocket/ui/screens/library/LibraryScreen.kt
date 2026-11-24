@@ -84,7 +84,7 @@ import app.hocket.ui.components.AlbumCard
 import app.hocket.ui.components.EmptyState
 import app.hocket.ui.components.GenreRow
 import app.hocket.ui.components.PlaylistRow
-import app.hocket.ui.components.SelectionToolbar
+import app.hocket.ui.components.SelectionDrawer
 import app.hocket.ui.components.TrackRow
 import app.hocket.ui.components.AlbumCardSkeleton
 import app.hocket.ui.components.ShimmerHost
@@ -537,7 +537,7 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
                         }
                     }
                     // Beside the pane this toolbar is for the list's own picks; the pane's page has its own for songs.
-                    SelectionToolbar(Modifier.align(Alignment.BottomCenter).padding(bottom = app.hocket.ui.nav.BottomOverlayInset),
+                    SelectionDrawer(Modifier.matchParentSize(),
                         kinds = if (twoPane) setOf(SelectionKind.Albums, SelectionKind.Artists, SelectionKind.Playlists) else null)
                 }
             }

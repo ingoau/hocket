@@ -397,6 +397,20 @@ class CoreClient(
         publishSelection()
     }
 
+    /** Selects exactly [ids] (every row of a short, fully known list: the queue's upcoming entries). */
+    fun selectIds(kind: SelectionKind, ids: Collection<String>) {
+        if (_selectionKind.value != kind && _selection.value.active) clearSelection()
+        _selectionKind.value = kind
+        _selection.update { Selection(ids = ids.toSet(), total = it.total) }
+        publishSelection()
+    }
+
+    /** Selects exactly these songs (an album's or a playlist's every song), remembering their accounts. */
+    fun selectTracks(tracks: Collection<TrackRef>) {
+        tracks.forEach { selectedRefs[it.id] = it }
+        selectIds(SelectionKind.Tracks, tracks.map { it.id })
+    }
+
     fun setSelectionTotal(total: Int) = _selection.update { it.withTotal(total) }
 
     fun clearSelection() {

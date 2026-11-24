@@ -387,7 +387,7 @@ private val MiniPlayerGap = app.hocket.ui.player.NowPlayingSheetState.MINI_GAP
 val BottomContentInset: Dp
     @Composable get() = LocalBottomBarInset.current + LocalStashRoom.current + if (LocalPlayerVisible.current && !LocalMiniBesideBar.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap + 24.dp else 24.dp
 
-/** Where a screen's bottom overlay (a selection toolbar, a floating button) sits clear of the bar and the mini player. */
+/** Where a screen's bottom overlay (a floating button) sits clear of the bar and the mini player. */
 val BottomOverlayInset: Dp
     @Composable get() = LocalBottomBarInset.current + LocalStashRoom.current + (if (LocalPlayerVisible.current && !LocalMiniBesideBar.current) app.hocket.ui.player.miniPlayerHeight() + MiniPlayerGap else 0.dp) + 12.dp
 
@@ -441,6 +441,18 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 if (sharedArtwork.attach(id)) {
                     entry.lifecycle.addObserver(LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_DESTROY) sharedArtwork.release(id) })
                 }
+            }
+            nav.addOnDestinationChangedListener(listener)
+            onDispose { nav.removeOnDestinationChangedListener(listener) }
+        }
+        // A selection belongs to the page it was made on: leaving the page ends it (a page without a
+        // drawer would otherwise keep it, and with it the bar and the mini player out of the way).
+        DisposableEffect(nav, client) {
+            var last: Int? = null
+            val listener = NavController.OnDestinationChangedListener { controller, _, _ ->
+                val entry = controller.currentBackStackEntry?.id?.hashCode()
+                if (last != null && entry != last) client.clearSelection()
+                last = entry
             }
             nav.addOnDestinationChangedListener(listener)
             onDispose { nav.removeOnDestinationChangedListener(listener) }
@@ -502,6 +514,14 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // into content nobody can see.
             val covered by remember(sheet) { derivedStateOf { sheet.coverProgress >= 0.6f } }
             val hiddenWhenCovered = if (covered) Modifier.clearAndSetSemantics { } else Modifier
+            // A selection on the pages (not the queue's, inside the player): its drawer takes the
+            // bottom of the screen, so the bar, the mini player and the stash chip step down out of
+            // its way as it rises, and come back as it leaves. 0 to 1, read in layout and draw only.
+            val selectionNow by client.selection.collectAsStateWithLifecycle()
+            val selectionKindNow by client.selectionKind.collectAsStateWithLifecycle()
+            val selecting = selectionNow.active && selectionKindNow != app.hocket.core.client.SelectionKind.QueueItems
+            val selectionAway = androidx.compose.animation.core.animateFloatAsState(if (selecting) 1f else 0f, app.hocket.ui.theme.Motion.sheet, label = "selectionAway")
+            val miniAwayPx = sheetInsetPx + with(density) { (miniHeightDp + MiniPlayerGap).roundToPx() }
             // Transitions: what the last bar/rail switch was, so the NavHost can tell it from a push.
             val transitions = remember { ShellTransitionInfo() }
             transitions.reducedMotion = LocalReducedMotion.current
@@ -691,11 +711,12 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // The bottom chrome's whole strip (the bar, the gap above it and the margins beside the
             // mini player, all on the solid scrim) takes touches: under the sheet and the bar, so
             // those still get theirs, but over the page, so a row hidden behind them is never tapped.
+            // Not while a selection's drawer has the bottom (the bar and the mini player have stepped away).
             if (!wide || playerVisible) {
                 val chromeHeight = bottomInset + (if (playerVisible && !barRow) MiniPlayerGap + app.hocket.ui.player.miniPlayerHeight() else 0.dp)
                 // Beside the rail on wide layouts (its lowest places stay tappable).
                 val railStart = if (wide) with(density) { (if (railWidthPx >= 0) railWidthPx else CollapsedRailWidth.roundToPx()).toDp() } else 0.dp
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = railStart).height(chromeHeight).then(if (covered) Modifier else Modifier.blockTouchesBehind()).testTag("bottomChromeBlocker"))
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = railStart).height(chromeHeight).then(if (covered || selecting) Modifier else Modifier.blockTouchesBehind()).testTag("bottomChromeBlocker"))
             }
             CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides navigator) {
             // The mini player's part of the entrance: up from below the bar, last of all. (At the
@@ -707,6 +728,9 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     alpha = e
                     if (entranceMoves) translationY = (1f - e) * miniRise
                 }
+                // Down below the screen's edge while a selection's drawer is up (only the mini
+                // player: an open player or side panel stays where it is).
+                translationY += selectionAway.value * (1f - sheet.progress) * miniAwayPx
             }) {
             NowPlayingSheet(
                 state = sheet,
@@ -737,7 +761,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 // through), eased in from well above it.
                 val solid = ((bottomInset - 36.dp) / scrimHeight).coerceIn(0f, 0.8f)
                 val scrim = remember(surface, solid) { easedScrim(surface, solid = solid) }
-                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.coverProgress, SCRIM_FADE_END) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }.background(scrim).testTag("bottomScrim"))
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(scrimHeight).zIndex(5f).graphicsLayer { alpha = barFade(sheet.coverProgress, SCRIM_FADE_END) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) * (1f - selectionAway.value) }.background(scrim).testTag("bottomScrim"))
             }
             if (!wide) {
                 // Drawn above the sheet so the collapsed sheet body never covers it; slides out as the
@@ -754,7 +778,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     // Its part of the entrance: up from below the screen's edge, after the page.
                     .offset {
                         val e = entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS)
-                        IntOffset(0, ((sheet.coverProgress + if (entranceMoves) 1f - e else 0f) * navBarHeightPx).roundToInt())
+                        IntOffset(0, ((maxOf(sheet.coverProgress, selectionAway.value) + if (entranceMoves) 1f - e else 0f) * navBarHeightPx).roundToInt())
                     }
                     // It fades out gently as the player grows over it.
                     .graphicsLayer { alpha = barFade(sheet.coverProgress) * entrancePart(entrance(), ShellEntrance.BAR_START_MS, ShellEntrance.BAR_END_MS) }
@@ -793,7 +817,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 androidx.compose.animation.AnimatedVisibility(
                     // Not under the full player either: faded out there, it would still take taps.
                     // (Nor over the side panel: it does not cover the screen, but it does cover the chip's corner.)
-                    visible = stash.isNotEmpty() && !covered && !sheetRising,
+                    visible = stash.isNotEmpty() && !covered && !sheetRising && !selecting,
                     enter = if (reducedMotion) androidx.compose.animation.fadeIn() else androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 380f), initialScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(edgeX, 1f)) +
                         androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 380f)) { it / 2 } + androidx.compose.animation.fadeIn(),
                     exit = if (reducedMotion) androidx.compose.animation.fadeOut() else androidx.compose.animation.scaleOut(androidx.compose.animation.core.spring(stiffness = 600f), targetScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(edgeX, 1f)) + androidx.compose.animation.fadeOut(),

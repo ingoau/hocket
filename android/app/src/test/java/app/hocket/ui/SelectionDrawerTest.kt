@@ -17,11 +17,15 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.swipeDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.ActionIds
 import app.hocket.core.client.SelectionKind
-import app.hocket.ui.components.SelectionToolbar
+import app.hocket.ui.components.SelectionDrawer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -30,28 +34,33 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The selected songs' menu (More on the selection toolbar): "3 songs · …", the rating starting
- * "Mixed" while they differ and rating every selected song, love that loves them all.
+ * The selection drawer: it peeks with the count and the quick actions; opened, the selected songs'
+ * menu: "3 songs · …", the rating starting "Mixed" while they differ and rating every selected song,
+ * love that loves them all.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-class SelectionToolbarTest {
+class SelectionDrawerTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
 
     private fun present(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
 
-    /** Three songs, rated differently (the fake library's first ones, with the first re-rated). */
-    private fun selectThree(core: TestCore): List<String> {
-        compose.setThemedContent(core) { SelectionToolbar() }
+    /** Three songs, rated differently (the fake library's first ones, with the first re-rated); [open]: the drawer opened. */
+    private fun selectThree(core: TestCore, open: Boolean = true): List<String> {
+        compose.setThemedContent(core) { SelectionDrawer() }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         val ids = core.fake.library.tracks.take(3).map { it.id }
         core.client.dispatch(app.hocket.core.Commands.rateTrack(TrackRef("fake-server", ids[0]), if (core.fake.library.track(ids[1])!!.rating.toInt() == 2) 3 else 2))
         compose.runOnIdle { ids.forEach { core.client.toggleSelected(SelectionKind.Tracks, it) } }
-        compose.waitUntil(5_000) { present("selection.more") }
-        compose.onNodeWithTag("selection.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present("selection.action.${ActionIds.PLAY}") }
+        compose.waitForIdle()
+        if (!open) return ids
+        // At the peek the menu is out of reach.
+        assertFalse(present("selectionMenu.header"))
+        compose.onNodeWithTag("selection.handle").performSemanticsAction(SemanticsActions.Expand)
         compose.waitUntil(5_000) { present("selectionMenu.header") }
         compose.waitForIdle()
         return ids
@@ -87,12 +96,88 @@ class SelectionToolbarTest {
     }
 
     @Test
-    fun playingFromTheMenuActsOnAllAndClearsTheSelection() {
+    fun playingFromTheOpenDrawerActsOnAllAndClearsTheSelection() {
         val core = TestCore(startPlaying = false)
         val ids = selectThree(core)
-        compose.onNodeWithTag("selectionMenu.action.${ActionIds.PLAY}").performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithTag("selection.action.${ActionIds.PLAY}").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { !core.client.selection.value.active }
         compose.waitUntil(5_000) { core.client.queue.value.current?.track?.id in ids }
+    }
+
+    @Test
+    fun theQuickRowPlaysTheSelectionFromThePeek() {
+        val core = TestCore(startPlaying = false)
+        val ids = selectThree(core, open = false)
+        compose.onNodeWithTag("selection.action.${ActionIds.PLAY}").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { !core.client.selection.value.active }
+        compose.waitUntil(5_000) { core.client.queue.value.current?.track?.id in ids }
+        // The drawer slides away once the selection ends.
+        compose.waitUntil(5_000) { !present("selection.drawer") }
+    }
+
+    @Test
+    fun theOpenDrawerClosesToThePeekAndBackEndsTheSelection() {
+        val core = TestCore(startPlaying = false)
+        selectThree(core)
+        compose.onNodeWithTag("selection.handle").performSemanticsAction(SemanticsActions.Collapse)
+        compose.waitUntil(5_000) { !present("selectionMenu.header") }
+        assertTrue(core.client.selection.value.active)
+        compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(5_000) { !core.client.selection.value.active }
+    }
+
+    @Test
+    fun swipingThePeekUpOpensTheDrawer() {
+        val core = TestCore(startPlaying = false)
+        selectThree(core, open = false)
+        compose.onNodeWithTag("selection.peek").performTouchInput { swipeUp(startY = centerY, endY = centerY - 900f, durationMillis = 400) }
+        compose.waitUntil(5_000) { present("selectionMenu.header") }
+        // And down by the handle, back to the peek (not off the screen).
+        compose.onNodeWithTag("selection.handle").performTouchInput { swipeDown(startY = centerY, endY = centerY + 500f, durationMillis = 400) }
+        compose.waitUntil(5_000) { !present("selectionMenu.header") }
+        assertTrue(core.client.selection.value.active)
+    }
+
+    @Test
+    fun selectAllInTheQueuePicksEveryUpcomingSong() {
+        val core = TestCore(startPlaying = true)
+        compose.setThemedContent(core) { app.hocket.ui.queue.QueueList(androidx.compose.ui.Modifier.fillMaxSize()) }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value && core.client.queue.value.entries.size > 2 }
+        val q = core.client.queue.value
+        val next = q.entries[q.entries.indexOfFirst { it.item.key == q.current?.item?.key } + 1].item.key
+        compose.runOnIdle { core.client.toggleSelected(SelectionKind.QueueItems, next) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Select all").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithContentDescription("Select all").onFirst().performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { core.client.selection.value.count == q.totalUpcoming.toInt() }
+        assertFalse(core.client.selection.value.contains(q.current!!.item.key))
+    }
+
+    /** A sub-page left open (Share) as the drawer closes to its peek no longer holds on to back. */
+    @Test
+    fun closingOnASubPageGoesBackToTheMenuAndBackStillEndsTheSelection() {
+        val core = TestCore(startPlaying = false)
+        selectThree(core)
+        compose.onNodeWithTag("selectionMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertFalse(present("selectionMenu.header") && present("selectionMenu.share"))
+        compose.onNodeWithTag("selection.handle").performSemanticsAction(SemanticsActions.Collapse)
+        compose.waitForIdle()
+        compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(5_000) { !core.client.selection.value.active }
+    }
+
+    /** A page's drawer leaves queue entries to the queue's own. */
+    @Test
+    fun aPagesDrawerIgnoresAQueueSelection() {
+        val core = TestCore(startPlaying = true)
+        compose.setThemedContent(core) { SelectionDrawer() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value && core.client.queue.value.entries.isNotEmpty() }
+        compose.runOnIdle { core.client.toggleSelected(SelectionKind.QueueItems, core.client.queue.value.entries.last().item.key) }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertFalse(present("selection.drawer"))
     }
 
     private fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
@@ -101,7 +186,7 @@ class SelectionToolbarTest {
     @Test
     fun theCountIsCentredOnTheCloseButton() {
         val core = TestCore(startPlaying = false)
-        compose.setThemedContent(core) { SelectionToolbar() }
+        compose.setThemedContent(core) { SelectionDrawer() }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         compose.runOnIdle { core.client.toggleSelected(SelectionKind.Tracks, core.fake.library.tracks.first().id) }
